@@ -1,87 +1,36 @@
-//! Microbench for the eval IR realtime decode path. Hand-builds a representative
-//! single-annotation graph (spatial NormalizedIndex + temporal Sine + a few
-//! elementwise ops over the n axis) and measures eval() at t=1 across n.
-//!
-//!   cargo run --release --bin bench_eval
-//!
-//! eval() includes assemble() (building the per-frame UniverseState), so these
-//! are end-to-end realtime-frame costs, not just op compute.
-
-use luma_lib::eval::ops::math::{BinOp, MathOp, UnaryOp};
-use luma_lib::eval::ops::signals::SignalOp;
-use luma_lib::eval::ops::spatial::SpatialOp;
-use luma_lib::eval::{
-    eval, Arena, Op, OpKind, OutputBinding, Phase, Plan, ResidentContext, SlotSpec,
-};
+//! Measure the real canonical playback path, including fixture output assembly.
+use luma_lib::eval::{compile::compile_pattern, eval, Arena, Plan, ResidentContext};
 use std::time::Instant;
-
-/// 6-op representative annotation: index -> *0.5, + sin(t), abs -> dimmer.
 fn make_plan(n: u32) -> Plan {
-    let slots = vec![
-        SlotSpec { n, c: 1 },    // 0 NormalizedIndex (per-primitive)
-        SlotSpec { n: 1, c: 1 }, // 1 Scalar
-        SlotSpec { n: 1, c: 1 }, // 2 Sine (temporal, global)
-        SlotSpec { n, c: 1 },    // 3 index * scalar
-        SlotSpec { n, c: 1 },    // 4 + sine
-        SlotSpec { n, c: 1 },    // 5 abs -> dimmer
-    ];
-    let ops = vec![
-        Op {
-            kind: OpKind::Spatial(SpatialOp::NormalizedIndex),
-            inputs: vec![],
-            out: 0,
-            phase: Phase::Prologue,
-        },
-        Op {
-            kind: OpKind::Math(MathOp::Scalar(0.5)),
-            inputs: vec![],
-            out: 1,
-            phase: Phase::Prologue,
-        },
-        Op {
-            kind: OpKind::Signal(SignalOp::Sine { freq: 0.5 }),
-            inputs: vec![],
-            out: 2,
-            phase: Phase::Kernel,
-        },
-        Op {
-            kind: OpKind::Math(MathOp::Binary(BinOp::Mul)),
-            inputs: vec![0, 1],
-            out: 3,
-            phase: Phase::Kernel,
-        },
-        Op {
-            kind: OpKind::Math(MathOp::Binary(BinOp::Add)),
-            inputs: vec![3, 2],
-            out: 4,
-            phase: Phase::Kernel,
-        },
-        Op {
-            kind: OpKind::Math(MathOp::Unary(UnaryOp::Abs)),
-            inputs: vec![4],
-            out: 5,
-            phase: Phase::Kernel,
-        },
-    ];
-    Plan {
-        slot_channels: slots
-            .iter()
-            .map(|s| luma_lib::eval::compile::default_channel_labels(s.c))
-            .collect(),
-        ops,
-        slots,
-        n,
-        primitive_ids: (0..n).map(|i| format!("f{i}:0")).collect(),
-        outputs: OutputBinding {
-            dimmer: Some(5),
+    let graph = serde_json::from_value(serde_json::json!({
+        "nodes":[
+            {"id":"index","typeId":"get_attribute","params":{"attribute":"normalized_index"}},
+            {"id":"scale","typeId":"scalar","params":{"value":0.5}},
+            {"id":"sine","typeId":"sine_wave","params":{"frequency":0.5}},
+            {"id":"mul","typeId":"math","params":{"operation":"multiply"}},
+            {"id":"add","typeId":"math","params":{"operation":"add"}},
+            {"id":"out","typeId":"apply_dimmer","params":{}}
+        ],"edges":[
+            {"id":"1","fromNode":"index","fromPort":"out","toNode":"mul","toPort":"a"},
+            {"id":"2","fromNode":"scale","fromPort":"out","toNode":"mul","toPort":"b"},
+            {"id":"3","fromNode":"mul","fromPort":"out","toNode":"add","toPort":"a"},
+            {"id":"4","fromNode":"sine","fromPort":"out","toNode":"add","toPort":"b"},
+            {"id":"5","fromNode":"add","fromPort":"out","toNode":"out","toPort":"signal"}
+        ],"args":[]
+    }))
+    .unwrap();
+    compile_pattern(
+        &graph,
+        &Default::default(),
+        ResidentContext {
+            positions: (0..n).map(|i| [i as f32, 0., 0.]).collect(),
+            span: (0., 60.),
             ..Default::default()
         },
-        ctx: ResidentContext::default(),
-        prologue_baked: Vec::new(),
-        views: Vec::new(),
-    }
+        (0..n).map(|i| format!("f{i}:0")).collect(),
+    )
+    .unwrap()
 }
-
 fn bench(n: u32, iters: u32) -> f64 {
     let plan = make_plan(n);
     let mut arena = Arena::default();
@@ -97,8 +46,8 @@ fn bench(n: u32, iters: u32) -> f64 {
 }
 
 fn main() {
-    println!("eval IR realtime decode — one representative 6-op annotation graph at t=1");
-    println!("(eval includes assemble: per-frame UniverseState HashMap build)\n");
+    println!("Canonical tensor realtime decode — spatial and temporal composition at t=1");
+    println!("(Includes fixture output: per-frame UniverseState HashMap build)\n");
     println!(
         "{:>9} {:>12} {:>14} {:>16}",
         "n", "us/frame", "FPS", "x 44Hz budget"

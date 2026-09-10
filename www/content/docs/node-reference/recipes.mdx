@@ -11,39 +11,23 @@ The following examples show how nodes are typically composed to create lighting 
 
 ## Basic Beat Pulse
 
-A beat envelope drives a gradient that fades between a color and black on each beat.
+Draw an Envelope curve for brightness, then trigger a Pulse on each beat.
 
 <NodeGraph
   nodes={[
-    { id: "clock", label: "Beat Clock", category: "input", x: 0, y: 0, outputs: ["Beat Grid"] },
-    { id: "env", label: "Beat Envelope", category: "generator", x: 200, y: 0, inputs: ["Beat Grid"], outputs: ["Signal"] },
-    { id: "color", label: "Color", category: "generator", x: 200, y: 130, params: { color: "#ff0000" }, outputs: ["Color"] },
-    { id: "grad", label: "Gradient", category: "color", x: 400, y: 0, inputs: ["Signal", "End Color"], outputs: ["Color"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 600, y: 40, inputs: ["Signal"] },
+    { id: "trigger", label: "Beat Trigger", category: "input", x: 0, y: 0, outputs: ["Events"] },
+    { id: "pulse", label: "Pulse", category: "generator", x: 200, y: 0, inputs: ["Trigger"], outputs: ["Signal"] },
+    { id: "output", label: "Output", category: "output", x: 400, y: 0, inputs: ["Dimmer"] },
   ]}
   edges={[
-    { from: "clock", fromHandle: "Beat Grid", to: "env", toHandle: "Beat Grid" },
-    { from: "env", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
-    { from: "color", fromHandle: "Color", to: "grad", toHandle: "End Color" },
-    { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
+    { from: "trigger", fromHandle: "Events", to: "pulse", toHandle: "Trigger" },
+    { from: "pulse", fromHandle: "Signal", to: "output", toHandle: "Dimmer" },
   ]}
 />
 
-### Data Flow
-
-1. `beat_clock` outputs the BeatGrid for the current context.
-2. `beat_envelope` receives the grid and generates a scalar pulse (0 to 1) on each beat, shaped by the ADSR parameters.
-3. `color` provides a constant red RGBA signal, connected to the gradient's `end_color` input.
-4. `gradient` interpolates between black (at value 0) and red (at value 1) using the beat envelope as the interpolation factor.
-5. `apply_color` writes the color signal to the fixtures targeted by the pattern's Selection argument.
-
-### Key Parameters to Tweak
-
-- `beat_envelope.subdivision` -- change from 1.0 (quarter notes) to 0.5 (eighth notes) for faster pulses.
-- `beat_envelope.attack_curve` -- set to -1.0 for snappy flashes, +1.0 for slow swells.
-- `gradient.end_color` -- set to `#000000` for fade-to-black, or another color for a color-to-color transition.
-
----
+Set the trigger's Repeat interval and the Pulse's travel duration independently.
+Draw the brightness curve in the inspector. Longer durations overlap with Max;
+shorter durations leave a dark gap before the next trigger.
 
 ## Spatial Chase
 

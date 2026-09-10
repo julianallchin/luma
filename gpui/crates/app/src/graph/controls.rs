@@ -6,7 +6,9 @@ use luma_ui::arg::{
     envelope::{EnvelopeChanged, EnvelopeEditor},
     gradient::{Gradient, GradientStop},
     gradient_editor::{GradientChanged, GradientEditor},
+    mapping::{MappingChanged, MappingEditor},
     number::{DraftedNumber, NumberEvent},
+    signal::{SignalChanged, SignalEditor},
 };
 use luma_ui::Enabled;
 
@@ -14,6 +16,7 @@ pub(super) struct Controls {
     definition: String,
     node: String,
     cells: Vec<InputControl>,
+    name: Option<Entity<luma_ui::text_input::TextInput>>,
     _subscriptions: Vec<Subscription>,
 }
 struct InputControl {
@@ -24,12 +27,35 @@ struct InputControl {
     widget: Widget,
 }
 enum Widget {
+    Seed(Entity<DraftedNumber<u64>>),
     Number(Entity<DraftedNumber>),
+    Signal(Entity<SignalEditor>),
     Color(Entity<ColorArgEditor>),
     Envelope(Entity<EnvelopeEditor>),
     Gradient(Entity<GradientEditor>),
+    Mapping(Entity<MappingEditor>),
     Choice,
     Connection,
+}
+impl Widget {
+    fn accepts(&self, value: Option<&p::Value>) -> bool {
+        match value {
+            Some(p::Value::Seed(_)) => matches!(self, Self::Seed(_)),
+            Some(value) if value.scalar_value().is_some() => matches!(self, Self::Number(_)),
+            Some(p::Value::Signal(_)) => matches!(self, Self::Signal(_)),
+            Some(p::Value::Color(_)) => matches!(self, Self::Color(_)),
+            Some(p::Value::Envelope(_)) => matches!(self, Self::Envelope(_)),
+            Some(p::Value::Gradient(_)) => matches!(self, Self::Gradient(_)),
+            Some(p::Value::Mapping(_)) => matches!(self, Self::Mapping(_)),
+            Some(
+                p::Value::Boundary(_)
+                | p::Value::Boolean(_)
+                | p::Value::AudioSource(_)
+                | p::Value::Drum(_),
+            ) => matches!(self, Self::Choice),
+            _ => matches!(self, Self::Connection),
+        }
+    }
 }
 
 fn resolved_value(
@@ -74,53 +100,77 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
     let Some(node_id) = editor.selected.first().map(ToString::to_string) else {
         return;
     };
-    let Source::Score(source) = &mut editor.source else {
-        return;
-    };
+    let source = &mut editor.source;
     let Some(parent) = source.library.definitions.get(&definition) else {
         return;
     };
     let p::Body::Graph(graph) = &parent.body else {
         return;
     };
-    let Some(node) = graph.nodes.get(&node_id) else {
-        return;
-    };
-    let Some(child) = source.library.definitions.get(&node.definition) else {
-        return;
+    let input_key = luma_lib::node_graph::lighting::input_node_key(&node_id);
+    let (specs, bindings, input_name) = if let Some(key) = input_key {
+        let name = parent
+            .inputs
+            .get(key)
+            .map(|spec| spec.name.clone())
+            .or_else(|| graph.input_nodes.get(key).map(|node| node.name.clone()));
+        let specs = parent
+            .inputs
+            .get(key)
+            .map(|spec| {
+                let mut spec = spec.clone();
+                spec.name = "Value".into();
+                (key.to_string(), spec)
+            })
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        (specs, std::collections::BTreeMap::new(), name)
+    } else {
+        let Some(node) = graph.nodes.get(&node_id) else {
+            return;
+        };
+        let Some(child) = source.library.definitions.get(&node.definition) else {
+            return;
+        };
+        (child.inputs.clone(), node.inputs.clone(), None)
     };
     let stale = source.controls.as_ref().is_none_or(|controls| {
         controls.definition != definition
             || controls.node != node_id
-            || controls.cells.len() != child.inputs.len()
+            || controls.cells.len() != specs.len()
             || controls.cells.iter().any(|cell| {
-                child
-                    .inputs
-                    .get(&cell.id)
-                    .is_none_or(|input| input.value_type != cell.spec.value_type)
-                    || matches!(cell.binding, Some(p::Binding::Connection { .. }))
-                        != matches!(
-                            node.inputs.get(&cell.id),
-                            Some(p::Binding::Connection { .. })
-                        )
+                specs.get(&cell.id).is_none_or(|input| {
+                    input.value_type != cell.spec.value_type
+                        || !cell
+                            .widget
+                            .accepts(resolved_value(parent, input, bindings.get(&cell.id)).as_ref())
+                }) || matches!(cell.binding, Some(p::Binding::Connection { .. }))
+                    != matches!(bindings.get(&cell.id), Some(p::Binding::Connection { .. }))
             })
     });
     if !stale {
+        if let (Some(field), Some(name)) = (&source.controls.as_ref().unwrap().name, &input_name) {
+            if !field.focus_handle(cx).is_focused(window) && field.read(cx).text() != name {
+                field.update(cx, |field, cx| field.set_text(name.clone(), cx));
+            }
+        }
         for cell in &mut source.controls.as_mut().unwrap().cells {
-            cell.spec = child.inputs[&cell.id].clone();
-            cell.binding = node.inputs.get(&cell.id).cloned();
+            cell.spec = specs[&cell.id].clone();
+            cell.binding = bindings.get(&cell.id).cloned();
             let value = resolved_value(parent, &cell.spec, cell.binding.as_ref());
             if value != cell.value {
                 match (&cell.widget, &value) {
-                    (
-                        Widget::Number(entity),
-                        Some(
-                            p::Value::Number(v)
-                            | p::Value::Beats(v)
-                            | p::Value::Proportion(v)
-                            | p::Value::Position(v),
-                        ),
-                    ) => entity.update(cx, |field, cx| field.set_value(*v, cx)),
+                    (Widget::Seed(entity), Some(p::Value::Seed(seed))) => {
+                        entity.update(cx, |field, cx| field.set_value(*seed, cx));
+                    }
+                    (Widget::Signal(entity), Some(p::Value::Signal(signal))) => {
+                        entity.update(cx, |field, cx| field.set_value(signal.clone(), window, cx));
+                    }
+                    (Widget::Number(entity), Some(value)) if value.scalar_value().is_some() => {
+                        entity.update(cx, |field, cx| {
+                            field.set_value(value.scalar_value().unwrap(), cx)
+                        })
+                    }
                     (Widget::Color(entity), Some(p::Value::Color(rgb))) => {
                         entity.update(cx, |field, cx| {
                             field.set_value(ColorArg::decode(rgb.map(|v| v as f32), 1.), cx)
@@ -134,6 +184,9 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                     (Widget::Envelope(entity), Some(p::Value::Envelope(envelope))) => {
                         entity.update(cx, |field, cx| field.set_value(envelope.clone(), cx))
                     }
+                    (Widget::Mapping(entity), Some(p::Value::Mapping(mapping))) => {
+                        entity.update(cx, |field, cx| field.set_value(mapping.clone(), cx))
+                    }
                     _ => (),
                 }
                 cell.value = value;
@@ -142,31 +195,50 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         return;
     }
     let mut subscriptions = Vec::new();
+    let name = input_name.map(|name| {
+        let field = cx.new(|cx| {
+            let mut field = luma_ui::text_input::TextInput::search("Input name", cx);
+            field.set_text(name, cx);
+            field
+        });
+        subscriptions.push(cx.subscribe(&field, |_: &mut Luma, _, _, cx| cx.notify()));
+        let app = cx.entity().downgrade();
+        let name_field = field.clone();
+        let target = target.clone();
+        let key = input_key.unwrap().to_string();
+        subscriptions.push(
+            window.on_focus_out(&field.focus_handle(cx), cx, move |_, _, cx| {
+                let name = name_field.read(cx).text().to_string();
+                app.update(cx, |this, cx| {
+                    this.set_graph_input_name(&target, &key, name, cx)
+                })
+                .ok();
+            }),
+        );
+        field
+    });
     let mut cells = Vec::new();
-    for (id, spec) in &child.inputs {
-        let binding = node.inputs.get(id).cloned();
+    for (id, spec) in &specs {
+        let binding = bindings.get(id).cloned();
         let value = resolved_value(parent, spec, binding.as_ref());
         let node_id = node_id.clone();
         let input = id.clone();
         let target = target.clone();
         let widget = match &value {
-            Some(
-                p::Value::Number(v)
-                | p::Value::Beats(v)
-                | p::Value::Proportion(v)
-                | p::Value::Position(v),
-            ) => {
+            Some(value) if value.scalar_value().is_some() => {
+                let v = value.scalar_value().unwrap();
                 let kind = spec.value_type;
+                let unit = kind.signal_type().and_then(|s| s.unit);
                 let field = cx.new(|cx| {
                     DraftedNumber::new(
                         spec.name.clone(),
-                        *v,
-                        if kind == p::ValueType::Proportion || kind == p::ValueType::Beats {
+                        v,
+                        if matches!(unit, Some(p::Unit::Proportion | p::Unit::Beats)) {
                             0.
                         } else {
                             -1e9
                         },
-                        if kind == p::ValueType::Proportion {
+                        if unit == Some(p::Unit::Proportion) {
                             1.
                         } else {
                             1e9
@@ -180,16 +252,51 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                     &field,
                     move |this: &mut Luma, _, event: &NumberEvent, cx| {
                         let NumberEvent::Committed(value) = *event;
-                        let value = match kind {
-                            p::ValueType::Beats => p::Value::Beats(value),
-                            p::ValueType::Proportion => p::Value::Proportion(value),
-                            p::ValueType::Position => p::Value::Position(value),
-                            _ => p::Value::Number(value),
-                        };
-                        this.set_graph_input_value(&target, &node_id, &input, value, cx);
+                        if let Ok(value) =
+                            luma_lib::node_graph::lighting::decode(kind, &serde_json::json!(value))
+                        {
+                            this.set_graph_input_value(&target, &node_id, &input, value, cx);
+                        }
                     },
                 ));
                 Widget::Number(field)
+            }
+            Some(p::Value::Seed(seed)) => {
+                let field = cx.new(|cx| {
+                    DraftedNumber::new(spec.name.clone(), *seed, 0, u64::MAX, 260., window, cx)
+                });
+                subscriptions.push(cx.subscribe(
+                    &field,
+                    move |this: &mut Luma, _, event: &NumberEvent<u64>, cx| {
+                        let NumberEvent::Committed(value) = *event;
+                        this.set_graph_input_value(
+                            &target,
+                            &node_id,
+                            &input,
+                            p::Value::Seed(value),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Seed(field)
+            }
+            Some(p::Value::Signal(signal)) => {
+                let field = cx.new(|cx| {
+                    SignalEditor::new(spec.name.clone(), signal.clone(), 260., window, cx)
+                });
+                subscriptions.push(cx.subscribe(
+                    &field,
+                    move |this: &mut Luma, _, event: &SignalChanged, cx| {
+                        this.set_graph_input_value(
+                            &target,
+                            &node_id,
+                            &input,
+                            p::Value::Signal(event.0.clone()),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Signal(field)
             }
             Some(p::Value::Color(rgb)) => {
                 let field = cx.new(|cx| {
@@ -216,7 +323,8 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                 Widget::Color(field)
             }
             Some(p::Value::Gradient(gradient)) => {
-                let field = cx.new(|cx| GradientEditor::new(display_gradient(gradient), cx));
+                let field =
+                    cx.new(|cx| GradientEditor::new(display_gradient(gradient), window, cx));
                 subscriptions.push(cx.subscribe(
                     &field,
                     move |this: &mut Luma, _, event: &GradientChanged, cx| {
@@ -225,6 +333,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                             .stops()
                             .iter()
                             .map(|stop| p::ColorStop {
+                                alpha: f64::from(stop.color.a),
                                 t: f64::from(stop.t),
                                 color: [stop.color.r, stop.color.g, stop.color.b].map(f64::from),
                             })
@@ -256,9 +365,26 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                 ));
                 Widget::Envelope(field)
             }
+            Some(p::Value::Mapping(mapping)) => {
+                let field = cx.new(|cx| {
+                    MappingEditor::new(spec.name.clone(), mapping.clone(), 260., window, cx)
+                });
+                subscriptions.push(cx.subscribe(
+                    &field,
+                    move |this: &mut Luma, _, event: &MappingChanged, cx| {
+                        this.set_graph_input_value(
+                            &target,
+                            &node_id,
+                            &input,
+                            p::Value::Mapping(event.0.clone()),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Mapping(field)
+            }
             Some(
-                p::Value::Mapping(_)
-                | p::Value::Boundary(_)
+                p::Value::Boundary(_)
                 | p::Value::Boolean(_)
                 | p::Value::AudioSource(_)
                 | p::Value::Drum(_),
@@ -277,8 +403,92 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         definition,
         node: node_id,
         cells,
+        name,
         _subscriptions: subscriptions,
     });
+}
+
+impl Luma {
+    fn set_graph_input_name(
+        &mut self,
+        target: &Target,
+        key: &str,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(TabBody::Graph(editor)) = self.workspace.body(target) else {
+            return;
+        };
+        let Some(id) = editor.edited_definition() else {
+            return;
+        };
+        let source = &editor.source;
+        let Some(parent) = source.library.definitions.get(&id) else {
+            return;
+        };
+        let p::Body::Graph(graph) = &parent.body else {
+            return;
+        };
+        let current = parent
+            .inputs
+            .get(key)
+            .map(|spec| &spec.name)
+            .or_else(|| graph.input_nodes.get(key).map(|node| &node.name));
+        if current.is_none_or(|current| current == name.trim()) {
+            return;
+        }
+        self.apply_score_graph_edit(
+            target,
+            p::GraphEdit::RenameInput {
+                key: key.into(),
+                name,
+            },
+            cx,
+        );
+    }
+
+    pub(crate) fn graph_input_name_key(
+        &mut self,
+        commit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.active_graph_target() else {
+            return;
+        };
+        let Some(TabBody::Graph(editor)) = self.workspace.body(&target) else {
+            return;
+        };
+        let source = &editor.source;
+        let Some(controls) = &source.controls else {
+            return;
+        };
+        let Some(key) =
+            luma_lib::node_graph::lighting::input_node_key(&controls.node).map(str::to_string)
+        else {
+            return;
+        };
+        let Some(field) = controls.name.clone() else {
+            return;
+        };
+        if commit {
+            self.set_graph_input_name(&target, &key, field.read(cx).text().to_string(), cx);
+        } else {
+            let parent = &source.library.definitions[&controls.definition];
+            let p::Body::Graph(graph) = &parent.body else {
+                return;
+            };
+            let name = parent
+                .inputs
+                .get(&key)
+                .map(|spec| &spec.name)
+                .or_else(|| graph.input_nodes.get(&key).map(|node| &node.name));
+            if let Some(name) = name {
+                field.update(cx, |field, cx| field.set_text(name.clone(), cx));
+            }
+        }
+        self.focus.focus(window, cx);
+    }
 }
 
 impl Luma {
@@ -290,15 +500,24 @@ impl Luma {
         value: p::Value,
         cx: &mut Context<Self>,
     ) {
+        if let Some(key) = luma_lib::node_graph::lighting::input_node_key(node) {
+            self.apply_score_graph_edit(
+                target,
+                p::GraphEdit::Default {
+                    key: key.into(),
+                    value,
+                },
+                cx,
+            );
+            return;
+        }
         let Some(TabBody::Graph(editor)) = self.workspace.body(target) else {
             return;
         };
         let Some(definition) = editor.edited_definition() else {
             return;
         };
-        let Source::Score(source) = &editor.source else {
-            return;
-        };
+        let source = &editor.source;
         let Some(p::Definition {
             body: p::Body::Graph(graph),
             ..
@@ -316,7 +535,7 @@ impl Luma {
 }
 
 pub(super) fn add_button(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
-    if !matches!(editor.source, Source::Score(_)) || editor.inspecting_builtin() {
+    if editor.inspecting_builtin() {
         return None;
     }
     let app = app.clone();
@@ -326,18 +545,7 @@ pub(super) fn add_button(editor: &Editor, app: &Entity<Luma>) -> Option<AnyEleme
             .id("graph-add-node")
             .on_click(move |_, window, cx| {
                 app.update(cx, |this, cx| {
-                    let mut search = None;
-                    this.edit_graph_tab(&target, cx, |editor| {
-                        if let Source::Score(source) = &mut editor.source {
-                            source.catalog_open = !source.catalog_open;
-                            source.catalog_query.clear();
-                            search = Some(source.search.clone());
-                        }
-                    });
-                    if let Some(search) = search {
-                        search.update(cx, |field, cx| field.set_text("", cx));
-                        search.focus_handle(cx).focus(window, cx);
-                    }
+                    this.open_graph_catalog(&target, window.mouse_position(), window, cx);
                 });
             })
             .agent_node(Role::Button, "Add node")
@@ -346,9 +554,7 @@ pub(super) fn add_button(editor: &Editor, app: &Entity<Luma>) -> Option<AnyEleme
 }
 
 pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
-    let Source::Score(source) = &editor.source else {
-        return None;
-    };
+    let source = &editor.source;
     if editor.inspecting_builtin() {
         return None;
     }
@@ -365,44 +571,6 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
         .flex()
         .flex_col()
         .gap(px(12.));
-    if source.catalog_open {
-        content = content.child(
-            div()
-                .h(px(32.))
-                .flex_none()
-                .child(source.search.clone())
-                .agent_node(Role::Input, "Search nodes…"),
-        );
-        let query = source.catalog_query.to_lowercase();
-        for (id, definition) in &source.library.definitions {
-            if !definition.name.to_lowercase().contains(&query)
-                && !id.to_lowercase().contains(&query)
-            {
-                continue;
-            }
-            let app = app.clone();
-            let target = target.clone();
-            let id = id.clone();
-            let label = source.library.display_name(&id);
-            content = content.child(
-                luma_ui::button(&label, Enabled::Yes)
-                    .flex_none()
-                    .id(SharedString::from(format!("graph-add-{id}")))
-                    .on_click(move |_, _, cx| {
-                        app.update(cx, |this, cx| {
-                            this.edit_graph_tab(&target, cx, |editor| {
-                                if let Source::Score(source) = &mut editor.source {
-                                    source.catalog_open = false;
-                                }
-                            });
-                            this.add_score_graph_node(&target, &id, cx);
-                        });
-                    })
-                    .agent_node(Role::Button, format!("Add {label}")),
-            );
-        }
-        return Some(content.into_any_element());
-    }
     let Some(controls) = source.controls.as_ref() else {
         return Some(
             content
@@ -419,10 +587,8 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 .into_any_element(),
         );
     }
-    if let Some((node, port)) = &source.pending_port {
-        content = content.child(luma_ui::silkscreen(format!(
-            "{node}.{port} → click an input"
-        )));
+    if let Some((node, port)) = &source.selected_output {
+        content = content.child(luma_ui::silkscreen(format!("{node}.{port}")));
         let app = app.clone();
         let target = target.clone();
         let binding = p::Binding::Connection {
@@ -450,6 +616,24 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 })
                 .agent_node(Role::Button, "Use as graph output"),
         );
+    }
+    if let Some(name) = &controls.name {
+        content = content.child(
+            div()
+                .key_context(crate::keymap::context::GRAPH_INPUT_NAME)
+                .child(luma_ui::silkscreen("Name"))
+                .child(
+                    div()
+                        .h(px(32.))
+                        .child(name.clone())
+                        .agent_node(Role::Input, "Input name"),
+                ),
+        );
+        if controls.cells.is_empty() {
+            content = content.child(luma_ui::silkscreen(
+                "Connect to a parameter to choose its type and default",
+            ));
+        }
     }
     let called = source
         .library
@@ -487,9 +671,12 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             .child(luma_ui::silkscreen(cell.spec.name.clone()));
         row = match &cell.widget {
             Widget::Number(field) => row.child(field.clone()),
+            Widget::Signal(field) => row.child(field.clone()),
+            Widget::Seed(field) => row.child(field.clone()),
             Widget::Color(field) => row.child(field.clone()),
             Widget::Envelope(field) => row.child(field.clone()),
             Widget::Gradient(field) => row.child(field.clone()),
+            Widget::Mapping(field) => row.child(field.clone()),
             Widget::Choice => {
                 let choices = luma_lib::node_graph::lighting::choices(cell.spec.value_type);
                 let labels: Vec<&str> =
@@ -516,7 +703,6 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 let input = cell.id.clone();
                 let menu = format!("{}.{}", node, input);
                 let toggle_menu = menu.clone();
-                let previous = cell.value.clone();
                 let kind = cell.spec.value_type;
                 let options = choices.clone();
                 row.child(luma_ui::arg::select::luma_arg_select(
@@ -527,33 +713,25 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                     move |_, cx| {
                         toggle.update(cx, |this, cx| {
                             this.edit_graph_tab(&toggle_target, cx, |editor| {
-                                if let Source::Score(source) = &mut editor.source {
-                                    source.choice_open =
-                                        if source.choice_open.as_ref() == Some(&toggle_menu) {
-                                            None
-                                        } else {
-                                            Some(toggle_menu.clone())
-                                        };
-                                }
+                                let source = &mut editor.source;
+                                source.choice_open =
+                                    if source.choice_open.as_ref() == Some(&toggle_menu) {
+                                        None
+                                    } else {
+                                        Some(toggle_menu.clone())
+                                    };
                             })
                         });
                     },
                     move |selected, _, cx| {
-                        if let Ok(mut value) = luma_lib::node_graph::lighting::decode(
+                        if let Ok(value) = luma_lib::node_graph::lighting::decode(
                             kind,
                             &serde_json::json!(options[selected].id),
                         ) {
-                            if let (Some(p::Value::Mapping(previous)), p::Value::Mapping(mapping)) =
-                                (&previous, &mut value)
-                            {
-                                mapping.reverse = previous.reverse;
-                                mapping.per_group = previous.per_group;
-                            }
                             app.update(cx, |this, cx| {
                                 this.edit_graph_tab(&target, cx, |editor| {
-                                    if let Source::Score(source) = &mut editor.source {
-                                        source.choice_open = None;
-                                    }
+                                    let source = &mut editor.source;
+                                    source.choice_open = None;
                                 });
                                 this.set_graph_input_value(&target, &node, &input, value, cx);
                             });
@@ -563,64 +741,103 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             }
             Widget::Connection => row.child(luma_ui::silkscreen(match &cell.binding {
                 Some(p::Binding::Connection { node, output }) => format!("From {node}.{output}"),
-                _ => format!("Connect a {:?} output", cell.spec.value_type),
+                Some(p::Binding::Input { input }) => format!(
+                    "Input · {}",
+                    source.library.definitions[&controls.definition].inputs[input].name
+                ),
+                _ if matches!(cell.value, Some(p::Value::Events(p::Events::Automatic))) => {
+                    "Uses Repeat · connect a trigger to replace it".into()
+                }
+                _ => format!("Connect a {} output", cell.spec.value_type),
             })),
         };
-        let app = app.clone();
-        let target = target.clone();
-        let node = controls.node.clone();
-        let input = cell.id.clone();
-        let exposed = matches!(cell.binding, Some(p::Binding::Input { .. }));
-        let edit = if exposed {
-            p::GraphEdit::Bind {
-                node: node.clone(),
-                input: input.clone(),
-                binding: cell.value.clone().map(Into::into),
+        if cell.spec.optional && cell.binding.is_none() {
+            row = row.child(luma_ui::silkscreen("Not written"));
+            if let Some(value) = &cell.value {
+                let app = app.clone();
+                let target = target.clone();
+                let edit = p::GraphEdit::Bind {
+                    node: controls.node.clone(),
+                    input: cell.id.clone(),
+                    binding: Some(value.clone().into()),
+                };
+                row = row.child(
+                    luma_ui::button("Use value", Enabled::Yes)
+                        .id(SharedString::from(format!(
+                            "write-{}-{}",
+                            controls.node, cell.id
+                        )))
+                        .on_click(move |_, _, cx| {
+                            app.update(cx, |this, cx| {
+                                this.apply_score_graph_edit(&target, edit.clone(), cx)
+                            });
+                        })
+                        .agent_node(Role::Button, format!("Write {}", cell.spec.name)),
+                );
             }
-        } else if matches!(cell.binding, Some(p::Binding::Connection { .. })) {
-            p::GraphEdit::Bind {
-                node: node.clone(),
-                input: input.clone(),
-                binding: None,
+        }
+        if controls.name.is_none() {
+            if let Some(p::Binding::Input { input }) = &cell.binding {
+                let app = app.clone();
+                let target = target.clone();
+                let id = luma_lib::node_graph::lighting::input_node_id(input);
+                let label = source.library.definitions[&controls.definition].inputs[input]
+                    .name
+                    .clone();
+                row = row.child(
+                    luma_ui::button(&format!("Input · {label}"), Enabled::Yes)
+                        .id(SharedString::from(format!(
+                            "edit-input-{}-{}",
+                            controls.node, cell.id
+                        )))
+                        .on_click(move |_, window, cx| {
+                            app.update(cx, |this, cx| {
+                                this.focus.focus(window, cx);
+                                this.edit_graph_tab(&target, cx, |editor| {
+                                    editor.selected = vec![id.clone().into()];
+                                    editor.selected_edge = None;
+                                });
+                            });
+                        })
+                        .agent_node(Role::Button, format!("Edit Input {label}")),
+                );
+            } else if cell.binding.is_some() {
+                let app = app.clone();
+                let target = target.clone();
+                let edit = p::GraphEdit::Bind {
+                    node: controls.node.clone(),
+                    input: cell.id.clone(),
+                    binding: None,
+                };
+                let label = if matches!(cell.binding, Some(p::Binding::Connection { .. })) {
+                    "Disconnect"
+                } else if cell.spec.optional {
+                    "Clear"
+                } else {
+                    "Reset"
+                };
+                row = row.child(
+                    luma_ui::button(label, Enabled::Yes)
+                        .id(SharedString::from(format!(
+                            "reset-{}-{}",
+                            controls.node, cell.id
+                        )))
+                        .on_click(move |_, _, cx| {
+                            app.update(cx, |this, cx| {
+                                this.apply_score_graph_edit(&target, edit.clone(), cx)
+                            });
+                        })
+                        .agent_node(Role::Button, format!("{}: {label}", cell.spec.name)),
+                );
             }
-        } else {
-            let parent = &source.library.definitions[&controls.definition];
-            let mut key = input.clone();
-            let mut index = 2;
-            while parent.inputs.contains_key(&key) {
-                key = format!("{input}_{index}");
-                index += 1;
-            }
-            p::GraphEdit::Expose {
-                node: node.clone(),
-                input: input.clone(),
-                key,
-                name: None,
-            }
-        };
-        let label = if exposed {
-            "On clip · make local"
-        } else if matches!(cell.binding, Some(p::Binding::Connection { .. })) {
-            "Disconnect"
-        } else {
-            "Expose on clip"
-        };
-        row = row.child(
-            luma_ui::button(label, Enabled::Yes)
-                .id(SharedString::from(format!(
-                    "expose-{}-{input}",
-                    controls.node
-                )))
-                .on_click(move |_, _, cx| {
-                    app.update(cx, |this, cx| {
-                        this.apply_score_graph_edit(&target, edit.clone(), cx)
-                    })
-                })
-                .agent_node(Role::Button, format!("{}: {label}", cell.spec.name)),
-        );
+        }
         content = content.child(row);
     }
-    Some(content.into_any_element())
+    Some(
+        content
+            .agent_node(Role::Card, "Node inspector")
+            .into_any_element(),
+    )
 }
 
 fn display_gradient(gradient: &p::Gradient) -> Gradient {
@@ -630,7 +847,7 @@ fn display_gradient(gradient: &p::Gradient) -> Gradient {
             r: stop.color[0] as f32,
             g: stop.color[1] as f32,
             b: stop.color[2] as f32,
-            a: 1.0,
+            a: stop.alpha as f32,
         },
     }))
 }

@@ -64,7 +64,6 @@ mod welcome;
 mod workspace;
 
 pub use chrome::hide_native_window_buttons;
-pub use graph::ViewData;
 #[cfg(feature = "agent")]
 pub use library::NavigationFixture;
 pub use library::{
@@ -128,7 +127,6 @@ pub struct Luma {
     pub(crate) tab_chrome: tab_chrome::TabChrome,
     /// The most recently opened subjects seed the `+` menu's editor choices.
     pub(crate) selected_track: Option<String>,
-    pub(crate) selected_pattern: Option<luma_lib::models::patterns::PatternSummary>,
     pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
@@ -154,6 +152,7 @@ pub struct Luma {
     /// [`Luma::sync_visualizer`]. `None` is both "no room to show" and the
     /// off switch for its redraw loop — see [`visualizer::visualizer`].
     pub(crate) visualizer: Option<visualizer::Visualizer>,
+    pub(crate) graph_audio: graph::preview::Audio,
     /// Whether the stage pane is suppressed by hand. Kept apart from
     /// [`visualizer`](Self::visualizer) the way `sidebar_hidden` is from
     /// `sidebar`: one says what there is to show, the other whether the room
@@ -253,7 +252,6 @@ impl Luma {
             parked: workspace::ParkedTabs::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
             selected_track: None,
-            selected_pattern: None,
             workspace_hidden: false,
             shell_presented: false,
             restoring_venue: false,
@@ -262,6 +260,7 @@ impl Luma {
             workspace_split: shell::workspace_split(),
             expanded: false,
             visualizer: None,
+            graph_audio: graph::preview::Audio::default(),
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
@@ -574,6 +573,35 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::UndoClips, _, cx| this.undo_clips(cx)))
             .on_action(cx.listener(|this, _: &keymap::RedoClips, _, cx| this.redo_clips(cx)))
             .on_action(cx.listener(|this, _: &keymap::DeleteNodes, _, cx| this.graph_delete(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::CommitGraphInputName, window, cx| {
+                    this.graph_input_name_key(true, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &keymap::CancelGraphInputName, window, cx| {
+                    this.graph_input_name_key(false, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &keymap::AddGraphNode, window, cx| {
+                this.graph_add_at_cursor(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &keymap::CancelGraphGesture, window, cx| {
+                    this.graph_cancel(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &keymap::NextGraphNode, _, cx| {
+                this.graph_catalog_step(true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &keymap::PrevGraphNode, _, cx| {
+                this.graph_catalog_step(false, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &keymap::CommitGraphNode, window, cx| {
+                    this.graph_catalog_commit(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &keymap::UndoGraph, _, cx| this.graph_undo(cx)))
             .on_action(cx.listener(|this, _: &keymap::RedoGraph, _, cx| this.graph_redo(cx)))
             .on_action(

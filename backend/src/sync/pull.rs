@@ -1724,17 +1724,13 @@ mod remote_deletion_tests {
     fn graph_evaluation() -> Arc<GraphEvaluation> {
         Arc::new(GraphEvaluation {
             plan: Arc::new(Plan {
-                ops: Vec::new(),
-                slots: Vec::new(),
-                slot_channels: Vec::new(),
-                n: 0,
+                program: None,
                 primitive_ids: Vec::new(),
                 outputs: Default::default(),
                 ctx: ResidentContext {
                     span: (0.0, 1.0),
                     ..Default::default()
                 },
-                prologue_baked: Vec::new(),
                 views: Vec::new(),
             }),
             views: HashMap::new(),

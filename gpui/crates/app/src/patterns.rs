@@ -1,14 +1,4 @@
-//! The pattern list: every pattern in the library, and the door into the
-//! graph editor.
-//!
-//! The web app has no screen like this — patterns are reached from a track's
-//! timeline or the perform page, and `/pattern/:id` is a top-level route with
-//! no index. This is the minimum a native host needs to get to the same
-//! editor: a name, its category, and its author, in one striped table.
-//!
-//! Deliberately not scoped to a venue. `list_patterns` takes no arguments,
-//! because a pattern belongs to the library rather than to a room, so this
-//! screen hangs off the welcome screen and not off a venue.
+//! Browse saved library patterns and preview a copy for insertion into a score.
 
 use std::rc::Rc;
 
@@ -81,10 +71,9 @@ const AUTHOR_WIDTH: f32 = 140.;
 const GAP: f32 = 8.;
 const PAD_X: f32 = 16.;
 
-/// `track_open` is whether the workspace resolved a track context for the
-/// graph doors (`Luma::graph_track_context`). Without one the rows are inert
-/// with the stated reason — the overlay stays a full pattern browser, but a
-/// row cannot open an editor that could not preview (§6).
+/// Browsing is available without a track. Previewing and inserting a copy need
+/// the destination track's timing and venue, so those rows remain inert until
+/// a track is open.
 pub fn patterns(
     state: &Patterns,
     app: &Entity<Luma>,
@@ -102,6 +91,9 @@ pub fn patterns(
         // its interior so the renderer effect can be upgraded in one place.
         .text_color(ladder::foreground())
         .child(toolbar(state, app, first_focus, first_focused, track_open))
+        .child(luma_ui::silkscreen(
+            "Choose a pattern to preview and add to this score",
+        ))
         .child(header())
         .child(match &state.error {
             Some(message) => luma_ui::plate(
@@ -240,7 +232,7 @@ fn pattern_row(
                     let id = id.clone();
                     app.update(cx, |this, cx| {
                         if let Some(pattern) = this.find_pattern(&id) {
-                            this.open_pattern(pattern, cx);
+                            this.preview_library_pattern(pattern, cx);
                         }
                     });
                 })

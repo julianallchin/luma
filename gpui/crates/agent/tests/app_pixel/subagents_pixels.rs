@@ -94,7 +94,7 @@ fn the_delegation_surfaces_are_captured() {
             ({{ working, listed, child, finished }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat("chat-subagent"),
+            open = chat::open_chat(),
             send = chat::send(),
             description = chat::SUBAGENT_DESCRIPTION,
             answer = chat::SUBAGENT_ANSWER,

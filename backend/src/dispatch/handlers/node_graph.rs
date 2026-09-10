@@ -68,7 +68,6 @@ pub async fn run_graph(
         pool,
         &services.storage,
         &services.fixtures_root,
-        &services.fft,
         &graph,
         &context,
         EvaluateOptions {
@@ -179,7 +178,7 @@ pub async fn preview_pattern(
     )
     .await;
 
-    let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
+    let plan = compile_pattern(&graph, &args, ctx, primitive_ids)
         .map_err(|error| CommandError::Internal(format!("Failed to compile pattern: {error:?}")))?;
 
     let dt = duration / frame_count as f32;
@@ -187,7 +186,7 @@ pub async fn preview_pattern(
         .map(|i| start_time + i as f32 * dt)
         .collect();
     let mut arena = Arena::default();
-    let frames = crate::eval::eval(&plan, &times, &mut arena);
+    let frames = crate::eval::try_eval(&plan, &times, &mut arena)?;
     let final_access =
         VenueAccess::<Operate>::operate(pool, VenueResource::Venue(&venue_id)).await?;
     if final_access.principal() != admitted_principal.as_deref() {

@@ -14,7 +14,7 @@
 //! loop / emitter), never here.
 
 use crate::eval::composite::{blank_frame, composite_frame};
-use crate::eval::{eval, Arena, BlendMode, Plan};
+use crate::eval::{try_eval, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
 
@@ -66,46 +66,61 @@ impl Scene {
     /// Evaluate over `times`, one [`UniverseState`] per sample. `times.len() == 1`
     /// is a realtime / scrub frame; a dense grid is a bake.
     pub fn render(&self, times: &[f32], scope: Scope, scratch: &mut Arena) -> Vec<UniverseState> {
+        self.try_render(times, scope, scratch)
+            .unwrap_or_else(|error| {
+                log::error!("Graph evaluation: {error}");
+                times.iter().map(|_| blank_frame()).collect()
+            })
+    }
+
+    pub fn try_render(
+        &self,
+        times: &[f32],
+        scope: Scope,
+        scratch: &mut Arena,
+    ) -> Result<Vec<UniverseState>, String> {
         match scope {
             // Raw single-pattern output — exactly what the per-pattern goldens
             // validated. No span mask: the caller chose the times.
             Scope::Single(idx) => match self.annotations.get(idx) {
-                Some(ann) => eval(ann.plan.as_ref(), times, scratch),
-                None => times.iter().map(|_| blank_frame()).collect(),
+                Some(ann) => try_eval(ann.plan.as_ref(), times, scratch),
+                None => Ok(times.iter().map(|_| blank_frame()).collect()),
             },
             Scope::Composite => self.composite(times, scratch),
         }
     }
 
-    /// Z-ordered composite. Each annotation is evaluated once over the full
-    /// `times` axis (cheap, seek-safe) and blended onto the base only at samples
-    /// its span contains — so out-of-span frames (where span-relative progress is
-    /// meaningless) never reach the output, matching the legacy compositor which
-    /// only sampled an annotation while active.
-    fn composite(&self, times: &[f32], scratch: &mut Arena) -> Vec<UniverseState> {
+    /// Each annotation evaluates one batch of its active times. Samples outside
+    /// its clip must neither contribute output nor cause an evaluation failure.
+    fn composite(&self, times: &[f32], scratch: &mut Arena) -> Result<Vec<UniverseState>, String> {
         let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
         for ann in &self.annotations {
-            // Skip annotations active at none of the requested times — for realtime
-            // (one frame) only the few under the playhead evaluate, instead of
-            // every annotation on the track every frame. This is the dominant
-            // per-frame cost on large tracks/venues.
-            if !times.iter().any(|&t| t >= ann.span.0 && t < ann.span.1) {
+            let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
+            if !times.iter().any(active) {
                 continue;
             }
-            let got = eval(ann.plan.as_ref(), times, scratch);
-            for (k, &t) in times.iter().enumerate() {
-                if t >= ann.span.0 && t < ann.span.1 {
-                    composite_frame(
-                        &mut frames[k],
-                        &got[k],
-                        &ann.plan.outputs,
-                        ann.blend_mode,
-                        1.0,
-                        None,
-                    );
-                }
+            let sample_times: std::borrow::Cow<'_, [f32]> = if times.iter().all(active) {
+                times.into()
+            } else {
+                times
+                    .iter()
+                    .copied()
+                    .filter(active)
+                    .collect::<Vec<_>>()
+                    .into()
+            };
+            let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
+            for ((k, _), frame) in times.iter().enumerate().filter(|(_, t)| active(t)).zip(got) {
+                composite_frame(
+                    &mut frames[k],
+                    &frame,
+                    &ann.plan.outputs,
+                    ann.blend_mode,
+                    1.0,
+                    None,
+                );
             }
         }
-        frames
+        Ok(frames)
     }
 }

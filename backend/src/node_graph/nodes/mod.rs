@@ -1,3 +1,4 @@
+pub(crate) mod legacy_options;
 use crate::models::node_graph::*;
 
 mod analysis;

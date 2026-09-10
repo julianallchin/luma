@@ -73,7 +73,7 @@ async fn eval_pattern_frames(
         beat_grid,
     )
     .await;
-    let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
+    let plan = compile_pattern(&graph, &args, ctx, primitive_ids)
         .map_err(|e| format!("Failed to compile pattern: {:?}", e))?;
     let scene = Scene::new(vec![crate::eval::CompiledAnnotation {
         plan: std::sync::Arc::new(plan),

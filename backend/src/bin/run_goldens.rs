@@ -1,4 +1,4 @@
-//! Runs every captured golden through the NEW eval engine and compares to the
+//! Runs every captured golden through the canonical tensor evaluator and compares to the
 //! legacy output. For each fixture: load the graph from the DB, take the resolved
 //! primitive ids / args / span from the golden, compile -> eval -> diff.
 //!
@@ -8,11 +8,10 @@
 //! + rotation + base), audio is decoded resident, and sample times are clamped to
 //! the annotation span (the capture sampled some out-of-span frames legacy held at
 //! the boundary). Comparison is on the emitted `dimmer × color`, not the HSV-split
-//! channels. Reports pass / fail(diff) / skip(unlowered node), plus a histogram of
-//! the node types still to lower.
+//! channels. Reports pass / fail(diff) / skip(invalid graph).
 
 use luma_lib::audio::{load_or_decode_audio, read_pcm_file, stereo_to_mono};
-use luma_lib::eval::compile::{compile_pattern, CompileError};
+use luma_lib::eval::compile::compile_pattern;
 use luma_lib::eval::{eval, Arena, ResidentAudio, ResidentContext};
 use luma_lib::models::node_graph::{BeatGrid, Graph};
 use luma_lib::services::tracks::TARGET_SAMPLE_RATE;
@@ -20,7 +19,7 @@ use luma_lib::storage::StorageRoot;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -292,7 +291,6 @@ async fn main() {
     files.sort();
 
     let (mut pass, mut fail, mut skip) = (0u32, 0u32, 0u32);
-    let mut unlowered: BTreeMap<String, u32> = BTreeMap::new();
     let mut fails: Vec<(String, f32)> = Vec::new();
     let mut audio_cache: HashMap<String, Option<ResidentAudio>> = HashMap::new();
     // Rough-match threshold on mean absolute error of the emitted output. A clean
@@ -410,13 +408,7 @@ async fn main() {
             ..Default::default()
         };
 
-        match compile_pattern(
-            &graph.nodes,
-            &graph.edges,
-            &args,
-            ctx,
-            primitive_ids.clone(),
-        ) {
+        match compile_pattern(&graph, &args, ctx, primitive_ids.clone()) {
             Ok(plan) => {
                 let mut arena = Arena::default();
                 let got = eval(&plan, &times, &mut arena);
@@ -474,11 +466,6 @@ async fn main() {
                     println!("  FAIL  {name:32} mae={mae:.4} max={max_diff:.3}  {worst}");
                 }
             }
-            Err(CompileError::UnknownNode { type_id, .. }) => {
-                skip += 1;
-                *unlowered.entry(type_id).or_default() += 1;
-                println!("  SKIP  {name:32} (unlowered node)");
-            }
             Err(e) => {
                 skip += 1;
                 println!("  SKIP  {name:32} ({e:?})");
@@ -492,8 +479,5 @@ async fn main() {
     );
     if !fails.is_empty() {
         println!("fails (max diff): {:?}", fails);
-    }
-    if !unlowered.is_empty() {
-        println!("unlowered node types (count): {:?}", unlowered);
     }
 }

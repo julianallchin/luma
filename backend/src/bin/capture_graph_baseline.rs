@@ -83,7 +83,7 @@ async fn main() -> Result<(), String> {
             grid,
         )
         .await;
-        let plan = eval::compile::compile_pattern(&graph.nodes, &graph.edges, &values, ctx, ids)
+        let plan = eval::compile::compile_pattern(&graph, &values, ctx, ids)
             .map_err(|e| format!("{name}: {e:?}"))?;
         let times: Vec<f32> = (0..65)
             .map(|i| start + (end - start) * (i as f32 / 65.0))
@@ -92,41 +92,24 @@ async fn main() -> Result<(), String> {
         let lit = frames
             .iter()
             .any(|f| f.primitives.values().any(|p| p.dimmer > 0.0001));
-        let calibration: Vec<_> = plan
-            .ops
-            .iter()
-            .filter_map(|op| {
-                use eval::{ops::signals::SignalOp, OpKind};
-                let (kind, index) = match op.kind {
-                    OpKind::Signal(SignalOp::Normalize { stat_idx }) => ("normalize", stat_idx),
-                    OpKind::Signal(SignalOp::Invert { stat_idx }) => ("invert", stat_idx),
-                    _ => return None,
-                };
-                let source = plan
-                    .ops
-                    .iter()
-                    .find(|source| op.inputs.first() == Some(&source.out));
-                Some(
-                    json!({"kind":kind,"min":plan.ctx.frozen[index],"max":plan.ctx.frozen[index+1],
-                "input":source.map(|source| format!("{:?}", source.kind))}),
-                )
-            })
-            .collect();
         let data = json!({"pattern_id":pattern,"name":name,"clip_id":clip,"track_id":track,"venue_id":venue,
             "score_id":row.get::<String,_>("score_id"),"z_index":row.get::<i64,_>("z_index"),
             "blend_mode":row.get::<String,_>("blend_mode"),
             "start":start,"end":end,"args":values,"graph":graph,"times":times,"frames":frames,
-            "calibration":calibration,"heads":plan.primitive_ids,"positions":plan.ctx.positions,"beat_grid":plan.ctx.beat_grid,
-            "writes":{"color":plan.outputs.color.is_some(),"dimmer":plan.outputs.dimmer.is_some(),
-                "position":plan.outputs.position.is_some(),"strobe":plan.outputs.strobe.is_some(),"speed":plan.outputs.speed.is_some()}});
+            "heads":plan.primitive_ids,"positions":plan.ctx.positions,"beat_grid":plan.ctx.beat_grid,
+            "writes":{"color":plan.outputs.color,"dimmer":plan.outputs.dimmer,
+                "position":plan.outputs.position,"strobe":plan.outputs.strobe,"speed":plan.outputs.speed}});
         let file = format!("{}.json", if all_clips { &clip } else { &pattern });
         std::fs::write(
             output.join(&file),
             serde_json::to_vec(&data).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
-        manifest.push(json!({"pattern":pattern,"name":name,"clip":clip,"file":file,"heads":plan.n,"has_light":lit}));
-        eprintln!("Captured {name}: {} heads, lit={lit}", plan.n);
+        manifest.push(json!({"pattern":pattern,"name":name,"clip":clip,"file":file,"heads":plan.primitive_ids.len(),"has_light":lit}));
+        eprintln!(
+            "Captured {name}: {} heads, lit={lit}",
+            plan.primitive_ids.len()
+        );
     }
     std::fs::write(
         output.join("manifest.json"),

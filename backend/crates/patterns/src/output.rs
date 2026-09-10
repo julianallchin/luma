@@ -99,3 +99,38 @@ impl FixtureOutput {
         Ok(())
     }
 }
+
+pub(crate) fn terminal_definition() -> crate::Definition {
+    use crate::*;
+    use std::collections::BTreeMap;
+    let port = |name: &str, value: Value| Input {
+        optional: true,
+        name: name.into(),
+        description: "Unwired leaves this capability untouched".into(),
+        value_type: value.value_type(),
+        rate: Rate::Frame,
+        default: Some(value),
+    };
+    Definition {
+        name: "Output".into(),
+        inputs: BTreeMap::from([
+            ("color".into(), port("Color", Value::Color([1.0; 3]))),
+            ("dimmer".into(), port("Dimmer", Value::Proportion(1.0))),
+            ("pan".into(), port("Pan (degrees)", Value::Degrees(0.0))),
+            ("tilt".into(), port("Tilt (degrees)", Value::Degrees(0.0))),
+            ("strobe".into(), port("Strobe", Value::Proportion(0.0))),
+            (
+                "speed".into(),
+                port("Movement speed", Value::Proportion(1.0)),
+            ),
+        ]),
+        outputs: BTreeMap::from([(
+            "lighting".into(),
+            Output {
+                value_type: ValueType::Lighting,
+                rate: Rate::Frame,
+            },
+        )]),
+        body: Body::Primitive(Primitive::Output),
+    }
+}

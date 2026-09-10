@@ -33,196 +33,48 @@
 
 #![cfg(all(feature = "app", feature = "pixel"))]
 
-use super::support;
-use support::session;
-
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use super::support::{self, Fixture};
+use gpui_agent::{Harness, Mode};
+use serde_json::{json, Value};
 use std::time::Duration;
 
-use gpui::{AnyView, App, AppContext as _, Window};
-use gpui_agent::{Config, Harness, Mode};
-use serde_json::{json, Value};
-
-/// Idempotency keys, as in `headless/graph.rs`: fixed UUIDs so re-seeding a
-/// directory replays rather than duplicates.
-const REQUEST_ID: &str = "7f1c2c61-0000-4000-8000-000000000001";
-const OPERATION_ID: &str = "7f1c2c61-0000-4000-8000-000000000002";
-const SCORE_REQUEST_ID: &str = "7f1c2c61-0000-4000-8000-000000000003";
-
-const PATTERN: &str = "Budget Graph";
-
-/// A 12 × 10 grid — 120 nodes, chained along each row. Real patterns run a
-/// dozen nodes; the budget is taken an order of magnitude past that so the
-/// number moves before anyone feels it.
 const COLUMNS: usize = 12;
 const ROWS: usize = 10;
-const NODE_COUNT: usize = COLUMNS * ROWS;
-
-/// 120 Hz — the same bar `track_editor_budget` holds the timeline to.
+const NODE_COUNT: usize = COLUMNS * ROWS + 1;
 const BUDGET_MS: f64 = 8.33;
 
-/// Build a pattern whose graph is `NODE_COUNT` `round` nodes on a grid, each
-/// row chained `out -> in`. `round` on purpose: its card carries a selector,
-/// so the measure pass and the paint both do real per-card work (a ghost
-/// stack of shaped options), which is what a busy real graph looks like.
-async fn seed(config_dir: &Path) -> String {
-    let db = luma_lib::database::local::database::init_app_db_at(config_dir)
-        .await
-        .expect("failed to open the fixture database");
-    let audio = config_dir.join("aurora.wav");
-    std::fs::write(&audio, support::wav(8)).expect("failed to write the fixture audio");
-    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
-        .bind(support::VENUE)
-        .bind(session::PRINCIPAL)
-        .bind(support::VENUE_NAME)
-        .execute(&db.0)
-        .await
-        .expect("failed to seed the venue");
-    sqlx::query(
-        "INSERT INTO tracks
-            (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-         VALUES (?, ?, 'graph-aurora-8s', ?, 'Nightliner', 8.0, ?, CURRENT_TIMESTAMP)",
-    )
-    .bind(support::TRACK)
-    .bind(session::PRINCIPAL)
-    .bind(support::TRACK_NAME)
-    .bind(audio.to_string_lossy().to_string())
-    .execute(&db.0)
-    .await
-    .expect("failed to seed the track");
-    session::signed_in(config_dir).await;
-    let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
-        .await
-        .expect("failed to open the fixture state database");
-    luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
-        .await
-        .expect("failed to arm admission");
-    let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
-    let workspaces = Arc::new(
-        luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
-            storage.agent_workspaces_dir(),
-            Arc::new(|| Err("the fixture does not run Python workspaces".to_string())),
-        ),
-    );
-    let services = luma_lib::dispatch::AppServices::headless(
-        db,
-        state_db,
-        storage,
-        config_dir.to_path_buf(),
-        workspaces,
-    );
-
-    call(
-        &services,
-        "create_score",
-        json!({
-            "requestId": SCORE_REQUEST_ID,
-            "trackId": support::TRACK,
-            "venueId": support::VENUE,
-            "name": "Fixture Score",
-        }),
-    )
-    .await;
-
-    let pattern = call(
-        &services,
-        "create_pattern",
-        json!({ "requestId": REQUEST_ID, "name": PATTERN, "description": null }),
-    )
-    .await;
-    let id = pattern["id"].as_str().expect("a created pattern has an id");
-    let document = call(
-        &services,
-        "get_pattern_graph_document",
-        json!({ "id": id, "implementationId": null }),
-    )
-    .await;
-
-    let nodes: Vec<Value> = (0..NODE_COUNT)
-        .map(|index| {
-            json!({
-                "id": format!("r{index}"),
-                "typeId": "round",
-                "params": {},
-                "positionX": (index % COLUMNS) as f64 * 260.0,
-                "positionY": (index / COLUMNS) as f64 * 220.0,
-            })
-        })
-        .collect();
-    let edges: Vec<Value> = (0..NODE_COUNT)
-        .filter(|index| (index + 1) % COLUMNS != 0)
-        .map(|index| {
-            json!({
-                "id": format!("e{index}"),
-                "fromNode": format!("r{index}"),
-                "fromPort": "out",
-                "toNode": format!("r{}", index + 1),
-                "toPort": "in",
-            })
-        })
-        .collect();
-    call(
-        &services,
-        "save_pattern_graph_document",
-        json!({
-            "id": id,
-            "implementationId": document["implementationId"],
-            "operationId": OPERATION_ID,
-            "baseRevision": document["revision"],
-            "graph": { "nodes": nodes, "edges": edges, "args": [] },
-        }),
-    )
-    .await;
-
-    id.to_string()
-}
-
-async fn call(services: &luma_lib::dispatch::AppServices, name: &str, args: Value) -> Value {
-    luma_lib::dispatch::dispatch(services, name, &args)
-        .await
-        .unwrap_or_else(|error| panic!("fixture command {name} failed: {error}"))
-}
-
-fn fixture_config_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("luma-gpui-graph-budget-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
-    std::fs::create_dir_all(&dir).expect("failed to create the temporary config directory");
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("failed to start the fixture runtime")
-        .block_on(seed(&dir));
-    dir
-}
-
 fn harness() -> Harness {
-    let config_dir = fixture_config_dir();
-    let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
-        luma_app::init(cx);
-        let library = luma_app::Library::open().expect("failed to open the fixture library");
-        cx.new(|cx| luma_app::Luma::new(library, cx)).into()
-    });
-    Harness::headless(
-        Config {
-            mode: Mode::Pixel,
-            call_timeout: Duration::from_secs(60),
-            runtime: support::runtime(config_dir),
-            ..Config::default()
-        },
-        root,
-    )
-    .expect("failed to start the harness")
+    let mut nodes = serde_json::Map::new();
+    for row in 0..ROWS {
+        for column in 0..COLUMNS {
+            let input = if column == 0 {
+                json!({"source":"value","value":{"type":"proportion","value":0.5}})
+            } else {
+                json!({"source":"connection","node":format!("{row}-{}",column-1),"output":"value"})
+            };
+            nodes.insert(
+                format!("{row}-{column}"),
+                json!({"definition":"core/floor",
+                "position":[column*240,row*140],"inputs":{"value":input}}),
+            );
+        }
+    }
+    nodes.insert("output".into(),json!({"definition":"output","position":[COLUMNS*240,0],
+        "inputs":{"dimmer":{"source":"connection","node":format!("0-{}",COLUMNS-1),"output":"value"}}}));
+    Fixture::new("graph-budget",8,vec![]).with_graph_score(json!({
+        "version":3,"definitions":{"budget":{"name":"Budget Graph","inputs":{},
+            "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
+            "body":{"kind":"graph","body":{"nodes":nodes,
+                "outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
+        }},"clips":{"clip":{"graph":"budget","start":0,"duration":8,"seed":0}}
+    })).with_rig().open(Mode::Pixel)
 }
 
 /// Open the graph, then pan and zoom as continuous gestures — steady-state
 /// frames, exactly as `track_editor_budget` measures its legs.
 const SCRIPT: &str = r#"
     nav.trackEditor("Test Venue", "Aurora");
-    nav.patterns();
-    app.frames(6);
-    nav.step("the pattern Budget Graph", "row", "Budget Graph");
-    nav.expand();
+    nav.expand();nav.stageOff();nav.pattern("Budget Graph");
     app.frames(8);
 
     /** Every frame drawn while `run` ran, as total CPU milliseconds. */
@@ -236,7 +88,7 @@ const SCRIPT: &str = r#"
     }
 
     function graphCards() {
-        return app.snapshot().findAll({ role: "card", label: "Round" });
+        return app.snapshot().findAll({ role: "card", label: "Floor" });
     }
 
     const cards = graphCards();

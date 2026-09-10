@@ -64,7 +64,7 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
             ({{ before: before.length, rows }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat("chat-context"),
+            open = chat::open_chat(),
             send = chat::send(),
             reading = chat::CONTEXT_READING,
         ),

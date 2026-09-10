@@ -11,6 +11,51 @@ from luma_exec.track import TrackError
 
 
 class ScoreTests(unittest.TestCase):
+    def test_gradient_literals_keep_opacity_and_leave_schema_validation_to_the_core(self):
+        stops = {"stops": [{"t": 0, "color": "#ff0000", "alpha": .2},
+                            {"t": 1, "color": [0., 0., 1.], "alpha": 0.}]}
+        original = copy.deepcopy(stops)
+        typed = _typed("gradient", stops)["value"]
+        self.assertEqual([stop["alpha"] for stop in typed["stops"]], [.2, 0.])
+        self.assertEqual(typed["stops"][0]["color"], [1., 0., 0.])
+        self.assertEqual(stops, original)
+        # Unknown fields must reach Rust's deny_unknown_fields checks, not vanish.
+        stops["stops"][0]["opacity"] = .5
+        self.assertIn("opacity", _typed("gradient", stops)["value"]["stops"][0])
+        self.assertEqual(_typed("gradient", {"stops": []}), {"type": "gradient", "value": {"stops": []}})
+
+    def test_seed_controls_keep_every_bit_in_json(self):
+        for seed in [0, (1 << 53) + 1, (1 << 64) - 2, (1 << 64) - 1]:
+            expected = {"type": "seed", "value": str(seed)}
+            for value in [seed, str(seed), {"type": "seed", "value": seed}]:
+                self.assertEqual(json.loads(json.dumps(_typed("seed", value))), expected)
+        for value in [-1, 1 << 64, 1.5, True, "1.5", "NaN", "", None]:
+            with self.assertRaises(TrackError):
+                _typed("seed", value)
+
+    def test_signal_sockets_accept_numbers_colors_and_unit_literals(self):
+        signal = {"signal": {"unit": None, "channels": None}}
+        self.assertEqual(_typed(signal, .25), {"type": "number", "value": .25})
+        self.assertEqual(_typed(signal, "#ff0000"), {"type": "color", "value": [1., 0., 0.]})
+        angle = {"signal": {"unit": "degrees", "channels": "value"}}
+        self.assertEqual(_typed(angle, 90), {"type": "degrees", "value": 90})
+        seconds = {"signal": {"unit": "seconds", "channels": "value"}}
+        self.assertEqual(_typed(seconds, .25), {"type": "seconds", "value": .25})
+        self.assertEqual(_typed(signal, {"type": "seconds", "value": .25}),
+                         {"type": "seconds", "value": .25})
+        with self.assertRaises(TrackError):
+            _typed(signal, {"type": "boundary", "value": "wrap"})
+
+    def test_mapping_choices_and_structured_mirror_values(self):
+        self.assertEqual(_typed("mapping", "vector")["value"]["source"],
+                         {"kind": "vector", "direction": [1.0, 0.0, 1.0]})
+        self.assertEqual(_typed("mapping", "major_axis")["value"]["source"],
+                         {"kind": "major_axis", "toward": [0.0, 0.0, 1.0]})
+        mapping = {"source": {"kind": "vector", "direction": [1.0, 0.0, 2.0]},
+                   "mirror": {"normal": [1.0, 0.0, 0.0], "offset": .25},
+                   "reverse": True, "per_group": True}
+        self.assertEqual(_typed("mapping", mapping), {"type": "mapping", "value": mapping})
+
     def track(self):
         nodes = {"chase": {"name": "Chase", "inputs": {
             key: {"name": key, "description": "", "value_type": kind, "rate": "frame", "default": {"type": kind, "value": default}}
@@ -20,12 +65,35 @@ class ScoreTests(unittest.TestCase):
         self.calls = []
         def call(method, payload):
             self.calls.append((method, copy.deepcopy(payload)))
+            if method == "track.score_upgrade":
+                candidate = copy.deepcopy(payload["candidate"])
+                candidate["version"] = 3
+                return candidate
+            if method == "track.graph_instance":
+                child = copy.deepcopy((nodes | payload["candidate"]["definitions"])[payload["definition"]])
+                child["body"] = {"kind": "graph", "body": {
+                    "nodes": {"effect": {"definition": payload["definition"], "inputs": {key: {"source": "input", "input": key} for key in child["inputs"]}}},
+                    "outputs": {key: {"source": "connection", "node": "effect", "output": key} for key in child["outputs"]},
+                }}
+                return child
             if method == "track.score_apply":
                 return {"revision": "next", "score": payload["candidate"]}
             return {"ok": True}
         return GraphTrack({"id": "track", "title": "Test", "revision": "base", "editable": True,
-                           "beat_origin_s": 1.5, "document": {"version": 2, "definitions": {}, "clips": {}}},
+                           "beat_origin_s": 1.5, "document": {"version": 3, "definitions": {}, "clips": {}}},
                           nodes=nodes, features={"beats": [1., 1.5, 2., 3., 4.], "downbeats": [1.5, 5.]}, host_call=call)
+
+    def test_v2_edit_upgrades_a_copy_and_keeps_the_saved_revision_as_its_base(self):
+        track = self.track()
+        track._document["version"] = 2
+        edit = track.edit()
+        self.assertEqual(edit.candidate["version"], 3)
+        self.assertEqual(track._document["version"], 2)
+        self.assertEqual(edit.base_revision, "base")
+        self.assertEqual(self.calls[0][0], "track.score_upgrade")
+        edit.apply()
+        self.assertEqual(self.calls[-1][1]["baseRevision"], "base")
+        self.assertEqual(self.calls[-1][1]["candidate"]["version"], 3)
 
     def test_manifest_refresh_keeps_live_track_and_revokes_departed_scope(self):
         from luma_exec.bindings import build_namespace, reconcile_facades

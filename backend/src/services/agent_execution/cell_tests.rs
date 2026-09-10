@@ -593,9 +593,10 @@ async fn python_edits_canonical_graph_scores_and_detached_workspaces() {
         track_id: TRACK_ID.into(),
         venue_id: f.venue_id.clone(),
     };
-    let empty =
-        crate::services::graph_scores::GraphScoreDocument::new(luma_patterns::Score::default())
-            .unwrap();
+    let empty = crate::services::graph_scores::GraphScoreDocument::new(
+        serde_json::from_value(json!({"version":2,"definitions":{},"clips":{}})).unwrap(),
+    )
+    .unwrap();
     f.authored
         .apply_score_source_for_scope(
             &f.pool,
@@ -616,15 +617,17 @@ async fn python_edits_canonical_graph_scores_and_detached_workspaces() {
 import json, numpy as np
 assert 'patterns' not in dir(luma)
 edit = luma.track.edit()
+assert edit.candidate['version'] == 3
+assert luma.track.document['version'] == 2
 graph = edit.graph(id='effect')
 shape = graph.node('soft_edges', id='shape', softness=.3)
 path = {'points': [[0, 0], [1, 1]], 'curves': [{'kind': 'bezier', 'control1': [.3, 0], 'control2': [.7, 1]}]}
 chase = graph.node('chase', id='chase', shape=shape.output(), path=path, mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
 position = graph.node('write_position', id='aim')
-combined = graph.node('add_lighting', id='combined', a=chase.output(), b=position.output())
-graph.output(combined.output())
+output = graph.node('output', id='output', dimmer=chase.output(), pan=position.output('pan'), tilt=position.output('tilt'))
+graph.output(output.output())
 graph.expose(chase, 'width', name='Stroke width')
-graph.expose(chase, 'color')
+graph.expose(output, 'color')
 custom = chase.customize(id='my-chase')
 custom.rename('My chase')
 assert graph.definition()['body']['body']['nodes']['chase']['definition'] == 'my-chase'
@@ -918,7 +921,7 @@ except RuntimeError as error:
         if effect == "band_pulse" {
             request.inputs.insert(
                 "source".into(),
-                luma_patterns::Value::AudioSource(luma_patterns::AudioSource::Bass),
+                luma_patterns::Value::AudioSource(luma_patterns::AudioSource::Bass.into()),
             );
             let error = crate::services::composable_patterns::preview(
                 &f.pool,
@@ -1014,81 +1017,144 @@ async fn python_authors_a_pattern_then_renders_and_places_it() {
     )
     .await
     .unwrap();
-    // Force a manifest refresh between opening the draft and saving it.
+    let scope = crate::services::track_edits::TrackScope {
+        score_id: SCORE_ID.into(),
+        track_id: TRACK_ID.into(),
+        venue_id: f.venue_id.clone(),
+    };
+    let current = f
+        .authored
+        .current_revision(&f.pool, Some("owner"), &thread)
+        .await
+        .unwrap();
+    let crate::models::authored_state::AuthoredProjectedDocument::TrackScore { revision } =
+        current.document
+    else {
+        panic!()
+    };
+    let empty =
+        crate::services::graph_scores::GraphScoreDocument::new(luma_patterns::Score::default())
+            .unwrap();
+    f.authored
+        .apply_score_source_for_scope(
+            &f.pool,
+            Some("owner"),
+            scope.clone(),
+            "canonical-authoring-start",
+            &empty.source().unwrap(),
+            &revision,
+            "Start graph score",
+        )
+        .await
+        .unwrap();
+    let patterns_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    // The same graph edit survives a binding refresh between Python cells.
     let opened = f
         .run_as_owner(
             &thread,
             turn,
-            "draft = luma.track.pattern('Authored soft chase')",
+            "edit = luma.track.edit(); graph = edit.graph('effect', name='Authored soft chase')",
         )
         .await;
-    expect_ok(&opened, "open Pattern draft");
+    expect_ok(&opened, "open graph edit");
     let code = r#"
 import numpy as np
-p = draft
-shape = p.node("soft_edges", softness=0.3)
-chase = p.node("chase", shape=shape.output("shape"), mapping="order", boundary="wrap", width=1.0,
-               color=[0.2, 0.5, 1.0], grid_aligned=False)
-p.expose(chase, "width")
-assert p.definition("chase")["body"]["kind"] == "graph"
-original = p.graph()
-exec(p.source())
-assert p.graph() == original
-p = draft
-assert p.check()["valid"]
-request = p._request()
-pattern_id = p.save()
-assert p.save() == pattern_id
-edit = luma.track.edit()
-edit.add_clip(pattern_id, seconds=(1.0, 2.0), z=0, selection="all", args={"width": 0.8})
+assert not hasattr(luma.track, 'pattern')
+shape = graph.node('soft_edges', softness=0.3)
+chase = graph.node('chase', shape=shape.output(), mapping='order', boundary='wrap', width=1.0,
+                   grid_aligned=False)
+palette = graph.node('sample_gradient', id='palette', position=.5, gradient={'stops': [
+    {'t': 0., 'color': '#4080ff', 'alpha': .2},
+    {'t': 1., 'color': '#4080ff', 'alpha': .8}]})
+intensity = graph.node('core/multiply', a=chase.output(), b=palette.output('opacity'))
+output = graph.node('output', dimmer=intensity.output(), color=palette.output('color'))
+graph.output(output.output())
+graph.expose(chase, 'width')
+graph.expose(palette, 'gradient', name='Colors')
+assert edit.definition('chase')['body']['kind'] == 'graph'
+original = edit.candidate
+edit.replace_source(edit.source())
+assert edit.candidate == original
+clip = edit.add_clip(graph, id='clip', seconds=(1.0, 2.0), z=0, selection='all', inputs={
+    'width': 0.8, 'gradient': {'stops': [{'t': 0., 'color': '#4080ff', 'alpha': .4}]}})
+assert edit.check()
 rendered = edit.window(seconds=(1.0, 2.0)).output.tensor
 assert np.max(rendered.values) > 0
+assert np.max(rendered.values) <= .4 + 1e-6, 'opacity did not reach rendered brightness'
+request = {'baseRevision': edit.base_revision, 'candidate': edit.candidate}
 applied = edit.apply()
-(applied.added, rendered.shape)
+saved_document = luma.track.document
+assert saved_document['clips']['clip']['graph'] == graph.id
+assert [s['alpha'] for s in saved_document['definitions']['effect']['inputs']['gradient']['default']['value']['stops']] == [.2, .8]
+assert saved_document['clips']['clip']['inputs']['gradient']['value']['stops'][0]['alpha'] == .4
+(clip.id, rendered.shape)
 "#;
     let out = f.run_as_owner(&thread, turn, code).await;
     expect_ok(
         &out,
-        "author, roundtrip, check, save, render and place Pattern",
+        "author, roundtrip, preview and save a canonical graph and clip",
     );
-    assert_eq!(out.repr.as_deref(), Some("(1, (2, 32, 3))"));
+    assert_eq!(out.repr.as_deref(), Some("('clip', (2, 32, 3))"));
     let replay = f
         .run_as_owner(
             &thread,
             turn,
-            "_luma_host_call('track.pattern_create', request)['id'] == pattern_id",
+            "_luma_host_call('track.score_apply', request)['revision'] == applied",
         )
         .await;
-    expect_ok(&replay, "retry Pattern creation");
+    expect_ok(&replay, "retry graph score creation");
     assert_eq!(replay.repr.as_deref(), Some("True"));
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM patterns WHERE name = 'Authored soft chase' AND score_id = ?",
-    )
-    .bind(SCORE_ID)
-    .fetch_one(&f.pool)
-    .await
-    .unwrap();
-    assert_eq!(count, 1);
-    // An invalid structured control must fail before a Pattern is persisted.
+    let patterns_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        patterns_after, patterns_before,
+        "graph authoring created a separate Pattern row"
+    );
     let invalid = f
         .run_as_owner(
             &thread,
             turn,
             r#"
-bad = luma.track.pattern("Invalid envelope")
-bad.node("chase", shape={"points": [[0, 1], [0, 0]]})
-bad.save()
+bad = luma.track.edit()
+bad.graph('invalid').node('chase', shape={'points': [[0, 1], [0, 0]]})
+bad.apply()
 "#,
         )
         .await;
     assert_eq!(invalid.status, "error");
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM patterns WHERE name = 'Invalid envelope'")
-            .fetch_one(&f.pool)
-            .await
-            .unwrap();
-    assert_eq!(count, 0);
-    f.service.shutdown_all();
+    let malformed = f
+        .run_as_owner(
+            &thread,
+            turn,
+            r#"
+bad = luma.track.edit()
+bad.graph('invalid-gradient').node('sample_gradient', gradient={
+    'stops': [{'t': 0., 'color': '#ffffff', 'opacity': .2}]})
+bad.apply()
+"#,
+        )
+        .await;
+    assert_eq!(
+        malformed.status, "error",
+        "unknown gradient fields vanished in Python"
+    );
+    let intact = f
+        .run_as_owner(
+            &thread,
+            turn,
+            "luma.track.document == saved_document and luma.track.revision == applied",
+        )
+        .await;
+    expect_ok(
+        &intact,
+        "invalid curve and gradient left the saved score unchanged",
+    );
+    assert_eq!(intact.repr.as_deref(), Some("True"));
 }
 
 #[tokio::test]
@@ -1583,7 +1649,6 @@ async fn the_graph_agent_reads_its_own_run_next_to_the_onsets() {
         &f.pool,
         &f.storage,
         &f.resource_root,
-        &crate::audio::FftService::new(),
         &graph,
         &GraphContext {
             track_id: TRACK_ID.into(),

@@ -148,13 +148,12 @@ async fn compile_annotation(
     )
     .await;
 
-    let plan =
-        compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids).map_err(|e| {
-            format!(
-                "Failed to compile pattern {}: {:?}",
-                annotation.pattern_id, e
-            )
-        })?;
+    let plan = compile_pattern(&graph, &args, ctx, primitive_ids).map_err(|e| {
+        format!(
+            "Failed to compile pattern {}: {:?}",
+            annotation.pattern_id, e
+        )
+    })?;
 
     Ok(Some(CompiledAnnotation {
         plan: std::sync::Arc::new(plan),

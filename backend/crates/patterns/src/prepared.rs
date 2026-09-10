@@ -1,33 +1,40 @@
 //! Validated, flattened graphs. Mapping/other fixed outputs are computed once;
 //! the frame loop never walks definitions or repeats geometry solves.
 use crate::{
-    graph::run_primitive, Binding, Body, Cell, Error, Frame, Graph, Library, Primitive, Rate,
-    Result, Value,
+    runtime::{self, Batch, EvaluatedValue},
+    Binding, Body, Cell, Error, Frame, Graph, Library, Primitive, Result, Value,
 };
 use std::collections::BTreeMap;
+mod clip_range;
 
 #[derive(Clone, Debug)]
 enum Source {
-    Constant(Value),
+    Constant(EvaluatedValue),
     Slot(usize),
 }
 #[derive(Clone, Debug)]
 struct Step {
+    label: String,
     primitive: Primitive,
     inputs: BTreeMap<String, Source>,
+    input_types: BTreeMap<String, crate::Input>,
     outputs: BTreeMap<String, usize>,
+    output_types: BTreeMap<String, crate::Output>,
 }
 #[derive(Clone, Debug)]
 pub struct PreparedGraph {
     steps: Vec<Step>,
     outputs: BTreeMap<String, Source>,
+    output_types: BTreeMap<String, crate::Output>,
     slots: usize,
     cells: Vec<Cell>,
+    fixtures: Vec<String>,
     clip_start: f64,
     clip_duration: f64,
     seed: u64,
     features: Option<std::sync::Arc<dyn crate::FeatureSource>>,
     requests: Vec<crate::FeatureRequest>,
+    baked: Vec<Option<EvaluatedValue>>,
 }
 impl PreparedGraph {
     pub fn new(
@@ -57,22 +64,60 @@ impl PreparedGraph {
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
+            output_types: library.definitions[definition].outputs.clone(),
             slots: 0,
             cells: frame.cells.to_vec(),
+            fixtures: {
+                let mut ids: Vec<_> = frame.cells.iter().map(|c| c.id.clone()).collect();
+                ids.sort();
+                ids
+            },
             clip_start: frame.clip_start,
             clip_duration: frame.clip_duration,
             seed: frame.seed,
             features: None,
             requests: Vec::new(),
+            baked: Vec::new(),
         };
         let bound = inputs
             .iter()
-            .map(|(key, value)| (key.clone(), Source::Constant(value.clone())))
-            .collect();
+            .map(|(key, value)| {
+                Ok((
+                    key.clone(),
+                    Source::Constant(EvaluatedValue::literal(value)?),
+                ))
+            })
+            .collect::<Result<_>>()?;
         prepared.outputs = prepared.lower(library, definition, bound)?;
-        // Validate relationships such as travel <= repeat at preparation, not
-        // on the first device tick. Dynamic errors still propagate from render.
+        // A nested definition may offer several independent outputs. Only the
+        // connected ones belong to this program, including during preparation.
+        let live = prepared.live_steps(prepared.steps.len(), &[], prepared.outputs.values());
+        prepared.steps = std::mem::take(&mut prepared.steps)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, step)| live.binary_search(&index).is_ok().then_some(step))
+            .collect();
+        for step in &prepared.steps {
+            let constants = step
+                .inputs
+                .iter()
+                .filter_map(|(name, source)| match source {
+                    Source::Constant(value) => {
+                        Some(value.sample(0).map(|value| (name.clone(), value)))
+                    }
+                    Source::Slot(_) => None,
+                })
+                .collect::<Result<_>>()?;
+            if let Some(request) = crate::features::request(step.primitive, &constants)? {
+                if !prepared.requests.contains(&request) {
+                    prepared.requests.push(request);
+                }
+            }
+        }
+        // Validate fixed controls during preparation, before the first device
+        // tick. Dynamic errors still propagate from render.
         if prepared.requests.is_empty() {
+            prepared.baked = prepared.prepare_fixed(None)?;
             prepared.evaluate(frame.clip_start)?;
         }
         Ok(prepared)
@@ -80,52 +125,141 @@ impl PreparedGraph {
     pub fn feature_requests(&self) -> &[crate::FeatureRequest] {
         &self.requests
     }
+    pub fn output_types(&self) -> &BTreeMap<String, crate::Output> {
+        &self.output_types
+    }
     pub fn with_features(
         mut self,
         features: std::sync::Arc<dyn crate::FeatureSource>,
     ) -> Result<Self> {
         self.features = Some(features);
+        self.baked = self.prepare_fixed(self.features.as_deref())?;
         self.evaluate(self.clip_start)?;
         Ok(self)
     }
     pub fn dynamic_step_count(&self) -> usize {
-        self.steps.len()
+        self.live_steps(self.steps.len(), &self.baked, self.outputs.values())
+            .len()
+    }
+
+    fn live_steps<'a>(
+        &self,
+        before: usize,
+        baked: &[Option<EvaluatedValue>],
+        roots: impl IntoIterator<Item = &'a Source>,
+    ) -> Vec<usize> {
+        let mut needed = vec![false; self.slots];
+        for source in roots {
+            if let Source::Slot(slot) = source {
+                needed[*slot] = true;
+            }
+        }
+        let mut steps = Vec::new();
+        for index in (0..before).rev() {
+            let step = &self.steps[index];
+            if step
+                .outputs
+                .values()
+                .any(|slot| needed[*slot] && baked.get(*slot).is_none_or(Option::is_none))
+            {
+                for source in step.inputs.values() {
+                    if let Source::Slot(slot) = source {
+                        needed[*slot] = true;
+                    }
+                }
+                steps.push(index);
+            }
+        }
+        steps.reverse();
+        steps
     }
     pub fn cell_count(&self) -> usize {
         self.cells.len()
     }
     pub fn evaluate(&self, beat: f64) -> Result<BTreeMap<String, Value>> {
-        if !beat.is_finite() {
+        self.evaluate_batch(&[beat])?
+            .into_iter()
+            .map(|(key, value)| Ok((key, value.sample(0)?)))
+            .collect()
+    }
+    pub fn evaluate_batch(&self, beats: &[f64]) -> Result<BTreeMap<String, EvaluatedValue>> {
+        self.evaluate_cached(beats, self.features.as_deref(), &self.baked)
+    }
+    pub(crate) fn evaluate_using(
+        &self,
+        beats: &[f64],
+        features: Option<&dyn crate::FeatureSource>,
+    ) -> Result<BTreeMap<String, EvaluatedValue>> {
+        let baked = self.prepare_fixed(features)?;
+        self.evaluate_cached(beats, features, &baked)
+    }
+    fn evaluate_cached(
+        &self,
+        beats: &[f64],
+        features: Option<&dyn crate::FeatureSource>,
+        baked: &[Option<EvaluatedValue>],
+    ) -> Result<BTreeMap<String, EvaluatedValue>> {
+        if beats.iter().any(|beat| !beat.is_finite()) {
             return Err(Error("musical time must be finite".into()));
         }
-        let mut slots = vec![None; self.slots];
-        for step in &self.steps {
-            let inputs = step
-                .inputs
-                .iter()
-                .map(|(key, source)| Ok((key.clone(), source.read(&slots)?)))
-                .collect::<Result<_>>()?;
-            let outputs = run_primitive(
-                step.primitive,
-                &inputs,
-                Frame {
-                    features: self.features.as_deref(),
-                    beat,
-                    clip_start: self.clip_start,
-                    clip_duration: self.clip_duration,
-                    seed: self.seed,
-                    cells: &self.cells,
-                },
-            )?;
+        let clock = crate::Signal::series(beats, crate::Unit::Number)?;
+        let mut slots = if baked.is_empty() {
+            vec![None; self.slots]
+        } else {
+            baked.to_vec()
+        };
+        for index in self.live_steps(self.steps.len(), baked, self.outputs.values()) {
+            let step = &self.steps[index];
+            let outputs = self.run_step(step, beats, &clock, features, &slots)?;
             for (name, value) in outputs {
-                value.validate()?;
                 slots[step.outputs[&name]] = Some(value);
             }
         }
         self.outputs
             .iter()
-            .map(|(name, source)| Ok((name.clone(), source.read(&slots)?)))
+            .map(|(name, source)| {
+                Ok((
+                    name.clone(),
+                    source
+                        .read(&slots)?
+                        .declared(self.output_types[name].value_type)?,
+                ))
+            })
             .collect()
+    }
+    fn run_step(
+        &self,
+        step: &Step,
+        beats: &[f64],
+        clock: &crate::Signal,
+        features: Option<&dyn crate::FeatureSource>,
+        slots: &[Option<EvaluatedValue>],
+    ) -> Result<BTreeMap<String, EvaluatedValue>> {
+        let inputs = step
+            .inputs
+            .iter()
+            .map(|(key, source)| Ok((key.clone(), source.read(slots)?)))
+            .collect::<Result<_>>()?;
+        runtime::run(
+            step.primitive,
+            &inputs,
+            &step.input_types,
+            &step.output_types,
+            Batch {
+                times: beats,
+                clock,
+                fixtures: &self.fixtures,
+                frame: Frame {
+                    features,
+                    beat: self.clip_start,
+                    clip_start: self.clip_start,
+                    clip_duration: self.clip_duration,
+                    seed: self.seed,
+                    cells: &self.cells,
+                },
+            },
+        )
+        .map_err(|error| Error(format!("{}: {error}", step.label)))
     }
     fn lower(
         &mut self,
@@ -141,16 +275,25 @@ impl PreparedGraph {
         }
         for (name, input) in &definition.inputs {
             if !inputs.contains_key(name) {
+                if input.optional {
+                    continue;
+                }
                 let value = input
                     .default
                     .as_ref()
                     .ok_or_else(|| Error(format!("{id}: required input {name}")))?;
-                inputs.insert(name.clone(), Source::Constant(value.clone()));
+                inputs.insert(
+                    name.clone(),
+                    Source::Constant(EvaluatedValue::literal(value)?),
+                );
             }
             if let Source::Constant(value) = &inputs[name] {
-                value.validate()?;
-                if value.value_type() != input.value_type {
-                    return Err(Error(format!("{id}.{name}: input type mismatch")));
+                if !input.value_type.accepts(value.kind()) {
+                    return Err(Error(format!(
+                        "{id}.{name}: expected {:?}, got {:?}",
+                        input.value_type,
+                        value.kind()
+                    )));
                 }
             }
         }
@@ -159,44 +302,45 @@ impl PreparedGraph {
                 let constants: BTreeMap<_, _> = inputs
                     .iter()
                     .filter_map(|(name, source)| match source {
-                        Source::Constant(value) => Some((name.clone(), value.clone())),
+                        Source::Constant(value) => {
+                            Some(value.sample(0).map(|value| (name.clone(), value)))
+                        }
                         _ => None,
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
                 validate_parameters(*primitive, &constants)?;
-                if let Some(request) = crate::features::request(*primitive, &constants)? {
-                    if !self.requests.contains(&request) {
-                        self.requests.push(request);
-                    }
-                }
-                if definition.outputs.values().all(|o| o.rate == Rate::Fixed)
-                    || (!primitive.reads_time()
-                        && inputs
-                            .values()
-                            .all(|input| matches!(input, Source::Constant(_))))
+                if !primitive.reads_track()
+                    && !primitive.reads_time()
+                    && inputs
+                        .values()
+                        .all(|input| matches!(input, Source::Constant(_)))
                 {
                     let values = inputs
                         .iter()
                         .map(|(key, source)| Ok((key.clone(), source.read(&[])?)))
                         .collect::<Result<_>>()?;
-                    let result = run_primitive(
+                    let result = runtime::run(
                         *primitive,
                         &values,
-                        Frame {
-                            features: self.features.as_deref(),
-                            beat: self.clip_start,
-                            clip_start: self.clip_start,
-                            clip_duration: self.clip_duration,
-                            seed: self.seed,
-                            cells: &self.cells,
+                        &definition.inputs,
+                        &definition.outputs,
+                        Batch {
+                            clock: &crate::Signal::scalar(self.clip_start, crate::Unit::Number)?,
+                            fixtures: &self.fixtures,
+                            times: &[self.clip_start],
+                            frame: Frame {
+                                features: self.features.as_deref(),
+                                beat: self.clip_start,
+                                clip_start: self.clip_start,
+                                clip_duration: self.clip_duration,
+                                seed: self.seed,
+                                cells: &self.cells,
+                            },
                         },
                     )?;
                     result
                         .into_iter()
-                        .map(|(name, value)| {
-                            value.validate()?;
-                            Ok((name, Source::Constant(value)))
-                        })
+                        .map(|(name, value)| Ok((name, Source::Constant(value))))
                         .collect()
                 } else {
                     let mut outputs = BTreeMap::new();
@@ -207,9 +351,12 @@ impl PreparedGraph {
                         self.slots += 1;
                     }
                     self.steps.push(Step {
+                        label: definition.name.clone(),
                         primitive: *primitive,
                         inputs,
+                        input_types: definition.inputs.clone(),
                         outputs,
+                        output_types: definition.outputs.clone(),
                     });
                     Ok(sources)
                 }
@@ -238,7 +385,7 @@ impl PreparedGraph {
         nodes: &mut BTreeMap<String, BTreeMap<String, Source>>,
     ) -> Result<Source> {
         match binding {
-            Binding::Value { value } => Ok(Source::Constant(value.clone())),
+            Binding::Value { value } => Ok(Source::Constant(EvaluatedValue::literal(value)?)),
             Binding::Input { input } => Ok(inputs[input].clone()),
             Binding::Connection { node, output } => {
                 if !nodes.contains_key(node) {
@@ -267,25 +414,23 @@ impl PreparedGraph {
 /// Relations involving fixed controls are checked even when a graph's dynamic
 /// branch requires track data that is deliberately absent during source validation.
 fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Result<()> {
+    crate::event_tensor::validate_parameters(op, inputs)?;
     let number = |name| inputs.get(name).map(Value::scalar);
     match op {
+        Primitive::ClipRange => {
+            if let Some(samples) = number("samples") {
+                crate::clip_range::sample_count(samples)?;
+            }
+            Ok(())
+        }
         Primitive::Rhythm if number("repeat").is_some_and(|v| v <= 0.0) => {
             Err(Error("repeat interval must be greater than zero".into()))
-        }
-        Primitive::TravelClock
-            if number("travel")
-                .zip(number("repeat"))
-                .is_some_and(|(travel, repeat)| travel <= 0.0 || repeat < travel) =>
-        {
-            Err(Error(
-                "travel must be positive and no longer than repeat".into(),
-            ))
         }
         _ => Ok(()),
     }
 }
 impl Source {
-    fn read(&self, slots: &[Option<Value>]) -> Result<Value> {
+    fn read(&self, slots: &[Option<EvaluatedValue>]) -> Result<EvaluatedValue> {
         match self {
             Self::Constant(value) => Ok(value.clone()),
             Self::Slot(index) => slots

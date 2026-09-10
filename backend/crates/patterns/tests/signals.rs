@@ -1,5 +1,8 @@
+mod support;
 use luma_patterns::*;
 use std::collections::BTreeMap;
+#[allow(unused_imports)]
+use support::EvaluateEffect;
 
 fn cells() -> Vec<Cell> {
     (0..16)
@@ -29,16 +32,18 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
     let gradient = Value::Gradient(Gradient {
         stops: vec![
             ColorStop {
+                alpha: 1.,
                 t: 0.,
                 color: [1., 0., 0.],
             },
             ColorStop {
+                alpha: 1.,
                 t: 1.,
                 color: [0., 0., 1.],
             },
         ],
     });
-    let fade = PreparedGraph::new(
+    let fade = support::prepare_effect(
         &library,
         "gradient",
         &BTreeMap::from([("gradient".into(), gradient.clone())]),
@@ -58,7 +63,7 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
         }
     }
     assert_eq!(fade.evaluate(3.).unwrap(), fade.evaluate(3.).unwrap());
-    let spatial = PreparedGraph::new(
+    let spatial = support::prepare_effect(
         &library,
         "spatial_gradient",
         &BTreeMap::from([
@@ -66,6 +71,7 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
             (
                 "mapping".into(),
                 Value::Mapping(MappingSpec {
+                    mirror: None,
                     source: MappingSource::U,
                     per_group: false,
                     reverse: false,
@@ -93,16 +99,14 @@ fn pulse_is_dark_in_the_rest_even_when_the_curve_ends_lit() {
             "shape".into(),
             Value::Envelope(Envelope::linear(vec![[0., 1.], [1., 1.]])),
         )]);
-        let graph = PreparedGraph::new(&library, effect, &inputs, frame(&cells)).unwrap();
+        let graph = support::prepare_effect(&library, effect, &inputs, frame(&cells)).unwrap();
         for (beat, dimmer) in [(3., 1.), (4.999, 1.), (5., 0.), (6.999, 0.), (7., 1.)] {
             let value = graph.evaluate(beat).unwrap();
             let Value::Lighting(light) = &value["lighting"] else {
                 panic!()
             };
             assert!(light.values().all(|v| v.dimmer == Some(dimmer)));
-            assert!(light
-                .values()
-                .all(|v| v.color.is_some() == (effect == "pulse")));
+            assert!(light.values().all(|v| v.color.is_none()));
         }
     }
 }
@@ -112,21 +116,20 @@ fn noise_is_smooth_seekable_and_bound_to_identity_and_seed() {
     let library = standard_library();
     let mut cells = cells();
     let graph =
-        PreparedGraph::new(&library, "noise_mask", &BTreeMap::new(), frame(&cells)).unwrap();
+        support::prepare_effect(&library, "noise_mask", &BTreeMap::new(), frame(&cells)).unwrap();
     let a = graph.evaluate(3.).unwrap();
     let b = graph.evaluate(3.001).unwrap();
     graph.evaluate(9.).unwrap();
     assert_eq!(a, graph.evaluate(3.).unwrap());
-    let (Value::Mask(a), Value::Mask(b)) = (&a["mask"], &b["mask"]) else {
-        panic!()
-    };
+    let a = support::field(&a["mask"]);
+    let b = support::field(&b["mask"]);
     assert!(a.iter().all(|(id, v)| (v - b[id]).abs() < 0.01));
     assert!(a.values().any(|v| *v != a["bar:0"]));
     cells.reverse();
     let reordered =
-        PreparedGraph::new(&library, "noise_mask", &BTreeMap::new(), frame(&cells)).unwrap();
+        support::prepare_effect(&library, "noise_mask", &BTreeMap::new(), frame(&cells)).unwrap();
     assert_eq!(graph.evaluate(8.).unwrap(), reordered.evaluate(8.).unwrap());
-    let different = PreparedGraph::new(
+    let different = support::prepare_effect(
         &library,
         "noise_mask",
         &BTreeMap::new(),
@@ -144,10 +147,12 @@ fn gradient_and_color_fields_reject_bad_authored_values_and_mismatched_domains()
     let bad = Gradient {
         stops: vec![
             ColorStop {
+                alpha: 1.,
                 t: 0.5,
                 color: [1.; 3],
             },
             ColorStop {
+                alpha: 1.,
                 t: 0.4,
                 color: [0.; 3],
             },
@@ -157,7 +162,7 @@ fn gradient_and_color_fields_reject_bad_authored_values_and_mismatched_domains()
     let library = standard_library();
     let cells = cells();
     assert!(library
-        .evaluate(
+        .evaluate_effect(
             "mask_color",
             &BTreeMap::from([
                 (
@@ -196,8 +201,15 @@ fn gradient_and_color_fields_reject_bad_authored_values_and_mismatched_domains()
 #[derive(Debug)]
 struct Analysis;
 impl FeatureSource for Analysis {
+    fn onsets(&self, _drum: Drum) -> Result<EventTimes> {
+        EventTimes::new(vec![4.0])
+    }
     fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample> {
         Ok(match request {
+            FeatureRequest::Timing => return Err(Error("test source has no timing".into())),
+            FeatureRequest::Spectrum { .. } => {
+                return Err(Error("test source has no spectrum".into()))
+            }
             FeatureRequest::Band { .. } => FeatureSample::Energy(0.025),
             FeatureRequest::Onsets(_) => FeatureSample::Onset((beat >= 4.0).then_some((4.0, 0))),
             FeatureRequest::Harmony => FeatureSample::PitchClass(Some(9)),
@@ -210,7 +222,7 @@ fn audio_sources_require_explicit_data_and_event_envelopes_seek_without_history(
     let library = standard_library();
     let cells = cells();
     let program =
-        PreparedGraph::new(&library, "drum_pulse", &BTreeMap::new(), frame(&cells)).unwrap();
+        support::prepare_effect(&library, "drum_pulse", &BTreeMap::new(), frame(&cells)).unwrap();
     assert_eq!(
         program.feature_requests(),
         &[FeatureRequest::Onsets(Drum::Kick)]
@@ -230,7 +242,7 @@ fn audio_sources_require_explicit_data_and_event_envelopes_seek_without_history(
         };
         assert!(light.values().all(|v| v.dimmer == Some(dimmer)));
     }
-    let band = PreparedGraph::new(&library, "band_pulse", &BTreeMap::new(), frame(&cells))
+    let band = support::prepare_effect(&library, "band_pulse", &BTreeMap::new(), frame(&cells))
         .unwrap()
         .with_features(std::sync::Arc::new(Analysis))
         .unwrap();
@@ -250,7 +262,7 @@ fn audio_sources_require_explicit_data_and_event_envelopes_seek_without_history(
         .inputs
         .insert("duration".into(), Value::Beats(0.));
     assert!(score.validate(&library).unwrap_err().0.contains("travel"));
-    assert!(PreparedGraph::new(
+    assert!(support::prepare_effect(
         &library,
         "band_energy",
         &BTreeMap::from([("high_hz".into(), Value::Number(10.))]),

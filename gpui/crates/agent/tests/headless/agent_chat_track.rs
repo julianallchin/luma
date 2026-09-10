@@ -18,12 +18,13 @@ fn navigation_preserves_chat_until_an_explicit_new_or_history_choice() {
     .open(Mode::Headless);
     let script = support::script(&format!(
         r#"
-        nav.venue({venue:?});
+        nav.patch({venue:?});
         const header = (label) => until(label, s => s.find({{role:"text",label}}));
         header("Luma");
-        until("default venue tab", s => s.find({{role:"card",label:"Test Venue Venue"}}));
+        until("venue tab", s => s.find({{role:"card",label:"Test Venue Venue"}}));
         app.type(app.snapshot().find({{role:"input",label:{placeholder:?}}}), "keep this draft");
         nav.track({track:?});
+        until("score clip",s=>s.find({{role:"card",label:"Strobe"}}));
         nav.pattern("Strobe");
         app.frames(8, {{waitMs:20}});
         if (!app.snapshot().find({{role:"input",label:"keep this draft"}})) throw new Error("navigation discarded draft");
@@ -47,7 +48,7 @@ fn navigation_preserves_chat_until_an_explicit_new_or_history_choice() {
         if (!app.snapshot().find({{role:"text",label:saved.label}})) throw new Error("selected conversation changed with tab");
         nav.step("close pattern", "button", "Close Strobe");
         nav.step("close track", "button", "Close Aurora");
-        until("venue fallback", s => s.find({{role:"card",label:"Test Venue Venue"}}));
+        until("closed score workspace", s => !s.find({{role:"button",label:"Aurora"}}));
         header("Luma");
     "#,
         venue = support::VENUE_NAME,

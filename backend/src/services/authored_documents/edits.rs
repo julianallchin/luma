@@ -20,6 +20,61 @@ use super::{
 };
 
 impl AuthoredDocuments {
+    /// Publish an automatic conversion against the exact history head. Restoring
+    /// the same old source creates a new head and therefore a new migration;
+    /// concurrent openers return the already-published current graph document.
+    pub async fn upgrade_score_for_scope(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        track_scope: TrackScope,
+        candidate: super::GraphScoreDocument,
+        expected_revision: &str,
+    ) -> Result<super::GraphScoreDocument> {
+        let candidate = super::GraphScoreDocument::new(candidate.score)
+            .map_err(AuthoredDocumentsError::Invalid)?;
+        if candidate.score.version() != 3 {
+            return Err(AuthoredDocumentsError::Invalid(
+                "score conversion must produce version 3".into(),
+            ));
+        }
+        let files = super::projection::score_files(&candidate)?;
+        let scope = ResolvedScope::track(principal, track_scope)?;
+        let _guard = self.document_guard(&scope.document_id).await;
+        let main = self.load_current_locked(pool, &scope).await?;
+        if let AuthoredDocument::GraphScore(current) = &main.document {
+            if current.score.version() == 3 {
+                return Ok(current.clone());
+            }
+        }
+        let operation = format!("upgrade-v3-{}", main.head.as_str());
+        let fingerprint = operation_request_fingerprint(
+            "graph_score_upgrade",
+            &[expected_revision, &file_snapshot_id(&files)],
+        );
+        self.apply_candidate_locked(
+            pool,
+            &scope,
+            &main.head,
+            expected_revision,
+            files,
+            AuthoredDocument::GraphScore(candidate.clone()),
+            TrackProjectionAuthority::ExistingOnly,
+            OperationSpec {
+                kind: "score_edit",
+                id: &operation,
+                fingerprint: &fingerprint,
+                result_json: None,
+            },
+            "Upgrade score to signal graphs",
+            None,
+            None,
+            None,
+        )
+        .await?;
+        Ok(candidate)
+    }
+
     pub async fn apply_graph_for_scope(
         &self,
         pool: &SqlitePool,

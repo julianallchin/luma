@@ -291,6 +291,7 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
             changed = true;
         }
         match arg.arg_type {
+            PatternArgType::Seed => {}
             PatternArgType::Color => {
                 if let Some(hex) = arg.default_value.as_str() {
                     arg.default_value = parse_legacy_hex_color(hex).map_err(|error| {

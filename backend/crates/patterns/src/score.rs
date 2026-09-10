@@ -10,6 +10,10 @@ pub struct Clip {
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
+    /// Historical clips used independent random draws for selecting heads and
+    /// animating them. New clips use `seed` for both unless explicitly supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_seed: Option<u64>,
     /// Group expression resolved by the host; never physical fixture ids.
     #[serde(default = "all_selection")]
     pub selection: crate::Selection,
@@ -27,28 +31,66 @@ fn replace_blend() -> crate::BlendMode {
     crate::BlendMode::Replace
 }
 
-/// New score document format. Local definitions travel with the score. This is
-/// deliberately not written into old SQL projections before migration exists.
+/// Canonical score document. Local definitions and stable clip identities travel
+/// with the score; historical versions are converted at the host migration seam.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Score {
-    version: u32,
+    pub(crate) version: u32,
     pub definitions: BTreeMap<String, Definition>,
     pub clips: BTreeMap<String, Clip>,
 }
 impl Default for Score {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             definitions: BTreeMap::new(),
             clips: BTreeMap::new(),
         }
     }
 }
 impl Score {
+    pub fn version(&self) -> u32 {
+        self.version
+    }
     pub fn validate(&self, base: &Library) -> Result<()> {
-        if self.version != 2 {
+        let library = self.validate_using(base, &crate::catalog::primitive)?;
+        for (id, clip) in &self.clips {
+            // Check fixed timing/value relationships without binding venue geometry.
+            // Actual domain requirements (e.g. a solved circle) are host checks.
+            PreparedGraph::new_validated(
+                &library,
+                &clip.graph,
+                &clip.inputs,
+                Frame {
+                    features: None,
+                    cells: &[],
+                    beat: clip.start,
+                    clip_start: clip.start,
+                    clip_duration: clip.duration,
+                    seed: clip.seed,
+                },
+            )
+            .map_err(|error| Error(format!("clip {id}: {error}")))?;
+        }
+        Ok(())
+    }
+    /// Structural/value validation uses a document's frozen vocabulary. It
+    /// must not execute old kernels merely to read or restore historical bytes.
+    pub(crate) fn validate_using(
+        &self,
+        base: &Library,
+        interface: &impl Fn(crate::Primitive) -> Definition,
+    ) -> Result<Library> {
+        if !matches!(self.version, 2 | 3) {
             return Err(Error(format!("unsupported score version {}", self.version)));
+        }
+        if self
+            .definitions
+            .values()
+            .any(|d| matches!(d.body, Body::Primitive(_)))
+        {
+            return Err(Error("score-local definitions must be graphs".into()));
         }
         let library = self.library(base)?;
         for (id, clip) in &self.clips {
@@ -59,16 +101,14 @@ impl Score {
                 )));
             }
         }
-        library.validate_many(
+        library.validate_many_using(
             self.definitions
                 .keys()
                 .map(String::as_str)
                 .chain(self.clips.values().map(|clip| clip.graph.as_str())),
+            interface,
         )?;
         for definition in self.definitions.values() {
-            if matches!(definition.body, Body::Primitive(_)) {
-                return Err(Error("score-local definitions must be graphs".into()));
-            }
             for input in definition.inputs.values() {
                 if let Some(value) = &input.default {
                     authored_value(value)?;
@@ -122,28 +162,12 @@ impl Score {
                     .inputs
                     .get(key)
                     .ok_or_else(|| Error(format!("unknown clip input {key}")))?;
-                if input.value_type != value.value_type() {
+                if !input.value_type.accepts(value.value_type()) {
                     return Err(Error(format!("clip input {key} has the wrong type")));
                 }
             }
-            // Check fixed timing/value relationships without binding venue geometry.
-            // Actual domain requirements (e.g. a solved circle) are host checks.
-            PreparedGraph::new_validated(
-                &library,
-                &clip.graph,
-                &clip.inputs,
-                Frame {
-                    features: None,
-                    cells: &[],
-                    beat: clip.start,
-                    clip_start: clip.start,
-                    clip_duration: clip.duration,
-                    seed: clip.seed,
-                },
-            )
-            .map_err(|error| Error(format!("clip {id}: {error}")))?;
         }
-        Ok(())
+        Ok(library)
     }
     pub fn to_json(&self, base: &Library) -> Result<String> {
         self.validate(base)?;
@@ -154,8 +178,8 @@ impl Score {
         score.validate(base)?;
         Ok(score)
     }
-    /// The score picker inserts an ordinary one-node graph and exposes the
-    /// selected node's interface. IDs are caller-owned for deterministic edits.
+    /// The score picker inserts the numerical effect and an explicit Output.
+    /// Its interface remains editable; IDs are caller-owned for deterministic edits.
     pub fn insert_effect(
         &mut self,
         library: &Library,
@@ -182,12 +206,7 @@ impl Score {
         }
         library.validate(effect)?;
         let definition = &library.definitions[effect];
-        if !definition.playable() {
-            return Err(Error(
-                "only Lighting outputs can be placed on the score".into(),
-            ));
-        }
-        let wrapper = definition.instance(effect);
+        let wrapper = definition.clip_instance(effect)?;
         self.definitions.insert(id.into(), wrapper);
         self.clips.insert(
             id.into(),
@@ -196,6 +215,7 @@ impl Score {
                 start,
                 duration,
                 seed: 0,
+                selection_seed: None,
                 selection: all_selection(),
                 z_index: 0,
                 blend_mode: replace_blend(),
@@ -212,9 +232,64 @@ impl Score {
             .clips
             .get(clip_id)
             .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
+        let mut candidate = self.clone();
+        candidate.definitions.extend(self.copy_definitions(
+            base,
+            &clip.graph,
+            new_id,
+            &self.library(base)?,
+        )?);
+        candidate.clips.get_mut(clip_id).unwrap().graph = new_id.into();
+        candidate.validate(base)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Import a clip and its reachable local definitions as an independent copy.
+    /// Built-ins stay shared. Collisions and invalid copies leave both scores intact.
+    pub fn import_clip(
+        &mut self,
+        base: &Library,
+        source: &Score,
+        clip_id: &str,
+        new_id: &str,
+    ) -> Result<()> {
+        self.validate(base)?;
+        source.validate(base)?;
+        crate::graph::identity(new_id)?;
+        if self.clips.contains_key(new_id) {
+            return Err(Error(format!("clip identity {new_id} already exists")));
+        }
+        let mut clip = source
+            .clips
+            .get(clip_id)
+            .ok_or_else(|| Error(format!("unknown source clip {clip_id}")))?
+            .clone();
+        let mut candidate = self.clone();
+        candidate.definitions.extend(source.copy_definitions(
+            base,
+            &clip.graph,
+            new_id,
+            &self.library(base)?,
+        )?);
+        clip.graph = new_id.into();
+        candidate.clips.insert(new_id.into(), clip);
+        candidate.validate(base)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    fn copy_definitions(
+        &self,
+        base: &Library,
+        root: &str,
+        new_id: &str,
+        destination: &Library,
+    ) -> Result<BTreeMap<String, Definition>> {
+        crate::graph::identity(new_id)?;
         let library = self.library(base)?;
         let mut reachable = BTreeSet::new();
-        let mut pending = vec![clip.graph.clone()];
+        let mut pending = vec![root.to_owned()];
         while let Some(id) = pending.pop() {
             if !reachable.insert(id.clone()) {
                 continue;
@@ -229,18 +304,20 @@ impl Score {
                 );
             }
         }
-        let mut remap = BTreeMap::from([(clip.graph.clone(), new_id.to_owned())]);
-        for (index, id) in reachable.iter().filter(|id| **id != clip.graph).enumerate() {
+        let mut remap = BTreeMap::from([(root.to_owned(), new_id.to_owned())]);
+        for (index, id) in reachable
+            .iter()
+            .filter(|id| id.as_str() != root)
+            .enumerate()
+        {
             remap.insert(id.clone(), format!("{new_id}/{index}"));
         }
         for id in remap.values() {
-            if id.is_empty() || library.definitions.contains_key(id) {
-                return Err(Error(format!(
-                    "graph identity {id} already exists or is empty"
-                )));
+            if destination.definitions.contains_key(id) {
+                return Err(Error(format!("graph identity {id} already exists")));
             }
         }
-        let mut candidate = self.clone();
+        let mut definitions = BTreeMap::new();
         for (old, new) in &remap {
             let original = &library.definitions[old];
             let mut definition = if matches!(original.body, Body::Primitive(_)) {
@@ -257,12 +334,9 @@ impl Score {
                     }
                 }
             }
-            candidate.definitions.insert(new.clone(), definition);
+            definitions.insert(new.clone(), definition);
         }
-        candidate.clips.get_mut(clip_id).unwrap().graph = new_id.into();
-        candidate.validate(base)?;
-        *self = candidate;
-        Ok(())
+        Ok(definitions)
     }
 
     /// Customize one call site. Copy the called graph and rebind this node;
@@ -379,9 +453,17 @@ impl Score {
 
 fn authored_value(value: &Value) -> Result<()> {
     value.validate()?;
+    if let Value::Signal(signal) = value {
+        if signal.fixtures().is_some() || signal.values().dim().1 != 1 {
+            return Err(Error(
+                "authored numerical values must broadcast over fixtures and time".into(),
+            ));
+        }
+    }
     if matches!(
         value,
         Value::Coordinates(_)
+            | Value::Events(crate::Events::Targeted { .. })
             | Value::ColorField(_)
             | Value::Field(_)
             | Value::Mask(_)

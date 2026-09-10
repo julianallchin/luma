@@ -1,20 +1,14 @@
-//! Typed lighting graphs in the normal score renderer. Compilation freezes
-//! mapping once; playback, scrubbing and heatmaps evaluate the same program.
-use super::{
-    compile::{CompileError, Lowerer},
-    ops::KernelCtx,
-    OpKind, Phase, ResidentContext,
-};
-use crate::{
-    models::node_graph::{Edge, NodeInstance},
-    node_graph::lighting::{decode, PREFIX},
-};
-use luma_patterns::{self as p, Binding, Body, Definition, Output, Rate, ValueType};
+//! Canonical graph preparation and fixture/diagnostic output adapters.
+use super::{Arena, OutputBinding, Plan, ResidentContext, ViewTap};
+use crate::models::node_graph::Signal;
+use crate::models::universe::{PrimitiveState, UniverseState};
+use luma_patterns as p;
+#[cfg(test)]
+use luma_patterns::Body;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
-
 #[derive(Clone, Debug)]
 pub struct Program {
     prepared: p::PreparedGraph,
@@ -22,329 +16,414 @@ pub struct Program {
     ids: Vec<String>,
     output: String,
 }
-
-pub fn lower(
-    nodes: &[NodeInstance],
-    edges: &[Edge],
-    args: &HashMap<String, serde_json::Value>,
-    ctx: &ResidentContext,
-    ids: &[String],
-    low: &mut Lowerer,
-) -> Result<(), CompileError> {
-    build(nodes, edges, args, ctx, ids, low).map_err(CompileError::Graph)
+#[derive(Debug)]
+pub struct Inspection {
+    pub times: Vec<f32>,
+    pub clock: p::BeatTimeline,
+    pub clip_start: f64,
+    pub values: BTreeMap<String, p::EvaluatedValue>,
+    pub spectrograms: BTreeMap<String, Result<Arc<crate::audio::melspec::Spectrogram>, String>>,
 }
-/// The authoring check and playback lower exactly the same typed program.
-pub(crate) fn library_for_graph(
-    nodes: &[NodeInstance],
-    edges: &[Edge],
-    args: &HashMap<String, serde_json::Value>,
-) -> Result<p::Library, String> {
-    let mut library = p::standard_library();
-    let mut graph = p::Graph {
-        nodes: BTreeMap::new(),
-        outputs: BTreeMap::new(),
-    };
-    let mut output = None;
-    for node in nodes {
-        if node.type_id == "pattern_args" {
-            continue;
-        }
-        let name = node.type_id.strip_prefix(PREFIX).ok_or_else(|| {
-            format!(
-                "{} is a legacy node; use typed lighting components in this Pattern",
-                node.type_id
-            )
-        })?;
-        let def = library
-            .definitions
-            .get(name)
-            .ok_or_else(|| format!("Unknown lighting node {name}"))?;
-        for key in node.params.keys() {
-            if !def.inputs.contains_key(key) {
-                return Err(format!("Unknown input {}.{key}", node.id));
-            }
-        }
-        let mut inputs = BTreeMap::new();
-        for (id, input) in &def.inputs {
-            let feeding: Vec<_> = edges
-                .iter()
-                .filter(|edge| edge.to_node == node.id && edge.to_port == *id)
-                .collect();
-            if feeding.len() > 1 {
-                return Err(format!("{} has more than one connection to {id}", node.id));
-            }
-            let binding = if let Some(edge) = feeding.first() {
-                let source = nodes
-                    .iter()
-                    .find(|node| node.id == edge.from_node)
-                    .ok_or("Connection source is missing")?;
-                if source.type_id == "pattern_args" {
-                    let value = args
-                        .get(&edge.from_port)
-                        .ok_or_else(|| format!("Missing exposed input {}", edge.from_port))?;
-                    Binding::Value {
-                        value: decode(input.value_type, value)?,
-                    }
-                } else {
-                    Binding::Connection {
-                        node: edge.from_node.clone(),
-                        output: edge.from_port.clone(),
-                    }
-                }
-            } else if let Some(value) = node.params.get(id) {
-                Binding::Value {
-                    value: decode(input.value_type, value)?,
-                }
-            } else {
-                continue;
-            };
-            inputs.insert(id.clone(), binding);
-        }
-        if let Some(port) = def.lighting_output() {
-            if !edges
-                .iter()
-                .any(|edge| edge.from_node == node.id && edge.from_port == port)
-            {
-                if output.is_some() {
-                    return Err("A Pattern needs one unconnected Lighting output; combine the outputs with Add Lighting".into());
-                }
-                output = Some((node.id.clone(), port.to_string()));
-            }
-        }
-        graph.nodes.insert(
-            node.id.clone(),
-            p::Node {
-                position: None,
-                definition: name.into(),
-                inputs,
-            },
-        );
-    }
-    let (node, port) = output.ok_or("A Pattern needs one Lighting output")?;
-    graph.outputs.insert(
-        "lighting".into(),
-        Binding::Connection { node, output: port },
-    );
-    library.definitions.insert(
-        "__score_pattern".into(),
-        Definition {
-            name: "Score Pattern".into(),
-            inputs: BTreeMap::new(),
-            outputs: BTreeMap::from([(
-                "lighting".into(),
-                Output {
-                    value_type: ValueType::Lighting,
-                    rate: Rate::Frame,
-                },
-            )]),
-            body: Body::Graph(graph),
-        },
-    );
-    library
-        .validate("__score_pattern")
-        .map_err(|e| e.to_string())?;
-    Ok(library)
-}
-
-fn build(
-    nodes: &[NodeInstance],
-    edges: &[Edge],
-    args: &HashMap<String, serde_json::Value>,
-    ctx: &ResidentContext,
-    ids: &[String],
-    low: &mut Lowerer,
-) -> Result<(), String> {
-    let library = library_for_graph(nodes, edges, args)?;
-    let grid = ctx
-        .beat_grid
-        .as_ref()
-        .ok_or("Lighting patterns require an analyzed beat grid")?;
-    let clock = grid.timeline().map_err(|error| error.to_string())?;
-    let start = clock
-        .beat_at(f64::from(ctx.span.0))
-        .map_err(|e| e.to_string())?;
-    let cells: Vec<_> = ids
-        .iter()
-        .zip(&ctx.positions)
-        .map(|(id, world)| p::Cell {
-            id: id.clone(),
-            group: "selection".into(),
-            world: world.map(f64::from),
-            uvz: p::Cell::stage_coordinates(world.map(f64::from)),
-        })
-        .collect();
-    let prepared = p::PreparedGraph::new(
-        &library,
-        "__score_pattern",
-        &BTreeMap::new(),
-        p::Frame {
-            features: None,
-            cells: &cells,
-            beat: start,
-            clip_start: start,
-            clip_duration: clock
-                .beat_at(f64::from(ctx.span.1))
-                .map_err(|e| e.to_string())?
-                - start,
-            seed: ctx.seed,
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    emit_prepared(prepared, clock, ids, start, "lighting", low)
-}
-
-fn emit_prepared(
+pub(crate) fn plan(
     prepared: p::PreparedGraph,
     clock: p::BeatTimeline,
-    ids: &[String],
-    start: f64,
+    ids: Vec<String>,
     output: &str,
-    low: &mut Lowerer,
-) -> Result<(), String> {
-    let initial = prepared.evaluate(start).map_err(|e| e.to_string())?;
-    let writes = match initial.get(output) {
-        Some(p::Value::Lighting(values)) => values
-            .values()
-            .next()
-            .map(|v| v.writes())
-            .unwrap_or([false; 5]),
-        _ => return Err("graph did not produce fixture output".into()),
+    ctx: ResidentContext,
+) -> Result<Plan, String> {
+    let program = Program {
+        prepared,
+        clock,
+        ids: ids.clone(),
+        output: output.into(),
     };
-    let packed = low.emit(
-        OpKind::Lighting(Arc::new(Program {
-            prepared,
-            clock,
-            ids: ids.to_vec(),
-            output: output.to_owned(),
-        })),
-        vec![],
-        low.n,
-        8,
-        Phase::Kernel,
-        "lighting",
-        "capabilities",
-    );
-    for (index, (name, start, width)) in [
-        ("color", 0, 3),
-        ("dimmer", 3, 1),
-        ("position", 4, 2),
-        ("strobe", 6, 1),
-        ("speed", 7, 1),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if !writes[index] {
-            continue;
-        }
-        let slot = low.emit(
-            OpKind::SelectApply(super::ops::select_apply::SelectApplyOp::Channels { start }),
-            vec![packed],
-            low.n,
-            width,
-            Phase::Kernel,
-            "lighting",
-            name,
-        );
-        match index {
-            0 => low.outputs.color = Some(slot),
-            1 => low.outputs.dimmer = Some(slot),
-            2 => low.outputs.position = Some(slot),
-            3 => low.outputs.strobe = Some(slot),
-            4 => low.outputs.speed = Some(slot),
-            _ => unreachable!(),
-        }
-    }
-    Ok(())
+    let initial = program.sample(&[ctx.span.0])?;
+    let writes = initial
+        .get(output)
+        .and_then(p::EvaluatedValue::lighting)
+        .ok_or("graph did not produce fixture output")?
+        .writes();
+    let views = initial
+        .iter()
+        .filter_map(|(name, value)| {
+            if name == output {
+                return None;
+            }
+            let (n, c, channels) = if let Some(signal) = value.signal() {
+                let (n, _, c) = signal.values().dim();
+                (n, c, channel_labels(*signal.channels(), c))
+            } else if matches!(value.sample(0), Ok(p::Value::Events(_))) {
+                (1, 1, vec!["events".into()])
+            } else {
+                return None;
+            };
+            Some((
+                name.strip_prefix("view/").unwrap_or(name).to_owned(),
+                ViewTap {
+                    output: name.clone(),
+                    n,
+                    c,
+                    channels,
+                },
+            ))
+        })
+        .collect();
+    Ok(Plan {
+        program: Some(Arc::new(program)),
+        primitive_ids: ids,
+        outputs: OutputBinding {
+            color: writes[0],
+            dimmer: writes[1],
+            position: writes[2],
+            strobe: writes[3],
+            speed: writes[4],
+        },
+        ctx,
+        views,
+    })
 }
-/// Direct compilation of a score-local graph. No Pattern/Implementation row or
-/// legacy canvas projection participates in this path.
 pub(crate) fn compile_clip(
     clip: &p::Clip,
     clock: p::BeatTimeline,
     cells: Vec<p::Cell>,
     prepared: p::PreparedGraph,
     output: &str,
-) -> Result<super::Plan, String> {
-    let ids: Vec<_> = cells.iter().map(|cell| cell.id.clone()).collect();
-    let start = clock
-        .seconds_at(clip.start)
-        .map_err(|error| error.to_string())?;
-    let end = clock
-        .seconds_at(clip.start + clip.duration)
-        .map_err(|error| error.to_string())?;
-    let span = (start as f32, end as f32);
+) -> Result<Plan, String> {
+    let span = (
+        clock.seconds_at(clip.start).map_err(|e| e.to_string())? as f32,
+        clock
+            .seconds_at(clip.start + clip.duration)
+            .map_err(|e| e.to_string())? as f32,
+    );
     if !span.0.is_finite() || !span.1.is_finite() || span.1 <= span.0 {
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
-    let mut low = Lowerer::new(ids.len() as u32);
-    emit_prepared(prepared, clock, &ids, clip.start, output, &mut low)?;
-    Ok(super::Plan {
-        ops: low.ops,
-        slots: low.slots,
-        slot_channels: low.slot_channels,
-        n: ids.len() as u32,
-        primitive_ids: ids,
-        outputs: low.outputs,
-        ctx: ResidentContext {
+    let ids = cells.iter().map(|c| c.id.clone()).collect();
+    plan(
+        prepared,
+        clock,
+        ids,
+        output,
+        ResidentContext {
             seed: clip.seed,
             span,
-            positions: cells
-                .iter()
-                .map(|cell| cell.world.map(|value| value as f32))
-                .collect(),
+            positions: cells.iter().map(|c| c.world.map(|v| v as f32)).collect(),
             ..Default::default()
         },
-        prologue_baked: Vec::new(),
-        views: Vec::new(),
-    })
+    )
 }
-
+fn channel_labels(channels: p::Channels, width: usize) -> Vec<String> {
+    let names: &[&str] = match channels {
+        p::Channels::Rgb => &["r", "g", "b"],
+        p::Channels::PanTilt => &["pan", "tilt"],
+        p::Channels::Value => &["value"],
+        _ => return (0..width).map(|i| format!("ch{i}")).collect(),
+    };
+    names.iter().map(|s| (*s).into()).collect()
+}
 impl Program {
-    pub fn run(&self, ctx: &KernelCtx) -> Vec<f32> {
-        let mut out = ctx.out_buf();
-        for (k, t) in ctx.times.iter().enumerate() {
-            let frame = self
+    pub(crate) fn inspect(&self, span: (f32, f32)) -> Result<Option<Inspection>, String> {
+        let names: Vec<_> = self
+            .prepared
+            .output_types()
+            .iter()
+            .filter(|(name, output)| {
+                **name != self.output
+                    && (output.value_type.signal_type().is_some()
+                        || matches!(
+                            output.value_type,
+                            p::ValueType::Events | p::ValueType::AudioSource
+                        ))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        if names.is_empty() {
+            return Ok(None);
+        }
+        const SAMPLES: usize = 128;
+        if self.prepared.cell_count().saturating_mul(SAMPLES) > 1_000_000 {
+            return Err("graph inspection exceeds one million head samples".into());
+        }
+        let times: Vec<_> = (0..SAMPLES)
+            .map(|i| span.0 + (span.1 - span.0) * i as f32 / (SAMPLES - 1) as f32)
+            .collect();
+        let mut values = self.sample(&times)?;
+        values.retain(|name, _| names.contains(name));
+        Ok(Some(Inspection {
+            times,
+            clock: self.clock.clone(),
+            clip_start: self
                 .clock
-                .beat_at(f64::from(*t))
-                .and_then(|beat| self.prepared.evaluate(beat));
-            match frame {
-                Ok(frame) => {
-                    if let Some(p::Value::Lighting(values)) = frame.get(&self.output) {
-                        for (i, id) in self.ids.iter().enumerate() {
-                            if let Some(value) = values.get(id) {
-                                let color = value.color.unwrap_or([1.0; 3]);
-                                let position = value.position.unwrap_or([0.0; 2]);
-                                let packed = [
-                                    color[0],
-                                    color[1],
-                                    color[2],
-                                    value.dimmer.unwrap_or(0.0).clamp(0.0, 1.0),
-                                    position[0],
-                                    position[1],
-                                    value.strobe.unwrap_or(0.0),
-                                    value.speed.unwrap_or(1.0),
-                                ];
-                                for (ch, v) in packed.iter().enumerate() {
-                                    out[ctx.out_idx(i, k, ch)] = *v as f32;
-                                }
+                .beat_at(f64::from(span.0))
+                .map_err(|e| e.to_string())?,
+            values,
+            spectrograms: BTreeMap::new(),
+        }))
+    }
+
+    pub(crate) fn sample(
+        &self,
+        times: &[f32],
+    ) -> Result<BTreeMap<String, p::EvaluatedValue>, String> {
+        times
+            .iter()
+            .map(|t| self.clock.beat_at(f64::from(*t)))
+            .collect::<p::Result<Vec<_>>>()
+            .and_then(|beats| self.prepared.evaluate_batch(&beats))
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn render(
+        &self,
+        times: &[f32],
+        bindings: &OutputBinding,
+        scratch: &mut Arena,
+    ) -> Result<Vec<UniverseState>, String> {
+        if times.is_empty() {
+            return Ok(vec![]);
+        }
+        scratch.values = self.sample(times)?;
+        let lighting = scratch
+            .values
+            .get(&self.output)
+            .and_then(p::EvaluatedValue::lighting)
+            .ok_or("graph did not produce fixture output")?;
+        let rows: BTreeMap<_, _> = lighting
+            .fixtures()
+            .iter()
+            .enumerate()
+            .map(|(n, id)| (id, n))
+            .collect();
+        let tensor = lighting.values();
+        let rows = self
+            .ids
+            .iter()
+            .map(|id| {
+                rows.get(id)
+                    .copied()
+                    .ok_or_else(|| format!("graph output is missing fixture {id}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((0..times.len())
+            .map(|k| {
+                let t = if tensor.dim().1 == 1 { 0 } else { k };
+                let primitives = self
+                    .ids
+                    .iter()
+                    .zip(&rows)
+                    .map(|(id, &row)| {
+                        let v = |ch| tensor[[row, t, ch]] as f32;
+                        (
+                            id.clone(),
+                            PrimitiveState {
+                                color: if bindings.color {
+                                    [v(0), v(1), v(2)]
+                                } else {
+                                    [1.; 3]
+                                },
+                                dimmer: if bindings.dimmer { v(3) } else { 0. },
+                                position: if bindings.position {
+                                    [v(4), v(5)]
+                                } else {
+                                    [0.; 2]
+                                },
+                                strobe: if bindings.strobe { v(6) } else { 0. },
+                                speed: if bindings.speed { v(7) } else { 1. },
+                            },
+                        )
+                    })
+                    .collect();
+                UniverseState { primitives }
+            })
+            .collect())
+    }
+    pub(crate) fn views(
+        &self,
+        times: &[f32],
+        taps: &[(String, ViewTap)],
+        span: (f32, f32),
+        scratch: &mut Arena,
+    ) -> Result<HashMap<String, Signal>, String> {
+        if taps.is_empty() || times.is_empty() {
+            return Ok(HashMap::new());
+        }
+        scratch.values = self.sample(times)?;
+        taps.iter()
+            .map(|(name, tap)| {
+                let value = &scratch.values[&tap.output];
+                let signal = if let Some(signal) = value.signal() {
+                    let values = signal.values();
+                    let (n, t, c) = values.dim();
+                    let rows = match signal.fixtures() {
+                        Some(domain) => self
+                            .ids
+                            .iter()
+                            .map(|id| {
+                                domain.iter().position(|v| v == id).ok_or_else(|| {
+                                    format!("view {} is missing fixture {id}", tap.output)
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => (0..n).collect(),
+                    };
+                    let mut data = Vec::with_capacity(rows.len() * times.len() * c);
+                    for row in &rows {
+                        for k in 0..times.len() {
+                            for ch in 0..c {
+                                data.push(values[[*row, if t == 1 { 0 } else { k }, ch]] as f32);
                             }
                         }
                     }
-                }
-                Err(error) => log::error!("Lighting frame at {t}: {error}"),
-            }
+                    Signal {
+                        n: rows.len(),
+                        t: times.len(),
+                        c,
+                        data,
+                    }
+                } else if let Ok(p::Value::Events(events)) = value.sample(0) {
+                    self.event_signal(&events, times, span)?
+                } else {
+                    return Err(format!("{} is not a numerical or event view", tap.output));
+                };
+                Ok((name.clone(), signal))
+            })
+            .collect()
+    }
+    fn event_signal(
+        &self,
+        events: &p::Events,
+        times: &[f32],
+        span: (f32, f32),
+    ) -> Result<Signal, String> {
+        let mut source = events;
+        while let p::Events::Targeted { events, .. } = source {
+            source = events;
         }
-        out
+        let mut data = vec![0.; times.len()];
+        let start = self
+            .clock
+            .beat_at(f64::from(span.0))
+            .map_err(|e| e.to_string())?;
+        let end = self
+            .clock
+            .beat_at(f64::from(span.1))
+            .map_err(|e| e.to_string())?;
+        // Event display bins are bounded by the requested grid, even for very dense schedules.
+        for (i, value) in data.iter_mut().enumerate() {
+            let a = span.0 + (span.1 - span.0) * i as f32 / times.len() as f32;
+            let b = span.0 + (span.1 - span.0) * (i + 1) as f32 / times.len() as f32;
+            let lo = self
+                .clock
+                .beat_at(f64::from(a))
+                .map_err(|e| e.to_string())?;
+            let hi = self
+                .clock
+                .beat_at(f64::from(b))
+                .map_err(|e| e.to_string())?;
+            let found = match source {
+                p::Events::Beats { times: recorded } => {
+                    let events = recorded.as_slice();
+                    let index = events.partition_point(|t| *t < lo);
+                    events
+                        .get(index)
+                        .is_some_and(|t| *t < hi || (i + 1 == times.len() && *t == end))
+                }
+                p::Events::Periodic {
+                    repeat,
+                    grid_aligned,
+                    delay,
+                } => {
+                    let origin = if *grid_aligned { 0. } else { start } + delay;
+                    let event = origin + ((lo - origin) / repeat).ceil() * repeat;
+                    event < hi || (i + 1 == times.len() && event == end)
+                }
+                _ => false,
+            };
+            *value = if found { 1. } else { 0. };
+        }
+        Ok(Signal {
+            n: 1,
+            t: times.len(),
+            c: 1,
+            data,
+        })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::node_graph::BeatGrid;
     #[test]
-    fn graph_score_compiles_local_definitions_and_matches_seeked_core_output() {
+    fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
+        let score: p::Score = serde_json::from_value(serde_json::json!({
+            "version":2,"definitions":{"custom":{
+                "name":"Runtime error", "inputs":{},
+                "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
+                "body":{"kind":"graph","body":{"nodes":{
+                    "clock":{"definition":"clip_time"},
+                    "subtract":{"definition":"core/subtract","inputs":{
+                        "a":{"source":"value","value":{"type":"number","value":0.5}},
+                        "b":{"source":"connection","node":"clock","output":"progress"}}},
+                    "root":{"definition":"core/square_root","inputs":{"value":{"source":"connection","node":"subtract","output":"value"}}},
+                    "output":{"definition":"output","inputs":{"dimmer":{"source":"connection","node":"root","output":"value"}}}
+                },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
+            }},"clips":{"clip":{"graph":"custom","start":0,"duration":4,"seed":0}}
+        })).unwrap();
+        let library = score.library(&p::standard_library()).unwrap();
+        let cells = vec![p::Cell {
+            id: "head".into(),
+            group: "wash".into(),
+            world: [0.; 3],
+            uvz: [0.; 3],
+        }];
+        let clip = &score.clips["clip"];
+        let program = p::PreparedGraph::new(
+            &library,
+            &clip.graph,
+            &clip.inputs,
+            p::Frame {
+                features: None,
+                cells: &cells,
+                beat: 0.,
+                clip_start: 0.,
+                clip_duration: 4.,
+                seed: 0,
+            },
+        )
+        .unwrap();
+        let clock = p::BeatTimeline::new(vec![0., 0.5, 1., 1.5, 2.], 0.).unwrap();
+        let plan = compile_clip(clip, clock, cells, program, "lighting").unwrap();
+        let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
+            span: plan.ctx.span,
+            plan: Arc::new(plan),
+            z_index: 0,
+            blend_mode: p::BlendMode::Replace,
+        }]);
+        let mut scratch = crate::eval::Arena::default();
+        let scope = crate::eval::Scope::Composite;
+        let before = scene.try_render(&[0.5], scope, &mut scratch).unwrap();
+        assert_eq!(
+            scene
+                .try_render(&[0.5, 1.5], scope, &mut scratch)
+                .unwrap_err(),
+            "Square root: needs nonnegative values"
+        );
+        assert!(scene.render(&[1.5], scope, &mut scratch)[0]
+            .primitives
+            .is_empty());
+        let after = scene.try_render(&[0.5], scope, &mut scratch).unwrap();
+        assert_eq!(before[0].primitives["head"].dimmer, 0.5);
+        assert_eq!(after[0].primitives["head"].dimmer, 0.5);
+        let clipped = scene.try_render(&[2.5, 0.5], scope, &mut scratch).unwrap();
+        assert!(
+            clipped[0].primitives.is_empty(),
+            "inactive times never evaluate the graph"
+        );
+        assert_eq!(clipped[1].primitives["head"].dimmer, 0.5);
+    }
+
+    #[test]
+    fn graph_score_compiles_local_definitions_and_matches_batched_core_output() {
         let base = p::standard_library();
         let mut score = p::Score::default();
         score
@@ -397,15 +476,15 @@ mod tests {
             z_index: 0,
             blend_mode: clip.blend_mode,
         }]);
-        // Reverse order as well as forward: no frame history may be required.
-        for seconds in [2.75_f32, 0.5, 1.25, 0.875, 2.25, 3.0, 0.0] {
-            let frame = scene
-                .render(
-                    &[seconds],
-                    crate::eval::Scope::Composite,
-                    &mut crate::eval::Arena::default(),
-                )
-                .remove(0);
+        // Rendering a time batch executes each graph operation once. Reordered
+        // host rows still follow fixture identity, independently of tensor rows.
+        let seconds = [2.75_f32, 0.5, 1.25, 0.875, 2.25, 3.0, 0.0];
+        let frames = scene.render(
+            &seconds,
+            crate::eval::Scope::Composite,
+            &mut crate::eval::Arena::default(),
+        );
+        for (seconds, frame) in seconds.into_iter().zip(frames) {
             let direct = prepared
                 .evaluate(clock.beat_at(f64::from(seconds)).unwrap())
                 .unwrap();
@@ -418,7 +497,7 @@ mod tests {
                 assert_eq!(frame.primitives[id].dimmer, value.dimmer.unwrap() as f32);
                 assert_eq!(
                     frame.primitives[id].color,
-                    value.color.unwrap().map(|v| v as f32)
+                    value.color.unwrap_or([1.0; 3]).map(|v| v as f32)
                 );
             }
         }
@@ -437,6 +516,7 @@ mod tests {
             .collect();
         let resolve = |source| {
             p::MappingSpec {
+                mirror: None,
                 source,
                 per_group: false,
                 reverse: false,
@@ -489,14 +569,7 @@ mod tests {
             span: (0., 4.),
             ..Default::default()
         };
-        let plan = crate::eval::compile::compile_pattern(
-            &graph.nodes,
-            &graph.edges,
-            &args,
-            ctx,
-            ids.clone(),
-        )
-        .unwrap();
+        let plan = crate::eval::compile::compile_pattern(&graph, &args, ctx, ids.clone()).unwrap();
         let frames = crate::eval::eval(
             &plan,
             &[0., 1., 1.9, 2.5],
@@ -545,21 +618,15 @@ mod tests {
                 span: (0., 2.),
                 ..Default::default()
             };
-            let plan = crate::eval::compile::compile_pattern(
-                &graph.nodes,
-                &graph.edges,
-                &args,
-                context,
-                ids.clone(),
-            )
-            .unwrap();
+            let plan =
+                crate::eval::compile::compile_pattern(&graph, &args, context, ids.clone()).unwrap();
             assert_eq!(
                 [
-                    plan.outputs.color.is_some(),
-                    plan.outputs.dimmer.is_some(),
-                    plan.outputs.position.is_some(),
-                    plan.outputs.strobe.is_some(),
-                    plan.outputs.speed.is_some()
+                    plan.outputs.color,
+                    plan.outputs.dimmer,
+                    plan.outputs.position,
+                    plan.outputs.strobe,
+                    plan.outputs.speed
                 ],
                 expected
             );

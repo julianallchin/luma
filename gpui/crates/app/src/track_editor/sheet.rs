@@ -8,10 +8,13 @@ use luma_lib::models::selection::{Selection, Subset};
 use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{luma_hsv_picker, ColorArg, ColorArgEditor, ColorArgEvent, Hsv};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
-use luma_ui::arg::gradient::{luma_gradient_bar, Gradient, GradientEvent, GradientStop};
+use luma_ui::arg::gradient::{Gradient, GradientStop};
+use luma_ui::arg::gradient_editor::{GradientChanged, GradientEditor};
+use luma_ui::arg::mapping::{MappingChanged, MappingEditor};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::palette::{luma_palette_row, PaletteEvent};
 use luma_ui::arg::select::luma_arg_select;
+use luma_ui::arg::signal::{SignalChanged, SignalEditor};
 use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
@@ -157,10 +160,14 @@ struct Cell {
 }
 
 enum Widget {
+    Seed(Entity<DraftedNumber<u64>>),
+    Mapping(Entity<MappingEditor>),
+    Invalid(String),
     Envelope(Entity<luma_ui::arg::envelope::EnvelopeEditor>),
     Choice(Vec<luma_lib::models::node_graph::ParamOption>),
     Color(Entity<ColorArgEditor>),
     Scalar(Entity<DraftedNumber>),
+    Signal(Entity<SignalEditor>),
     Selection(Entity<GroupExpressionEditor>),
     /// Stateless kit rows keep their selection (and the picker's working HSV)
     /// here, on the host — the kit's contract.
@@ -168,13 +175,46 @@ enum Widget {
         selected: Option<usize>,
         hsv: Hsv,
     },
-    Gradient {
-        selected: Option<usize>,
-        hsv: Hsv,
-    },
+    Gradient(Entity<GradientEditor>),
 }
 
 // -- wire codecs --------------------------------------------------------------
+
+fn mapping_value(value: &serde_json::Value) -> Result<luma_patterns::MappingSpec, String> {
+    match luma_lib::node_graph::lighting::decode(luma_patterns::ValueType::Mapping, value)? {
+        luma_patterns::Value::Mapping(mapping) => Ok(mapping),
+        _ => Err("Expected a mapping".into()),
+    }
+}
+
+fn mapping_widget(
+    definition: &PatternArgDef,
+    stored: &serde_json::Value,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subscriptions: &mut Vec<Subscription>,
+) -> Widget {
+    let value = match mapping_value(stored) {
+        Ok(value) => value,
+        Err(error) => return Widget::Invalid(error),
+    };
+    let field =
+        cx.new(|cx| MappingEditor::new(definition.name.clone(), value, FIELD_W, window, cx));
+    let input = definition.id.clone();
+    subscriptions.push(
+        cx.subscribe(&field, move |this, _, event: &MappingChanged, cx| {
+            this.arg_live(
+                &input,
+                luma_lib::node_graph::lighting::wire_value(&luma_patterns::Value::Mapping(
+                    event.0.clone(),
+                )),
+                cx,
+            );
+        }),
+    );
+    Widget::Mapping(field)
+}
+
 //
 // The sheet's serialization edge: everything below speaks the widget kit's
 // typed values, everything above speaks the args JSON the score stores. The
@@ -274,14 +314,14 @@ fn palette_to_wire(colors: &[Rgba]) -> serde_json::Value {
 fn gradient_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> Gradient {
     let stops = |value: &serde_json::Value| -> Option<Vec<GradientStop>> {
         let list = value.get("stops")?.as_array()?;
-        let parsed: Vec<GradientStop> = list
+        let parsed: Option<Vec<GradientStop>> = list
             .iter()
-            .filter_map(|stop| {
+            .map(|stop| {
                 Some(GradientStop {
                     t: stop.get("t")?.as_f64()? as f32,
                     color: {
                         let color = stop.get("color")?;
-                        if let Some(hex) = color.as_str() {
+                        let mut color = if let Some(hex) = color.as_str() {
                             hex_to_rgba(hex)?
                         } else {
                             let c = color.as_array()?;
@@ -291,12 +331,16 @@ fn gradient_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -
                                 b: c.get(2)?.as_f64()? as f32,
                                 a: 1.0,
                             }
+                        };
+                        if let Some(alpha) = stop.get("alpha").and_then(serde_json::Value::as_f64) {
+                            color.a = alpha as f32;
                         }
+                        color
                     },
                 })
             })
             .collect();
-        (!parsed.is_empty()).then_some(parsed)
+        parsed
     };
     Gradient::new(stops(value).or_else(|| stops(fallback)).unwrap_or_default())
 }
@@ -306,7 +350,7 @@ fn gradient_to_wire(gradient: &Gradient) -> serde_json::Value {
         "stops": gradient
             .stops()
             .iter()
-            .map(|stop| serde_json::json!({ "color": rgba_to_hex(stop.color), "t": f64::from(stop.t) }))
+            .map(|stop| serde_json::json!({ "color": rgba_to_hex(stop.color), "t": f64::from(stop.t), "alpha": f64::from(stop.color.a) }))
             .collect::<Vec<_>>(),
     })
 }
@@ -371,7 +415,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         let built = build(editor, primary, pattern, &defs, window, cx);
         editor.sheet.built = Some(built);
     }
-    resync(editor, cx);
+    resync(editor, window, cx);
 }
 
 /// Ask for the venue's group names, once.
@@ -468,138 +512,197 @@ fn build(
         .iter()
         .map(|def| {
             let stored = stored_arg(editor, def);
-            let widget = match def.arg_type {
-                PatternArgType::Envelope => {
-                    let points = envelope_value(&stored, &def.default_value);
-                    let entity = cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
-                    let arg_id = def.id.clone();
-                    subs.push(cx.subscribe(
-                        &entity,
-                        move |this: &mut Luma,
-                              _,
-                              event: &luma_ui::arg::envelope::EnvelopeChanged,
-                              cx| {
-                            this.arg_live(
-                                &arg_id,
-                                serde_json::to_value(&event.0).expect("validated envelope"),
-                                cx,
-                            );
-                        },
-                    ));
-                    Widget::Envelope(entity)
-                }
-                PatternArgType::Color => {
-                    let value = color_from_wire(&stored, &def.default_value);
-                    let entity = cx.new(|cx| {
-                        let control = ColorArgEditor::new(def.name.clone(), value, cx);
-                        if editor.graph_score.is_some()
-                            || defs.iter().any(|input| {
-                                matches!(
-                                    input.arg_type,
-                                    PatternArgType::Beats
-                                        | PatternArgType::Proportion
-                                        | PatternArgType::Mapping
-                                )
-                            })
-                        {
-                            control.rgb_only()
-                        } else {
-                            control
+            let widget = if let Ok(signal) =
+                serde_json::from_value::<luma_patterns::Signal>(stored.clone())
+            {
+                let field =
+                    cx.new(|cx| SignalEditor::new(def.name.clone(), signal, FIELD_W, window, cx));
+                let arg_id = def.id.clone();
+                subs.push(cx.subscribe(
+                    &field,
+                    move |this: &mut Luma, _, event: &SignalChanged, cx| {
+                        this.arg_live(
+                            &arg_id,
+                            serde_json::to_value(&event.0).expect("serializable signal"),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Signal(field)
+            } else {
+                match def.arg_type {
+                    PatternArgType::Seed => {
+                        match luma_lib::node_graph::lighting::decode(
+                            luma_patterns::ValueType::Seed,
+                            &stored,
+                        ) {
+                            Ok(luma_patterns::Value::Seed(seed)) => {
+                                let field = cx.new(|cx| {
+                                    DraftedNumber::new(
+                                        def.name.clone(),
+                                        seed,
+                                        0,
+                                        u64::MAX,
+                                        FIELD_W,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                                let arg_id = def.id.clone();
+                                subs.push(cx.subscribe(
+                                    &field,
+                                    move |this: &mut Luma, _, event: &NumberEvent<u64>, cx| {
+                                        let NumberEvent::Committed(value) = *event;
+                                        this.arg_live(
+                                            &arg_id,
+                                            serde_json::json!(value.to_string()),
+                                            cx,
+                                        );
+                                    },
+                                ));
+                                Widget::Seed(field)
+                            }
+                            Err(error) => Widget::Invalid(error),
+                            _ => unreachable!("seed decoder"),
                         }
-                    });
-                    let arg_id = def.id.clone();
-                    subs.push(cx.subscribe(
-                        &entity,
-                        move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
-                            let ColorArgEvent::Changed(value) = *event;
-                            this.arg_live(&arg_id, color_to_wire(value), cx);
-                        },
-                    ));
-                    Widget::Color(entity)
-                }
-                PatternArgType::Mapping
-                | PatternArgType::Boundary
-                | PatternArgType::Boolean
-                | PatternArgType::AudioSource
-                | PatternArgType::Drum => {
-                    Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
-                }
-                PatternArgType::Scalar
-                | PatternArgType::Beats
-                | PatternArgType::Proportion
-                | PatternArgType::Position => {
-                    let value = scalar_from_wire(&stored, &def.default_value);
-                    let entity = cx.new(|cx| {
-                        DraftedNumber::new(
-                            def.name.clone(),
-                            value,
-                            if matches!(
-                                def.arg_type,
-                                PatternArgType::Proportion | PatternArgType::Beats
-                            ) {
-                                0.
-                            } else {
-                                -1e9
+                    }
+                    PatternArgType::Envelope => {
+                        let points = envelope_value(&stored, &def.default_value);
+                        let entity =
+                            cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
+                        let arg_id = def.id.clone();
+                        subs.push(cx.subscribe(
+                            &entity,
+                            move |this: &mut Luma,
+                                  _,
+                                  event: &luma_ui::arg::envelope::EnvelopeChanged,
+                                  cx| {
+                                this.arg_live(
+                                    &arg_id,
+                                    serde_json::to_value(&event.0).expect("validated envelope"),
+                                    cx,
+                                );
                             },
-                            if def.arg_type == PatternArgType::Proportion {
-                                1.
+                        ));
+                        Widget::Envelope(entity)
+                    }
+                    PatternArgType::Color => {
+                        let value = color_from_wire(&stored, &def.default_value);
+                        let entity = cx.new(|cx| {
+                            let control = ColorArgEditor::new(def.name.clone(), value, cx);
+                            if editor.graph_score.is_some()
+                                || defs.iter().any(|input| {
+                                    matches!(
+                                        input.arg_type,
+                                        PatternArgType::Beats
+                                            | PatternArgType::Proportion
+                                            | PatternArgType::Mapping
+                                    )
+                                })
+                            {
+                                control.rgb_only()
                             } else {
-                                1e9
+                                control
+                            }
+                        });
+                        let arg_id = def.id.clone();
+                        subs.push(cx.subscribe(
+                            &entity,
+                            move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
+                                let ColorArgEvent::Changed(value) = *event;
+                                this.arg_live(&arg_id, color_to_wire(value), cx);
                             },
-                            FIELD_W,
-                            window,
-                            cx,
-                        )
-                    });
-                    let arg_id = def.id.clone();
-                    subs.push(cx.subscribe(
-                        &entity,
-                        move |this: &mut Luma, _, event: &NumberEvent, cx| {
-                            let NumberEvent::Committed(value) = *event;
-                            this.arg_live(&arg_id, serde_json::json!(value), cx);
+                        ));
+                        Widget::Color(entity)
+                    }
+                    PatternArgType::Mapping => mapping_widget(def, &stored, window, cx, &mut subs),
+                    PatternArgType::Boundary
+                    | PatternArgType::Boolean
+                    | PatternArgType::AudioSource
+                    | PatternArgType::Drum => {
+                        Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
+                    }
+                    PatternArgType::Scalar
+                    | PatternArgType::Beats
+                    | PatternArgType::Proportion
+                    | PatternArgType::Position => {
+                        let value = scalar_from_wire(&stored, &def.default_value);
+                        let entity = cx.new(|cx| {
+                            DraftedNumber::new(
+                                def.name.clone(),
+                                value,
+                                if matches!(
+                                    def.arg_type,
+                                    PatternArgType::Proportion | PatternArgType::Beats
+                                ) {
+                                    0.
+                                } else {
+                                    -1e9
+                                },
+                                if def.arg_type == PatternArgType::Proportion {
+                                    1.
+                                } else {
+                                    1e9
+                                },
+                                FIELD_W,
+                                window,
+                                cx,
+                            )
+                        });
+                        let arg_id = def.id.clone();
+                        subs.push(cx.subscribe(
+                            &entity,
+                            move |this: &mut Luma, _, event: &NumberEvent, cx| {
+                                let NumberEvent::Committed(value) = *event;
+                                this.arg_live(&arg_id, serde_json::json!(value), cx);
+                            },
+                        ));
+                        Widget::Scalar(entity)
+                    }
+                    PatternArgType::Selection => {
+                        let entity = cx.new(|cx| {
+                            GroupExpressionEditor::new(
+                                groups.iter().cloned(),
+                                selection_from_wire(&stored).expression,
+                                EXPR_W,
+                                window,
+                                cx,
+                            )
+                        });
+                        let arg_id = def.id.clone();
+                        let def_for_event = def.clone();
+                        subs.push(cx.subscribe(
+                            &entity,
+                            move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
+                                let ExpressionEvent::Committed(expression) = event.clone();
+                                this.arg_selection(&arg_id, &def_for_event, cx, |selection| {
+                                    selection.expression = expression;
+                                });
+                            },
+                        ));
+                        Widget::Selection(entity)
+                    }
+                    PatternArgType::Palette => Widget::Palette {
+                        selected: None,
+                        hsv: Hsv {
+                            h: 0.,
+                            s: 0.,
+                            v: 1.,
                         },
-                    ));
-                    Widget::Scalar(entity)
-                }
-                PatternArgType::Selection => {
-                    let entity = cx.new(|cx| {
-                        GroupExpressionEditor::new(
-                            groups.iter().cloned(),
-                            selection_from_wire(&stored).expression,
-                            EXPR_W,
-                            window,
-                            cx,
-                        )
-                    });
-                    let arg_id = def.id.clone();
-                    let def_for_event = def.clone();
-                    subs.push(cx.subscribe(
-                        &entity,
-                        move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
-                            let ExpressionEvent::Committed(expression) = event.clone();
-                            this.arg_selection(&arg_id, &def_for_event, cx, |selection| {
-                                selection.expression = expression;
-                            });
-                        },
-                    ));
-                    Widget::Selection(entity)
-                }
-                PatternArgType::Palette => Widget::Palette {
-                    selected: None,
-                    hsv: Hsv {
-                        h: 0.,
-                        s: 0.,
-                        v: 1.,
                     },
-                },
-                PatternArgType::Gradient => Widget::Gradient {
-                    selected: None,
-                    hsv: Hsv {
-                        h: 0.,
-                        s: 0.,
-                        v: 1.,
-                    },
-                },
+                    PatternArgType::Gradient => {
+                        let value = gradient_from_wire(&stored, &def.default_value);
+                        let entity = cx.new(|cx| GradientEditor::new(value, window, cx));
+                        let arg_id = def.id.clone();
+                        subs.push(cx.subscribe(
+                            &entity,
+                            move |this: &mut Luma, _, event: &GradientChanged, cx| {
+                                this.arg_live(&arg_id, gradient_to_wire(&event.0), cx);
+                            },
+                        ));
+                        Widget::Gradient(entity)
+                    }
+                }
             };
             Cell {
                 def: def.clone(),
@@ -640,7 +743,7 @@ fn reading(editor: &Editor) -> SharedString {
 /// echo the per-cell `synced` guard filters out: a value the sheet itself
 /// wrote round-trips byte-identical, so the guard sees no movement and the
 /// widget's in-progress state survives.
-fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
+fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     let reading = reading(editor);
     let blend = primary_clip(editor).map_or(BlendMode::Replace, |clip| clip.blend);
     let stored: Vec<serde_json::Value> = editor
@@ -665,7 +768,18 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
         if cell.synced == stored {
             continue;
         }
+        if cell.def.arg_type == PatternArgType::Mapping {
+            match (&cell.widget, mapping_value(&stored)) {
+                (Widget::Mapping(entity), Ok(value)) => {
+                    entity.update(cx, |field, cx| field.set_value(value, cx));
+                }
+                _ => cell.widget = mapping_widget(&cell.def, &stored, window, cx, &mut built._subs),
+            }
+            cell.synced = stored;
+            continue;
+        }
         match &mut cell.widget {
+            Widget::Mapping(_) | Widget::Invalid(_) => {}
             Widget::Envelope(entity) => {
                 let points = envelope_value(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(points, cx));
@@ -679,6 +793,18 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
                 let value = scalar_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |field, cx| field.set_value(value, cx));
             }
+            Widget::Seed(entity) => {
+                if let Ok(luma_patterns::Value::Seed(seed)) =
+                    luma_lib::node_graph::lighting::decode(luma_patterns::ValueType::Seed, &stored)
+                {
+                    entity.update(cx, |field, cx| field.set_value(seed, cx));
+                }
+            }
+            Widget::Signal(entity) => {
+                if let Ok(value) = serde_json::from_value::<luma_patterns::Signal>(stored.clone()) {
+                    entity.update(cx, |field, cx| field.set_value(value, window, cx));
+                }
+            }
             Widget::Selection(entity) => {
                 let expression = selection_from_wire(&stored).expression;
                 entity.update(cx, |editor, cx| editor.set_text(expression, cx));
@@ -691,13 +817,9 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
                     *selected = None;
                 }
             }
-            Widget::Gradient { selected, .. } => {
-                let count = gradient_from_wire(&stored, &cell.def.default_value)
-                    .stops()
-                    .len();
-                if selected.is_some_and(|index| index >= count) {
-                    *selected = None;
-                }
+            Widget::Gradient(entity) => {
+                let value = gradient_from_wire(&stored, &cell.def.default_value);
+                entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
         }
         cell.synced = stored;
@@ -940,11 +1062,12 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .pt(pad)
                 .pb(px(12.))
                 .child(luma_ui::silkscreen(
-                    if built
-                        .pattern
-                        .as_ref()
-                        .and_then(|id| state.patterns.iter().find(|p| p.id == id.as_ref()))
-                        .is_some_and(|p| p.score_id.is_some())
+                    if state.graph_score.is_some()
+                        || built
+                            .pattern
+                            .as_ref()
+                            .and_then(|id| state.patterns.iter().find(|p| p.id == id.as_ref()))
+                            .is_some_and(|p| p.score_id.is_some())
                     {
                         "PATTERN · THIS SCORE"
                     } else {
@@ -1117,6 +1240,8 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
     let name = cell.def.name.as_str();
     let one = |control: Div| vec![named(name, control)];
     match &cell.widget {
+        Widget::Mapping(entity) => one(div().child(entity.clone())),
+        Widget::Invalid(error) => one(div().text_color(ladder::danger()).child(error.clone())),
         Widget::Choice(options) => {
             let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
             let stored = cell
@@ -1135,8 +1260,6 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
             let pick = app.clone();
             let options = options.clone();
             let id = cell.def.id.clone();
-            let previous = cell.synced.clone();
-            let mapping = cell.def.arg_type == PatternArgType::Mapping;
             one(luma_arg_select(
                 name,
                 selected,
@@ -1156,18 +1279,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 move |selected, _, cx| {
                     pick.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| editor.sheet.open = None);
-                        let mut value = serde_json::json!(options[selected].id);
-                        if mapping && previous.is_object() {
-                            if let Ok(luma_patterns::Value::Mapping(chosen)) =
-                                luma_lib::node_graph::lighting::decode(
-                                    luma_patterns::ValueType::Mapping,
-                                    &value,
-                                )
-                            {
-                                value = previous.clone();
-                                value["source"] = serde_json::to_value(chosen.source).unwrap();
-                            }
-                        }
+                        let value = serde_json::json!(options[selected].id);
                         this.arg_live(&id, value, cx);
                     });
                 },
@@ -1176,6 +1288,8 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         Widget::Envelope(entity) => one(div().child(entity.clone())),
         Widget::Color(entity) => one(div().child(entity.clone())),
         Widget::Scalar(entity) => one(div().child(entity.clone())),
+        Widget::Seed(entity) => one(div().child(entity.clone())),
+        Widget::Signal(entity) => one(div().child(entity.clone())),
         Widget::Selection(entity) => {
             let selection = selection_from_wire(&cell.synced);
 
@@ -1249,18 +1363,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 plate_open(state, index),
             ))
         }
-        Widget::Gradient { selected, hsv } => {
-            let gradient = gradient_from_wire(&cell.synced, &cell.def.default_value);
-            one(gradient_widget(
-                app,
-                index,
-                cell,
-                gradient,
-                *selected,
-                *hsv,
-                plate_open(state, index),
-            ))
-        }
+        Widget::Gradient(entity) => one(div().child(entity.clone())),
     }
 }
 
@@ -1419,108 +1522,6 @@ fn palette_widget(
         )
     });
     div().relative().child(row).children(plate)
-}
-
-fn gradient_widget(
-    app: &Entity<Luma>,
-    index: usize,
-    cell: &Cell,
-    gradient: Gradient,
-    selected: Option<usize>,
-    hsv: Hsv,
-    plate_open: bool,
-) -> Div {
-    let def = cell.def.clone();
-    let events = app.clone();
-    let gradient_for_events = gradient.clone();
-    let bar = luma_gradient_bar(
-        def.name.clone(),
-        &gradient,
-        selected,
-        FIELD_W,
-        move |event, _, cx| {
-            let def = def.clone();
-            let mut gradient = gradient_for_events.clone();
-            events.update(cx, |this, cx| {
-                let write = match event {
-                    GradientEvent::Select(at) => {
-                        let color = gradient.stops().get(at).map(|stop| stop.color);
-                        this.with_track_editor(cx, |editor| {
-                            if let Some(color) = color {
-                                if let Some(built) = editor.sheet.built.as_mut() {
-                                    if let Some(cell) = built.cells.get_mut(index) {
-                                        if let Widget::Gradient { selected, hsv } = &mut cell.widget
-                                        {
-                                            *selected = Some(at);
-                                            *hsv = Hsv::from_rgb([color.r, color.g, color.b]);
-                                        }
-                                    }
-                                }
-                                editor.sheet.open = Some(Menu::Swatch(index));
-                            }
-                        });
-                        None
-                    }
-                    GradientEvent::Move { index: stop, t } => {
-                        gradient.move_stop(stop, t);
-                        Some(gradient)
-                    }
-                    GradientEvent::Add { t } => {
-                        let at = gradient.insert(t);
-                        let color = gradient.stops()[at].color;
-                        this.with_track_editor(cx, |editor| {
-                            if let Some(built) = editor.sheet.built.as_mut() {
-                                if let Some(cell) = built.cells.get_mut(index) {
-                                    if let Widget::Gradient { selected, hsv } = &mut cell.widget {
-                                        *selected = Some(at);
-                                        *hsv = Hsv::from_rgb([color.r, color.g, color.b]);
-                                    }
-                                }
-                            }
-                        });
-                        Some(gradient)
-                    }
-                };
-                if let Some(gradient) = write {
-                    this.arg_live(&def.id, gradient_to_wire(&gradient), cx);
-                }
-            });
-        },
-    );
-    let plate = plate_open.then_some(selected).flatten().map(|at| {
-        let def = cell.def.clone();
-        let picker_app = app.clone();
-        let gradient = gradient.clone();
-        let dismiss = app.clone();
-        swatch_plate(
-            format!("{}:stop-picker", cell.def.name),
-            hsv,
-            move |_, cx| {
-                dismiss.update(cx, |this, cx| {
-                    if this.dismiss_sheet_menu() {
-                        cx.notify();
-                    }
-                });
-            },
-            move |hsv, _, cx| {
-                let def = def.clone();
-                let mut gradient = gradient.clone();
-                picker_app.update(cx, |this, cx| {
-                    edit_widget(this, index, cx, |widget| {
-                        if let Widget::Gradient { hsv: held, .. } = widget {
-                            *held = hsv;
-                        }
-                    });
-                    if at < gradient.stops().len() {
-                        let [r, g, b] = hsv.to_rgb();
-                        gradient.set_color(at, Rgba { r, g, b, a: 1. });
-                        this.arg_live(&def.id, gradient_to_wire(&gradient), cx);
-                    }
-                });
-            },
-        )
-    });
-    div().relative().child(bar).children(plate)
 }
 
 fn envelope_value(

@@ -48,10 +48,28 @@ def _plain(value):
 def _typed(kind, value):
     """Units come from the port schema; explicit typed values are also accepted."""
     value = _plain(value)
+    kind = _plain(kind)
+    if isinstance(kind, dict) and "signal" in kind:
+        spec = kind["signal"]
+        if isinstance(value, dict) and "type" in value:
+            if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field"}:
+                raise TrackError("a signal socket needs a numerical value")
+            return value  # The core validates units, channels and fixture domains.
+        rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
+        literal = "color" if rgb else spec.get("unit") or "number"
+        return _typed(literal, value)
     if isinstance(value, dict) and "type" in value:
         if value["type"] != kind:
             raise TrackError(f"expected {kind}, got {value['type']}")
+        if kind == "seed":
+            return _typed(kind, value.get("value"))
         return value
+    if kind == "seed":
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            value = int(value)
+        if type(value) is not int or not 0 <= value < (1 << 64):
+            raise TrackError("seed needs an integer from 0 through 18446744073709551615")
+        value = str(value)
     if kind == "color" and isinstance(value, str):
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
             raise TrackError("color must be #RRGGBB or three normalized channels")
@@ -61,14 +79,16 @@ def _typed(kind, value):
             value = {"stops": [{"t": stop[0], "color": stop[1]} for stop in value]}
         if not isinstance(value, dict) or "stops" not in value:
             raise TrackError("gradient needs stops with position and color")
-        value = {"stops": [{"t": stop["t"], "color": _typed("color", stop["color"])["value"]}
-                           for stop in value["stops"]]}
+        value = dict(value, stops=[dict(stop, color=_typed("color", stop["color"])["value"])
+                                   for stop in value["stops"]])
     if kind == "mapping" and isinstance(value, str):
         source = {"kind": value}
         if value == "circle":
             source["origin"] = 0.0
         if value == "major_axis":
-            source["toward"] = [1.0, 0.0, 0.0]
+            source["toward"] = [0.0, 0.0, 1.0]
+        if value == "vector":
+            source["direction"] = [1.0, 0.0, 1.0]
         value = {"source": source, "reverse": False, "per_group": False}
     if kind == "envelope" and isinstance(value, list):
         value = {"points": value}
@@ -263,6 +283,10 @@ class Edit:
         self.base_revision = track.revision
         self._base = copy.deepcopy(track._document)
         self._candidate = copy.deepcopy(self._base)
+        if self._candidate.get("version") == 2:
+            # This is a working copy. The original revision remains the CAS
+            # base; migration is saved together with the eventual authored edit.
+            self._candidate = track._host_call("track.score_upgrade", {"candidate": self._candidate})
         self._closed = False
 
     def _open(self):
@@ -303,13 +327,10 @@ class Edit:
         id = id or str(uuid.uuid4())
         definition = {"inputs": {}, "outputs": {}, "body": {"kind": "graph", "body": {"nodes": {}, "outputs": {}}}}
         if node is not None:
-            child = self.definition(node)
-            definition["inputs"] = child["inputs"]
-            definition["outputs"] = child["outputs"]
-            definition["body"]["body"] = {
-                "nodes": {"effect": {"definition": node, "inputs": {key: {"source": "input", "input": key} for key in child["inputs"]}}},
-                "outputs": {key: {"source": "connection", "node": "effect", "output": key} for key in child["outputs"]},
-            }
+            self.definition(node)  # Report an unknown name before the host call.
+            definition = self._track._host_call("track.graph_instance", {
+                "candidate": copy.deepcopy(self._candidate), "definition": node,
+            })
         if name is not None:
             definition["name"] = name
         definitions[id] = definition
@@ -319,8 +340,8 @@ class Edit:
         """Stage an exact score.luma source. check/apply run Rust's validator."""
         self._open()
         candidate = json.loads(source)
-        if not isinstance(candidate, dict) or candidate.get("version") != 2:
-            raise TrackError("expected a version-2 score document")
+        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3):
+            raise TrackError("expected a version-2 or version-3 score document")
         self._candidate = candidate
 
     def source(self):
@@ -493,6 +514,15 @@ class Input:
     graph: "Graph"
     key: str
 
+    def rename(self, name):
+        """Rename the visible control; its stable key and clip overrides stay."""
+        self.graph._edit._gesture(self.graph.id, [{"op": "rename_input", "key": self.key, "name": name}])
+        return self
+
+    def move(self, x, y):
+        self.graph._edit._gesture(self.graph.id, [{"op": "move_inputs", "positions": {self.key: [x, y]}}])
+        return self
+
 
 @dataclass(frozen=True)
 class Node:
@@ -590,16 +620,30 @@ class Graph:
                           "binding": None if value is None else self._binding(value, spec["inputs"][key]["value_type"])})
         self._edit._gesture(self.id, edits)
 
+    def add_input(self, name, *, key=None, position=(0, 0)):
+        """Add a named Input; its first destination infers type and default."""
+        key = key or str(uuid.uuid4())
+        self._edit._gesture(self.id, [{"op": "add_input", "key": key, "name": name, "position": list(position)}])
+        return Input(self, key)
+
     def expose(self, node, input, *, key=None, name=None):
-        """Expose a node input as a graph/clip control; key defaults to input."""
+        """Create an Input and wire it to a parameter in one edit."""
         self._same(node.graph)
+        spec = self._node_spec(node.id)["inputs"].get(input)
+        if spec is None:
+            raise TrackError(f"node {node.id} has no input {input!r}")
         key = key or input
-        self._edit._gesture(self.id, [{"op": "expose", "node": node.id, "input": input, "key": key, "name": name}])
+        self._edit._gesture(self.id, [
+            {"op": "add_input", "key": key, "name": name or spec["name"], "position": [0, 0]},
+            {"op": "bind", "node": node.id, "input": input, "binding": {"source": "input", "input": key}},
+        ])
         return Input(self, key)
 
     def input(self, key):
-        """Reference an exposed graph input for wiring into a node."""
-        if key not in self.definition()["inputs"]:
+        """Reference a named Input, including one awaiting its first wire."""
+        definition = self.definition()
+        nodes = definition["body"]["body"].get("input_nodes", {}) if definition["body"]["kind"] == "graph" else {}
+        if key not in definition["inputs"] and key not in nodes:
             raise TrackError(f"graph has no input {key!r}")
         return Input(self, key)
 
@@ -613,8 +657,8 @@ class Graph:
     def output(self, output, *, key="lighting"):
         """Declare a Node.output(...) as this graph's output.
 
-        A playable clip needs one fixture-lighting output bundle. Combine
-        independent capabilities with add_lighting before declaring it.
+        Connect numerical signals to an Output node for a playable clip.
+        Reusable graphs may expose numerical or structured outputs directly.
         """
         if not isinstance(output, Output):
             raise TrackError("a graph output must reference a node output")
@@ -622,7 +666,8 @@ class Graph:
 
     def remove(self, node):
         self._same(node.graph)
-        self._edit._gesture(self.id, [{"op": "remove", "id": node.id}])
+        edit = {"op": "remove_input", "key": node.key} if isinstance(node, Input) else {"op": "remove", "id": node.id}
+        self._edit._gesture(self.id, [edit])
 
     def rename(self, name):
         self._edit._gesture(self.id, [{"op": "name", "name": name}])

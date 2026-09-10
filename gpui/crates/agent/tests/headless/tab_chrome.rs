@@ -22,6 +22,7 @@ fn fixture(name: &'static str) -> Fixture {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
+    .with_typed_patterns("chase")
     .with_rig()
 }
 
@@ -32,7 +33,7 @@ const SCRIPT: &str = r#"
         const shot = app.snapshot();
         return {
             shot,
-            choices: ["Venue", "Pattern editor", "Track editor"]
+            choices: ["Venue", "Patterns", "Track editor"]
                 .map((label) => shot.find({ role: "button", label })),
             reasons: shot.findAll({ role: "text" }).map((node) => node.label),
         };
@@ -51,6 +52,9 @@ const SCRIPT: &str = r#"
     until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }) !== undefined);
     const second = menu();
     app.click(second.choices[1]);
+    until("library browser",s=>s.find({role:"row",label:"Strobe"}));
+    nav.dismiss();
+    app.click(app.snapshot().find({role:"button",label:"Strobe"}));
     app.frames(2);
     const patternChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Strobe" }).length;
 
@@ -77,19 +81,41 @@ const SCRIPT: &str = r#"
 "#;
 
 #[test]
+fn workspace_expands_and_restores_chat_through_visible_controls() {
+    let mut harness = fixture("workspace-visible-expand")
+        .window(1600., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.trackEditor("Test Venue", "Aurora");
+        until("score clip",s=>s.find({role:"card",label:"Strobe"}));
+        nav.pattern("Strobe");
+        const canvas=()=>app.snapshot().find({role:"card",label:"Graph workspace"}).bounds.width;
+        const initial=canvas();
+        nav.step("expand editor", "button", "Expand");
+        until("expanded editor",s=>s.find({role:"button",label:"Show chat"})
+            && !s.find({role:"card",label:"Conversation"}));
+        if(canvas()<=initial+200)throw new Error("Expand did not give the graph room");
+        nav.step("restore chat", "button", "Show chat");
+        until("chat restored",s=>s.find({role:"card",label:"Conversation"})
+            && s.find({role:"button",label:"Expand"}));
+        if(Math.abs(canvas()-initial)>2)throw new Error("Show chat did not restore the split");
+    "#,
+        ),
+        Duration::from_secs(60),
+    );
+    assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
+}
+
+#[test]
 fn menu_prerequisites_idempotent_opens_and_close_gestures_share_one_path() {
     let mut harness = harness();
     let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    assert_eq!(out["firstEnabled"], serde_json::json!([true, false, true]));
-    assert!(
-        out["firstReasons"].as_array().is_some_and(|reasons| reasons
-            .iter()
-            .any(|reason| reason == "Select a pattern first")),
-        "the disabled pattern choice did not explain itself: {out:#}"
-    );
+    assert_eq!(out["firstEnabled"], serde_json::json!([true, true, true]));
     assert_eq!(out["secondEnabled"], serde_json::json!([true, true, true]));
     assert_eq!(out["trackChipsAfterReveal"], 1);
     assert_eq!(out["patternChipsAfterReveal"], 1);

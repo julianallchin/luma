@@ -2,6 +2,173 @@ use super::*;
 use crate::services::graph_scores::{self, GraphScoreDocument};
 
 #[tokio::test]
+async fn isolated_clip_preview_preserves_grid_selection_overrides_and_seek_order() {
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+    let fixture = Fixture::new().await;
+    fixture.track_scope().await;
+    let root = fixture._directory.path().join("fixtures");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("Dimmer.qxf"), r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Dimmer</Model><Type>Dimmer</Type><Channel Name="Dimmer" Preset="IntensityMasterDimmer"/><Mode Name="Default"><Channel Number="0">Dimmer</Channel></Mode></FixtureDefinition>"#).unwrap();
+    for index in 0..2 {
+        sqlx::query("INSERT INTO fixtures(id,venue_id,universe,address,num_channels,manufacturer,model,mode_name,fixture_path,pos_x,pos_y,pos_z) VALUES(?, 'venue',1,?,1,'Test','Dimmer','Default','Dimmer.qxf',?,0,3)")
+            .bind(format!("fixture-{index}")).bind(index+1).bind(index as f64).execute(&fixture.pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO fixture_groups(id,venue_id,name) VALUES('selected','venue','selected')",
+    )
+    .execute(&fixture.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO fixture_group_members(id,fixture_id,group_id,head_index,display_order) VALUES('member','fixture-0','selected',-1,0)").execute(&fixture.pool).await.unwrap();
+    crate::venue_graph::ensure_migrated(&fixture.pool, "venue", &root)
+        .await
+        .unwrap();
+    // Tempo changes halfway through: four beats here last four seconds.
+    sqlx::query("INSERT INTO track_beats(track_id,beats_json,downbeats_json,bpm,downbeat_offset,beats_per_bar) VALUES('track','[0,0.5,1,1.5,2,3,4,5,6]','[0,2,6]',120,0,4)").execute(&fixture.pool).await.unwrap();
+    let library = luma_patterns::standard_library();
+    let mut score = luma_patterns::Score::default();
+    score
+        .insert_effect(&library, "write_dimmer", "preview", 4., 4.)
+        .unwrap();
+    score
+        .insert_effect(&library, "write_dimmer", "other", 4., 4.)
+        .unwrap();
+    let clip = score.clips.get_mut("preview").unwrap();
+    clip.selection.expression = "selected".into();
+    clip.inputs
+        .insert("value".into(), luma_patterns::Value::Proportion(0.25));
+    let definition = score.definitions.get_mut(&clip.graph).unwrap();
+    let luma_patterns::Body::Graph(graph) = &mut definition.body else {
+        panic!()
+    };
+    graph.nodes.insert(
+        "seconds".into(),
+        luma_patterns::Node {
+            definition: "core/track_time".into(),
+            inputs: Default::default(),
+            position: None,
+        },
+    );
+    for (key, binding, value_type, rate) in [
+        (
+            "view/level",
+            luma_patterns::Binding::Input {
+                input: "value".into(),
+            },
+            luma_patterns::ValueType::Proportion,
+            luma_patterns::Rate::Frame,
+        ),
+        (
+            "view/time",
+            luma_patterns::Binding::Connection {
+                node: "seconds".into(),
+                output: "seconds".into(),
+            },
+            luma_patterns::Value::Seconds(0.).value_type(),
+            luma_patterns::Rate::Frame,
+        ),
+        (
+            "view/events",
+            luma_patterns::Value::Events(luma_patterns::Events::Beats {
+                times: luma_patterns::EventTimes::new(vec![4., 5., 7.]).unwrap(),
+            })
+            .into(),
+            luma_patterns::ValueType::Events,
+            luma_patterns::Rate::Fixed,
+        ),
+    ] {
+        graph.outputs.insert(key.into(), binding);
+        definition
+            .outputs
+            .insert(key.into(), luma_patterns::Output { value_type, rate });
+    }
+    let stored = score.clone();
+    let mut access = VenueAccess::<Read>::read(&fixture.pool, VenueResource::Score("score"))
+        .await
+        .unwrap();
+    let preview = graph_scores::prepare_clip_preview(
+        &mut access,
+        &root,
+        &StorageRoot::from_path(fixture._directory.path().join("storage")),
+        "track",
+        &score,
+        "preview",
+    )
+    .await
+    .unwrap();
+    drop(access);
+    assert_eq!(preview.span, (2., 6.));
+    let inspection = preview.inspection.as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(inspection.times.len(), 128);
+    assert_eq!((inspection.times[0], inspection.times[127]), preview.span);
+    assert_eq!(inspection.values.len(), 3);
+    for (i, seconds) in inspection.times.iter().enumerate() {
+        assert_eq!(
+            inspection.values["view/level"]
+                .sample(i)
+                .unwrap()
+                .scalar_value()
+                .unwrap(),
+            0.25
+        );
+        assert!(
+            (inspection.values["view/time"]
+                .sample(i)
+                .unwrap()
+                .scalar_value()
+                .unwrap()
+                - f64::from(*seconds))
+            .abs()
+                < 1e-5
+        );
+    }
+    let luma_patterns::Value::Events(luma_patterns::Events::Beats { times }) =
+        inspection.values["view/events"].sample(0).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        times
+            .as_slice()
+            .iter()
+            .map(|beat| inspection.clock.seconds_at(*beat).unwrap())
+            .collect::<Vec<_>>(),
+        vec![2., 3., 5.]
+    );
+    assert_eq!(
+        preview.scene.annotations.len(),
+        1,
+        "another clip leaked into preview"
+    );
+    let times = [2., 5.5, 2.25, 4.];
+    let mut scratch = crate::eval::Arena::default();
+    let frames = preview
+        .scene
+        .render(&times, crate::eval::Scope::Single(0), &mut scratch);
+    for (time, frame) in times.into_iter().zip(&frames) {
+        assert_eq!(frame.primitives.len(), 1, "preview ignored group selection");
+        assert_eq!(
+            frame.primitives["fixture-0:0"].dimmer, 0.25,
+            "preview ignored clip override"
+        );
+        assert_eq!(
+            &preview
+                .scene
+                .render(&[time], crate::eval::Scope::Single(0), &mut scratch)[0],
+            frame
+        );
+    }
+    let outside = preview
+        .scene
+        .render(&[1.99, 6.], crate::eval::Scope::Composite, &mut scratch);
+    assert!(
+        outside.iter().all(|frame| frame.primitives.is_empty()),
+        "clip preview crossed its active span"
+    );
+    assert_eq!(score, stored, "preview rewrote the authored document");
+}
+
+#[tokio::test]
 async fn delayed_sync_acknowledgements_do_not_conflict_with_normal_score_edits() {
     let owner = "score-owner";
     let fixture = Fixture::signed_in(owner).await;
@@ -395,6 +562,127 @@ async fn graph_score_projection_rolls_back_with_failed_history_write() {
             .unwrap(),
         1
     );
+}
+
+#[tokio::test]
+async fn tensor_score_migration_keeps_historical_bytes_and_is_reversible() {
+    let assert_document = |actual: GraphScoreDocument, expected: &GraphScoreDocument| {
+        assert_eq!(actual.revision, expected.revision);
+        assert_eq!(actual.score, expected.score);
+    };
+    let (fixture, thread, scope) = legacy().await;
+    let initial = current(&fixture, &scope).await;
+    let baseline: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/patterns/tests/fixtures/v2-samples.json"
+    )))
+    .unwrap();
+    let mut score: luma_patterns::Score =
+        serde_json::from_value(baseline["score"].clone()).unwrap();
+    score.clips.retain(|id, _| id.starts_with("sample-chase-"));
+    score
+        .definitions
+        .retain(|id, _| id.starts_with("sample-chase-"));
+    let original = GraphScoreDocument::new(score).unwrap();
+    let old_source = original.source().unwrap();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "seed-v2-score",
+            &old_source,
+            initial.document.revision(),
+            "Load existing score",
+        )
+        .await
+        .unwrap();
+    let before = current(&fixture, &scope).await;
+    let candidate =
+        GraphScoreDocument::new(luma_patterns::migration::upgrade_v2(&original.score).unwrap())
+            .unwrap();
+    let source = candidate.source().unwrap();
+    assert_ne!(candidate.revision, original.revision);
+    assert_eq!(original.source().unwrap(), old_source);
+    assert_eq!(
+        GraphScoreDocument::from_source(&old_source)
+            .unwrap()
+            .revision,
+        original.revision
+    );
+
+    sqlx::query("CREATE TRIGGER reject_tensor_migration BEFORE INSERT ON authored_operation_outcomes WHEN NEW.operation_id = 'failed-tensor-migration' BEGIN SELECT RAISE(ABORT, 'injected migration history failure'); END")
+        .execute(&fixture.pool).await.unwrap();
+    let failed = fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "failed-tensor-migration",
+            &source,
+            &original.revision,
+            "Upgrade graph signals",
+        )
+        .await
+        .unwrap_err();
+    assert!(failed
+        .to_string()
+        .contains("injected migration history failure"));
+    assert_eq!(current(&fixture, &scope).await.head, before.head);
+    assert_document(stored(&fixture, &scope).await.unwrap(), &original);
+
+    let apply = || {
+        fixture.authored.apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "tensor-migration",
+            &source,
+            &original.revision,
+            "Upgrade graph signals",
+        )
+    };
+    let applied = apply().await.unwrap();
+    assert!(applied.changed);
+    assert_eq!(apply().await.unwrap().revision_id, applied.revision_id);
+    let migrated = current(&fixture, &scope).await;
+    assert_eq!(migrated.files[SCORE_PATH], source.as_bytes());
+    assert_document(stored(&fixture, &scope).await.unwrap(), &candidate);
+
+    for (head, operation, expected, expected_source) in [
+        (
+            before.head.as_str(),
+            "restore-v2-score",
+            &original,
+            &old_source,
+        ),
+        (
+            migrated.head.as_str(),
+            "restore-v3-score",
+            &candidate,
+            &source,
+        ),
+    ] {
+        fixture
+            .authored
+            .restore(
+                &fixture.pool,
+                None,
+                &thread.id,
+                head,
+                operation,
+                AuthoredRestoreMode::StateOnly,
+            )
+            .await
+            .unwrap();
+        assert_document(stored(&fixture, &scope).await.unwrap(), expected);
+        assert_eq!(
+            current(&fixture, &scope).await.files[SCORE_PATH],
+            expected_source.as_bytes()
+        );
+    }
 }
 
 #[tokio::test]
@@ -814,5 +1102,348 @@ async fn conflicted_subagent_proposal_is_readable_after_retirement_and_resolutio
             .await
             .is_err(),
         "reverse parent/child access must be refused"
+    );
+}
+
+#[tokio::test]
+async fn typed_row_score_migration_preserves_shared_graphs_timing_arguments_and_history() {
+    row_score_migration_preserves_shared_graphs_timing_arguments_and_history(false).await;
+}
+
+#[tokio::test]
+async fn mixed_row_score_migration_preserves_shared_graphs_timing_arguments_and_history() {
+    row_score_migration_preserves_shared_graphs_timing_arguments_and_history(true).await;
+}
+
+async fn row_score_migration_preserves_shared_graphs_timing_arguments_and_history(mixed: bool) {
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+    use crate::services::graph_documents::exact_graph_json;
+    let fixture = Fixture::new().await;
+    let scope = fixture.track_scope().await;
+    let mut graph = crate::node_graph::lighting::pattern("chase").unwrap();
+    if mixed {
+        // Route an exposed typed control through the original numeric vocabulary.
+        let edge = graph
+            .edges
+            .iter_mut()
+            .find(|e| e.to_port == "width")
+            .unwrap();
+        edge.to_node = "width_value".into();
+        edge.to_port = "value".into();
+        graph.nodes.push(crate::models::node_graph::NodeInstance {
+            id: "width_value".into(),
+            type_id: "scalar".into(),
+            params: Default::default(),
+            position_x: Some(10.),
+            position_y: Some(40.),
+        });
+        graph.edges.push(crate::models::node_graph::Edge {
+            id: "width-value".into(),
+            from_node: "width_value".into(),
+            from_port: "out".into(),
+            to_node: "effect".into(),
+            to_port: "width".into(),
+        });
+    }
+    graph
+        .args
+        .iter_mut()
+        .find(|a| a.id == "travel")
+        .unwrap()
+        .name = "Journey length".into();
+    let raw = exact_graph_json(&graph).unwrap();
+    sqlx::query("INSERT INTO implementations(id,pattern_id,graph_json) VALUES('implementation','pattern',?)")
+        .bind(&raw).execute(&fixture.pool).await.unwrap();
+    sqlx::query("INSERT INTO track_beats(track_id,beats_json,downbeats_json,bpm,downbeat_offset,beats_per_bar) VALUES('track','[0,0.5,1,1.5,2,3,4,5,6]','[0,2,6]',120,0,4)")
+        .execute(&fixture.pool).await.unwrap();
+    // Use the shared Selection serializer rather than duplicating subset wire syntax.
+    let selection = luma_patterns::Selection {
+        expression: "front_wash | drum_uplighters".into(),
+        subset: luma_patterns::Subset::Fraction(0.5),
+    };
+    let args = json!({"travel": 6.0, "color": "#ff0044", "selection": selection.to_value()});
+    sqlx::query("INSERT INTO track_scores(id,score_id,pattern_id,start_time,end_time,z_index,blend_mode,args_json) VALUES('0482d1cf-a7e3-4db1-9681-529aa1b87ab3','score','pattern',2,6,7,'screen',?)")
+        .bind(args.to_string()).execute(&fixture.pool).await.unwrap();
+    sqlx::query("INSERT INTO track_scores(id,score_id,pattern_id,start_time,end_time,z_index,blend_mode,args_json) SELECT '8b2eaf16-4107-4e69-8dc8-f14b81ad2186',score_id,pattern_id,1,2,9,'replace','{}' FROM track_scores WHERE score_id='score'")
+        .execute(&fixture.pool).await.unwrap();
+    let thread = fixture
+        .authored
+        .create_thread_with_authored_state(
+            &fixture.pool,
+            CreateAgentThreadInput {
+                request_id: Uuid::new_v4().to_string(),
+                agent_kind: "track_copilot".into(),
+                subject_kind: Some("track".into()),
+                subject_id: Some("track".into()),
+                venue_id: Some("venue".into()),
+                score_id: Some("score".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let before = current(&fixture, &scope).await;
+    let mut access = VenueAccess::<Read>::read(&fixture.pool, VenueResource::Score("score"))
+        .await
+        .unwrap();
+    let graph_scores::ScoreDocument::Legacy(original) =
+        graph_scores::read_score_document(&mut access, &scope)
+            .await
+            .unwrap()
+    else {
+        panic!()
+    };
+    let candidate = graph_scores::migration::upgrade_rows(&mut access, &scope, &original)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(access);
+    let id = "0482d1cf-a7e3-4db1-9681-529aa1b87ab3";
+    let clip = &candidate.score.clips[id];
+    assert_eq!((clip.start, clip.duration), (4., 4.));
+    assert_eq!(clip.z_index, 7);
+    assert_eq!(clip.blend_mode, luma_patterns::BlendMode::Screen);
+    assert_eq!(clip.selection, selection);
+    assert_eq!(clip.inputs["travel"], luma_patterns::Value::Beats(6.));
+    assert_eq!(
+        clip.selection_seed,
+        Some(crate::eval::context::seed_for(Some(id), "effect"))
+    );
+    assert_eq!(
+        clip.seed,
+        crate::eval::context::seed_for(Some(id), "lighting")
+    );
+    assert_ne!(clip.selection_seed, Some(clip.seed));
+    assert_eq!(
+        clip.graph,
+        candidate.score.clips["8b2eaf16-4107-4e69-8dc8-f14b81ad2186"].graph
+    );
+    assert_eq!(
+        candidate.score.definitions[&clip.graph].inputs["travel"].name,
+        "Journey length"
+    );
+    assert!(
+        stored(&fixture, &scope).await.is_none(),
+        "candidate creation wrote storage"
+    );
+    let apply = || {
+        fixture.authored.upgrade_score_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            candidate.clone(),
+            &original.revision,
+        )
+    };
+    let (first, second) = tokio::join!(apply(), apply());
+    assert_eq!(first.unwrap().revision, candidate.revision);
+    assert_eq!(second.unwrap().revision, candidate.revision);
+    let migrated = current(&fixture, &scope).await;
+    assert_eq!(
+        stored(&fixture, &scope).await.unwrap().revision,
+        candidate.revision
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM track_scores WHERE score_id='score'")
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT graph_json FROM implementations WHERE id='implementation'"
+        )
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap(),
+        raw,
+        "migration changed the library source"
+    );
+    fixture
+        .authored
+        .restore(
+            &fixture.pool,
+            None,
+            &thread.id,
+            before.head.as_str(),
+            "undo-row-migration",
+            AuthoredRestoreMode::StateOnly,
+        )
+        .await
+        .unwrap();
+    assert!(stored(&fixture, &scope).await.is_none());
+    let restored = current(&fixture, &scope).await;
+    assert_eq!(restored.document.revision(), original.revision);
+    assert_eq!(restored.files, before.files);
+    assert_eq!(apply().await.unwrap().revision, candidate.revision);
+    assert_eq!(
+        stored(&fixture, &scope).await.unwrap().revision,
+        candidate.revision
+    );
+    assert_ne!(
+        current(&fixture, &scope).await.head,
+        migrated.head,
+        "reopening a restored source reused an obsolete migration operation"
+    );
+    let mut edited = candidate.score.clone();
+    edited.clips.get_mut(id).unwrap().duration = 3.;
+    let edited = GraphScoreDocument::new(edited).unwrap();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "edit-after-reopening",
+            &edited.source().unwrap(),
+            &candidate.revision,
+            "Edit after restore",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        apply().await.unwrap().revision,
+        edited.revision,
+        "a delayed opener returned its stale migration over a newer edit"
+    );
+}
+
+#[tokio::test]
+async fn numerical_rows_preserve_shared_named_inputs_and_wrapped_overrides() {
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+    use luma_patterns as p;
+    let fixture = Fixture::new().await;
+    let scope = fixture.track_scope().await;
+    let graph: crate::models::node_graph::Graph = serde_json::from_value(json!({
+        "nodes": [
+            {"id":"pattern_args", "typeId":"pattern_args", "params":{}, "positionX":-220., "positionY":50.},
+            {"id":"square", "typeId":"math", "params":{"operation":"multiply"}, "positionX":0., "positionY":50.},
+            {"id":"apply", "typeId":"apply_dimmer", "params":{}, "positionX":300., "positionY":50.}
+        ],
+        "edges": [
+            {"id":"gain-a", "fromNode":"pattern_args", "fromPort":"gain", "toNode":"square", "toPort":"a"},
+            {"id":"gain-b", "fromNode":"pattern_args", "fromPort":"gain", "toNode":"square", "toPort":"b"},
+            {"id":"output", "fromNode":"square", "fromPort":"out", "toNode":"apply", "toPort":"signal"}
+        ],
+        "args": [
+            {"id":"gain", "name":"Snare level", "argType":"Scalar", "defaultValue":0.25},
+            {"id":"tint", "name":"Unused accent", "argType":"Color", "defaultValue":{"r":255.0,"g":0.0,"b":68.0,"a":1.0}}
+        ]
+    })).unwrap();
+    let raw = crate::services::graph_documents::exact_graph_json(&graph).unwrap();
+    sqlx::query("INSERT INTO implementations(id,pattern_id,graph_json) VALUES('implementation','pattern',?)")
+        .bind(&raw).execute(&fixture.pool).await.unwrap();
+    sqlx::query("INSERT INTO track_beats(track_id,beats_json,downbeats_json,bpm,downbeat_offset,beats_per_bar) VALUES('track','[0,0.5,1,1.5,2,2.5,3,3.5,4]','[0,2,4]',120,0,4)")
+        .execute(&fixture.pool).await.unwrap();
+    for (id, args) in [
+        ("clip-a", json!({"gain":{"value":0.6}})),
+        ("clip-b", json!({"gain":0.2})),
+    ] {
+        sqlx::query("INSERT INTO track_scores(id,score_id,pattern_id,start_time,end_time,z_index,blend_mode,args_json) VALUES(?,'score','pattern',1,3,0,'replace',?)")
+            .bind(id).bind(args.to_string()).execute(&fixture.pool).await.unwrap();
+    }
+    let mut access = VenueAccess::<Read>::read(&fixture.pool, VenueResource::Score("score"))
+        .await
+        .unwrap();
+    let graph_scores::ScoreDocument::Legacy(original) =
+        graph_scores::read_score_document(&mut access, &scope)
+            .await
+            .unwrap()
+    else {
+        panic!()
+    };
+    let converted = graph_scores::migration::upgrade_rows(&mut access, &scope, &original)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(access);
+    assert!(
+        stored(&fixture, &scope).await.is_none(),
+        "conversion wrote storage"
+    );
+    let mut score = converted.score;
+    let root = score.clips["clip-a"].graph.clone();
+    assert_eq!(root, score.clips["clip-b"].graph);
+    assert_eq!(
+        score.definitions[&root].inputs["gain"].default,
+        Some(p::Value::Number(0.25))
+    );
+    let p::Body::Graph(body) = &score.definitions[&root].body else {
+        panic!()
+    };
+    assert_eq!(body.input_nodes.len(), 2);
+    assert_eq!(body.input_nodes["gain"].position, Some([-220., 50.]));
+    assert_eq!(body.nodes["square"].position, Some([0., 50.]));
+    for port in ["a", "b"] {
+        assert_eq!(
+            body.nodes["square"].inputs[port],
+            p::Binding::Input {
+                input: "gain".into()
+            }
+        );
+    }
+    let base = p::standard_library();
+    let library = score.library(&base).unwrap();
+    score
+        .definitions
+        .get_mut(&root)
+        .unwrap()
+        .edit(
+            &library,
+            p::GraphEdit::RenameInput {
+                key: "gain".into(),
+                name: "Hit intensity".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        score.definitions[&root].inputs["gain"].name,
+        "Hit intensity"
+    );
+    let library = score.library(&base).unwrap();
+    let cells = vec![p::Cell {
+        id: "head".into(),
+        group: "all".into(),
+        world: [0.; 3],
+        uvz: [0.; 3],
+    }];
+    for (id, expected) in [("clip-a", 0.36), ("clip-b", 0.04)] {
+        let clip = &score.clips[id];
+        assert_eq!((clip.start, clip.duration), (2., 4.));
+        let prepared = p::PreparedGraph::new(
+            &library,
+            &root,
+            &clip.inputs,
+            p::Frame {
+                cells: &cells,
+                features: None,
+                beat: 2.,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .unwrap();
+        let output = prepared.evaluate_batch(&[2., 5., 3., 2.]).unwrap();
+        for t in 0..4 {
+            let actual = output["lighting"].lighting().unwrap().sample(t).unwrap()["head"]
+                .dimmer
+                .unwrap();
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "{id}: {actual} != {expected}"
+            );
+        }
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT graph_json FROM implementations WHERE id='implementation'"
+        )
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap(),
+        raw
     );
 }

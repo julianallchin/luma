@@ -1,5 +1,8 @@
+mod support;
 use luma_patterns::*;
 use std::collections::{BTreeMap, BTreeSet};
+#[allow(unused_imports)]
+use support::EvaluateEffect;
 
 fn cells() -> Vec<Cell> {
     (0..16)
@@ -26,9 +29,7 @@ fn frame(cells: &[Cell]) -> Frame<'_> {
 }
 fn selected(program: &PreparedGraph, beat: f64) -> BTreeSet<String> {
     let value = program.evaluate(beat).unwrap();
-    let Value::Mask(mask) = &value["mask"] else {
-        panic!()
-    };
+    let mask = &support::field(&value["mask"]);
     assert!(mask.values().all(|v| *v == 0. || *v == 1.));
     mask.iter()
         .filter(|(_, v)| **v == 1.)
@@ -41,7 +42,8 @@ fn shuffled_walk_lights_exact_head_counts_without_repeating_until_needed() {
     let library = standard_library();
     let mut cells = cells();
     let args = BTreeMap::from([("count".into(), Value::Number(2.))]);
-    let program = PreparedGraph::new(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
+    let program =
+        support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
     let mut seen = BTreeSet::new();
     for beat in 0..8 {
         let current = selected(&program, beat as f64);
@@ -54,18 +56,19 @@ fn shuffled_walk_lights_exact_head_counts_without_repeating_until_needed() {
     assert_eq!(selected(&program, 1.), selected(&program, 1.99));
     cells.reverse();
     let reordered =
-        PreparedGraph::new(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
+        support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
     for beat in [20., 1., 7., 0.1, 3.] {
         assert_eq!(selected(&program, beat), selected(&reordered, beat));
     }
     for (count, expected) in [(-1., 0), (0., 0), (1., 1), (2.9, 2), (16., 16), (100., 16)] {
         let args = BTreeMap::from([("count".into(), Value::Number(count))]);
-        let p = PreparedGraph::new(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
+        let p =
+            support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
         for beat in [0., 1., 17.] {
             assert_eq!(selected(&p, beat).len(), expected);
         }
     }
-    let empty = PreparedGraph::new(&library, "random_heads_mask", &args, frame(&[])).unwrap();
+    let empty = support::prepare_effect(&library, "random_heads_mask", &args, frame(&[])).unwrap();
     assert!(selected(&empty, 4.).is_empty());
 }
 
@@ -79,7 +82,8 @@ fn fresh_random_sets_and_phase_delay_replay_after_seeking() {
         ("delay".into(), Value::Beats(0.5)),
         ("grid_aligned".into(), Value::Boolean(true)),
     ]);
-    let program = PreparedGraph::new(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
+    let program =
+        support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
     assert_eq!(selected(&program, 0.5), selected(&program, 1.499));
     assert_ne!(selected(&program, 0.5), selected(&program, 1.5));
     let before_seek = selected(&program, 1.5);
@@ -88,7 +92,7 @@ fn fresh_random_sets_and_phase_delay_replay_after_seeking() {
     assert_eq!(selected(&program, 0.5).len(), 3);
     let mut moved = frame(&cells);
     moved.clip_start = 0.25;
-    let moved = PreparedGraph::new(&library, "random_heads_mask", &args, moved).unwrap();
+    let moved = support::prepare_effect(&library, "random_heads_mask", &args, moved).unwrap();
     assert_eq!(selected(&program, 1.5), selected(&moved, 1.5));
 }
 
@@ -97,7 +101,7 @@ fn ranks_break_coordinate_ties_by_head_identity_and_radius_keeps_stage_aspect() 
     let library = standard_library();
     let cells = cells();
     let rank = library
-        .evaluate(
+        .evaluate_effect(
             "core/rank",
             &BTreeMap::from([(
                 "value".into(),
@@ -111,12 +115,8 @@ fn ranks_break_coordinate_ties_by_head_identity_and_radius_keeps_stage_aspect() 
         )
         .unwrap();
     assert_eq!(
-        rank["value"],
-        Value::Field(BTreeMap::from([
-            ("a".into(), 1.),
-            ("b".into(), 2.),
-            ("c".into(), 0.)
-        ]))
+        support::field(&rank["value"]),
+        BTreeMap::from([("a".into(), 1.), ("b".into(), 2.), ("c".into(), 0.)])
     );
     let positions = [[-4., 0., 7.], [4., 0., 9.], [0., -1., 2.], [0., 1., 0.]];
     let cells: Vec<_> = positions
@@ -130,20 +130,19 @@ fn ranks_break_coordinate_ties_by_head_identity_and_radius_keeps_stage_aspect() 
         })
         .collect();
     let program =
-        PreparedGraph::new(&library, "radial_distance", &BTreeMap::new(), frame(&cells)).unwrap();
+        support::prepare_effect(&library, "radial_distance", &BTreeMap::new(), frame(&cells))
+            .unwrap();
     assert_eq!(program.dynamic_step_count(), 0);
-    let value = program.evaluate(0.).unwrap();
+    let batch = program.evaluate_batch(&[0.0]).unwrap();
+    let signal = batch["value"].signal().unwrap();
     assert_eq!(
-        value["value"],
-        Value::Field(BTreeMap::from([
-            ("0".into(), 4.),
-            ("1".into(), 4.),
-            ("2".into(), 1.),
-            ("3".into(), 1.),
-        ]))
+        signal.values().iter().copied().collect::<Vec<_>>(),
+        [4.0, 4.0, 1.0, 1.0]
     );
+    assert_eq!(signal.fixtures().unwrap(), ["0", "1", "2", "3"]);
+    assert_eq!(signal.unit(), Unit::Number);
     assert!(library
-        .evaluate(
+        .evaluate_effect(
             "core/square_root",
             &BTreeMap::from([(
                 "value".into(),
@@ -172,7 +171,7 @@ fn strobe_and_rainbow_are_graphs_and_preserve_output_capabilities() {
             .unwrap();
         score.validate(&library).unwrap();
     }
-    let program = PreparedGraph::new(
+    let program = support::prepare_effect(
         &library,
         "strobe",
         &BTreeMap::from([
@@ -196,7 +195,8 @@ fn strobe_and_rainbow_are_graphs_and_preserve_output_capabilities() {
                 && v.speed.is_none()),
         "{light:?}"
     );
-    let rainbow = PreparedGraph::new(&library, "rainbow", &BTreeMap::new(), frame(&cells)).unwrap();
+    let rainbow =
+        support::prepare_effect(&library, "rainbow", &BTreeMap::new(), frame(&cells)).unwrap();
     let value = rainbow.evaluate(0.).unwrap();
     let Value::Lighting(light) = &value["lighting"] else {
         panic!()
@@ -221,12 +221,11 @@ fn chase_uses_an_editable_travel_envelope_for_bounce_and_offstage_endpoints() {
         (4., -0.25, 0.),
     ] {
         let outputs = library
-            .evaluate(
+            .evaluate_effect(
                 "motion",
                 &BTreeMap::from([
                     ("elapsed".into(), Value::Beats(elapsed)),
                     ("travel".into(), Value::Beats(4.)),
-                    ("repeat".into(), Value::Beats(6.)),
                     ("start".into(), Value::Position(-0.25)),
                     ("end".into(), Value::Position(1.25)),
                     ("path".into(), path.clone()),
@@ -234,8 +233,8 @@ fn chase_uses_an_editable_travel_envelope_for_bounce_and_offstage_endpoints() {
                 frame(&cells),
             )
             .unwrap();
-        assert_eq!(outputs["position"], Value::Position(position));
-        assert_eq!(outputs["active"], Value::Proportion(active));
+        assert_eq!(outputs["position"].scalar_value(), Some(position));
+        assert_eq!(outputs["active"].scalar_value(), Some(active));
     }
     let mut score = Score::default();
     score
@@ -271,7 +270,7 @@ fn field_profile_is_dark_outside_its_width_even_with_hard_edges() {
     ]));
     for width in [1., 0., -1.] {
         let value = library
-            .evaluate(
+            .evaluate_effect(
                 "profile_mask",
                 &BTreeMap::from([
                     ("offset".into(), offset.clone()),
@@ -281,9 +280,7 @@ fn field_profile_is_dark_outside_its_width_even_with_hard_edges() {
                 frame(&cells),
             )
             .unwrap();
-        let Value::Mask(mask) = &value["mask"] else {
-            panic!()
-        };
+        let mask = &support::field(&value["mask"]);
         assert_eq!(mask["a"], 0.);
         assert_eq!(mask["e"], 0.);
         for head in ["b", "c", "d"] {

@@ -69,7 +69,7 @@ fn the_context_gauge_is_captured_at_rest_and_open() {
             ({{ settled, open }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat("chat-context"),
+            open = chat::open_chat(),
             send = chat::send(),
             reading = chat::CONTEXT_READING,
         ),
@@ -95,7 +95,7 @@ fn model_picker_with_effort_slider() {
             until("effort slider", (s) => s.find({{ role: "slider", label: "Reasoning effort" }}) !== undefined);
             app.frames(4, {{ waitMs: 40 }});
             app.screenshot()
-        "#, until = chat::UNTIL, open = chat::open_chat("chat-engine")),
+        "#, until = chat::UNTIL, open = chat::open_chat()),
         Duration::from_secs(300),
     );
     assert_eq!(result.error, None, "capture failed: {}", result.stdout);

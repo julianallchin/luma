@@ -37,9 +37,9 @@ const CLIPS: [(&str, &str, f64, f64, i64); 2] = [
 /// the assertion be exact rather than approximate.
 const DRAG_X: f64 = 100.;
 
-fn harness() -> Harness {
+fn harness(name: &'static str) -> Harness {
     Fixture::new(
-        "track-editor",
+        name,
         TRACK_SECONDS,
         CLIPS
             .iter()
@@ -141,7 +141,7 @@ const SCRIPT: &str = r#"
 
 #[test]
 fn a_clip_edge_dragged_on_the_timeline_moves_stays_moved_and_the_playhead_runs() {
-    let mut harness = harness();
+    let mut harness = harness("track-editor-drag");
     let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
@@ -250,7 +250,7 @@ fn transport(reading: &Value) -> Vec<String> {
 
 #[test]
 fn beat_grid_approval_survives_reopening_and_can_be_undone() {
-    let mut harness = harness();
+    let mut harness = harness("track-editor-approval");
     let result = harness.exec(
         &support::script(
             r#"

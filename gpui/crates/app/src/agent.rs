@@ -3,7 +3,7 @@
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
-use luma_lib::agent::{AgentKind, SubjectKind, ThreadScope};
+use luma_lib::agent::ThreadScope;
 
 use crate::shell::Body;
 use crate::Luma;
@@ -17,18 +17,6 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
         if let Some((track, venue, score)) = editor.score_subject() {
             return Some(ThreadScope::track(track, venue, score));
         }
-        let (pattern, implementation) = editor.subject()?;
-        return Some(ThreadScope {
-            agent_kind: AgentKind::PatternGraph,
-            subject_kind: SubjectKind::Pattern,
-            subject_id: pattern,
-            implementation_id: Some(implementation),
-            venue_id: app
-                .sidebar
-                .as_ref()
-                .map(|browser| browser.venue_id().to_owned()),
-            score_id: None,
-        });
     }
     app.sidebar
         .as_ref()
@@ -111,7 +99,7 @@ impl Luma {
                         self.reload_score_contents(target, score, cx);
                     }
                 }
-                Some(Body::Graph(_)) => self.reload_graph(&target, cx),
+                Some(Body::Graph(_)) => {}
                 Some(Body::Patch(_)) => {
                     if let Some(venue) = target.venue() {
                         self.reload_patch(venue.to_owned(), cx);

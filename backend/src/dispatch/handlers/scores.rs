@@ -10,8 +10,9 @@ use crate::models::scores::{
 use crate::services::score_mutations;
 use crate::services::track_edits::TrackEditResult;
 
-/// None marks a score still awaiting manual migration. Reading another visible
-/// member's score uses its actual owner; writing requires the admitted owner.
+/// Opening an owned historical score records its complete conversion as one
+/// authored revision. Another member's score gets a read-only projection; its
+/// stored source and revision remain untouched.
 pub async fn get_score_document(
     services: &AppServices,
     score_id: String,
@@ -24,10 +25,48 @@ pub async fn get_score_document(
         track_id: score.track_id,
         venue_id: score.venue_id,
     };
-    Ok(
-        crate::services::graph_scores::load(access.connection(), &scope, score.uid.as_deref())
-            .await?,
-    )
+    let editable = access.principal() == score.uid.as_deref();
+    let document = crate::services::graph_scores::read_score_document(&mut access, &scope).await?;
+    let (revision, mut upgraded) = match document {
+        crate::services::graph_scores::ScoreDocument::Graph(document) => {
+            if document.score.version() != 2 {
+                return Ok(Some(document));
+            }
+            let upgraded = crate::services::graph_scores::GraphScoreDocument::new(
+                luma_patterns::migration::upgrade_v2(&document.score)
+                    .map_err(|error| CommandError::Invalid(error.to_string()))?,
+            )
+            .map_err(CommandError::Invalid)?;
+            (document.revision, upgraded)
+        }
+        crate::services::graph_scores::ScoreDocument::Legacy(document) => {
+            let Some(upgraded) = crate::services::graph_scores::migration::upgrade_rows(
+                &mut access,
+                &scope,
+                &document,
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            (document.revision, upgraded)
+        }
+    };
+    drop(access);
+    if editable {
+        upgraded = services
+            .authored
+            .upgrade_score_for_scope(
+                &services.db.0,
+                score.uid.as_deref(),
+                scope,
+                upgraded,
+                &revision,
+            )
+            .await?;
+        services.sync.push_notify.notify_one();
+    }
+    Ok(Some(upgraded))
 }
 
 pub async fn apply_score_document(
@@ -97,6 +136,30 @@ pub async fn preview_score_clip(
         &services.fixtures_root,
         &services.storage,
         &scope.track_id,
+        &candidate.score,
+        &clip_id,
+    )
+    .await?)
+}
+
+/// Native preview programs cross the same authorized dispatch seam as image
+/// previews, without serializing an executable scene or installing it globally.
+pub async fn prepare_score_clip_preview(
+    services: &AppServices,
+    score_id: String,
+    clip_id: String,
+    score: luma_patterns::Score,
+) -> Result<crate::services::graph_scores::ClipPreview, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Score(&score_id)).await?;
+    let metadata = db::get_score(&mut access, &score_id).await?;
+    let candidate = crate::services::graph_scores::GraphScoreDocument::new(score)
+        .map_err(CommandError::Invalid)?;
+    Ok(crate::services::graph_scores::prepare_clip_preview(
+        &mut access,
+        &services.fixtures_root,
+        &services.storage,
+        &metadata.track_id,
         &candidate.score,
         &clip_id,
     )

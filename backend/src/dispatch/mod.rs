@@ -161,6 +161,7 @@ use crate::sync::orchestrator::SyncReport;
 use handlers::score_dsl::{
     ScoreDslExportResponse, ScoreDslImportResponse, ScoreDslValidationResponse,
 };
+pub use handlers::scores::prepare_score_clip_preview;
 use handlers::tracks::TrackAudioBase64;
 /// Large native audio payload; retains the dispatcher's visibility checks.
 pub use handlers::waveforms::get_track_waveform_signal;
@@ -212,6 +213,7 @@ commands! {
         id: String,
         implementation_id: Option<String>,
     ) -> GraphDocument;
+    patterns::get_pattern_score_template(id: String, venue_id: String) -> luma_patterns::Score;
     patterns::get_pattern_args(
         id: String,
         venue_id: Option<String>,
@@ -713,6 +715,7 @@ commands! {
     host_audio::host_pause() -> ();
     host_audio::host_seek(seconds: f32) -> ();
     host_audio::host_set_loop(enabled: bool) -> ();
+    host_audio::host_set_playback_range(start_seconds: f32, end_seconds: f32, looping: bool) -> ();
     host_audio::host_set_loop_region(
         start_seconds: Option<f32>,
         end_seconds: Option<f32>,

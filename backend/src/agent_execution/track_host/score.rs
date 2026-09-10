@@ -164,6 +164,25 @@ impl TrackHost {
         }
         supervise(async {
             match method {
+                "track.score_upgrade" => {
+                    let request: Upgrade = decode(payload)?;
+                    let candidate = luma_patterns::migration::upgrade_v2(&request.candidate)
+                        .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
+                    Ok(json!(candidate))
+                }
+                "track.graph_instance" => {
+                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
+                    let request: Instance = decode(payload)?;
+                    let library = request.candidate.library(&luma_patterns::standard_library())
+                        .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
+                    let definition = library.definitions.get(&request.definition)
+                        .ok_or_else(|| HostCallError::new("invalid_score", "unknown graph definition"))?;
+                    let instance = if definition.placeable() {
+                        definition.clip_instance(&request.definition)
+                            .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?
+                    } else { definition.instance(&request.definition) };
+                    Ok(json!(instance))
+                }
                 "track.score_check" => {
                     let plan: GraphScoreEdit = decode(payload)?;
                     let scene = self.prepare_score(&plan).await?;
@@ -203,6 +222,19 @@ impl TrackHost {
             }
         }, context, limit).await
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Upgrade {
+    candidate: luma_patterns::Score,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Instance {
+    candidate: luma_patterns::Score,
+    definition: String,
 }
 
 #[derive(Deserialize)]

@@ -20,6 +20,7 @@ mod fixture_picker_pixels;
 mod gauntlet;
 mod gauntlet_chat;
 mod graph_budget;
+mod graph_editor_pixels;
 mod sidebar_scores_pixels;
 mod sidebar_toggle_budget;
 mod signin_pixels;

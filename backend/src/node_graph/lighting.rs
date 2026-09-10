@@ -7,6 +7,38 @@ use std::collections::{BTreeMap, HashMap};
 
 pub const PREFIX: &str = "lighting/";
 
+#[cfg(test)]
+mod mapping_tests {
+    use super::*;
+
+    #[test]
+    fn authoring_projection_preserves_structured_mapping_values() {
+        for source in [
+            p::MappingSource::Circle { origin: 0.375 },
+            p::MappingSource::MajorAxis {
+                toward: [1., -2., 3.],
+            },
+            p::MappingSource::Vector {
+                direction: [1., 0., 2.],
+            },
+        ] {
+            let value = p::Value::Mapping(p::MappingSpec {
+                mirror: Some(p::MirrorPlane {
+                    normal: [1., 0., 1.],
+                    offset: 0.25,
+                }),
+                source,
+                reverse: true,
+                per_group: true,
+            });
+            assert_eq!(
+                decode(ValueType::Mapping, &wire_value(&value)).expect("valid mapping"),
+                value
+            );
+        }
+    }
+}
+
 pub fn choices(kind: ValueType) -> Vec<ParamOption> {
     let rows: &[(&str, &str)] = match kind {
         ValueType::AudioSource => &[
@@ -22,14 +54,7 @@ pub fn choices(kind: ValueType) -> Vec<ParamOption> {
             ("hihat", "Hi-hat"),
             ("cymbal", "Cymbal"),
         ],
-        ValueType::Mapping => &[
-            ("z", "Up (Z+)"),
-            ("u", "Stage right (U+)"),
-            ("v", "Downstage (V+)"),
-            ("major_axis", "Major axis"),
-            ("circle", "Solved circle"),
-            ("order", "Selection order"),
-        ],
+        ValueType::Mapping => &p::MappingSource::OPTIONS,
         ValueType::Boundary => &[("natural", "Natural"), ("clip", "Clip"), ("wrap", "Wrap")],
         ValueType::Boolean => &[("true", "Yes"), ("false", "No")],
         _ => &[],
@@ -44,36 +69,35 @@ pub fn choices(kind: ValueType) -> Vec<ParamOption> {
 
 pub fn port_type(kind: ValueType) -> PortType {
     match kind {
-        ValueType::Number | ValueType::Field => PortType::Signal,
+        ValueType::Seed => PortType::Seed,
+        ValueType::Signal(_) | ValueType::Number | ValueType::Field => PortType::Signal,
         ValueType::Color | ValueType::ColorField => PortType::Signal,
         ValueType::Gradient => PortType::Stops,
         ValueType::AudioSource => PortType::Audio,
-        ValueType::Drum => PortType::Events,
-        ValueType::Beats => PortType::Beats,
-        ValueType::Proportion => PortType::Proportion,
-        ValueType::Position => PortType::Position,
+        ValueType::Drum | ValueType::Events => PortType::Events,
+        ValueType::Beats => PortType::Signal,
+        ValueType::Proportion => PortType::Signal,
+        ValueType::Position => PortType::Signal,
         ValueType::Boolean => PortType::Boolean,
         ValueType::Mapping => PortType::Mapping,
         ValueType::Coordinates => PortType::Coordinates,
         ValueType::Boundary => PortType::Boundary,
         ValueType::Envelope => PortType::Envelope,
-        ValueType::Mask => PortType::Mask,
+        ValueType::Mask => PortType::Signal,
         ValueType::Lighting => PortType::Lighting,
     }
 }
 
 pub fn wire_value(value: &p::Value) -> Value {
     match value {
-        p::Value::Mapping(m) => json!(match m.source {
-            p::MappingSource::U => "u",
-            p::MappingSource::V => "v",
-            p::MappingSource::Z => "z",
-            p::MappingSource::Order => "order",
-            p::MappingSource::MajorAxis { .. } => "major_axis",
-            p::MappingSource::Circle { .. } => "circle",
-        }),
+        p::Value::Signal(signal)
+            if signal.fixtures().is_none() && signal.values().dim() == (1, 1, 1) =>
+        {
+            json!(signal.values()[[0, 0, 0]])
+        }
+        p::Value::Signal(signal) => serde_json::to_value(signal).expect("serializable signal"),
         p::Value::Gradient(gradient) => {
-            json!({"stops": gradient.stops.iter().map(|stop| json!({"t":stop.t, "color":stop.color})).collect::<Vec<_>>()})
+            serde_json::to_value(gradient).expect("serializable gradient")
         }
         p::Value::Color(rgb) => {
             json!({"r": rgb[0]*255., "g": rgb[1]*255., "b": rgb[2]*255., "a": 1.})
@@ -83,6 +107,35 @@ pub fn wire_value(value: &p::Value) -> Value {
 }
 
 pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
+    if let ValueType::Signal(spec) = kind {
+        let decoded = if value.get("values").is_some() {
+            p::Value::Signal(
+                serde_json::from_value(value.clone())
+                    .map_err(|e| format!("Invalid signal: {e}"))?,
+            )
+        } else if spec.channels == Some(p::Channels::Rgb)
+            || value.get("r").is_some()
+            || value.is_array()
+            || value.as_str().is_some_and(|v| v.starts_with('#'))
+        {
+            decode(ValueType::Color, value)?
+        } else {
+            let number = value.as_f64().ok_or("A numerical signal needs a value")?;
+            match spec.unit {
+                Some(p::Unit::Beats) => p::Value::Beats(number),
+                Some(p::Unit::Proportion) => p::Value::Proportion(number),
+                Some(p::Unit::Position) => p::Value::Position(number),
+                Some(p::Unit::Degrees) => p::Value::Degrees(number),
+                Some(p::Unit::Seconds) => p::Value::Seconds(number),
+                _ => p::Value::Number(number),
+            }
+        };
+        decoded.validate().map_err(|e| e.to_string())?;
+        if !kind.accepts(decoded.value_type()) {
+            return Err("Signal units or channels do not match this input".into());
+        }
+        return Ok(decoded);
+    }
     let value = match kind {
         ValueType::Gradient => {
             let stops = value
@@ -92,28 +145,42 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
             let stops = stops
                 .iter()
                 .map(|stop| {
-                    let color = decode(ValueType::Color, &stop["color"])?;
+                    // Gradient opacity is separate from RGB. Historical stops
+                    // may store it in the color object or an eight-digit hex.
+                    let mut rgb = stop["color"].clone();
+                    if let Some(object) = rgb.as_object_mut() {
+                        object.remove("a");
+                    } else if let Some(hex) = rgb.as_str() {
+                        if hex.starts_with('#') && hex.len() == 9 {
+                            let rgba = u32::from_str_radix(&hex[1..], 16)
+                                .map_err(|_| "Invalid gradient color")?;
+                            rgb = json!([
+                                ((rgba >> 24) & 255) as f64 / 255.,
+                                ((rgba >> 16) & 255) as f64 / 255.,
+                                ((rgba >> 8) & 255) as f64 / 255.
+                            ]);
+                        }
+                    }
+                    let color = decode(ValueType::Color, &rgb)?;
                     let p::Value::Color(color) = color else {
                         unreachable!()
                     };
-                    Ok(json!({"t":stop["t"], "color":color}))
+                    let alpha = stop
+                        .get("alpha")
+                        .and_then(Value::as_f64)
+                        .unwrap_or_else(|| {
+                            super::migration::values::parse_color(&stop["color"])[3] as f64
+                        });
+                    Ok(json!({"t":stop["t"], "color":color, "alpha":alpha}))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             json!({"stops":stops})
         }
         ValueType::Mapping if value.is_string() => {
-            let source = match value.as_str().unwrap() {
-                "u" => p::MappingSource::U,
-                "v" => p::MappingSource::V,
-                "z" => p::MappingSource::Z,
-                "order" => p::MappingSource::Order,
-                "major_axis" => p::MappingSource::MajorAxis {
-                    toward: [0., 0., 1.],
-                },
-                "circle" => p::MappingSource::Circle { origin: 0. },
-                other => return Err(format!("Unknown mapping {other}")),
-            };
+            let source = p::MappingSource::from_key(value.as_str().unwrap())
+                .map_err(|error| error.to_string())?;
             return Ok(p::Value::Mapping(p::MappingSpec {
+                mirror: None,
                 source,
                 per_group: false,
                 reverse: false,
@@ -163,7 +230,29 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
 }
 
 pub fn node_types() -> Vec<NodeTypeDef> {
-    let mut types = types_for(&p::standard_library());
+    // Schema-v3 standalone patterns retain their historical ports for decoding;
+    // the score canvas calls types_for with its canonical library directly.
+    let library = p::migration::v2_library();
+    let mut types = types_for(&library);
+    types.retain(|node| {
+        node.id
+            .strip_prefix(PREFIX)
+            .is_some_and(|id| library.definitions.contains_key(id))
+    });
+    for node in &mut types {
+        let definition = &library.definitions[node.id.strip_prefix(PREFIX).unwrap()];
+        node.outputs.extend(
+            definition
+                .outputs
+                .iter()
+                .filter(|(_, output)| output.value_type == ValueType::Lighting)
+                .map(|(id, _)| PortDef {
+                    id: id.clone(),
+                    name: id.clone(),
+                    port_type: PortType::Lighting,
+                }),
+        );
+    }
     // Only legacy graphs bind their execution domain through a Selection port.
     for node in &mut types {
         if node
@@ -181,8 +270,18 @@ pub fn node_types() -> Vec<NodeTypeDef> {
     types
 }
 
+pub fn input_node_id(key: &str) -> String {
+    format!("$input/{key}")
+}
+pub fn input_node_key(id: &str) -> Option<&str> {
+    id.strip_prefix("$input/")
+}
+fn input_type_id(definition: &str, key: &str) -> String {
+    format!("{PREFIX}$input/{definition}/{key}")
+}
+
 pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
-    library
+    let mut types: Vec<_> = library
         .definitions
         .iter()
         .map(|(id, def)| {
@@ -233,14 +332,12 @@ pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
             NodeTypeDef {
                 id: format!("{PREFIX}{id}"),
                 name: library.display_name(id),
-                description: Some(
-                    "Typed lighting node. Every input accepts a value or a connection.".into(),
-                ),
+                description: Some("Every input accepts a value or a connection.".into()),
                 category: Some(
                     if def.lighting_output().is_some() {
-                        "Lighting"
+                        "Output"
                     } else {
-                        "Lighting components"
+                        "Signals and controls"
                     }
                     .into(),
                 ),
@@ -248,6 +345,7 @@ pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
                 outputs: def
                     .outputs
                     .iter()
+                    .filter(|(_, output)| output.value_type != ValueType::Lighting)
                     .map(|(id, output)| PortDef {
                         id: id.clone(),
                         name: id.clone(),
@@ -257,22 +355,91 @@ pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
                 params,
             }
         })
-        .collect()
+        .collect();
+    for (id, definition) in &library.definitions {
+        let p::Body::Graph(graph) = &definition.body else {
+            continue;
+        };
+        let keys: std::collections::BTreeSet<_> = definition
+            .inputs
+            .keys()
+            .chain(graph.input_nodes.keys())
+            .collect();
+        for key in keys {
+            let spec = definition.inputs.get(key);
+            let name = spec
+                .map(|spec| spec.name.clone())
+                .unwrap_or_else(|| graph.input_nodes[key].name.clone());
+            types.push(NodeTypeDef {
+                id: input_type_id(id, key),
+                name,
+                description: Some("Exposed Input".into()),
+                category: Some("Inputs".into()),
+                inputs: Vec::new(),
+                params: Vec::new(),
+                outputs: vec![PortDef {
+                    id: "value".into(),
+                    name: "value".into(),
+                    port_type: spec
+                        .map(|spec| port_type(spec.value_type))
+                        .unwrap_or(PortType::Signal),
+                }],
+            });
+        }
+    }
+    types
 }
 
-fn input_label(input: &p::Input) -> String {
-    if input.value_type == ValueType::Beats {
-        format!("{} (beats)", input.name)
-    } else if input.value_type == ValueType::Proportion {
-        format!("{} (0–1)", input.name)
-    } else {
+pub fn input_label(input: &p::Input) -> String {
+    let suffix = match input
+        .value_type
+        .signal_type()
+        .filter(|spec| spec.channels != Some(p::Channels::Rgb))
+        .and_then(|spec| spec.unit)
+    {
+        Some(p::Unit::Beats) => " (beats)",
+        Some(p::Unit::Proportion) => " (0–1)",
+        Some(p::Unit::Degrees) => " (degrees)",
+        Some(p::Unit::Seconds) => " (seconds)",
+        _ => "",
+    };
+    if input.name.ends_with(suffix) {
         input.name.clone()
+    } else {
+        format!("{}{suffix}", input.name)
     }
+}
+
+/// The graph and clip inspectors share the destination's editor metadata.
+pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
+    if let Some(spec) = kind.signal_type() {
+        return match spec.channels {
+            Some(p::Channels::Rgb) => Some(PatternArgType::Color),
+            Some(p::Channels::PanTilt | p::Channels::Components(_)) => Some(PatternArgType::Scalar),
+            Some(p::Channels::Value) | None => Some(match spec.unit {
+                Some(p::Unit::Beats) => PatternArgType::Beats,
+                Some(p::Unit::Proportion) => PatternArgType::Proportion,
+                Some(p::Unit::Position) => PatternArgType::Position,
+                _ => PatternArgType::Scalar,
+            }),
+        };
+    }
+    Some(match kind {
+        ValueType::Seed => PatternArgType::Seed,
+        ValueType::Gradient => PatternArgType::Gradient,
+        ValueType::AudioSource => PatternArgType::AudioSource,
+        ValueType::Drum => PatternArgType::Drum,
+        ValueType::Mapping => PatternArgType::Mapping,
+        ValueType::Boundary => PatternArgType::Boundary,
+        ValueType::Envelope => PatternArgType::Envelope,
+        ValueType::Boolean => PatternArgType::Boolean,
+        _ => return None,
+    })
 }
 
 /// A playable one-node Pattern, with the node's inputs exposed to each clip.
 pub fn pattern(effect: &str) -> Result<Graph, String> {
-    let library = p::standard_library();
+    let library = p::migration::v2_library();
     let def = library
         .definitions
         .get(effect)
@@ -282,26 +449,15 @@ pub fn pattern(effect: &str) -> Result<Graph, String> {
     }
     let mut args = Vec::new();
     for (id, input) in &def.inputs {
-        let arg_type = match input.value_type {
-            ValueType::Number => PatternArgType::Scalar,
-            ValueType::Beats => PatternArgType::Beats,
-            ValueType::Proportion => PatternArgType::Proportion,
-            ValueType::Position => PatternArgType::Position,
-            ValueType::Color => PatternArgType::Color,
-            ValueType::Gradient => PatternArgType::Gradient,
-            ValueType::AudioSource => PatternArgType::AudioSource,
-            ValueType::Drum => PatternArgType::Drum,
-            ValueType::Mapping => PatternArgType::Mapping,
-            ValueType::Boundary => PatternArgType::Boundary,
-            ValueType::Envelope => PatternArgType::Envelope,
-            ValueType::Boolean => PatternArgType::Boolean,
-            _ => {
-                return Err(format!(
-                    "{} needs an enclosing graph to supply {}",
-                    def.name, input.name
-                ))
-            }
-        };
+        if input.value_type == ValueType::Events {
+            continue;
+        }
+        let arg_type = arg_type(input.value_type).ok_or_else(|| {
+            format!(
+                "{} needs an enclosing graph to supply {}",
+                def.name, input.name
+            )
+        })?;
         let default = input.default.as_ref().ok_or_else(|| {
             format!(
                 "{} needs an enclosing graph to supply {}",
@@ -431,7 +587,7 @@ pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
 /// Read-only canvas projection of a built-in definition. This is never saved
 /// or compiled: the canonical graph remains the typed library definition.
 pub fn inspect_definition(id: &str) -> Option<Graph> {
-    project_definition(&p::standard_library(), id)
+    project_definition(&p::migration::v2_library(), id)
 }
 
 pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
@@ -472,7 +628,7 @@ pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
                     params.insert(port.clone(), wire_value(value));
                     continue;
                 }
-                p::Binding::Input { input } => ("__inputs".to_owned(), input.clone()),
+                p::Binding::Input { input } => (input_node_id(input), "value".into()),
                 p::Binding::Connection { node, output } => (node.clone(), output.clone()),
             };
             graph.edges.push(Edge {
@@ -492,12 +648,24 @@ pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
         });
         *row += 1;
     }
-    graph.nodes.push(NodeInstance {
-        id: "__inputs".into(),
-        type_id: "pattern_args".into(),
-        params: HashMap::new(),
-        position_x: None,
-        position_y: None,
-    });
+    let keys: std::collections::BTreeSet<_> = definition
+        .inputs
+        .keys()
+        .chain(body.input_nodes.keys())
+        .collect();
+    for (index, key) in keys.into_iter().enumerate() {
+        let position = body
+            .input_nodes
+            .get(key)
+            .and_then(|node| node.position)
+            .unwrap_or([-240., index as f64 * 40.]);
+        graph.nodes.push(NodeInstance {
+            id: input_node_id(key),
+            type_id: input_type_id(id, key),
+            params: HashMap::new(),
+            position_x: Some(position[0]),
+            position_y: Some(position[1]),
+        });
+    }
     Some(graph)
 }

@@ -13,11 +13,19 @@
 //! the unit that gets written, a command's inverse is the document it
 //! replaced, and every command gets undo for free instead of owing an inverse.
 
-/// The two stacks, and nothing else: every method is an exchange against them,
-/// so the invariant "undo and redo never lose the present" lives here once.
+/// Undo and redo exchange the present with a stored state. A checkpoint also
+/// retains displaced history until the gesture is known to have changed it.
 pub(crate) struct History<S> {
     past: Vec<S>,
     future: Vec<S>,
+    checkpoint: Option<Checkpoint<S>>,
+}
+
+/// A gesture may turn out to be only a click. Keep what recording displaced
+/// until abandon_if commits the gesture or the next history operation does.
+struct Checkpoint<S> {
+    future: Vec<S>,
+    oldest: Option<S>,
 }
 
 impl<S> Default for History<S> {
@@ -25,6 +33,7 @@ impl<S> Default for History<S> {
         Self {
             past: Vec::new(),
             future: Vec::new(),
+            checkpoint: None,
         }
     }
 }
@@ -37,10 +46,11 @@ impl<S> History<S> {
     /// Mark a point to come back to. A fresh edit is a new branch, so whatever
     /// a previous undo left ahead of here is gone.
     pub(crate) fn record(&mut self, now: S) {
-        self.future.clear();
-        if self.past.len() >= Self::DEPTH {
-            self.past.remove(0);
-        }
+        let oldest = (self.past.len() >= Self::DEPTH).then(|| self.past.remove(0));
+        self.checkpoint = Some(Checkpoint {
+            future: std::mem::take(&mut self.future),
+            oldest,
+        });
         self.past.push(now);
     }
 
@@ -53,12 +63,21 @@ impl<S> History<S> {
     pub(crate) fn abandon_if(&mut self, untouched: impl FnOnce(&S) -> bool) {
         if self.past.last().is_some_and(untouched) {
             self.past.pop();
+            if let Some(checkpoint) = self.checkpoint.take() {
+                self.future = checkpoint.future;
+                if let Some(oldest) = checkpoint.oldest {
+                    self.past.insert(0, oldest);
+                }
+            }
+        } else {
+            self.checkpoint = None;
         }
     }
 
     /// Step back: exchange `now` for the last checkpoint. `None` — with `now`
     /// dropped and both stacks untouched — when there is nowhere to go.
     pub(crate) fn undo(&mut self, now: S) -> Option<S> {
+        self.checkpoint = None;
         let was = self.past.pop()?;
         self.future.push(now);
         Some(was)
@@ -67,6 +86,7 @@ impl<S> History<S> {
     /// Step forward again: exchange `now` for the state the last undo left
     /// ahead of here.
     pub(crate) fn redo(&mut self, now: S) -> Option<S> {
+        self.checkpoint = None;
         let next = self.future.pop()?;
         self.past.push(now);
         Some(next)
@@ -76,6 +96,30 @@ impl<S> History<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_click_preserves_redo() {
+        let mut history = History::default();
+        history.record(1);
+        assert_eq!(history.undo(2), Some(1));
+        history.record(1);
+        history.abandon_if(|previous| *previous == 1);
+        assert_eq!(history.redo(1), Some(2));
+        assert_eq!(history.undo(2), Some(1));
+    }
+
+    #[test]
+    fn unchanged_click_at_capacity_preserves_the_oldest_step() {
+        let mut history = History::<usize>::default();
+        for step in 0..History::<usize>::DEPTH {
+            history.record(step);
+        }
+        history.record(100);
+        history.abandon_if(|previous| *previous == 100);
+        for step in (0..History::<usize>::DEPTH).rev() {
+            assert_eq!(history.undo(step + 1), Some(step));
+        }
+    }
 
     /// The exchange discipline: undo and redo trade the present for a stored
     /// state without ever losing either, and a dead end changes nothing.

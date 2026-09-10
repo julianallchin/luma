@@ -110,6 +110,7 @@ use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
 mod document;
+pub(crate) use document::GraphDraft;
 mod minimap;
 pub(crate) mod picker;
 mod playback_clock;
@@ -436,6 +437,7 @@ struct Clipboard {
 struct Snapshot {
     clips: Rc<[Clip]>,
     definitions: Option<Rc<std::collections::BTreeMap<String, luma_patterns::Definition>>>,
+    graph_drafts: Rc<std::collections::BTreeMap<String, document::GraphDraft>>,
     selected: Vec<SharedString>,
     cursor: Option<Cursor>,
 }
@@ -1097,6 +1099,11 @@ impl Editor {
                 .graph_score
                 .as_ref()
                 .map(|graph| graph.definitions.clone()),
+            graph_drafts: self
+                .graph_score
+                .as_ref()
+                .map(|graph| graph.drafts.clone())
+                .unwrap_or_default(),
             selected: self.selected.clone(),
             cursor: self.cursor,
         }
@@ -1120,8 +1127,14 @@ impl Editor {
             .graph_score
             .as_ref()
             .map(|score| score.definitions.clone());
+        let drafts = self
+            .graph_score
+            .as_ref()
+            .map(|graph| graph.drafts.clone())
+            .unwrap_or_default();
         self.history.abandon_if(|was| {
             Rc::ptr_eq(&was.clips, &clips)
+                && *was.graph_drafts == *drafts
                 && match (&was.definitions, &definitions) {
                     (Some(a), Some(b)) => Rc::ptr_eq(a, b),
                     (None, None) => true,
@@ -1154,6 +1167,7 @@ impl Editor {
         self.cursor = snapshot.cursor;
         if let (Some(graph), Some(definitions)) = (&mut self.graph_score, snapshot.definitions) {
             graph.definitions = definitions;
+            graph.drafts = snapshot.graph_drafts;
             self.sheet.invalidate_defs();
         }
         self.replace_clips(snapshot.clips.to_vec());
@@ -1625,7 +1639,7 @@ impl Editor {
             .definitions
             .into_iter()
             .filter(|(_, definition)| {
-                definition.playable()
+                definition.placeable()
                     && definition
                         .inputs
                         .values()
@@ -1655,19 +1669,18 @@ impl Editor {
                         }),
                 );
             }
-        } else {
-            choices.extend(
-                self.patterns
-                    .iter()
-                    .filter(|pattern| {
-                        pattern.score_id.is_none()
-                            || pattern.score_id.as_deref()
-                                == self.score.as_ref().map(|score| score.id.as_str())
-                    })
-                    .cloned()
-                    .map(InsertChoice::Pattern),
-            );
         }
+        choices.extend(
+            self.patterns
+                .iter()
+                .filter(|pattern| {
+                    pattern.score_id.is_none()
+                        || pattern.score_id.as_deref()
+                            == self.score.as_ref().map(|score| score.id.as_str())
+                })
+                .cloned()
+                .map(InsertChoice::Pattern),
+        );
         choices.retain(|choice| choice.name().to_lowercase().contains(&query));
         choices
     }
@@ -1936,6 +1949,9 @@ impl Luma {
             if event == &luma_ui::text_input::Event::Edited {
                 let query = field.read(cx).text().to_string();
                 this.edit_track_tab(&search_target, cx, |editor| {
+                    if editor.menu_query == query {
+                        return;
+                    }
                     editor.menu_query = query;
                     if let Some(menu) = editor.menu.as_mut() {
                         menu.active = 0;
@@ -2140,6 +2156,7 @@ impl Luma {
         };
         let pending = self.library.score_contents(&score.id, track);
         let score_id = score.id.clone();
+        self.close_score_graph_tabs(&target, Some(&score_id), cx);
         self.edit_track_tab(&target, cx, |editor| rebase(editor, Some(score)));
         cx.spawn(async move |this, cx| {
             let contents = pending.await;
@@ -2171,6 +2188,7 @@ impl Luma {
                 for id in previews {
                     this.refresh_clip_preview_for(target.clone(), id, cx);
                 }
+                this.refresh_working_scene_for(&target, cx);
             })
             .ok();
         })
@@ -2203,6 +2221,7 @@ impl Luma {
         if !showing {
             return;
         }
+        self.close_score_graph_tabs(target, None, cx);
         self.edit_track_tab(target, cx, |editor| rebase(editor, None));
     }
 
@@ -2568,6 +2587,38 @@ impl Luma {
         picker::open(self, cx);
     }
 
+    pub(crate) fn preview_library_pattern(
+        &mut self,
+        pattern: PatternSummary,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(context) = self.graph_track_context() else {
+            return;
+        };
+        let target = Target::TrackEditor {
+            track: context.track,
+            venue: context.venue,
+        };
+        self.workspace.select(&target);
+        self.close_overlay(cx);
+        self.add_pattern(cx);
+        if let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() {
+            editor.menu_query = pattern.name.clone();
+            editor
+                .menu_search
+                .update(cx, |field, cx| field.set_text(&pattern.name, cx));
+            let index = editor
+                .insertion_choices()
+                .iter()
+                .position(|choice| matches!(choice, InsertChoice::Pattern(p) if p.id == pattern.id))
+                .unwrap_or(0);
+            if let Some(menu) = &mut editor.menu {
+                menu.active = index;
+            }
+        }
+        cx.notify();
+    }
+
     /// A right-click: work out where a clip would go and offer the patterns.
     ///
     /// `computeInsertionTarget`. The span is one bar — the next downbeat if
@@ -2624,14 +2675,19 @@ impl Luma {
         };
         let canvas = state.canvas.get();
         let time = state.view.time_at(f32::from(at.x - canvas.origin.x));
-        let Some(row) = state.layout().row_at(f32::from(at.y - canvas.origin.y)) else {
-            return;
+        // The first click selects the clip and can open the inspector, moving
+        // the timeline before the second click. Keep that selected identity.
+        let selected = match state.selected.as_slice() {
+            [id] => state.clips.iter().find(|clip| clip.id == *id),
+            _ => None,
         };
-        let Some(clip) = state
-            .clips
-            .iter()
-            .find(|clip| clip.row == row && time >= clip.start && time <= clip.end)
-        else {
+        let Some(clip) = selected.or_else(|| {
+            let row = state.layout().row_at(f32::from(at.y - canvas.origin.y))?;
+            state
+                .clips
+                .iter()
+                .find(|clip| clip.row == row && time >= clip.start && time <= clip.end)
+        }) else {
             return;
         };
         if state.graph_score.is_some() {
@@ -2644,15 +2700,9 @@ impl Luma {
             self.open_score_graph(owner, id, cx);
             return;
         }
-        let Some(pattern) = state
-            .patterns
-            .iter()
-            .find(|pattern| pattern.id == clip.pattern.as_ref())
-            .cloned()
-        else {
-            return;
-        };
-        self.open_pattern(pattern, cx);
+        self.with_track_editor(cx, |editor| {
+            editor.error = Some("This score has missing or unsupported pattern implementations. Its saved clips remain intact; graph editing is available after those implementations are resolved.".into());
+        });
     }
 
     /// `ArrowUp` / `ArrowDown` in the insertion menu. A no-op with no menu
@@ -2736,9 +2786,57 @@ impl Luma {
         }
         if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
         {
+            if let InsertChoice::Pattern(pattern) = &choice {
+                let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+                    return;
+                };
+                if !editor.writable() {
+                    return;
+                }
+                let Some(score_id) = editor.score_id().map(str::to_owned) else {
+                    return;
+                };
+                let target = Target::TrackEditor {
+                    track: editor.track_id.clone(),
+                    venue: editor.venue_id.clone(),
+                };
+                let pending = self
+                    .library
+                    .pattern_score_template(&pattern.id, &editor.venue_id);
+                self.with_track_editor(cx, |editor| editor.menu = None);
+                cx.spawn(async move |this, cx| {
+                    let result = pending.await;
+                    this.update(cx, |this, cx| {
+                        let mut inserted = false;
+                        this.edit_track_tab(&target, cx, |editor| {
+                            if editor.score_id() != Some(score_id.as_str()) || !editor.writable() {
+                                return;
+                            }
+                            match result {
+                                Ok(template) => {
+                                    editor.checkpoint();
+                                    match editor.insert_graph(menu, &choice, Some(&template)) {
+                                        Ok(()) => inserted = true,
+                                        Err(error) => editor.error = Some(error),
+                                    }
+                                    editor.abandon_checkpoint();
+                                }
+                                Err(error) => editor.error = Some(error.to_string()),
+                            }
+                        });
+                        if inserted {
+                            this.commit_graph_score_for(target.clone(), cx);
+                            this.refresh_working_scene_for(&target, cx);
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+                return;
+            }
             self.track_command(
                 |editor| {
-                    if let Err(error) = editor.insert_graph(menu, &choice) {
+                    if let Err(error) = editor.insert_graph(menu, &choice, None) {
                         editor.error = Some(error);
                     }
                 },

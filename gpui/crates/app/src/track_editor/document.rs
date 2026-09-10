@@ -8,10 +8,18 @@ use std::collections::BTreeMap;
 
 pub(super) const SELECTION_INPUT: &str = "@clip/selection";
 
+#[derive(Clone, PartialEq)]
+pub(crate) struct GraphDraft {
+    pub base: p::Score,
+    pub candidate: p::Score,
+    pub error: String,
+}
+
 pub(super) struct GraphState {
     pub base: GraphScoreDocument,
     pub definitions: Rc<BTreeMap<String, p::Definition>>,
     pub composited_definitions: Rc<BTreeMap<String, p::Definition>>,
+    pub drafts: Rc<BTreeMap<String, GraphDraft>>,
 }
 
 impl GraphState {
@@ -21,6 +29,7 @@ impl GraphState {
             base: document,
             composited_definitions: definitions.clone(),
             definitions,
+            drafts: Rc::default(),
         }
     }
 
@@ -32,14 +41,7 @@ impl GraphState {
 }
 
 pub(super) fn wire_value(value: &p::Value) -> serde_json::Value {
-    match value {
-        p::Value::Color(color) => {
-            serde_json::json!({"r":color[0]*255.0,"g":color[1]*255.0,"b":color[2]*255.0,"a":1.0})
-        }
-        // Preserve orientation, circle origin and grouping through unrelated
-        // clip edits; reducing Mapping to its menu label loses those values.
-        _ => serde_json::to_value(value).expect("typed value serializes")["value"].clone(),
-    }
+    luma_lib::node_graph::lighting::wire_value(value)
 }
 
 pub(super) fn resolve_document(
@@ -124,7 +126,10 @@ impl Editor {
             .graph_score
             .as_ref()
             .ok_or("this score uses legacy patterns")?;
-        let mut score = p::Score::default();
+        // Keep the document version through native edits. Starting from the
+        // current default would downgrade an upgraded score on its first save.
+        let mut score = graph.base.score.clone();
+        score.clips.clear();
         score.definitions = (*graph.definitions).clone();
         if self.clips.is_empty() {
             return Ok(score);
@@ -207,26 +212,10 @@ impl Editor {
             default_value: p::Selection::all().to_value(),
         }];
         for (id, input) in &definition.inputs {
-            let arg_type = match input.value_type {
-                p::ValueType::Number => PatternArgType::Scalar,
-                p::ValueType::Beats => PatternArgType::Beats,
-                p::ValueType::Proportion => PatternArgType::Proportion,
-                p::ValueType::Position => PatternArgType::Position,
-                p::ValueType::Color => PatternArgType::Color,
-                p::ValueType::Gradient => PatternArgType::Gradient,
-                p::ValueType::AudioSource => PatternArgType::AudioSource,
-                p::ValueType::Drum => PatternArgType::Drum,
-                p::ValueType::Mapping => PatternArgType::Mapping,
-                p::ValueType::Boundary => PatternArgType::Boundary,
-                p::ValueType::Envelope => PatternArgType::Envelope,
-                p::ValueType::Boolean => PatternArgType::Boolean,
-                _ => continue,
+            let Some(arg_type) = luma_lib::node_graph::lighting::arg_type(input.value_type) else {
+                continue;
             };
-            let name = match input.value_type {
-                p::ValueType::Beats => format!("{} (beats)", input.name),
-                p::ValueType::Proportion => format!("{} (0–1)", input.name),
-                _ => input.name.clone(),
-            };
+            let name = luma_lib::node_graph::lighting::input_label(input);
             inputs.push(PatternArgDef {
                 id: id.clone(),
                 name,
@@ -385,6 +374,10 @@ impl Luma {
                                 .graph_score
                                 .as_ref()
                                 .map(|graph| graph.composited_definitions.clone());
+                            let drafts = editor
+                                .graph_score
+                                .as_ref()
+                                .map(|graph| graph.drafts.clone());
                             if let Err(error) = editor.install_contents(contents) {
                                 editor.error = Some(error);
                                 return;
@@ -394,6 +387,9 @@ impl Luma {
                                 (editor.graph_score.as_mut(), definitions)
                             {
                                 graph.composited_definitions = definitions;
+                            }
+                            if let (Some(graph), Some(drafts)) = (&mut editor.graph_score, drafts) {
+                                graph.drafts = drafts;
                             }
                             editor.history = History::default();
                             editor.selected.clear();
@@ -420,6 +416,7 @@ impl Editor {
         &mut self,
         menu: InsertMenu,
         choice: &InsertChoice,
+        template: Option<&p::Score>,
     ) -> Result<(), String> {
         let clock = self
             .beats
@@ -451,6 +448,7 @@ impl Editor {
                         start,
                         duration,
                         seed: 0,
+                        selection_seed: None,
                         selection: p::Selection::all(),
                         z_index: z,
                         blend_mode: p::BlendMode::Replace,
@@ -458,11 +456,29 @@ impl Editor {
                     },
                 );
             }
-            InsertChoice::Pattern(_) => return Err("Use a node or a graph from this score".into()),
+            InsertChoice::Pattern(_) => {
+                score
+                    .import_clip(
+                        &p::standard_library(),
+                        template.ok_or("Pattern template has not loaded")?,
+                        "template",
+                        &id,
+                    )
+                    .map_err(|error| error.to_string())?;
+                let clip = score
+                    .clips
+                    .get_mut(&id)
+                    .ok_or("Imported pattern has no clip")?;
+                clip.start = start;
+                clip.duration = duration;
+            }
         }
         let clip = score.clips.get_mut(&id).unwrap();
         clip.z_index = z;
         clip.seed = uuid::Uuid::new_v4().as_u64_pair().0;
+        score
+            .validate(&p::standard_library())
+            .map_err(|error| error.to_string())?;
         self.edit_graph_score(score)?;
         self.menu = None;
         self.selected = vec![id.into()];
@@ -477,17 +493,54 @@ impl Editor {
 }
 
 impl Editor {
-    pub(crate) fn publish_graph_edit(&mut self, score: p::Score) -> Result<(), String> {
+    pub(crate) fn graph_draft(&self, root: &str) -> Option<&GraphDraft> {
+        self.graph_score.as_ref()?.drafts.get(root)
+    }
+
+    /// Drafts participate in the same undo stack as published graph/timeline
+    /// edits, while the persisted score remains the last playable document.
+    pub(crate) fn record_graph_draft(
+        &mut self,
+        root: &str,
+        draft: GraphDraft,
+    ) -> Result<(), String> {
         if !self.writable() {
             return Err("This score is read only".into());
         }
-        if self.graph_candidate()? == score {
+        if self.graph_score.is_none() {
+            return Err("this score uses legacy patterns".into());
+        }
+        self.checkpoint();
+        Rc::make_mut(&mut self.graph_score.as_mut().unwrap().drafts).insert(root.to_owned(), draft);
+        Ok(())
+    }
+
+    pub(crate) fn publish_graph_edit(&mut self, score: p::Score) -> Result<(), String> {
+        self.publish_graph_gesture(score, None)
+    }
+
+    pub(crate) fn publish_graph_gesture(
+        &mut self,
+        score: p::Score,
+        completed_root: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.writable() {
+            return Err("This score is read only".into());
+        }
+        if self.graph_candidate()? == score
+            && completed_root
+                .and_then(|root| self.graph_draft(root))
+                .is_none()
+        {
             return Ok(());
         }
         self.checkpoint();
         if let Err(error) = self.edit_graph_score(score) {
             self.abandon_checkpoint();
             return Err(error);
+        }
+        if let (Some(graph), Some(root)) = (&mut self.graph_score, completed_root) {
+            Rc::make_mut(&mut graph.drafts).remove(root);
         }
         Ok(())
     }

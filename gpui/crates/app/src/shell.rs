@@ -69,7 +69,7 @@ pub(crate) enum Overlay {
     /// morph, two text fields and their subscriptions, and an enum is as large
     /// as its largest variant — every overlay slot in the app would pay for it.
     Venues(Box<welcome::VenuePicker>),
-    /// The pattern picker. Picking a row opens a [`Target::Graph`] tab.
+    /// The library browser. Picking a row previews a copy for score insertion.
     Patterns(patterns::Patterns),
     Settings(settings::Settings),
     AddTracks(Box<add_tracks::AddTracks>),
@@ -279,7 +279,8 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(_) | Body::Patch(_) => {}
+            Body::Graph(editor) => self.stop_graph_preview(&editor.target(), cx),
+            Body::Patch(_) => {}
         }
     }
 
@@ -527,12 +528,14 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     } else {
         f32::from(workspace_w)
     };
-    // The strip is the band's only child, so it gets everything the band's
-    // anchors leave. It used to share the band with the settings gear and
-    // yield to it; the account moved to the sidebar's foot, and with it the
-    // one reason a narrow window had to choose between reaching a tab and
-    // reaching an account.
-    let workspace_strip_width = chrome::band_room(
+    // Reserve room for the visible expand control. Narrow windows already
+    // give the workspace all available room and do not offer a no-op toggle.
+    let expansion_width = if !squeezed && !app.workspace.is_empty() {
+        84.0
+    } else {
+        0.0
+    };
+    let workspace_strip_width = (chrome::band_room(
         chrome::BandSpan {
             x: viewport - workspace_panel_width,
             width: workspace_panel_width,
@@ -541,7 +544,8 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         0.0,
         0.0,
         0,
-    );
+    ) - expansion_width)
+        .max(0.0);
     // The `+` menu hangs off the strip, and the strip is the panel's: put the
     // panel away or empty it and the menu has nothing to hang off, so it goes
     // too rather than waiting armed for whatever brings the strip back.
@@ -668,7 +672,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             width: workspace_panel_width,
             viewport,
         };
-        let head = chrome::band(span).child(chrome::tab_strip(
+        let mut head = chrome::band(span).child(chrome::tab_strip(
             app,
             &entity,
             workspace_strip_width,
@@ -676,6 +680,31 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             window,
             cx,
         ));
+        if expansion_width > 0.0 {
+            let label = if app.expanded { "Show chat" } else { "Expand" };
+            let expanded = entity.clone();
+            head = head.child(
+                div()
+                    .w(px(expansion_width))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .child(
+                        luma_ui::button(label, luma_ui::Enabled::Yes)
+                            .id("workspace-expand")
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_click(move |_, _, cx| {
+                                expanded.update(cx, |this, cx| {
+                                    this.expanded = !this.expanded;
+                                    cx.notify();
+                                });
+                            })
+                            .agent_node(Role::Button, label),
+                    ),
+            );
+        }
         if show_thread {
             // Both sides are lit surfaces whose own value step already divides
             // them, so this rule is a hint. The grip that pulls it is mounted

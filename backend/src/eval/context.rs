@@ -65,9 +65,9 @@ pub fn clear_track_audio_cache(track_hash: &str) {
 ///     edge's `from_port` (the arg id).
 ///
 /// Returns `(selection, seed)` where `seed` is the deterministic per-node hash
-/// (matching `LowerCtx::seed` / the legacy executor) — see the determinism
+/// (matching the saved node seed) — see the determinism
 /// contract on `groups::resolve_selection_expression_with_path`.
-fn graph_selection(
+pub(crate) fn graph_selection(
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
@@ -117,14 +117,13 @@ fn graph_selection(
     None
 }
 
-/// Whether any node requires the host to decode the track audio buffer. Mirrors
-/// `node_graph::context::needs_audio_context` (that module is private to
-/// `node_graph`, so the predicate is duplicated here rather than re-exported).
+/// Whether saved audio nodes require resident PCM before canonical preparation.
 fn needs_audio_context(nodes: &[NodeInstance]) -> bool {
     nodes.iter().any(|n| {
         matches!(
             n.type_id.as_str(),
             "audio_input"
+                | "mel_spec_viewer"
                 | "stem_splitter"
                 | "harmony_analysis"
                 | "lowpass_filter"
@@ -135,7 +134,7 @@ fn needs_audio_context(nodes: &[NodeInstance]) -> bool {
 
 /// Deterministic seed for one node's selection draw.
 ///
-/// The node id alone is `DefaultHasher(node.id)`, matching `LowerCtx::seed`.
+/// The node id alone is `DefaultHasher(node.id)`, matching the saved node seed.
 /// An [`instance`](resolve_primitive_ids) — the clip or cue this occurrence of
 /// the pattern belongs to — is mixed in after it, so the same pattern placed
 /// twice draws two different halves of a group while either clip on its own

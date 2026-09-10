@@ -7,6 +7,7 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PortType {
+    Seed,
     Beats,
     Proportion,
     Position,
@@ -37,6 +38,7 @@ impl PortType {
     #[must_use]
     pub fn key(&self) -> &'static str {
         match self {
+            PortType::Seed => "Seed",
             PortType::Beats => "Beats",
             PortType::Proportion => "Proportion",
             PortType::Position => "Position",
@@ -75,7 +77,7 @@ pub enum ParamType {
     Number,
     Text,
     /// A closed set of strings, in menu order. The options are a projection of
-    /// the lowering vocabulary itself (`eval::ops::math::MATH_OPS` and
+    /// the lowering vocabulary itself (`node_graph::nodes::legacy_options::MATH_OPS` and
     /// friends), so a picker cannot offer a value that will not compile — the
     /// whole point of the variant. Anything a picker should *not* constrain
     /// stays [`ParamType::Text`].
@@ -86,7 +88,7 @@ pub enum ParamType {
 
 impl ParamType {
     /// A closed picker over a lowering vocabulary table's `(id, label, op)`
-    /// rows — see `eval::ops::math::MATH_OPS`. The op column stays behind in the
+    /// rows — see `node_graph::nodes::legacy_options::MATH_OPS`. The op column stays behind in the
     /// compiler; only the authoring pair crosses the seam.
     pub fn enum_of<T>(table: &[(&str, &str, T)]) -> Self {
         ParamType::Enum {
@@ -103,6 +105,7 @@ impl ParamType {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternArgType {
+    Seed,
     AudioSource,
     Drum,
     Envelope,
@@ -231,6 +234,26 @@ pub struct BeatGrid {
 }
 
 impl BeatGrid {
+    pub fn timing(&self) -> luma_patterns::Result<luma_patterns::TrackTiming> {
+        luma_patterns::TrackTiming::new(
+            self.timeline()?,
+            luma_patterns::EventTimes::new(
+                self.beats
+                    .iter()
+                    .copied()
+                    .map(f64::from)
+                    .collect::<Vec<_>>(),
+            )?,
+            luma_patterns::EventTimes::new(
+                self.downbeats
+                    .iter()
+                    .copied()
+                    .map(f64::from)
+                    .collect::<Vec<_>>(),
+            )?,
+            f64::from(self.bpm),
+        )
+    }
     /// The same musical origin and variable-tempo clock for authored clips,
     /// preview sampling, and playback.
     pub fn timeline(&self) -> luma_patterns::Result<luma_patterns::BeatTimeline> {
@@ -420,6 +443,7 @@ mod gradient_contract_tests {
                     .stops
                     .iter()
                     .map(|(t, c)| luma_patterns::ColorStop {
+                        alpha: f64::from(c[3]),
                         t: f64::from(*t),
                         color: [c[0], c[1], c[2]].map(f64::from),
                     })

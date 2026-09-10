@@ -29,7 +29,7 @@ use crate::text_input::TextInput;
 #[must_use]
 pub fn parse_draft(draft: &str, min: f64, max: f64) -> Option<f64> {
     let value: f64 = draft.trim().parse().ok()?;
-    value.is_finite().then(|| value.clamp(min, max))
+    value.is_finite().then(|| value.clamp_value(min, max))
 }
 
 /// The one spelling a committed value shows as — also what a revert restores,
@@ -39,42 +39,65 @@ pub fn format_value(value: f64) -> String {
     format!("{value}")
 }
 
+/// The two number domains share drafting, focus and commit behavior. Integer
+/// seeds never pass through a floating-point conversion.
+pub trait DraftValue: Copy + PartialEq + std::fmt::Display + 'static {
+    fn clamp_value(self, min: Self, max: Self) -> Self;
+    fn parse(draft: &str, min: Self, max: Self) -> Option<Self>;
+}
+impl DraftValue for f64 {
+    fn clamp_value(self, min: Self, max: Self) -> Self {
+        self.clamp(min, max)
+    }
+    fn parse(draft: &str, min: Self, max: Self) -> Option<Self> {
+        parse_draft(draft, min, max)
+    }
+}
+impl DraftValue for u64 {
+    fn clamp_value(self, min: Self, max: Self) -> Self {
+        self.clamp(min, max)
+    }
+    fn parse(draft: &str, min: Self, max: Self) -> Option<Self> {
+        draft.trim().parse::<Self>().ok().map(|v| v.clamp(min, max))
+    }
+}
+
 /// What the field tells its host: a draft became a number.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NumberEvent {
-    Committed(f64),
+pub enum NumberEvent<T = f64> {
+    Committed(T),
 }
 
 /// The entity. Emits [`NumberEvent::Committed`] only when a commit lands on a
 /// *different* value — enter-then-blur is one commit, not two.
-pub struct DraftedNumber {
+pub struct DraftedNumber<T: DraftValue = f64> {
     /// Names the field's automation node, so two number cells in one strip
     /// stay tellable apart — the same contract as a slider's id.
     id: SharedString,
     input: Entity<TextInput>,
-    value: f64,
-    min: f64,
-    max: f64,
+    value: T,
+    min: T,
+    max: T,
     width: f32,
     _blur: Subscription,
 }
 
-impl EventEmitter<NumberEvent> for DraftedNumber {}
+impl<T: DraftValue> EventEmitter<NumberEvent<T>> for DraftedNumber<T> {}
 
-impl DraftedNumber {
+impl<T: DraftValue> DraftedNumber<T> {
     pub fn new(
         id: impl Into<SharedString>,
-        value: f64,
-        min: f64,
-        max: f64,
+        value: T,
+        min: T,
+        max: T,
         width: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let value = value.clamp(min, max);
+        let value = value.clamp_value(min, max);
         let input = cx.new(|cx| {
             let mut input = TextInput::search("", cx);
-            input.set_text(format_value(value), cx);
+            input.set_text(value.to_string(), cx);
             input
         });
         // Blur is a commit point. The subscription lives on this entity, so a
@@ -96,27 +119,27 @@ impl DraftedNumber {
     }
 
     #[must_use]
-    pub fn value(&self) -> f64 {
+    pub fn value(&self) -> T {
         self.value
     }
 
     /// A host-side write. Stomps any draft in progress — the host is asserting
     /// the value moved under the field, and a draft over a stale value is the
     /// worse thing to keep.
-    pub fn set_value(&mut self, value: f64, cx: &mut Context<Self>) {
-        self.value = value.clamp(self.min, self.max);
-        let text = format_value(self.value);
+    pub fn set_value(&mut self, value: T, cx: &mut Context<Self>) {
+        self.value = value.clamp_value(self.min, self.max);
+        let text = self.value.to_string();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
         cx.notify();
     }
 
     fn commit(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         let draft = self.input.read(cx).text().to_string();
-        match parse_draft(&draft, self.min, self.max) {
+        match T::parse(&draft, self.min, self.max) {
             Some(value) => {
                 let changed = value != self.value;
                 self.value = value;
-                let text = format_value(value);
+                let text = value.to_string();
                 if draft != text {
                     self.input.update(cx, |input, cx| input.set_text(text, cx));
                 }
@@ -129,7 +152,7 @@ impl DraftedNumber {
     }
 
     fn revert(&mut self, cx: &mut Context<Self>) {
-        let text = format_value(self.value);
+        let text = self.value.to_string();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
 
@@ -143,13 +166,13 @@ impl DraftedNumber {
     }
 }
 
-impl Focusable for DraftedNumber {
+impl<T: DraftValue> Focusable for DraftedNumber<T> {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
     }
 }
 
-impl Render for DraftedNumber {
+impl<T: DraftValue> Render for DraftedNumber<T> {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let reading = format!("{} = {}", self.id, self.input.read(cx).text());
         float::field()
@@ -192,5 +215,17 @@ mod tests {
         assert_eq!(format_value(42.), "42");
         assert_eq!(format_value(3.5), "3.5");
         assert_eq!(format_value(-0.25), "-0.25");
+    }
+
+    #[test]
+    fn integer_drafts_preserve_every_bit_and_revert_invalid_values() {
+        for value in [0, 9_007_199_254_740_993, u64::MAX - 1, u64::MAX] {
+            assert_eq!(u64::parse(&value.to_string(), 0, u64::MAX), Some(value));
+        }
+        assert_eq!(u64::parse(" 42 ", 0, 100), Some(42));
+        assert_eq!(u64::parse("101", 0, 100), Some(100));
+        for draft in ["", "-1", "1.5", "NaN", "18446744073709551616"] {
+            assert_eq!(u64::parse(draft, 0, u64::MAX), None);
+        }
     }
 }

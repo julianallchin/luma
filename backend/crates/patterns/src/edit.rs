@@ -9,6 +9,21 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GraphEdit {
+    AddInput {
+        key: String,
+        name: String,
+        position: [f64; 2],
+    },
+    RenameInput {
+        key: String,
+        name: String,
+    },
+    RemoveInput {
+        key: String,
+    },
+    MoveInputs {
+        positions: BTreeMap<String, [f64; 2]>,
+    },
     Move {
         positions: BTreeMap<String, [f64; 2]>,
     },
@@ -23,12 +38,6 @@ pub enum GraphEdit {
         node: String,
         input: String,
         binding: Option<Binding>,
-    },
-    Expose {
-        node: String,
-        input: String,
-        key: String,
-        name: Option<String>,
     },
     Output {
         key: String,
@@ -52,12 +61,79 @@ impl Definition {
         let Body::Graph(graph) = &mut next.body else {
             return Err(Error("fundamental operations are immutable".into()));
         };
+        // Older documents already have formal parameters. Give those the
+        // same editable socket identity as newly created Inputs.
+        for (key, spec) in &next.inputs {
+            graph
+                .input_nodes
+                .entry(key.clone())
+                .or_insert_with(|| crate::InputNode {
+                    name: spec.name.clone(),
+                    position: None,
+                });
+        }
         if graph.nodes.len() > MAX_GRAPH_NODES {
             return Err(Error(format!(
                 "a graph supports at most {MAX_GRAPH_NODES} nodes"
             )));
         }
         match edit {
+            GraphEdit::AddInput {
+                key,
+                name,
+                position,
+            } => {
+                identity(&key)?;
+                if graph.input_nodes.contains_key(&key) {
+                    return Err(Error(format!("Input {key} already exists")));
+                }
+                if graph.input_nodes.len() >= MAX_GRAPH_NODES {
+                    return Err(Error(format!(
+                        "a graph supports at most {MAX_GRAPH_NODES} Inputs"
+                    )));
+                }
+                let node = crate::InputNode {
+                    name: name.trim().into(),
+                    position: Some(position),
+                };
+                node.validate()?;
+                graph.input_nodes.insert(key, node);
+            }
+            GraphEdit::RenameInput { key, name } => {
+                let node = graph
+                    .input_nodes
+                    .get_mut(&key)
+                    .ok_or_else(|| Error(format!("unknown Input {key}")))?;
+                node.name = name.trim().into();
+                node.validate()?;
+                if let Some(spec) = next.inputs.get_mut(&key) {
+                    spec.name = node.name.clone();
+                }
+            }
+            GraphEdit::RemoveInput { key } => {
+                if graph.input_nodes.remove(&key).is_none() {
+                    return Err(Error(format!("unknown Input {key}")));
+                }
+                next.inputs.remove(&key);
+                for node in graph.nodes.values_mut() {
+                    node.inputs.retain(
+                        |_, binding| !matches!(binding, Binding::Input { input } if input == &key),
+                    );
+                }
+                graph.outputs.retain(
+                    |_, binding| !matches!(binding, Binding::Input { input } if input == &key),
+                );
+            }
+            GraphEdit::MoveInputs { positions } => {
+                for (key, position) in positions {
+                    let node = graph
+                        .input_nodes
+                        .get_mut(&key)
+                        .ok_or_else(|| Error(format!("unknown Input {key}")))?;
+                    node.position = Some(position);
+                    node.validate()?;
+                }
+            }
             GraphEdit::Move { positions } => {
                 for (id, position) in positions {
                     if position.iter().any(|value| !value.is_finite()) {
@@ -82,6 +158,23 @@ impl Definition {
                     return Err(Error(format!(
                         "a graph supports at most {MAX_GRAPH_NODES} nodes"
                     )));
+                }
+                let child = &library.definitions[&definition];
+                if child.body == Body::Primitive(crate::Primitive::Output) {
+                    if graph.nodes.values().any(|node| {
+                        library.definitions[&node.definition].body
+                            == Body::Primitive(crate::Primitive::Output)
+                    }) {
+                        return Err(Error("this graph already has an Output".into()));
+                    }
+                    next.outputs = child.outputs.clone();
+                    graph.outputs = BTreeMap::from([(
+                        "lighting".into(),
+                        Binding::Connection {
+                            node: id.clone(),
+                            output: "lighting".into(),
+                        },
+                    )]);
                 }
                 graph.nodes.insert(
                     id,
@@ -110,6 +203,47 @@ impl Definition {
                 binding,
             } => {
                 let target = input_spec(library, graph, &node, &input)?;
+                if let Some(Binding::Input { input: key }) = &binding {
+                    if !next.inputs.contains_key(key) {
+                        let source = graph
+                            .input_nodes
+                            .get(key)
+                            .ok_or_else(|| Error(format!("unknown Input {key}")))?;
+                        let mut spec = target.clone();
+                        spec.optional = false;
+                        spec.name = source.name.clone();
+                        match graph.nodes[&node].inputs.get(&input) {
+                            Some(Binding::Value { value }) => spec.default = Some(value.clone()),
+                            Some(Binding::Input { input }) => {
+                                spec.default = next
+                                    .inputs
+                                    .get(input)
+                                    .ok_or_else(|| Error(format!("unknown Input {input}")))?
+                                    .default
+                                    .clone();
+                            }
+                            _ => (),
+                        }
+                        if spec.default.is_none() {
+                            spec.default = spec.value_type.signal_default();
+                        }
+                        if let Some(value) = &spec.default {
+                            if let ValueType::Signal(kind) = &mut spec.value_type {
+                                let actual = value.value_type().signal_type().ok_or_else(|| {
+                                    Error("a signal Input needs a numerical default".into())
+                                })?;
+                                kind.unit = kind.unit.or(actual.unit);
+                                kind.channels = kind.channels.or(actual.channels);
+                            } else if matches!(
+                                spec.value_type,
+                                ValueType::Field | ValueType::Mask | ValueType::ColorField
+                            ) {
+                                spec.value_type = value.value_type();
+                            }
+                        }
+                        next.inputs.insert(key.clone(), spec);
+                    }
+                }
                 if let Some(binding) = &binding {
                     compatible(
                         library,
@@ -127,40 +261,18 @@ impl Definition {
                     inputs.remove(&input);
                 }
             }
-            GraphEdit::Expose {
-                node,
-                input,
-                key,
-                name,
-            } => {
-                identity(&key)?;
-                if next.inputs.contains_key(&key) {
-                    return Err(Error(format!("graph input {key} already exists")));
-                }
-                let mut spec = input_spec(library, graph, &node, &input)?.clone();
-                match graph.nodes[&node].inputs.get(&input) {
-                    Some(Binding::Value { value }) => spec.default = Some(value.clone()),
-                    Some(_) => {
-                        return Err(Error("disconnect this input before exposing it".into()))
-                    }
-                    None => (),
-                }
-                if let Some(name) = name {
-                    spec.name = name;
-                }
-                next.inputs.insert(key.clone(), spec);
-                graph
-                    .nodes
-                    .get_mut(&node)
-                    .unwrap()
-                    .inputs
-                    .insert(input, Binding::Input { input: key });
-            }
             GraphEdit::Output { key, binding } => {
                 identity(&key)?;
-                let (value_type, rate) = binding_type(library, &next.inputs, graph, &binding)?;
-                next.outputs
-                    .insert(key.clone(), crate::Output { value_type, rate });
+                let (value_type, _) = binding_type(library, &next.inputs, graph, &binding)?;
+                next.outputs.insert(
+                    key.clone(),
+                    crate::Output {
+                        value_type,
+                        // A currently constant output can become animated through
+                        // later edits. Wire inference computes its current rate.
+                        rate: crate::Rate::Frame,
+                    },
+                );
                 graph.outputs.insert(key, binding);
             }
             GraphEdit::Default { key, value } => {
@@ -169,7 +281,7 @@ impl Definition {
                     .inputs
                     .get_mut(&key)
                     .ok_or_else(|| Error(format!("unknown graph input {key}")))?;
-                if input.value_type != value.value_type() {
+                if !input.value_type.accepts(value.value_type()) {
                     return Err(Error("graph default has the wrong type".into()));
                 }
                 input.default = Some(value);
@@ -209,8 +321,12 @@ impl Definition {
     }
     fn prune_disconnected_inputs(&mut self, previously_used: &std::collections::BTreeSet<String>) {
         let used = self.referenced_inputs();
-        self.inputs
-            .retain(|id, _| !previously_used.contains(id) || used.contains(id));
+        let Body::Graph(graph) = &self.body else {
+            return;
+        };
+        self.inputs.retain(|id, _| {
+            graph.input_nodes.contains_key(id) || !previously_used.contains(id) || used.contains(id)
+        });
     }
 }
 
@@ -280,29 +396,9 @@ fn binding_type(
     graph: &Graph,
     binding: &Binding,
 ) -> Result<(ValueType, Rate)> {
-    match binding {
-        Binding::Value { value } => {
-            value.validate()?;
-            Ok((value.value_type(), Rate::Fixed))
-        }
-        Binding::Input { input } => inputs
-            .get(input)
-            .map(|i| (i.value_type, i.rate))
-            .ok_or_else(|| Error(format!("unknown graph input {input}"))),
-        Binding::Connection { node, output } => {
-            let node = graph
-                .nodes
-                .get(node)
-                .ok_or_else(|| Error(format!("unknown node {node}")))?;
-            library
-                .definitions
-                .get(&node.definition)
-                .and_then(|def| def.outputs.get(output))
-                .map(|o| (o.value_type, o.rate))
-                .ok_or_else(|| Error(format!("{}: unknown output {output}", node.definition)))
-        }
-    }
+    library.binding_type(inputs, graph, binding)
 }
+
 fn compatible(
     library: &Library,
     inputs: &BTreeMap<String, crate::Input>,
@@ -312,8 +408,8 @@ fn compatible(
     rate: Rate,
 ) -> Result<()> {
     let (actual, actual_rate) = binding_type(library, inputs, graph, binding)?;
-    if actual != expected {
-        return Err(Error(format!("expected {expected:?}, got {actual:?}")));
+    if !expected.accepts(actual) {
+        return Err(Error(format!("expected {expected}, got {actual}")));
     }
     if rate == Rate::Fixed && actual_rate == Rate::Frame {
         return Err(Error(
@@ -348,11 +444,22 @@ mod tests {
         definition
             .edit(
                 &library,
-                GraphEdit::Expose {
+                GraphEdit::AddInput {
+                    key: "pill_size".into(),
+                    name: "Pill size".into(),
+                    position: [0., 0.],
+                },
+            )
+            .unwrap();
+        definition
+            .edit(
+                &library,
+                GraphEdit::Bind {
                     node: node.clone(),
                     input: "width".into(),
-                    key: "pill_size".into(),
-                    name: Some("Pill size".into()),
+                    binding: Some(Binding::Input {
+                        input: "pill_size".into(),
+                    }),
                 },
             )
             .unwrap();
@@ -406,10 +513,8 @@ mod tests {
             .edit_graph(
                 &base,
                 "inner",
-                GraphEdit::Bind {
-                    node: "effect".into(),
-                    input: "width".into(),
-                    binding: Some(Value::Proportion(0.3).into()),
+                GraphEdit::RemoveInput {
+                    key: "width".into(),
                 },
             )
             .unwrap();
@@ -429,7 +534,7 @@ mod tests {
                     &library,
                     GraphEdit::Add {
                         id: id.into(),
-                        definition: "add_lighting".into(),
+                        definition: "core/add".into(),
                     },
                 )
                 .unwrap();
@@ -442,7 +547,7 @@ mod tests {
                     input: "a".into(),
                     binding: Some(Binding::Connection {
                         node: "b".into(),
-                        output: "lighting".into(),
+                        output: "value".into(),
                     }),
                 },
             )
@@ -456,7 +561,7 @@ mod tests {
                     input: "a".into(),
                     binding: Some(Binding::Connection {
                         node: "a".into(),
-                        output: "lighting".into(),
+                        output: "value".into(),
                     }),
                 },
             )

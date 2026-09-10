@@ -1,5 +1,8 @@
+mod support;
 use luma_patterns::*;
 use std::collections::BTreeMap;
+#[allow(unused_imports)]
+use support::EvaluateEffect;
 
 fn bar() -> Mapping {
     Mapping::linear(
@@ -35,6 +38,7 @@ fn inputs() -> BTreeMap<String, Value> {
     BTreeMap::from([(
         "mapping".into(),
         Value::Mapping(MappingSpec {
+            mirror: None,
             source: MappingSource::Z,
             per_group: false,
             reverse: false,
@@ -47,23 +51,35 @@ fn light(
     values: &BTreeMap<String, Value>,
     beat: f64,
 ) -> BTreeMap<String, [f64; 3]> {
-    let result = lib.evaluate(id, values, frame(beat)).unwrap();
+    let result = lib.evaluate_effect(id, values, frame(beat)).unwrap();
     let Value::Lighting(l) = &result["lighting"] else {
         panic!()
     };
     l.iter().map(|(id, v)| (id.clone(), v.rgb())).collect()
 }
 #[test]
-fn all_builtins_validate_and_only_lighting_graphs_are_score_candidates() {
+fn all_builtins_validate_and_numerical_effects_get_explicit_terminals() {
     let lib = standard_library();
     for id in lib.definitions.keys() {
         lib.validate(id).unwrap();
     }
-    assert!(lib.definitions["chase"].playable());
-    assert!(lib.definitions["dissolve_flash"].playable());
-    assert!(!lib.definitions["chase_mask"].playable());
-    assert!(matches!(lib.definitions["chase"].body, Body::Graph(_)));
-    assert!(matches!(lib.definitions["chase_mask"].body, Body::Graph(_)));
+    assert!(lib.definitions["chase"].placeable());
+    assert!(lib.definitions["dissolve_flash"].placeable());
+    assert!(!lib.definitions["chase"].playable());
+    assert!(!lib.definitions.contains_key("chase_mask"));
+    assert!(!lib.definitions.contains_key("pulse_mask"));
+    for (id, definition) in &lib.definitions {
+        assert!(
+            definition
+                .inputs
+                .values()
+                .all(|p| p.value_type != ValueType::Lighting),
+            "{id}"
+        );
+        if id != "output" {
+            assert!(!definition.playable(), "{id}");
+        }
+    }
     assert!(matches!(lib.definitions["pill"].body, Body::Graph(_)));
     assert!(matches!(
         lib.definitions["dissolve_mask"].body,
@@ -73,6 +89,43 @@ fn all_builtins_validate_and_only_lighting_graphs_are_score_candidates() {
         lib.definitions["multiply_mask"].body,
         Body::Graph(_)
     ));
+}
+
+#[test]
+fn placement_keeps_auxiliary_outputs_and_rejects_mistyped_capabilities() {
+    let mut library = standard_library();
+    for id in ["sample_gradient", "sample_field_gradient", "mix_palette"] {
+        let definition = &library.definitions[id];
+        assert!(definition.placeable());
+        let placed = definition.clip_instance(id).unwrap();
+        assert!(placed.playable());
+        assert!(placed.outputs.contains_key("opacity"));
+        library.definitions.insert("placed".into(), placed);
+        library.validate("placed").unwrap();
+    }
+    let mut invalid = library.definitions["sample_gradient"].clone();
+    invalid
+        .outputs
+        .insert("pan".into(), invalid.outputs["color"].clone());
+    assert!(
+        !invalid.placeable(),
+        "a wrong capability type was treated as auxiliary"
+    );
+    assert!(invalid.clip_instance("sample_gradient").is_err());
+    let mut reserved = library.definitions["sample_gradient"].clone();
+    reserved
+        .outputs
+        .insert("lighting".into(), reserved.outputs["opacity"].clone());
+    assert!(
+        !reserved.placeable(),
+        "placement would overwrite an existing output"
+    );
+    let mut helper = library.definitions["sample_gradient"].clone();
+    helper.outputs.remove("color");
+    assert!(
+        !helper.placeable(),
+        "an auxiliary signal has no implicit capability"
+    );
 }
 #[test]
 fn chase_rest_is_dark_and_seeking_is_deterministic() {
@@ -167,7 +220,7 @@ fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
             ("softness".into(), Value::Proportion(softness)),
         ]);
         let result = lib
-            .evaluate(
+            .evaluate_effect(
                 "dissolve_mask",
                 &values,
                 Frame {
@@ -177,10 +230,7 @@ fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
                 },
             )
             .unwrap();
-        let Value::Mask(mask) = result["mask"].clone() else {
-            panic!()
-        };
-        mask
+        support::field(&result["mask"])
     };
     for softness in [0.0, 0.2, 1.0] {
         let mut previous = evaluate(0.0, softness, cells());
@@ -240,12 +290,13 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
             inputs: exposed_inputs,
             outputs,
             body: Body::Graph(Graph {
+                input_nodes: BTreeMap::new(),
                 nodes: BTreeMap::from([("chase".into(), node)]),
                 outputs: BTreeMap::from([(
-                    "lighting".into(),
+                    "dimmer".into(),
                     Binding::Connection {
                         node: "chase".into(),
-                        output: "lighting".into(),
+                        output: "dimmer".into(),
                     },
                 )]),
             }),
@@ -257,48 +308,52 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
     );
 }
 #[test]
-fn rejects_units_missing_targets_invalid_values_and_implicit_overlap() {
+fn rejects_units_missing_targets_and_invalid_values_but_allows_overlap() {
     let lib = standard_library();
     assert!(lib
-        .evaluate("pill", &BTreeMap::new(), frame(9.0))
+        .evaluate_effect("pill", &BTreeMap::new(), frame(9.0))
         .unwrap_err()
         .0
         .contains("mapping"));
     let mut i = inputs();
     i.insert("travel".into(), Value::Number(2.0));
     assert!(lib
-        .evaluate("chase", &i, frame(9.0))
+        .evaluate_effect("chase", &i, frame(9.0))
         .unwrap_err()
         .0
-        .contains("expected Beats"));
+        .contains("Beats"));
     i.insert("travel".into(), Value::Beats(8.0));
-    assert!(lib
-        .evaluate("chase", &i, frame(9.0))
-        .unwrap_err()
-        .0
-        .contains("overlap"));
+    assert!(lib.evaluate_effect("chase", &i, frame(9.0)).is_ok());
     i.insert("travel".into(), Value::Beats(f64::NAN));
-    assert!(lib.evaluate("chase", &i, frame(9.0)).is_err());
+    assert!(lib.evaluate_effect("chase", &i, frame(9.0)).is_err());
 }
 #[test]
 fn rejects_signal_to_fixed_input_and_definition_cycles() {
     let mut lib = standard_library();
-    let Body::Graph(g) = &mut lib.definitions.get_mut("chase_mask").unwrap().body else {
+    let Body::Graph(g) = &mut lib.definitions.get_mut("chase").unwrap().body else {
         panic!()
     };
-    g.nodes.get_mut("motion").unwrap().inputs.insert(
+    g.nodes.insert(
+        "clock".into(),
+        Node {
+            position: None,
+            definition: "rhythm".into(),
+            inputs: BTreeMap::new(),
+        },
+    );
+    g.nodes.get_mut("chase").unwrap().inputs.insert(
         "travel".into(),
         Binding::Connection {
-            node: "rhythm".into(),
+            node: "clock".into(),
             output: "elapsed".into(),
         },
     );
     assert!(lib.validate("chase").unwrap_err().0.contains("fixed input"));
     let mut lib = standard_library();
-    let Body::Graph(g) = &mut lib.definitions.get_mut("chase_mask").unwrap().body else {
+    let Body::Graph(g) = &mut lib.definitions.get_mut("chase").unwrap().body else {
         panic!()
     };
-    g.nodes.get_mut("pill").unwrap().definition = "chase_mask".into();
+    g.nodes.get_mut("chase").unwrap().definition = "chase".into();
     assert!(lib.validate("chase").unwrap_err().0.contains("recursive"));
 }
 #[test]
@@ -311,7 +366,7 @@ fn saved_graphs_roundtrip_without_losing_rich_values() {
         light(&restored, "chase", &inputs(), 9.0)
     );
     let result = restored
-        .evaluate(
+        .evaluate_effect(
             "envelope",
             &BTreeMap::from([
                 (
@@ -323,7 +378,7 @@ fn saved_graphs_roundtrip_without_losing_rich_values() {
             frame(9.0),
         )
         .unwrap();
-    assert_eq!(result["value"], Value::Proportion(1.0));
+    assert_eq!(result["value"].scalar_value(), Some(1.0));
 }
 
 #[test]
@@ -343,6 +398,7 @@ fn angled_wings_each_get_their_own_principal_progression() {
         })
         .collect();
     let m = MappingSpec {
+        mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0.0, 1.0, 0.0],
         },
@@ -356,6 +412,7 @@ fn angled_wings_each_get_their_own_principal_progression() {
         assert!((c.position - n / 4.0).abs() < 1e-9);
     }
     let reversed = MappingSpec {
+        mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0.0, 1.0, 0.0],
         },
@@ -371,84 +428,38 @@ fn angled_wings_each_get_their_own_principal_progression() {
 #[test]
 fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
     let mut lib = standard_library();
-    let source = lib.definitions["chase_mask"].clone();
-    let graph = Graph {
-        nodes: BTreeMap::from([
-            (
-                "chase".into(),
-                Node {
-                    position: None,
-                    definition: "chase_mask".into(),
-                    inputs: source
-                        .inputs
-                        .keys()
-                        .map(|k| (k.clone(), Binding::Input { input: k.clone() }))
-                        .collect(),
-                },
-            ),
-            (
-                "dissolve".into(),
-                Node {
-                    position: None,
-                    definition: "dissolve_mask".into(),
-                    inputs: BTreeMap::from([("coverage".into(), Value::Proportion(0.5).into())]),
-                },
-            ),
-            (
-                "combine".into(),
-                Node {
-                    position: None,
-                    definition: "multiply_mask".into(),
-                    inputs: BTreeMap::from([
-                        (
-                            "a".into(),
-                            Binding::Connection {
-                                node: "chase".into(),
-                                output: "mask".into(),
-                            },
-                        ),
-                        (
-                            "b".into(),
-                            Binding::Connection {
-                                node: "dissolve".into(),
-                                output: "mask".into(),
-                            },
-                        ),
-                    ]),
-                },
-            ),
-            (
-                "color".into(),
-                Node {
-                    position: None,
-                    definition: "appearance".into(),
-                    inputs: BTreeMap::from([(
-                        "mask".into(),
-                        Binding::Connection {
-                            node: "combine".into(),
-                            output: "mask".into(),
-                        },
-                    )]),
-                },
-            ),
-        ]),
-        outputs: BTreeMap::from([(
-            "lighting".into(),
-            Binding::Connection {
-                node: "color".into(),
-                output: "lighting".into(),
-            },
-        )]),
+    let mut definition = lib.definitions["chase"].instance("chase");
+    let Body::Graph(graph) = &mut definition.body else {
+        panic!()
     };
-    lib.definitions.insert(
-        "dissolving-chase".into(),
-        Definition {
-            name: "Dissolving chase".into(),
-            inputs: source.inputs,
-            outputs: lib.definitions["appearance"].outputs.clone(),
-            body: Body::Graph(graph),
+    let wire = |node: &str, output: &str| Binding::Connection {
+        node: node.into(),
+        output: output.into(),
+    };
+    graph.nodes.insert(
+        "dissolve".into(),
+        Node {
+            position: None,
+            definition: "dissolve_mask".into(),
+            inputs: BTreeMap::from([("coverage".into(), Value::Proportion(0.5).into())]),
         },
     );
+    graph.nodes.insert(
+        "multiply".into(),
+        Node {
+            position: None,
+            definition: "core/multiply".into(),
+            inputs: BTreeMap::from([
+                ("a".into(), wire("effect", "dimmer")),
+                ("b".into(), wire("dissolve", "mask")),
+            ]),
+        },
+    );
+    graph
+        .outputs
+        .insert("dimmer".into(), wire("multiply", "value"));
+    lib.definitions
+        .insert("dissolving-chase".into(), definition);
     let actual = light(&lib, "dissolving-chase", &inputs(), 9.0);
     let chase = light(&lib, "chase", &inputs(), 9.0);
     let mask = lib
@@ -458,9 +469,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             frame(9.0),
         )
         .unwrap();
-    let Value::Mask(mask) = &mask["mask"] else {
-        panic!()
-    };
+    let mask = support::field(&mask["mask"]);
     for (id, color) in actual {
         assert_eq!(color, chase[&id].map(|v| v * mask[&id]));
     }
@@ -473,6 +482,23 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
     score
         .insert_effect(&lib, "chase", "local-1", 8.0, 8.0)
         .unwrap();
+    // Color is exposed from Output; Chase remains an independently reusable intensity.
+    for edit in [
+        GraphEdit::AddInput {
+            key: "color".into(),
+            name: "Color".into(),
+            position: [0., 0.],
+        },
+        GraphEdit::Bind {
+            node: "output".into(),
+            input: "color".into(),
+            binding: Some(Binding::Input {
+                input: "color".into(),
+            }),
+        },
+    ] {
+        score.edit_graph(&lib, "local-1", edit).unwrap();
+    }
     let original = serde_json::to_value(&score.definitions).unwrap();
     score
         .clips
@@ -498,9 +524,57 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
         .evaluate_clip(&lib, "local-1", &inputs(), 16.0, cells())
         .unwrap()
         .is_empty());
+    assert!(score.insert_effect(&lib, "pill", "mask", 8.0, 8.0).is_err());
+}
+
+#[test]
+fn score_event_literals_cannot_capture_a_venues_head_identities() {
+    let library = standard_library();
+    let mut score = Score::default();
+    score
+        .insert_effect(&library, "chase", "local", 0., 8.)
+        .unwrap();
+    let events = Events::Beats {
+        times: EventTimes::new(vec![0., 1.]).unwrap(),
+    };
+    score
+        .clips
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .insert("trigger".into(), Value::Events(events.clone()));
+    let saved = score.to_json(&library).unwrap();
+    Score::from_json(&library, &saved).unwrap();
+    let captured = Value::Events(
+        events
+            .targeted(EventTargets::random(vec!["venue-a/head-1".into()], 1., 42, false).unwrap())
+            .unwrap(),
+    );
+    score
+        .clips
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .insert("trigger".into(), captured.clone());
     assert!(score
-        .insert_effect(&lib, "chase_mask", "mask", 8.0, 8.0)
-        .is_err());
+        .to_json(&library)
+        .unwrap_err()
+        .to_string()
+        .contains("resolved cell values"));
+    score.clips.get_mut("local").unwrap().inputs.clear();
+    score
+        .definitions
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .get_mut("trigger")
+        .unwrap()
+        .default = Some(captured);
+    assert!(score
+        .to_json(&library)
+        .unwrap_err()
+        .to_string()
+        .contains("resolved cell values"));
 }
 
 #[test]
@@ -513,6 +587,7 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
     score.clips.get_mut("local").unwrap().inputs.insert(
         "mapping".into(),
         Value::Mapping(MappingSpec {
+            mirror: None,
             source: MappingSource::Circle { origin: 0.25 },
             per_group: true,
             reverse: true,
@@ -656,6 +731,7 @@ fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
         })
         .collect();
     let map = MappingSpec {
+        mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0., 0., 1.],
         },
@@ -716,6 +792,68 @@ fn clips_share_graphs_until_made_independent_including_local_dependencies() {
 }
 
 #[test]
+fn importing_a_clip_copies_only_reachable_graphs_and_rejects_collisions_atomically() {
+    let base = standard_library();
+    let mut source = Score::default();
+    source
+        .insert_effect(&base, "chase", "source", 4., 8.)
+        .unwrap();
+    source
+        .customize_node(&base, "source", "effect", "local_chase")
+        .unwrap();
+    source
+        .insert_effect(&base, "chase", "unused", 0., 1.)
+        .unwrap();
+    let clip = source.clips.get_mut("source").unwrap();
+    clip.selection = Selection::new("back_movers");
+    clip.seed = 73;
+    clip.inputs.insert("width".into(), Value::Proportion(0.4));
+    let original = source.clone();
+    let mut destination = Score::default();
+    destination
+        .import_clip(&base, &source, "source", "first")
+        .unwrap();
+    destination
+        .import_clip(&base, &source, "source", "second")
+        .unwrap();
+    assert_eq!(destination.definitions.len(), 4);
+    assert_eq!(source, original);
+    assert_eq!(
+        destination.clips["first"].inputs,
+        source.clips["source"].inputs
+    );
+    assert_eq!(
+        destination.clips["first"].selection,
+        source.clips["source"].selection
+    );
+    assert_eq!(destination.clips["first"].seed, 73);
+    let Body::Graph(first) = &destination.definitions["first"].body else {
+        panic!()
+    };
+    let Body::Graph(second) = &destination.definitions["second"].body else {
+        panic!()
+    };
+    assert_ne!(
+        first.nodes["effect"].definition,
+        second.nodes["effect"].definition
+    );
+    assert_eq!(
+        destination.definitions[&first.nodes["effect"].definition],
+        source.definitions["local_chase"]
+    );
+    let before = destination.clone();
+    for (clip, id) in [
+        ("source", "first"),
+        ("source", "first/0"),
+        ("absent", "third"),
+        ("source", "chase"),
+    ] {
+        assert!(destination.import_clip(&base, &source, clip, id).is_err());
+        assert_eq!(destination, before);
+    }
+}
+
+#[test]
 fn fixture_output_writers_preserve_unset_capabilities() {
     let lib = standard_library();
     for (id, expected) in [
@@ -723,9 +861,11 @@ fn fixture_output_writers_preserve_unset_capabilities() {
         ("write_dimmer", [false, true, false, false, false]),
         ("write_strobe", [false, false, false, true, false]),
         ("write_speed", [false, false, false, false, true]),
-        ("chase", [true, true, false, false, false]),
+        ("chase", [false, true, false, false, false]),
     ] {
-        let output = lib.evaluate(id, &BTreeMap::new(), frame(9.0)).unwrap();
+        let output = lib
+            .evaluate_effect(id, &BTreeMap::new(), frame(9.0))
+            .unwrap();
         let Value::Lighting(values) = &output["lighting"] else {
             panic!()
         };
@@ -777,7 +917,7 @@ fn refreshing_dissolve_holds_each_interval_and_replays_after_seeking() {
     for beat in [8.0, 8.125, 9.0, 12.01] {
         assert_eq!(
             prepared.evaluate(beat).unwrap(),
-            lib.evaluate("dissolve_mask", &overrides, frame(beat))
+            lib.evaluate_effect("dissolve_mask", &overrides, frame(beat))
                 .unwrap()
         );
     }
@@ -815,10 +955,8 @@ fn graph_pill_matches_the_previous_spatial_kernel() {
                             ("shape".into(), Value::Envelope(shape.clone())),
                             ("boundary".into(), Value::Boundary(boundary)),
                         ]);
-                        let result = lib.evaluate("pill", &inputs, frame(9.0)).unwrap();
-                        let Value::Mask(actual) = &result["mask"] else {
-                            panic!()
-                        };
+                        let result = lib.evaluate_effect("pill", &inputs, frame(9.0)).unwrap();
+                        let actual = &support::field(&result["mask"]);
                         let expected = reference_pill(&mapping, center, width, &shape, boundary);
                         for (id, value) in actual {
                             assert!((value - expected[id]).abs() < 1e-10, "{id}: {value} != {} at center {center}, width {width}, boundary {boundary:?}", expected[id]);
@@ -879,7 +1017,7 @@ fn pill(
         })
         .collect();
     let output = standard_library()
-        .evaluate(
+        .evaluate_effect(
             "pill",
             &BTreeMap::from([
                 ("mapping".into(), Value::Coordinates(mapping.clone())),
@@ -895,10 +1033,7 @@ fn pill(
             },
         )
         .unwrap();
-    let Value::Mask(mask) = output["mask"].clone() else {
-        panic!()
-    };
-    mask
+    support::field(&output["mask"])
 }
 
 #[test]

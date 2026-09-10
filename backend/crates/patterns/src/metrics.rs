@@ -1,7 +1,6 @@
-//! Geometry and reductions over a resolved head domain. Ordering always uses
-//! stable head identities to break ties, never fixture or graph traversal order.
+//! Geometry and reductions over a resolved fixture domain. Ordering uses an
+//! explicit order signal where supplied, with stable identities to break ties.
 use crate::*;
-use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -10,15 +9,85 @@ pub enum FieldReduction {
     Maximum,
     Mean,
     Count,
+    DistinctCount,
 }
 
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     use crate::signals::port;
     let (name, inputs, outputs) = match op {
+        Primitive::ChannelIndex => (
+            "Channel index",
+            vec![(
+                "value",
+                port("Value", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![(
+                "value",
+                ValueType::Signal(SignalType {
+                    unit: Some(Unit::Number),
+                    channels: None,
+                }),
+            )],
+        ),
+        Primitive::DomainIndex => (
+            "Fixture index",
+            vec![(
+                "value",
+                port("Domain", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![("value", ValueType::Number)],
+        ),
+        Primitive::AlignDomain => (
+            "Align fixture domain",
+            vec![
+                (
+                    "value",
+                    port("Value", ValueType::Signal(SignalType::ANY), None),
+                ),
+                (
+                    "reference",
+                    port("Domain", ValueType::Signal(SignalType::ANY), None),
+                ),
+                (
+                    "order",
+                    port(
+                        "First fixture order",
+                        ValueType::Number,
+                        Some(Value::Number(0.)),
+                    ),
+                ),
+            ],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
+        ),
+        Primitive::ChannelCount => (
+            "Channel count",
+            vec![(
+                "value",
+                port("Value", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![("value", ValueType::Number)],
+        ),
+        Primitive::FieldFirst => (
+            "First fixture value",
+            vec![
+                (
+                    "value",
+                    port("Value", ValueType::Signal(SignalType::ANY), None),
+                ),
+                (
+                    "order",
+                    port("Order", ValueType::Number, Some(Value::Number(0.))),
+                ),
+            ],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
+        ),
         Primitive::FieldRank => (
             "Rank heads",
-            vec![("value", port("Value", ValueType::Field, None))],
-            vec![("value", ValueType::Field)],
+            vec![(
+                "value",
+                port("Value", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
         ),
         Primitive::FieldReduce(reduction) => (
             match reduction {
@@ -26,8 +95,94 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 FieldReduction::Maximum => "Field maximum",
                 FieldReduction::Mean => "Field mean",
                 FieldReduction::Count => "Head count",
+                FieldReduction::DistinctCount => "Distinct values",
             },
-            vec![("value", port("Value", ValueType::Field, None))],
+            vec![(
+                "value",
+                port("Value", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
+        ),
+        Primitive::WorldGeometry => (
+            "Fixture geometry",
+            vec![],
+            vec![
+                (
+                    "position",
+                    ValueType::Signal(SignalType::new(
+                        Unit::Number,
+                        Channels::components(3).unwrap(),
+                    )),
+                ),
+                ("index", ValueType::Number),
+            ],
+        ),
+        Primitive::CirclePhase | Primitive::PrincipalDirection | Primitive::RadialCoordinates => (
+            match op {
+                Primitive::CirclePhase => "Fit circle",
+                Primitive::PrincipalDirection => "Principal direction",
+                _ => "Radial coordinates",
+            },
+            vec![
+                (
+                    "position",
+                    port(
+                        "Position",
+                        ValueType::Signal(SignalType::new(
+                            Unit::Number,
+                            Channels::components(if op == Primitive::PrincipalDirection {
+                                2
+                            } else {
+                                3
+                            })
+                            .unwrap(),
+                        )),
+                        None,
+                    ),
+                ),
+                (
+                    "order",
+                    port("Sample order", ValueType::Number, Some(Value::Number(0.))),
+                ),
+            ],
+            if op == Primitive::CirclePhase {
+                vec![("phase", ValueType::Number)]
+            } else if op == Primitive::RadialCoordinates {
+                vec![("phase", ValueType::Number), ("radius", ValueType::Number)]
+            } else {
+                vec![(
+                    "direction",
+                    ValueType::Signal(SignalType::new(
+                        Unit::Number,
+                        Channels::components(2).unwrap(),
+                    )),
+                )]
+            },
+        ),
+        Primitive::RankNearby => (
+            "Rank nearby points",
+            vec![
+                ("value", port("Sort value", ValueType::Number, None)),
+                (
+                    "order",
+                    port("Tie order", ValueType::Number, Some(Value::Number(0.))),
+                ),
+                (
+                    "position",
+                    port(
+                        "Position",
+                        ValueType::Signal(SignalType::new(
+                            Unit::Number,
+                            Channels::components(3).unwrap(),
+                        )),
+                        None,
+                    ),
+                ),
+                (
+                    "tolerance",
+                    port("Merge distance", ValueType::Number, Some(Value::Number(0.))),
+                ),
+            ],
             vec![("value", ValueType::Number)],
         ),
         Primitive::StageCoordinates => (
@@ -43,7 +198,15 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     };
     Some(Definition {
         name: name.into(),
-        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        inputs: inputs
+            .into_iter()
+            .map(|(k, mut v)| {
+                if op == Primitive::RankNearby && k == "tolerance" {
+                    v.rate = Rate::Fixed;
+                }
+                (k.into(), v)
+            })
+            .collect(),
         outputs: outputs
             .into_iter()
             .map(|(k, value_type)| {
@@ -58,74 +221,4 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             .collect(),
         body: Body::Primitive(op),
     })
-}
-
-pub(crate) fn run(
-    op: Primitive,
-    inputs: &BTreeMap<String, Value>,
-    frame: Frame,
-) -> Option<Result<BTreeMap<String, Value>>> {
-    if op == Primitive::StageCoordinates {
-        return Some(Ok(["u", "v", "z"]
-            .into_iter()
-            .enumerate()
-            .map(|(axis, key)| {
-                (
-                    key.into(),
-                    Value::Field(
-                        frame
-                            .cells
-                            .iter()
-                            .map(|c| (c.id.clone(), c.uvz[axis]))
-                            .collect(),
-                    ),
-                )
-            })
-            .collect()));
-    }
-    if !matches!(op, Primitive::FieldRank | Primitive::FieldReduce(_)) {
-        return None;
-    }
-    let Value::Field(field) = &inputs["value"] else {
-        unreachable!("validated field")
-    };
-    let value = match op {
-        Primitive::FieldRank => {
-            let mut ordered: Vec<_> = field.iter().collect();
-            ordered.sort_by(|(a_id, a), (b_id, b)| {
-                // Treat -0 and +0 as the same value; the identity breaks ties.
-                if a == b {
-                    a_id.cmp(b_id)
-                } else {
-                    a.total_cmp(b)
-                }
-            });
-            Value::Field(
-                ordered
-                    .into_iter()
-                    .enumerate()
-                    .map(|(rank, (id, _))| (id.clone(), rank as f64))
-                    .collect(),
-            )
-        }
-        Primitive::FieldReduce(reduction) => Value::Number(if field.is_empty() {
-            0.0
-        } else {
-            match reduction {
-                FieldReduction::Count => field.len() as f64,
-                FieldReduction::Minimum => field.values().copied().fold(f64::INFINITY, f64::min),
-                FieldReduction::Maximum => {
-                    field.values().copied().fold(f64::NEG_INFINITY, f64::max)
-                }
-                // Divide first to avoid overflowing a sum of otherwise valid values.
-                FieldReduction::Mean => field.values().map(|v| v / field.len() as f64).sum(),
-            }
-        }),
-        _ => unreachable!(),
-    };
-    Some(
-        value
-            .validate()
-            .map(|_| BTreeMap::from([("value".into(), value)])),
-    )
 }
