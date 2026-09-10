@@ -6,24 +6,27 @@
 //! in a snapshot are offsets from it, not absolute track time. `host_load_track`
 //! loads from 0.0, which is why the two coincide in the track editor.
 //!
-//! The steady-state channel for transport state is the `host-audio://state`
-//! event; `host_snapshot` exists only to fill the gap before the first
-//! broadcast arrives.
+//! The native editor polls `host_snapshot`. Every control and snapshot names
+//! the playback session, so delayed work cannot operate on another song.
 
 use std::path::Path;
 
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::dispatch::{AppServices, CommandError};
-use crate::host_audio::HostAudioSnapshot;
+use crate::host_audio::{HostAudioControl, HostAudioSnapshot};
 
 /// Load a slice of a track for playback. `start_time` and `end_time` are
 /// absolute track seconds; `end_time <= 0` means "to the end".
 pub async fn host_load_segment(
     services: &AppServices,
     track_id: String,
+    session: u64,
     start_time: f32,
     end_time: f32,
 ) -> Result<(), CommandError> {
+    if !services.host_audio.begin_load(session, track_id.clone()) {
+        return Ok(());
+    }
     services
         .sync
         .ensure_track_audio(&services.storage, &track_id)
@@ -72,6 +75,7 @@ pub async fn host_load_segment(
         services,
         &track_id,
         admitted_principal.as_deref(),
+        session,
         samples,
         audio.sample_rate,
         start_time,
@@ -81,7 +85,14 @@ pub async fn host_load_segment(
 
 /// Load a whole track for playback.
 /// Segment start is 0.0, so snapshot times equal absolute track times.
-pub async fn host_load_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
+pub async fn host_load_track(
+    services: &AppServices,
+    track_id: String,
+    session: u64,
+) -> Result<(), CommandError> {
+    if !services.host_audio.begin_load(session, track_id.clone()) {
+        return Ok(());
+    }
     services
         .sync
         .ensure_track_audio(&services.storage, &track_id)
@@ -109,6 +120,7 @@ pub async fn host_load_track(services: &AppServices, track_id: String) -> Result
         services,
         &track_id,
         admitted_principal.as_deref(),
+        session,
         audio.samples.clone(),
         audio.sample_rate,
         0.0,
@@ -138,6 +150,7 @@ async fn commit_segment(
     services: &AppServices,
     track_id: &str,
     admitted_principal: Option<&str>,
+    session: u64,
     samples: Vec<f32>,
     sample_rate: u32,
     segment_start: f32,
@@ -150,69 +163,80 @@ async fn commit_segment(
     }
     services
         .host_audio
-        .load_segment(samples, sample_rate, segment_start)?;
+        .finish_load(session, samples, sample_rate, segment_start)?;
     Ok(access.commit().await?)
 }
 
-/// Start playback. Errors when nothing is loaded; does not seek first.
-pub async fn host_play(services: &AppServices) -> Result<(), CommandError> {
-    Ok(services.host_audio.play()?)
+/// Seek and start as one operation owned by this playback session.
+pub async fn host_play(
+    services: &AppServices,
+    session: u64,
+    seconds: f32,
+) -> Result<(), CommandError> {
+    Ok(services
+        .host_audio
+        .control(session, HostAudioControl::Play { seconds })?)
 }
 
-/// Pause playback. A no-op when nothing is loaded.
-pub async fn host_pause(services: &AppServices) -> Result<(), CommandError> {
-    services.host_audio.pause();
-    Ok(())
+pub async fn host_pause(services: &AppServices, session: u64) -> Result<(), CommandError> {
+    Ok(services
+        .host_audio
+        .control(session, HostAudioControl::Pause)?)
 }
 
-/// Seek to `seconds` relative to the loaded segment's start.
-pub async fn host_seek(services: &AppServices, seconds: f32) -> Result<(), CommandError> {
-    Ok(services.host_audio.seek(seconds)?)
+pub async fn host_seek(
+    services: &AppServices,
+    session: u64,
+    seconds: f32,
+) -> Result<(), CommandError> {
+    Ok(services
+        .host_audio
+        .control(session, HostAudioControl::Seek { seconds })?)
 }
 
-/// Enable or disable looping over the current loop region.
-pub async fn host_set_loop(services: &AppServices, enabled: bool) -> Result<(), CommandError> {
-    services.host_audio.set_loop(enabled);
-    Ok(())
-}
-
-/// Set the loop region in segment-relative seconds.
-///
-/// Looping follows the region: it turns on only when both bounds are given, so
-/// clearing either bound is how the caller turns looping off.
 pub async fn host_set_loop_region(
     services: &AppServices,
+    session: u64,
     start_seconds: Option<f32>,
     end_seconds: Option<f32>,
 ) -> Result<(), CommandError> {
-    let enabled = start_seconds.is_some() && end_seconds.is_some();
-    services
+    Ok(services.host_audio.control(
+        session,
+        HostAudioControl::Loop {
+            start: start_seconds,
+            end: end_seconds,
+        },
+    )?)
+}
+
+pub async fn host_set_playback_rate(
+    services: &AppServices,
+    session: u64,
+    rate: f32,
+) -> Result<(), CommandError> {
+    Ok(services
         .host_audio
-        .set_loop_region(start_seconds, end_seconds);
-    services.host_audio.set_loop(enabled);
-    Ok(())
+        .control(session, HostAudioControl::Rate { rate })?)
 }
 
 pub async fn host_set_playback_range(
     services: &AppServices,
+    session: u64,
     start_seconds: f32,
     end_seconds: f32,
     looping: bool,
 ) -> Result<(), CommandError> {
-    services
-        .host_audio
-        .set_playback_range(start_seconds, end_seconds, looping)
-        .map_err(CommandError::Invalid)
+    Ok(services.host_audio.control(
+        session,
+        HostAudioControl::Range {
+            start: start_seconds,
+            end: end_seconds,
+            looping,
+        },
+    )?)
 }
 
-/// Set playback rate (1.0 = normal). Changes pitch; no time-stretch.
-pub async fn host_set_playback_rate(services: &AppServices, rate: f32) -> Result<(), CommandError> {
-    services.host_audio.set_playback_rate(rate);
-    Ok(())
-}
-
-/// Read transport state once. The `host-audio://state` event carries the same
-/// payload continuously; this is the priming read before the first one lands.
+/// Read the current session and its transport state for the native editor.
 pub async fn host_snapshot(services: &AppServices) -> Result<HostAudioSnapshot, CommandError> {
     Ok(services.host_audio.snapshot())
 }

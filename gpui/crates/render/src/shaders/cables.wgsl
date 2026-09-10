@@ -20,6 +20,8 @@ const MIN_NDC_HALF: f32 = 0.0011;
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) alpha: f32,
+    @location(1) view_depth: f32,
+    @location(2) world: vec3<f32>,
 };
 
 @vertex
@@ -52,10 +54,13 @@ fn vs_main(
     var out: VsOut;
     out.clip = vec4<f32>(centre.xy + offset * uv.y * widen, centre.z, centre.w);
     out.alpha = uv.x;
+    out.view_depth = dot(world - globals.camera_pos.xyz, globals.camera_forward.xyz);
+    out.world = world;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.0, 0.0, 0.0, in.alpha);
+    let color = scene_radiance(vec3<f32>(0.0), in.world - globals.camera_pos.xyz);
+    return vec4<f32>(color, in.alpha * horizon_coverage(in.view_depth));
 }

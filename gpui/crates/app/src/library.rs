@@ -2159,38 +2159,55 @@ impl Library {
     pub fn load_audio(
         &self,
         track_id: &str,
+    ) -> (u64, impl Future<Output = Result<(), LibraryError>> + use<>) {
+        // Allocate before spawning: task scheduling must not reorder navigation.
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (
+            session,
+            self.call(
+                "host_load_track",
+                json!({ "trackId": track_id, "session": session }),
+            ),
+        )
+    }
+
+    /// Seeking and playing are atomic at the audio host.
+    pub fn play(
+        &self,
+        session: u64,
+        seconds: f32,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("host_load_track", json!({ "trackId": track_id }))
+        self.call(
+            "host_play",
+            json!({ "session": session, "seconds": seconds }),
+        )
     }
 
-    /// Start playback from wherever the transport currently is.
-    pub fn play(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("host_play", json!({}))
+    pub fn pause(&self, session: u64) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("host_pause", json!({ "session": session }))
     }
 
-    pub fn pause(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("host_pause", json!({}))
+    pub fn seek(
+        &self,
+        session: u64,
+        seconds: f32,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "host_seek",
+            json!({ "session": session, "seconds": seconds }),
+        )
     }
 
-    /// Move the transport to `seconds` from the loaded segment's start, which
-    /// for a whole track is absolute track time.
-    pub fn seek(&self, seconds: f32) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("host_seek", json!({ "seconds": seconds }))
-    }
-
-    /// Loop `region`, or stop looping when it is `None`.
-    ///
-    /// One argument for what the seam takes as two bounds, because the host
-    /// turns looping *on* exactly when both are given — so a pair of
-    /// independent `Option`s could spell a state that means nothing, and this
-    /// one cannot.
     pub fn set_loop_region(
         &self,
+        session: u64,
         region: Option<(f32, f32)>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "host_set_loop_region",
             json!({
+                "session": session,
                 "startSeconds": region.map(|(start, _)| start),
                 "endSeconds": region.map(|(_, end)| end),
             }),
@@ -2199,21 +2216,53 @@ impl Library {
 
     pub(crate) fn set_preview_range(
         &self,
+        session: u64,
         span: (f32, f32),
         looping: bool,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "host_set_playback_range",
-            json!({"startSeconds":span.0, "endSeconds":span.1, "looping":looping}),
+            json!({"session":session, "startSeconds":span.0, "endSeconds":span.1, "looping":looping}),
         )
+    }
+
+    /// Restore a song's transport before enabling its controls.
+    pub fn restore_audio(
+        &self,
+        session: u64,
+        seconds: f32,
+        region: Option<(f32, f32)>,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let services = self.services.clone();
+        let task = self.runtime.spawn(async move {
+            command::<()>(
+                &services,
+                "host_seek",
+                &json!({"session":session,"seconds":seconds}),
+            )
+            .await?;
+            command::<()>(
+                &services,
+                "host_set_loop_region",
+                &json!({
+                    "session": session,
+                    "startSeconds": region.map(|r| r.0),
+                    "endSeconds": region.map(|r| r.1),
+                }),
+            )
+            .await
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at("host_seek", Cause::Cancelled(error.to_string()))
+            })?
+        }
     }
 
     /// The transport, `after` a wait.
     ///
-    /// The desktop app learns the playhead from a `host-audio://state` event
-    /// used by native playback; this host
-    /// polls instead — and the pacing belongs on the Tokio runtime because
-    /// that is the one this process has real timers on. GPUI's own timers are
+    /// Native playback polls on the Tokio runtime because that is the one
+    /// this process has real timers on. GPUI's own timers are
     /// driven by a test clock under the harness, so a poll paced there would
     /// never tick in a test.
     pub fn transport_after(
@@ -2814,6 +2863,11 @@ impl Library {
     /// the same reason as [`Self::sample_universe`].
     pub fn render_time(&self) -> f32 {
         self.services.host_audio().render_time()
+    }
+
+    pub(crate) fn preview_time(&self, session: u64) -> Option<f32> {
+        let snapshot = self.services.host_audio().snapshot();
+        (snapshot.session == session).then_some(snapshot.current_time)
     }
 
     /// What the transport is doing, right now — whether it is running, and how

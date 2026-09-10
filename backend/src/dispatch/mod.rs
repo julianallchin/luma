@@ -705,22 +705,23 @@ commands! {
         venue_id: String,
     ) -> ();
 
-    host_audio::host_load_track(track_id: String) -> ();
+    host_audio::host_load_track(track_id: String, session: u64) -> ();
     host_audio::host_load_segment(
         track_id: String,
+        session: u64,
         start_time: f32,
         end_time: f32,
     ) -> ();
-    host_audio::host_play() -> ();
-    host_audio::host_pause() -> ();
-    host_audio::host_seek(seconds: f32) -> ();
-    host_audio::host_set_loop(enabled: bool) -> ();
-    host_audio::host_set_playback_range(start_seconds: f32, end_seconds: f32, looping: bool) -> ();
+    host_audio::host_play(session: u64, seconds: f32) -> ();
+    host_audio::host_pause(session: u64) -> ();
+    host_audio::host_seek(session: u64, seconds: f32) -> ();
+    host_audio::host_set_playback_range(session: u64, start_seconds: f32, end_seconds: f32, looping: bool) -> ();
     host_audio::host_set_loop_region(
+        session: u64,
         start_seconds: Option<f32>,
         end_seconds: Option<f32>,
     ) -> ();
-    host_audio::host_set_playback_rate(rate: f32) -> ();
+    host_audio::host_set_playback_rate(session: u64, rate: f32) -> ();
     host_audio::host_snapshot() -> HostAudioSnapshot;
 
     sync::force_quit() -> ();

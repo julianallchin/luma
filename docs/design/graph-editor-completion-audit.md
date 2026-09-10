@@ -204,3 +204,28 @@ not restore the deleted node selection. The broader chat/auth and venue-chain te
 failures, and the local n2n model artifact problem, remain as described above and
 in the chronological design ledger. The full application test suite is not claimed
 green. None blocks the verified graph workflows or required effect compositions.
+
+
+## Integration with dev
+
+The completed redesign was committed as `6978a5a6` and integrated with dev's
+`9c3cd008` visualizer work and `e23532dc` track playback/overlap changes.
+Graph preview now uses the same session ownership checks as track playback;
+late range, seek and pause commands cannot modify another song. Returning to
+the timeline restores its own playhead. Fullscreen Space controls the active
+preview, while Space in the graph canvas still opens node search.
+
+The newer inspector layout exposed a double-click hit-test regression. The
+first clip hit now survives the layout change until the second click, and
+opening, dragging, undoing and reopening the graph pass native verification.
+
+Integration validation: 23 native graph tests in `/tmp/luma-dev-merge-graphs.log`,
+eight navigation/overlap/fullscreen tests in `/tmp/luma-dev-merge-navigation.log`,
+four audio boundary/session tests in `/tmp/luma-dev-merge-audio-tests.log`, and
+13 Python score tests in `/tmp/luma-dev-merge-python.log` pass. The IPC manifest
+was regenerated for the combined command table and its check passes in
+`/tmp/luma-dev-merge-manifest-final.log`. Backend all-targets validation passes
+in `/tmp/luma-dev-merge-backend-check.log`.
+GPUI workspace/all-targets validation also passes in
+`/tmp/luma-dev-merge-workspace-check.log`. Both local SQLite databases were
+backed up and passed `quick_check` before updating the watched dev checkout.

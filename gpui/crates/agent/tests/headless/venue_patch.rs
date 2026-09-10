@@ -799,6 +799,14 @@ fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
         function field(name) {
             return app.snapshot().findAll({role:"slider"}).find(n => n.label.startsWith(name + " = "));
         }
+        function densityAt(fraction) {
+            const box = app.snapshot().find({role:"slider",label:"Haze density"}).bounds;
+            const start = box.x + box.width / 2;
+            app.drag({x:start, y:box.y + box.height / 2}, {dx:box.width * (fraction - 0.5), dy:0}, {steps:8});
+            app.frames(3);
+            return Number(field("Haze density").label.split(" = ")[1]);
+        }
+        const densityRange = [densityAt(0), densityAt(0.2), densityAt(1)];
         const names = ["Haze density", "Cloudiness", "Cloud size (m)", "Turbulence", "Wind speed (m/s)", "Wind direction (°)"];
         const before = names.map(n => field(n).label);
         names.forEach(name => {
@@ -813,9 +821,10 @@ fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
         app.key("escape");
         nav.step("reopen", "toggle", "Render settings");
         app.frames(4);
-        ({before, changed, outdoor, reopened:names.map(n => field(n).label)})
+        ({densityRange, before, changed, outdoor, reopened:names.map(n => field(n).label)})
     "#,
     );
+    assert_eq!(out["densityRange"], serde_json::json!([0, 0.02, 0.5]));
     for (before, after) in out["before"]
         .as_array()
         .unwrap()

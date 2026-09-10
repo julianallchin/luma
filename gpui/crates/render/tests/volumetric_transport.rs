@@ -244,6 +244,18 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
         .unwrap();
 }
 
+fn capture_transport(name: &str, pixels: &[u8]) {
+    if let Some(dir) = std::env::var_os("LUMA_HAZE_CAPTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        write_png(
+            &PathBuf::from(dir).join(format!("{name}.png")),
+            WIDTH,
+            HEIGHT,
+            pixels,
+        );
+    }
+}
+
 /// How long [`wait_for_serial`] waits before calling the renderer worker stuck.
 ///
 /// **A liveness guard, not a frame budget.** A viewport's *first* frame pays
@@ -335,10 +347,14 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     let gobo = renderer
         .render(&frame(Vec::new(), vec![light(1)]), WIDTH, HEIGHT, 4)
         .unwrap();
-    // Updated for the shared procedural density and cached optical depth (2026-09-09).
+    for (name, pixels) in [("one", &one), ("overlap", &overlap), ("gobo", &gobo)] {
+        capture_transport(name, pixels);
+    }
+    // Progressive jitter and the filtered optical-depth cache (2026-09-09).
+    // Cache conversion changes only isolated pixels by one RGB code value.
     assert_eq!(
         (hash(&one), hash(&overlap), hash(&gobo)),
-        (0x9ab29ee32527eeb2, 0x67cc4de977fed399, 0x76bf37bd8e435af9,),
+        (0xaaf6942622d41dc6, 0x70078f0d2f2e5ae2, 0x54725299460adbfb,),
         "one/overlap/gobo transport golden drifted"
     );
 
@@ -363,10 +379,12 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
     let blocked = renderer
         .render(&frame(vec![blocker()], vec![light(0)]), WIDTH, HEIGHT, 2)
         .unwrap();
-    // Same density and tail update as above; occlusion invariants stay unchanged.
+    capture_transport("open", &open);
+    capture_transport("blocked", &blocked);
+    // Same cache/jitter update as above; occlusion invariants stay unchanged.
     assert_eq!(
         (hash(&open), hash(&blocked)),
-        (0x5bb5cb043128ba71, 0xe6f9d7329430056e),
+        (0x3f77aea731776a3e, 0xde5cee70c24880b),
         "depth-occlusion transport golden drifted"
     );
     assert!(mean_rgb(&blocked) < mean_rgb(&open));
@@ -701,4 +719,118 @@ fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
         fresh.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
         "restoring fixtures reused stale grid cells"
     );
+}
+
+#[test]
+fn deterministic_haze_is_independent_of_live_subframe_budget() {
+    let mut broad = light(0);
+    broad.wash = 0.9;
+    broad.cos_field = 0.5;
+    broad.cos_beam = 0.85;
+    let mut narrow = light(0);
+    narrow.position.x += 0.8;
+    let mut input = frame(vec![blocker()], vec![broad, narrow]);
+    input.haze_resolution = 1.0;
+    input.geometry_shadows = true;
+    input.fixture_shadows = true;
+    input.haze_appearance.cloudiness = 0.7;
+    let mut renderer = Renderer::new().unwrap();
+    let expected = renderer
+        .render_next(&input, WIDTH + 3, HEIGHT + 1, 1)
+        .unwrap();
+    assert!(mean_rgb(&expected) > 1.0, "test requires a visible volume");
+    for samples in [2, 4, 1] {
+        assert_eq!(
+            expected,
+            renderer
+                .render_next(&input, WIDTH + 3, HEIGHT + 1, samples)
+                .unwrap(),
+            "deterministic radiance changed with {samples} live subframes"
+        );
+    }
+    // Force the extra stochastic pass without contributing extra radiance.
+    // The deterministic part must still be added exactly once, at full weight.
+    let mut inactive_gobo = light(1);
+    inactive_gobo.haze_gain = 0.0;
+    input.fixture_cones.push(inactive_gobo);
+    assert_eq!(
+        expected,
+        renderer
+            .render_next(&input, WIDTH + 3, HEIGHT + 1, 2)
+            .unwrap(),
+        "a stochastic pass changed deterministic beam energy"
+    );
+    input.fixture_cones.pop();
+    input.haze_appearance.wind_speed = 1.0;
+    input.time = 0.1;
+    renderer
+        .render_next(&input, WIDTH + 3, HEIGHT + 1, 2)
+        .unwrap();
+    input.time = 0.2;
+    let current = renderer
+        .render_next(&input, WIDTH + 3, HEIGHT + 1, 2)
+        .unwrap();
+    let mut fresh = Renderer::new().unwrap();
+    assert_eq!(
+        current,
+        fresh.render(&input, WIDTH + 3, HEIGHT + 1, 1).unwrap(),
+        "deterministic density lagged behind the current scene time"
+    );
+}
+
+#[test]
+fn live_shadow_intervals_agree_with_converged_transport() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let catalogue =
+        luma_render::Catalogue::load(&root.join("experiments/haze-shadow.json")).unwrap();
+    let suite: serde_json::Value = serde_json::from_reader(
+        File::open(root.join("experiments/haze-shadow-suite.json")).unwrap(),
+    )
+    .unwrap();
+    let mut library = Library::new(root.join("../../../resources/meshes"));
+    let mut renderer = Renderer::new().unwrap();
+    for pose in suite["cases"].as_array().unwrap() {
+        let scene = catalogue
+            .scenes
+            .iter()
+            .find(|scene| scene.id == pose["scene"].as_str().unwrap())
+            .unwrap();
+        let mut input =
+            luma_render::build_frame(scene, &catalogue.definitions, 0.0, &mut library).unwrap();
+        let eye: [f32; 3] = serde_json::from_value(pose["eye"].clone()).unwrap();
+        let target: [f32; 3] = serde_json::from_value(pose["target"].clone()).unwrap();
+        input.camera = luma_render::frame::Camera {
+            eye: eye.into(),
+            target: target.into(),
+            fov_y_deg: 50.0,
+        };
+        input.haze_resolution = 1.0;
+        let live = renderer
+            .render_next(&input, 960, 640, luma_render::LIVE_SUBFRAMES)
+            .unwrap();
+        input.haze_steps = 32;
+        let reference = renderer.render_reference(&input, 960, 640, 64).unwrap();
+        let mut errors = Vec::with_capacity(960 * 640 * 3);
+        for (a, b) in live.chunks_exact(4).zip(reference.chunks_exact(4)) {
+            errors.extend(
+                (0..3).map(|channel| (f64::from(a[channel]) - f64::from(b[channel])).abs()),
+            );
+        }
+        let rmse = (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt();
+        errors.sort_by(f64::total_cmp);
+        let p99 = errors[errors.len() * 99 / 100];
+        assert!(
+            rmse < 1.6 && p99 <= 6.0,
+            "{} lost shadow precision: RMSE {rmse:.3}, p99 {p99}",
+            pose["id"]
+        );
+        input.haze_steps = 8;
+        assert_eq!(
+            live,
+            renderer
+                .render_next(&input, 960, 640, luma_render::LIVE_SUBFRAMES)
+                .unwrap(),
+            "a frozen medium flickered after the reference capture"
+        );
+    }
 }

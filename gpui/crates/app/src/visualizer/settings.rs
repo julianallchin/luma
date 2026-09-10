@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 pub(super) struct DockMotion {
     popup: Transition,
     tooltip: Transition,
-    pub(super) switches: [Transition; 3],
+    pub(super) switches: [Transition; 4],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,

@@ -42,6 +42,7 @@ mod chrome;
 mod confirm;
 mod fixture_library;
 mod fixture_picker;
+mod fullscreen;
 mod graph;
 mod history;
 mod keymap;
@@ -153,6 +154,8 @@ pub struct Luma {
     /// off switch for its redraw loop — see [`visualizer::visualizer`].
     pub(crate) visualizer: Option<visualizer::Visualizer>,
     pub(crate) graph_audio: graph::preview::Audio,
+    pub(crate) fullscreen: Option<fullscreen::State>,
+    pub(crate) visualizer_focus: FocusHandle,
     /// Whether the stage pane is suppressed by hand. Kept apart from
     /// [`visualizer`](Self::visualizer) the way `sidebar_hidden` is from
     /// `sidebar`: one says what there is to show, the other whether the room
@@ -261,6 +264,8 @@ impl Luma {
             expanded: false,
             visualizer: None,
             graph_audio: graph::preview::Audio::default(),
+            fullscreen: None,
+            visualizer_focus: cx.focus_handle(),
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
@@ -383,8 +388,7 @@ impl Luma {
                                 .ok()
                                 .and_then(|value| value.parse().ok())
                                 .unwrap_or(50.0);
-                            drop(this.library.seek(seek));
-                            drop(this.library.play());
+                            this.play_track_at(seek, cx);
                             true
                         }
                         None => false,
@@ -444,6 +448,7 @@ impl Render for Luma {
         self.sync_workspace_scope(cx);
         self.sync_chat(window, cx);
         self.sync_visualizer(cx);
+        self.sync_fullscreen(window, cx);
         self.take_focus(window, cx);
 
         let root_holds_focus = matches!(self.focus_slot(), FocusSlot::Shell);
@@ -464,6 +469,16 @@ impl Render for Luma {
             // dispatched at the focused element bubbles to here, and each
             // handler is a no-op wherever it does not apply.
             .key_context(keymap::context::ROOT)
+            .on_action(
+                cx.listener(|this, _: &keymap::ToggleVisualizerFullscreen, window, cx| {
+                    this.toggle_visualizer_fullscreen(window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &keymap::DismissVisualizerFullscreen, window, cx| {
+                    this.dismiss_fullscreen(window, cx);
+                },
+            ))
             .on_action(
                 cx.listener(|this, _: &keymap::DismissOverlay, _, cx| this.dismiss_overlay(cx)),
             )
@@ -566,7 +581,13 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::SelectTab7, _, cx| this.select_tab(6, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab8, _, cx| this.select_tab(7, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab9, _, cx| this.select_tab(8, cx)))
-            .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
+            .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| {
+                if let Some(Body::Graph(editor)) = this.workspace.active_body() {
+                    this.toggle_graph_preview(&editor.target(), cx);
+                } else {
+                    this.toggle_playback(cx);
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),
             )
@@ -635,7 +656,7 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
                 this.commit_insert_menu(cx)
             }))
-            .child(shell::regions(self, window, cx))
+            .child(fullscreen::content(self, window, cx))
             .into_any_element();
         // The once-per-frame hover tick, at the tail so it runs after every
         // row above has read its blend. Without it a hover wash is evaluated

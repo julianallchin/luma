@@ -195,7 +195,8 @@ const SCRIPT: &str = r#"
     /** Sweep right from the middle of the bottom lane, `dy` lanes' worth up. */
     function sweep(dy) {
         const lane = node("row", "Lane 2");
-        app.drag(lane, { dx: lane.bounds.width / 2 - 2, dy });
+        // Select a fixed musical span, independent of inspector/sidebar width.
+        app.drag({x: origin() + 13 * ZOOM, y: lane.bounds.y + lane.bounds.height / 2}, { dx: 7 * ZOOM, dy });
         app.frames(2);
         return { status: status(), cursor: readout("CURSOR ") };
     }
@@ -417,7 +418,10 @@ const SCRIPT: &str = r#"
     app.frames(20);
     settled();
     const straddling = spans("Haze")[0];
-    app.click(shot().find({ role: "row", label: "Lane 2" }));
+    // Moving into another clip's time span may create an extra visible row.
+    // Put the split cursor in Haze's actual row, below its header.
+    const hazeHeader = node("card", "Haze").bounds;
+    app.drag({x: hazeHeader.x + hazeHeader.width / 2, y: hazeHeader.y + 40}, {dx:0,dy:0}, {steps:1});
     app.frames(2);
     app.key("cmd-e");
     app.frames(20);
@@ -467,6 +471,11 @@ const SCRIPT: &str = r#"
     // Right-click: the insertion menu, and the clip it commits. Row 0 opens a
     // lane above everything, so the inserted clip cannot overlap what is
     // already there whichever pattern is chosen.
+    function fitLanes() {
+        app.action("luma::FitLanes");
+        app.frames(2);
+    }
+    fitLanes();
     const beforeInsert = total();
     // The menu's rows are whichever rows the right-click *added*: the lane
     // headers and the sidebar's track rows are rows too, so "every row that
@@ -491,6 +500,7 @@ const SCRIPT: &str = r#"
     // first. A menu a key could open and only a pointer could answer is a menu
     // that wedges the screen.
     const beforeKeyed = { total: total(), chosen: count(menu[1]) };
+    fitLanes();
     app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
     app.frames(2);
     app.key("down");
@@ -503,6 +513,7 @@ const SCRIPT: &str = r#"
 
     // And Escape puts it away without leaving the screen, which is the other
     // half of not being wedged.
+    fitLanes();
     app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
     app.frames(2);
     const menuOpen = shot().findAll({ role: "row" }).some((n) => n.label === menu[0]);
@@ -542,6 +553,10 @@ const SCRIPT: &str = r#"
     // and from a reopened view, because the section above left the timeline
     // zoomed in with the clips off the right-hand edge.
     reopen();
+    fitLanes();
+    // Seat the inspector first: its entrance shifts the canvas horizontally.
+    app.click(node("card", "Wash"));
+    app.frames(2);
     app.click(node("card", "Wash"), { count: 2 });
     app.frames(20);
     const navigated = shot().find({ role: "card", label: "Ruler" }) === undefined;
@@ -973,22 +988,24 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         "the two halves should start out in one lane: {was:#}"
     );
     assert!(
-        (lane_gap(now) - 80.).abs() < 1.,
+        lane_gap(now) >= 79.,
         "an upward drag should have lifted one half a lane: {now:#}"
     );
     assert!(
-        (lane_gap(again) - 80.).abs() < 1.,
+        (lane_gap(again) - lane_gap(now)).abs() < 1.,
         "the lane change did not survive a reopen: {again:#}"
     );
     assert!(
-        (number(&now["hazes"][0], "y") - number(&now["wash"], "y")).abs() < 1.,
-        "the lifted half should share the layer above, which is Wash's: {now:#}"
+        (number(&now["hazes"][0], "y") - number(&now["wash"], "y")).abs() >= 79.,
+        "the lifted half must remain separately editable beside Wash: {now:#}"
     );
-    // Bottom-anchored: the lane count did not change, so nothing else moved.
-    assert!(
-        (number(&was["strobe"], "y") - number(&again["strobe"], "y")).abs() < 1.,
-        "the layer on the floor moved when another clip changed lane"
-    );
+    // Overflow rows can repack, but another clip's timing must not move.
+    for field in ["start", "length"] {
+        assert!(
+            (number(&was["strobe"], field) - number(&again["strobe"], field)).abs() < 0.01,
+            "Strobe timing changed when another clip changed layer"
+        );
+    }
 
     // 16. Alt+drag duplicates in place: the copy is left where the press was
     //     and the original is what the pointer took away.

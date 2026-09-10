@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**234 commands** across **35 domains** · **18 events**
+**233 commands** across **35 domains** · **18 events**
 
 ## Domains
 
@@ -31,7 +31,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `fixtures` | 16 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 14 | `backend/src/dispatch/handlers/groups.rs` |
-| `host_audio` | 10 | `backend/src/dispatch/handlers/host_audio.rs` |
+| `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `node_graph` | 3 | `backend/src/dispatch/handlers/node_graph.rs` |
@@ -49,7 +49,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 14 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 2 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **234** | |
+| **total** | **233** | |
 
 ## Commands
 
@@ -245,15 +245,14 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `host_load_track` | `trackId: String` | `()` |
-| `host_load_segment` | `trackId: String`<br>`startTime: f32`<br>`endTime: f32` | `()` |
-| `host_play` | — | `()` |
-| `host_pause` | — | `()` |
-| `host_seek` | `seconds: f32` | `()` |
-| `host_set_loop` | `enabled: bool` | `()` |
-| `host_set_playback_range` | `startSeconds: f32`<br>`endSeconds: f32`<br>`looping: bool` | `()` |
-| `host_set_loop_region` | `startSeconds: Option<f32>`<br>`endSeconds: Option<f32>` | `()` |
-| `host_set_playback_rate` | `rate: f32` | `()` |
+| `host_load_track` | `trackId: String`<br>`session: u64` | `()` |
+| `host_load_segment` | `trackId: String`<br>`session: u64`<br>`startTime: f32`<br>`endTime: f32` | `()` |
+| `host_play` | `session: u64`<br>`seconds: f32` | `()` |
+| `host_pause` | `session: u64` | `()` |
+| `host_seek` | `session: u64`<br>`seconds: f32` | `()` |
+| `host_set_playback_range` | `session: u64`<br>`startSeconds: f32`<br>`endSeconds: f32`<br>`looping: bool` | `()` |
+| `host_set_loop_region` | `session: u64`<br>`startSeconds: Option<f32>`<br>`endSeconds: Option<f32>` | `()` |
+| `host_set_playback_rate` | `session: u64`<br>`rate: f32` | `()` |
 | `host_snapshot` | — | `HostAudioSnapshot` |
 
 ### `midi`

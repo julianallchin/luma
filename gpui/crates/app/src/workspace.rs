@@ -32,6 +32,7 @@
 use std::collections::HashMap;
 
 use crate::tabs::{Tabs, Target};
+use crate::Body;
 
 /// Whose tab strip is on screen.
 ///
@@ -85,6 +86,20 @@ impl<B> Default for ParkedTabs<B> {
 }
 
 impl<B> ParkedTabs<B> {
+    /// Document replies still belong to their editor while it is parked.
+    pub(crate) fn body_mut<'a>(
+        &'a mut self,
+        live: &'a mut Tabs<B>,
+        target: &Target,
+    ) -> Option<&'a mut B> {
+        if live.body(target).is_some() {
+            return live.body_mut(target);
+        }
+        self.parked
+            .values_mut()
+            .find_map(|tabs| tabs.body_mut(target))
+    }
+
     pub(crate) fn targets(&self, live: &Tabs<B>) -> Vec<Target> {
         live.iter()
             .chain(self.parked.values().flat_map(|tabs| tabs.iter()))
@@ -203,10 +218,23 @@ impl crate::Luma {
     /// `selected_track`, which is what it was already doing.
     pub(crate) fn sync_workspace_scope(&mut self, cx: &mut gpui::Context<Self>) {
         let scope = self.tab_scope();
+        if scope != self.parked.current {
+            self.park_track_audio(cx);
+        }
         if self.parked.focus(scope, &mut self.workspace) {
             // The swapped-in set has its own active tab, so the keyboard is
             // owed to a different element than the frame before.
             cx.notify();
+        }
+        let track = self
+            .workspace
+            .iter()
+            .find(|tab| matches!(tab.target, Target::TrackEditor { .. }))
+            .map(|tab| tab.target.clone());
+        if matches!(self.workspace.active_body(), Some(Body::Graph(_))) {
+            self.park_track_audio(cx);
+        } else if let Some(target) = track {
+            self.activate_track_audio(&target, cx);
         }
         self.refresh_agent_tabs(cx);
     }
@@ -264,6 +292,20 @@ mod tests {
 
     fn targets(tabs: &Tabs<&str>) -> Vec<Target> {
         tabs.iter().map(|tab| tab.target.clone()).collect()
+    }
+
+    #[test]
+    fn a_late_document_read_updates_its_parked_editor_only() {
+        let mut parked = ParkedTabs::default();
+        let mut live = Tabs::default();
+        parked.focus(Some(track_scope("a", "room")), &mut live);
+        live.open(editor("a", "room"), || "loading");
+        parked.focus(Some(track_scope("b", "room")), &mut live);
+        live.open(editor("b", "room"), || "song b");
+        *parked.body_mut(&mut live, &editor("a", "room")).unwrap() = "loaded a";
+        assert_eq!(live.active_body(), Some(&"song b"));
+        parked.focus(Some(track_scope("a", "room")), &mut live);
+        assert_eq!(live.active_body(), Some(&"loaded a"));
     }
 
     #[test]

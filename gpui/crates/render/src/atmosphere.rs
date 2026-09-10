@@ -21,9 +21,12 @@
 //! disc and the shadows a rig casts can never disagree about how bright the day
 //! is.
 //!
-//! Not implemented: the aerial-perspective volume. Distant geometry is left to
-//! the composite's existing horizon dissolve. See the module note at the end of
-//! [`SkyFrame`] for what adding it would take.
+//! Finite camera-to-surface paths are integrated in an angular/distance volume
+//! (`aerial`). Surfaces read its RGB transmittance and scattered radiance before
+//! blending. The volume is cached by sun and camera altitude.
+
+mod aerial;
+pub(crate) use aerial::{surface_prelude, Textures as AerialTextures, MAX_DISTANCE_M};
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -194,13 +197,8 @@ fn transmittance(r: f32, mu: f32) -> Vec3 {
 /// rather than from an authored `sun`, so the disc in the picture, the colour
 /// of the horizon and the direction of every cast shadow are one fact.
 ///
-/// # Aerial perspective
-/// Not modelled. Adding it is Hillaire §5.2: a 32x32x32 froxel volume holding
-/// in-scattered radiance and transmittance out to a few kilometres, filled by
-/// one compute pass per frame (it depends on the camera, unlike everything
-/// here), then sampled in the composite by the same view ray it already
-/// reconstructs — replacing the `horizon_dissolve` mix with a physical one. The
-/// volume is the only piece of state a moving camera would invalidate.
+/// Aerial perspective uses the same atmosphere and solar irradiance for finite
+/// paths. It applies after surface lighting, leaving the material model intact.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkyFrame {
     /// Unit world direction from the ground toward the sun.
@@ -295,6 +293,7 @@ impl SkyUniform {
 /// The scene-independent half: the two static tables, the pipelines that fill
 /// the volatile one, and the layout the composite binds group 2 with.
 pub(crate) struct AtmospherePipelines {
+    aerial: aerial::Pipelines,
     transmittance: wgpu::TextureView,
     multiscatter: wgpu::TextureView,
     skyview_layout: wgpu::BindGroupLayout,
@@ -322,6 +321,7 @@ impl AtmospherePipelines {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let aerial = aerial::Pipelines::new(device, queue, &sampler);
         let transmittance = transmittance_table(device, queue);
         let prelude = prelude();
         let common = include_str!("shaders/atmosphere_common.wgsl");
@@ -412,6 +412,7 @@ impl AtmospherePipelines {
             ],
         });
         Self {
+            aerial,
             transmittance,
             multiscatter,
             skyview_layout,
@@ -433,6 +434,7 @@ impl AtmospherePipelines {
 #[derive(Default)]
 pub(crate) struct AtmosphereCache {
     resident: Option<Resident>,
+    aerial: aerial::Cache,
 }
 
 struct Resident {
@@ -442,6 +444,18 @@ struct Resident {
 }
 
 impl AtmosphereCache {
+    pub(crate) fn prepare_aerial(
+        &mut self,
+        pipelines: &AtmospherePipelines,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        sky: Option<&SkyFrame>,
+        height_m: f32,
+    ) -> AerialTextures {
+        self.aerial
+            .prepare(pipelines, device, encoder, sky, height_m)
+    }
+
     /// Bring the sky-view table and the environment probe up to date with
     /// `sky`, returning the composite's group-2 bindings and, when there is a
     /// sky, the irradiance and specular cubes the scene pass should use.

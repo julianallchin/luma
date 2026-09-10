@@ -24,10 +24,7 @@ pub type Definitions = std::collections::BTreeMap<String, Definition>;
 /// Shader cap shared by fixture surface lighting and volumetric transport.
 pub const MAX_FIXTURE_CONES: usize = 512;
 
-/// Edge length of the ground quad, metres. Its rim has to fall past the
-/// composite's horizon dissolve — that is what makes the floor read as
-/// unbounded — while its corners stay inside the camera's far plane, or the
-/// rim is merely replaced by a far-plane arc.
+/// Indoor ground extent, beyond the artistic distance dissolve.
 const FLOOR_EXTENT_M: f32 = 2000.0;
 
 /// One uploadable triangle list.
@@ -256,7 +253,7 @@ pub struct Frame {
     pub haze_density: f32,
     /// Authored procedural density and drift.
     pub haze_appearance: crate::scene_desc::HazeAppearance,
-    /// Finite world-space support, including outdoor venue haze.
+    /// Physical support for indoor haze. Outdoors the density field is global.
     pub haze_bounds: luma_scene::Aabb,
     /// Equiangular samples per beam.
     pub haze_steps: u32,
@@ -698,15 +695,16 @@ pub fn build_with(
     // `to_world · (whatever three.js composed)`, so mesh data and local offsets
     // need no per-vertex conversion.
     //
-    // The quad reads as unbounded because the composite dissolves surfaces into
-    // the background between `HORIZON_NEAR_M` and `HORIZON_FAR_M`
-    // (`composite.wgsl`); the half-extent only has to outrun that band by
-    // enough that no rim survives a grazing view. It is *not* the room's
-    // extent — nothing measures the venue from it.
+    // Outdoors the atmosphere attenuates geometry over kilometres, so the
+    // floor must reach the outdoor clipping distance. Indoors its rim stays
+    // beyond the artistic horizon dissolve. Neither extent measures the venue.
     let to_world = Mat4::from_mat3(r);
-    let floor = bank.insert("::floor".into(), || {
-        plane_mesh(FLOOR_EXTENT_M, FLOOR_EXTENT_M)
-    });
+    let (floor_key, floor_extent) = if sky.is_some() {
+        ("::outdoor-floor", crate::atmosphere::MAX_DISTANCE_M * 4.0)
+    } else {
+        ("::floor", FLOOR_EXTENT_M)
+    };
+    let floor = bank.insert(floor_key.into(), || plane_mesh(floor_extent, floor_extent));
     if scene.render.show_floor {
         draws.push(Draw {
             mesh: floor,
@@ -718,7 +716,7 @@ pub fn build_with(
                 // sky bounces sunlight off. Spelling it twice would let a
                 // venue's near floor and the same ground at the horizon
                 // disagree, which is visible as a seam exactly where the
-                // composite dissolves one into the other.
+                // distance fade dissolves one into the other.
                 base_color: sky.map_or_else(
                     || hex_srgb(0x03_03_03),
                     |sky| Vec3::splat(sky.ground_albedo),

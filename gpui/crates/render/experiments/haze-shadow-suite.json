@@ -1,0 +1,75 @@
+{
+  "catalogue": "haze-shadow.json",
+  "width": 960,
+  "height": 640,
+  "cases": [
+    {
+      "id": "truss-shadow-oblique",
+      "scene": "truss-shadow",
+      "time": 1,
+      "eye": [
+        2,
+        5,
+        8
+      ],
+      "target": [
+        0,
+        -0.5,
+        7.17
+      ],
+      "fov": 50,
+      "purpose": "Truss shadow edges and shafts in haze"
+    },
+    {
+      "id": "truss-shadow-near",
+      "scene": "truss-shadow",
+      "time": 1,
+      "eye": [
+        0.7,
+        1,
+        7.5
+      ],
+      "target": [
+        0,
+        -2,
+        7.17
+      ],
+      "fov": 50,
+      "purpose": "Truss shadow edges and shafts in haze"
+    },
+    {
+      "id": "truss-shadow-side",
+      "scene": "truss-shadow",
+      "time": 1,
+      "eye": [
+        8,
+        3,
+        7.6
+      ],
+      "target": [
+        0,
+        3,
+        7.17
+      ],
+      "fov": 50,
+      "purpose": "Truss shadow edges and shafts in haze"
+    },
+    {
+      "id": "truss-shadow-along",
+      "scene": "truss-shadow",
+      "time": 1,
+      "eye": [
+        0.5,
+        9,
+        7.5
+      ],
+      "target": [
+        0,
+        -1,
+        7.17
+      ],
+      "fov": 50,
+      "purpose": "Truss shadow edges and shafts in haze"
+    }
+  ]
+}

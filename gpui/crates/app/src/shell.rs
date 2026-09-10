@@ -143,6 +143,7 @@ impl Body {
 #[derive(PartialEq, Eq, Clone)]
 pub(crate) enum FocusSlot {
     Overlay(&'static str),
+    VisualizerFullscreen,
     Tab(Target),
     Shell,
 }
@@ -152,6 +153,9 @@ impl Luma {
     /// else the active tab, else the shell root (whose dispatch path still
     /// reaches every ROOT-scoped binding).
     pub(crate) fn focus_slot(&self) -> FocusSlot {
+        if self.fullscreen_presented() {
+            return FocusSlot::VisualizerFullscreen;
+        }
         // `as_open`: a dialog that is leaving has already given the keyboard
         // back, so focus returns to the opener on the click rather than after
         // the animation.
@@ -189,7 +193,14 @@ impl Luma {
         if entering_overlay {
             self.overlay_return_focus = window.focused(cx).map(|focus| focus.downgrade());
         }
+        let leaving_fullscreen = matches!(self.focused_slot, FocusSlot::VisualizerFullscreen);
         self.focused_slot = slot;
+        if matches!(self.focused_slot, FocusSlot::VisualizerFullscreen)
+            || (leaving_fullscreen && self.visualizer.is_some())
+        {
+            window.focus(&self.visualizer_focus, cx);
+            return;
+        }
         if matches!(self.focused_slot, FocusSlot::Overlay(_)) {
             window.focus(&self.dialog_focus, cx);
             return;
@@ -223,12 +234,16 @@ impl Luma {
     ///
     /// A modal is the strict case and gets the strict test — the keyboard
     /// belongs *inside the card*, since that is the whole claim of a focus
-    /// trap. Everywhere else the shell is deliberately permissive: a click into
+    /// trap. Fullscreen likewise keeps focus inside the visualizer. Elsewhere
+    /// the shell is deliberately permissive: a click into
     /// the sidebar while a tab is up is focus the user moved on purpose, and
     /// asking whether the tab still contains it would snatch it back.
     fn keyboard_is_seated(&self, window: &Window, cx: &App) -> bool {
         if matches!(self.focused_slot, FocusSlot::Overlay(_)) {
             return self.dialog_focus.contains_focused(window, cx);
+        }
+        if matches!(self.focused_slot, FocusSlot::VisualizerFullscreen) {
+            return self.visualizer_focus.contains_focused(window, cx);
         }
         window.focused(cx).is_some()
     }
@@ -261,20 +276,11 @@ impl Luma {
     /// *close* — switching tabs never comes through this path.
     pub(crate) fn teardown(&mut self, body: Body, cx: &mut Context<Self>) {
         match body {
-            Body::TrackEditor(mut state) => {
-                // The loop belongs to the transport, which outlives the tab: a
-                // region left armed would wrap the *next* track at times that
-                // meant something on this one. Same for playback itself.
-                let looping = state.take_loop_region();
-                let pause = self.library.pause();
-                cx.background_spawn(async move {
-                    pause.await.ok();
-                })
-                .detach();
-                if looping {
-                    let clear = self.library.set_loop_region(None);
+            Body::TrackEditor(state) => {
+                if let Some(session) = state.playback_session() {
+                    let pause = self.library.pause(session);
                     cx.background_spawn(async move {
-                        clear.await.ok();
+                        pause.await.ok();
                     })
                     .detach();
                 }
@@ -943,7 +949,7 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     }
     let inspector = match app.workspace.active_body_mut() {
         Some(Body::TrackEditor(editor)) => {
-            Some(track_editor::inspector(editor, &cx.entity(), window, cx))
+            track_editor::inspector(editor, &cx.entity(), window, cx)
         }
         _ => None,
     };
@@ -963,23 +969,41 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     // its own state and reads the library synchronously, and the two fields
     // are disjoint.
     let stage_view = app.stage_view();
-    let venue_tools = match app.workspace.active_body() {
-        Some(Body::Patch(page)) => Some(stage::controls(
+    let venue_tools = match (app.workspace.active_body(), stage_view.as_ref()) {
+        (Some(Body::Patch(page)), Some(stage_view)) => Some(stage::controls(
             &page.stage,
             &cx.entity(),
-            stage_view.as_ref(),
+            Some(stage_view),
             window,
         )),
         _ => None,
     };
+    let fullscreen_slot = app
+        .fullscreen
+        .as_ref()
+        .filter(|_| app.fullscreen_presented())
+        .map(|state| state.slot.clone());
+    let focus = app.visualizer_focus.clone();
     let Luma {
         visualizer,
         library,
         ..
     } = app;
-    let stage = visualizer.as_mut().map(|state| {
-        visualizer::visualizer(state, &cx.entity(), library, window, venue_tools).into_any_element()
-    });
+    let stage = if let Some(slot) = fullscreen_slot {
+        Some(crate::fullscreen::placeholder(slot))
+    } else {
+        visualizer.as_mut().map(|state| {
+            visualizer::visualizer(
+                state,
+                &cx.entity(),
+                library,
+                window,
+                visualizer::Chrome::Embedded { venue_tools },
+                &focus,
+            )
+            .into_any_element()
+        })
+    };
     div()
         .flex_1()
         .min_h_0()
