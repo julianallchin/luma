@@ -58,37 +58,13 @@ impl Widget {
     }
 }
 
-fn resolved_value(
-    parent: &p::Definition,
-    spec: &p::Input,
-    binding: Option<&p::Binding>,
-) -> Option<p::Value> {
+fn resolved_value(spec: &p::Input, binding: Option<&p::Binding>) -> Option<p::Value> {
     match binding {
         Some(p::Binding::Value { value }) => Some(value.clone()),
-        Some(p::Binding::Input { input }) => parent.inputs.get(input)?.default.clone(),
-        Some(p::Binding::Connection { .. }) => None,
+        Some(p::Binding::Input { .. } | p::Binding::Connection { .. }) => None,
         None => spec.default.clone(),
     }
 }
-fn value_edit(
-    node: &str,
-    input: &str,
-    binding: &Option<p::Binding>,
-    value: p::Value,
-) -> p::GraphEdit {
-    match binding {
-        Some(p::Binding::Input { input }) => p::GraphEdit::Default {
-            key: input.clone(),
-            value,
-        },
-        _ => p::GraphEdit::Bind {
-            node: node.into(),
-            input: input.into(),
-            binding: Some(value.into()),
-        },
-    }
-}
-
 pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     let Some(definition) = editor.edited_definition() else {
         return;
@@ -143,7 +119,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                     input.value_type != cell.spec.value_type
                         || !cell
                             .widget
-                            .accepts(resolved_value(parent, input, bindings.get(&cell.id)).as_ref())
+                            .accepts(resolved_value(input, bindings.get(&cell.id)).as_ref())
                 }) || matches!(cell.binding, Some(p::Binding::Connection { .. }))
                     != matches!(bindings.get(&cell.id), Some(p::Binding::Connection { .. }))
             })
@@ -157,7 +133,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         for cell in &mut source.controls.as_mut().unwrap().cells {
             cell.spec = specs[&cell.id].clone();
             cell.binding = bindings.get(&cell.id).cloned();
-            let value = resolved_value(parent, &cell.spec, cell.binding.as_ref());
+            let value = resolved_value(&cell.spec, cell.binding.as_ref());
             if value != cell.value {
                 match (&cell.widget, &value) {
                     (Widget::Seed(entity), Some(p::Value::Seed(seed))) => {
@@ -220,7 +196,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
     let mut cells = Vec::new();
     for (id, spec) in &specs {
         let binding = bindings.get(id).cloned();
-        let value = resolved_value(parent, spec, binding.as_ref());
+        let value = resolved_value(spec, binding.as_ref());
         let node_id = node_id.clone();
         let input = id.clone();
         let target = target.clone();
@@ -525,12 +501,26 @@ impl Luma {
         else {
             return;
         };
-        let binding = graph
-            .nodes
-            .get(node)
-            .and_then(|node| node.inputs.get(input))
-            .cloned();
-        self.apply_score_graph_edit(target, value_edit(node, input, &binding, value), cx);
+        let Some(child) = graph.nodes.get(node) else {
+            return;
+        };
+        // A widget can lose focus after its port is connected. Such a late
+        // edit must neither replace the wire nor change its source's default.
+        if matches!(
+            child.inputs.get(input),
+            Some(p::Binding::Input { .. } | p::Binding::Connection { .. })
+        ) {
+            return;
+        }
+        self.apply_score_graph_edit(
+            target,
+            p::GraphEdit::Bind {
+                node: node.into(),
+                input: input.into(),
+                binding: Some(value.into()),
+            },
+            cx,
+        );
     }
 }
 
@@ -739,12 +729,9 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                     },
                 ))
             }
+            Widget::Connection if matches!(cell.binding, Some(p::Binding::Input { .. })) => row,
             Widget::Connection => row.child(luma_ui::silkscreen(match &cell.binding {
                 Some(p::Binding::Connection { node, output }) => format!("From {node}.{output}"),
-                Some(p::Binding::Input { input }) => format!(
-                    "Input · {}",
-                    source.library.definitions[&controls.definition].inputs[input].name
-                ),
                 _ if matches!(cell.value, Some(p::Value::Events(p::Events::Automatic))) => {
                     "Uses Repeat · connect a trigger to replace it".into()
                 }
