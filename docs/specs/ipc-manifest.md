@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**232 commands** across **35 domains** · **18 events**
+**234 commands** across **35 domains** · **18 events**
 
 ## Domains
 
@@ -31,11 +31,11 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `fixtures` | 16 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 14 | `backend/src/dispatch/handlers/groups.rs` |
-| `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
+| `host_audio` | 10 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `node_graph` | 3 | `backend/src/dispatch/handlers/node_graph.rs` |
-| `patterns` | 11 | `backend/src/dispatch/handlers/patterns.rs` |
+| `patterns` | 12 | `backend/src/dispatch/handlers/patterns.rs` |
 | `perform` | 9 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
@@ -49,7 +49,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 14 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 2 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **232** | |
+| **total** | **234** | |
 
 ## Commands
 
@@ -251,6 +251,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `host_pause` | — | `()` |
 | `host_seek` | `seconds: f32` | `()` |
 | `host_set_loop` | `enabled: bool` | `()` |
+| `host_set_playback_range` | `startSeconds: f32`<br>`endSeconds: f32`<br>`looping: bool` | `()` |
 | `host_set_loop_region` | `startSeconds: Option<f32>`<br>`endSeconds: Option<f32>` | `()` |
 | `host_set_playback_rate` | `rate: f32` | `()` |
 | `host_snapshot` | — | `HostAudioSnapshot` |
@@ -309,6 +310,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `set_pattern_category` | `patternId: String`<br>`categoryName: Option<String>` | `()` |
 | `verify_pattern` | `id: String`<br>`verify: bool` | `PatternSummary` |
 | `get_pattern_graph_document` | `id: String`<br>`implementationId: Option<String>` | `GraphDocument` |
+| `get_pattern_score_template` | `id: String`<br>`venueId: String` | `luma_patterns::Score` |
 | `get_pattern_args` | `id: String`<br>`venueId: Option<String>`<br>`implementationId: Option<String>` | `Vec<PatternArgDef>` |
 | `save_pattern_graph_document` | `id: String`<br>`implementationId: String`<br>`operationId: String`<br>`baseRevision: String`<br>`graph: Graph` | `GraphEditResult` |
 

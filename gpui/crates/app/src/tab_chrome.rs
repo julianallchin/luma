@@ -448,7 +448,7 @@ impl NewTabChoice {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Patch => "Venue",
-            Self::Pattern => "Pattern editor",
+            Self::Pattern => "Patterns",
             Self::Track => "Track editor",
         }
     }
@@ -458,7 +458,6 @@ impl NewTabChoice {
 pub(crate) struct NewTabPrerequisites {
     pub(crate) venue: Option<String>,
     pub(crate) track: Option<String>,
-    pub(crate) pattern: Option<String>,
     /// The track a graph tab would be evaluated against, resolved from the
     /// tab strip (`Luma::graph_track_context`). The graph editor cannot open
     /// without one — §6/§9 ruling 1 of the graph-editor design doc.
@@ -483,14 +482,8 @@ pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvaila
             NewTabChoice::Patch if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
-            // The track gate outranks the pattern gate: a pattern can be
-            // picked while trackless, but no pick makes the editor openable
-            // without a track to evaluate against.
             NewTabChoice::Pattern if prerequisites.graph_track.is_none() => {
                 Some(crate::graph::NO_TRACK_REASON)
-            }
-            NewTabChoice::Pattern if prerequisites.pattern.is_none() => {
-                Some("Select a pattern first")
             }
             _ => None,
         };
@@ -509,10 +502,6 @@ impl Luma {
                 .as_ref()
                 .map(|state| state.venue_id().to_string()),
             track: self.selected_track.clone(),
-            pattern: self
-                .selected_pattern
-                .as_ref()
-                .map(|pattern| pattern.id.clone()),
             graph_track: self.graph_track_context().map(|context| context.track),
         }
     }
@@ -552,6 +541,7 @@ impl Luma {
     /// Logical teardown, shared by every close gesture.
     ///
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
+        self.close_score_graph_tabs(target, None, cx);
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
             if self.workspace.is_empty() {
@@ -571,11 +561,7 @@ impl Luma {
         self.tab_chrome.menu_open = false;
         match choice {
             NewTabChoice::Patch => self.open_patch(cx),
-            NewTabChoice::Pattern => {
-                if let Some(pattern) = self.selected_pattern.clone() {
-                    self.open_pattern(pattern, cx);
-                }
-            }
+            NewTabChoice::Pattern => self.show_patterns(cx),
             NewTabChoice::Track => {
                 if let Some(track) = self.selected_track.clone() {
                     self.open_track(&track, cx);
@@ -591,8 +577,9 @@ mod tests {
     use super::*;
 
     fn target(name: &str) -> Target {
-        Target::Graph {
-            pattern: name.into(),
+        Target::ScoreGraph {
+            score: "score".into(),
+            graph: name.into(),
         }
     }
 
@@ -778,22 +765,17 @@ mod tests {
             Some("Select a track first")
         );
 
-        // The track gate outranks the pattern gate; with a track editor open
-        // the pattern gate is what remains.
+        // An open track supplies the context for browsing pattern templates.
         let track_open = NewTabPrerequisites {
             venue: Some("v".into()),
             graph_track: Some("t".into()),
             ..Default::default()
         };
-        assert_eq!(
-            reason(&track_open, NewTabChoice::Pattern),
-            Some("Select a pattern first")
-        );
+        assert_eq!(reason(&track_open, NewTabChoice::Pattern), None);
 
         let all = menu_choices(&NewTabPrerequisites {
             venue: Some("v".into()),
             track: Some("t".into()),
-            pattern: Some("p".into()),
             graph_track: Some("t".into()),
         });
         assert!(all.into_iter().all(ChoiceAvailability::enabled));

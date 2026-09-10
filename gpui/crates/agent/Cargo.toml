@@ -48,6 +48,7 @@ required-features = ["app"]
 [dev-dependencies]
 # `scripted-model` is what lets a test drive a turn without a network.
 luma = { path = "../../../backend", features = ["scripted-model"] }
+luma-patterns = { path = "../../../backend/crates/patterns" }
 luma-chat = { path = "../chat" }
 # The pixel suite projects world points through the camera the app reports, so
 # it needs the same camera and the same gizmo scale the renderer uses.

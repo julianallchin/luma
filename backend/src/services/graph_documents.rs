@@ -490,7 +490,7 @@ pub async fn load_visible_graph_document(
     }
 }
 
-async fn load_visible_graph_document_for_connection(
+pub(crate) async fn load_visible_graph_document_for_connection(
     connection: &mut SqliteConnection,
     pattern_id: &str,
     venue_id: Option<&str>,
@@ -922,6 +922,16 @@ pub fn validate_graph_structure(graph: &Graph) -> Result<(), Vec<GraphValidation
                 format!("{path}.fromNode"),
                 format!("unknown node {}", edge.from_node),
             );
+        } else if edge.from_node == PATTERN_ARGS_NODE_ID
+            && !graph.args.iter().any(|arg| arg.id == edge.from_port)
+        {
+            // Exposed keys belong to the stored graph, so this invariant does
+            // not depend on whether its node vocabulary is still installed.
+            issue(
+                &mut issues,
+                format!("{path}.fromPort"),
+                format!("unknown output {}.{}", edge.from_node, edge.from_port),
+            );
         }
         if !nodes.contains_key(edge.to_node.as_str()) {
             issue(
@@ -1196,7 +1206,10 @@ async fn load_document(
             format!("stored pattern graph is corrupt: {error}"),
         )
     })?;
-    let graph = canonicalize_graph(&graph)?;
+    // Stored graphs can reference a vocabulary that is no longer offered for
+    // authoring. Reads must remain possible for migration and history; writes
+    // still validate against the current catalog in apply_graph_edit_in_transaction.
+    let graph = canonicalize_graph_structure(&graph)?;
     let revision = graph_revision(&graph)?;
     Ok(GraphDocument {
         implementation_id: row.id,
@@ -1321,7 +1334,7 @@ fn validate_params(
         .type_id
         .strip_prefix(crate::node_graph::lighting::PREFIX)
     {
-        let library = luma_patterns::standard_library();
+        let library = luma_patterns::migration::v2_library();
         if let Some(typed) = library.definitions.get(id) {
             for (key, value) in &node.params {
                 let path = format!("{node_path}.params.{key}");
@@ -1377,6 +1390,9 @@ fn validate_params(
 fn validate_arg_default(issues: &mut Vec<GraphValidationIssue>, path: &str, arg: &PatternArgDef) {
     let value = &arg.default_value;
     let valid = match arg.arg_type {
+        PatternArgType::Seed => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::Seed, value).is_ok()
+        }
         PatternArgType::Scalar | PatternArgType::Beats | PatternArgType::Position => {
             value.as_f64().is_some_and(f64::is_finite)
         }
@@ -1480,18 +1496,20 @@ fn output_port_type(
 ) -> Option<PortType> {
     if node.id == PATTERN_ARGS_NODE_ID && node.type_id == PATTERN_ARGS_NODE_ID {
         return args.get(port).map(|arg| match arg.arg_type {
+            PatternArgType::Seed => PortType::Seed,
             PatternArgType::AudioSource => PortType::Audio,
             PatternArgType::Drum => PortType::Events,
-            PatternArgType::Beats => PortType::Beats,
-            PatternArgType::Proportion => PortType::Proportion,
-            PatternArgType::Position => PortType::Position,
             PatternArgType::Boolean => PortType::Boolean,
             PatternArgType::Mapping => PortType::Mapping,
             PatternArgType::Boundary => PortType::Boundary,
             PatternArgType::Envelope => PortType::Envelope,
             PatternArgType::Selection => PortType::Selection,
             PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
-            PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,
+            PatternArgType::Color
+            | PatternArgType::Scalar
+            | PatternArgType::Beats
+            | PatternArgType::Proportion
+            | PatternArgType::Position => PortType::Signal,
         });
     }
     definitions
@@ -1804,12 +1822,19 @@ mod tests {
             position_x: None,
             position_y: None,
         };
-        let graph = Graph {
+        let mut graph = Graph {
             nodes: vec![args_node, node("view", "view_signal")],
             edges: vec![edge(PATTERN_ARGS_NODE_ID, "amount", "view", "in")],
             args: vec![argument],
         };
         assert!(validate_graph(&graph).is_ok());
+        graph.nodes[1].type_id = "retired_node".into();
+        assert!(validate_graph_structure(&graph).is_ok());
+        graph.edges[0].from_port = "removed_arg".into();
+        let issues = validate_graph_structure(&graph).unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "edges[0].fromPort");
+        assert!(issues[0].message.contains("pattern_args.removed_arg"));
     }
 
     async fn test_pool() -> SqlitePool {

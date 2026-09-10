@@ -32,9 +32,11 @@ pub mod envelope;
 pub mod expression;
 pub mod gradient;
 pub mod gradient_editor;
+pub mod mapping;
 pub mod number;
 pub mod palette;
 pub mod select;
+pub mod signal;
 
 use std::cell::Cell;
 use std::rc::Rc;

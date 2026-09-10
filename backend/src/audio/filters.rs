@@ -100,6 +100,37 @@ pub fn highpass_filter(samples: &[f32], cutoff_hz: f32, sample_rate: f32) -> Vec
     output
 }
 
+/// Prepare a complete immutable source before graph sampling. Every chain starts
+/// at the source's absolute origin; no filter state crosses playback or seeks.
+pub(crate) fn apply_chain(
+    samples: &[f32],
+    sample_rate: u32,
+    source: &luma_patterns::AudioInput,
+) -> Result<Vec<f32>, String> {
+    use luma_patterns::AudioFilter;
+    source.validate().map_err(|e| e.to_string())?;
+    if sample_rate <= 2 {
+        return Err("audio filters need a sample rate above 2 Hz".into());
+    }
+    let mut output = samples.to_vec();
+    for filter in source.filters() {
+        let coefficients = match filter {
+            AudioFilter::Lowpass { cutoff_hz } => {
+                BiquadCoeffs::lowpass(*cutoff_hz as f32, sample_rate as f32)
+            }
+            AudioFilter::Highpass { cutoff_hz } => {
+                BiquadCoeffs::highpass(*cutoff_hz as f32, sample_rate as f32)
+            }
+        }
+        .ok_or("could not prepare audio filter coefficients")?;
+        coefficients.apply_inplace(&mut output);
+    }
+    if output.iter().any(|v| !v.is_finite()) {
+        return Err("audio filter produced nonfinite samples".into());
+    }
+    Ok(output)
+}
+
 /// Pre-filtered 3-band audio (low, mid, high) for shared use across resolutions.
 pub struct FilteredBands {
     pub low: Vec<f32>,
@@ -155,4 +186,35 @@ pub fn filter_3band(samples: &[f32], sample_rate: f32) -> FilteredBands {
     );
 
     FilteredBands { low, mid, high }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use luma_patterns::{AudioFilter, AudioInput, AudioSource};
+
+    #[test]
+    fn prepared_filters_select_frequency_content_without_changing_the_source() {
+        let tone = |frequency: f32| {
+            (0..8000)
+                .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 8000.).sin())
+                .collect::<Vec<_>>()
+        };
+        let low = tone(100.);
+        let high = tone(2000.);
+        let power = |samples: &[f32]| samples[4000..].iter().map(|v| v * v).sum::<f32>() / 4000.;
+        for (filter, pass, stop) in [
+            (AudioFilter::Lowpass { cutoff_hz: 300. }, &low, &high),
+            (AudioFilter::Highpass { cutoff_hz: 1000. }, &high, &low),
+        ] {
+            let source = AudioInput::from(AudioSource::Mix).filtered(filter).unwrap();
+            let output = apply_chain(pass, 8000, &source).unwrap();
+            let rejected = apply_chain(stop, 8000, &source).unwrap();
+            assert!(power(&output) > 0.4);
+            assert!(power(&output) > power(&rejected) * 100.);
+            assert_eq!(output, apply_chain(pass, 8000, &source).unwrap());
+            assert!(apply_chain(pass, 0, &source).is_err());
+            assert!(apply_chain(&[f32::NAN], 8000, &source).is_err());
+        }
+    }
 }

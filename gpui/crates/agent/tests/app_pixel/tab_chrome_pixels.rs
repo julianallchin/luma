@@ -113,6 +113,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
+    .with_typed_patterns("chase")
     .with_rig()
     .with_motion()
     .with_motion_scale(10.0)
@@ -140,9 +141,8 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             const menuState = until("new tab menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
             const menu = menuState.find({ role: "card", label: "New tab menu" });
-            const menuRows = ["Patch", "Pattern editor", "Track editor"]
+            const menuRows = ["Venue", "Patterns", "Track editor"]
                 .map((label) => menuState.find({ role: "button", label }));
-            const reason = menuState.find({ role: "text", label: "Select a pattern first" });
             const menuAnimatedFull = app.screenshot().path;
             const menuAnimatedCrop = app.screenshot({ node: menu }).path;
             app.frames(2, { waitMs: 1700 });
@@ -159,8 +159,8 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }));
             app.click(app.snapshot().find({ role: "button", label: "new-tab" }));
             const universeMenu = until("the animated Universe menu choice", (s) =>
-                s.find({ role: "button", label: "Patch" }) ? s : undefined);
-            app.click(universeMenu.find({ role: "button", label: "Patch" }));
+                s.find({ role: "button", label: "Venue" }) ? s : undefined);
+            app.click(universeMenu.find({ role: "button", label: "Venue" }));
             until("the universe tab", (s) =>
                 s.find({ role: "card", label: "Test Venue Patch" }));
             app.frames(2, { waitMs: 1100 });
@@ -213,7 +213,6 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
                 menu: menu.bounds,
                 strip: menuState.find({ role: "card", label: "Tab strip" }).bounds,
                 menuRows: menuRows.map((row) => ({ bounds: row.bounds, enabled: row.enabled })),
-                reason: reason.bounds,
                 before, start, startCrop, mid, midCrop, after: app.screenshot().path,
                 close: close.bounds, stable: stable.bounds,
                 startExit, seamExit, midExit, seamResize,
@@ -228,10 +227,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
     );
 
     let menu = &out["menu"];
-    println!(
-        "menu bounds={} rows={} reason={}",
-        menu, out["menuRows"], out["reason"]
-    );
+    println!("menu bounds={} rows={}", menu, out["menuRows"]);
     assert!(
         number(menu, "width") >= 230.0 && number(menu, "height") >= 140.0,
         "menu wrapper bounds were {menu:#}; rows were {:#}",
@@ -241,8 +237,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         assert!(number(&row["bounds"], "width") > 200.0);
         assert!(number(&row["bounds"], "height") >= 38.0);
     }
-    assert_eq!(out["menuRows"][1]["enabled"], false);
-    assert!(number(&out["reason"], "width") > 0.0);
+    assert_eq!(out["menuRows"][1]["enabled"], true);
     assert!(number(&out["strip"], "x") >= 0.0);
     assert!(number(&out["strip"], "x") + number(&out["strip"], "width") <= 1280.0);
 
@@ -355,6 +350,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
+    .with_typed_patterns("chase")
     .with_rig()
     .window(420.0, 480.0)
     .open(Mode::Pixel);
@@ -368,8 +364,8 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
                 s.find({ role: "button", label: "new-tab" }) ? s : undefined);
             app.click(initialPlusState.find({ role: "button", label: "new-tab" }));
             const universeMenu = until("compact Universe choice", (s) =>
-                s.find({ role: "button", label: "Patch" }) ? s : undefined);
-            app.click(universeMenu.find({ role: "button", label: "Patch" }));
+                s.find({ role: "button", label: "Venue" }) ? s : undefined);
+            app.click(universeMenu.find({ role: "button", label: "Venue" }));
             until("compact Universe tab", (s) =>
                 s.find({ role: "button", label: "Test Venue" }) ? s : undefined);
             // With the sidebar still consuming 257px, the 420px shell has no
@@ -398,7 +394,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             app.click(compactPlus);
             const shot = until("compact menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
-            const rows = ["Patch", "Pattern editor", "Track editor"]
+            const rows = ["Venue", "Patterns", "Track editor"]
                 .map((label) => shot.find({ role: "button", label }));
             const labels = new Set([
                 "Aurora", "Strobe", "Test Venue", "Close Aurora", "Close Strobe",
@@ -465,7 +461,7 @@ fn empty_workspace_action_rows_are_visible() {
         until("empty workspace", s => s.find({ role: "card", label: "Empty panel" }) !== undefined);
         app.frames(4);
         ({ shot: app.screenshot().path,
-           rows: ["Venue", "Pattern editor", "Track editor"].map(label =>
+           rows: ["Venue", "Patterns", "Track editor"].map(label =>
              app.snapshot().find({ role: "button", label }).bounds) })
     "#,
         ),

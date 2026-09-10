@@ -1,4 +1,4 @@
-//! One pattern, one scripted turn, and the app opened on both.
+//! A score context and a scripted turn in the unified chat.
 //!
 //! # Why the model and the tool are scripted, and the database is real
 //!
@@ -30,30 +30,6 @@ use luma_lib::agent::model::scripted::ScriptedModel;
 use luma_lib::agent::model::{ModelEvent, StopReason, Usage};
 use luma_lib::agent::tools::{Tool, ToolContext, ToolRegistry};
 use serde_json::{json, Value};
-
-/// One pattern per test, plus the one the captures are taken over.
-///
-/// A conversation's identity is its scope, and a scope's subject is the
-/// pattern — so two tests sharing a pattern would share a thread, and the
-/// second would open onto the first's transcript. One pattern each is what
-/// makes each test's panel empty when it opens.
-pub const PATTERNS: [&str; 10] = [
-    "chat-turn",
-    "chat-context",
-    "chat-growth",
-    "chat-typing",
-    "chat-repoint",
-    "chat-new",
-    "chat-history",
-    "chat-engine",
-    "chat-subagent",
-    CAPTURED,
-];
-
-/// What the unattached panel promises, as the panel itself spells it.
-
-/// The pattern the reference captures are taken over.
-pub const CAPTURED: &str = "gauntlet-chat";
 
 /// How long the scripted tool takes to answer.
 ///
@@ -400,56 +376,6 @@ async fn seed(config_dir: &Path) {
     )
     .await
     .expect("failed to seed the score");
-    for (index, name) in PATTERNS.iter().enumerate() {
-        let created = luma_lib::dispatch::dispatch(
-            &services,
-            "create_pattern",
-            &json!({
-                "requestId": format!("7f1c2c60-0000-4000-8000-0000000003a{index}"),
-                "name": name,
-                "description": null,
-            }),
-        )
-        .await
-        .expect("failed to seed the pattern");
-        let id = created["id"].as_str().expect("a created pattern has an id");
-        if *name == CAPTURED {
-            seed_graph(&services, id).await;
-        }
-    }
-}
-
-/// Give the captured pattern a real graph, so the plate behind the panel is
-/// the editor doing its job rather than an empty canvas. The graph is the
-/// gauntlet's own `gradient` fixture — the same one the graph captures use, so
-/// the two sets of plates are of one library.
-async fn seed_graph(services: &luma_lib::dispatch::AppServices, pattern: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../harness/gauntlet/fixtures/gradient.json");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return; // no fixture checked out: the capture still works, emptier.
-    };
-    let fixture: Value = serde_json::from_slice(&bytes).expect("the fixture is not JSON");
-    let document = luma_lib::dispatch::dispatch(
-        services,
-        "get_pattern_graph_document",
-        &json!({ "id": pattern, "implementationId": null }),
-    )
-    .await
-    .expect("failed to read the pattern's graph document");
-    luma_lib::dispatch::dispatch(
-        services,
-        "save_pattern_graph_document",
-        &json!({
-            "id": pattern,
-            "implementationId": document["implementationId"],
-            "operationId": "7f1c2c60-0000-4000-8000-0000000003b0",
-            "baseRevision": document["revision"],
-            "graph": fixture["graph"],
-        }),
-    )
-    .await
-    .expect("failed to seed the pattern's graph");
 }
 
 /// The seeded library, made once per process.
@@ -548,7 +474,7 @@ pub fn composer() -> String {
     )
 }
 
-/// Open a pattern’s graph tab and explicitly create its chat. Leaves the chat
+/// Open a score and explicitly create a new conversation. Leaves the chat
 /// idle, which is where every capture and every assertion starts.
 ///
 /// Every step polls rather than counting frames: the library is behind a Tokio
@@ -561,15 +487,12 @@ pub fn composer() -> String {
 /// Waiting on the *composer* is the honest wait: an unattached centre has
 /// none, so a Send that can be pressed is proof the scope resolved and not
 /// merely that a region appeared.
-pub fn open_chat(pattern: &str) -> String {
+pub fn open_chat() -> String {
     format!(
         r#"
         {until}
         {venue}
-        // The graph editor is not openable without a track context (§6 of the
-        // graph-editor design doc), so the walk goes venue → track → pattern.
         nav.track("Aurora");
-        nav.pattern({pattern:?});
         nav.step("new conversation", "button", "New chat");
         until("the conversation", (s) => s.find({{role: "button", label: "New chat"}})?.enabled);
         until("the chat centre", (s) => {{

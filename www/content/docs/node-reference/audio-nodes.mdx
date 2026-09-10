@@ -78,111 +78,44 @@ None.
 
 ---
 
-## Lowpass Filter
+## Audio lowpass and highpass
 
-| Field | Value |
-|-------|-------|
-| **Type ID** | `lowpass_filter` |
-| **Category** | Audio Processing |
-| **Description** | IIR lowpass filter applied to audio signal. |
+`audio_lowpass` passes frequencies below its cutoff; `audio_highpass` passes
+frequencies above it. Both use second-order Butterworth filters.
 
 ### Inputs
 
-| Port | Type | Required |
-|------|------|----------|
-| `audio_in` | Audio | Yes |
+| Port | Type | Default |
+|------|------|---------|
+| `source` | Audio source | Mix |
+| `cutoff_hz` | Number (Hz) | 200 |
 
-### Outputs
+Both inputs are fixed for the clip. Choose a track or stem, or connect another
+filter's output. Cutoffs must be at least 1 Hz; preparation caps them just below
+the source's Nyquist frequency.
+
+### Output
 
 | Port | Type |
 |------|------|
-| `audio_out` | Audio |
+| `source` | Filtered audio source |
 
-### Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `cutoff_hz` | float | 200.0 | Cutoff frequency in Hz (clamped to [1, Nyquist]) |
-
-### Behavior
-
-- Preserves sample rate, crop info, and track metadata from the input.
-- Cutoff frequency is clamped to the valid range [1 Hz, Nyquist frequency].
+Connect the result to Audio spectrum or Frequency energy. Filter chains are
+prepared once from the source's absolute beginning, so overlapping clips and
+scrubbing use the same filtered audio. Filtering affects analysis; preview
+playback still plays the original track.
 
 ---
 
-## Highpass Filter
+## Envelope
 
-| Field | Value |
-|-------|-------|
-| **Type ID** | `highpass_filter` |
-| **Category** | Audio Processing |
-| **Description** | IIR highpass filter applied to audio signal. |
+Draw a curve with editable anchors and Bézier handles. The `envelope` node maps
+normalized `progress` through that `shape` and outputs a numeric `value`,
+preserving fixture, time and channel dimensions.
 
-### Inputs
+For an event-driven response, use Pulse with an Envelope curve. Connect a Beat
+Trigger or Drum Trigger, set travel duration independently, and draw the response.
+Each event starts its own curve; overlapping responses combine by Max. The
+response is zero after its duration ends.
 
-| Port | Type | Required |
-|------|------|----------|
-| `audio_in` | Audio | Yes |
-
-### Outputs
-
-| Port | Type |
-|------|------|
-| `audio_out` | Audio |
-
-### Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `cutoff_hz` | float | 200.0 | Cutoff frequency in Hz |
-
-### Behavior
-
-- Behaves identically to the lowpass filter in terms of metadata preservation, but passes frequencies above the cutoff.
-
----
-
-## Beat Envelope
-
-| Field | Value |
-|-------|-------|
-| **Type ID** | `beat_envelope` |
-| **Category** | Audio Processing |
-| **Description** | Generates ADSR envelopes triggered at beat positions. The core rhythmic driver for most patterns. |
-
-### Inputs
-
-| Port | Type | Required |
-|------|------|----------|
-| `grid` | BeatGrid | Yes |
-| `subdivision` | Signal | No (overrides the subdivision parameter if connected) |
-
-### Outputs
-
-| Port | Type |
-|------|------|
-| `out` | Signal (N=1, T=SIMULATION_RATE x duration, C=1) |
-
-### Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `subdivision` | float | 1.0 | Beat subdivision: 0.25=sixteenth, 0.5=eighth, 1=quarter, 2=half, 4=whole |
-| `only_downbeats` | bool | false | Only trigger on downbeats (bar starts) |
-| `offset` | float | 0.0 | Beat fraction offset |
-| `attack` | float | 0.1 | Attack phase weight |
-| `decay` | float | 0.3 | Decay phase weight |
-| `sustain` | float | 0.3 | Sustain phase weight |
-| `release` | float | 0.3 | Release phase weight |
-| `sustain_level` | float | 0.7 | Sustain floor (0-1) |
-| `attack_curve` | float | 0.0 | Attack shape: -1=snappy/instant, +1=slow swell |
-| `decay_curve` | float | 0.0 | Decay shape: -1=snappy, +1=slow |
-| `amplitude` | float | 1.0 | Output scale (0-1) |
-
-### Behavior
-
-- Weights (attack + decay + sustain + release) are normalized to the inter-beat duration.
-- Multiple overlapping pulses are summed, which can produce values greater than 1.0.
-- The `subdivision` input port, when connected, overrides the `subdivision` parameter.
-- Common subdivisions: 0.25 (sixteenth notes), 0.5 (eighth notes), 1.0 (quarter notes), 2.0 (half notes), 4.0 (whole notes).
+Saved stage-based envelope settings are imported as ordinary editable curves.

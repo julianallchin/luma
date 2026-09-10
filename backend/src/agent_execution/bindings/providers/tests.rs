@@ -1223,17 +1223,13 @@ fn evaluation(graph: &Graph, venue_id: &str, span: (f32, f32)) -> GraphEvaluatio
     );
     GraphEvaluation {
         plan: Arc::new(Plan {
-            ops: Vec::new(),
-            slots: Vec::new(),
-            slot_channels: Vec::new(),
-            n: 2,
+            program: None,
             primitive_ids: primitive_ids.clone(),
             outputs: Default::default(),
             ctx: ResidentContext {
                 span,
                 ..Default::default()
             },
-            prologue_baked: Vec::new(),
             views: Vec::new(),
         }),
         views,

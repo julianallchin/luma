@@ -1,58 +1,18 @@
-//! The graph-editor gauntlet: the GPUI half of the reference captures in
-//! `harness/gauntlet/`.
-//!
-//! `harness/gauntlet/shot-graph.mjs` renders the *web* pattern-graph canvas to
-//! `web-<pattern>-<view>.png`; this is the same four shots out of the native
-//! editor, written beside them as `gpui-<pattern>-<view>.png`, so the two
-//! stacks can be put next to each other. `style-spec.md` is the measured
-//! description of what those web shots contain and is the bar the GPUI canvas
-//! is held to.
-//!
-//! ```sh
-//! cargo test -p gpui-agent --features pixel --test gauntlet -- --ignored --nocapture
-//! ```
-//!
-//! `#[ignore]`d because it is a *generator*, not an assertion: it creates a GPU
-//! device, opens four windows the size of a graph, and overwrites files in the
-//! repository. Nothing here fails on a pixel change — a human (or a critic)
-//! compares the pairs.
-//!
-//! # Same graph, both stacks
-//!
-//! The fixtures under `harness/gauntlet/fixtures/` are the real saved graphs
-//! for `gradient` and `circle_pill_step`, with positions normalized once
-//! through the app's own `layoutGraph()` — see `extract-fixtures.ts` for why.
-//! Both stacks read *that* file rather than the developer's library, so the
-//! two pictures are provably of the same graph at the same coordinates. This
-//! test seeds them into a throwaway library through
-//! `save_pattern_graph_document`, because an authored graph document is the
-//! only thing the editor can open (and the only thing it could write back).
-//!
-//! # Framing
-//!
-//! Neither view is driven by a gesture: the harness can click and drag, but it
-//! cannot scroll, so a zoom cannot be typed in.
-//!
-//! - **whole** sizes the window so that the editor's own `fitView` lands at
-//!   ≈0.5 — the zoom React Flow's `minZoom` pins the web whole-graph shot to.
-//! - **closeup** sizes the window *past* the whole graph, so the same fit
-//!   clamps at 1:1, and then crops the frame to a 900 × 460 window placed
-//!   against a named card — the same region the web `closeup` viewport frames.
-//!
-//! Both are functions of the fixture and the window, so a rerun is the same
-//! picture.
+//! Capture migrated historical fixtures in the canonical score editor.
+//! The original graph JSON and web reference images remain unchanged evidence.
+//! These captures use score-owned copies, compact cards and real inspection;
+//! no synthetic signal store or obsolete editor is kept for screenshots.
+//! Run this ignored generator on a platform with a native pixel harness.
 
 #![cfg(all(feature = "app", feature = "pixel"))]
 
 use super::support::session;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{px, size, AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};
-use luma_lib::models::node_graph::Signal;
 use serde_json::{json, Value};
 
 /// The closeup crop, in logical pixels — the size of the web capture page's
@@ -89,7 +49,7 @@ const SHOTS: &[Shot] = &[
         window: (2200., 800.),
         // `closeup: { x: -240, y: -30 }` puts graph (240, 30) at the canvas
         // origin, and `Linear Ramp` is at (320, 206).
-        anchor: Some(("Linear Ramp", 80., 176.)),
+        anchor: Some(("Ramp", 80., 176.)),
     },
     Shot {
         pattern: "circle_pill_step",
@@ -104,7 +64,7 @@ const SHOTS: &[Shot] = &[
         window: (4400., 1200.),
         // `closeup: { x: -260, y: -255 }`, and the left-most `Math` is at
         // (320, 285).
-        anchor: Some(("Math", 60., 30.)),
+        anchor: Some(("Circular distance", 60., 30.)),
     },
 ];
 
@@ -153,6 +113,12 @@ async fn seed(config_dir: &Path) {
     .execute(&db.0)
     .await
     .expect("failed to seed the track");
+    let beats: Vec<f64> = (0..16).map(|i| i as f64 * 0.5).collect();
+    let downbeats: Vec<f64> = beats.iter().copied().step_by(4).collect();
+    sqlx::query("INSERT INTO track_beats (track_id,uid,beats_json,downbeats_json,bpm,downbeat_offset,beats_per_bar) VALUES(?,?,?,?,120.,0.,4)")
+        .bind(super::support::TRACK).bind(session::PRINCIPAL)
+        .bind(serde_json::to_string(&beats).unwrap()).bind(serde_json::to_string(&downbeats).unwrap())
+        .execute(&db.0).await.expect("seed musical timing for the imported clips");
     session::signed_in(config_dir).await;
     let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
         .await
@@ -252,18 +218,9 @@ fn fixture_config_dir() -> PathBuf {
     dir
 }
 
-fn harness(
-    window: (f32, f32),
-    views: HashMap<String, Signal>,
-    config_dir: std::path::PathBuf,
-) -> Harness {
+fn harness(window: (f32, f32), config_dir: std::path::PathBuf) -> Harness {
     let root: gpui_agent::RootFactory = Arc::new(move |_: &mut Window, cx: &mut App| -> AnyView {
         luma_app::init(cx);
-        // The same seeding the web capture page does with the same fixture
-        // (`useViewDataStore.getState().setResults(fixture.viewSignals, …)`):
-        // neither stack evaluates the graph for a screenshot, and a reference
-        // shot with an empty 720px box in it is not a quality bar.
-        luma_app::ViewData::publish(cx, views.clone());
         let library = luma_app::Library::open().expect("failed to open the fixture library");
         cx.new(|cx| luma_app::Luma::new(library, cx)).into()
     });
@@ -335,10 +292,7 @@ fn the_gauntlet_patterns_are_captured_from_the_native_editor() {
     let out = root().join("harness/gauntlet");
 
     for shot in SHOTS {
-        let views: HashMap<String, Signal> =
-            serde_json::from_value(fixture(shot.pattern)["viewSignals"].clone())
-                .expect("fixture viewSignals do not deserialize as Signals");
-        let mut harness = harness(shot.window, views, config_dir.clone());
+        let mut harness = harness(shot.window, config_dir.clone());
         let result = harness.exec(
             &super::support::script(&script(
                 shot.pattern,

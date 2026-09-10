@@ -81,7 +81,7 @@ fn the_chat_panel_is_captured_across_one_turn() {
             ({{ idle, streaming, finished }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat(chat::CAPTURED),
+            open = chat::open_chat(),
             send = chat::send(),
         ),
         Duration::from_secs(240),

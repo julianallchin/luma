@@ -125,19 +125,21 @@ globalThis.nav = {
 		);
 	},
 
-	// A pattern's graph tab, via the picker.
-	//
-	// Waits for the picker to be *gone*, not merely for the row to be clicked.
-	// An overlay's close is deferred so it can animate out, and until it is
-	// reaped its scrim is still a full-window hit target — so a gesture aimed
-	// at the shell on the next line (the `+` control, a node on the canvas)
-	// lands on the dying dialog instead, silently doing nothing.
+	// Reveal an existing score graph, or import a saved library template first.
 	pattern(name) {
-		nav.patterns();
-		nav.step(`the pattern ${name}`, "row", name);
-		until("the dismissed pattern picker", (s) =>
-			s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) === undefined,
-		);
+		const tab = app.snapshot().find({ role: "button", label: name });
+		if (tab) { app.click(tab); return; }
+		let clip = app.snapshot().find({ role: "card", label: name });
+		if (!clip) {
+			nav.patterns();
+			nav.step(`the pattern ${name}`, "row", name);
+			until("the insertion preview", s => s.find({role:"card",label:"Insert pattern dialog"}));
+			app.key("enter");
+			until("the inserted clip", s => s.find({role:"card",label:name}));
+			clip = app.snapshot().find({role:"card",label:name});
+		}
+		app.click(clip, {count:2});
+		until("the score graph", s => s.find({role:"card",label:"Graph workspace"}));
 	},
 
 	// The venue's patch tab, via the `+` menu. The one tab that names a room

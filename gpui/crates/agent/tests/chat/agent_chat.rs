@@ -61,7 +61,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     // -- idle -----------------------------------------------------------------
     let idle = run(
         &mut session,
-        &format!("{}\napp.snapshot().nodes", chat::open_chat("chat-turn")),
+        &format!("{}\napp.snapshot().nodes", chat::open_chat()),
     );
     assert!(
         labels(&idle, "text").iter().any(|l| l == "Luma"),
@@ -154,7 +154,7 @@ fn the_transcript_grows_between_frames() {
                 (s) => !s.findAll({{ role: "text" }}).some((n) => n.label === "Working")));
             ({{ first, last }})
         "#,
-            chat::open_chat("chat-growth"),
+            chat::open_chat(),
             chat::send(),
         ),
     );
@@ -254,7 +254,6 @@ fn a_new_chat_has_one_identity_across_editors() {
             // Open the graph before explicitly starting its conversation.
             {venue}
             nav.track("Aurora");
-            nav.pattern("chat-repoint");
             nav.step("new conversation", "button", "New chat");
             until("the conversation", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
@@ -291,7 +290,7 @@ fn space_typed_into_the_composer_is_a_space() {
             app.frames(2);
             app.snapshot().findAll({{ role: "input" }}).map((n) => n.label)
         "#,
-            chat::open_chat("chat-typing"),
+            chat::open_chat(),
             composer = chat::composer()
         ),
     );
@@ -330,7 +329,7 @@ fn the_chat_chrome_offers_history_and_starts_a_new_conversation() {
                     .some((n) => n.label.includes("Where do you want to start?")));
             ({{ chrome, settled, fresh: prose() }})
         "#,
-            open = chat::open_chat("chat-new"),
+            open = chat::open_chat(),
             send = chat::send(),
         ),
     );
@@ -445,7 +444,7 @@ fn the_history_picker_reopens_the_conversation_that_was_picked() {
                     .some((n) => n.label.includes("where does the ramp peak?")));
             ({{ first, second, listed, hits, reopened: prose() }})
         "#,
-            open = chat::open_chat("chat-history"),
+            open = chat::open_chat(),
             send = chat::send(),
         ),
     );
@@ -567,7 +566,7 @@ fn model_selection_survives_reopening_and_is_shared_with_new_chats() {
         if (!engines.every((engine) => engine === "OpenRouter · Kimi K3 Fast"))
             throw new Error("thread choices were not preserved: " + JSON.stringify(engines));
     "#,
-            open = chat::open_chat("chat-engine")
+            open = chat::open_chat()
         ),
     );
     drop(session);
@@ -586,7 +585,7 @@ fn model_selection_survives_reopening_and_is_shared_with_new_chats() {
         app.click(app.snapshot().find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}));
         until("effort restored after restart", (s) => s.find({{ role: "text", label: "Effort · Low" }}) !== undefined);
     "#,
-            open = chat::open_chat("chat-turn")
+            open = chat::open_chat()
         ),
     );
 }

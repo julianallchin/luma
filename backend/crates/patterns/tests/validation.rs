@@ -4,14 +4,14 @@ use std::collections::BTreeMap;
 fn wire(node: &str) -> Binding {
     Binding::Connection {
         node: node.into(),
-        output: "lighting".into(),
+        output: "value".into(),
     }
 }
 
 #[test]
 fn compact_recursive_expansion_is_rejected_before_it_is_built() {
     let mut library = standard_library();
-    let mut previous = "write_position".to_owned();
+    let mut previous = "core/absolute".to_owned();
     for index in 0..16 {
         let mut definition = library.definitions[&previous].instance(&previous);
         let Body::Graph(graph) = &mut definition.body else {
@@ -24,11 +24,11 @@ fn compact_recursive_expansion_is_rejected_before_it_is_built() {
             "sum".into(),
             Node {
                 position: None,
-                definition: "add_lighting".into(),
+                definition: "core/add".into(),
                 inputs: BTreeMap::from([("a".into(), wire("effect")), ("b".into(), wire("copy"))]),
             },
         );
-        graph.outputs.insert("lighting".into(), wire("sum"));
+        graph.outputs.insert("value".into(), wire("sum"));
         previous = format!("level-{index}");
         library.definitions.insert(previous.clone(), definition);
     }
@@ -39,18 +39,18 @@ fn compact_recursive_expansion_is_rejected_before_it_is_built() {
 #[test]
 fn long_wire_chains_and_deep_definition_chains_are_bounded() {
     let mut library = standard_library();
-    let mut definition = library.definitions["write_position"].instance("write_position");
+    let mut definition = library.definitions["core/absolute"].instance("core/absolute");
     let Body::Graph(graph) = &mut definition.body else {
         unreachable!()
     };
     let mut previous = "effect".to_owned();
-    for index in 0..90 {
+    for index in 0..110 {
         let id = format!("sum-{index}");
         graph.nodes.insert(
             id.clone(),
             Node {
                 position: None,
-                definition: "add_lighting".into(),
+                definition: "core/add".into(),
                 inputs: BTreeMap::from([
                     ("a".into(), wire(&previous)),
                     ("b".into(), wire("effect")),
@@ -59,7 +59,7 @@ fn long_wire_chains_and_deep_definition_chains_are_bounded() {
         );
         previous = id;
     }
-    graph.outputs.insert("lighting".into(), wire(&previous));
+    graph.outputs.insert("value".into(), wire(&previous));
     library.definitions.insert("chain".into(), definition);
     assert!(library
         .validate("chain")
@@ -67,7 +67,7 @@ fn long_wire_chains_and_deep_definition_chains_are_bounded() {
         .to_string()
         .contains("dependency depth"));
 
-    let mut previous = "write_position".to_owned();
+    let mut previous = "core/absolute".to_owned();
     for index in 0..30 {
         let definition = library.definitions[&previous].instance(&previous);
         previous = format!("wrapper-{index}");
@@ -87,15 +87,20 @@ fn score_validation_rejects_invalid_timing_even_without_a_resolved_venue() {
     score
         .insert_effect(&library, "chase", "clip", 0.0, 16.0)
         .unwrap();
-    for repeat in [0.0, 0.5] {
-        score
-            .clips
-            .get_mut("clip")
-            .unwrap()
-            .inputs
-            .insert("repeat".into(), Value::Beats(repeat));
-        assert!(score.validate(&library).is_err());
-    }
+    score
+        .clips
+        .get_mut("clip")
+        .unwrap()
+        .inputs
+        .insert("repeat".into(), Value::Beats(0.0));
+    assert!(score.validate(&library).is_err());
+    score
+        .clips
+        .get_mut("clip")
+        .unwrap()
+        .inputs
+        .insert("repeat".into(), Value::Beats(0.5));
+    score.validate(&library).unwrap();
     score.clips.get_mut("clip").unwrap().inputs.clear();
     score.validate(&library).unwrap();
     let input = score.definitions["clip"].inputs["width"].clone();
@@ -122,14 +127,14 @@ fn invalid_envelopes_identify_the_authored_location_and_anchor() {
     let invalid = Value::Envelope(Envelope::linear(vec![
         [0., 0.],
         [0.5, 1.],
-        [0.5, 0.],
+        [0.4, 0.],
         [1., 0.],
     ]));
     let check = |score: &Score, location: &str| {
         let error = score.validate(&library).unwrap_err().to_string();
         assert!(error.contains(location), "{error}");
         assert!(error.contains("points[2].x"), "{error}");
-        assert!(error.contains("preceding x (0.5)"), "{error}");
+        assert!(error.contains("previous x (0.5)"), "{error}");
     };
     let mut score = original.clone();
     score

@@ -4,8 +4,7 @@
 //! Annotations have independent spans, z-order, and lifetimes (they enter/leave
 //! the timeline, and in perform mode the DJ adds/removes/reorders them live), so
 //! compositing is a fold over independent per-plan [`eval`](super::eval) results
-//! rather than a static meta-plan. The IR's `OpKind::Blend` stays reserved for
-//! within-graph branch blending.
+//! over the canonical graph outputs.
 //!
 //! The blend math is ported verbatim from the legacy `compositor.rs` /
 //! `engine::composite_layer_frame` so the look is preserved bit-for-bit through
@@ -62,11 +61,11 @@ pub fn composite_frame(
     intensity: f32,
     allowed: Option<&HashSet<&str>>,
 ) {
-    let sets_dimmer = bindings.dimmer.is_some();
-    let sets_color = bindings.color.is_some();
-    let sets_strobe = bindings.strobe.is_some();
-    let sets_position = bindings.position.is_some();
-    let sets_speed = bindings.speed.is_some();
+    let sets_dimmer = bindings.dimmer;
+    let sets_color = bindings.color;
+    let sets_strobe = bindings.strobe;
+    let sets_position = bindings.position;
+    let sets_speed = bindings.speed;
 
     for (id, tp) in &top.primitives {
         if let Some(set) = allowed {

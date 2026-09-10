@@ -42,9 +42,9 @@ Transform audio signals: splitting stems, filtering frequencies, and extracting 
 
 - `stem_splitter` -- Separates audio into 4 stems (drums, bass, vocals, other).
 - `frequency_amplitude` -- Extracts amplitude in selected frequency bands via FFT.
-- `lowpass_filter` -- IIR lowpass filter.
-- `highpass_filter` -- IIR highpass filter.
-- `beat_envelope` -- Generates ADSR envelopes triggered at beat positions.
+- `audio_lowpass` -- Lowpass audio source for spectrum or energy analysis.
+- `audio_highpass` -- Highpass audio source for spectrum or energy analysis.
+- `envelope` -- Samples an editable curve at the input progress.
 
 ### [Analysis Nodes](/docs/node-reference/analysis-nodes)
 
@@ -66,10 +66,12 @@ Extract spatial attributes from fixture arrangements. Fixture targeting is handl
 
 Generate and transform color signals.
 
-- `color` -- Constant color generator.
-- `gradient` -- Maps scalar input to a color range.
-- `chroma_palette` -- Maps 12-pitch chroma to RGB via weighted palette.
-- `spectral_shift` -- Rotates hue based on dominant pitch in chroma signal.
+- `sample_gradient` -- Sample a gradient with a numerical position.
+- `mix_palette` -- Mix palette colors using channel weights; expose opacity separately.
+- `palette_fallback` -- Use another palette when the first has no colors.
+- `hsv` -- Construct RGB from hue, saturation and value.
+- `rotate_hue` -- Rotate RGB hue with fixture/time broadcasting.
+- `core/channel_argmax` -- Find the strongest channel; compose pitch-driven hue rotation.
 
 ### [Signal Nodes](/docs/node-reference/signal-nodes)
 

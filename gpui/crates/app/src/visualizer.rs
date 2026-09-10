@@ -370,6 +370,7 @@ pub(crate) struct Visualizer {
     /// [`Self::venue_id`] so moving between scores — of one track or of two —
     /// re-composites instead of tearing the stage down.
     subject: Option<Lit>,
+    graph_preview: Option<crate::graph::preview::View>,
     /// The score whose composite has actually *landed* on the render engine.
     ///
     /// Distinct from [`Self::subject`], which is what this stage has asked
@@ -833,6 +834,7 @@ impl Visualizer {
             venue_name,
             subject,
             lit: None,
+            graph_preview: None,
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
             camera: opening_camera(
@@ -2406,6 +2408,7 @@ struct StageSubject {
     venue_name: String,
     /// The score that lights the rig, when one does.
     lit: Option<Lit>,
+    graph_preview: Option<crate::graph::preview::View>,
 }
 
 /// The score a stage is lit by.
@@ -2469,10 +2472,15 @@ impl Luma {
                 || venue_id.clone(),
                 |browser| browser.venue_name().to_string(),
             );
+        let graph_preview = match self.workspace.active_body() {
+            Some(Body::Graph(editor)) => editor.preview_view(),
+            _ => None,
+        };
         Some(StageSubject {
             venue_id,
             venue_name: name,
             lit,
+            graph_preview,
         })
     }
 
@@ -2491,16 +2499,30 @@ impl Luma {
             venue_id,
             venue_name,
             lit: subject,
+            graph_preview,
         }) = self.stage_subject()
         else {
             // Dropping the state is what un-mounts the viewport, and
             // un-mounting is what stops its continuous redraw — see the
             // rendering note on [`visualizer`].
-            if self.visualizer.take().is_some() {
+            if let Some(state) = self.visualizer.take() {
+                if let Some(view) = state.graph_preview {
+                    self.stop_graph_preview(&view.target, cx);
+                }
                 cx.notify();
             }
             return;
         };
+        let previous_preview = self
+            .visualizer
+            .as_ref()
+            .and_then(|state| state.graph_preview.as_ref())
+            .map(|view| view.target.clone());
+        if let Some(previous) = previous_preview
+            .filter(|target| graph_preview.as_ref().map(|view| &view.target) != Some(target))
+        {
+            self.stop_graph_preview(&previous, cx);
+        }
         // Split the borrow: both arms read the library and mutate the stage,
         // and the two fields are disjoint. The same split `shell::active_tab`
         // takes for the same reason.
@@ -2522,6 +2544,9 @@ impl Luma {
                 ));
                 cx.notify();
             }
+        }
+        if let Some(state) = visualizer {
+            state.graph_preview = graph_preview;
         }
     }
 
@@ -2672,6 +2697,12 @@ pub(crate) fn visualizer(
                                 .child(luma_ui::float::frosted_card(card))
                         })
                 })),
+        )
+        .children(
+            state
+                .graph_preview
+                .as_ref()
+                .map(|view| crate::graph::preview::controls(view, app, library)),
         )
         .agent_node(
             Role::Card,
@@ -3155,6 +3186,26 @@ fn frame_graph(intervals: Vec<f32>) -> impl IntoElement {
 
 /// The viewport itself, or the reason there isn't one.
 fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyElement {
+    // Graph evaluation and its errors remain available when GPU rendering is
+    // disabled. Keep one sample for the eventual stage draw.
+    let graph_sample = if let Some(view) = &state.graph_preview {
+        let time = view.time(library);
+        let sampled = std::time::Instant::now();
+        match view.sample(time) {
+            Ok(universe) => Some((
+                time,
+                Some(universe),
+                sampled.elapsed().as_secs_f32() * 1_000.0,
+            )),
+            Err(error) => {
+                return plate(error)
+                    .agent_node(Role::Card, "Stage")
+                    .into_any_element()
+            }
+        }
+    } else {
+        None
+    };
     // A frame that failed drew nothing and left its reason behind; adopt it
     // before deciding what this frame shows.
     if let Some(error) = state.stage.borrow_mut().error.take() {
@@ -3264,10 +3315,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 
     // The one live read. `render_time` and `sample_universe` are synchronous
     // because a frame's inputs must be this frame's — see `Library`.
-    let time = library.render_time();
-    let sampled = std::time::Instant::now();
-    let universe = library.sample_universe(time);
-    let sample_ms = sampled.elapsed().as_secs_f32() * 1_000.0;
+    let (time, universe, sample_ms) = graph_sample.unwrap_or_else(|| {
+        let time = library.render_time();
+        let sampled = std::time::Instant::now();
+        let universe = library.sample_universe(time);
+        (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
+    });
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
@@ -4126,6 +4179,7 @@ mod orbit_selection_tests {
             venue_name: "Venue".into(),
             subject: None,
             lit: None,
+            graph_preview: None,
             gpu_enabled: false,
             status: Status::Loading,
             camera,

@@ -57,9 +57,9 @@ impl Envelope {
                     "envelope.points[{i}] is {point:?}; both coordinates must be finite and in 0..1"
                 )));
             }
-            if i > 0 && self.points[i - 1][0] >= point[0] {
+            if i > 0 && self.points[i - 1][0] > point[0] {
                 return Err(Error(format!(
-                    "envelope.points[{i}].x is {}; must be greater than the preceding x ({})",
+                    "envelope.points[{i}].x is {}; must not precede the previous x ({})",
                     point[0],
                     self.points[i - 1][0]
                 )));
@@ -112,7 +112,7 @@ impl Envelope {
     }
 
     pub fn sample(&self, progress: f64) -> f64 {
-        if progress <= 0. {
+        if progress < 0. {
             return self.points[0][1];
         }
         if progress >= 1. {
@@ -120,7 +120,7 @@ impl Envelope {
         }
         let i = self
             .points
-            .partition_point(|p| p[0] < progress)
+            .partition_point(|p| p[0] <= progress)
             .saturating_sub(1);
         match self.curve(i) {
             EnvelopeCurve::Linear => {
@@ -172,7 +172,7 @@ impl Envelope {
                     attached[axis] = (attached[axis] + point[axis] - old[axis]).clamp(0., 1.);
                 }
                 let (a, b) = (next.points[i][0], next.points[i + 1][0]);
-                if a >= b {
+                if a > b {
                     return Err(Error("envelope anchors must remain ordered".into()));
                 }
                 control1[0] = control1[0].clamp(a, b);

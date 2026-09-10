@@ -1,13 +1,13 @@
 //! Stateless signal sources and arithmetic. Musical clocks never accumulate
 //! frame deltas, and coherent noise is a pure function of its coordinates.
 use crate::*;
-use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaryMath {
     Absolute,
     Floor,
+    Float32,
     Fraction,
     Sine,
     SquareRoot,
@@ -15,6 +15,7 @@ pub enum UnaryMath {
 
 pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input {
     Input {
+        optional: false,
         name: name.into(),
         description: name.into(),
         value_type: kind,
@@ -57,12 +58,120 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             match math {
                 UnaryMath::Absolute => "Absolute value",
                 UnaryMath::Floor => "Floor",
+                UnaryMath::Float32 => "32-bit precision",
                 UnaryMath::Fraction => "Fraction (wrap)",
                 UnaryMath::Sine => "Sine (turns)",
                 UnaryMath::SquareRoot => "Square root",
             },
-            vec![("value", field("Value"))],
-            vec![("value", ValueType::Field)],
+            vec![(
+                "value",
+                port("Value", ValueType::Signal(SignalType::ANY), None),
+            )],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
+        ),
+        Primitive::ValueNoise1d | Primitive::ValueNoise3d => (
+            if matches!(op, Primitive::ValueNoise1d) {
+                "Value noise (1D)"
+            } else {
+                "Value noise (3D)"
+            },
+            if matches!(op, Primitive::ValueNoise1d) {
+                vec![
+                    ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
+                    (
+                        "position",
+                        port(
+                            "Position",
+                            ValueType::Signal(SignalType {
+                                unit: Some(Unit::Number),
+                                channels: None,
+                            }),
+                            Some(Value::Number(0.)),
+                        ),
+                    ),
+                    (
+                        "octaves",
+                        port("Octaves", ValueType::Number, Some(Value::Number(1.))),
+                    ),
+                ]
+            } else {
+                vec![
+                    ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
+                    (
+                        "x",
+                        port(
+                            "X",
+                            ValueType::Signal(SignalType {
+                                unit: Some(Unit::Number),
+                                channels: None,
+                            }),
+                            Some(Value::Number(0.)),
+                        ),
+                    ),
+                    (
+                        "y",
+                        port(
+                            "Y",
+                            ValueType::Signal(SignalType {
+                                unit: Some(Unit::Number),
+                                channels: None,
+                            }),
+                            Some(Value::Number(0.)),
+                        ),
+                    ),
+                    (
+                        "z",
+                        port(
+                            "Z",
+                            ValueType::Signal(SignalType {
+                                unit: Some(Unit::Number),
+                                channels: None,
+                            }),
+                            Some(Value::Number(0.)),
+                        ),
+                    ),
+                    (
+                        "octaves",
+                        port("Octaves", ValueType::Number, Some(Value::Number(1.))),
+                    ),
+                ]
+            },
+            vec![(
+                "value",
+                ValueType::Signal(SignalType {
+                    unit: Some(Unit::Number),
+                    channels: None,
+                }),
+            )],
+        ),
+        Primitive::SeedStream => (
+            "Seed stream",
+            vec![
+                ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
+                (
+                    "stream",
+                    port("Stream", ValueType::Seed, Some(Value::Seed(0))),
+                ),
+            ],
+            vec![("seed", ValueType::Seed)],
+        ),
+        Primitive::Power => (
+            "Power",
+            vec![
+                (
+                    "base",
+                    port("Base", ValueType::Signal(SignalType::ANY), None),
+                ),
+                (
+                    "exponent",
+                    port(
+                        "Exponent",
+                        ValueType::Signal(SignalType::ANY),
+                        Some(Value::Number(2.)),
+                    ),
+                ),
+            ],
+            vec![("value", ValueType::Signal(SignalType::ANY))],
         ),
         Primitive::Noise => (
             "Coherent noise",
@@ -86,7 +195,15 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     };
     Some(Definition {
         name: name.into(),
-        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        inputs: inputs
+            .into_iter()
+            .map(|(k, mut v)| {
+                if v.value_type == ValueType::Seed {
+                    v.rate = Rate::Fixed;
+                }
+                (k.into(), v)
+            })
+            .collect(),
         outputs: outputs
             .into_iter()
             .map(|(k, value_type)| {
@@ -94,7 +211,11 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     k.into(),
                     Output {
                         value_type,
-                        rate: Rate::Frame,
+                        rate: if op == Primitive::SeedStream {
+                            Rate::Fixed
+                        } else {
+                            Rate::Frame
+                        },
                     },
                 )
             })
@@ -124,115 +245,7 @@ impl FieldMath {
     }
 }
 
-pub(crate) fn run(
-    op: Primitive,
-    i: &BTreeMap<String, Value>,
-    frame: Frame,
-) -> Option<Result<BTreeMap<String, Value>>> {
-    let field = |name: &str| match &i[name] {
-        Value::Field(v) | Value::Mask(v) => v,
-        _ => unreachable!("validated numeric field"),
-    };
-    let value = match op {
-        Primitive::ClipTime => {
-            return Some(Ok(BTreeMap::from([
-                (
-                    "elapsed".into(),
-                    Value::Beats((frame.beat - frame.clip_start).max(0.0)),
-                ),
-                (
-                    "progress".into(),
-                    Value::Proportion(
-                        ((frame.beat - frame.clip_start) / frame.clip_duration).clamp(0.0, 1.0),
-                    ),
-                ),
-                ("duration".into(), Value::Beats(frame.clip_duration)),
-                ("beat".into(), Value::Number(frame.beat)),
-            ])))
-        }
-        Primitive::ScalarBinary(math) => {
-            Value::Number(math.evaluate(i["a"].scalar(), i["b"].scalar()))
-        }
-        Primitive::ScalarConvert { to, .. } => {
-            let value = i["value"].scalar();
-            match to {
-                ScalarKind::Number => Value::Number(value),
-                ScalarKind::Beats => Value::Beats(value),
-                ScalarKind::Position => Value::Position(value),
-                ScalarKind::Proportion => Value::Proportion(value.clamp(0.0, 1.0)),
-            }
-        }
-        Primitive::FieldUnary(math) => Value::Field(
-            field("value")
-                .iter()
-                .map(|(id, v)| {
-                    (
-                        id.clone(),
-                        match math {
-                            UnaryMath::Absolute => v.abs(),
-                            UnaryMath::Floor => v.floor(),
-                            UnaryMath::Fraction => v.rem_euclid(1.0),
-                            UnaryMath::Sine => (v * std::f64::consts::TAU).sin(),
-                            UnaryMath::SquareRoot => v.sqrt(),
-                        },
-                    )
-                })
-                .collect(),
-        ),
-        Primitive::Noise => {
-            let x = field("x");
-            let y = field("y");
-            let z = field("z");
-            if !x.keys().eq(y.keys()) || !x.keys().eq(z.keys()) {
-                return Some(Err(Error("noise coordinate head domains differ".into())));
-            }
-            let values = x
-                .iter()
-                .map(|(id, x)| {
-                    coherent_noise([*x, y[id], z[id]], frame.seed).map(|v| (id.clone(), v))
-                })
-                .collect::<Result<_>>();
-            match values {
-                Ok(v) => Value::Field(v),
-                Err(e) => return Some(Err(e)),
-            }
-        }
-        Primitive::WriteMask | Primitive::WriteStrobeMask => {
-            return Some(Ok(BTreeMap::from([(
-                "lighting".into(),
-                Value::Lighting(
-                    field("mask")
-                        .iter()
-                        .map(|(id, value)| {
-                            (
-                                id.clone(),
-                                if op == Primitive::WriteMask {
-                                    FixtureOutput {
-                                        dimmer: Some(*value),
-                                        ..Default::default()
-                                    }
-                                } else {
-                                    FixtureOutput {
-                                        strobe: Some(*value),
-                                        ..Default::default()
-                                    }
-                                },
-                            )
-                        })
-                        .collect(),
-                ),
-            )])))
-        }
-        _ => return None,
-    };
-    Some(
-        value
-            .validate()
-            .map(|_| BTreeMap::from([("value".into(), value)])),
-    )
-}
-
-fn coherent_noise(point: [f64; 3], seed: u64) -> Result<f64> {
+pub(crate) fn coherent_noise(point: [f64; 3], seed: u64) -> Result<f64> {
     if point.iter().any(|v| !v.is_finite() || v.abs() > 1e12) {
         return Err(Error(
             "noise coordinates must be finite and within ±1e12".into(),

@@ -1,5 +1,58 @@
 use luma_patterns::{Envelope, EnvelopeCurve};
 
+#[test]
+fn coincident_anchors_express_instant_steps_with_right_continuous_sampling() {
+    let e = Envelope::linear(vec![
+        [0., 0.],
+        [0., 1.],
+        [0.5, 1.],
+        [0.5, 0.2],
+        [1., 0.2],
+        [1., 0.],
+    ]);
+    e.validate().unwrap();
+    for (time, expected) in [(0., 1.), (0.499, 1.), (0.5, 0.2), (0.999, 0.2), (1., 0.)] {
+        assert_eq!(e.sample(time), expected);
+    }
+}
+
+#[test]
+fn editable_envelope_samples_each_vector_channel() {
+    use luma_patterns::*;
+    use std::collections::BTreeMap;
+    let frame = Frame {
+        cells: &[],
+        features: None,
+        beat: 0.,
+        clip_start: 0.,
+        clip_duration: 1.,
+        seed: 0,
+    };
+    let library = standard_library();
+    let shape = Envelope::linear(vec![[0., 0.], [0.25, 1.], [0.75, 0.4], [1., 0.]]);
+    let result = PreparedGraph::new(
+        &library,
+        "envelope",
+        &BTreeMap::from([
+            ("shape".into(), Value::Envelope(shape.clone())),
+            (
+                "progress".into(),
+                Value::Signal(
+                    Signal::vector(vec![0., 0.125, 0.25, 0.5, 1.], Unit::Number).unwrap(),
+                ),
+            ),
+        ]),
+        frame,
+    )
+    .unwrap()
+    .evaluate_batch(&[0.])
+    .unwrap();
+    let signal = result["value"].signal().unwrap();
+    for (actual, expected) in signal.values().iter().zip([0., 0.5, 1., 0.7, 0.]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+}
+
 fn curved() -> Envelope {
     Envelope {
         points: vec![[0., 0.], [1., 1.]],
@@ -56,7 +109,7 @@ fn edits_keep_handles_valid_and_reject_invalid_changes_atomically() {
     e.validate().unwrap();
     let before = e.clone();
     assert!(e.move_point(i, [f64::NAN, 0.]).is_err());
-    assert!(e.move_point(i, [1., 0.]).is_err());
+    assert!(e.move_point(i, [1.01, 0.]).is_err());
     assert!(e
         .set_curve(
             0,

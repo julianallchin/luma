@@ -126,6 +126,20 @@ impl HostAudioState {
         guard.set_loop_region(start, end);
     }
 
+    /// A bounded audition uses the loaded track's clock. Looping and stopping
+    /// at the end share the same sample boundary in the audio callback.
+    pub fn set_playback_range(&self, start: f32, end: f32, looping: bool) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        let duration = guard.segment.as_ref().ok_or("No audio is loaded")?.duration;
+        if !start.is_finite() || !end.is_finite() || start < 0. || end <= start || start >= duration
+        {
+            return Err("playback range needs finite bounds within the loaded audio".into());
+        }
+        guard.set_loop_region(Some(start), Some(end.min(duration)));
+        guard.set_loop(looping);
+        Ok(())
+    }
+
     pub fn set_audio_output_enabled(&self, enabled: bool) {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.set_audio_output_enabled(enabled);
@@ -443,6 +457,7 @@ impl HostAudioInner {
         let end = self
             .loop_end
             .map(|e| (e * sample_rate as f32).floor() as usize)
+            .map(|end| end.min(num_frames))
             .unwrap_or(usize::MAX);
         (start, end)
     }
@@ -531,7 +546,7 @@ impl HostAudioInner {
             let elapsed = start.elapsed().as_secs_f32();
             let position = self.start_offset + elapsed * self.playback_rate;
 
-            let loop_boundary = self.loop_end.unwrap_or(duration);
+            let loop_boundary = self.loop_end.unwrap_or(duration).min(duration);
             if self.loop_enabled && position >= loop_boundary {
                 let loop_start = self.loop_start.unwrap_or(0.0);
                 let region = (loop_boundary - loop_start).max(0.001);
@@ -539,8 +554,8 @@ impl HostAudioInner {
                 self.current_time = wrapped;
                 self.start_offset = wrapped;
                 self.start_instant = Some(Instant::now());
-            } else if position >= duration {
-                self.current_time = duration;
+            } else if position >= loop_boundary {
+                self.current_time = loop_boundary;
                 self.stop_audio();
                 self.start_offset = self.current_time;
             } else {
@@ -759,4 +774,58 @@ pub async fn reload_settings(host: &HostAudioState, pool: &sqlx::SqlitePool) -> 
     let settings = crate::settings::load_settings(pool).await?;
     host.set_audio_output_enabled(settings.audio_output_enabled);
     Ok(())
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn host() -> HostAudioState {
+        let host = HostAudioState::default();
+        host.set_audio_output_enabled(false);
+        host.load_segment(vec![0.; 80], 4, 0.).unwrap(); // Ten seconds, stereo.
+        host
+    }
+
+    #[test]
+    fn bounded_audio_stops_or_wraps_at_the_same_boundary() {
+        let host = host();
+        host.set_playback_range(2., 4., false).unwrap();
+        let mut inner = host.inner.lock().unwrap();
+        inner.is_playing = true;
+        inner.start_offset = 2.;
+        inner.start_instant = Some(Instant::now() - Duration::from_secs(3));
+        inner.refresh_progress();
+        assert!(!inner.is_playing);
+        assert_eq!(inner.current_time, 4.);
+        assert_eq!(inner.loop_frames(4, 40), (8, 16));
+        drop(inner);
+
+        host.set_playback_range(2., 4., true).unwrap();
+        let mut inner = host.inner.lock().unwrap();
+        inner.is_playing = true;
+        inner.start_offset = 3.;
+        inner.start_instant = Some(Instant::now() - Duration::from_secs(2));
+        inner.refresh_progress();
+        assert!(inner.is_playing);
+        assert!((inner.current_time - 3.).abs() < 0.01);
+        assert_eq!(inner.loop_frames(4, 40), (8, 16));
+    }
+
+    #[test]
+    fn playback_bounds_are_validated_and_cannot_overrun_samples() {
+        let host = host();
+        host.set_playback_range(2., 20., false).unwrap();
+        assert_eq!(host.inner.lock().unwrap().loop_frames(4, 40), (8, 40));
+        for (start, end) in [(4., 2.), (-1., 4.), (10., 12.), (f32::NAN, 4.)] {
+            assert!(host.set_playback_range(start, end, true).is_err());
+            assert_eq!(host.inner.lock().unwrap().loop_frames(4, 40), (8, 40));
+        }
+        host.set_loop_region(None, None);
+        assert_eq!(
+            host.inner.lock().unwrap().loop_frames(4, 40),
+            (0, usize::MAX)
+        );
+    }
 }

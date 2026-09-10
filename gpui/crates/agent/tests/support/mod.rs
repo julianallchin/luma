@@ -171,6 +171,7 @@ pub struct Fixture {
     extra_scores: usize,
     seeded_threads: bool,
     graph_score: Option<Value>,
+    typed_pattern: Option<String>,
 }
 
 impl Fixture {
@@ -197,6 +198,7 @@ impl Fixture {
             extra_scores: 0,
             seeded_threads: false,
             graph_score: None,
+            typed_pattern: None,
         }
     }
 
@@ -245,6 +247,11 @@ impl Fixture {
             "graph fixture uses its canonical document"
         );
         self.graph_score = Some(score);
+        self
+    }
+
+    pub fn with_typed_patterns(mut self, effect: &str) -> Self {
+        self.typed_pattern = Some(effect.into());
         self
     }
 
@@ -504,6 +511,19 @@ impl Fixture {
                 .execute(pool)
                 .await
                 .expect("failed to seed a pattern");
+            if let Some(effect) = &self.typed_pattern {
+                let graph = luma_lib::node_graph::lighting::pattern(effect).unwrap();
+                sqlx::query(
+                    "INSERT INTO implementations(id,uid,pattern_id,graph_json) VALUES(?,?,?,?)",
+                )
+                .bind(format!("implementation-{}", clip.pattern))
+                .bind(session::PRINCIPAL)
+                .bind(&clip.pattern)
+                .bind(serde_json::to_string(&graph).unwrap())
+                .execute(pool)
+                .await
+                .expect("seed a historical typed graph");
+            }
         }
         if self.seed_track {
             sqlx::query(
@@ -806,8 +826,15 @@ impl Fixture {
         )
         .await;
         let node = |id: &str, type_id: &str, params: Value| {
+            let (x, y) = match id {
+                "pattern_args" => (-300.0, 0.0),
+                "pulse" => (0.0, 200.0),
+                "mix" => (300.0, 0.0),
+                "apply" => (600.0, 0.0),
+                _ => (0.0, 0.0),
+            };
             json!({ "id": id, "typeId": type_id, "params": params,
-                    "positionX": 0.0, "positionY": 0.0 })
+                    "positionX": x, "positionY": y })
         };
         let edge = |from: &str, from_port: &str, to: &str, to_port: &str| {
             json!({ "id": format!("{from}{from_port}-{to}{to_port}"),
@@ -1184,3 +1211,6 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
+
+#[allow(dead_code)]
+pub mod graph_interactions;

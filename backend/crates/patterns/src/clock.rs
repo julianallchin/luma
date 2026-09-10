@@ -8,6 +8,12 @@ pub struct BeatTimeline {
     origin: f64,
 }
 impl BeatTimeline {
+    /// Detected beat positions in absolute seconds, independent of the musical
+    /// origin used by beat_at/seconds_at. Useful for aligned preview overlays.
+    pub fn timestamps(&self) -> &[f64] {
+        &self.seconds
+    }
+
     pub fn new(seconds: Vec<f64>, origin_seconds: f64) -> Result<Self> {
         if seconds.len() < 2
             || seconds.iter().any(|v| !v.is_finite())

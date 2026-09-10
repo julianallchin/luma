@@ -5,6 +5,7 @@ pub mod fft;
 pub mod filters;
 pub mod melspec;
 pub mod resample;
+pub(crate) mod spectrum;
 pub mod stem_cache;
 
 pub use analysis::calculate_frequency_amplitude;

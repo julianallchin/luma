@@ -4,7 +4,7 @@ use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, V
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::selection::{Selection, Subset};
 use crate::models::universe::{PrimitiveState, UniverseState};
-use luma_patterns::{standard_library, Cell, Frame, PreparedGraph, Value};
+use luma_patterns::{standard_library, Cell, Frame, PreparedGraph};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -49,20 +49,38 @@ pub(crate) async fn preview(
     if cells.len().saturating_mul(request.times.len()) > 1_000_000 {
         return Err("preview exceeds one million cell samples; request fewer times".into());
     }
-    let library = request.library.unwrap_or_else(standard_library);
+    let mut library = request.library.unwrap_or_else(standard_library);
+    let definition_id = if let Some(definition) = library.definitions.get(&request.definition) {
+        if !definition.playable() && definition.placeable() {
+            let wrapped = definition
+                .clip_instance(&request.definition)
+                .map_err(|e| e.to_string())?;
+            let mut id = "preview/output".to_owned();
+            while library.definitions.contains_key(&id) {
+                id.push('_');
+            }
+            library.definitions.insert(id.clone(), wrapped);
+            id
+        } else {
+            request.definition.clone()
+        }
+    } else {
+        request.definition.clone()
+    };
     let definition = library
         .definitions
-        .get(&request.definition)
+        .get(&definition_id)
         .ok_or_else(|| format!("unknown graph {}", request.definition))?;
-    let lighting = definition.lighting_output().ok_or_else(||
-        "a playable pattern must expose exactly one Lighting output; combine contributions in its graph".to_string()
-    )?.to_owned();
+    let lighting = definition
+        .lighting_output()
+        .ok_or_else(|| "connect this graph's signals to Output before previewing it".to_string())?
+        .to_owned();
     let start = clock
         .beat_at(request.clip_start)
         .map_err(|e| e.to_string())?;
     let prepared = PreparedGraph::new(
         &library,
-        &request.definition,
+        &definition_id,
         &request.inputs,
         Frame {
             features: None,
@@ -81,7 +99,7 @@ pub(crate) async fn preview(
             &mut access,
             storage,
             &request.track_id,
-            clock.clone(),
+            &beat_grid,
             prepared.feature_requests(),
         )
         .await?;
@@ -98,25 +116,14 @@ pub(crate) async fn preview(
         .map(|time| clock.beat_at(*time))
         .collect::<luma_patterns::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
-    let mut writes = None;
-    let frames = beats
-        .iter()
-        .map(|beat| {
-            let mut output = prepared.evaluate(*beat).map_err(|e| e.to_string())?;
-            let Some(Value::Lighting(light)) = output.remove(&lighting) else {
-                return Err("pattern did not produce Lighting".into());
-            };
-            let layout = light
-                .values()
-                .next()
-                .map(|v| v.writes())
-                .unwrap_or([false; 5]);
-            if writes.is_some_and(|previous| previous != layout) {
-                return Err("pattern output capabilities changed during preview".into());
-            }
-            writes = Some(layout);
-            Ok(universe(light))
-        })
+    let output = prepared.evaluate_batch(&beats).map_err(|e| e.to_string())?;
+    let light = output
+        .get(&lighting)
+        .and_then(|v| v.lighting())
+        .ok_or("pattern did not produce fixture output")?;
+    let writes = light.writes();
+    let frames = (0..beats.len())
+        .map(|time| light.sample(time).map(universe).map_err(|e| e.to_string()))
         .collect::<Result<Vec<_>, String>>()?;
     // A sign-out during preparation must not publish data under a new identity.
     let final_access =
@@ -130,7 +137,7 @@ pub(crate) async fn preview(
         frames,
         writes: ["color", "dimmer", "position", "strobe", "speed"]
             .into_iter()
-            .zip(writes.unwrap_or([false; 5]))
+            .zip(writes)
             .map(|(name, written)| (name.to_string(), written))
             .collect(),
     })

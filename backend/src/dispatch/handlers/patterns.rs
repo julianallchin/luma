@@ -111,6 +111,49 @@ pub async fn get_pattern_graph_document(
     Ok(load_visible_graph_document(pool, &id, None, implementation_id.as_deref()).await?)
 }
 
+/// Read a library pattern as a canonical, detached clip template. The source
+/// pattern is never rewritten; insertion publishes only the destination score.
+pub async fn get_pattern_score_template(
+    services: &AppServices,
+    id: String,
+    venue_id: String,
+) -> Result<luma_patterns::Score, CommandError> {
+    use crate::node_graph::migration::{pattern, ROOT};
+    use luma_patterns as p;
+    let summary = db::get_pattern_pool(&services.db.0, &id).await?;
+    let document = load_visible_graph_document(&services.db.0, &id, Some(&venue_id), None).await?;
+    let mut score = pattern(&document.graph, &summary.name)
+        .map_err(CommandError::Invalid)?
+        .ok_or_else(|| {
+            CommandError::Invalid(format!("{} contains unsupported nodes", summary.name))
+        })?;
+    let args = crate::eval::graph_run::merge_arg_values(&document.graph, None, false);
+    let selection = crate::eval::context::graph_selection(
+        &document.graph.nodes,
+        &document.graph.edges,
+        &args,
+        None,
+    );
+    score.clips.insert(
+        "template".into(),
+        p::Clip {
+            graph: ROOT.into(),
+            start: 0.,
+            duration: 1.,
+            seed: 0,
+            selection_seed: None,
+            selection: selection.map_or_else(p::Selection::all, |(selection, _)| selection),
+            z_index: 0,
+            blend_mode: p::BlendMode::Replace,
+            inputs: Default::default(),
+        },
+    );
+    score
+        .validate(&p::standard_library())
+        .map_err(|error| CommandError::Invalid(error.to_string()))?;
+    Ok(score)
+}
+
 /// Verifying also stamps the author's display name — the two are one write in
 /// the UI's model. The push is synchronous rather than a `notify_one` nudge so
 /// other users see the verified state immediately; that also makes a network

@@ -193,6 +193,18 @@ pub async fn host_set_loop_region(
     Ok(())
 }
 
+pub async fn host_set_playback_range(
+    services: &AppServices,
+    start_seconds: f32,
+    end_seconds: f32,
+    looping: bool,
+) -> Result<(), CommandError> {
+    services
+        .host_audio
+        .set_playback_range(start_seconds, end_seconds, looping)
+        .map_err(CommandError::Invalid)
+}
+
 /// Set playback rate (1.0 = normal). Changes pitch; no time-stretch.
 pub async fn host_set_playback_rate(services: &AppServices, rate: f32) -> Result<(), CommandError> {
     services.host_audio.set_playback_rate(rate);

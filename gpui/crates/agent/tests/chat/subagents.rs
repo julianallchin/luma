@@ -104,7 +104,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
                 finished_chip, finished_line }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat("chat-subagent"),
+            open = chat::open_chat(),
             send = chat::send(),
             description = chat::SUBAGENT_DESCRIPTION,
             answer = chat::SUBAGENT_ANSWER,
@@ -151,9 +151,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
     // rail the parent's do — which is the whole claim of "no second renderer".
     let child_chips = strings("child_chips");
     assert!(
-        child_chips
-            .iter()
-            .any(|chip| chip == "ramp bounds"),
+        child_chips.iter().any(|chip| chip == "ramp bounds"),
         "the child's own transcript is missing its tool call: {child_chips:?}"
     );
 

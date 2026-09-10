@@ -13,6 +13,69 @@ pub enum AudioSource {
     Vocals,
     Other,
 }
+
+/// An immutable audio preparation request. Bare sources retain their original
+/// string serialization; filters describe preprocessing, never playback state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum AudioInput {
+    Source(AudioSource),
+    Filtered {
+        source: AudioSource,
+        filters: Vec<AudioFilter>,
+    },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AudioFilter {
+    Lowpass { cutoff_hz: f64 },
+    Highpass { cutoff_hz: f64 },
+}
+impl From<AudioSource> for AudioInput {
+    fn from(source: AudioSource) -> Self {
+        Self::Source(source)
+    }
+}
+impl AudioInput {
+    pub fn source(&self) -> AudioSource {
+        match self {
+            Self::Source(source) | Self::Filtered { source, .. } => *source,
+        }
+    }
+    pub fn name(&self) -> &'static str {
+        self.source().name()
+    }
+    pub fn filters(&self) -> &[AudioFilter] {
+        match self {
+            Self::Source(_) => &[],
+            Self::Filtered { filters, .. } => filters,
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        if self.filters().len() > 64 {
+            return Err(Error("audio supports at most 64 filter stages".into()));
+        }
+        for filter in self.filters() {
+            let (AudioFilter::Lowpass { cutoff_hz } | AudioFilter::Highpass { cutoff_hz }) = filter;
+            if !cutoff_hz.is_finite() || *cutoff_hz < 1. {
+                return Err(Error(
+                    "audio cutoff must be finite and at least 1 Hz".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub fn filtered(&self, filter: AudioFilter) -> Result<Self> {
+        let mut filters = self.filters().to_vec();
+        filters.push(filter);
+        let audio = Self::Filtered {
+            source: self.source(),
+            filters,
+        };
+        audio.validate()?;
+        Ok(audio)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Drum {
@@ -44,8 +107,13 @@ impl Drum {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeatureRequest {
+    Timing,
+    Spectrum {
+        source: AudioInput,
+        hold_edges: bool,
+    },
     Band {
-        source: AudioSource,
+        source: AudioInput,
         low_hz: f64,
         high_hz: f64,
     },
@@ -54,6 +122,12 @@ pub enum FeatureRequest {
 }
 #[derive(Clone, Debug)]
 pub enum FeatureSample {
+    Timing(std::sync::Arc<TrackTiming>),
+    /// Magnitude bins normalized by the FFT size, with their uniform spacing.
+    Spectrum {
+        bins: Vec<f64>,
+        bin_hz: f64,
+    },
     Energy(f64),
     /// Absolute beat of the latest event and its stable, zero-based index.
     Onset(Option<(f64, u64)>),
@@ -61,15 +135,71 @@ pub enum FeatureSample {
 }
 pub trait FeatureSource: std::fmt::Debug + Send + Sync {
     fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample>;
+    /// Immutable absolute event timestamps for the analyzed track.
+    fn onsets(&self, drum: Drum) -> Result<EventTimes>;
 }
 
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     use crate::signals::port;
     let fixed = |name, kind, value| Input {
+        optional: false,
         rate: Rate::Fixed,
         ..port(name, kind, Some(value))
     };
     let (name, inputs, outputs) = match op {
+        Primitive::FilterAudio { highpass } => (
+            if highpass {
+                "Audio highpass"
+            } else {
+                "Audio lowpass"
+            },
+            vec![
+                (
+                    "source",
+                    fixed(
+                        "Audio source",
+                        ValueType::AudioSource,
+                        Value::AudioSource(AudioSource::Mix.into()),
+                    ),
+                ),
+                (
+                    "cutoff_hz",
+                    fixed("Cutoff (Hz)", ValueType::Number, Value::Number(200.)),
+                ),
+            ],
+            vec![("source", ValueType::AudioSource)],
+        ),
+        Primitive::AudioSpectrum => (
+            "Audio spectrum",
+            vec![
+                (
+                    "source",
+                    fixed(
+                        "Audio source",
+                        ValueType::AudioSource,
+                        Value::AudioSource(AudioSource::Mix.into()),
+                    ),
+                ),
+                (
+                    "hold_edges",
+                    fixed(
+                        "Hold audio boundaries",
+                        ValueType::Boolean,
+                        Value::Boolean(false),
+                    ),
+                ),
+            ],
+            vec![
+                (
+                    "spectrum",
+                    ValueType::Signal(SignalType {
+                        unit: Some(Unit::Number),
+                        channels: None,
+                    }),
+                ),
+                ("bin_hz", ValueType::Number),
+            ],
+        ),
         Primitive::BandEnergy => (
             "Frequency energy",
             vec![
@@ -78,7 +208,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     fixed(
                         "Audio source",
                         ValueType::AudioSource,
-                        Value::AudioSource(AudioSource::Mix),
+                        Value::AudioSource(AudioSource::Mix.into()),
                     ),
                 ),
                 (
@@ -96,17 +226,21 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             ],
             vec![("value", ValueType::Number)],
         ),
-        Primitive::DrumClock => (
+        Primitive::DrumClock | Primitive::DrumEvents => (
             "Drum event time",
             vec![(
                 "drum",
                 fixed("Drum", ValueType::Drum, Value::Drum(Drum::Kick)),
             )],
-            vec![
-                ("elapsed", ValueType::Beats),
-                ("index", ValueType::Number),
-                ("present", ValueType::Proportion),
-            ],
+            if op == Primitive::DrumEvents {
+                vec![("trigger", ValueType::Events)]
+            } else {
+                vec![
+                    ("elapsed", ValueType::Beats),
+                    ("index", ValueType::Number),
+                    ("present", ValueType::Proportion),
+                ]
+            },
         ),
         Primitive::Harmony => (
             "Harmony",
@@ -119,7 +253,12 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         _ => return None,
     };
     Some(Definition {
-        name: name.into(),
+        name: if op == Primitive::DrumEvents {
+            "Drum trigger"
+        } else {
+            name
+        }
+        .into(),
         inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         outputs: outputs
             .into_iter()
@@ -128,7 +267,11 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     k.into(),
                     Output {
                         value_type,
-                        rate: Rate::Frame,
+                        rate: if matches!(op, Primitive::FilterAudio { .. }) {
+                            Rate::Fixed
+                        } else {
+                            Rate::Frame
+                        },
                     },
                 )
             })
@@ -142,8 +285,25 @@ pub(crate) fn request(
     inputs: &BTreeMap<String, Value>,
 ) -> Result<Option<FeatureRequest>> {
     Ok(Some(match op {
+        Primitive::TrackTime
+        | Primitive::GridEvents
+        | Primitive::EventWindow
+        | Primitive::EventSpacing
+        | Primitive::ThinEvents => FeatureRequest::Timing,
+        Primitive::AudioSpectrum => {
+            let Value::AudioSource(source) = &inputs["source"] else {
+                unreachable!()
+            };
+            let Value::Boolean(hold_edges) = inputs["hold_edges"] else {
+                unreachable!()
+            };
+            FeatureRequest::Spectrum {
+                source: source.clone(),
+                hold_edges,
+            }
+        }
         Primitive::BandEnergy => {
-            let Value::AudioSource(source) = inputs["source"] else {
+            let Value::AudioSource(source) = &inputs["source"] else {
                 unreachable!()
             };
             let low_hz = inputs["low_hz"].scalar();
@@ -159,12 +319,12 @@ pub(crate) fn request(
                 ));
             }
             FeatureRequest::Band {
-                source,
+                source: source.clone(),
                 low_hz,
                 high_hz,
             }
         }
-        Primitive::DrumClock => {
+        Primitive::DrumClock | Primitive::DrumEvents => {
             let Value::Drum(drum) = inputs["drum"] else {
                 unreachable!()
             };
@@ -173,65 +333,4 @@ pub(crate) fn request(
         Primitive::Harmony => FeatureRequest::Harmony,
         _ => return Ok(None),
     }))
-}
-
-pub(crate) fn run(
-    op: Primitive,
-    inputs: &BTreeMap<String, Value>,
-    frame: Frame,
-) -> Option<Result<BTreeMap<String, Value>>> {
-    if !op.reads_track() {
-        return None;
-    }
-    Some((|| {
-        let request = request(op, inputs)?.expect("track operation");
-        let source = frame
-            .features
-            .ok_or_else(|| Error("this graph requires analyzed track data".into()))?;
-        let outputs = match (op, source.sample(&request, frame.beat)?) {
-            (Primitive::BandEnergy, FeatureSample::Energy(value))
-                if value.is_finite() && value >= 0.0 =>
-            {
-                BTreeMap::from([("value".into(), Value::Number(value))])
-            }
-            (Primitive::DrumClock, FeatureSample::Onset(event)) => {
-                let (elapsed, index, present) = match event {
-                    Some((beat, index))
-                        if beat.is_finite()
-                            && beat <= frame.beat
-                            && index <= 9_007_199_254_740_991 =>
-                    {
-                        (frame.beat - beat, index as f64, 1.0)
-                    }
-                    None => (0.0, 0.0, 0.0),
-                    _ => return Err(Error("invalid analyzed onset".into())),
-                };
-                BTreeMap::from([
-                    ("elapsed".into(), Value::Beats(elapsed)),
-                    ("index".into(), Value::Number(index)),
-                    ("present".into(), Value::Proportion(present)),
-                ])
-            }
-            (Primitive::Harmony, FeatureSample::PitchClass(pitch))
-                if pitch.is_none_or(|p| p < 12) =>
-            {
-                BTreeMap::from([
-                    (
-                        "pitch_class".into(),
-                        Value::Number(pitch.unwrap_or(0) as f64),
-                    ),
-                    (
-                        "present".into(),
-                        Value::Proportion(if pitch.is_some() { 1.0 } else { 0.0 }),
-                    ),
-                ])
-            }
-            _ => {
-                return Err(Error(
-                    "track source returned the wrong feature type or range".into(),
-                ))
-            }
-        };
-        Ok(outputs)
-    })())
 }

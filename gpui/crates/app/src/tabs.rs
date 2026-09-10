@@ -59,10 +59,6 @@ pub(crate) enum Target {
         track: String,
         venue: String,
     },
-    /// One pattern's node graph.
-    Graph {
-        pattern: String,
-    },
     ScoreGraph {
         score: String,
         graph: String,
@@ -81,7 +77,7 @@ impl Target {
     pub(crate) fn key_context(&self) -> &'static str {
         match self {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
-            Self::Graph { .. } | Self::ScoreGraph { .. } => crate::keymap::context::GRAPH,
+            Self::ScoreGraph { .. } => crate::keymap::context::GRAPH,
             Self::Patch { .. } => crate::keymap::context::PATCH,
         }
     }
@@ -94,7 +90,6 @@ impl Target {
     pub(crate) fn element_key(&self) -> String {
         match self {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
-            Self::Graph { pattern } => format!("graph:{pattern}"),
             Self::ScoreGraph { score, graph } => format!("score-graph:{score}:{graph}"),
             Self::Patch { venue } => format!("patch:{venue}"),
         }
@@ -111,7 +106,7 @@ impl Target {
     pub(crate) fn venue(&self) -> Option<&str> {
         match self {
             Self::Patch { venue } => Some(venue),
-            Self::TrackEditor { .. } | Self::Graph { .. } | Self::ScoreGraph { .. } => None,
+            Self::TrackEditor { .. } | Self::ScoreGraph { .. } => None,
         }
     }
 }
@@ -299,8 +294,9 @@ mod tests {
     }
 
     fn graph(pattern: &str) -> Target {
-        Target::Graph {
-            pattern: pattern.to_string(),
+        Target::ScoreGraph {
+            score: "score".into(),
+            graph: pattern.to_string(),
         }
     }
 

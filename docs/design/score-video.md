@@ -34,7 +34,7 @@ Every link is already public and already used by `venue.render`. Three propertie
 recording nearly free to build on top:
 
 - **`Scene::render` takes an arbitrary `&[f32]`.** Its own doc says a dense grid is a
-  bake. Evaluation is a pure function of absolute `t` — ADSR trigger lists, random
+  bake. Evaluation is a pure function of absolute `t` — envelope events, random
   seeds, filter state and audio windows are all baked at compile or recomputed from
   `t`, so no frame needs a predecessor. Frames may be evaluated in one batched call.
 - **The renderer is already reusable.** `Renderer::targets` reallocates only when

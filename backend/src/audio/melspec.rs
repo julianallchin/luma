@@ -6,6 +6,54 @@ pub const MEL_SPEC_WIDTH: usize = 512;
 pub const MEL_SPEC_HEIGHT: usize = 128;
 const HOP_SIZE: usize = 512;
 
+/// A clip-cropped view of one exact audio source. Columns and frequency rows
+/// retain their coordinates so preview overlays use the track's real clock.
+#[derive(Clone, Debug)]
+pub struct Spectrogram {
+    pub width: usize,
+    pub height: usize,
+    pub data: Vec<f32>,
+    pub span: (f32, f32),
+    pub frequencies_hz: Vec<f32>,
+}
+
+pub fn inspect(samples: &[f32], sample_rate: u32, span: (f32, f32)) -> Result<Spectrogram, String> {
+    if sample_rate == 0
+        || samples.is_empty()
+        || !span.0.is_finite()
+        || !span.1.is_finite()
+        || span.1 <= span.0
+    {
+        return Err(
+            "spectrogram needs nonempty audio, a sample rate and a finite time span".into(),
+        );
+    }
+    let sr = sample_rate as f32;
+    let start = ((span.0.max(0.) * sr) as usize).min(samples.len());
+    let end = ((span.1.max(0.) * sr).ceil() as usize).clamp(start, samples.len());
+    let (data, span) = if start < end {
+        (
+            generate_melspec(
+                &FftService::new(),
+                &samples[start..end],
+                sample_rate,
+                MEL_SPEC_WIDTH,
+                MEL_SPEC_HEIGHT,
+            ),
+            (start as f32 / sr, end as f32 / sr),
+        )
+    } else {
+        (vec![0.; MEL_SPEC_WIDTH * MEL_SPEC_HEIGHT], span)
+    };
+    Ok(Spectrogram {
+        width: MEL_SPEC_WIDTH,
+        height: MEL_SPEC_HEIGHT,
+        data,
+        span,
+        frequencies_hz: super::fft::mel_center_frequencies(MEL_SPEC_HEIGHT, sample_rate),
+    })
+}
+
 pub fn generate_melspec(
     fft_service: &FftService,
     samples: &[f32],
@@ -124,5 +172,42 @@ fn normalize_spectrogram(data: &mut [f32]) {
 
     for (dst, &log_value) in data.iter_mut().zip(log_values.iter()) {
         *dst = ((log_value - min_log) / range).clamp(0.0, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spectrogram_crops_on_the_absolute_clock_and_is_black_outside_audio() {
+        let samples: Vec<_> = (0..8000)
+            .map(|i| (i as f32 * std::f32::consts::TAU * 440. / 8000.).sin())
+            .collect();
+        let full = inspect(&samples, 8000, (0., 1.)).unwrap();
+        assert!(full.data.iter().any(|v| *v > 0.9));
+        let cropped = inspect(&samples, 8000, (-1., 0.5)).unwrap();
+        assert_eq!(cropped.span, (0., 0.5));
+        assert_eq!(
+            cropped.data,
+            generate_melspec(
+                &FftService::new(),
+                &samples[..4000],
+                8000,
+                MEL_SPEC_WIDTH,
+                MEL_SPEC_HEIGHT
+            )
+        );
+        assert_eq!(
+            cropped.frequencies_hz,
+            super::super::fft::mel_center_frequencies(MEL_SPEC_HEIGHT, 8000)
+        );
+        for span in [(-2., -1.), (2., 3.)] {
+            let empty = inspect(&samples, 8000, span).unwrap();
+            assert_eq!(empty.span, span);
+            assert!(empty.data.iter().all(|v| *v == 0.));
+        }
+        assert!(inspect(&samples, 0, (0., 1.)).is_err());
+        assert!(inspect(&samples, 8000, (f32::NAN, 1.)).is_err());
     }
 }

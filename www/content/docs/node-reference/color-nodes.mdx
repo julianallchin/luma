@@ -1,158 +1,81 @@
 ---
 title: Color Nodes
-description: Nodes for generating and transforming color signals -- constant colors, gradients, chroma palettes, and spectral shifting.
+description: Sample palettes, mix colors and rotate hue using composable signals.
 ---
 
 # Color Nodes
 
-Color nodes generate and transform color signals.
+Color is an RGB signal. Its fixture and time dimensions broadcast like other
+signals. Set a constant color or gradient in the inspector, or connect a named
+Input to share and expose that control.
 
----
+Palettes retain up to 64 stops. A single stop is a constant color; an empty
+palette samples as black. The inspector shows “No colors” for empty values and
+lets you add a color or remove the last one. Empty clip overrides remain distinct
+from an inherited graph default.
 
-## Color
+`palette_fallback` takes a `gradient` and a `fallback`, returning the first when
+it contains any colors and the fallback otherwise. An explicit black color counts
+as a color. Saved harmonic palettes use this operation to preserve their original
+rainbow fallback while sharing the same Input with other consumers.
 
-| Field | Value |
-|-------|-------|
-| **Type ID** | `color` |
-| **Category** | Color |
-| **Description** | Constant color generator. |
+## Sample gradient
 
-### Inputs
+`sample_gradient` samples a structured gradient at
+`position`. A position of 0 selects the start and 1 the end; positions outside
+that range hold the nearest endpoint. Interpolation between stops uses OKLab.
+The `color` output carries RGB; `opacity` samples the stop opacity as a separate
+scalar signal. Both preserve the position signal's fixture and time dimensions.
+Connect opacity to Output's Dimmer, or multiply it by an independent intensity
+signal. Existing color-only connections keep their brightness behavior.
 
-None.
+Connect mapped position and travel phase through Add and Fraction to make a
+traveling palette ribbon. Its intensity can come from an independent Envelope,
+Chase or other numerical signal.
 
-### Outputs
+## Mix palette
 
-| Port | Type |
-|------|------|
-| `out` | Signal (N=1, T=1, C=4 RGBA) |
+`mix_palette` takes a `gradient` and a vector of `weights`. Each channel weights
+one palette color; the result is their sum. Multiple fixtures and times can have
+different weights. The outputs are `color` (RGB) and `opacity` (a separate scalar
+signal). Neither output is clipped by the mixer.
 
-### Parameters
+`perceptual` selects OKLab mixing. In this mode, when the weight count matches
+the stop count, weights refer directly to the authored stops. Otherwise, colors
+are sampled evenly across the gradient. `vibrance` controls chroma correction
+in perceptual mode and defaults to 0.6. Ordinary RGB mixing is the default and
+always uses evenly sampled colors.
 
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `color` | JSON string | -- | Color as `{"r": 0-255, "g": 0-255, "b": 0-255, "a": 0-1}` |
+## HSV
 
-### Behavior
+`hsv` constructs RGB from `hue` in turns, `saturation` and `value`. Saturation and
+value default to 1. Hue wraps in either direction; 0 and 1 are red, one third is
+green, and two thirds is blue. The resulting RGB is clipped to 0–1.
 
-- RGB values in the parameter are 0-255 integers; they are normalized to 0.0-1.0 in the output signal.
-- Alpha is already 0.0-1.0 in the parameter.
+## Rotate hue
 
----
+`rotate_hue` takes `color` and `turns`, producing `color`. Zero leaves the hue
+unchanged; one third rotates red to green. Negative values rotate the other way.
+Both inputs can vary across fixtures and time.
 
-## Gradient
+Rotation preserves the minimum and maximum RGB channels. It therefore preserves
+HSL lightness and HSV value/saturation. Gray stays gray. Numerical values outside
+0–1 retain their headroom until a downstream operation or Output bounds them.
 
-| Field | Value |
-|-------|-------|
-| **Type ID** | `gradient` |
-| **Category** | Color |
-| **Description** | Maps a scalar input signal to a color range via linear interpolation. |
+## Pitch-driven hue rotation
 
-### Inputs
+Use `core/channel_argmax` (Strongest channel) to find the index of the greatest
+pitch weight, Divide by 12, then connect that signal to Rotate hue's `turns`.
+Strongest channel accepts any channel count, returns a zero-based index per
+fixture and time, and chooses the first index on ties. Multiply the rotation
+signal to control its strength.
 
-| Port | Type | Required |
-|------|------|----------|
-| `in` | Signal (C >= 1) | Yes |
-| `start_color` | Signal | No (overrides start_color parameter) |
-| `end_color` | Signal | No (overrides end_color parameter) |
+Saved Spectral Shift nodes migrate to this composition. They retain the old
+first-selected-head behavior and ignore the old Strength setting, which never
+affected playback. New compositions can operate independently on every head.
 
-### Outputs
+## Output
 
-| Port | Type |
-|------|------|
-| `out` | Signal (N=in.N, T=in.T, C=4 RGBA) |
-
-### Parameters
-
-| Name | Type | Default | Description |
-|------|------|---------|-------------|
-| `start_color` | hex string | `"#000000"` | Color at input value 0.0 |
-| `end_color` | hex string | `"#ffffff"` | Color at input value 1.0 |
-
-### Behavior
-
-- The input signal's first channel (C=0) is used as the interpolation factor.
-- Input values are expected in the 0.0-1.0 range; values outside this range will extrapolate.
-- Wired `start_color` and `end_color` inputs override the corresponding parameters.
-- Interpolation is performed independently per RGBA channel.
-
----
-
-## Chroma Palette
-
-| Field | Value |
-|-------|-------|
-| **Type ID** | `chroma_palette` |
-| **Category** | Color |
-| **Description** | Maps 12-pitch chroma distribution to RGB color via weighted palette lookup. |
-
-### Inputs
-
-| Port | Type | Required |
-|------|------|----------|
-| `chroma` | Signal (C=12) | Yes |
-
-### Outputs
-
-| Port | Type |
-|------|------|
-| `out` | Signal (N=1, T=chroma.T, C=3 RGB) |
-
-### Parameters
-
-None.
-
-### Pitch-to-Color Palette
-
-| Pitch | Color |
-|-------|-------|
-| C | Red |
-| C# | OrangeRed |
-| D | Orange |
-| D# | Gold |
-| E | Yellow |
-| F | GreenYellow |
-| F# | Green |
-| G | Cyan |
-| G# | DeepSkyBlue |
-| A | Blue |
-| A# | BlueViolet |
-| B | Magenta |
-
-### Behavior
-
-- Output color is the weighted sum of all 12 palette entries, where weights come from the chroma distribution.
-- Auto-gain normalization ensures consistent brightness regardless of chroma magnitude.
-
----
-
-## Spectral Shift
-
-| Field | Value |
-|-------|-------|
-| **Type ID** | `spectral_shift` |
-| **Category** | Color |
-| **Description** | Rotates input color's hue based on the dominant pitch in a chroma signal. |
-
-### Inputs
-
-| Port | Type | Required |
-|------|------|----------|
-| `in` | Signal (C >= 3, RGB) | Yes |
-| `chroma` | Signal (C=12) | Yes |
-
-### Outputs
-
-| Port | Type |
-|------|------|
-| `out` | Signal (N=1, T=min(in.T, chroma.T), C=3 RGB) |
-
-### Parameters
-
-None.
-
-### Behavior
-
-- Converts input color to HSL, shifts hue by `(dominant_pitch / 12) * 360` degrees, converts back to RGB.
-- The dominant pitch is the channel index with the highest value in the chroma distribution at each time step.
-- Creates harmonically-responsive color shifting that tracks chord changes.
+Connect color to Output's Color port. With an explicit Dimmer connection, color
+and intensity remain independent. With Color alone, Output extracts brightness
+from RGB. Other capabilities, including movement, accept their own signals.

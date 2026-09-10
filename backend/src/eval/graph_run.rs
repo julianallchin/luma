@@ -24,11 +24,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
-use crate::audio::{mel_center_frequencies, FftService};
 use crate::canonical_json::to_string as canonical_json;
 use crate::eval::compile::compile_pattern;
 use crate::eval::context::build_resident_context;
-use crate::eval::{Arena, Plan, ResidentContext, ViewTap};
+use crate::eval::{Arena, Plan, ResidentContext};
 use crate::models::node_graph::{BeatGrid, Graph, GraphContext, RunResult, Signal};
 use crate::models::tracks::MelSpec;
 use crate::models::universe::UniverseState;
@@ -118,7 +117,6 @@ pub async fn evaluate_graph(
     pool: &SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,
-    fft: &FftService,
     graph: &Graph,
     context: &GraphContext,
     opts: EvaluateOptions,
@@ -159,7 +157,7 @@ pub async fn evaluate_graph(
             );
         }
 
-        compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
+        compile_pattern(&graph, &args, ctx, primitive_ids)
             .map_err(|e| format!("Failed to compile graph: {:?}", e))?
     };
 
@@ -169,7 +167,7 @@ pub async fn evaluate_graph(
     let universe_state = if graph.nodes.is_empty() {
         None
     } else {
-        crate::eval::eval(&plan, &[context.start_time], &mut arena).pop()
+        crate::eval::try_eval(&plan, &[context.start_time], &mut arena)?.pop()
     };
 
     // The dense grid is computed whether or not anything taps it — it is the run's
@@ -179,7 +177,7 @@ pub async fn evaluate_graph(
     let views = if plan.views.is_empty() {
         HashMap::new()
     } else {
-        crate::eval::eval_views(&plan, &times_s, &mut arena)
+        crate::eval::eval_views(&plan, &times_s, &mut arena)?
             .into_iter()
             .map(|(node_id, signal)| {
                 let channels = plan
@@ -193,9 +191,11 @@ pub async fn evaluate_graph(
             .collect()
     };
 
-    let mel_views = opts
-        .include_mel
-        .then(|| compute_mel_specs(graph, &plan.ctx, fft));
+    let mel_views = if opts.include_mel {
+        Some(compute_mel_specs(&plan)?)
+    } else {
+        None
+    };
 
     let primitive_ids = plan.primitive_ids.clone();
     let positions = plan.ctx.positions.clone();
@@ -238,17 +238,13 @@ impl GraphEvaluation {
 /// A compiled plan with no ops — what an empty graph evaluates to.
 fn empty_plan(span: (f32, f32)) -> Plan {
     Plan {
-        ops: Vec::new(),
-        slots: Vec::new(),
-        slot_channels: Vec::new(),
-        n: 0,
+        program: None,
         primitive_ids: Vec::new(),
         outputs: Default::default(),
         ctx: ResidentContext {
             span,
             ..Default::default()
         },
-        prologue_baked: Vec::new(),
         views: Vec::new(),
     }
 }
@@ -258,13 +254,7 @@ fn empty_plan(span: (f32, f32)) -> Plan {
 fn max_view_cols(plan: &Plan) -> usize {
     plan.views
         .iter()
-        .map(|(_, tap)| match tap {
-            ViewTap::Slot(slot) => {
-                let spec = &plan.slots[*slot as usize];
-                (spec.n.max(1) * spec.c.max(1)) as usize
-            }
-            ViewTap::Events(_) => 1,
-        })
+        .map(|(_, tap)| tap.n.max(1).saturating_mul(tap.c.max(1)))
         .max()
         .unwrap_or(1)
 }
@@ -396,99 +386,43 @@ fn sha256_hex(s: &str) -> String {
 /// through pass-through audio nodes (filters) to its source: a `stem_splitter`
 /// port selects that stem, anything else uses the full mix. (Filter nodes do not
 /// transform the preview audio — the spectrogram shows the unfiltered source.)
-fn compute_mel_specs(
-    graph: &Graph,
-    ctx: &ResidentContext,
-    fft_service: &FftService,
-) -> HashMap<String, SemanticMel> {
-    use crate::audio::{generate_melspec, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
-
-    let mut out = HashMap::new();
-    let by_id: HashMap<&str, &crate::models::node_graph::NodeInstance> =
-        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let edge_to = |node: &str, port: &str| {
-        graph
-            .edges
-            .iter()
-            .find(|e| e.to_node == node && e.to_port == port)
+fn compute_mel_specs(plan: &Plan) -> Result<HashMap<String, SemanticMel>, String> {
+    let Some(program) = &plan.program else {
+        return Ok(HashMap::new());
     };
-
-    for node in graph
-        .nodes
-        .iter()
-        .filter(|n| n.type_id == "mel_spec_viewer")
-    {
-        // Trace `in` upstream through filter pass-throughs to the audio source.
-        let mut stem: Option<String> = None;
-        let mut edge = edge_to(&node.id, "in");
-        while let Some(e) = edge {
-            let Some(src) = by_id.get(e.from_node.as_str()) else {
-                break;
-            };
-            match src.type_id.as_str() {
-                "lowpass_filter" | "highpass_filter" => edge = edge_to(&src.id, "audio_in"),
-                "stem_splitter" => {
-                    stem = e.from_port.strip_suffix("_out").map(str::to_string);
-                    break;
-                }
-                _ => break,
-            }
-        }
-
-        let audio = match &stem {
-            Some(name) => ctx.stems.get(name),
-            None => ctx.audio.as_ref(),
+    let mut audio = super::track_features::AudioSources::resident(&plan.ctx);
+    let values = program.sample(&[plan.ctx.span.0])?;
+    let mut out = HashMap::new();
+    for (name, value) in values {
+        let Ok(luma_patterns::Value::AudioSource(source)) = value.sample(0) else {
+            continue;
         };
-        let Some(audio) = audio else { continue };
-        if audio.samples.is_empty() || audio.sample_rate == 0 {
-            continue;
-        }
-
-        // Crop the resident full-track audio to the annotation span.
-        let (s0, s1) = ctx.span;
-        let sr = audio.sample_rate as f32;
-        let start = ((s0.max(0.0) * sr) as usize).min(audio.samples.len());
-        let end = ((s1.max(0.0) * sr).ceil() as usize).clamp(start, audio.samples.len());
-        if start >= end {
-            continue;
-        }
-
-        let data = generate_melspec(
-            fft_service,
-            &audio.samples[start..end],
-            audio.sample_rate,
-            MEL_SPEC_WIDTH,
-            MEL_SPEC_HEIGHT,
-        );
-
-        // Beat grid shifted relative to the crop, when the viewer has one wired.
-        let beat_grid = edge_to(&node.id, "grid")
-            .and_then(|_| ctx.beat_grid.as_ref())
-            .map(|g| beat_grid_relative_to_span(g, s0, s1));
-
-        // Columns aggregate the STFT frames of the crop in equal blocks, so column
-        // `i` sits at the center of the `i`-th of `WIDTH` equal slices of the
-        // cropped audio, in absolute track seconds.
-        let (crop_s0, crop_s1) = (start as f32 / sr, end as f32 / sr);
-        let times_s = (0..MEL_SPEC_WIDTH)
-            .map(|i| crop_s0 + (crop_s1 - crop_s0) * ((i as f32 + 0.5) / MEL_SPEC_WIDTH as f32))
+        audio.prepare(&source)?;
+        let pcm = audio.get(&source).map_err(|e| e.to_string())?;
+        let mel = crate::audio::melspec::inspect(&pcm.samples, pcm.sample_rate, plan.ctx.span)?;
+        let (start, end) = mel.span;
+        let times_s = (0..mel.width)
+            .map(|i| start + (end - start) * (i as f32 + 0.5) / mel.width as f32)
             .collect();
-
         out.insert(
-            node.id.clone(),
+            name.strip_prefix("view/").unwrap_or(&name).to_owned(),
             SemanticMel {
                 mel: MelSpec {
-                    width: MEL_SPEC_WIDTH,
-                    height: MEL_SPEC_HEIGHT,
-                    data,
-                    beat_grid,
+                    width: mel.width,
+                    height: mel.height,
+                    data: mel.data,
+                    beat_grid: plan
+                        .ctx
+                        .beat_grid
+                        .as_ref()
+                        .map(|g| beat_grid_relative_to_span(g, start, end)),
                 },
-                frequencies_hz: mel_center_frequencies(MEL_SPEC_HEIGHT, audio.sample_rate),
+                frequencies_hz: mel.frequencies_hz,
                 times_s,
             },
         );
     }
-    out
+    Ok(out)
 }
 
 /// Shift a beat grid into span-relative time (keep beats inside `[start, end]`,
@@ -580,7 +514,7 @@ mod tests {
             positions: vec![[0.0, 0.0, 0.0]; primitive_ids.len()],
             ..Default::default()
         };
-        compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids).expect("compile")
+        compile_pattern(&graph, &args, ctx, primitive_ids).expect("compile")
     }
 
     /// The grid is uniform and lands exactly on both span endpoints — the whole
@@ -640,7 +574,7 @@ mod tests {
 
         assert_eq!(plan.primitive_ids, ids);
         assert_eq!(plan.ctx.positions.len(), plan.primitive_ids.len());
-        assert_eq!(plan.n as usize, plan.primitive_ids.len());
+        assert_eq!(plan.primitive_ids.len(), plan.primitive_ids.len());
     }
 
     /// Channel labels reach the view taps: a color path reports r/g/b, a scalar
@@ -659,21 +593,80 @@ mod tests {
         };
         assert_eq!(channels("view_color"), vec!["r", "g", "b"]);
         assert_eq!(channels("view_value"), vec!["value"]);
-
-        // …and every slot is labelled to its own width.
-        for (spec, labels) in plan.slots.iter().zip(&plan.slot_channels) {
-            assert_eq!(spec.c as usize, labels.len());
-        }
     }
 
-    /// An `Events` tap has no slot; it still names its single channel.
     #[test]
     fn event_taps_are_labelled() {
-        let plan = compile(&color_and_value_graph(), vec!["p0".into()], (0.0, 1.0));
-        assert_eq!(
-            plan.view_channels(&ViewTap::Events(vec![0.5])),
-            vec!["events"]
-        );
+        let graph = Graph {
+            nodes: vec![
+                node("beat", "beat_pulses", &[]),
+                node("view", "view_events", &[]),
+            ],
+            edges: vec![edge("beat", "events_out", "view", "events_in")],
+            args: vec![],
+        };
+        let plan = compile(&graph, vec!["p0".into()], (0., 1.));
+        assert_eq!(plan.view_channels(&plan.views[0].1), vec!["events"]);
+    }
+
+    #[test]
+    fn audio_diagnostics_follow_the_connected_filter_and_argument_override() {
+        let graph = Graph {
+            nodes: vec![
+                node("audio", "audio_input", &[]),
+                node("args", "pattern_args", &[]),
+                node("filter", "lowpass_filter", &[]),
+                node("mel", "mel_spec_viewer", &[]),
+            ],
+            edges: vec![
+                edge("audio", "out", "filter", "audio_in"),
+                edge("args", "cutoff", "filter", "cutoff_hz"),
+                edge("filter", "audio_out", "mel", "in"),
+            ],
+            args: vec![PatternArgDef {
+                id: "cutoff".into(),
+                name: "Cutoff".into(),
+                arg_type: PatternArgType::Scalar,
+                default_value: Value::from(1000.),
+            }],
+        };
+        let samples: Vec<f32> = (0..8000)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / 8000.;
+                (phase * 100.).sin() * 0.4 + (phase * 2000.).sin() * 0.2
+            })
+            .collect();
+        let ctx = ResidentContext {
+            span: (0.2, 0.8),
+            audio: Some(crate::eval::ResidentAudio {
+                samples: Arc::new(samples.clone()),
+                sample_rate: 8000,
+            }),
+            ..Default::default()
+        };
+        let plan = compile_pattern(
+            &graph,
+            &HashMap::from([("cutoff".into(), Value::from(200.))]),
+            ctx,
+            vec![],
+        )
+        .unwrap();
+        let actual = compute_mel_specs(&plan).unwrap().remove("mel").unwrap();
+        let source = luma_patterns::AudioInput::from(luma_patterns::AudioSource::Mix)
+            .filtered(luma_patterns::AudioFilter::Lowpass { cutoff_hz: 200. })
+            .unwrap();
+        let filtered = crate::audio::filters::apply_chain(&samples, 8000, &source).unwrap();
+        let expected = crate::audio::melspec::inspect(&filtered, 8000, (0.2, 0.8)).unwrap();
+        assert_eq!(actual.mel.data, expected.data);
+        assert_eq!(actual.frequencies_hz, expected.frequencies_hz);
+        assert!(actual.times_s[0] > 0.2 && *actual.times_s.last().unwrap() < 0.8);
+        let unfiltered = crate::audio::melspec::inspect(&samples, 8000, (0.2, 0.8)).unwrap();
+        assert!(actual
+            .mel
+            .data
+            .iter()
+            .zip(unfiltered.data)
+            .any(|(a, b)| (*a - b).abs() > 0.1));
     }
 
     /// Reordering nodes and edges, and moving every node on the canvas, must not

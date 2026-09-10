@@ -27,6 +27,7 @@ fn harness() -> Harness {
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
     .with_equal_timestamp_track()
+    .with_typed_patterns("chase")
     .with_rig()
     .open(Mode::Headless)
 }

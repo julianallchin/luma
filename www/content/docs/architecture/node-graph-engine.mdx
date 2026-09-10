@@ -1,131 +1,97 @@
 ---
 title: Node Graph Engine
-description: Execution model, topological sort, node dispatch, ADSR envelopes, and selection resolution
+description: Canonical score graphs, tensor preparation, immutable events, and clip playback
 ---
 
-The node graph engine evaluates pattern graphs to produce time-varying light output for fixtures. It lives in `backend/src/node_graph/`.
+Canonical scores own their graph definitions and clip instances. The shared
+evaluator in `backend/crates/patterns` computes numerical signals; the backend
+supplies venue geometry and analyzed track data, then composites explicit fixture
+outputs. Native playback and clip previews use the same prepared program.
 
-## Execution Model
+## Documents and preparation
 
-File: `backend/src/node_graph/executor.rs`
+A score contains named definitions and clips. A definition is a graph of node
+instances, input bindings and named outputs. Built-in recipes use the same graph
+format; numerical primitives have one Rust signature and kernel registry.
+Each clip supplies timing in beats, a group selection, a seed and input overrides.
+An Input node's stable key connects these overrides to the graph; renaming its
+display label preserves those connections.
 
-Graph execution follows five steps:
+Preparation validates types, rates, required bindings and graph acyclicity, then
+flattens nested definitions. Only outputs connected to the calling graph remain
+in the program. Unused drum sources, audio analyses and clip-range reductions
+are removed before track preparation. A source offering several drums therefore
+needs only the analyses used by its connected outputs.
 
-### 1. Graph Loading
+Fixed computations, including mappings and immutable event lists, are prepared
+once. Clip-range reductions sample their upstream dependencies over the clip;
+they are reused during playback. Rebinding analyzed track data rebuilds these
+prepared values. Playback executes the remaining dependencies in order without
+walking the authored definitions again.
 
-Parse `graph_json` from the implementation into a `Graph { nodes, edges, args }` structure. The graph JSON is the serialized representation stored in the database.
+Key files: `backend/crates/patterns/src/graph.rs`, `prepared.rs`, `score.rs`,
+and `backend/src/services/graph_scores.rs`.
 
-### 2. Dependency Resolution
+## Signals and controls
 
-Build a `petgraph::Graph` from edges and run `toposort()` for execution order. Cycles are detected and rejected with an error. The mapping from node IDs to petgraph indices uses a simple `HashMap<&str, NodeIndex>` that is allocated and dropped per execution.
+Numerical values are tensors with fixture, time and channel axes. Singleton axes
+broadcast; fixture identities, physical units and channel meanings constrain
+compatible connections. Scalars, colors, spatial fields and movement vectors use
+the same arithmetic operations. A Chase value can drive brightness, be remapped
+into pan/tilt, or become a palette coordinate.
 
-### 3. Context Loading
+Envelopes, gradients, mappings, dropdown choices, audio source descriptions and
+events remain structured values. Nodes consume these directly; the graph does
+not expand curve construction into stage-specific arithmetic nodes.
 
-If any node requires audio or beats (audio_input, beat_clock, stem_splitter, etc.), load the track's audio and beat grid via `context::load_context()`. This step is skipped entirely if the graph has no audio-dependent nodes.
+## Events and envelopes
 
-### 4. Sequential Execution
+Events are immutable timestamps or periodic schedules. They may broadcast across
+a selection or carry head targeting. Random targeting derives from the seed,
+event identity and head identity, so seeking does not reroll an event.
 
-Process each node in topological order:
+Event age is evaluated from the requested time. Broadcasting event ages against
+head coordinates produces independent Chase journeys; Max combines overlapping
+responses. Trigger spacing and journey duration are independent. A completed
+journey contributes zero even when the drawn curve ends above zero.
 
-1. Gather incoming edges (lookup source node outputs from `ExecutionState`)
-2. Execute node logic via `nodes::run_node()` (dispatch by `type_id`)
-3. Store outputs in `ExecutionState` keyed by `(node_id, port_id)`
+Envelope is one editable curve represented by anchors and optional Bézier handles.
+Its numerical sampler preserves fixture, time and channel dimensions. Coincident
+anchors express instantaneous steps, with the rightmost anchor winning at the
+boundary. Saved stage controls are converted into ordinary curve data on import.
 
-### 5. Output Merging
+## Timing and output
 
-Collect all `apply_*` node outputs into a unified `LayerTimeSeries`. Multiple apply outputs for the same primitive use last-write-wins merging.
+The host converts absolute track seconds to musical beats using the analyzed beat
+timeline, including tempo changes. Seconds and beats have distinct units. The
+evaluator accepts arbitrary sample times: playback, out-of-order scrubbing and
+batch rendering use the same calculations without a fixed simulation rate or
+playback history.
 
-After merging, a preview frame is rendered at `start_time` via `engine::render_frame()` for immediate frontend visualization.
+Output accepts independent color, dimmer, pan, tilt, strobe and movement-speed
+signals. Leaving a capability unwired differs from writing zero. The host
+compositor layers active clips in their authored order and blend mode, with each
+clip active over its half-open time span.
 
-## ExecutionState
+The native visualizer auditions an isolated clip with real audio, selection and
+overrides. Additional numerical, event and audio outputs can be inspected beside its
+transport. Audio outputs display a mel spectrogram of the connected source and
+filter chain, with a temporary beat overlay. Signal plots retain head and channel identity; event ticks use the
+track's beat timeline. Plots are sampled when the clip changes and cached while
+the transport moves. Inspection preferences and the preview cursor are temporary.
 
-Defined in `backend/src/node_graph/state.rs`:
+## Venue selection and historical documents
 
-```rust
-pub struct ExecutionState {
-    pub audio_buffers: HashMap<(String, String), AudioBuffer>,
-    pub beat_grids: HashMap<(String, String), BeatGrid>,
-    pub selections: HashMap<(String, String), Vec<Selection>>,
-    pub signal_outputs: HashMap<(String, String), Signal>,
-    pub apply_outputs: Vec<LayerTimeSeries>,
-    pub color_outputs: HashMap<(String, String), String>,
-    pub root_caches: HashMap<i64, RootCache>,
-    pub view_results: HashMap<String, Signal>,
-    pub mel_specs: HashMap<String, MelSpec>,
-    pub color_views: HashMap<String, String>,
-    pub node_timings: Vec<NodeTiming>,
-}
-```
+Scores target group names rather than physical fixture IDs. The backend resolves
+the clip's selection expression against the current venue, enumerates its heads
+and supplies their world and UVZ coordinates to the evaluator. The resulting
+domain travels with numerical fields so unrelated selections cannot silently mix.
 
-All outputs are keyed by `(node_id, port_id)` tuples. Different output types (signals, selections, audio buffers, beat grids) are stored in separate HashMaps so type safety is maintained without runtime casting.
-
-## Node Dispatch
-
-File: `backend/src/node_graph/nodes/mod.rs`
-
-The top-level `run_node()` function dispatches to submodule handlers in order:
-
-1. **selection** -- spatial attributes, random masks
-2. **audio** -- stems, filters, beats, frequency analysis
-3. **signals** -- math, ramp, noise, orbit, remap
-4. **color** -- constant, gradient, chroma, spectral
-5. **apply** -- color (+ derived brightness), position, strobe, speed
-6. **analysis** -- harmony, tension, mel spectrogram
-
-Each submodule's `run_node()` returns `Ok(true)` if it handled the node type, or `Ok(false)` to pass to the next handler. This chain-of-responsibility pattern keeps node implementations organized by category.
-
-### NodeExecutionContext
-
-Each node receives a `NodeExecutionContext` (defined in `backend/src/node_graph/node_execution_context.rs`) with:
-
-- Access to incoming edges and source node outputs
-- Database pools (main + project)
-- FFT service, stem cache
-- Graph context (track, venue, timing info)
-- Pattern argument definitions and values
-- Configuration flags (compute_visualizations, log settings)
-- Pre-loaded audio buffer and beat grid from context loading
-
-## ADSR Envelope Generation
-
-The executor includes ADSR (Attack-Decay-Sustain-Release) envelope utilities used by signal nodes:
-
-### `adsr_durations(span_sec, attack, decay, sustain, release)`
-
-Distributes a time span across attack/decay/sustain/release phases based on relative weights. Weights are normalized so they sum to the total span.
-
-### `calc_envelope(t, peak, attack, decay, sustain, release, sustain_level, a_curve, d_curve)`
-
-Generates a time-domain ADSR envelope value at time `t`. The `peak` parameter is the time of maximum amplitude.
-
-### `shape_curve(x, curve)`
-
-Applies exponential shaping to a linear `[0, 1]` value:
-
-| Curve value | Effect |
-|-------------|--------|
-| Positive (0 to +1) | Convex/snappy shapes (power 1-6) |
-| Zero | Linear (no shaping) |
-| Negative (-1 to 0) | Concave/swell shapes |
-
-## Temporal Alignment
-
-All signals use absolute time (seconds from track start):
-
-- Time mapping in nodes: `t_idx / (t_steps - 1) * duration + start_time`
-- `SeriesSample` times are absolute, not relative to pattern start
-- The `SIMULATION_RATE` constant (60.0 Hz) determines the maximum temporal resolution
-
-This absolute-time convention ensures correct alignment when the compositor merges layers from different annotations spanning different time ranges on the track.
-
-## Selection Resolution
-
-File: `backend/src/node_graph/nodes/selection.rs`
-
-Selection resolution translates selection expressions (over group names) into concrete fixture lists. Selection is not a graph node -- it is a pattern argument resolved before graph execution:
-
-1. Selection expressions are parsed into an AST by the expression parser in `backend/src/services/groups.rs`
-2. Supported operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
-3. Expressions are resolved against the venue's fixture group names (e.g., `front_wash & left_truss`)
-4. Each matched fixture's heads are enumerated with global 3D positions computed from fixture position, rotation, and head layout offsets
-5. The resolved selection is passed into the graph execution context and automatically available to Apply nodes and Get Attribute nodes
+Historical graph conversion lives in `backend/src/node_graph/migration` and
+`backend/src/services/graph_scores/migration.rs`. It preserves authored bindings
+and records intentional behavior changes against frozen reference results.
+Saved standalone graphs also cross this import boundary before playback. The
+old category compiler and operation dispatcher have been removed; the host
+adapter only prepares track data, projects canonical output into fixture
+capabilities, and publishes diagnostics. An unfinished graph receives an
+explicit unwritten Output and remains editable.

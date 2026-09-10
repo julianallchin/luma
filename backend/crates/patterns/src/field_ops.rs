@@ -1,5 +1,5 @@
-//! Fundamental numeric field operations. Field keys are stable head identities;
-//! scalar-to-field broadcasting is explicit at a graph's unit boundary.
+//! Authoring signatures for numerical operations. Compiled execution shares
+//! the tensor kernels regardless of a document's scalar/field port spelling.
 use crate::*;
 use std::collections::BTreeMap;
 
@@ -35,6 +35,7 @@ impl ScalarKind {
 
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     let port = |name: &str, kind: ValueType| Input {
+        optional: false,
         name: name.into(),
         description: name.into(),
         value_type: kind,
@@ -42,6 +43,56 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         default: None,
     };
     let (name, inputs, output, kind) = match op {
+        Primitive::JoinChannels => (
+            "Join channels",
+            vec![
+                ("a", port("A", ValueType::Signal(SignalType::ANY))),
+                ("b", port("B", ValueType::Signal(SignalType::ANY))),
+            ],
+            "value",
+            ValueType::Signal(SignalType::ANY),
+        ),
+        Primitive::Channel => (
+            "Channel",
+            vec![
+                ("value", port("Signal", ValueType::Signal(SignalType::ANY))),
+                (
+                    "index",
+                    Input {
+                        optional: false,
+                        name: "Index".into(),
+                        description: "Channel index, starting at zero".into(),
+                        value_type: ValueType::Number,
+                        rate: Rate::Fixed,
+                        default: Some(Value::Number(0.)),
+                    },
+                ),
+            ],
+            "value",
+            ValueType::Signal(SignalType {
+                unit: None,
+                channels: Some(Channels::Value),
+            }),
+        ),
+        Primitive::ChannelArgmax => (
+            "Strongest channel",
+            vec![("value", port("Signal", ValueType::Signal(SignalType::ANY)))],
+            "value",
+            ValueType::Number,
+        ),
+        Primitive::ChannelMaximum | Primitive::ChannelSum => (
+            if op == Primitive::ChannelSum {
+                "Sum channels"
+            } else {
+                "Maximum channel"
+            },
+            vec![("value", port("Value", ValueType::Signal(SignalType::ANY)))],
+            "value",
+            ValueType::Signal(SignalType {
+                unit: None,
+                channels: Some(Channels::Value),
+            }),
+        ),
         Primitive::FieldBinary(math) => (
             match math {
                 FieldMath::Add => "Add",
@@ -52,11 +103,11 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 FieldMath::Maximum => "Maximum",
             },
             vec![
-                ("a", port("A", ValueType::Field)),
-                ("b", port("B", ValueType::Field)),
+                ("a", port("A", ValueType::Signal(SignalType::ANY))),
+                ("b", port("B", ValueType::Signal(SignalType::ANY))),
             ],
             "value",
-            ValueType::Field,
+            ValueType::Signal(SignalType::ANY),
         ),
         Primitive::Broadcast(kind) => (
             "Broadcast",
@@ -66,9 +117,12 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         ),
         Primitive::FieldClamp => (
             "Clamp coverage",
-            vec![("value", port("Value", ValueType::Field))],
+            vec![("value", port("Value", ValueType::Signal(SignalType::ANY)))],
             "mask",
-            ValueType::Mask,
+            ValueType::Signal(SignalType {
+                unit: Some(Unit::Proportion),
+                channels: None,
+            }),
         ),
         Primitive::MaskToField => (
             "Coverage values",
@@ -79,11 +133,12 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         Primitive::FieldGreater => (
             "Greater than",
             vec![
-                ("a", port("A", ValueType::Field)),
-                ("b", port("B", ValueType::Field)),
+                ("a", port("A", ValueType::Signal(SignalType::ANY))),
+                ("b", port("B", ValueType::Signal(SignalType::ANY))),
                 (
                     "tolerance",
                     Input {
+                        optional: false,
                         name: "Tolerance".into(),
                         description: "Ignore differences at or below this absolute tolerance"
                             .into(),
@@ -94,17 +149,29 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ),
             ],
             "mask",
-            ValueType::Mask,
+            ValueType::Signal(SignalType {
+                unit: Some(Unit::Proportion),
+                channels: None,
+            }),
         ),
         Primitive::FieldSelect => (
             "Choose",
             vec![
-                ("condition", port("Condition", ValueType::Mask)),
-                ("yes", port("Yes", ValueType::Field)),
-                ("no", port("No", ValueType::Field)),
+                (
+                    "condition",
+                    port(
+                        "Condition",
+                        ValueType::Signal(SignalType {
+                            unit: Some(Unit::Proportion),
+                            channels: None,
+                        }),
+                    ),
+                ),
+                ("yes", port("Yes", ValueType::Signal(SignalType::ANY))),
+                ("no", port("No", ValueType::Signal(SignalType::ANY))),
             ],
             "value",
-            ValueType::Field,
+            ValueType::Signal(SignalType::ANY),
         ),
         Primitive::ChooseNumber => (
             "Choose number",
@@ -121,6 +188,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             vec![(
                 "epoch",
                 Input {
+                    optional: false,
                     name: "Epoch".into(),
                     description: "Changing this index chooses a new deterministic random field"
                         .into(),
@@ -146,139 +214,4 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         )]),
         body: Body::Primitive(op),
     })
-}
-
-pub(crate) fn run(
-    op: Primitive,
-    i: &BTreeMap<String, Value>,
-    frame: Frame,
-) -> Option<Result<BTreeMap<String, Value>>> {
-    if !matches!(
-        op,
-        Primitive::FieldBinary(_)
-            | Primitive::Broadcast(_)
-            | Primitive::FieldClamp
-            | Primitive::MaskToField
-            | Primitive::FieldGreater
-            | Primitive::FieldSelect
-            | Primitive::RandomField
-            | Primitive::ChooseNumber
-    ) {
-        return None;
-    }
-    Some((|| {
-        let field = |key: &str| match &i[key] {
-            Value::Field(f) | Value::Mask(f) => f,
-            _ => unreachable!("validated field input"),
-        };
-        let out = |key: &str, value: Value| Ok(BTreeMap::from([(key.into(), value)]));
-        let zip = |a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>| {
-            if a.keys().eq(b.keys()) {
-                Ok(())
-            } else {
-                Err(Error("numeric field head domains differ".into()))
-            }
-        };
-        match op {
-            Primitive::Broadcast(_) => out(
-                "value",
-                Value::Field(
-                    frame
-                        .cells
-                        .iter()
-                        .map(|c| (c.id.clone(), i["value"].scalar()))
-                        .collect(),
-                ),
-            ),
-            Primitive::MaskToField => out("value", Value::Field(field("mask").clone())),
-            Primitive::FieldBinary(math) => {
-                let a = field("a");
-                let b = field("b");
-                zip(a, b)?;
-                let result = a
-                    .iter()
-                    .map(|(id, a)| {
-                        let b = b[id];
-                        (id.clone(), math.evaluate(*a, b))
-                    })
-                    .collect();
-                out("value", Value::Field(result))
-            }
-            Primitive::FieldClamp => out(
-                "mask",
-                Value::Mask(
-                    field("value")
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clamp(0.0, 1.0)))
-                        .collect(),
-                ),
-            ),
-            Primitive::FieldGreater => {
-                let a = field("a");
-                let b = field("b");
-                zip(a, b)?;
-                out(
-                    "mask",
-                    Value::Mask(
-                        a.iter()
-                            .map(|(id, a)| {
-                                (
-                                    id.clone(),
-                                    if *a - b[id] > i["tolerance"].scalar().max(0.0) {
-                                        1.0
-                                    } else {
-                                        0.0
-                                    },
-                                )
-                            })
-                            .collect(),
-                    ),
-                )
-            }
-            Primitive::FieldSelect => {
-                let c = field("condition");
-                let yes = field("yes");
-                let no = field("no");
-                zip(c, yes)?;
-                zip(c, no)?;
-                out(
-                    "value",
-                    Value::Field(
-                        c.iter()
-                            .map(|(id, c)| (id.clone(), if *c > 0.0 { yes[id] } else { no[id] }))
-                            .collect(),
-                    ),
-                )
-            }
-            Primitive::ChooseNumber => out(
-                "value",
-                i[if i["condition"] == Value::Boolean(true) {
-                    "yes"
-                } else {
-                    "no"
-                }]
-                .clone(),
-            ),
-            Primitive::RandomField => {
-                let epoch = i["epoch"].scalar();
-                if epoch.fract() != 0.0 || epoch.abs() > 9_007_199_254_740_991.0 {
-                    return Err(Error(
-                        "random epoch must be an exactly representable integer".into(),
-                    ));
-                }
-                let seed = crate::spatial::epoch_seed(frame.seed, epoch as i64);
-                out(
-                    "value",
-                    Value::Field(
-                        frame
-                            .cells
-                            .iter()
-                            .map(|c| (c.id.clone(), crate::spatial::threshold(&c.id, seed)))
-                            .collect(),
-                    ),
-                )
-            }
-            _ => unreachable!(),
-        }
-    })())
 }

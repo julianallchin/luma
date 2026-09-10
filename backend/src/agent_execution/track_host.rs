@@ -31,7 +31,6 @@ use crate::services::track_edits::{
 };
 use crate::storage::StorageRoot;
 
-mod patterns;
 mod score;
 
 const SAMPLES_PER_BEAT: f64 = 16.0;
@@ -349,6 +348,8 @@ impl HostCallHandler for TrackHost {
             if matches!(
                 method,
                 "track.score_check"
+                    | "track.score_upgrade"
+                    | "track.graph_instance"
                     | "track.score_apply"
                     | "track.score_render"
                     | "track.graph_edit"
@@ -356,9 +357,6 @@ impl HostCallHandler for TrackHost {
                     | "track.score_independent"
             ) {
                 return self.score_call(method, payload, context).await;
-            }
-            if matches!(method, "track.pattern_check" | "track.pattern_create") {
-                return self.pattern_call(method, payload, context).await;
             }
             if method == "track.apply" {
                 let plan: TrackEditPlan = decode(payload)?;

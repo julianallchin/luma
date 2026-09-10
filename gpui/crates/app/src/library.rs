@@ -70,9 +70,7 @@ use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
-use luma_lib::models::node_graph::{
-    BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
-};
+use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext, PatternArgDef, RunResult};
 use luma_lib::models::patch::{
     ArtNetNode, AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput,
 };
@@ -87,7 +85,6 @@ use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, Venue
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 use luma_lib::services::fixtures as fixtures_service;
-use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
 use luma_lib::services::group_derivation::FixtureRole;
 use luma_lib::services::track_edits::{TrackClip, TrackEditResult};
 use luma_lib::settings::AppSettings;
@@ -1751,55 +1748,14 @@ impl Library {
         )
     }
 
-    /// The node catalogue: what every `typeId` in a graph means. Static for
-    /// the life of the process, so a screen reads it once.
-    pub fn node_types(
-        &self,
-    ) -> impl Future<Output = Result<Vec<NodeTypeDef>, LibraryError>> + use<> {
-        self.call("get_node_types", json!({}))
-    }
-
-    /// One pattern's graph, with the implementation and revision it came from.
-    /// Both are the write token: [`Self::save_pattern_graph`] needs them, and
-    /// they are only valid for the document this returned.
-    ///
-    /// Resolves the implementation venue-agnostically, as the web editor does
-    /// — `get_pattern_args` is the one that resolves against a venue, and the
-    /// two can disagree.
-    pub fn pattern_graph(
+    pub fn pattern_score_template(
         &self,
         pattern_id: &str,
-    ) -> impl Future<Output = Result<GraphDocument, LibraryError>> + use<> {
+        venue_id: &str,
+    ) -> impl Future<Output = Result<luma_patterns::Score, LibraryError>> + use<> {
         self.call(
-            "get_pattern_graph_document",
-            json!({ "id": pattern_id, "implementationId": null }),
-        )
-    }
-
-    /// Write a whole graph back, optimistically.
-    ///
-    /// `base_revision` is the revision the edited graph was read at; the seam
-    /// refuses the write if the document has moved since, which is the only
-    /// thing keeping two editors from silently overwriting each other.
-    /// `operation_id` makes a retry of *this* write idempotent — reuse it
-    /// verbatim across attempts, never mint a second one.
-    pub fn save_pattern_graph(
-        &self,
-        pattern_id: &str,
-        implementation_id: &str,
-        operation_id: &str,
-        base_revision: &str,
-        graph: &Graph,
-    ) -> impl Future<Output = Result<GraphEditResult, LibraryError>> + use<> {
-        self.call(
-            "save_pattern_graph_document",
-            json!({
-                "id": pattern_id,
-                "implementationId": implementation_id,
-                "operationId": operation_id,
-                "baseRevision": base_revision,
-                "graph": graph,
-            }),
+            "get_pattern_score_template",
+            json!({"id": pattern_id, "venueId": venue_id}),
         )
     }
 
@@ -1828,20 +1784,6 @@ impl Library {
         Output = Result<luma_lib::models::composable_patterns::ComposablePreview, LibraryError>,
     > + use<> {
         self.call("preview_composable_pattern", json!({"request":request}))
-    }
-
-    pub fn graph_preview_image(
-        &self,
-        graph: &Graph,
-        track: &str,
-        venue: &str,
-    ) -> impl Future<Output = Result<luma_lib::models::patterns::AnnotationPreview, LibraryError>> + use<>
-    {
-        self.call(
-            "preview_graph_image",
-            json!({"graph":graph,"trackId":track,"venueId":venue,
-            "startTime":0.,"endTime":8.,"beatGrid":null}),
-        )
     }
 
     pub fn run_graph(
@@ -1991,6 +1933,32 @@ impl Library {
             "preview_score_clip",
             json!({"scoreId":score_id,"clipId":clip_id,"score":score}),
         )
+    }
+
+    pub(crate) fn prepare_score_clip_preview(
+        &self,
+        score_id: &str,
+        clip_id: &str,
+        score: &luma_patterns::Score,
+    ) -> impl Future<Output = Result<luma_lib::services::graph_scores::ClipPreview, LibraryError>> + use<>
+    {
+        let services = self.services.clone();
+        let (score_id, clip_id, score) = (score_id.to_owned(), clip_id.to_owned(), score.clone());
+        let task = self.runtime.spawn(async move {
+            luma_lib::dispatch::prepare_score_clip_preview(&services, score_id, clip_id, score)
+                .await
+                .map_err(|error| {
+                    LibraryError::at("prepare_score_clip_preview", Cause::Command(error))
+                })
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at(
+                    "prepare_score_clip_preview",
+                    Cause::Cancelled(error.to_string()),
+                )
+            })?
+        }
     }
 
     pub(crate) fn composite_score_document(
@@ -2226,6 +2194,17 @@ impl Library {
                 "startSeconds": region.map(|(start, _)| start),
                 "endSeconds": region.map(|(_, end)| end),
             }),
+        )
+    }
+
+    pub(crate) fn set_preview_range(
+        &self,
+        span: (f32, f32),
+        looping: bool,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "host_set_playback_range",
+            json!({"startSeconds":span.0, "endSeconds":span.1, "looping":looping}),
         )
     }
 

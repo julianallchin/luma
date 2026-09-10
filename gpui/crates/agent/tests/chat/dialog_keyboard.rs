@@ -43,7 +43,7 @@ fn escape_closes_the_history_picker_the_thread_opened() {
                 dismissed: after.find({{ role: "card", label: "Chat history dialog" }}) === undefined,
             }})
         "#,
-            open = chat::open_chat("chat-history"),
+            open = chat::open_chat(),
             composer = chat::composer(),
         ),
         Duration::from_secs(180),
@@ -110,7 +110,7 @@ fn escape_steps_the_subagents_dialog_back_before_it_closes_it() {
             ({{ rowFocused, opened, threadSeated, stillOpen, closed }})
         "#,
             until = chat::UNTIL,
-            open = chat::open_chat("chat-subagent"),
+            open = chat::open_chat(),
             send = chat::send(),
             description = chat::SUBAGENT_DESCRIPTION,
             answer = chat::SUBAGENT_ANSWER,

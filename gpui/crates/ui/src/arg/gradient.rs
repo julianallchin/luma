@@ -4,7 +4,7 @@
 //! # The order is the type's, not the caller's
 //!
 //! [`Gradient`] owns the invariants — stops sorted by `t`, positions in
-//! `0..=1`, never fewer than two — and every mutator preserves them, so no
+//! `0..=1`, including empty and single-color values — and every mutator preserves them, so no
 //! host ever sorts, clamps, or index-juggles. The web reference re-sorts after
 //! every pointer move and then hunts for where its dragged stop went; here
 //! [`Gradient::move_stop`] instead clamps a drag between its neighbours, so a
@@ -40,30 +40,15 @@ pub struct GradientStop {
 }
 
 /// The ordered stop set. Constructed through [`Gradient::new`], which is where
-/// "sorted, clamped, at least two" becomes true and the mutators keep it true.
+/// "sorted and clamped" becomes true and the mutators keep it true.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gradient {
     stops: Vec<GradientStop>,
 }
 
-/// The pair a stopless construction falls back to — black to white, the web
-/// side's fallback.
-fn fallback() -> [GradientStop; 2] {
-    [
-        GradientStop {
-            t: 0.,
-            color: gpui::black().into(),
-        },
-        GradientStop {
-            t: 1.,
-            color: gpui::white().into(),
-        },
-    ]
-}
-
 impl Gradient {
     /// Adopt stops from anywhere — a JSON arg, a node param — sorting and
-    /// clamping them, and padding to two with the fallback if given fewer.
+    /// clamping them. Empty and single-color values retain their authored meaning.
     /// Total: there is no stop list this refuses.
     #[must_use]
     pub fn new(stops: impl IntoIterator<Item = GradientStop>) -> Self {
@@ -75,12 +60,6 @@ impl Gradient {
             })
             .collect();
         stops.sort_by(|a, b| a.t.total_cmp(&b.t));
-        let mut fill = fallback().into_iter();
-        while stops.len() < 2 {
-            // Padding goes where its `t` says; re-sort the (tiny) list after.
-            stops.push(fill.next().expect("fallback covers a two-stop deficit"));
-            stops.sort_by(|a, b| a.t.total_cmp(&b.t));
-        }
         Self { stops }
     }
 
@@ -94,8 +73,9 @@ impl Gradient {
     #[must_use]
     pub fn color_at(&self, t: f32) -> Rgba {
         let t = t.clamp(0., 1.);
-        let first = self.stops.first().expect("a gradient has two stops");
-        let last = self.stops.last().expect("a gradient has two stops");
+        let (Some(first), Some(last)) = (self.stops.first(), self.stops.last()) else {
+            return gpui::black().into();
+        };
         if t < first.t {
             return first.color;
         }
@@ -125,7 +105,11 @@ impl Gradient {
         let t = t.clamp(0., 1.);
         let stop = GradientStop {
             t,
-            color: self.color_at(t),
+            color: if self.stops.is_empty() {
+                gpui::white().into()
+            } else {
+                self.color_at(t)
+            },
         };
         let index = self.stops.partition_point(|s| s.t <= t);
         self.stops.insert(index, stop);
@@ -151,11 +135,9 @@ impl Gradient {
         self.stops[index].color = color;
     }
 
-    /// Remove a stop — unless that would leave fewer than two, in which case
-    /// nothing happens and the caller is told. A gradient of one stop is a
-    /// swatch; the type refuses to become one.
+    /// Remove a stop, allowing the last color to be removed as well.
     pub fn remove(&mut self, index: usize) -> bool {
-        if self.stops.len() <= 2 {
+        if index >= self.stops.len() {
             return false;
         }
         self.stops.remove(index);
@@ -205,9 +187,7 @@ pub fn luma_gradient_bar(
 
     // Flat lead-in, one 2-stop segment per adjacent pair, flat tail.
     let mut segments: Vec<gpui::AnyElement> = Vec::with_capacity(stops.len() + 1);
-    let first = stops.first().expect("a gradient has two stops");
-    let last = stops.last().expect("a gradient has two stops");
-    if first.t > 0. {
+    if let Some(first) = stops.first().filter(|first| first.t > 0.) {
         segments.push(
             div()
                 .h_full()
@@ -230,7 +210,7 @@ pub fn luma_gradient_bar(
                 .into_any_element(),
         );
     }
-    if last.t < 1. {
+    if let Some(last) = stops.last().filter(|last| last.t < 1.) {
         segments.push(
             div()
                 .h_full()
@@ -303,6 +283,7 @@ pub fn luma_gradient_bar(
         .h(px(CONTROL_HEIGHT))
         .border_1()
         .border_color(ladder::control_border())
+        .bg(gpui::black())
         .overflow_hidden()
         .children(segments)
         .child(probe)
@@ -356,17 +337,19 @@ mod tests {
     }
 
     /// Construction is total: unsorted input sorts, out-of-range positions
-    /// clamp, and fewer than two stops pads with the fallback pair.
+    /// clamp, and empty or single-color values keep their meaning.
     #[test]
     fn construction_establishes_the_invariants() {
         let g = Gradient::new([stop(0.9, 1.), stop(-0.5, 0.), stop(0.4, 0.5)]);
         assert_eq!(ts(&g), vec![0., 0.4, 0.9]);
         assert_sorted(&g);
 
-        assert_eq!(Gradient::new([]).stops().len(), 2);
-        let padded = Gradient::new([stop(0.5, 1.)]);
-        assert_eq!(padded.stops().len(), 2);
-        assert_sorted(&padded);
+        assert_eq!(Gradient::new([]).stops().len(), 0);
+        let single = Gradient::new([stop(0.5, 1.)]);
+        assert_eq!(single.stops(), &[stop(0.5, 1.)]);
+        for t in [-1., 0., 0.5, 1., 2.] {
+            assert_eq!(single.color_at(t), stop(0.5, 1.).color);
+        }
     }
 
     /// A drag clamps between its neighbours: order holds, the index stays
@@ -403,13 +386,19 @@ mod tests {
         }
     }
 
-    /// Two stops are the floor: removal below it is refused, above it works.
+    /// Clearing and refilling do not introduce synthetic fallback stops.
     #[test]
-    fn removal_stops_at_two() {
+    fn removal_can_clear_a_palette_and_insertion_restores_one_color() {
         let mut g = Gradient::new([stop(0., 0.), stop(0.5, 0.5), stop(1., 1.)]);
         assert!(g.remove(1));
+        assert!(g.remove(0));
+        assert!(g.remove(0));
         assert!(!g.remove(0));
-        assert_eq!(g.stops().len(), 2);
+        assert!(g.stops().is_empty());
+        assert_eq!(g.color_at(0.5), gpui::black().into());
+        assert_eq!(g.insert(0.5), 0);
+        assert_eq!(g.stops().len(), 1);
+        assert_eq!(g.color_at(0.5), gpui::white().into());
     }
 
     /// The sampler: flat past the ends, perceptual between.

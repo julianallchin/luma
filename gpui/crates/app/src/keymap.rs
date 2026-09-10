@@ -51,6 +51,8 @@ pub(crate) mod context {
     // Tab contexts, declared by the tab's own root *inside* `WORKSPACE`.
     pub const TRACK_EDITOR: &str = "TrackEditor";
     pub const GRAPH: &str = "Graph";
+    pub const GRAPH_INPUT_NAME: &str = "GraphInputName";
+    pub const GRAPH_NODE_SEARCH: &str = "GraphNodeSearch";
     pub const VISUALIZER: &str = "Visualizer";
     pub const PATCH: &str = "Patch";
     pub const STAGE: &str = "Stage";
@@ -177,6 +179,13 @@ actions!(
         RedoClips,
         /// Remove the graph editor's selected nodes.
         DeleteNodes,
+        AddGraphNode,
+        CancelGraphGesture,
+        NextGraphNode,
+        PrevGraphNode,
+        CommitGraphNode,
+        CommitGraphInputName,
+        CancelGraphInputName,
         /// Undo / redo the graph editor's last edit.
         UndoGraph,
         RedoGraph,
@@ -245,6 +254,26 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("enter", CommitInsertOption, Some(context::PATTERN_INSERT)),
         KeyBinding::new("escape", DismissOverlay, Some(context::PATTERN_INSERT)),
         KeyBinding::new("space", PlayPause, Some(&editing)),
+        KeyBinding::new(
+            "enter",
+            CommitGraphInputName,
+            Some(context::GRAPH_INPUT_NAME),
+        ),
+        KeyBinding::new(
+            "escape",
+            CancelGraphInputName,
+            Some(context::GRAPH_INPUT_NAME),
+        ),
+        KeyBinding::new("space", AddGraphNode, Some(&graphing)),
+        KeyBinding::new("escape", CancelGraphGesture, Some(&graphing)),
+        KeyBinding::new("down", NextGraphNode, Some(context::GRAPH_NODE_SEARCH)),
+        KeyBinding::new("up", PrevGraphNode, Some(context::GRAPH_NODE_SEARCH)),
+        KeyBinding::new("enter", CommitGraphNode, Some(context::GRAPH_NODE_SEARCH)),
+        KeyBinding::new(
+            "escape",
+            CancelGraphGesture,
+            Some(context::GRAPH_NODE_SEARCH),
+        ),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
         KeyBinding::new("backspace", DeleteNodes, Some(&graphing)),
         // `f` is a character a person could be typing, so it carries the same

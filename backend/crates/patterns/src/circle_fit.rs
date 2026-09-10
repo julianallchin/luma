@@ -14,6 +14,26 @@ pub struct CircleFitResult {
     pub angular_positions: Vec<f32>,
     /// Whether each point is an inlier
     pub is_inlier: Vec<bool>,
+    centroid: [f32; 3],
+    basis: PlaneBasis,
+}
+
+impl CircleFitResult {
+    /// Map transformed points against the original fit. Re-fitting folded
+    /// geometry would change the circle's frame and its authored origin.
+    pub fn angular_position(&self, point: [f32; 3]) -> f32 {
+        let relative: [f32; 3] = std::array::from_fn(|axis| point[axis] - self.centroid[axis]);
+        let project = |basis: [f32; 3]| {
+            relative
+                .into_iter()
+                .zip(basis)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        let du = project(self.basis.basis_u) - self.center_u;
+        let dv = project(self.basis.basis_v) - self.center_v;
+        ((dv.atan2(du) + PI) / (2. * PI) + 0.25) % 1.
+    }
 }
 
 /// 3D point with ID for tracking
@@ -99,6 +119,8 @@ pub fn fit_circle_3d(positions: &[(f32, f32, f32)]) -> Option<CircleFitResult> {
         radius: ransac_result.radius,
         angular_positions,
         is_inlier: ransac_result.is_inlier,
+        centroid: [cx, cy, cz],
+        basis,
     })
 }
 

@@ -217,7 +217,7 @@ async fn compile_single_cue(
     )
     .await;
 
-    let plan = compile_pattern(&graph.nodes, &graph.edges, &args, ctx, primitive_ids)
+    let plan = compile_pattern(&graph, &args, ctx, primitive_ids)
         .map_err(|e| format!("Failed to compile cue {}: {:?}", cue.id, e))?;
 
     Ok(CompiledCue {
