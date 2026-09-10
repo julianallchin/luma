@@ -25,7 +25,9 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
         const expect=v=>{const actual=Number(opacity().label.split(" = ")[1]);if(Math.abs(actual-v)>1e-6)throw new Error("opacity "+actual+" != "+v);};
         const set=v=>{app.click(opacity());app.key("secondary-a backspace");app.type(opacity(),String(v));app.key("enter");};
         app.click(node("card","Opacity ribbon"));app.click(node("card","Opacity ribbon"),{count:2});
-        app.click(node("card","Palette"));expect(0.2);
+        app.click(node("card","Mix palette"));node("button","Edit Input Palette");
+        if(app.snapshot().findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")))throw new Error("connected gradient remained editable on its consumer");
+        app.click(node("button","Edit Input Palette"));expect(0.2);
         app.click(node("slider","graph-gradient:stop:1 = 1"));expect(0.8);
         app.click(node("slider","graph-gradient:stop:0 = 0"));set(0.4);expect(0.4);
         app.click(node("card","Palette"));app.key("secondary-z");expect(0.2);
@@ -105,7 +107,9 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
         app.click(node("input","Input name"));app.key("secondary-a backspace");app.type(node("input","Input name"),"Texture seed");app.key("enter");
         app.drag(node("button","$input/input_1 output value"),node("button","noise input seed"),{steps:8,restale:"match"});
         node("button","Edge $input/input_1.value → noise.seed");
-        app.click(node("card","Texture seed"));expect("Value","18446744073709551614");
+        app.click(node("card","Value noise (1D)"));node("button","Edit Input Texture seed");
+        if(app.snapshot().findAll({role:"input"}).some(n=>n.label.startsWith("Seed = ")))throw new Error("connected seed remained editable on its consumer");
+        app.click(node("button","Edit Input Texture seed"));expect("Value","18446744073709551614");
         set("Value","18446744073709551615");expect("Value","18446744073709551615");
         set("Value","1.5");expect("Value","18446744073709551615");
         app.click(node("card","Texture seed"));app.key("secondary-z");expect("Value","18446744073709551614");
@@ -272,6 +276,10 @@ fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
         app.key("enter"); node("card","Follow beat grid");
         app.drag(node("button","$input/input_1 output value"),node("button","beat_a input grid_aligned"),{steps:8,restale:"match"});
         node("button","Edge $input/input_1.value → beat_a.grid_aligned");
+        const beatA=()=>app.snapshot().findAll({role:"card",label:"Beat trigger"})[0];
+        app.click(beatA());node("button","Edit Input Follow beat grid");
+        check(!app.snapshot().find({role:"select",label:"No"}),"connected dropdown remained editable on its consumer");
+        app.click(node("button","Edit Input Follow beat grid"));
         app.click(node("select","No")); app.click(node("button","Yes"));
         app.drag(node("button","beat_b input grid_aligned"),node("button","$input/input_1 output value"),{steps:8,restale:"match"});
         node("button","Edge $input/input_1.value → beat_b.grid_aligned");
@@ -279,7 +287,10 @@ fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
         app.key("delete");
         node("card","Follow beat grid");
         check(!!app.snapshot().find({role:"button",label:"Edge $input/input_1.value → beat_b.grid_aligned"}),"disconnecting one consumer removed the shared Input");
+        app.click(beatA());node("select","No");
         app.key("secondary-z"); node("button","Edge $input/input_1.value → beat_a.grid_aligned");
+        node("button","Edit Input Follow beat grid");
+        check(!app.snapshot().find({role:"select",label:"Yes"}) && !app.snapshot().find({role:"select",label:"No"}),"undo left a connected dropdown editable");
 
         app.click(node("button","Aurora"));
         app.click(node("card","Input controls"));
