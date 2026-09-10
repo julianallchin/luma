@@ -46,6 +46,8 @@ fn harness() -> Harness {
             .map(|(pattern, name, start, end, z)| Clip::new(*pattern, *name, *start, *end).lane(*z))
             .collect(),
     )
+    // Keep complete clip spans visible when the inspector opens.
+    .window(1600., 900.)
     .open(Mode::Headless)
 }
 
@@ -76,13 +78,14 @@ const SCRIPT: &str = r#"
     function read() {
         const shot = app.snapshot();
         const clips = {};
+        const origin = shot.find({ role: "card", label: "Waveform" }).bounds.x;
         for (const card of shot.findAll({ role: "card" })) {
-            clips[card.label] = { x: card.bounds.x, width: card.bounds.width };
+            clips[card.label] = { x: card.bounds.x - origin, width: card.bounds.width };
         }
         const playhead = shot.find({ role: "slider", label: "Playhead" });
         return {
             clips,
-            playhead: playhead === undefined ? null : playhead.bounds.x,
+            playhead: playhead === undefined ? null : playhead.bounds.x - origin,
             transport: shot.findAll({ role: "button" }).map((n) => n.label),
             status: shot.findAll({ role: "text" }).map((n) => n.label),
         };

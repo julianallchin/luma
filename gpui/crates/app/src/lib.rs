@@ -384,8 +384,7 @@ impl Luma {
                                 .ok()
                                 .and_then(|value| value.parse().ok())
                                 .unwrap_or(50.0);
-                            drop(this.library.seek(seek));
-                            drop(this.library.play());
+                            this.play_track_at(seek, cx);
                             true
                         }
                         None => false,
