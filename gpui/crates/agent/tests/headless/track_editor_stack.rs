@@ -160,17 +160,45 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
     //    next mouse move.
     for (reading, when) in [(&out["lifted"], "on screen"), (&out["stored"], "reopened")] {
         assert_eq!(
-            (
-                rank(reading, "Charlie"),
-                rank(reading, "Cap"),
-                rank(reading, "Alpha"),
-                rank(reading, "Bravo"),
-            ),
-            (0, 1, 2, 2),
-            "{when}: a one-lane group drag should leave Charlie alone on top, \
-             Cap under it and Alpha sharing Bravo's lane: {reading:#}"
+            (rank(reading, "Charlie"), rank(reading, "Cap")),
+            (0, 1),
+            "{when}: {reading:#}"
+        );
+        let mut shared = [rank(reading, "Alpha"), rank(reading, "Bravo")];
+        shared.sort_unstable();
+        assert_eq!(
+            shared,
+            [2, 3],
+            "{when}: same-priority overlaps need separate editable rows: {reading:#}"
         );
     }
+    // The extra visible row must not change the layer the drag actually saved.
+    let directory = support::config_dir("track-editor-stack");
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let pool = sqlx::SqlitePool::connect(&format!(
+                "sqlite:{}",
+                directory.join("luma.db").display()
+            ))
+            .await
+            .unwrap();
+            let layers: std::collections::BTreeMap<String,i64> = sqlx::query_as::<_, (String,i64)>(
+            "SELECT p.name, c.z_index FROM track_scores c JOIN patterns p ON p.id = c.pattern_id"
+        ).fetch_all(&pool).await.unwrap().into_iter().collect();
+            assert_eq!(
+                (
+                    layers["Alpha"],
+                    layers["Bravo"],
+                    layers["Charlie"],
+                    layers["Cap"]
+                ),
+                (1, 1, 3, 2)
+            );
+            pool.close().await;
+        });
 }
 
 /// Which lane a clip is in, counting from the topmost occupied one.

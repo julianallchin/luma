@@ -110,8 +110,11 @@ use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
 mod document;
+mod lanes;
+use lanes::assign_rows;
 mod minimap;
 pub(crate) mod picker;
+mod playback;
 mod playback_clock;
 mod playback_surface;
 mod sheet;
@@ -163,8 +166,8 @@ pub struct Editor {
     beat_validation_error: Option<String>,
     /// The **working copy**: every clip as the screen currently has it, with
     /// its lane resolved. Rebuilt whenever the clips change and never during a
-    /// draw — a lane is a function of *every* clip's `zIndex`, so working it
-    /// out per clip per frame would be quadratic in the one thing that grows.
+    /// draw. Rows depend on layer priority and overlapping time spans, so
+    /// rebuilding them per frame would repeat work for unchanged clips.
     ///
     /// Every gesture and every command edits this list and nothing else;
     /// [`Luma::commit_clips`] is the only thing that writes, and it writes the
@@ -327,7 +330,7 @@ struct Clip {
     start: f64,
     end: f64,
     /// Which lane it sits in, counting down from the empty insertion lane at
-    /// row 0. Derived from every clip's `zIndex` together — see [`lanes`].
+    /// row 0. Overlaps at one lighting priority get separate rows — see [`lanes`].
     row: usize,
     z: i64,
     blend: BlendMode,
@@ -688,9 +691,9 @@ struct Transport {
     playing: bool,
     position: f32,
     duration: f32,
-    /// A poll loop is running. Exactly one at a time, or every play would
-    /// leave another behind.
-    polling: bool,
+    session: Option<u64>,
+    ready: bool,
+    polling: Option<gpui::Task<()>>,
     status_second: u64,
 }
 
@@ -824,14 +827,6 @@ impl Editor {
         &self.track_name
     }
 
-    /// Disarm the loop region on the way out, reporting whether one was armed.
-    /// The tab teardown's half of the close contract: the loop belongs to the
-    /// transport, which outlives the tab, and a region left armed would wrap
-    /// the *next* track at times that meant something on this one.
-    pub(crate) fn take_loop_region(&mut self) -> bool {
-        self.loop_region.take().is_some()
-    }
-
     /// Whether an edit is allowed to land at all: a score this host owns, and
     /// no other reason to refuse.
     fn writable(&self) -> bool {
@@ -933,7 +928,7 @@ impl Editor {
         }
         self.clips
             .iter()
-            .find(|clip| clip.row == row && time >= clip.start && time <= clip.end)
+            .find(|clip| clip.row == row && time >= clip.start && time < clip.end)
     }
 
     /// The furthest the view may scroll: the content's width less the
@@ -1019,7 +1014,7 @@ impl Editor {
                     // captured, so recomputing it every move from that is
                     // idempotent and there is no second, visual-only
                     // representation to keep in step with this one.
-                    clip.z = row_to_z(layers, was.row as i32 + rows - 1);
+                    clip.z = lanes::drag_z(layers, was.row as i32 - 1, rows);
                 }
                 Drag::Resize(Edge::Start) => {
                     let moved = (was.start + shift).max(0.);
@@ -1043,14 +1038,12 @@ impl Editor {
     ///
     /// **The only way the clip list changes.** Every gesture and every command
     /// funnels through here, which is what makes "a lane is a function of
-    /// every clip's z" a fact rather than a convention, and what keeps
+    /// every clip's priority and time span" a fact rather than a convention.
+    /// This also keeps
     /// [`Editor::dirty`] from being something a caller can forget to set.
     fn replace_clips(&mut self, mut clips: Vec<Clip>) {
         self.mint_unknown_ids(&mut clips);
-        let rows = rows_by_z(clips.iter().map(|clip| clip.z));
-        for clip in &mut clips {
-            clip.row = rows.get(&clip.z).copied().unwrap_or(1);
-        }
+        assign_rows(&mut clips);
         self.clips = clips.into();
         self.dirty = true;
     }
@@ -1339,21 +1332,6 @@ impl Editor {
     // touches five clips a single atomic write rather than five that can half
     // land.
 
-    /// The z values the cursor's lane band covers.
-    ///
-    /// `getRegionInfo`'s z set: the rows are 1-based, so row *r* is the
-    /// `r - 1`th layer counting down from the top.
-    fn cursor_zs(&self) -> Vec<i64> {
-        let Some(cursor) = self.cursor else {
-            return Vec::new();
-        };
-        let layers = z_ladder(&self.clips);
-        let (low, high) = cursor.rows();
-        (low..=high)
-            .filter_map(|row| layers.get(row.checked_sub(1)?).copied())
-            .collect()
-    }
-
     /// `deleteInRegion` when the cursor has a range, otherwise delete the
     /// selected clips whole.
     ///
@@ -1364,8 +1342,8 @@ impl Editor {
     fn delete(&mut self) {
         match self.cursor.and_then(Cursor::span) {
             Some(span) => {
-                let zs = self.cursor_zs();
-                let clips = clear_region(&self.clips, span, &zs);
+                let rows = self.cursor.unwrap().rows();
+                let clips = clear_region(&self.clips, span, rows.0..=rows.1);
                 self.replace_clips(clips);
                 self.selected.clear();
                 self.cursor = None;
@@ -1395,11 +1373,11 @@ impl Editor {
     fn split(&mut self) {
         let Some(cursor) = self.cursor else { return };
         let at = cursor.start;
-        let zs = self.cursor_zs();
+        let (first, last) = cursor.rows();
         let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
         let mut halves = Vec::new();
         for clip in &mut clips {
-            if !zs.contains(&clip.z) || at <= clip.start || at >= clip.end {
+            if !(first..=last).contains(&clip.row) || at <= clip.start || at >= clip.end {
                 continue;
             }
             if at - clip.start < MIN_CLIP || clip.end - at < MIN_CLIP {
@@ -1426,20 +1404,20 @@ impl Editor {
         if self.selected.is_empty() {
             return;
         }
-        let layers = z_ladder(&self.clips);
+        let mut layers = z_ladder(&self.clips);
+        layers.dedup();
         let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
-        let held: Vec<usize> = clips
-            .iter()
-            .filter(|clip| self.selected.contains(&clip.id))
-            .map(|clip| clip.row)
-            .collect();
-        if down && held.iter().any(|row| *row >= layers.len()) {
+        if down
+            && clips
+                .iter()
+                .any(|clip| self.selected.contains(&clip.id) && Some(&clip.z) == layers.last())
+        {
             return;
         }
-        let step = if down { 1 } else { -1 };
         for clip in &mut clips {
             if self.selected.contains(&clip.id) {
-                clip.z = row_to_z(&layers, clip.row as i32 + step - 1);
+                let row = layers.iter().position(|z| *z == clip.z).unwrap() as i32;
+                clip.z = row_to_z(&layers, row + if down { 1 } else { -1 });
             }
         }
         self.replace_clips(clips);
@@ -1456,11 +1434,12 @@ impl Editor {
         let Some(cursor) = self.cursor else { return };
         let items: Vec<(f64, usize, Clip)> = match cursor.span() {
             Some((from, to)) => {
-                let zs = self.cursor_zs();
-                let top = cursor.rows().0;
+                let (top, bottom) = cursor.rows();
                 self.clips
                     .iter()
-                    .filter(|clip| zs.contains(&clip.z) && clip.start < to && clip.end > from)
+                    .filter(|clip| {
+                        (top..=bottom).contains(&clip.row) && clip.start < to && clip.end > from
+                    })
                     .filter_map(|clip| {
                         let (start, end) = (clip.start.max(from), clip.end.min(to));
                         (end - start >= MIN_CLIP).then(|| {
@@ -1540,8 +1519,14 @@ impl Editor {
         if minted.is_empty() {
             return;
         }
-        let zs: Vec<i64> = minted.iter().map(|clip| clip.z).collect();
-        let mut clips = clear_region(&self.clips, (at, at + span), &zs);
+        let bottom = top
+            + board
+                .items
+                .iter()
+                .map(|(_, row, _)| *row)
+                .max()
+                .unwrap_or(0);
+        let mut clips = clear_region(&self.clips, (at, at + span), top..=bottom);
         self.selected = minted.iter().map(|clip| clip.id.clone()).collect();
         clips.extend(minted);
         self.replace_clips(clips);
@@ -1749,13 +1734,16 @@ fn rows_of(score_id: &str, clips: &[TrackClip]) -> Vec<TrackScore> {
         .collect()
 }
 
-/// The distinct `zIndex` values in the score, **descending** — so index 0 is
-/// the topmost layer, which is the order [`row_to_z`] indexes by.
+/// Lighting priority for each visible row, from top to bottom. Overlapping
+/// clips at one priority occupy separate rows without changing the score.
 fn z_ladder(clips: &[Clip]) -> Vec<i64> {
-    let mut z: Vec<i64> = clips.iter().map(|clip| clip.z).collect();
-    z.sort_unstable_by(|left, right| right.cmp(left));
-    z.dedup();
-    z
+    let mut layers = vec![0; clips.iter().map(|clip| clip.row).max().unwrap_or(0)];
+    for clip in clips {
+        if clip.row > 0 {
+            layers[clip.row - 1] = clip.z;
+        }
+    }
+    layers
 }
 
 /// `rowToZ`: which `zIndex` a lane index means, where the index is 0-based
@@ -1779,7 +1767,7 @@ fn row_to_z(layers: &[i64], row: i32) -> i64 {
 }
 
 /// `resolveOverlaps` + `applyOverlapActions`: the clip list with `span`
-/// cleared out of the lanes `zs` names.
+/// cleared out of the visible rows the cursor covers.
 ///
 /// One function rather than the web's plan-then-apply pair because nothing
 /// here inspects the plan — the two halves exist on the web so a caller can
@@ -1787,11 +1775,15 @@ fn row_to_z(layers: &[i64], row: i32) -> i64 {
 /// interesting part: a clip the region *partly* covers is trimmed or split
 /// rather than deleted, and a remnant shorter than [`MIN_CLIP`] is dropped
 /// instead of being left as a sliver nothing can grab.
-fn clear_region(clips: &[Clip], span: (f64, f64), zs: &[i64]) -> Vec<Clip> {
+fn clear_region(
+    clips: &[Clip],
+    span: (f64, f64),
+    rows: std::ops::RangeInclusive<usize>,
+) -> Vec<Clip> {
     let (from, to) = span;
     let mut out = Vec::with_capacity(clips.len());
     for clip in clips {
-        let touched = zs.contains(&clip.z) && clip.start < to && clip.end > from;
+        let touched = rows.contains(&clip.row) && clip.start < to && clip.end > from;
         if !touched {
             out.push(clip.clone());
             continue;
@@ -1817,21 +1809,6 @@ fn clear_region(clips: &[Clip], span: (f64, f64), zs: &[i64]) -> Vec<Clip> {
     out
 }
 
-/// Resolve which lane each distinct `zIndex` sits in, exactly as the web
-/// timeline's `rowMap` does: the values sorted ascending, then inverted so the
-/// highest z is the *highest* lane on screen, and row 0 left empty as the
-/// insertion lane above them. Rows are therefore 1-based.
-fn rows_by_z(z: impl Iterator<Item = i64>) -> HashMap<i64, usize> {
-    let mut z: Vec<i64> = z.collect();
-    z.sort_unstable();
-    z.dedup();
-    let max_row = z.len().saturating_sub(1);
-    z.iter()
-        .enumerate()
-        .map(|(index, value)| (*value, max_row - index + 1))
-        .collect()
-}
-
 /// How many lanes the canvas draws: the occupied ones plus the empty insertion
 /// lane above them. A press below the last of them is a press on nothing, and
 /// the lane stripes stop there too — one rule, so the paint and the hit test
@@ -1847,8 +1824,7 @@ fn lane_count(clips: &[Clip]) -> usize {
 
 /// Resolve the clips a load or a write returned into what the canvas draws.
 fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
-    let rows = rows_by_z(clips.iter().map(|clip| clip.z_index));
-    clips
+    let mut clips: Vec<Clip> = clips
         .iter()
         .map(|clip| Clip {
             id: clip.id.clone().into(),
@@ -1857,13 +1833,15 @@ fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
             color: ladder::pattern(&clip.pattern_id),
             start: clip.start_time,
             end: clip.end_time,
-            row: rows.get(&clip.z_index).copied().unwrap_or(1),
+            row: 0,
             z: clip.z_index,
             blend: clip.blend_mode,
             args: clip.args.clone(),
             core: None,
         })
-        .collect()
+        .collect();
+    assign_rows(&mut clips);
+    clips.into()
 }
 
 /// What a clip is called: its pattern's name, or the id spelled out for a
@@ -1918,6 +1896,7 @@ impl Luma {
         };
         if self.workspace.body_mut(&target).is_some() {
             self.workspace.select(&target);
+            self.activate_track_audio(&target, cx);
             cx.notify();
             return;
         }
@@ -1927,7 +1906,6 @@ impl Luma {
         let validation = self.library.track_beat_validation(track_id);
         let scores = self.library.scores_across_venues(track_id);
         let patterns = self.library.patterns();
-        let audio = self.library.load_audio(track_id);
 
         let menu_search =
             cx.new(|cx| luma_ui::text_input::TextInput::search("Search patterns…", cx));
@@ -2003,6 +1981,7 @@ impl Luma {
             sheet: sheet::State::default(),
         });
         self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
+        self.activate_track_audio(&target, cx);
 
         // The previews ride their own task because they are the one slow read
         // — the seam evaluates every clip's pattern over its span — and the
@@ -2036,7 +2015,6 @@ impl Luma {
             let validation = validation.await;
             let patterns = patterns.await;
             let scores = scores.await;
-            let audio = audio.await;
 
             let patterns = patterns.unwrap_or_default();
 
@@ -2069,9 +2047,6 @@ impl Luma {
                         }
                         Err(error) => editor.beat_validation_error = Some(error.to_string()),
                     }
-                    if let Err(error) = audio {
-                        editor.error = Some(error.to_string());
-                    }
                     match scores {
                         // The venue in hand, in the order the seam listed —
                         // `scores.updated_at DESC`, which in practice is
@@ -2100,7 +2075,6 @@ impl Luma {
                 if let Some(score) = open {
                     this.load_score(target.clone(), score, cx);
                 }
-                this.poll_transport(cx);
                 // A long track at the opening zoom can already be past the
                 // stored envelope's resolution, so the first measurement is
                 // asked for with the waveform rather than waiting for a
@@ -2134,7 +2108,9 @@ impl Luma {
         // Whatever the outgoing score still owes goes out first. The write
         // names its own score, so it lands on the document it was made
         // against however long it takes to return.
-        self.commit_clips(cx);
+        if self.workspace.active() == Some(&target) {
+            self.commit_clips(cx);
+        }
         let Target::TrackEditor { track, .. } = &target else {
             return;
         };
@@ -2226,7 +2202,7 @@ impl Luma {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Editor),
     ) {
-        if let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) {
+        if let Some(Body::TrackEditor(editor)) = self.parked.body_mut(&mut self.workspace, target) {
             edit(editor);
             cx.notify();
         }
@@ -2297,127 +2273,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    /// Start or stop playback, and read the transport back either way — the
-    /// audio host is the authority on whether it is playing, so the button's
-    /// own state is never assumed.
-    pub(crate) fn toggle_playback(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
-            return;
-        };
-        let playing = state.transport.playing;
-        // Seeking first is what makes Play resume from a scrub the screen made
-        // while stopped: the host plays from wherever *it* is, and a stopped
-        // playhead only moved on screen.
-        let steps: Vec<Transition> = if playing {
-            vec![Box::pin(self.library.pause())]
-        } else {
-            vec![
-                Box::pin(self.library.seek(state.transport.position)),
-                Box::pin(self.library.play()),
-            ]
-        };
-        cx.spawn(async move |this, cx| {
-            let mut failed = None;
-            for step in steps {
-                if let Err(error) = step.await {
-                    failed = Some(error.to_string());
-                    break;
-                }
-            }
-            this.update(cx, |this, cx| match failed {
-                Some(message) => {
-                    this.with_track_editor(cx, |editor| editor.error = Some(message));
-                }
-                None => this.poll_transport(cx),
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Follow the playhead until it stops moving.
-    ///
-    /// The desktop app is told where the transport is by a `host-audio://state`
-    /// event; nothing broadcasts one here, so this host asks. The loop runs
-    /// only while something is playing and exits as soon as the host says it
-    /// has stopped, so a parked editor costs nothing — and [`Transport::polling`]
-    /// keeps a second play from starting a second loop.
-    fn poll_transport(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
-            return;
-        };
-        if state.transport.polling {
-            return;
-        }
-        state.transport.polling = true;
-        let mut pending = self.library.transport_after(Duration::ZERO);
-        cx.spawn(async move |this, cx| loop {
-            let snapshot = pending.await;
-            let again = this
-                .update(cx, |this, cx| this.apply_transport(snapshot, cx))
-                .unwrap_or(false);
-            if !again {
-                return;
-            }
-            let next = this.read_with(cx, |this, _| this.library.transport_after(POLL));
-            match next {
-                Ok(next) => pending = next,
-                Err(_) => return,
-            }
-        })
-        .detach();
-    }
-
-    /// Take one transport reading. Returns whether the loop should ask again —
-    /// only while the editor is still up and the host is still playing.
-    fn apply_transport(
-        &mut self,
-        snapshot: Result<HostAudioSnapshot, LibraryError>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
-            return false;
-        };
-        let Ok(snapshot) = snapshot else {
-            state.transport.polling = false;
-            return false;
-        };
-        let status_second = snapshot.current_time.max(0.) as u64;
-        let notify_status = state.transport.playing != snapshot.is_playing
-            || state.transport.status_second != status_second
-            || state.transport.duration != snapshot.duration_seconds;
-        state.transport.status_second = status_second;
-        state.transport.playing = snapshot.is_playing;
-        // A scrub in progress owns the playhead; adopting the host's position
-        // under the pointer would fight the drag.
-        if !matches!(state.gesture, Some(Gesture::Scrub)) {
-            let now = std::time::Instant::now();
-            state.transport.clock.observe(
-                now,
-                f64::from(snapshot.current_time),
-                snapshot.is_playing,
-            );
-            state.transport.position = state
-                .transport
-                .clock
-                .position(now)
-                .unwrap_or(f64::from(snapshot.current_time))
-                as f32;
-        }
-        // The loaded segment's length is the authority once audio is in hand:
-        // a waveform's `durationSeconds` is the decoded file's, and the two
-        // disagree by a frame or two.
-        if snapshot.is_loaded && snapshot.duration_seconds > 0. {
-            state.transport.duration = snapshot.duration_seconds;
-        }
-        state.transport.polling = snapshot.is_playing;
-        state.follow_playhead();
-        if notify_status || !snapshot.is_playing {
-            cx.notify();
-        }
-        snapshot.is_playing
     }
 
     /// Toggle following the playhead, and take up the new setting at once —
@@ -2495,9 +2350,10 @@ impl Luma {
         };
         let region = state.toggle_loop();
         cx.notify();
-        let pending = self
-            .library
-            .set_loop_region(region.map(|(from, to)| (from as f32, to as f32)));
+        let pending = self.library.set_loop_region(
+            state.transport.session.unwrap_or(0),
+            region.map(|(from, to)| (from as f32, to as f32)),
+        );
         cx.background_spawn(async move {
             pending.await.ok();
         })
@@ -2630,7 +2486,7 @@ impl Luma {
         let Some(clip) = state
             .clips
             .iter()
-            .find(|clip| clip.row == row && time >= clip.start && time <= clip.end)
+            .find(|clip| clip.row == row && time >= clip.start && time < clip.end)
         else {
             return;
         };
@@ -3117,7 +2973,16 @@ impl Luma {
     /// Move the transport, optimistically: the playhead is already where the
     /// pointer put it, and the seek is what makes the audio agree.
     fn seek(&mut self, seconds: f32, cx: &mut Context<Self>) {
-        let pending = self.library.seek(seconds);
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        let Some(session) = editor.transport.session else {
+            return;
+        };
+        if !editor.transport.ready {
+            return;
+        }
+        let pending = self.library.seek(session, seconds);
         cx.background_spawn(async move {
             pending.await.ok();
         })
@@ -3763,13 +3628,16 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Text, state.track_name.clone()),
         )
         .child(
-            luma_ui::button(if playing { "Pause" } else { "Play" }, Enabled::Yes)
-                .id("transport")
-                // One button, two labels — the label *is* the state, so a
-                // script reads what the transport is doing from the same place
-                // a person does.
-                .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
-                .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
+            luma_ui::button(
+                if playing { "Pause" } else { "Play" },
+                (state.transport.ready && state.transport.session.is_some()).into(),
+            )
+            .id("transport")
+            // One button, two labels — the label *is* the state, so a
+            // script reads what the transport is doing from the same place
+            // a person does.
+            .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
+            .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
         )
         .child(
             luma_ui::button(

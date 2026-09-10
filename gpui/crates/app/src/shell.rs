@@ -261,20 +261,11 @@ impl Luma {
     /// *close* — switching tabs never comes through this path.
     pub(crate) fn teardown(&mut self, body: Body, cx: &mut Context<Self>) {
         match body {
-            Body::TrackEditor(mut state) => {
-                // The loop belongs to the transport, which outlives the tab: a
-                // region left armed would wrap the *next* track at times that
-                // meant something on this one. Same for playback itself.
-                let looping = state.take_loop_region();
-                let pause = self.library.pause();
-                cx.background_spawn(async move {
-                    pause.await.ok();
-                })
-                .detach();
-                if looping {
-                    let clear = self.library.set_loop_region(None);
+            Body::TrackEditor(state) => {
+                if let Some(session) = state.playback_session() {
+                    let pause = self.library.pause(session);
                     cx.background_spawn(async move {
-                        clear.await.ok();
+                        pause.await.ok();
                     })
                     .detach();
                 }

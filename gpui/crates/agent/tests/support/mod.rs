@@ -164,6 +164,7 @@ pub struct Fixture {
     source_search_responses: Vec<luma_app::SourceSearchFixtureResponse>,
     source_import_fixture_delay: Option<Duration>,
     equal_timestamp_track: bool,
+    second_track_seconds: Option<u32>,
     force_motion: bool,
     motion_scale: Option<f32>,
     extra_tracks: usize,
@@ -190,6 +191,7 @@ impl Fixture {
             source_search_responses: Vec::new(),
             source_import_fixture_delay: None,
             equal_timestamp_track: false,
+            second_track_seconds: None,
             force_motion: false,
             motion_scale: None,
             extra_tracks: 0,
@@ -318,6 +320,13 @@ impl Fixture {
 
     pub fn with_equal_timestamp_track(mut self) -> Self {
         self.equal_timestamp_track = true;
+        self
+    }
+
+    /// A second playable song with an observably different audio duration.
+    pub fn with_second_track(mut self, seconds: u32) -> Self {
+        self.equal_timestamp_track = true;
+        self.second_track_seconds = Some(seconds);
         self
     }
 
@@ -524,6 +533,9 @@ impl Fixture {
             .expect("failed to seed the track");
             self.seed_beats(pool).await;
             if self.equal_timestamp_track {
+                let seconds = self.second_track_seconds.unwrap_or(self.seconds);
+                let second_audio = config_dir.join("zulu.wav");
+                std::fs::write(&second_audio, wav(seconds)).unwrap();
                 sqlx::query(
                     "INSERT INTO tracks
                         (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
@@ -531,9 +543,9 @@ impl Fixture {
                              COALESCE(?, CURRENT_TIMESTAMP))",
                 )
                 .bind(session::PRINCIPAL)
-                .bind(self.track_hash("zulu"))
-                .bind(f64::from(self.seconds))
-                .bind(audio.to_string_lossy().to_string())
+                .bind(format!("zulu-{seconds}s"))
+                .bind(f64::from(seconds))
+                .bind(second_audio.to_string_lossy().to_string())
                 .bind(self.track_created_at.as_deref())
                 .execute(pool)
                 .await
