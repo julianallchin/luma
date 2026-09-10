@@ -412,6 +412,8 @@ pub(crate) struct Visualizer {
     venue_environment: VenueEnvironment,
     render_lab: RenderLab,
     pub(crate) settings_open: bool,
+    presentation: bool,
+    bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
     selection_motion: SelectionMotion,
     environment_error: Option<String>,
@@ -596,6 +598,7 @@ struct RenderLab {
     haze_steps: u32,
     haze_resolution: f32,
     grid_enabled: bool,
+    gizmos_enabled: bool,
     debug_view: scene_desc::DebugView,
 }
 
@@ -655,6 +658,7 @@ impl RenderLab {
         render.haze.steps = self.haze_steps;
         render.haze.resolution = self.haze_resolution;
         render.show_grid = self.grid_enabled;
+        render.show_gizmos = self.gizmos_enabled;
         render.debug_view = self.debug_view;
         render.fixture_surface_lighting = self.fixture_surface_lighting;
         render.fixture_shadows = self.fixture_shadows;
@@ -701,6 +705,7 @@ impl RenderLab {
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             grid_enabled: true,
+            gizmos_enabled: true,
             debug_view: scene_desc::DebugView::Pbr,
         };
         lab.set_environment(environment);
@@ -750,6 +755,7 @@ enum LabToggle {
     FixtureShadows,
     Haze,
     Grid,
+    Gizmos,
 }
 #[derive(Clone, Copy)]
 enum LabValue {
@@ -760,18 +766,21 @@ enum LabValue {
     WindSpeed,
     WindDirection,
 }
+const MAX_HAZE_DENSITY: f32 = 0.5;
+
 impl RenderLab {
     fn toggle(&mut self, control: LabToggle) {
         let value = match control {
             LabToggle::FixtureShadows => &mut self.fixture_shadows,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
+            LabToggle::Gizmos => &mut self.gizmos_enabled,
         };
         *value = !*value;
     }
     fn set(&mut self, control: LabValue, value: f32) {
         match control {
-            LabValue::HazeDensity => self.haze_density = value.clamp(0.0, 2.0),
+            LabValue::HazeDensity => self.haze_density = value.clamp(0.0, MAX_HAZE_DENSITY),
             LabValue::Cloudiness => self.haze_appearance.cloudiness = value,
             LabValue::CloudSize => self.haze_appearance.cloud_size = value,
             LabValue::Turbulence => self.haze_appearance.turbulence = value,
@@ -853,6 +862,8 @@ impl Visualizer {
             venue_environment: VenueEnvironment::default(),
             render_lab: RenderLab::new(environment),
             settings_open: false,
+            presentation: false,
+            bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),
             selection_motion: SelectionMotion::new(cx.reduce_motion()),
             environment_error: None,
@@ -1055,7 +1066,8 @@ impl Visualizer {
     /// Only chrome that *spans* an edge earns an inset, because that is what an
     /// inset claims — this band of the frame is covered. The toolbar's row runs
     /// the full width and is centred on exactly where a fitted rig's floor
-    /// lands, so it does. The frame-stats readout is a box in the top-left
+    /// lands, so it does when it contains controls. An empty toolbar earns no
+    /// inset. The frame-stats readout is a box in the top-left
     /// corner and does not: reserving the whole top band for it cost 19% of the
     /// pane's height in the 943×220 viewport the pixel suite opens, which with
     /// the toolbar's own band left the fit 55% of the frame to work in and drew
@@ -1070,7 +1082,11 @@ impl Visualizer {
         if w <= 0.0 || h <= 0.0 {
             return Viewfinder::new(FOV_Y_DEG, DEFAULT_ASPECT);
         }
-        let toolbar = (f32::from(TOOLBAR_OVERLAY_BOTTOM) + f32::from(OVERLAY_BAND)) / h;
+        let toolbar = if self.bottom_bar_visible {
+            (f32::from(TOOLBAR_OVERLAY_BOTTOM) + f32::from(OVERLAY_BAND)) / h
+        } else {
+            0.
+        };
         Viewfinder::new(FOV_Y_DEG, w / h).inset(Insets::vertical(0.0, toolbar))
     }
 
@@ -1235,6 +1251,14 @@ impl Visualizer {
 
     fn editor_press(&mut self, point: Point<Pixels>, shift: bool) {
         let at = self.viewport_point(point);
+        if self.presentation {
+            self.editor_drag = Some(EditorDrag::ClickOrbit {
+                gesture: ClickOrbit::new(at),
+                shift: false,
+                start: at,
+            });
+            return;
+        }
         let viewport = self.viewport_size();
         // A hand in the air owns the click's *meaning* (place, or nothing),
         // and the gizmo must not intercept it — but the gesture is still a
@@ -1317,6 +1341,9 @@ impl Visualizer {
     /// grabbed. Analytic against a handful of primitives, so it is cheap
     /// enough to ask per move.
     fn hover_gizmo(&self, point: Point<Pixels>) -> Option<GizmoHandle> {
+        if self.presentation {
+            return None;
+        }
         let at = self.viewport_point(point);
         let viewport = self.viewport_size();
         let stage = self.stage.borrow();
@@ -1338,7 +1365,7 @@ impl Visualizer {
     }
 
     fn selection_gizmo_space(&self) -> luma_scene::gizmo::GizmoSpace {
-        if self.selection.selected().is_empty() {
+        if self.presentation || self.selection.selected().is_empty() {
             return luma_scene::gizmo::GizmoSpace::DISABLED;
         }
         if let Some(build) = self.build.as_ref() {
@@ -1408,6 +1435,9 @@ impl Visualizer {
         // the selection paths below can bail before reaching the end.
         self.drag = None;
         let interaction = self.editor_drag.take()?;
+        if self.presentation {
+            return None;
+        }
         // Set only by a plain click on a fixture — the gesture that selects a
         // row. See the expansion at the tail.
         let mut clicked_fixture: Option<String> = None;
@@ -1557,6 +1587,23 @@ impl Visualizer {
     /// or not a renderer exists, which is what a headless aim depends on.
     pub(crate) fn stage_pane(&self) -> Bounds<Pixels> {
         self.stage.borrow().pane
+    }
+
+    pub(crate) fn prepare_presentation(&mut self) {
+        self.settings_open = false;
+        self.drag = None;
+        // A shortcut can arrive before mouse-up. Cancel an unfinished pose
+        // preview before parking the editor, so it cannot survive without a commit.
+        if let Some(EditorDrag::Gizmo { originals, .. }) = self.editor_drag.take() {
+            let mut stage = self.stage.borrow_mut();
+            if let Some(scene) = stage.scene.as_mut() {
+                for (object, position, rotation) in originals {
+                    set_object_pose(scene, &object, position, rotation);
+                }
+            }
+            stage.idle = None;
+        }
+        self.gizmo_hover = None;
     }
 
     /// Where the pointer is aiming in the room, in the socket layer's frame:
@@ -2571,6 +2618,11 @@ impl Luma {
     }
 }
 
+pub(crate) enum Chrome {
+    Embedded { venue_tools: Option<AnyElement> },
+    Fullscreen { transport: Option<AnyElement> },
+}
+
 /// The stage pane with floating controls.
 ///
 /// # Calling this is what starts the redraw loop
@@ -2588,7 +2640,8 @@ pub(crate) fn visualizer(
     app: &Entity<Luma>,
     library: &Library,
     window: &mut Window,
-    venue_tools: Option<AnyElement>,
+    chrome: Chrome,
+    focus: &gpui::FocusHandle,
 ) -> impl IntoElement {
     // Continuous redraw: asking at the top of a render is what makes the next
     // one happen, and CVDisplayLink paces it (spec §4.3).
@@ -2601,22 +2654,33 @@ pub(crate) fn visualizer(
         stage.requested_at = Some(Instant::now());
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
+    state.presentation = matches!(&chrome, Chrome::Fullscreen { .. });
+    let (venue_tools, transport) = match chrome {
+        Chrome::Embedded { venue_tools } => (venue_tools, None),
+        Chrome::Fullscreen { transport } => (None, transport),
+    };
     let venue = venue_tools.is_some();
-    let floating = overlay_toolbar(state, app, venue_tools);
+    let body = body(state, app, library);
+    let floating = overlay_toolbar(state, app, venue_tools, transport);
+    state.bottom_bar_visible = floating.is_some();
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
-    let builder = state.build.as_ref().map(|build| {
-        crate::stage::build_layer(
-            build,
-            &state.camera,
-            pane.origin,
-            (f32::from(pane.size.width), f32::from(pane.size.height)),
-            // With no GPU there is no canvas and no window listener, so the
-            // claim card is also the pointer's way in — the headless path.
-            state.gpu_enabled,
-            app,
-        )
-    });
+    let builder = state
+        .build
+        .as_ref()
+        .filter(|_| !state.presentation)
+        .map(|build| {
+            crate::stage::build_layer(
+                build,
+                &state.camera,
+                pane.origin,
+                (f32::from(pane.size.width), f32::from(pane.size.height)),
+                // With no GPU there is no canvas and no window listener, so the
+                // claim card is also the pointer's way in — the headless path.
+                state.gpu_enabled,
+                app,
+            )
+        });
     let measure = {
         let stage = Rc::clone(&state.stage);
         canvas(
@@ -2647,8 +2711,16 @@ pub(crate) fn visualizer(
         state.selection_motion.since = None;
         selection_target
     };
+    let mut keys = gpui::KeyContext::default();
+    keys.add(crate::keymap::context::VISUALIZER);
+    if venue {
+        keys.add(crate::keymap::context::STAGE);
+        keys.add(crate::keymap::context::PATCH);
+    }
     div()
         .size_full()
+        .key_context(keys)
+        .track_focus(focus)
         .flex()
         .flex_col()
         .bg(ladder::background())
@@ -2657,11 +2729,12 @@ pub(crate) fn visualizer(
                 .flex_1()
                 .min_h_0()
                 .relative()
-                .child(body(state, app, library))
+                .child(body)
                 .child(measure)
                 .children(builder)
                 .child(fps)
-                .child(floating)
+                .children(floating)
+                .child(fullscreen_button(state.presentation, app))
                 .when(matches!(state.status, Status::Live), |d| {
                     d.child(settings::trigger(state, app))
                 })
@@ -2731,7 +2804,7 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             "Haze density",
             lab.haze_density,
             0.,
-            2.,
+            MAX_HAZE_DENSITY,
             LabValue::HazeDensity,
         ))
         .child(lab_value(
@@ -2788,6 +2861,13 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             lab.grid_enabled,
             LabToggle::Grid,
         ))
+        .child(lab_toggle(
+            state,
+            app,
+            "Gizmos",
+            lab.gizmos_enabled,
+            LabToggle::Gizmos,
+        ))
 }
 
 fn lab_toggle(
@@ -2802,6 +2882,7 @@ fn lab_toggle(
         LabToggle::Haze => 0,
         LabToggle::FixtureShadows => 1,
         LabToggle::Grid => 2,
+        LabToggle::Gizmos => 3,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -2861,6 +2942,11 @@ fn lab_value(
     control: LabValue,
 ) -> Div {
     let app = app.clone();
+    let (step, power) = if matches!(control, LabValue::HazeDensity) {
+        (0.001, 2.0)
+    } else {
+        (0.01, 1.0)
+    };
     div()
         .flex()
         .items_center()
@@ -2868,13 +2954,13 @@ fn lab_value(
         .gap(px(12.))
         .child(div().text_size(px(12.)).child(label))
         .child(
-            luma_ui::float::scrub(
+            luma_ui::float::scrub_with_power(
                 label,
                 value.into(),
-                min.into(),
-                max.into(),
-                0.01,
+                f64::from(min)..=f64::from(max),
+                step,
                 76.0,
+                power,
                 move |value, _, cx| {
                     app.update(cx, |this, cx| {
                         if let Some(state) = this.visualizer_mut() {
@@ -2888,15 +2974,50 @@ fn lab_value(
         )
 }
 
-/// The bottom-centre floating toolbar: how the camera is driven, and which
-/// gizmo the selection wears.
-///
-/// Float tier, not slab. It hangs unattached over the picture, which is the
-/// whole of `luma_ui::float`'s rule about which language a control speaks —
-/// and since the builder's chrome floats over this same viewport, a row of
-/// opaque square uppercase slabs beside a translucent rounded popover would be
-/// two design languages in one tab.
-fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<AnyElement>) -> Div {
+/// A persistent exit stays available even when the scene is loading or failed.
+fn fullscreen_button(fullscreen: bool, app: &Entity<Luma>) -> impl IntoElement {
+    let label = if fullscreen {
+        "Exit fullscreen"
+    } else {
+        "Fullscreen visualizer"
+    };
+    let icon = if fullscreen {
+        luma_ui::icons::IconName::Minimize
+    } else {
+        luma_ui::icons::IconName::Expand
+    };
+    let app = app.clone();
+    div().absolute().top(px(16.)).right(px(16.)).child(
+        luma_ui::button("", luma_ui::Enabled::Yes)
+            .id("visualizer-fullscreen")
+            .size(px(32.))
+            .p_0()
+            .occlude()
+            .child(gpui_component::Icon::new(icon).size(px(18.)))
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+            })
+            .on_click(move |_, window, cx| {
+                app.update(cx, |this, cx| this.toggle_visualizer_fullscreen(window, cx))
+            })
+            .agent_node(Role::Button, label),
+    )
+}
+
+/// Only mount the floating surface when it has controls to display.
+fn overlay_toolbar(
+    state: &Visualizer,
+    app: &Entity<Luma>,
+    venue_tools: Option<AnyElement>,
+    transport: Option<AnyElement>,
+) -> Option<AnyElement> {
+    let gizmo = !state.presentation
+        && matches!(state.status, Status::Live)
+        && state.selection_gizmo_space() != luma_scene::gizmo::GizmoSpace::DISABLED;
+    let venue_tools = venue_tools.filter(|_| matches!(state.status, Status::Live));
+    if venue_tools.is_none() && transport.is_none() && !gizmo {
+        return None;
+    }
     let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
         let app = app.clone();
@@ -2912,15 +3033,15 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<A
             })
             .agent_node(Role::Toggle, label)
     };
-    div()
-        .absolute()
-        .bottom(TOOLBAR_OVERLAY_BOTTOM)
-        .left_0()
-        .right_0()
-        .flex()
-        .justify_center()
-        .when(matches!(state.status, Status::Live), |el| {
-            el.child(
+    Some(
+        div()
+            .absolute()
+            .bottom(TOOLBAR_OVERLAY_BOTTOM)
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
                 luma_ui::float::popover_card()
                     .flex_row()
                     .items_center()
@@ -2931,25 +3052,25 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<A
                     // (see [`listen`]), and the row is air either side of it.
                     .occlude()
                     .children(venue_tools)
+                    .children(transport)
                     // The two gizmo modes are one choice, so they share one
                     // track. Zoom is the wheel's (and `=`/`-`), not a button's
                     // — a camera verb with a pointer gesture needs no chrome.
                     //
                     // The mode switch uses the same joint freedoms as the
                     // handles, including mixed selections with no shared frame.
-                    .when(
-                        state.selection_gizmo_space() != luma_scene::gizmo::GizmoSpace::DISABLED,
-                        |bar| {
-                            bar.child(
-                                luma_ui::float::segmented()
-                                    .child(mode("Translate", GizmoMode::Translate))
-                                    .child(mode("Rotate", GizmoMode::Rotate)),
-                            )
-                        },
-                    )
+                    .when(gizmo, |bar| {
+                        bar.child(
+                            luma_ui::float::segmented()
+                                .child(mode("Translate", GizmoMode::Translate))
+                                .child(mode("Rotate", GizmoMode::Rotate)),
+                        )
+                    })
                     .map(luma_ui::float::frosted_card),
             )
-        })
+            .agent_node(Role::Card, "Visualizer toolbar")
+            .into_any_element(),
+    )
 }
 
 /// One 60 Hz frame — the graph's hairline, and the bound a clean frame sits
@@ -3333,6 +3454,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         .selection
         .selected()
         .iter()
+        .filter(|_| !state.presentation)
         .rev()
         .filter_map(|object| match object {
             EditorObject::Fixture(id) => Some(id.clone()),
@@ -3343,6 +3465,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         .selection
         .selected()
         .iter()
+        .filter(|_| !state.presentation)
         .filter_map(|object| match object {
             EditorObject::StagePiece(id) => Some(id.clone()),
             EditorObject::Fixture(_) => None,
@@ -3367,15 +3490,15 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     // paint closure. They ride inside `scene.editor`, which `IdleKey` compares
     // whole — so a ghost that moved is a frame the stage owes, without a
     // second flag to remember.
-    let build_affordances =
-        state
-            .build
-            .as_ref()
-            .map_or_else(luma_render::scene_desc::Build::default, |build| {
-                let mut editor = scene_desc::Editor::default();
-                crate::stage::install(build, &mut editor);
-                editor.build
-            });
+    let build_affordances = state
+        .build
+        .as_ref()
+        .filter(|_| !state.presentation)
+        .map_or_else(luma_render::scene_desc::Build::default, |build| {
+            let mut editor = scene_desc::Editor::default();
+            crate::stage::install(build, &mut editor);
+            editor.build
+        });
     // A pointer drag holds the idle gate open: camera drags move the key's
     // camera anyway, but a gizmo drag mutates the scene's geometry, which the
     // key deliberately does not carry.
@@ -3384,6 +3507,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         || state
             .build
             .as_ref()
+            .filter(|_| !state.presentation)
             .is_some_and(|build| build.hand.owns_pointer());
     let key_lab = state.render_lab.clone();
     let sized = app.clone();
@@ -3747,6 +3871,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         let at = event.position;
         let shift = event.modifiers.shift;
         pressed.update(cx, |this, cx| {
+            window.focus(&this.visualizer_focus, cx);
             if let Some(state) = this.visualizer_mut() {
                 if event.button == MouseButton::Left {
                     state.editor_press(at, shift);
@@ -3787,6 +3912,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                             cx.notify();
                         }
                         aim = over
+                            && !state.presentation
                             && state
                                 .build
                                 .as_ref()
@@ -3930,7 +4056,7 @@ mod render_lab_tests {
         let mut lab = RenderLab::new(VenueEnvironment::default());
         let house = lab.house;
         lab.set(LabValue::HazeDensity, 9.0);
-        assert_eq!(lab.haze_density, 2.0);
+        assert_eq!(lab.haze_density, 0.5);
         lab.toggle(LabToggle::FixtureShadows);
         assert!(!lab.fixture_shadows);
         assert_eq!(lab.house, house);
@@ -4195,6 +4321,8 @@ mod orbit_selection_tests {
             venue_environment: Default::default(),
             render_lab: RenderLab::new(Default::default()),
             settings_open: false,
+            presentation: false,
+            bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(true)),
             selection_motion: SelectionMotion::new(true),
             environment_error: None,
@@ -4372,6 +4500,42 @@ mod orbit_selection_tests {
             state.camera.target.z > 3.0,
             "F must frame the raised object, not the floor"
         );
+    }
+
+    #[test]
+    fn fullscreen_clicks_and_shift_drags_preserve_selection() {
+        let camera = Camera::default();
+        let pick = PickSnapshot {
+            camera,
+            graph: SceneGraph::new(),
+            meshes: Vec::new(),
+            objects: Vec::new(),
+            ordered: Vec::new(),
+            anchors: HashMap::new(),
+            bounds: HashMap::new(),
+            gizmo_pivot: None,
+            gizmo_space: Default::default(),
+        };
+        let mut state = visualizer(None, pick);
+        let selected = EditorObject::Fixture("selected".into());
+        state.selection.replace([selected.clone()]);
+        state.prepare_presentation();
+        state.presentation = true;
+        assert_eq!(state.camera, camera);
+        assert_eq!(
+            state.selection_gizmo_space(),
+            luma_scene::gizmo::GizmoSpace::DISABLED
+        );
+        let start = gpui::point(px(100.), px(100.));
+        state.editor_press(start, false);
+        assert!(state.editor_release(start).is_none());
+        assert_eq!(state.selection.selected(), std::slice::from_ref(&selected));
+        state.editor_press(start, true);
+        let end = gpui::point(px(200.), px(150.));
+        state.editor_moved(end);
+        assert_ne!(state.camera, camera, "Shift-drag should still orbit");
+        assert!(state.editor_release(end).is_none());
+        assert_eq!(state.selection.selected(), &[selected]);
     }
 
     #[test]

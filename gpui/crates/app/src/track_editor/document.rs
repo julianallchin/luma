@@ -59,8 +59,7 @@ pub(super) fn resolve_document(
         .score
         .library(&p::standard_library())
         .map_err(|error| error.to_string())?;
-    let rows = rows_by_z(document.score.clips.values().map(|clip| clip.z_index));
-    document
+    let mut clips = document
         .score
         .clips
         .iter()
@@ -76,7 +75,7 @@ pub(super) fn resolve_document(
                 end: clock
                     .seconds_at(clip.start + clip.duration)
                     .map_err(|error| error.to_string())?,
-                row: rows[&clip.z_index],
+                row: 0,
                 z: clip.z_index,
                 blend: clip.blend_mode,
                 args: serde_json::Value::Object(
@@ -88,8 +87,9 @@ pub(super) fn resolve_document(
                 core: Some(clip.clone()),
             })
         })
-        .collect::<Result<Vec<_>, String>>()
-        .map(Into::into)
+        .collect::<Result<Vec<_>, String>>()?;
+    assign_rows(&mut clips);
+    Ok(clips.into())
 }
 
 impl Editor {
@@ -360,12 +360,32 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut previews = Vec::new();
+                let mut changed = false;
                 this.edit_track_tab(&target, cx, |editor| {
                     if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
                         return;
                     }
                     match result {
                         Ok(contents) => {
+                            // Agent commits invalidate several tabs. An unchanged
+                            // document must not discard this song's local edits,
+                            // selection, previews, or undo history.
+                            let unchanged = match &contents {
+                                crate::library::ScoreContents::Graph { document, .. } => editor
+                                    .graph_score
+                                    .as_ref()
+                                    .is_some_and(|graph| graph.base.revision == document.revision),
+                                crate::library::ScoreContents::Legacy(clips) => {
+                                    editor.graph_score.is_none()
+                                        && clips
+                                            .iter()
+                                            .map(TrackClip::from)
+                                            .eq(editor.base.iter().cloned())
+                                }
+                            };
+                            if unchanged {
+                                return;
+                            }
                             // Installing a read initializes its scene baseline. Keep
                             // the actual installed baseline so the rig recompiles
                             // changed clips and definition-only agent edits.
@@ -382,6 +402,7 @@ impl Luma {
                                 editor.error = Some(error);
                                 return;
                             }
+                            changed = true;
                             editor.composited = composited;
                             if let (Some(graph), Some(definitions)) =
                                 (editor.graph_score.as_mut(), definitions)
@@ -403,7 +424,9 @@ impl Luma {
                 for id in previews {
                     this.refresh_clip_preview_for(target.clone(), id, cx);
                 }
-                this.refresh_working_scene_for(&target, cx);
+                if changed {
+                    this.refresh_working_scene_for(&target, cx);
+                }
             })
             .ok();
         })

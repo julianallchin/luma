@@ -54,6 +54,7 @@ pub(crate) mod context {
     pub const GRAPH_INPUT_NAME: &str = "GraphInputName";
     pub const GRAPH_NODE_SEARCH: &str = "GraphNodeSearch";
     pub const VISUALIZER: &str = "Visualizer";
+    pub const VISUALIZER_FULLSCREEN: &str = "VisualizerFullscreen";
     pub const PATCH: &str = "Patch";
     pub const STAGE: &str = "Stage";
 
@@ -147,6 +148,9 @@ actions!(
         /// visible tab, so this is a preference about screen space and never a
         /// navigation.
         ToggleVisualizer,
+        ToggleVisualizerFullscreen,
+        DismissVisualizerFullscreen,
+        Quit,
         /// Copy the stage builder's selected subtree onto the cursor. Scoped
         /// to the stage page, because ⌘D means nothing anywhere else and a
         /// shell-wide binding would take the chord from every tab that might
@@ -221,9 +225,18 @@ actions!(
 pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.
-    let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
+    let escape = format!(
+        "{} && !{} && !{}",
+        context::ROOT,
+        context::TEXT_INPUT,
+        context::VISUALIZER_FULLSCREEN
+    );
     let shell = std::iter::once(context::ROOT.to_string())
         .chain(context::DIALOGS.iter().map(|name| format!("!{name}")))
+        .chain(std::iter::once(format!(
+            "!{}",
+            context::VISUALIZER_FULLSCREEN
+        )))
         .collect::<Vec<_>>()
         .join(" && ");
     // A dialog owns Escape even when its current child is a text field. Route
@@ -313,6 +326,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("w", GizmoTranslate, Some(&staging)),
         KeyBinding::new("e", GizmoRotate, Some(&staging)),
         KeyBinding::new("a", AddStageElement, Some(&staging)),
+        KeyBinding::new("space", PlayPause, Some(&viewing)),
         KeyBinding::new("=", ZoomStageIn, Some(&viewing)),
         KeyBinding::new("-", ZoomStageOut, Some(&viewing)),
         KeyBinding::new("f", FocusStageSelection, Some(&staging)),
@@ -340,7 +354,30 @@ pub(crate) fn init(cx: &mut App) {
     chord(&mut bindings, "v", PasteClips, &editing);
     chord(&mut bindings, "d", DuplicateClips, &editing);
     chord(&mut bindings, "l", ToggleLoopRegion, &editing);
+    let fullscreen = format!(
+        "{} && !{}",
+        context::VISUALIZER_FULLSCREEN,
+        context::TEXT_INPUT
+    );
+    bindings.extend([
+        KeyBinding::new("shift-f", ToggleVisualizerFullscreen, Some(&viewing)),
+        KeyBinding::new(
+            "escape",
+            DismissVisualizerFullscreen,
+            Some(context::VISUALIZER_FULLSCREEN),
+        ),
+        KeyBinding::new("f", FocusStageSelection, Some(&fullscreen)),
+        KeyBinding::new("secondary-q", Quit, None),
+    ]);
     cx.bind_keys(bindings);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.set_menus([
+        gpui::Menu::new("Luma").items([gpui::MenuItem::action("Quit Luma", Quit)]),
+        gpui::Menu::new("View").items([gpui::MenuItem::action(
+            "Fullscreen visualizer",
+            ToggleVisualizerFullscreen,
+        )]),
+    ]);
 }
 
 /// Bind one editing chord under both of its modifiers.

@@ -17,6 +17,8 @@ pub enum IconName {
     ChevronRight,
     ChevronUp,
     Close,
+    Expand,
+    Minimize,
     Cpu,
     Network,
     PanelLeft,
@@ -46,6 +48,8 @@ impl IconNamed for IconName {
             Self::ChevronRight => "nucleo/chevron-right.svg".into(),
             Self::ChevronUp => "nucleo/chevron-up.svg".into(),
             Self::Close => "nucleo/xmark.svg".into(),
+            Self::Expand => "nucleo/expand.svg".into(),
+            Self::Minimize => "nucleo/minimize.svg".into(),
             Self::Cpu => "nucleo/microchip.svg".into(),
             Self::Network => "nucleo/nodes.svg".into(),
             Self::PanelLeft => "nucleo/sidebar-left.svg".into(),
@@ -68,6 +72,8 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "nucleo/expand.svg" => Some(include_bytes!("../assets/nucleo/expand.svg")),
+            "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),
             "nucleo/thumbs-up.svg" => Some(include_bytes!("../assets/nucleo/thumbs-up.svg")),
             "nucleo/thumbs-down.svg" => Some(include_bytes!("../assets/nucleo/thumbs-down.svg")),
             "nucleo/camera.svg" => Some(include_bytes!("../assets/nucleo/camera.svg")),

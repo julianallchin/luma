@@ -365,7 +365,7 @@ class Edit:
         return result
 
     def add_clip(self, graph, *, id=None, beats=None, bars=None, seconds=None,
-                 selection="all", subset=None, z=0, blend="replace", seed=None, inputs=None):
+                 selection="all", subset=None, z=None, blend="replace", seed=None, inputs=None):
         """Stage a clip and return its Clip value; graph may be a Graph or ID.
 
         Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
@@ -373,6 +373,8 @@ class Edit:
         expression. subset accepts a fraction, head count, or "all".
         inputs overrides the graph's exposed controls; definition(graph.id)
         gives their types/defaults. Clips composite bottom-up by integer z.
+        Omit z to place above clips overlapping this time range (or at zero
+        when the range is empty). Supply z explicitly to choose layer order.
         replace covers the lower layer; add sums/clamps; screen brightens
         without replacing the base color. Inspect overlaps before applying.
         """
@@ -382,6 +384,10 @@ class Edit:
         id = id or str(uuid.uuid4())
         if id in self._candidate["clips"]:
             raise TrackError(f"clip {id!r} already exists")
+        if z is None:
+            z = max((clip.get("z_index", 0) for clip in self._candidate["clips"].values()
+                     if clip["start"] < end and start < clip["start"] + clip["duration"]),
+                    default=-1) + 1
         value = {"graph": graph, "start": start, "duration": end-start,
                  "selection": _selection(selection, subset), "z_index": _z(z), "blend_mode": _blend(blend),
                  "seed": seed if seed is not None else uuid.uuid4().int & ((1 << 64)-1),

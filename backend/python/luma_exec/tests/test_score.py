@@ -56,6 +56,20 @@ class ScoreTests(unittest.TestCase):
                    "reverse": True, "per_group": True}
         self.assertEqual(_typed("mapping", mapping), {"type": "mapping", "value": mapping})
 
+    def test_new_clips_get_nonoverlapping_layers_unless_explicitly_chosen(self):
+        track = self.track()
+        edit = track.edit()
+        graph = edit.graph(node="chase", id="effect")
+        first = edit.add_clip(graph, id="first", beats=(0, 4))
+        second = edit.add_clip(graph, id="second", beats=(2, 6))
+        adjacent = edit.add_clip(graph, id="adjacent", beats=(6, 8))
+        explicit = edit.add_clip(graph, id="explicit", beats=(0, 4), z=0)
+        self.assertEqual((first.z, second.z, adjacent.z, explicit.z), (0, 1, 0, 0))
+        edit.apply()
+        saved = self.calls[-1][1]["candidate"]["clips"]
+        self.assertEqual(saved["second"]["z_index"], 1)
+        self.assertEqual(saved["explicit"]["z_index"], 0)
+
     def track(self):
         nodes = {"chase": {"name": "Chase", "inputs": {
             key: {"name": key, "description": "", "value_type": kind, "rate": "frame", "default": {"type": kind, "value": default}}

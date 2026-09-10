@@ -1,0 +1,563 @@
+{
+  "date": "2026-09-09",
+  "source_base": "7cfc6e8f",
+  "branch": "codex/haze-transport-experiments",
+  "adapter": "NVIDIA GeForce RTX 5090",
+  "driver": "595.84",
+  "production": {
+    "haze_resolution": 1.0,
+    "stochastic_subframes": 2,
+    "grid_tile_pixels": 8,
+    "grid_slices": 128,
+    "block_side": 4,
+    "shadow_size": 256
+  },
+  "scope": "Offscreen production score replay; excludes GPUI, picking, presentation and readback waits. Not presented FPS.",
+  "inputs_sha256": {
+    "/tmp/luma-haze-lab/gasworks.json": "a0a736b0e0032b1d00eb32b71d4556ce09dc30ea63ff18b6df28fca800697d3d",
+    "/tmp/luma-haze-lab/suite.json": "64f1f2f1c18f222141ed7929941a4f6b24a2ba420544d09399a316e516620b03",
+    "/tmp/luma-haze-v2/actual-gasworks.json": "ee6e9941b325eeaecaa4d4c44c2aa275bf1536fc11313bb61333fe358c39908e",
+    "/tmp/luma-haze-v2/replay-suite.json": "4aeadbe1847a8796568beb4b78114279a65b0f8f7980d4103d646e27d0b68ea3",
+    "gpui/crates/render/experiments/haze-shadow.json": "1e167ce92fa3e737b947cf4f9ad163709b7bc89c4c3903acad3fd1db7e0411b3",
+    "gpui/crates/render/experiments/haze-shadow-suite.json": "3f3d9b43aea1a0a962ea6799fb162a8466b4faccba88cf12f9945eb62b91a935",
+    "gpui/crates/render/experiments/haze-warm-shadow.json": "84f1b6024dfb19cb5a300d0069a1d4821dd26af7ed979b6c54fea4b62a162016",
+    "gpui/crates/render/experiments/haze-warm-shadow-suite.json": "18ead48093504d079377927214566704ac23007f167a4d3930990af8a4c9eece"
+  },
+  "replay": [
+    {
+      "path": "/tmp/luma-haze-v2/get-lucky-final-a.json",
+      "frames": 1152,
+      "size": [
+        1634,
+        750
+      ],
+      "gpu_ms": {
+        "median": 4.140592,
+        "p95": 5.598624,
+        "max": 6.153728
+      },
+      "haze_ms": {
+        "median": 2.588736,
+        "p95": 3.9414719999999996,
+        "max": 4.491008
+      },
+      "grid_ms": {
+        "median": 1.2511519999999998,
+        "p95": 1.74448,
+        "max": 2.21712
+      },
+      "lighting_ms": {
+        "median": 1.055744,
+        "p95": 1.553408,
+        "max": 2.0223999999999998
+      },
+      "scene_ms": {
+        "median": 1.158864,
+        "p95": 1.6468479999999999,
+        "max": 2.296128
+      },
+      "encode_ms": {
+        "median": 0.7942965,
+        "p95": 1.18873,
+        "max": 8.047195
+      }
+    },
+    {
+      "path": "/tmp/luma-haze-v2/get-lucky-final-b.json",
+      "frames": 1152,
+      "size": [
+        1634,
+        750
+      ],
+      "gpu_ms": {
+        "median": 3.948832,
+        "p95": 5.39312,
+        "max": 6.132543999999999
+      },
+      "haze_ms": {
+        "median": 2.520816,
+        "p95": 3.8643199999999998,
+        "max": 4.199231999999999
+      },
+      "grid_ms": {
+        "median": 1.226272,
+        "p95": 1.6441919999999999,
+        "max": 1.9092799999999999
+      },
+      "lighting_ms": {
+        "median": 1.0311679999999999,
+        "p95": 1.449984,
+        "max": 1.7172479999999999
+      },
+      "scene_ms": {
+        "median": 1.1452,
+        "p95": 1.543104,
+        "max": 2.16512
+      },
+      "encode_ms": {
+        "median": 0.729991,
+        "p95": 0.9369479999999999,
+        "max": 7.069556
+      }
+    }
+  ],
+  "quality_reference": "native 64 subframes x 32 samples; exhaustive per-ray transport with spatial denoising disabled",
+  "quality": [
+    {
+      "case": "gasworks-get-lucky-1s-bar-close",
+      "mode": "final",
+      "rmse": 0.489664226770401,
+      "lit_rmse": 0.489664226770401,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "104893655b174459a81a7fa98d18afd95265841d328cbb178c6f499c78d15b9b",
+      "first_rmse": 0.489664226770401,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.42765334248542786
+    },
+    {
+      "case": "gasworks-get-lucky-1s-inside",
+      "mode": "final",
+      "rmse": 0.1937611997127533,
+      "lit_rmse": 0.3861868679523468,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "c3f9d29d0d215503520e53dda1339a27b7f9164574bef2330d38f31ec1892d45",
+      "first_rmse": 0.1937611997127533,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.19744598865509033
+    },
+    {
+      "case": "gasworks-get-lucky-1s-replay-camera",
+      "mode": "final",
+      "rmse": 0.24818339943885803,
+      "lit_rmse": 0.3861338794231415,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "226bf31c099a4ab8011a44046a04ef80e6a03e5293fd247e871acf52537c15ee",
+      "first_rmse": 0.24818339943885803,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.24810612201690674
+    },
+    {
+      "case": "gasworks-get-lucky-1s-side",
+      "mode": "final",
+      "rmse": 0.42843472957611084,
+      "lit_rmse": 0.8400588631629944,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "d62b83814341039034f23c4f94e37da408e3a3f7335b7f5bccd941f30582dd65",
+      "first_rmse": 0.42843472957611084,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.42224904894828796
+    },
+    {
+      "case": "gasworks-get-lucky-1s-source",
+      "mode": "final",
+      "rmse": 0.4861336648464203,
+      "lit_rmse": 0.4861336648464203,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "39753289a50d61cd19976098bd7b015b853bd45ed170d2e9a2e8a367598c3a60",
+      "first_rmse": 0.4861336648464203,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.48517853021621704
+    },
+    {
+      "case": "gasworks-get-lucky-1s-source-side",
+      "mode": "final",
+      "rmse": 0.26953113079071045,
+      "lit_rmse": 0.26953113079071045,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "70c64a519f0a3204f147c65d2dd6641d45fa20cf6ec6511ccdc774fe02326e4b",
+      "first_rmse": 0.26953113079071045,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.26651403307914734
+    },
+    {
+      "case": "gasworks-get-lucky-1s-wide",
+      "mode": "final",
+      "rmse": 0.29344603419303894,
+      "lit_rmse": 0.3821324110031128,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "402d94914d08f1b3d026c0416765b3681c1b844821a7615227e6ce51f91036b3",
+      "first_rmse": 0.29344603419303894,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.2934949994087219
+    },
+    {
+      "case": "gasworks-get-lucky-3s-bar-close",
+      "mode": "final",
+      "rmse": 0.45085278153419495,
+      "lit_rmse": 0.45085278153419495,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "e8b128655906b07fc5b2f65eb679d50159f53aee3784bac4ecbe4f6e5efb9925",
+      "first_rmse": 0.45085278153419495,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.40614983439445496
+    },
+    {
+      "case": "gasworks-get-lucky-3s-inside",
+      "mode": "final",
+      "rmse": 0.18306532502174377,
+      "lit_rmse": 0.4002130627632141,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "9f2b7c4f08b89b919d352bb2ca0e27a4a60d30414bb4b4b5e750b3a1ed239a0a",
+      "first_rmse": 0.18306532502174377,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.18400681018829346
+    },
+    {
+      "case": "gasworks-get-lucky-3s-replay-camera",
+      "mode": "final",
+      "rmse": 0.2442578673362732,
+      "lit_rmse": 0.3756333887577057,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "a07746ea50cfa933ffe3a98beebd87baac8318a9e08ab2725cf34817f8a8202d",
+      "first_rmse": 0.2442578673362732,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.24478179216384888
+    },
+    {
+      "case": "gasworks-get-lucky-3s-side",
+      "mode": "final",
+      "rmse": 0.4412236213684082,
+      "lit_rmse": 0.8461887836456299,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "b2c42a992dee20119306bc1f92dbc416fdba4ed7cfe87eb92bfb4818903d728b",
+      "first_rmse": 0.4412236213684082,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.4348187744617462
+    },
+    {
+      "case": "gasworks-get-lucky-3s-source",
+      "mode": "final",
+      "rmse": 0.44595134258270264,
+      "lit_rmse": 0.44595134258270264,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "479bc82dbc54c58e0bd870228a93bfbf37ed6ffa17fe06d46b62010ebe660d82",
+      "first_rmse": 0.44595134258270264,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.45067283511161804
+    },
+    {
+      "case": "gasworks-get-lucky-3s-source-side",
+      "mode": "final",
+      "rmse": 0.26801618933677673,
+      "lit_rmse": 0.26801618933677673,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "47514f896a645cddbeb2a779a609d9f93d6caa95bdc7815b410315beb0398b5f",
+      "first_rmse": 0.26801618933677673,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.26722657680511475
+    },
+    {
+      "case": "gasworks-get-lucky-3s-wide",
+      "mode": "final",
+      "rmse": 0.2974199950695038,
+      "lit_rmse": 0.3834361732006073,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "e3bd5eb72535287d32bea294749a711673b48d88820ac937d7cafd408b6370ba",
+      "first_rmse": 0.2974199950695038,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.29781192541122437
+    },
+    {
+      "case": "gasworks-get-lucky-7s-bar-close",
+      "mode": "final",
+      "rmse": 0.47662198543548584,
+      "lit_rmse": 0.47662198543548584,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "a69cd6835f099aa22ea012a57a7b6e84bfca801e2158070ad324aa076252e1e1",
+      "first_rmse": 0.47662198543548584,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.4259289503097534
+    },
+    {
+      "case": "gasworks-get-lucky-7s-inside",
+      "mode": "final",
+      "rmse": 0.1743135154247284,
+      "lit_rmse": 0.4037768244743347,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "05bccf38543012fe7dcab94d1382feac4bddb334ced0f0a4613fd245f4d8ab26",
+      "first_rmse": 0.1743135154247284,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.17194285988807678
+    },
+    {
+      "case": "gasworks-get-lucky-7s-replay-camera",
+      "mode": "final",
+      "rmse": 0.2489958107471466,
+      "lit_rmse": 0.3742004334926605,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "490b78aaf0570aadd34de784b565c19a0dc501bfd6d7b141379f339be50b4a02",
+      "first_rmse": 0.2489958107471466,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.24913886189460754
+    },
+    {
+      "case": "gasworks-get-lucky-7s-side",
+      "mode": "final",
+      "rmse": 0.41269394755363464,
+      "lit_rmse": 0.750780463218689,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "e05f8a0f22b13cf5358a14c0cd0c1550ccc29307d775367bbce000fa3597c14a",
+      "first_rmse": 0.41269394755363464,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.40660107135772705
+    },
+    {
+      "case": "gasworks-get-lucky-7s-source",
+      "mode": "final",
+      "rmse": 0.4556520879268646,
+      "lit_rmse": 0.4556520879268646,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "ea26582dc3a7205c4c73005b2a9079f12c66a592736c3afe40ff34deb1e7d60e",
+      "first_rmse": 0.4556520879268646,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.45343321561813354
+    },
+    {
+      "case": "gasworks-get-lucky-7s-source-side",
+      "mode": "final",
+      "rmse": 0.2910875976085663,
+      "lit_rmse": 0.2910875976085663,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "927b84f2c35e56236ee598d18184a148a29f65c289c5900a6edee269b255f1ac",
+      "first_rmse": 0.2910875976085663,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.2969435155391693
+    },
+    {
+      "case": "gasworks-get-lucky-7s-wide",
+      "mode": "final",
+      "rmse": 0.3009073734283447,
+      "lit_rmse": 0.3769892454147339,
+      "absolute_error_p99": 1.0,
+      "png_sha256": "66a9f11030e6bffb32c3d81b8ba8194784178490057f0218441bc0ddbf4179e4",
+      "first_rmse": 0.3009073734283447,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.3003036677837372
+    },
+    {
+      "case": "truss-shadow-along",
+      "mode": "final",
+      "rmse": 0.7528641819953918,
+      "lit_rmse": 0.747799813747406,
+      "absolute_error_p99": 2.0,
+      "png_sha256": "1aafd1202a68eb2670249e304aaa57948ab5ebc96437b050efd854f8680fc92f",
+      "first_rmse": 0.7528641819953918,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.7385435104370117
+    },
+    {
+      "case": "truss-shadow-near",
+      "mode": "final",
+      "rmse": 0.9161104559898376,
+      "lit_rmse": 0.9376269578933716,
+      "absolute_error_p99": 2.0,
+      "png_sha256": "8c4e63fe12622659ff8efc69e44d4616b20728de9b42abd072d8bcc50953df47",
+      "first_rmse": 0.9161104559898376,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.9008871912956238
+    },
+    {
+      "case": "truss-shadow-oblique",
+      "mode": "final",
+      "rmse": 0.9300887584686279,
+      "lit_rmse": 0.9300887584686279,
+      "absolute_error_p99": 3.0,
+      "png_sha256": "c8134c50798aba3f02406b2a257d8af342ab5aa2a00b60ab089931aba3b67ec8",
+      "first_rmse": 0.9300887584686279,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.9298069477081299
+    },
+    {
+      "case": "truss-shadow-side",
+      "mode": "final",
+      "rmse": 1.052368402481079,
+      "lit_rmse": 0.8352822065353394,
+      "absolute_error_p99": 3.0,
+      "png_sha256": "7fbf17bafb785ae5402e27a593dbd896722c7ec7a039dd08142cd476a9afca48",
+      "first_rmse": 1.052368402481079,
+      "still_stddev": 0.0,
+      "pan_rmse": 1.07011878490448
+    },
+    {
+      "case": "warm-truss-close",
+      "mode": "final",
+      "rmse": 0.6227859854698181,
+      "lit_rmse": 0.6227859854698181,
+      "absolute_error_p99": 2.0,
+      "png_sha256": "f2fad8adac613a7dc523ae9aff46d682ec9dc77c4a6dfa1f8599c991108a0dee",
+      "first_rmse": 0.6227859854698181,
+      "still_stddev": 0.0,
+      "pan_rmse": 0.6197028160095215
+    }
+  ],
+  "culling_validation": [
+    {
+      "case": "gasworks-get-lucky-1s-bar-close",
+      "rmse": 0.0,
+      "max": 0.0,
+      "different_pixels": 0
+    },
+    {
+      "case": "gasworks-get-lucky-1s-inside",
+      "rmse": 0.000637887953849786,
+      "max": 1.0,
+      "different_pixels": 1
+    },
+    {
+      "case": "gasworks-get-lucky-1s-replay-camera",
+      "rmse": 0.002118481554389188,
+      "max": 1.0,
+      "different_pixels": 22
+    },
+    {
+      "case": "gasworks-get-lucky-1s-side",
+      "rmse": 0.0015625,
+      "max": 1.0,
+      "different_pixels": 6
+    },
+    {
+      "case": "gasworks-get-lucky-1s-source",
+      "rmse": 0.000637887953849786,
+      "max": 1.0,
+      "different_pixels": 1
+    },
+    {
+      "case": "gasworks-get-lucky-1s-source-side",
+      "rmse": 0.0011048543456039805,
+      "max": 1.0,
+      "different_pixels": 3
+    },
+    {
+      "case": "gasworks-get-lucky-1s-wide",
+      "rmse": 0.0029919597117385567,
+      "max": 1.0,
+      "different_pixels": 21
+    },
+    {
+      "case": "gasworks-get-lucky-3s-bar-close",
+      "rmse": 0.0,
+      "max": 0.0,
+      "different_pixels": 0
+    },
+    {
+      "case": "gasworks-get-lucky-3s-inside",
+      "rmse": 0.001275775907699572,
+      "max": 1.0,
+      "different_pixels": 4
+    },
+    {
+      "case": "gasworks-get-lucky-3s-replay-camera",
+      "rmse": 0.0022583089249096095,
+      "max": 1.0,
+      "different_pixels": 25
+    },
+    {
+      "case": "gasworks-get-lucky-3s-side",
+      "rmse": 0.0019136638615493578,
+      "max": 1.0,
+      "different_pixels": 9
+    },
+    {
+      "case": "gasworks-get-lucky-3s-source",
+      "rmse": 0.0011048543456039805,
+      "max": 1.0,
+      "different_pixels": 3
+    },
+    {
+      "case": "gasworks-get-lucky-3s-source-side",
+      "rmse": 0.0016876928902103802,
+      "max": 1.0,
+      "different_pixels": 7
+    },
+    {
+      "case": "gasworks-get-lucky-3s-wide",
+      "rmse": 0.004326366595269831,
+      "max": 1.0,
+      "different_pixels": 46
+    },
+    {
+      "case": "gasworks-get-lucky-7s-bar-close",
+      "rmse": 0.0,
+      "max": 0.0,
+      "different_pixels": 0
+    },
+    {
+      "case": "gasworks-get-lucky-7s-inside",
+      "rmse": 0.001275775907699572,
+      "max": 1.0,
+      "different_pixels": 4
+    },
+    {
+      "case": "gasworks-get-lucky-7s-replay-camera",
+      "rmse": 0.0022126818190407183,
+      "max": 1.0,
+      "different_pixels": 24
+    },
+    {
+      "case": "gasworks-get-lucky-7s-side",
+      "rmse": 0.00142636082683637,
+      "max": 1.0,
+      "different_pixels": 5
+    },
+    {
+      "case": "gasworks-get-lucky-7s-source",
+      "rmse": 0.0,
+      "max": 0.0,
+      "different_pixels": 0
+    },
+    {
+      "case": "gasworks-get-lucky-7s-source-side",
+      "rmse": 0.001275775907699572,
+      "max": 1.0,
+      "different_pixels": 4
+    },
+    {
+      "case": "gasworks-get-lucky-7s-wide",
+      "rmse": 0.0034938562148434213,
+      "max": 1.0,
+      "different_pixels": 30
+    },
+    {
+      "case": "truss-shadow-along",
+      "rmse": 0.005022734771350497,
+      "max": 1.0,
+      "different_pixels": 53
+    },
+    {
+      "case": "truss-shadow-near",
+      "rmse": 0.0,
+      "max": 0.0,
+      "different_pixels": 0
+    },
+    {
+      "case": "truss-shadow-oblique",
+      "rmse": 0.0015625,
+      "max": 1.0,
+      "different_pixels": 6
+    },
+    {
+      "case": "truss-shadow-side",
+      "rmse": 0.0024705294220065464,
+      "max": 1.0,
+      "different_pixels": 15
+    },
+    {
+      "case": "warm-truss-close",
+      "rmse": 0.0009021097956087903,
+      "max": 1.0,
+      "different_pixels": 2
+    }
+  ],
+  "validation": {
+    "renderer_lib": 126,
+    "procedural_haze": 6,
+    "volumetric_transport": 11,
+    "ignored_benchmarks": 1,
+    "workspace_all_targets": "passed"
+  },
+  "notes": [
+    "The reference shares the finite optical-depth cache, shadow maps and single-scattering model. It is not independent physical ground truth.",
+    "The initial frozen harness used one live subframe instead of production two; it has been corrected. Actual saved-score replays always used production two.",
+    "Old capture goldens changed only isolated RGB values by one code level after filtered optical-cache conversion; largest measured RMSE 0.045."
+  ]
+}

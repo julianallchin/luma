@@ -2483,6 +2483,10 @@
           "rust": "String"
         },
         {
+          "name": "session",
+          "rust": "u64"
+        },
+        {
           "name": "startTime",
           "rust": "f32"
         },
@@ -2494,7 +2498,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 21
+        "line": 20
       },
       "name": "host_load_segment",
       "prose": {
@@ -2513,12 +2517,16 @@
         {
           "name": "trackId",
           "rust": "String"
+        },
+        {
+          "name": "session",
+          "rust": "u64"
         }
       ],
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 84
+        "line": 88
       },
       "name": "host_load_track",
       "prose": {
@@ -2534,11 +2542,16 @@
       "returns": "()"
     },
     {
-      "args": [],
+      "args": [
+        {
+          "name": "session",
+          "rust": "u64"
+        }
+      ],
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 163
+        "line": 181
       },
       "name": "host_pause",
       "prose": {
@@ -2551,11 +2564,20 @@
       "returns": "()"
     },
     {
-      "args": [],
+      "args": [
+        {
+          "name": "session",
+          "rust": "u64"
+        },
+        {
+          "name": "seconds",
+          "rust": "f32"
+        }
+      ],
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 158
+        "line": 171
       },
       "name": "host_play",
       "prose": {
@@ -2570,6 +2592,10 @@
     {
       "args": [
         {
+          "name": "session",
+          "rust": "u64"
+        },
+        {
           "name": "seconds",
           "rust": "f32"
         }
@@ -2577,7 +2603,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 169
+        "line": 187
       },
       "name": "host_seek",
       "prose": {
@@ -2592,27 +2618,9 @@
     {
       "args": [
         {
-          "name": "enabled",
-          "rust": "bool"
-        }
-      ],
-      "domain": "host_audio",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 174
-      },
-      "name": "host_set_loop",
-      "prose": {
-        "notes": "Loops the whole loaded segment when no explicit loop region is set. host_set_loop_region ALSO sets this flag, so the two commands can fight: calling host_set_loop(true) with no region loops the segment, then a later clear via host_set_loop_region(null,null) silently disables looping. Two ways to control one flag — flag as a design smell.",
-        "returns": "void (infallible)",
-        "sideEffects": [
-          "flips the atomic loop flag read by the audio thread"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
+          "name": "session",
+          "rust": "u64"
+        },
         {
           "name": "startSeconds",
           "rust": "Option<f32>"
@@ -2625,7 +2633,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 183
+        "line": 197
       },
       "name": "host_set_loop_region",
       "prose": {
@@ -2640,6 +2648,10 @@
     },
     {
       "args": [
+        {
+          "name": "session",
+          "rust": "u64"
+        },
         {
           "name": "startSeconds",
           "rust": "f32"
@@ -2656,13 +2668,17 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 196
+        "line": 222
       },
       "name": "host_set_playback_range",
       "returns": "()"
     },
     {
       "args": [
+        {
+          "name": "session",
+          "rust": "u64"
+        },
         {
           "name": "rate",
           "rust": "f32"
@@ -2671,7 +2687,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 209
+        "line": 212
       },
       "name": "host_set_playback_rate",
       "prose": {
@@ -2688,7 +2704,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 216
+        "line": 240
       },
       "name": "host_snapshot",
       "prose": {
@@ -5871,7 +5887,7 @@
       "handlers": "backend/src/dispatch/handlers/groups.rs"
     },
     {
-      "commandCount": 10,
+      "commandCount": 9,
       "domain": "host_audio",
       "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
@@ -6078,7 +6094,7 @@
         "backend/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:150"
+        "gpui/crates/app/src/library.rs:147"
       ],
       "name": "track-import-state",
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
@@ -6127,7 +6143,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 234,
+    "commandCount": 233,
     "domainCount": 35,
     "eventCount": 18
   },

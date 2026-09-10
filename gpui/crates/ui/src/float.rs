@@ -765,10 +765,26 @@ pub fn scrub(
     width: f32,
     on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<Div> {
+    scrub_with_power(id, value, min..=max, step, width, 1.0, on_change)
+}
+
+/// A value scrub with a power curve. Powers above one give small values more
+/// pointer travel; the fill follows the pointer and the readout stays in units.
+pub fn scrub_with_power(
+    id: impl Into<SharedString>,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+    width: f32,
+    power: f64,
+    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<Div> {
+    assert!(power.is_finite() && power > 0.0);
+    let (min, max) = (*range.start(), *range.end());
     let id = id.into();
     let span = (max - min).max(f64::EPSILON);
     #[allow(clippy::cast_possible_truncation)]
-    let fraction = (((value - min) / span) as f32).clamp(0.0, 1.0);
+    let fraction = ((value - min) / span).clamp(0.0, 1.0).powf(1.0 / power) as f32;
     let text = format_step(value, step);
     let moved = id.clone();
     field()
@@ -814,7 +830,7 @@ pub fn scrub(
         .on_drag_move(crate::arg::drag_fraction(
             moved,
             move |at, _: &ScrubDrag, window, cx| {
-                let raw = min + span * f64::from(at.x);
+                let raw = min + span * f64::from(at.x).powf(power);
                 // Land on the step, so a swept value is one the model can
                 // hold: the caller's step is what makes 0.5 m a length and
                 // 0.4999 m a rounding artefact in a readout.
@@ -835,8 +851,10 @@ fn format_step(value: f64, step: f64) -> String {
         0
     } else if step >= 0.1 {
         1
-    } else {
+    } else if step >= 0.01 {
         2
+    } else {
+        3
     };
     format!("{value:.places$}")
 }

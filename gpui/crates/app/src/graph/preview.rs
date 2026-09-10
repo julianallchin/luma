@@ -11,7 +11,7 @@ mod inspection;
 #[derive(Default)]
 pub(crate) struct Audio {
     target: Option<Target>,
-    generation: u64,
+    session: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -21,6 +21,7 @@ pub(super) struct State {
     pub failure: Rc<RefCell<Option<String>>>,
     pub cursor: Option<f32>,
     pub playing: bool,
+    session: Option<u64>,
     pub starting: bool,
     pub looping: bool,
     inspection: inspection::State,
@@ -82,7 +83,12 @@ impl View {
             .as_ref()
             .map_or((0., 0.), |scene| scene.span);
         if self.state.playing {
-            library.render_time().clamp(span.0, span.1)
+            self.state
+                .session
+                .and_then(|session| library.preview_time(session))
+                .or(self.state.cursor)
+                .unwrap_or(span.0)
+                .clamp(span.0, span.1)
         } else {
             self.state.cursor.unwrap_or(span.0).clamp(span.0, span.1)
         }
@@ -123,35 +129,26 @@ impl Luma {
     }
 
     pub(crate) fn stop_graph_preview(&mut self, target: &Target, cx: &mut Context<Self>) {
-        let stop = self.graph_audio.target.as_ref() == Some(target);
-        if stop {
+        let session = if self.graph_audio.target.as_ref() == Some(target) {
             self.graph_audio.target = None;
-            self.graph_audio.generation += 1;
-        }
-        let time = self.library.render_time();
+            self.graph_audio.session.take()
+        } else {
+            None
+        };
+        let time = session.and_then(|session| self.library.preview_time(session));
         self.with_preview(target, |state| {
             if state.playing {
-                state.cursor = Some(time);
+                state.cursor = time.or(state.cursor);
             }
+            state.session = None;
             state.playing = false;
             state.starting = false;
         });
-        if stop {
-            let pause = self.library.pause();
-            cx.spawn(async move |this, cx| {
-                let _ = pause.await;
-                // A newer preview may already be starting. Do not clear its loop.
-                let clear = this
-                    .read_with(cx, |this, _| {
-                        this.graph_audio
-                            .target
-                            .is_none()
-                            .then(|| this.library.set_loop_region(None))
-                    })
-                    .ok()
-                    .flatten();
-                if let Some(clear) = clear {
-                    let _ = clear.await;
+        if let Some(session) = session {
+            let pause = self.library.pause(session);
+            cx.background_spawn(async move {
+                if let Err(error) = pause.await {
+                    eprintln!("Failed to stop graph preview: {error}");
                 }
             })
             .detach();
@@ -160,13 +157,13 @@ impl Luma {
         cx.notify();
     }
 
-    fn preview_current(&self, target: &Target, generation: u64) -> bool {
+    fn preview_current(&self, target: &Target, session: u64) -> bool {
         self.workspace.active() == Some(target)
             && self.graph_audio.target.as_ref() == Some(target)
-            && self.graph_audio.generation == generation
+            && self.graph_audio.session == Some(session)
     }
 
-    fn toggle_graph_preview(&mut self, target: &Target, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_graph_preview(&mut self, target: &Target, cx: &mut Context<Self>) {
         let Some(TabBody::Graph(editor)) = self.workspace.body(target) else {
             return;
         };
@@ -188,38 +185,27 @@ impl Luma {
             time = span.0;
         }
         let track = editor.context.track.clone();
-        self.graph_audio.generation += 1;
-        let generation = self.graph_audio.generation;
+        let (session, load) = self.library.load_audio(&track);
+        self.graph_audio.session = Some(session);
         self.graph_audio.target = Some(target.clone());
         self.with_preview(target, |state| {
             state.starting = true;
+            state.session = Some(session);
             state.cursor = Some(time);
             *state.failure.borrow_mut() = None;
         });
         self.edit_graph_tab(target, cx, |editor| editor.preview_error = None);
         let target = target.clone();
-        let load = self.library.load_audio(&track);
         cx.spawn(async move |this, cx| {
             let result = async {
                 load.await?;
-                // A dismissed preview must never begin playing when decoding lands.
-                let Some(seek) = this
-                    .read_with(cx, |this, _| {
-                        this.preview_current(&target, generation)
-                            .then(|| this.library.seek(time))
-                    })
-                    .ok()
-                    .flatten()
-                else {
-                    return Ok(false);
-                };
-                seek.await?;
+                // Session ownership makes late controls harmless after navigation.
                 let Some(region) = this
                     .read_with(cx, |this, _| {
-                        if !this.preview_current(&target, generation) { return None; }
+                        if !this.preview_current(&target, session) { return None; }
                         let Some(TabBody::Graph(editor)) = this.workspace.body(&target) else { return None };
                         let source = &editor.source;
-                        Some(this.library.set_preview_range(span, source.preview.looping))
+                        Some(this.library.set_preview_range(session, span, source.preview.looping))
                     })
                     .ok()
                     .flatten()
@@ -229,8 +215,8 @@ impl Luma {
                 region.await?;
                 let Some(play) = this
                     .read_with(cx, |this, _| {
-                        this.preview_current(&target, generation)
-                            .then(|| this.library.play())
+                        this.preview_current(&target, session)
+                            .then(|| this.library.play(session, time))
                     })
                     .ok()
                     .flatten()
@@ -243,7 +229,7 @@ impl Luma {
             .await;
             let started = this
                 .update(cx, |this, cx| {
-                    if !this.preview_current(&target, generation) {
+                    if !this.preview_current(&target, session) {
                         return false;
                     }
                     let playing = matches!(&result, Ok(true));
@@ -273,7 +259,7 @@ impl Luma {
                 let snapshot = pending.await;
                 let again = this
                     .update(cx, |this, cx| {
-                        if !this.preview_current(&target, generation) {
+                        if !this.preview_current(&target, session) {
                             return false;
                         }
                         let failure = match this.workspace.body(&target) {
@@ -288,7 +274,8 @@ impl Luma {
                         let looping = matches!(this.workspace.body(&target), Some(TabBody::Graph(editor)) if editor.source.preview.looping);
                         match snapshot {
                             Ok(snapshot)
-                                if snapshot.is_playing
+                                if snapshot.session == session
+                                    && snapshot.is_playing
                                     && (looping || snapshot.current_time < span.1) =>
                             {
                                 this.with_preview(&target, |state| {
@@ -326,7 +313,10 @@ impl Luma {
             playing = state.playing;
         });
         if playing {
-            let pending = self.library.seek(seconds);
+            let Some(session) = self.graph_audio.session else {
+                return;
+            };
+            let pending = self.library.seek(session, seconds);
             let target = target.clone();
             cx.spawn(async move |this, cx| {
                 if let Err(error) = pending.await {
@@ -355,7 +345,10 @@ impl Luma {
             }
         });
         if let Some((span, looping)) = region {
-            let pending = self.library.set_preview_range(span, looping);
+            let Some(session) = self.graph_audio.session else {
+                return;
+            };
+            let pending = self.library.set_preview_range(session, span, looping);
             let target = target.clone();
             cx.spawn(async move |this, cx| {
                 if let Err(error) = pending.await {

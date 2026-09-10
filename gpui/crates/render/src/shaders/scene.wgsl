@@ -136,8 +136,9 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
         return stage_visibility(world + normal * 0.006, fixture_cores[light_index].position);
     }
     let layer = i32(slot);
-    let clip = fixture_shadow_matrices[layer].view_proj
-        * vec4<f32>(world + normal * 0.006, 1.0);
+    let matrix = fixture_shadow_matrices[layer].view_proj;
+    let biased = world + normal * 0.006;
+    let clip = matrix * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     if ndc.z < 0.0 || ndc.z > 1.0 {
         return 1.0;
@@ -146,29 +147,49 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return 1.0;
     }
-    // Metric slack (see `shadow_compare_reference`); the world-space normal
-    // offset above carries the acne margin, this only guards depth precision.
+    // Projective depth is affine across a planar receiver in shadow UV.
+    // Compare each texel against that plane at its own centre: using the
+    // centre pixel's depth for every tap makes a grazing floor shadow itself.
     let planes = fixture_shadow_matrices[layer].params;
-    let reference = shadow_compare_reference(ndc.z, planes.x, planes.y, 0.02);
+    let row_x = vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x);
+    let row_y = vec3<f32>(matrix[0].y, matrix[1].y, matrix[2].y);
+    let plane_distance = min(dot(normal, biased - fixture_cores[light_index].position), -1e-5);
+    let projection_scale = planes.x * planes.y / (planes.y - planes.x);
+    let gradient = projection_scale / plane_distance * vec2<f32>(
+        2.0 * dot(normal, row_x) / dot(row_x, row_x),
+        -2.0 * dot(normal, row_y) / dot(row_y, row_y),
+    );
+    let texel = surface_clusters.shadow.y;
+    let at = uv / texel - 0.5;
+    let base = floor(at);
+    let fraction = fract(at);
+    // The same 3x3 bilinear PCF footprint, expanded into its sixteen unique
+    // texels so hardware filtering cannot mix comparisons at different depths.
+    let weights_x = array<f32, 4>(1.0 - fraction.x, 1.0, 1.0, fraction.x);
+    let weights_y = array<f32, 4>(1.0 - fraction.y, 1.0, 1.0, fraction.y);
     var visible = 0.0;
-    for (var y = -1; y <= 1; y = y + 1) {
-        for (var x = -1; x <= 1; x = x + 1) {
+    for (var y = 0u; y < 4u; y += 1u) {
+        for (var x = 0u; x < 4u; x += 1u) {
+            let tap_uv = clamp((base + vec2<f32>(f32(x), f32(y)) - 0.5) * texel,
+                vec2<f32>(0.5 * texel), vec2<f32>(1.0 - 0.5 * texel));
+            let reference = shadow_compare_reference(ndc.z + dot(gradient, tap_uv - uv), planes.x, planes.y, 0.02);
+            let weight = weights_x[x] * weights_y[y];
             if layer < 256 {
-            visible += textureSampleCompareLevel(
-                fixture_shadow_map,
-                fixture_shadow_sampler,
-                uv + vec2<f32>(f32(x), f32(y)) * surface_clusters.shadow.y,
-                layer,
-                reference,
-            );
+                visible += weight * textureSampleCompareLevel(
+                    fixture_shadow_map,
+                    fixture_shadow_sampler,
+                    tap_uv,
+                    layer,
+                    reference,
+                );
             } else {
-            visible += textureSampleCompareLevel(
-                fixture_shadow_map_extra,
-                fixture_shadow_sampler,
-                uv + vec2<f32>(f32(x), f32(y)) * surface_clusters.shadow.y,
-                layer - 256,
-                reference,
-            );
+                visible += weight * textureSampleCompareLevel(
+                    fixture_shadow_map_extra,
+                    fixture_shadow_sampler,
+                    tap_uv,
+                    layer - 256,
+                    reference,
+                );
             }
         }
     }
@@ -467,5 +488,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         }
     }
 
-    return vec4<f32>(out, 1.0);
+    // This opaque pipeline replaces the target, so write premultiplied
+    // radiance directly. Depth still occludes geometry behind the surface.
+    let coverage = horizon_coverage(view_depth);
+    return vec4<f32>(scene_radiance(out, in.world - globals.camera_pos.xyz) * coverage, coverage);
 }

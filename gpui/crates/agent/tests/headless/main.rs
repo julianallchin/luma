@@ -55,10 +55,13 @@ mod track_editor_sheet;
 mod track_editor_stack;
 mod track_editor_ux;
 mod track_editor_waveform;
+mod track_overlaps;
+mod track_playback_sessions;
 mod tracks;
 mod venue_builder;
 mod venue_patch;
 mod venues;
+mod visualizer_fullscreen;
 mod visualizer_score;
 mod workspace_scope;
 

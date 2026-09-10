@@ -64,6 +64,83 @@ impl Default for HostAudioState {
 }
 
 impl HostAudioState {
+    /// Sessions are issued in navigation order. Reject older requests before
+    /// they can stop the current song, and again when their decode completes.
+    pub fn begin_load(&self, session: u64, track_id: String) -> bool {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        if session <= guard.session {
+            return false;
+        }
+        guard.unload();
+        guard.session = session;
+        guard.track_id = Some(track_id);
+        guard.loop_enabled = false;
+        guard.loop_start = None;
+        guard.loop_end = None;
+        true
+    }
+
+    pub fn finish_load(
+        &self,
+        session: u64,
+        samples: Vec<f32>,
+        sample_rate: u32,
+        start_time_abs: f32,
+    ) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        if guard.session != session {
+            return Ok(());
+        }
+        guard.load_segment(samples, sample_rate, start_time_abs)
+    }
+
+    /// Check ownership and perform the whole control under the same lock.
+    /// A cancelled editor's queued controls are harmless even after A → B → A.
+    pub fn control(&self, session: u64, control: HostAudioControl) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("host audio state poisoned");
+        if guard.session != session {
+            return Ok(());
+        }
+        match control {
+            HostAudioControl::Play { seconds } => {
+                guard.seek(seconds)?;
+                guard.play()
+            }
+            HostAudioControl::Pause => {
+                guard.pause();
+                Ok(())
+            }
+            HostAudioControl::Seek { seconds } => guard.seek(seconds),
+            HostAudioControl::Loop { start, end } => {
+                guard.set_loop_region(start, end);
+                guard.set_loop(start.is_some() && end.is_some());
+                Ok(())
+            }
+            HostAudioControl::Range {
+                start,
+                end,
+                looping,
+            } => {
+                let duration = guard.segment.as_ref().ok_or("No audio is loaded")?.duration;
+                if !start.is_finite()
+                    || !end.is_finite()
+                    || start < 0.
+                    || end <= start
+                    || start >= duration
+                {
+                    return Err("playback range needs finite bounds within the loaded audio".into());
+                }
+                guard.set_loop_region(Some(start), Some(end.min(duration)));
+                guard.set_loop(looping);
+                Ok(())
+            }
+            HostAudioControl::Rate { rate } => {
+                guard.set_playback_rate(rate);
+                Ok(())
+            }
+        }
+    }
+
     /// Sample rate audio should be decoded at for this host.
     ///
     /// A host with output disabled has no reason to query CoreAudio for a
@@ -91,63 +168,9 @@ impl HostAudioState {
         guard.segment_start_abs + guard.current_time
     }
 
-    pub fn load_segment(
-        &self,
-        samples: Vec<f32>,
-        sample_rate: u32,
-        start_time_abs: f32,
-    ) -> Result<(), String> {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.load_segment(samples, sample_rate, start_time_abs)
-    }
-
-    pub fn play(&self) -> Result<(), String> {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.play()
-    }
-
-    pub fn pause(&self) {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.pause();
-    }
-
-    pub fn seek(&self, seconds: f32) -> Result<(), String> {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.seek(seconds)
-    }
-
-    pub fn set_loop(&self, enabled: bool) {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.set_loop(enabled);
-    }
-
-    pub fn set_loop_region(&self, start: Option<f32>, end: Option<f32>) {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.set_loop_region(start, end);
-    }
-
-    /// A bounded audition uses the loaded track's clock. Looping and stopping
-    /// at the end share the same sample boundary in the audio callback.
-    pub fn set_playback_range(&self, start: f32, end: f32, looping: bool) -> Result<(), String> {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        let duration = guard.segment.as_ref().ok_or("No audio is loaded")?.duration;
-        if !start.is_finite() || !end.is_finite() || start < 0. || end <= start || start >= duration
-        {
-            return Err("playback range needs finite bounds within the loaded audio".into());
-        }
-        guard.set_loop_region(Some(start), Some(end.min(duration)));
-        guard.set_loop(looping);
-        Ok(())
-    }
-
     pub fn set_audio_output_enabled(&self, enabled: bool) {
         let mut guard = self.inner.lock().expect("host audio state poisoned");
         guard.set_audio_output_enabled(enabled);
-    }
-
-    pub fn set_playback_rate(&self, rate: f32) {
-        let mut guard = self.inner.lock().expect("host audio state poisoned");
-        guard.set_playback_rate(rate);
     }
 
     pub fn unload(&self) {
@@ -166,6 +189,8 @@ impl HostAudioState {
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HostAudioSnapshot {
+    pub session: u64,
+    pub track_id: Option<String>,
     /// Whether audio is currently loaded
     pub is_loaded: bool,
     /// Whether playback is active
@@ -178,10 +203,121 @@ pub struct HostAudioSnapshot {
     pub loop_enabled: bool,
 }
 
+pub enum HostAudioControl {
+    Play {
+        seconds: f32,
+    },
+    Pause,
+    Seek {
+        seconds: f32,
+    },
+    Loop {
+        start: Option<f32>,
+        end: Option<f32>,
+    },
+    /// A bounded audition stops or loops at the same audio sample boundary.
+    Range {
+        start: f32,
+        end: f32,
+        looping: bool,
+    },
+    Rate {
+        rate: f32,
+    },
+}
+
 struct LoadedSegment {
     samples: Arc<Vec<f32>>,
     sample_rate: u32,
     duration: f32,
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn host() -> HostAudioState {
+        let host = HostAudioState::default();
+        host.set_audio_output_enabled(false);
+        host
+    }
+
+    #[test]
+    fn late_loads_and_controls_cannot_replace_another_song() {
+        let host = host();
+        assert!(host.begin_load(1, "a".into()));
+        assert!(host.begin_load(2, "b".into()));
+        host.finish_load(2, vec![0.; 48_000 * 2 * 8], 48_000, 0.)
+            .unwrap();
+        host.control(2, HostAudioControl::Play { seconds: 3. })
+            .unwrap();
+        // A finishes decoding after B is already playing.
+        host.finish_load(1, vec![0.; 48_000 * 2 * 20], 48_000, 0.)
+            .unwrap();
+        host.control(1, HostAudioControl::Pause).unwrap();
+        host.control(1, HostAudioControl::Seek { seconds: 15. })
+            .unwrap();
+        host.control(
+            1,
+            HostAudioControl::Range {
+                start: 1.,
+                end: 2.,
+                looping: true,
+            },
+        )
+        .unwrap();
+        assert!(!host.begin_load(1, "a".into()));
+        let snapshot = host.snapshot();
+        assert_eq!(snapshot.track_id.as_deref(), Some("b"));
+        assert_eq!(snapshot.session, 2);
+        assert_eq!(snapshot.duration_seconds, 8.);
+        assert!(!snapshot.loop_enabled);
+        assert_eq!(host.inner.lock().unwrap().loop_end, None);
+        assert!(snapshot.is_playing);
+        assert!((3.0..4.0).contains(&snapshot.current_time));
+    }
+
+    #[test]
+    fn returning_to_a_song_starts_a_fresh_session_and_restores_its_playhead() {
+        let host = host();
+        assert!(host.begin_load(1, "a".into()));
+        host.finish_load(1, vec![0.; 48_000 * 2 * 20], 48_000, 0.)
+            .unwrap();
+        host.control(
+            1,
+            HostAudioControl::Loop {
+                start: Some(2.),
+                end: Some(3.),
+            },
+        )
+        .unwrap();
+        assert!(host.begin_load(2, "b".into()));
+        host.finish_load(2, vec![0.; 48_000 * 2 * 8], 48_000, 0.)
+            .unwrap();
+        assert!(!host.snapshot().loop_enabled);
+        assert!(host.begin_load(3, "a".into()));
+        host.finish_load(3, vec![0.; 48_000 * 2 * 20], 48_000, 0.)
+            .unwrap();
+        host.control(3, HostAudioControl::Play { seconds: 10. })
+            .unwrap();
+        host.control(
+            1,
+            HostAudioControl::Loop {
+                start: Some(2.),
+                end: Some(3.),
+            },
+        )
+        .unwrap();
+        host.control(2, HostAudioControl::Play { seconds: 0. })
+            .unwrap();
+        let snapshot = host.snapshot();
+        assert_eq!(snapshot.track_id.as_deref(), Some("a"));
+        assert_eq!(snapshot.session, 3);
+        assert_eq!(snapshot.duration_seconds, 20.);
+        assert!(!snapshot.loop_enabled);
+        assert!(snapshot.is_playing);
+        assert!((10.0..11.0).contains(&snapshot.current_time));
+    }
 }
 
 /// Shared state between the audio thread and the main thread
@@ -214,6 +350,8 @@ struct PersistentStream {
 }
 
 struct HostAudioInner {
+    session: u64,
+    track_id: Option<String>,
     segment: Option<LoadedSegment>,
     current_time: f32,
     is_playing: bool,
@@ -233,6 +371,8 @@ struct HostAudioInner {
 impl HostAudioInner {
     fn new() -> Self {
         Self {
+            session: 0,
+            track_id: None,
             segment: None,
             current_time: 0.0,
             is_playing: false,
@@ -571,6 +711,8 @@ impl HostAudioInner {
         };
 
         HostAudioSnapshot {
+            session: self.session,
+            track_id: self.track_id.clone(),
             is_loaded,
             is_playing: self.is_playing,
             current_time: self.current_time,
@@ -784,14 +926,23 @@ mod preview_tests {
     fn host() -> HostAudioState {
         let host = HostAudioState::default();
         host.set_audio_output_enabled(false);
-        host.load_segment(vec![0.; 80], 4, 0.).unwrap(); // Ten seconds, stereo.
+        assert!(host.begin_load(1, "preview".into()));
+        host.finish_load(1, vec![0.; 80], 4, 0.).unwrap(); // Ten seconds, stereo.
         host
     }
 
     #[test]
     fn bounded_audio_stops_or_wraps_at_the_same_boundary() {
         let host = host();
-        host.set_playback_range(2., 4., false).unwrap();
+        host.control(
+            1,
+            HostAudioControl::Range {
+                start: 2.,
+                end: 4.,
+                looping: false,
+            },
+        )
+        .unwrap();
         let mut inner = host.inner.lock().unwrap();
         inner.is_playing = true;
         inner.start_offset = 2.;
@@ -802,7 +953,15 @@ mod preview_tests {
         assert_eq!(inner.loop_frames(4, 40), (8, 16));
         drop(inner);
 
-        host.set_playback_range(2., 4., true).unwrap();
+        host.control(
+            1,
+            HostAudioControl::Range {
+                start: 2.,
+                end: 4.,
+                looping: true,
+            },
+        )
+        .unwrap();
         let mut inner = host.inner.lock().unwrap();
         inner.is_playing = true;
         inner.start_offset = 3.;
@@ -816,13 +975,37 @@ mod preview_tests {
     #[test]
     fn playback_bounds_are_validated_and_cannot_overrun_samples() {
         let host = host();
-        host.set_playback_range(2., 20., false).unwrap();
+        host.control(
+            1,
+            HostAudioControl::Range {
+                start: 2.,
+                end: 20.,
+                looping: false,
+            },
+        )
+        .unwrap();
         assert_eq!(host.inner.lock().unwrap().loop_frames(4, 40), (8, 40));
         for (start, end) in [(4., 2.), (-1., 4.), (10., 12.), (f32::NAN, 4.)] {
-            assert!(host.set_playback_range(start, end, true).is_err());
+            assert!(host
+                .control(
+                    1,
+                    HostAudioControl::Range {
+                        start: start,
+                        end: end,
+                        looping: true
+                    }
+                )
+                .is_err());
             assert_eq!(host.inner.lock().unwrap().loop_frames(4, 40), (8, 40));
         }
-        host.set_loop_region(None, None);
+        host.control(
+            1,
+            HostAudioControl::Loop {
+                start: None,
+                end: None,
+            },
+        )
+        .unwrap();
         assert_eq!(
             host.inner.lock().unwrap().loop_frames(4, 40),
             (0, usize::MAX)
