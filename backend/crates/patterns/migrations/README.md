@@ -20,6 +20,11 @@ grid, delay and angle overrides, over nine fixtures and nine sample times.
 Shimmer became graphs over the `core/event_ages` tensor. Version 3 documents
 validate against it; `migration::upgrade_v3` rewrites their effect nodes as the
 beat-driven patterns or the trigger-driven graphs plus an explicit Beat trigger.
+The v2 conversion copied every library effect a score used into it as a
+`<effect>/signals` graph, nested as deeply as that library was; `upgrade_v3`
+recognizes a copy that is still the library graph by content and replaces it
+with the shipped pattern of the same controls, folding the copy's dimmer into
+the pattern's color wherever an Apply node or a graph interface took the pair.
 
 `v2-event-recipes.json` is part of the v2-to-v3 transformation. It replaces
 legacy cyclic Chase/Pulse/Dissolve recipes with event operations while retaining

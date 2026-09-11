@@ -7,7 +7,7 @@ pub(crate) mod preview;
 mod score;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
@@ -631,6 +631,7 @@ impl Luma {
                     let mut edits: Vec<_> = editor
                         .selected
                         .iter()
+                        .filter(|id| id.as_ref() != luma_lib::node_graph::lighting::OUTPUTS_NODE)
                         .map(
                             |id| match luma_lib::node_graph::lighting::input_node_key(id) {
                                 Some(key) => {
@@ -640,12 +641,17 @@ impl Luma {
                             },
                         )
                         .collect();
+                    // An output stays bound; the wire into the outputs card is
+                    // replaced, never removed.
                     if let Some(edge) = editor.selected_edge.as_ref().and_then(|id| {
                         editor
                             .shown_graph()?
                             .edges
                             .iter()
                             .find(|edge| edge.id == id.as_ref())
+                            .filter(|edge| {
+                                edge.to_node != luma_lib::node_graph::lighting::OUTPUTS_NODE
+                            })
                     }) {
                         edits.push(luma_patterns::GraphEdit::Bind {
                             node: edge.to_node.clone(),
@@ -754,6 +760,9 @@ struct Scene {
 
 struct Card {
     interface_input: bool,
+    /// The document says where this card goes. Otherwise [`Scene::layout`]
+    /// decides, once the card has a size.
+    placed: bool,
     node_id: SharedString,
     title: SharedString,
     origin: Point<f32>,
@@ -910,8 +919,7 @@ impl Scene {
             .nodes
             .iter()
             .filter(|node| node.type_id != "pattern_args")
-            .enumerate()
-            .map(|(index, instance)| {
+            .map(|instance| {
                 let definition = types.get(&instance.type_id);
                 let ports = |defs: &[PortDef], output: bool| {
                     defs.iter()
@@ -957,6 +965,7 @@ impl Scene {
                 Card {
                     interface_input: luma_lib::node_graph::lighting::input_node_key(&instance.id)
                         .is_some(),
+                    placed: instance.position_x.is_some() && instance.position_y.is_some(),
                     node_id: instance.id.clone().into(),
                     // A type the catalogue does not know still gets a card: it
                     // is in the document, so hiding it would be a graph the
@@ -965,7 +974,10 @@ impl Scene {
                         .map(|d| d.name.clone())
                         .unwrap_or_else(|| instance.type_id.clone())
                         .into(),
-                    origin: placement(instance.position_x, instance.position_y, index),
+                    origin: point(
+                        instance.position_x.unwrap_or(0.) as f32,
+                        instance.position_y.unwrap_or(0.) as f32,
+                    ),
                     width: CARD_MIN_WIDTH,
                     height: 0.,
                     inputs: definition
@@ -1078,7 +1090,238 @@ impl Scene {
             }
             card.resolve_regions();
         }
+        if self.cards.iter().any(|card| !card.placed) {
+            self.layout();
+        }
         self.measured = true;
+    }
+
+    /// Arrange the cards the document does not place. Columns follow the
+    /// wires left to right, each card as near its consumers as its producers
+    /// allow, so an Input lands beside the card that reads it. Rows follow
+    /// the ports a card is wired to, so wires run as straight as the column
+    /// lets them. A card the document does place stays put, and a new card
+    /// among placed ones takes the nearest free spot beside what it reads.
+    fn layout(&mut self) {
+        const GUTTER: f32 = 80.;
+        const GAP: f32 = 18.;
+        let n = self.cards.len();
+        let mut succ: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); n];
+        let mut pred: Vec<Vec<(usize, usize, usize)>> = vec![Vec::new(); n];
+        for link in &self.links {
+            succ[link.from.0].push((link.to.0, link.from.1, link.to.1));
+            pred[link.to.0].push((link.from.0, link.from.1, link.to.1));
+        }
+        // The row a card's wires ask for: each settled neighbour's port,
+        // less where that wire meets this card.
+        let wanted = |cards: &[Card], i: usize, settled: &dyn Fn(usize) -> bool| {
+            let mut sum = 0.;
+            let mut count = 0.;
+            for &(j, from, to) in &pred[i] {
+                if settled(j) {
+                    sum +=
+                        cards[j].origin.y + cards[j].outputs[from].at.y - cards[i].inputs[to].at.y;
+                    count += 1.;
+                }
+            }
+            for &(j, from, to) in &succ[i] {
+                if settled(j) {
+                    sum +=
+                        cards[j].origin.y + cards[j].inputs[to].at.y - cards[i].outputs[from].at.y;
+                    count += 1.;
+                }
+            }
+            (count > 0.).then(|| sum / count)
+        };
+        if self.cards.iter().any(|card| card.placed) {
+            let mut settled: Vec<bool> = self.cards.iter().map(|card| card.placed).collect();
+            for i in 0..n {
+                if settled[i] {
+                    continue;
+                }
+                let left = succ[i]
+                    .iter()
+                    .filter(|&&(j, ..)| settled[j])
+                    .map(|&(j, ..)| self.cards[j].origin.x)
+                    .reduce(f32::min);
+                let right = pred[i]
+                    .iter()
+                    .filter(|&&(j, ..)| settled[j])
+                    .map(|&(j, ..)| self.cards[j].origin.x + self.cards[j].width)
+                    .reduce(f32::max);
+                let x = match (left, right) {
+                    (Some(left), _) => left - self.cards[i].width - GUTTER,
+                    (None, Some(right)) => right + GUTTER,
+                    (None, None) => 0.,
+                };
+                let y = wanted(&self.cards, i, &|j| settled[j]).unwrap_or(0.);
+                self.cards[i].origin = point(x, y);
+                // Below whatever it would cover.
+                while let Some(j) = (0..n).find(|&j| {
+                    settled[j]
+                        && self.cards[i].intersects(
+                            self.cards[j].origin - point(GAP, GAP),
+                            self.cards[j].origin
+                                + point(self.cards[j].width + GAP, self.cards[j].height + GAP),
+                        )
+                }) {
+                    self.cards[i].origin.y = self.cards[j].origin.y + self.cards[j].height + GAP;
+                }
+                settled[i] = true;
+            }
+            return;
+        }
+        // Columns: the longest wire path from a source, then each card slides
+        // toward whichever side it has more wires on, as far as the other
+        // side allows. Every slide shortens the wires, so this settles.
+        let mut column = vec![0usize; n];
+        let mut indegree: Vec<usize> = pred.iter().map(Vec::len).collect();
+        let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+        let mut topological = Vec::with_capacity(n);
+        while let Some(i) = queue.pop_front() {
+            topological.push(i);
+            for &(j, ..) in &succ[i] {
+                column[j] = column[j].max(column[i] + 1);
+                indegree[j] -= 1;
+                if indegree[j] == 0 {
+                    queue.push_back(j);
+                }
+            }
+        }
+        // A cycle, which the document never validates, leaves its cards at the left.
+        let missing: Vec<usize> = (0..n).filter(|i| !topological.contains(i)).collect();
+        topological.extend(missing);
+        loop {
+            let mut changed = false;
+            for &i in topological.iter().rev() {
+                let lo = pred[i]
+                    .iter()
+                    .map(|&(j, ..)| column[j] + 1)
+                    .max()
+                    .unwrap_or(0);
+                let hi = succ[i]
+                    .iter()
+                    .map(|&(j, ..)| column[j].saturating_sub(1))
+                    .min()
+                    .unwrap_or(column[i])
+                    .max(lo);
+                let target = match succ[i].len().cmp(&pred[i].len()) {
+                    std::cmp::Ordering::Greater => hi,
+                    std::cmp::Ordering::Less => lo,
+                    std::cmp::Ordering::Equal => column[i].clamp(lo, hi),
+                };
+                if target != column[i] {
+                    column[i] = target;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut used = column.clone();
+        used.sort_unstable();
+        used.dedup();
+        let mut columns: Vec<Vec<usize>> = vec![Vec::new(); used.len()];
+        for &i in &topological {
+            column[i] = used.binary_search(&column[i]).unwrap_or(0);
+            columns[column[i]].push(i);
+        }
+        // Rows within a column: by the rows of a card's neighbours in the
+        // column before, then after, and by the port each wire meets there,
+        // so a fan of Inputs follows the port order of the card reading it.
+        let mut rank = vec![0f32; n];
+        for cards in &columns {
+            for (row, &i) in cards.iter().enumerate() {
+                rank[i] = row as f32;
+            }
+        }
+        for sweep in 0..4 {
+            let forward = sweep % 2 == 0;
+            let order: Vec<usize> = if forward {
+                (0..columns.len()).collect()
+            } else {
+                (0..columns.len()).rev().collect()
+            };
+            for c in order {
+                let mut keyed: Vec<(f32, usize)> = columns[c]
+                    .iter()
+                    .map(|&i| {
+                        let neighbours = if forward { &pred[i] } else { &succ[i] };
+                        let key = if neighbours.is_empty() {
+                            rank[i]
+                        } else {
+                            neighbours
+                                .iter()
+                                .map(|&(j, from, to)| {
+                                    rank[j] + 0.001 * (if forward { from } else { to }) as f32
+                                })
+                                .sum::<f32>()
+                                / neighbours.len() as f32
+                        };
+                        (key, i)
+                    })
+                    .collect();
+                keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+                columns[c] = keyed.into_iter().map(|(_, i)| i).collect();
+                for (row, &i) in columns[c].iter().enumerate() {
+                    rank[i] = row as f32;
+                }
+            }
+        }
+        let mut x = 0.;
+        for cards in &columns {
+            let mut y = 0.;
+            for &i in cards {
+                self.cards[i].origin = point(x, y);
+                y += self.cards[i].height + GAP;
+            }
+            x += cards
+                .iter()
+                .map(|&i| self.cards[i].width)
+                .fold(0., f32::max)
+                + GUTTER;
+        }
+        // Pull each card toward the rows its wires ask for, keeping the
+        // column's order and gaps: a card that would cover the one above it
+        // goes below instead, and the column as a whole shares the pushes.
+        for round in 0..8 {
+            let order: Vec<usize> = if round % 2 == 0 {
+                (0..columns.len()).collect()
+            } else {
+                (0..columns.len()).rev().collect()
+            };
+            for c in order {
+                let want: Vec<Option<f32>> = columns[c]
+                    .iter()
+                    .map(|&i| wanted(&self.cards, i, &|_| true))
+                    .collect();
+                let mut floor = f32::MIN;
+                let mut placed = Vec::with_capacity(columns[c].len());
+                for (k, &i) in columns[c].iter().enumerate() {
+                    let y = want[k].unwrap_or(self.cards[i].origin.y).max(floor);
+                    placed.push(y);
+                    floor = y + self.cards[i].height + GAP;
+                }
+                let pushes: Vec<f32> = want
+                    .iter()
+                    .zip(&placed)
+                    .filter_map(|(want, placed)| want.map(|want| want - placed))
+                    .collect();
+                let shift = pushes.iter().sum::<f32>() / pushes.len().max(1) as f32;
+                for (k, &i) in columns[c].iter().enumerate() {
+                    self.cards[i].origin.y = placed[k] + shift;
+                }
+            }
+        }
+        let top = self
+            .cards
+            .iter()
+            .map(|card| card.origin.y)
+            .fold(f32::MAX, f32::min);
+        for card in &mut self.cards {
+            card.origin.y -= top;
+        }
     }
 
     /// A newly inserted or selected card must be reachable above older cards
@@ -1215,15 +1458,6 @@ fn run_width(text: &SharedString, size: f32, weight: FontWeight, window: &Window
 
 /// Break `text` to `width`, greedily, on spaces — the one thing a canvas has
 /// to do for itself that a `<p>` does for free.
-/// A node's stored position, or the same fallback grid the web editor lays out
-/// when one is missing: five across, 200 × 150 apart.
-fn placement(x: Option<f64>, y: Option<f64>, index: usize) -> Point<f32> {
-    point(
-        x.map(|x| x as f32).unwrap_or((index % 5) as f32 * 200.),
-        y.map(|y| y as f32).unwrap_or((index / 5) as f32 * 150.),
-    )
-}
-
 // -- rendering ----------------------------------------------------------------
 
 fn viewport_controls(state: &Editor, app: &Entity<Luma>) -> Div {
