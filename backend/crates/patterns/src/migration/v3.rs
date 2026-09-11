@@ -2,6 +2,9 @@
 //! with built-in repeat controls. A saved node becomes either the beat-driven
 //! pattern with the same argument keys, or the trigger-driven graph plus an
 //! explicit Beat trigger node when its trigger was left automatic.
+//!
+//! Version 4 → 5: the score-local copies of version 2 library effects that the
+//! earlier conversions left behind become the shipped patterns.
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,13 +37,15 @@ pub fn validate_v3(score: &Score) -> Result<()> {
 }
 
 pub fn upgrade_v3(score: &Score) -> Result<Score> {
-    upgrade_v3_tracking(score).map(|(score, _)| score)
+    upgrade_v3_tracking(score, true).map(|(score, _)| score)
 }
 
 /// Upgrade, also reporting which score-local copies of version 2 library
-/// effects became which pattern.
+/// effects became which pattern. Without `retarget`, the copies stay: the
+/// shape the earlier builds wrote, which version 5 recognizes.
 pub(super) fn upgrade_v3_tracking(
     score: &Score,
+    retarget: bool,
 ) -> Result<(Score, BTreeMap<String, &'static Pattern>)> {
     if score.version != 3 {
         return Err(Error(format!(
@@ -92,7 +97,11 @@ pub(super) fn upgrade_v3_tracking(
         }
     }
     let mut definitions = score.definitions.clone();
-    let (retargeted, mut unused) = retarget_library_copies(&mut definitions, &score.clips);
+    let (retargeted, mut unused) = if retarget {
+        retarget_library_copies(&mut definitions, &score.clips, library_copies())
+    } else {
+        Default::default()
+    };
     inline_retired_graphs(&mut definitions);
     let local: BTreeSet<String> = definitions.keys().cloned().collect();
     let local: BTreeSet<&str> = local.iter().map(String::as_str).collect();
@@ -103,8 +112,23 @@ pub(super) fn upgrade_v3_tracking(
             unused.entry(id.clone()).or_default().extend(dropped);
         }
     }
-    // An exposure that fed only a removed control leaves the interface, and
-    // callers stop binding it; their own exposures may then become unused.
+    remove_unused_exposures(&mut definitions, &mut clips, unused);
+    let upgraded = Score {
+        version: 4,
+        definitions,
+        clips,
+    };
+    upgraded.validate(&standard_library())?;
+    Ok((upgraded, retargeted))
+}
+
+/// Exposed inputs that fed only a removed control leave the interface, and
+/// callers stop binding them; their own exposures may then become unused.
+fn remove_unused_exposures(
+    definitions: &mut BTreeMap<String, Definition>,
+    clips: &mut BTreeMap<String, Clip>,
+    mut unused: BTreeMap<String, BTreeSet<String>>,
+) {
     let mut removed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     while !unused.is_empty() {
         let mut next: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -133,7 +157,7 @@ pub(super) fn upgrade_v3_tracking(
                 graph.input_nodes.remove(key);
                 definition.inputs.remove(key);
             }
-            for (caller_id, caller) in &mut definitions {
+            for (caller_id, caller) in definitions.iter_mut() {
                 let Body::Graph(graph) = &mut caller.body else {
                     continue;
                 };
@@ -160,13 +184,30 @@ pub(super) fn upgrade_v3_tracking(
         clip.inputs
             .retain(|_, value| *value != Value::Events(Events::Automatic));
     }
+}
+
+/// Version 4 → 5. Documents an earlier build converted still carry the
+/// copies of version 2 library effects, already rewritten around the
+/// version 4 kernels; those become the shipped patterns too.
+pub fn upgrade_v4(score: &Score) -> Result<Score> {
+    if score.version != 4 {
+        return Err(Error(format!(
+            "cannot migrate score version {}",
+            score.version
+        )));
+    }
+    score.validate(&standard_library())?;
+    let mut definitions = score.definitions.clone();
+    let mut clips = score.clips.clone();
+    let (_, unused) = retarget_library_copies(&mut definitions, &clips, library_copies_v4());
+    remove_unused_exposures(&mut definitions, &mut clips, unused);
     let upgraded = Score {
-        version: 4,
+        version: 5,
         definitions,
         clips,
     };
     upgraded.validate(&standard_library())?;
-    Ok((upgraded, retargeted))
+    Ok(upgraded)
 }
 
 /// A version 2 library effect a score used was copied into it as
@@ -266,16 +307,41 @@ fn library_copies() -> &'static BTreeMap<String, Definition> {
     })
 }
 
+/// The same copies as the version 3 → 4 conversion of an earlier build left
+/// them: each placed the way a clip places an effect, so the conversion sees
+/// the controls a clip supplies.
+fn library_copies_v4() -> &'static BTreeMap<String, Definition> {
+    static COPIES: std::sync::OnceLock<BTreeMap<String, Definition>> = std::sync::OnceLock::new();
+    COPIES.get_or_init(|| {
+        let mut definitions = library_copies().clone();
+        for (effect, _) in &PATTERNS {
+            let id = format!("{effect}/signals");
+            definitions.insert(format!("{effect}/placed"), definitions[&id].instance(&id));
+        }
+        let score = Score {
+            version: 3,
+            definitions,
+            clips: BTreeMap::new(),
+        };
+        let (score, _) = upgrade_v3_tracking(&score, false).expect("library copies convert");
+        score
+            .definitions
+            .into_iter()
+            .filter(|(id, _)| id.ends_with("/signals"))
+            .collect()
+    })
+}
+
 /// Returns the copies replaced, and the exposed inputs of each graph that fed
 /// only a removed control.
 fn retarget_library_copies(
     definitions: &mut BTreeMap<String, Definition>,
     clips: &BTreeMap<String, Clip>,
+    canonical: &BTreeMap<String, Definition>,
 ) -> (
     BTreeMap<String, &'static Pattern>,
     BTreeMap<String, BTreeSet<String>>,
 ) {
-    let canonical = library_copies();
     let copies: BTreeMap<String, &'static Pattern> = definitions
         .iter()
         .filter_map(|(id, definition)| {
@@ -402,9 +468,25 @@ fn retarget_library_copies(
                         node: source.clone(),
                         output: "color".into(),
                     };
-                    let foldable = node.definition == "output"
-                        && key == "dimmer"
-                        && node.inputs.get("color").is_none_or(|bound| *bound == same);
+                    // White over a pattern left at its own color is that color.
+                    let white = |bound: &Binding| {
+                        *bound == Binding::from(Value::Color([1.0; 3]))
+                            && !graph.nodes[&source].inputs.contains_key("color")
+                    };
+                    let foldable = match node.definition.as_str() {
+                        "output" => {
+                            key == "dimmer"
+                                && node.inputs.get("color").is_none_or(|bound| *bound == same)
+                        }
+                        "mask_color" => {
+                            key == "mask"
+                                && node
+                                    .inputs
+                                    .get("color")
+                                    .is_some_and(|bound| *bound == same || white(bound))
+                        }
+                        _ => false,
+                    };
                     let entry = folds.entry(source).or_insert((true, Vec::new()));
                     entry.0 &= foldable;
                     entry.1.push(id.clone());
@@ -440,9 +522,26 @@ fn retarget_library_copies(
                 };
                 if foldable {
                     for reader in readers {
-                        let apply = graph.nodes.get_mut(&reader).unwrap();
-                        apply.inputs.remove("dimmer");
-                        apply.inputs.insert("color".into(), color.clone());
+                        if graph.nodes[&reader].definition == "output" {
+                            let apply = graph.nodes.get_mut(&reader).unwrap();
+                            apply.inputs.remove("dimmer");
+                            apply.inputs.insert("color".into(), color.clone());
+                            continue;
+                        }
+                        // A Mask color that re-applied the pattern's own
+                        // brightness was the pattern's color all along.
+                        graph.nodes.remove(&reader);
+                        for binding in graph
+                            .nodes
+                            .values_mut()
+                            .flat_map(|node| node.inputs.values_mut())
+                            .chain(graph.outputs.values_mut())
+                        {
+                            if matches!(binding, Binding::Connection { node, .. } if *node == reader)
+                            {
+                                *binding = color.clone();
+                            }
+                        }
                     }
                     if graph.outputs.remove("dimmer").is_some() {
                         definition.outputs.remove("dimmer");

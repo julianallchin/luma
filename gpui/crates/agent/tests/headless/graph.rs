@@ -7,7 +7,7 @@ use std::time::Duration;
 fn fixture(name: &'static str) -> Harness {
     Fixture::new(name, 20, vec![])
         .with_graph_score(json!({
-            "version":4,
+            "version":5,
             "definitions":{"canvas":{"name":"Canvas test","inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{
@@ -255,7 +255,7 @@ fn graph_auto_layout_follows_the_wires_and_shows_named_outputs() {
     let name = "graph-auto-layout";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(json!({
-            "version":4,
+            "version":5,
             "definitions":{"loose":{"name":"Loose graph",
                 "inputs":{
                     "tint":{"name":"Tint","description":"","value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame","default":{"type":"color","value":[1.0,0.5,0.25]}},

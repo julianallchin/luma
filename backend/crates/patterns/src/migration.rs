@@ -3,14 +3,15 @@
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 mod v3;
-pub use v3::{upgrade_v3, v3_library, validate_v3, Pattern};
+pub use v3::{upgrade_v3, upgrade_v4, v3_library, validate_v3, Pattern};
 
 /// Bring any supported document to the current version. A current document
 /// is validated and returned unchanged.
 pub fn upgrade(score: &Score) -> Result<Score> {
     match score.version {
-        2 => upgrade_v3(&upgrade_v2(score)?),
-        3 => upgrade_v3(score),
+        2 => upgrade_v4(&upgrade_v3(&upgrade_v2(score)?)?),
+        3 => upgrade_v4(&upgrade_v3(score)?),
+        4 => upgrade_v4(score),
         Score::VERSION => {
             score.validate(&standard_library())?;
             Ok(score.clone())
@@ -263,11 +264,14 @@ pub fn upgrade_v2_node(
     }
     let mut conversion = Conversion::new(&source, &target, std::iter::empty());
     let call = conversion.definition(id, capabilities, false)?;
-    let (score, retargeted) = v3::upgrade_v3_tracking(&Score {
-        version: 3,
-        definitions: conversion.definitions,
-        clips: BTreeMap::new(),
-    })?;
+    let (score, retargeted) = v3::upgrade_v3_tracking(
+        &Score {
+            version: 3,
+            definitions: conversion.definitions,
+            clips: BTreeMap::new(),
+        },
+        true,
+    )?;
     let Some(pattern) = retargeted.get(&call.id) else {
         return Ok(NodeUpgrade {
             definitions: score.definitions,

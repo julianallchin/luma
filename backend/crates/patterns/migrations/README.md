@@ -26,6 +26,11 @@ recognizes a copy that is still the library graph by content and replaces it
 with the shipped pattern of the same controls, folding the copy's dimmer into
 the pattern's color wherever an Apply node or a graph interface took the pair.
 
+Version 4 documents written by the first build of that vocabulary still carry
+those copies, rewritten around the version 4 kernels. `upgrade_v4` recognizes
+that shape the same way (`tests/fixtures/v4-samples.json` is the v2 samples as
+that build saved them) and produces version 5, which has no library copies.
+
 `v2-event-recipes.json` is part of the v2-to-v3 transformation. It replaces
 legacy cyclic Chase/Pulse/Dissolve recipes with event operations while retaining
 their exposed argument keys and defaults. It is conversion data, separate from
