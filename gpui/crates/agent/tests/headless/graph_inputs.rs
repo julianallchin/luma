@@ -8,7 +8,7 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
     let name = "graph-gradient-opacity";
     let mut harness = Fixture::new(name,20,vec![])
         .with_graph_score(json!({
-            "version":6,"definitions":{"ribbon":{"name":"Opacity ribbon",
+            "version":7,"definitions":{"ribbon":{"name":"Opacity ribbon",
                 "inputs":{"palette":{"name":"Palette","description":"","value_type":"gradient","rate":"fixed","default":{"type":"gradient","value":{"stops":[{"t":0.,"color":[1.,0.,0.],"alpha":0.2},{"t":1.,"color":[0.,0.,1.],"alpha":0.8}]}}}},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"input_nodes":{"palette":{"name":"Palette","position":[-250.,0.]}},"nodes":{
@@ -78,7 +78,7 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
     let name = "graph-seed-inputs";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(json!({
-            "version":6,"definitions":{"texture":{"name":"Seeded texture","inputs":{},
+            "version":7,"definitions":{"texture":{"name":"Seeded texture","inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"nodes":{
                     "noise":{"definition":"core/value_noise_1d","position":[300.,0.],"inputs":{
@@ -157,7 +157,7 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
 fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
     let mut harness = Fixture::new("graph-input-nodes", 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version":6,
+            "version":7,
             "definitions": {
                 "custom": {
                     "name": "Input controls",
@@ -365,7 +365,7 @@ fn vector_inputs_infer_components_and_edit_defaults_and_clip_overrides_independe
         "unit":"degrees","channels":{"components":12},"fixtures":null
     }}});
     let mut harness = Fixture::new(name,20,vec![]).with_graph_score(json!({
-        "version":6,"definitions":{"aim":{"name":"Vector aim","inputs":{},
+        "version":7,"definitions":{"aim":{"name":"Vector aim","inputs":{},
             "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
             "body":{"kind":"graph","body":{"nodes":{
                 "pan":{"definition":"core/channel","position":[300.,0.],"inputs":{"value":literal,"index":{"source":"value","value":{"type":"number","value":0.}}}},
@@ -448,7 +448,7 @@ fn rgb_signal_inputs_use_the_color_picker_and_preserve_signal_metadata() {
     let name = "graph-rgb-input";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(json!({
-            "version":6,"definitions":{"tint":{"name":"RGB input","inputs":{},
+            "version":7,"definitions":{"tint":{"name":"RGB input","inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"nodes":{
                     "output":{"definition":"output","position":[300.,0.],"inputs":{

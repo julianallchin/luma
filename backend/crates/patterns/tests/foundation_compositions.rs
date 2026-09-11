@@ -240,20 +240,21 @@ fn triangle_and_ramp_chase_fields_directly_remap_to_pan_tilt_vectors() {
 }
 
 #[test]
-fn shimmer_is_random_head_events_under_an_event_envelope() {
+fn beat_shimmer_is_a_dissolve_with_flat_coverage() {
     let library = standard_library();
-    let Body::Graph(graph) = &library.definitions["shimmer"].body else {
+    let Body::Graph(graph) = &library.definitions["beat_shimmer"].body else {
         panic!()
     };
-    assert_eq!(graph.nodes.len(), 2);
-    assert_eq!(graph.nodes["heads"].definition, "random_head_events");
-    assert_eq!(graph.nodes["envelope"].definition, "event_envelope");
+    assert_eq!(graph.nodes["shimmer"].definition, "dissolve");
     let cells = cells();
     let program = PreparedGraph::new(
         &library,
         "beat_shimmer",
         &BTreeMap::from([
-            ("proportion".into(), Value::Proportion(0.4)),
+            (
+                "proportion".into(),
+                Value::Envelope(Envelope::linear(vec![[0., 0.4], [1., 0.4]])),
+            ),
             ("repeat".into(), Value::Beats(1.)),
             ("duration".into(), Value::Beats(2.)),
         ]),

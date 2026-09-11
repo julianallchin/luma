@@ -668,42 +668,6 @@
     }}
   },
 
-  "random_head_events": {
-    "name": "Random head events",
-    "inputs": {
-      "duration": {"name":"Duration","description":"How long each event stays active, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "proportion": {"name":"Proportion","description":"Fraction of heads each event addresses, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.25}},
-      "trigger": {"name":"Trigger","description":"Each event addresses a fresh random set of heads","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
-    },
-    "outputs": {"progress":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"},"weight":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"duration"},"events":{"source":"input","input":"trigger"}}},
-        "heads": {"definition":"random_selection","inputs":{"index":{"source":"connection","node":"ages","output":"index"},"proportion":{"source":"input","input":"proportion"}}},
-        "weight": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"heads","output":"selected"},"b":{"source":"connection","node":"ages","output":"weight"}}}
-      },
-      "outputs": {"progress":{"source":"connection","node":"ages","output":"progress"},"weight":{"source":"connection","node":"weight","output":"value"}}
-    }}
-  },
-
-  "shimmer": {
-    "name": "Shimmer",
-    "inputs": {
-      "duration": {"name":"Duration","description":"Independent lifetime of each head's brightness curve, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "proportion": {"name":"Proportion","description":"Fraction of heads each event lights, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.25}},
-      "shape": {"name":"Brightness curve","description":"Brightness over each head's event","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
-      "trigger": {"name":"Trigger","description":"Each event lights a fresh random set of heads","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
-    },
-    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "heads": {"definition":"random_head_events","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"trigger":{"source":"input","input":"trigger"}}},
-        "envelope": {"definition":"event_envelope","inputs":{"progress":{"source":"connection","node":"heads","output":"progress"},"shape":{"source":"input","input":"shape"},"weight":{"source":"connection","node":"heads","output":"weight"}}}
-      },
-      "outputs": {"mask":{"source":"connection","node":"envelope","output":"mask"}}
-    }}
-  },
-
   "dissolve": {
     "name": "Dissolve",
     "inputs": {
@@ -779,8 +743,8 @@
     "name": "Beat shimmer",
     "inputs": {
       "color": {"name":"Color","description":"Applied to every lit head","value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame","default":{"type":"color","value":[1.0,1.0,1.0]}},
-      "duration": {"name":"Duration","description":"Independent lifetime of each head's brightness curve, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "proportion": {"name":"Proportion","description":"Fraction of heads each event lights, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}},
+      "duration": {"name":"Duration","description":"How long each event lasts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
+      "proportion": {"name":"Coverage","description":"Fraction of heads each event lights, over the event","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.25],[1.0,0.25]]}},"author":{"kind":"choice","options":[{"label":"Few heads","value":{"type":"envelope","value":{"points":[[0.0,0.1],[1.0,0.1]]}}},{"label":"Some heads","value":{"type":"envelope","value":{"points":[[0.0,0.25],[1.0,0.25]]}}},{"label":"Half","value":{"type":"envelope","value":{"points":[[0.0,0.5],[1.0,0.5]]}}}],"custom":true}},
       "repeat": {"name":"Repeat","description":"Beats between events","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.125}},
       "shape": {"name":"Brightness curve","description":"Brightness over each head's event","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}}
     },
@@ -788,7 +752,7 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "events": {"definition":"beat_trigger","inputs":{"repeat":{"source":"input","input":"repeat"}}},
-        "shimmer": {"definition":"shimmer","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}},
+        "shimmer": {"definition":"dissolve","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}},
         "color": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"shimmer","output":"mask"}}}
       },
       "outputs": {"color":{"source":"connection","node":"color","output":"value"}}

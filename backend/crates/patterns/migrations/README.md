@@ -31,6 +31,11 @@ runs twice because the first builds of versions 4 and 5 saved documents with
 the copies still in them; `tests/fixtures/v4-samples.json` is the v2 samples
 as the version 4 build saved them, and converges on a fresh conversion.
 
+`v6-retired.json` holds Shimmer and Random head events as they shipped before
+version 7 removed them from the library: Shimmer was a Dissolve with a flat
+coverage curve. `migration::upgrade_v6` opens every call to either up into the
+nodes it was made of, so the document computes exactly what it did.
+
 `v2-event-recipes.json` is part of the v2-to-v3 transformation. It replaces
 legacy cyclic Chase/Pulse/Dissolve recipes with event operations while retaining
 their exposed argument keys and defaults. It is conversion data, separate from

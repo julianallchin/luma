@@ -409,6 +409,27 @@ fn convert(
             "shimmer" => {
                 node.definition = "beat_shimmer".into();
                 drop(node, &["seed"], &mut dropped);
+                // Coverage is a curve over the event now; a fixed share of
+                // heads becomes a flat curve, and a wired share is dropped.
+                match node.inputs.remove("proportion") {
+                    Some(Binding::Value {
+                        value: Value::Proportion(share) | Value::Number(share),
+                    }) => {
+                        node.inputs.insert(
+                            "proportion".into(),
+                            Binding::Value {
+                                value: Value::Envelope(Envelope::linear(vec![
+                                    [0., share],
+                                    [1., share],
+                                ])),
+                            },
+                        );
+                    }
+                    Some(Binding::Input { input }) => {
+                        dropped.insert(input);
+                    }
+                    _ => {}
+                }
             }
             "dissolve_mask" => {
                 node.definition = "random_selection".into();
