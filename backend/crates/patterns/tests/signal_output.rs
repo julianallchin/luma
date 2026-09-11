@@ -269,7 +269,7 @@ fn generic_input_inherits_a_bound_color_and_keeps_its_label_independent() {
         GraphEdit::AddInput {
             key: "tint".into(),
             name: "Accent".into(),
-            position: [0.0, 0.0],
+            position: Some([0.0, 0.0]),
         },
     )
     .unwrap();
@@ -314,7 +314,7 @@ fn required_numeric_input_gets_an_editable_broadcast_default() {
         GraphEdit::AddInput {
             key: "level".into(),
             name: "Level".into(),
-            position: [0.0, 0.0],
+            position: Some([0.0, 0.0]),
         },
     )
     .unwrap();

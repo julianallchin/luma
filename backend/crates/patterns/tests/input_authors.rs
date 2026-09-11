@@ -78,7 +78,7 @@ fn presets_must_fit_the_wire_type_and_exposed_inputs_inherit_them() {
             GraphEdit::AddInput {
                 key: "travel_curve".into(),
                 name: "Travel curve".into(),
-                position: [0., 0.],
+                position: Some([0., 0.]),
             },
         )
         .unwrap();
