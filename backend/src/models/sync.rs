@@ -1,26 +1,27 @@
-//! Readable sync state. Delivery failures stay in SQLite; activity belongs to
-//! the engine that owns the sync lock.
+//! Readable sync state.
+//!
+//! PowerSync owns the queue, the retries and the backoff, so there is nothing
+//! here for the app to decide — this is a report, not a control surface. A
+//! write that the server refuses outright is recorded in the local-only
+//! `sync_rejections` table rather than surfaced as a per-row failure list: it
+//! needs recovery, not a retry button.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
-    pub syncing: bool,
-    pub progress: Option<SyncProgress>,
-    pub pending_changes: usize,
-    pub errors: Vec<String>,
-    pub failures: Vec<SyncFailure>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncFailure {
-    pub table_name: String,
-    pub record_id: String,
-    pub subject: String,
-    pub attempts: i64,
-    pub permanent: bool,
-    pub last_error: Option<String>,
+    /// A sync stream is open to the PowerSync service.
+    pub connected: bool,
+    /// Local writes are being sent to Supabase.
+    pub uploading: bool,
+    /// Remote rows are being applied locally.
+    pub downloading: bool,
+    /// When both directions last went quiet while connected, RFC 3339.
+    pub last_synced_at: Option<String>,
+    /// Rows waiting in the upload queue.
+    pub pending_uploads: usize,
+    /// The last transport error, if the connection is unhealthy now.
+    pub error: Option<String>,
 }
 
 /// Counts are scoped to the named phase. `None` means its total is not yet known.

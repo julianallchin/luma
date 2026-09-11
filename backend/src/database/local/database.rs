@@ -61,14 +61,16 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
         .create_if_missing(true)
         .foreign_keys(true);
 
-    // Every pooled connection is a writer, so every one carries the change
-    // log. The sync SDK holds its own pool and deliberately does not, which is
-    // what keeps a download out of this database's history.
+    // Every pooled connection is a writer, so every one carries the change log
+    // and the PowerSync upload queue. Both trigger sets are TEMP, so they
+    // belong to the connection and never to the file: the sync SDK holds its
+    // own pool and deliberately has neither, which is what keeps a downloaded
+    // row out of this database's history and out of the upload queue.
     let pool = SqlitePoolOptions::new()
         .max_connections(16)
         .after_connect(|connection, _| {
             Box::pin(async move {
-                crate::sync::triggers::install_change_log(connection)
+                crate::sync::triggers::install(connection)
                     .await
                     .map_err(|error| sqlx::Error::Configuration(error.into()))
             })

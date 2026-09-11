@@ -90,3 +90,4 @@ target-pixel/
 # …and the agent friction log
 !/docs/AGENT_FRICTION.md
 .metadata_never_index
+experiments/powersync/run/
