@@ -1,9 +1,9 @@
-//! A quiet sidebar row; failed deliveries explain themselves on expansion.
+//! A quiet sidebar row. It says nothing while sync is healthy and idle.
 use crate::Luma;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity};
 use luma_lib::models::sync::SyncStatus;
-use luma_ui::node::{AgentNode as _, Instrument as _, Role};
+use luma_ui::node::{Instrument as _, Role};
 
 #[derive(Default)]
 pub(crate) struct SidebarSync {
@@ -13,6 +13,23 @@ pub(crate) struct SidebarSync {
     retrying: bool,
     activity_since: Option<std::time::Instant>,
     show_activity: bool,
+}
+
+impl SidebarSync {
+    /// Everything worth reading when the row is expanded.
+    fn details(&self) -> Vec<String> {
+        let mut details = Vec::new();
+        details.extend(self.status.error.iter().cloned());
+        details.extend(self.read_error.iter().cloned());
+        if let Some(at) = &self.status.last_synced_at {
+            details.push(format!("Last synced {at}"));
+        }
+        details
+    }
+
+    fn busy(&self) -> bool {
+        self.status.uploading || self.status.downloading
+    }
 }
 
 impl Luma {
@@ -31,7 +48,8 @@ impl Luma {
                     Err(error) => (this.sync_status.status.clone(), Some(error.to_string())),
                 };
                 let state = &mut this.sync_status;
-                if status.syncing || status.pending_changes > 0 {
+                let busy = status.uploading || status.downloading;
+                if busy || status.pending_uploads > 0 {
                     state
                         .activity_since
                         .get_or_insert_with(std::time::Instant::now);
@@ -41,11 +59,10 @@ impl Luma {
                 // Quick background syncs should not flash UI at every edit.
                 // A meaningful backlog is useful immediately; slower work gets
                 // a compact indicator once it has lasted long enough to notice.
-                let show_activity = status.pending_changes >= 10
+                let show_activity = status.pending_uploads >= 10
                     || state.activity_since.is_some_and(|since| {
                         since.elapsed() >= std::time::Duration::from_millis(800)
                     });
-                let syncing = status.syncing;
                 if status != state.status
                     || error != state.read_error
                     || show_activity != state.show_activity
@@ -56,7 +73,7 @@ impl Luma {
                     cx.notify();
                 }
                 this.library
-                    .debounce(std::time::Duration::from_millis(if syncing {
+                    .debounce(std::time::Duration::from_millis(if busy {
                         500
                     } else {
                         1000
@@ -70,7 +87,7 @@ impl Luma {
     }
 
     fn retry_sidebar_sync(&mut self, cx: &mut Context<Self>) {
-        if self.sync_status.retrying || self.sync_status.status.syncing {
+        if self.sync_status.retrying || self.sync_status.busy() {
             return;
         }
         self.sync_status.retrying = true;
@@ -95,43 +112,25 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
     }
     let state = &shell.sync_status;
     let status = &state.status;
-    let count =
-        status.failures.len() + status.errors.len() + usize::from(state.read_error.is_some());
-    if !state.show_activity && count == 0 && !state.expanded {
+    let unhealthy = status.error.is_some() || state.read_error.is_some();
+    if !state.show_activity && !unhealthy && !state.expanded {
         return div().into_any_element();
     }
-    let label = if status.syncing || (status.pending_changes > 0 && count == 0) {
-        if status.pending_changes > 0 {
-            format!("Syncing · {}", status.pending_changes)
-        } else {
-            "Syncing…".into()
-        }
-    } else if count > 0 {
-        format!("Sync needs attention · {count}")
+    let label = if unhealthy {
+        "Sync needs attention".to_owned()
+    } else if status.pending_uploads > 0 {
+        format!("Syncing · {}", status.pending_uploads)
+    } else if state.busy() {
+        "Syncing…".to_owned()
     } else {
-        "Up to date".into()
+        "Up to date".to_owned()
     };
     let toggle = app.clone();
     let keyboard_toggle = app.clone();
     let keyboard_retry = app.clone();
     let retry = app.clone();
-    let mut details = status.errors.clone();
-    details.extend(state.read_error.iter().cloned());
-    details.extend(status.failures.iter().map(|failure| {
-        format!(
-            "{} · {}
-{}
-{}",
-            failure.table_name.replace('_', " "),
-            if failure.permanent {
-                "Blocked"
-            } else {
-                "Will retry"
-            },
-            failure.last_error.as_deref().unwrap_or("Delivery failed"),
-            failure.record_id.replace('\u{1f}', " / ")
-        )
-    }));
+    let details = state.details();
+    let retryable = unhealthy && !state.busy() && !state.retrying;
     div()
         .flex()
         .flex_col()
@@ -140,7 +139,7 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
         .py(px(6.))
         .gap(px(6.))
         .text_size(px(11.))
-        .text_color(if count > 0 {
+        .text_color(if unhealthy {
             luma_ui::ladder::danger()
         } else {
             luma_ui::ladder::muted_foreground()
@@ -177,54 +176,23 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .when(status.syncing, |el| {
-                        let phase = status
-                            .progress
-                            .as_ref()
-                            .map(|progress| progress.phase.clone())
-                            .unwrap_or_else(|| "Preparing sync…".into());
-                        let el = el.child(div().child(phase.clone()).agent_node(Role::Text, phase));
-                        let Some(progress) = status.progress.as_ref() else {
-                            return el;
-                        };
-                        let Some(total) = progress.total.filter(|total| *total > 0) else {
-                            return el;
-                        };
-                        let completed = progress.completed.min(total);
-                        let summary = format!("{completed} / {total} {}", progress.unit);
-                        el.child(div().child(summary.clone()).agent_node(Role::Text, summary))
-                            .child(
-                                div()
-                                    .h(px(3.))
-                                    .w_full()
-                                    .bg(luma_ui::ladder::foreground_alpha(0.12))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(gpui::relative(completed as f32 / total as f32))
-                                            .bg(luma_ui::ladder::foreground_alpha(0.65)),
-                                    ),
-                            )
-                    })
-                    .children(details.into_iter().map(|message| div().child(message)))
-                    .when(!status.syncing && count > 0, |el| {
+                    .children(details.into_iter().map(|message| {
+                        div().child(message.clone()).agent_node(Role::Text, message)
+                    }))
+                    .when(retryable, |el| {
                         el.child(
-                            luma_ui::button(
-                                "Retry sync",
-                                (!state.retrying && !status.syncing).into(),
-                            )
-                            .id("retry-sync")
-                            .on_key_down(move |event, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    keyboard_retry
-                                        .update(cx, |this, cx| this.retry_sidebar_sync(cx));
-                                }
-                            })
-                            .on_click(move |_, _, cx| {
-                                retry.update(cx, |this, cx| this.retry_sidebar_sync(cx))
-                            })
-                            .agent_node(Role::Button, "Retry sync")
-                            .agent_disabled(state.retrying || status.syncing),
+                            luma_ui::button("Retry sync", true.into())
+                                .id("retry-sync")
+                                .on_key_down(move |event, _, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        keyboard_retry
+                                            .update(cx, |this, cx| this.retry_sidebar_sync(cx));
+                                    }
+                                })
+                                .on_click(move |_, _, cx| {
+                                    retry.update(cx, |this, cx| this.retry_sidebar_sync(cx))
+                                })
+                                .agent_node(Role::Button, "Retry sync"),
                         )
                     }),
             )

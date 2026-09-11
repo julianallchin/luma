@@ -57,8 +57,15 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
         .create_if_missing(true)
         .foreign_keys(true);
 
+    // Every writer connection carries the upload-capture triggers. They are
+    // TEMP, so they belong to the connection and never to the file: the SDK's
+    // own connection applies downloads without them, which is what keeps a
+    // downloaded row from being uploaded straight back.
     let pool = SqlitePoolOptions::new()
         .max_connections(16)
+        .after_connect(|connection, _| {
+            Box::pin(async move { crate::sync::triggers::install_crud_triggers(connection).await })
+        })
         .connect_with(connect_options)
         .await
         .map_err(|e| {
