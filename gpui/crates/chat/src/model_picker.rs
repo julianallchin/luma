@@ -280,9 +280,8 @@ impl Picker {
                                     chat.model_picker.step(delta);
                                     cx.notify();
                                 }),
-                                "enter" if models_open => key_chat.update(cx, |chat, cx| {
-                                    chat.choose_current_model(window, cx)
-                                }),
+                                "enter" if models_open => key_chat
+                                    .update(cx, |chat, cx| chat.choose_current_model(window, cx)),
                                 _ => return,
                             }
                             cx.stop_propagation();
@@ -524,25 +523,28 @@ impl Picker {
         chat: &Entity<AgentChat>,
         cx: &gpui::App,
     ) -> AnyElement {
-        let providers = div().flex().flex_wrap().gap(px(4.)).children(
-            Service::ALL.into_iter().map(|service| {
-                let target = chat.clone();
-                float::chip()
-                    .id(SharedString::from(format!("service-{service:?}")))
-                    .text_size(px(11.))
-                    .child(service.label())
-                    .when(service == self.service, |el| {
-                        el.bg(ladder::foreground_alpha(0.14))
-                    })
-                    .on_click(move |_, window, cx| {
-                        target.update(cx, |chat, cx| {
-                            chat.browse_models(service, cx);
-                            window.focus(&chat.model_picker.models_focus(cx), cx);
+        let providers =
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(4.))
+                .children(Service::ALL.into_iter().map(|service| {
+                    let target = chat.clone();
+                    float::chip()
+                        .id(SharedString::from(format!("service-{service:?}")))
+                        .text_size(px(11.))
+                        .child(service.label())
+                        .when(service == self.service, |el| {
+                            el.bg(ladder::foreground_alpha(0.14))
                         })
-                    })
-                    .agent_node(Role::Button, service.label())
-            }),
-        );
+                        .on_click(move |_, window, cx| {
+                            target.update(cx, |chat, cx| {
+                                chat.browse_models(service, cx);
+                                window.focus(&chat.model_picker.models_focus(cx), cx);
+                            })
+                        })
+                        .agent_node(Role::Button, service.label())
+                }));
         let search = self.service.lists_models().then(|| {
             let query = self.search.read(cx).text().to_string();
             float::field()
@@ -550,7 +552,11 @@ impl Picker {
                 .child(div().w_full().child(self.search.clone()))
                 .agent_node(
                     Role::Input,
-                    if query.is_empty() { "Search models…".into() } else { query },
+                    if query.is_empty() {
+                        "Search models…".into()
+                    } else {
+                        query
+                    },
                 )
         });
         let body = match self.catalogs.get(&self.service) {
@@ -597,7 +603,9 @@ impl Picker {
                     div()
                         .text_size(px(11.))
                         .text_color(ladder::muted_foreground())
-                        .child(format!("Only the first {LIST_LIMIT} show. Type to find others.")),
+                        .child(format!(
+                            "Only the first {LIST_LIMIT} show. Type to find others."
+                        )),
                 )
             })
             .child(
@@ -900,7 +908,10 @@ mod tests {
             detail(&model(Some((1., 5.)))).as_deref(),
             Some("400K context · $1 in · $5 out")
         );
-        assert_eq!(detail(&model(Some((0., 0.)))).as_deref(), Some("400K context · Free"));
+        assert_eq!(
+            detail(&model(Some((0., 0.)))).as_deref(),
+            Some("400K context · Free")
+        );
         assert!(matches(&model(None), "gpt SOL"));
         assert!(matches(&model(None), "openai/"));
         assert!(!matches(&model(None), "kimi"));

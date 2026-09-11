@@ -203,10 +203,7 @@ pub async fn models(
         match service {
             Service::Claude => super::claude::models(cwd).await,
             Service::Codex => super::codex::models(cwd).await,
-            _ => Ok(api_choices(
-                service.provider().expect("API service"),
-                Vec::new(),
-            )),
+            _ => Ok(table_choices(service.provider().expect("API service"))),
         }
     };
     tokio::time::timeout(std::time::Duration::from_secs(15), models)
@@ -240,7 +237,10 @@ pub async fn refresh_gateway(
             // A cache that cannot be written costs the next open its instant
             // rows, not this one its list.
             if let Err(error) = remote::write_cache(cache, &models).await {
-                eprintln!("[models] could not save the {} list: {error}", provider.as_str());
+                eprintln!(
+                    "[models] could not save the {} list: {error}",
+                    provider.as_str()
+                );
             }
             Ok(api_choices(provider, models))
         }
@@ -253,48 +253,54 @@ pub async fn refresh_gateway(
 
 /// `provider`'s list as last saved at `cache`, for the rows the picker shows
 /// while [`refresh_gateway`] is on the wire.
-pub async fn cached_gateway(provider: Provider, cache: &std::path::Path) -> Option<Vec<ModelChoice>> {
+pub async fn cached_gateway(
+    provider: Provider,
+    cache: &std::path::Path,
+) -> Option<Vec<ModelChoice>> {
     remote::read_cache(cache)
         .await
         .map(|models| api_choices(provider, models))
 }
 
-/// The table's models that `provider` routes, first and under their own names,
-/// then everything else the gateway lists. A table model takes its price and
-/// effort levels from the list when the list carries it.
-fn api_choices(provider: Provider, listed: Vec<remote::RemoteModel>) -> Vec<ModelChoice> {
-    let mut listed = listed;
-    let mut choices: Vec<ModelChoice> = model::MODELS
+/// The table's models that `provider` routes: what a service that publishes
+/// no list of its own (the first-party API) offers.
+fn table_choices(provider: Provider) -> Vec<ModelChoice> {
+    model::MODELS
         .iter()
         .filter_map(|spec| {
-            let id = ModelId::parse(spec.key)?;
-            let wire = id.wire_id(provider).ok()?;
-            let entry = listed
-                .iter()
-                .position(|model| model.id == wire)
-                .map(|at| listed.remove(at));
+            ModelId::parse(spec.key)?.wire_id(provider).ok()?;
             Some(ModelChoice {
                 id: Some(spec.key.into()),
                 label: spec.display.into(),
                 resolved_model: Some(spec.key.into()),
-                effort_levels: entry.as_ref().map_or_else(
-                    || remote::EFFORTS.map(str::to_string).into(),
-                    |entry| entry.efforts.clone(),
-                ),
+                effort_levels: remote::EFFORTS.map(str::to_string).into(),
                 context_window: Some(spec.context_window),
-                price: entry.and_then(|entry| entry.price),
+                price: None,
             })
         })
-        .collect();
-    choices.extend(listed.into_iter().map(|model| ModelChoice {
-        id: Some(model.id.clone()),
-        label: model.name,
-        resolved_model: Some(model.id),
-        effort_levels: model.efforts,
-        context_window: (model.context_window > 0).then_some(model.context_window),
-        price: model.price,
-    }));
-    choices
+        .collect()
+}
+
+/// A gateway's list as picker rows: only what the gateway lists, in its
+/// order. A row the model table also carries is chosen under the table's key,
+/// so a thread that saved that key still finds its row.
+fn api_choices(provider: Provider, listed: Vec<remote::RemoteModel>) -> Vec<ModelChoice> {
+    listed
+        .into_iter()
+        .map(|model| {
+            let key = ModelId::resolve(&model.id, provider)
+                .filter(|id| id.wire_id(provider).ok() == Some(model.id.as_str()))
+                .map(|id| id.key().to_string());
+            ModelChoice {
+                resolved_model: Some(key.unwrap_or_else(|| model.id.clone())),
+                id: Some(model.id),
+                label: model.name,
+                effort_levels: model.efforts,
+                context_window: (model.context_window > 0).then_some(model.context_window),
+                price: model.price,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -383,8 +389,11 @@ mod tests {
         .is_err());
     }
 
+    /// A gateway's rows are its list and nothing else. The one row the model
+    /// table also carries keeps the table's key, so a selection saved as
+    /// `kimi-k3-fast` still finds it.
     #[test]
-    fn table_models_lead_the_list_and_take_its_prices() {
+    fn gateway_rows_are_only_what_the_gateway_lists() {
         let listed = remote::parse(
             Provider::OpenRouter,
             &serde_json::json!({ "data": [
@@ -401,15 +410,32 @@ mod tests {
         );
         let choices = api_choices(Provider::OpenRouter, listed);
         let ids: Vec<_> = choices.iter().filter_map(|c| c.id.as_deref()).collect();
-        assert_eq!(ids, ["claude-opus-5", "kimi-k3-fast", "grok-4.5", "openai/gpt-5.6-sol"]);
+        assert_eq!(ids, ["openai/gpt-5.6-sol", "moonshotai/kimi-k3-fast"]);
         let kimi = &choices[1];
         assert_eq!(kimi.label, "Kimi K3 Fast");
         assert_eq!(kimi.effort_levels, ["low", "high"]);
-        assert!(kimi.price.is_some());
-        assert_eq!(choices[0].price, None, "not in this list: no price, all efforts");
-        assert_eq!(choices[0].effort_levels, remote::EFFORTS);
-        assert_eq!(choices[3].label, "GPT-5.6 Sol");
-        assert_eq!(choices[3].context_window, Some(400_000));
+        assert!(kimi.matches(&Some("kimi-k3-fast".into())));
+        let previous = Selection {
+            service: Service::OpenRouter,
+            model: None,
+            effort: None,
+        };
+        assert_eq!(
+            kimi.selection(Service::OpenRouter, &previous)
+                .model
+                .as_deref(),
+            Some("kimi-k3-fast")
+        );
+        let sol = &choices[0];
+        assert_eq!(sol.label, "GPT-5.6 Sol");
+        assert_eq!(sol.context_window, Some(400_000));
+        assert_eq!(
+            sol.selection(Service::OpenRouter, &previous)
+                .model
+                .as_deref(),
+            Some("openai/gpt-5.6-sol")
+        );
+        assert!(api_choices(Provider::VercelAiGateway, Vec::new()).is_empty());
     }
 
     #[tokio::test]

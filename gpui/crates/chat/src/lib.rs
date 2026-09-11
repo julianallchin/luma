@@ -634,8 +634,7 @@ impl AgentChat {
 
     /// Pick the model under the list's keyboard cursor.
     fn choose_current_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(selection), Some(model)) =
-            (self.selection.as_ref(), self.model_picker.current())
+        let (Some(selection), Some(model)) = (self.selection.as_ref(), self.model_picker.current())
         else {
             return;
         };
