@@ -236,18 +236,6 @@ pub async fn delete_venue(access: &mut VenueAccess<'_, Write>) -> Result<(), Str
         );
     }
 
-    let authored_history: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM authored_documents WHERE venue_id = ?")
-            .bind(&id)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|error| format!("Failed to inspect venue authored history: {error}"))?;
-    if authored_history != 0 {
-        return Err(
-            "Authored venues must be retained so their score history remains restorable".into(),
-        );
-    }
-
     // Child admission triggers resolve their venue through the still-live
     // parent. During an ON DELETE cascade that parent is already gone, so the
     // authorized aggregate deletion uses a transaction-local maintenance
@@ -515,27 +503,6 @@ mod tests {
 
         let error = delete_owned_venue(&pool).await.unwrap_err();
         assert!(error.contains("durable conversations"));
-        assert!(venue_exists(&pool).await);
-    }
-
-    #[tokio::test]
-    async fn venue_deletion_refuses_authored_history() {
-        let (_directory, pool) = test_pool().await;
-        insert_owned_venue(&pool).await;
-        sqlx::query(
-            "INSERT INTO authored_documents
-             (document_id, document_kind, principal_key, subject_id,
-              track_id, venue_id, score_id)
-             VALUES (?, 'track_score', 'signed-in:alice', 'track',
-                     'track', 'venue', 'score')",
-        )
-        .bind(format!("ad-{}", "a".repeat(64)))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let error = delete_owned_venue(&pool).await.unwrap_err();
-        assert!(error.contains("score history remains restorable"));
         assert!(venue_exists(&pool).await);
     }
 

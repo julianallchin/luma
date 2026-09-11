@@ -1,6 +1,6 @@
+pub mod actor;
 pub mod agent_execution;
 pub mod agent_threads;
-pub mod actor;
 pub mod composable_patterns;
 pub mod distribute;
 pub mod fixtures;

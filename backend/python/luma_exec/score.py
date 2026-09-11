@@ -139,7 +139,7 @@ class Clip:
 
 
 class GraphTrack(_ImmutableSnapshot):
-    """The current score. Edits capture a revision; apply advances this object."""
+    """The current score. An edit captures a copy; apply advances this object."""
     __getattr__ = Track.__getattr__
     __dir__ = Track.__dir__
     _luma_catalog_items = Track._luma_catalog_items
@@ -154,7 +154,6 @@ class GraphTrack(_ImmutableSnapshot):
         self.title = str(_field(values, "title", default=""))
         self.duration_s = float(_field(values, "duration_s", default=0) or 0)
         self.editable = bool(_field(values, "editable", default=False))
-        self.revision = str(_field(values, "revision"))
         self._document = _plain(_field(values, "document"))
         self._downbeats = _downbeat_values(features)
         self._beats = _downbeat_values({"downbeats": _field(features, "beats", default=None)})
@@ -169,8 +168,8 @@ class GraphTrack(_ImmutableSnapshot):
         return Track._call(self, method, payload)
 
     def _refresh(self, snapshot):
-        # Edits own their candidate and base revision; only this live facade
-        # advances when the worker installs a new manifest for the same score.
+        # An edit owns its candidate; only this live facade advances when the
+        # worker installs a new manifest for the same score.
         for key, value in vars(snapshot).items():
             object.__setattr__(self, key, value)
 
@@ -210,7 +209,7 @@ class GraphTrack(_ImmutableSnapshot):
         return json.dumps(self._document, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
     def edit(self):
-        """Capture the complete saved score in a private, revision-checked Edit.
+        """Capture the complete saved score in a private Edit.
 
         Existing clips are included. Changes stay private until edit.apply().
         """
@@ -219,11 +218,10 @@ class GraphTrack(_ImmutableSnapshot):
             raise TrackReadOnlyError("this score is read-only")
         return Edit(self)
 
-    def _advance(self, document):
-        object.__setattr__(self, "revision", document["revision"])
-        object.__setattr__(self, "_document", copy.deepcopy(document["score"]))
+    def _advance(self, score):
+        object.__setattr__(self, "_document", copy.deepcopy(score))
         object.__setattr__(self, "_values", dict(_items(self._values)) | {
-            "revision": document["revision"], "document": _freeze(document["score"]),
+            "document": _freeze(score),
         })
 
     def _clock(self):
@@ -269,7 +267,7 @@ class GraphTrack(_ImmutableSnapshot):
         return self.beat_at(start), self.beat_at(end)
 
     def window(self, **range):
-        return Window(self, self.revision, self._document, self._range(**range))
+        return Window(self, self._document, self._range(**range))
 
     def __repr__(self):
         return f"<luma.track {self.title!r} clips={len(self.clips)} graphs={len(self._document['definitions'])} editable={self.editable}>"
@@ -283,11 +281,10 @@ class Edit:
     """
     def __init__(self, track):
         self._track = track
-        self.base_revision = track.revision
         self._base = copy.deepcopy(track._document)
         self._candidate = copy.deepcopy(self._base)
         if self._candidate.get("version") != SCORE_VERSION:
-            # This is a working copy. The original revision remains the CAS
+            # This is a working copy. The live rows remain the
             # base; migration is saved together with the eventual authored edit.
             self._candidate = track._host_call("track.score_upgrade", {"candidate": self._candidate})
         self._closed = False
@@ -457,24 +454,23 @@ class Edit:
     def check(self):
         """Run the native score validator; return CheckResult without saving.
 
-        Reports incomplete graphs, invalid inputs and revision conflicts.
+        Reports incomplete graphs and invalid inputs.
         The validation verb is check(), not validate().
         """
         self._open()
-        return _check_result(self._track._call("track.score_check", {"baseRevision": self.base_revision, "candidate": self.candidate}))
+        return _check_result(self._track._call("track.score_check", {"candidate": self.candidate}))
 
     def apply(self):
         """Validate and commit the complete candidate, then close this edit.
 
-        Returns the saved revision and advances luma.track. A child workspace
-        saves privately for its parent's merge. On conflict, inspect current
-        state and open a fresh edit; never silently overwrite other work.
+        Advances luma.track and returns the saved score. A subagent saves into
+        its own draft, which its parent merges per clip when the child is done.
         """
         self._open()
-        result = self._track._call("track.score_apply", {"baseRevision": self.base_revision, "candidate": self.candidate})
+        result = self._track._call("track.score_apply", {"candidate": self.candidate})
         self._track._advance(result)
         self._closed = True
-        return result["revision"]
+        return result
 
     def diff(self):
         """IDs added, removed or updated versus this edit's captured base."""
@@ -492,7 +488,7 @@ class Edit:
         timeline() plots clips; output.heatmap() shows composited light output.
         For the 3D scene, use luma.venue.render(edit=self, t=seconds).
         """
-        return Window(self._track, self.base_revision, self._candidate, self._track._range(**range))
+        return Window(self._track, self._candidate, self._track._range(**range))
 
     def _preview(self, only=None):
         """Snapshot for the venue camera; isolation never mutates the draft."""
@@ -505,7 +501,7 @@ class Edit:
             if missing:
                 raise TrackError(f"unknown preview clip(s): {', '.join(missing)}")
             candidate["clips"] = {id: candidate["clips"][id] for id in ids}
-        return {"baseRevision": self.base_revision, "candidate": candidate}
+        return {"candidate": candidate}
 
 
 # Discovery and validation use the same mode vocabulary.
@@ -692,8 +688,8 @@ class Graph:
 
 
 class Window(_ImmutableSnapshot):
-    def __init__(self, track, revision, document, span):
-        self._track, self._revision = track, revision
+    def __init__(self, track, document, span):
+        self._track = track
         self._document = copy.deepcopy(document)
         self.start_s, self.end_s = (track.seconds_at(beat) for beat in span)
         self.bars = None
@@ -703,7 +699,7 @@ class Window(_ImmutableSnapshot):
         self._seal()
 
     def _render(self):
-        return self._track._call("track.score_render", {"baseRevision": self._revision, "candidate": copy.deepcopy(self._document),
+        return self._track._call("track.score_render", {"candidate": copy.deepcopy(self._document),
                                                        "startTime": self.start_s, "endTime": self.end_s})
 
     def timeline(self):

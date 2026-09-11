@@ -3,7 +3,9 @@
 //! lands on the live rows or on the thread's draft.
 use super::*;
 use crate::database::local::scores::rows;
-use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource, Write};
+use crate::database::local::venue_access::{
+    AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
+};
 use crate::services::{drafts, graph_scores};
 use luma_patterns::Score;
 

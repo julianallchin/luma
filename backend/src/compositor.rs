@@ -221,7 +221,10 @@ mod tests {
         )
         .await
         .expect("build the scene");
-        println!("build_score_scene: {:.1} ms", built.elapsed().as_secs_f64() * 1e3);
+        println!(
+            "build_score_scene: {:.1} ms",
+            built.elapsed().as_secs_f64() * 1e3
+        );
 
         // One frame at a time, exactly as the live path samples it — a batched
         // `times` slice would amortise per-call costs the renderer never gets to.
@@ -281,8 +284,9 @@ mod tests {
                 role TEXT NOT NULL DEFAULT 'owner'
              );
              CREATE TABLE venue_members (
+                id TEXT PRIMARY KEY,
+                uid TEXT NOT NULL,
                 venue_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
                 role TEXT NOT NULL
              );
              CREATE TABLE scores (

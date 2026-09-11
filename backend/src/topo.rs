@@ -1,10 +1,7 @@
 //! Generic topological sort over an arbitrary node type.
 //!
-//! Two callers: `sync::registry` orders tables for FK-safe push/pull;
-//! `preprocessing::scheduler` orders DAG nodes for layered execution.
-//! Both peel layers via Kahn's algorithm — the only difference is whether
-//! you want a flat order or grouped layers, which is what [`flat`] vs
-//! [`layers`] return.
+//! One caller: `preprocessing::scheduler` orders DAG nodes for layered
+//! execution, peeling layers via Kahn's algorithm.
 //!
 //! Cycles or unknown parents panic with the offending nodes named. Both are
 //! programming errors caught at registry-construction time, not runtime
@@ -13,7 +10,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-
 
 /// Topologically sort `nodes` into parallel layers: every node in `layers[i]`
 /// has all its parents in `layers[0..i]`. Within a layer, nodes appear in
@@ -85,16 +81,6 @@ mod tests {
     }
 
     #[test]
-    fn flat_orders_parents_before_children() {
-        let nodes = vec![n("c", &["b"]), n("a", &[]), n("b", &["a"])];
-        let out = flat(&nodes, |n| n.name, |n| n.parents.clone());
-        assert_eq!(
-            out.iter().map(|n| n.name).collect::<Vec<_>>(),
-            vec!["a", "b", "c"]
-        );
-    }
-
-    #[test]
     fn layers_groups_parallel_siblings() {
         let nodes = vec![
             n("root", &[]),
@@ -122,13 +108,13 @@ mod tests {
     #[should_panic(expected = "Cycle")]
     fn cycle_panics() {
         let nodes = vec![n("a", &["b"]), n("b", &["a"])];
-        let _ = flat(&nodes, |n| n.name, |n| n.parents.clone());
+        let _ = layers(&nodes, |n| n.name, |n| n.parents.clone());
     }
 
     #[test]
     #[should_panic(expected = "unknown parent")]
     fn unknown_parent_panics() {
         let nodes = vec![n("a", &["ghost"])];
-        let _ = flat(&nodes, |n| n.name, |n| n.parents.clone());
+        let _ = layers(&nodes, |n| n.name, |n| n.parents.clone());
     }
 }

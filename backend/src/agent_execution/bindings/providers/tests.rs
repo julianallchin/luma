@@ -413,12 +413,14 @@ impl Fixture {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO track_scores
-                (id, score_id, pattern_id, start_time, end_time, z_index, blend_mode, args_json)
-             VALUES ('ann-1', ?, ?, 12.5, 20.0, 3, 'add', '{\"intensity\":0.5}')",
+            "INSERT INTO clips
+                (id, uid, score_id, graph, start, duration, seed, selection_json,
+                 z_index, blend_mode, inputs_json)
+             VALUES (? || ':ann-1', '', ?, 'strobe', 12.5, 7.5, '0',
+                     '{\"expression\":\"all\"}', 3, 'add', '{}')",
         )
         .bind(SCORE_ID)
-        .bind(PATTERN_ID)
+        .bind(SCORE_ID)
         .execute(&self.pool)
         .await
         .unwrap();
@@ -628,37 +630,16 @@ async fn full_assembly_covers_every_schema_branch() {
     // deliberately does not leak into the agent namespace.
     assert!(v.get("score").is_none());
     assert_eq!(at(&v, "track.editable"), true);
-    let revision = at(&v, "track.revision").as_str().unwrap();
-    let mut access = crate::database::local::venue_access::VenueAccess::<
-        crate::database::local::venue_access::Read,
-    >::read(
-        &f.pool,
-        crate::database::local::venue_access::VenueResource::Score(SCORE_ID),
-    )
-    .await
-    .unwrap();
-    let stored = crate::database::local::scores::list_track_scores_for_score(&mut access, SCORE_ID)
-        .await
-        .unwrap();
-    drop(access);
-    assert_eq!(
-        revision,
-        crate::services::track_edits::track_revision(&stored)
-    );
-    let clip = &at(&v, "track.clips")[0];
-    assert_eq!(clip["id"], "ann-1");
-    assert_eq!(clip["pattern_id"], PATTERN_ID);
-    assert_eq!(clip["pattern_name"], "Strobe");
-    assert_eq!(clip["start_s"], 12.5);
-    assert_eq!(clip["end_s"], 20.0);
-    assert_eq!(clip["z"], 3);
-    assert_eq!(clip["blend"], "add");
-    assert_eq!(clip["args"]["intensity"], 0.5);
-    assert_eq!(at(&v, "patterns.summaries")[0]["name"], "Strobe");
-    assert_eq!(
-        at(&v, "patterns.argument_schemas")[PATTERN_ID][0]["id"],
-        "color"
-    );
+    let clip = &at(&v, "track.document")["clips"]["ann-1"];
+    assert_eq!(clip["graph"], "strobe");
+    assert_eq!(clip["start"], 12.5);
+    assert_eq!(clip["duration"], 7.5);
+    assert_eq!(clip["z_index"], 3);
+    assert_eq!(clip["blend_mode"], "add");
+    // A score in scope publishes the node library, not the pattern catalog:
+    // persistence vocabulary does not leak into the agent namespace.
+    assert!(at(&v, "nodes").is_object());
+    assert!(v.get("patterns").is_none());
 
     // §10.3 graph: nothing was contributed.
     assert_eq!(at(&v, "graph.run")["$kind"], "unavailable");
@@ -885,7 +866,11 @@ async fn invalid_pattern_schema_is_reported_instead_of_looking_empty() {
         .await
         .unwrap();
 
-    let (manifest, _store) = f.assemble(&f.scope()).await;
+    // The pattern catalog is a graph thread's vocabulary; a score in scope
+    // publishes the node library instead.
+    let mut scope = f.scope();
+    scope.score_id = None;
+    let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
     assert!(at(&v, "patterns.argument_schemas")
         .get(PATTERN_ID)
@@ -970,8 +955,7 @@ async fn timeline_visibility_does_not_imply_edit_authorization() {
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
 
-    assert_eq!(at(&v, "track.clips")[0]["id"], "ann-1");
-    assert!(at(&v, "track.revision").is_string());
+    assert!(at(&v, "track.document")["clips"]["ann-1"].is_object());
     assert_eq!(at(&v, "track.editable"), false);
 }
 
@@ -992,8 +976,7 @@ async fn a_venue_is_describable_without_a_score() {
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
     assert_eq!(at(&v, "track.id"), TRACK_ID);
-    assert!(reason(&v, "track.revision").contains("no authored lighting timeline"));
-    assert!(reason(&v, "track.clips").contains("no authored lighting timeline"));
+    assert!(reason(&v, "track.document").contains("no authored lighting timeline"));
     assert_eq!(at(&v, "track.editable"), false);
     assert!(v.get("score").is_none());
 }

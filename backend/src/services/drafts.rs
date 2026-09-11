@@ -98,7 +98,11 @@ pub async fn merge(connection: &mut SqliteConnection, draft_id: &str) -> Result<
             live.clips.insert(id.clone(), clip.clone());
         }
     }
-    for id in base.clips.keys().filter(|id| !state.clips.contains_key(*id)) {
+    for id in base
+        .clips
+        .keys()
+        .filter(|id| !state.clips.contains_key(*id))
+    {
         live.clips.remove(id);
     }
     for (id, definition) in &state.definitions {
@@ -129,10 +133,7 @@ pub async fn discard(connection: &mut SqliteConnection, draft_id: &str) -> Resul
     Ok(())
 }
 
-async fn both(
-    connection: &mut SqliteConnection,
-    draft_id: &str,
-) -> Result<(Score, Score), String> {
+async fn both(connection: &mut SqliteConnection, draft_id: &str) -> Result<(Score, Score), String> {
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT base_json, state_json FROM drafts WHERE id = ?")
             .bind(draft_id)
@@ -157,4 +158,153 @@ async fn scope(
 
 fn read(source: &str) -> Result<Score, String> {
     serde_json::from_str(source).map_err(|error| format!("unreadable draft: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::local::scores::tests::test_pool;
+    use luma_patterns::{BlendMode, Clip, Selection};
+
+    fn clip(start: f64) -> Clip {
+        Clip {
+            graph: "strobe".into(),
+            start,
+            duration: 4.0,
+            seed: 7,
+            selection_seed: None,
+            selection: Selection::all(),
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            inputs: Default::default(),
+        }
+    }
+
+    async fn seeded() -> (tempfile::TempDir, sqlx::SqlitePool) {
+        let (directory, pool) = test_pool().await;
+        for statement in [
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('t', 'alice', 'h', '/t')",
+            "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Venue')",
+            "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('s', 'alice', 't', 'v')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        (directory, pool)
+    }
+
+    /// The whole reason a draft holds two copies: a merge applies what the
+    /// child changed, and leaves what the parent changed meanwhile alone.
+    #[tokio::test]
+    async fn a_merge_applies_the_childs_changes_and_keeps_the_parents() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut live = Score::default();
+        live.clips.insert("shared".into(), clip(0.0));
+        live.clips.insert("parent".into(), clip(8.0));
+        rows::save_score(&mut connection, "s", "alice", &live)
+            .await
+            .unwrap();
+
+        let draft = create(&mut connection, "s", "child-thread", "alice")
+            .await
+            .unwrap();
+
+        // The child moves one clip and adds one.
+        let mut child = live.clone();
+        child.clips.get_mut("shared").unwrap().start = 1.0;
+        child.clips.insert("child".into(), clip(16.0));
+        apply(&mut connection, &draft, &child).await.unwrap();
+
+        // The parent, meanwhile, edits a clip the child never touched.
+        let mut parent = live.clone();
+        parent.clips.get_mut("parent").unwrap().z_index = 9;
+        rows::save_score(&mut connection, "s", "alice", &parent)
+            .await
+            .unwrap();
+
+        let merged = merge(&mut connection, &draft).await.unwrap();
+        assert_eq!(merged.clips["shared"].start, 1.0, "the child's edit lands");
+        assert_eq!(
+            merged.clips["parent"].z_index, 9,
+            "the parent's edit survives the merge"
+        );
+        assert!(merged.clips.contains_key("child"));
+        assert_eq!(
+            rows::load_score(&mut connection, "s").await.unwrap(),
+            merged
+        );
+        assert_eq!(
+            of_thread(&mut connection, "child-thread", "s")
+                .await
+                .unwrap(),
+            None,
+            "merging closes the draft"
+        );
+    }
+
+    /// A deletion is a decision. A clip the child removed goes even though the
+    /// parent edited it; reviving it would be a second decision nobody made.
+    #[tokio::test]
+    async fn a_deleted_clip_stays_deleted() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut live = Score::default();
+        live.clips.insert("doomed".into(), clip(0.0));
+        rows::save_score(&mut connection, "s", "alice", &live)
+            .await
+            .unwrap();
+        let draft = create(&mut connection, "s", "child", "alice")
+            .await
+            .unwrap();
+
+        let mut child = live.clone();
+        child.clips.remove("doomed");
+        apply(&mut connection, &draft, &child).await.unwrap();
+
+        let mut parent = live.clone();
+        parent.clips.get_mut("doomed").unwrap().z_index = 3;
+        rows::save_score(&mut connection, "s", "alice", &parent)
+            .await
+            .unwrap();
+
+        let merged = merge(&mut connection, &draft).await.unwrap();
+        assert!(merged.clips.is_empty());
+    }
+
+    /// Opening a draft twice keeps the one the child has been writing.
+    #[tokio::test]
+    async fn creating_a_draft_twice_keeps_the_first() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let first = create(&mut connection, "s", "child", "alice")
+            .await
+            .unwrap();
+        let mut work = Score::default();
+        work.clips.insert("a".into(), clip(0.0));
+        apply(&mut connection, &first, &work).await.unwrap();
+        let again = create(&mut connection, "s", "child", "alice")
+            .await
+            .unwrap();
+        assert_eq!(again, first);
+        assert_eq!(state(&mut connection, &first).await.unwrap(), work);
+    }
+
+    #[tokio::test]
+    async fn discarding_leaves_the_live_score_alone() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut live = Score::default();
+        live.clips.insert("kept".into(), clip(0.0));
+        rows::save_score(&mut connection, "s", "alice", &live)
+            .await
+            .unwrap();
+        let draft = create(&mut connection, "s", "child", "alice")
+            .await
+            .unwrap();
+        apply(&mut connection, &draft, &Score::default())
+            .await
+            .unwrap();
+        discard(&mut connection, &draft).await.unwrap();
+        assert_eq!(rows::load_score(&mut connection, "s").await.unwrap(), live);
+    }
 }

@@ -1,6 +1,12 @@
 //! A score is rows: one `clips` row per clip, one `score_definitions` row per
 //! local definition, and the `scores` row itself.
 //!
+//! A clip key and a definition key are unique inside their score, not across
+//! the library — two scores may each have a `flash`. Sync addresses every row
+//! by one global `id`, so the stored id is `score_id:key` and the key is read
+//! back off it. A score id is a uuid and carries no colon, so the split is
+//! unambiguous however the key is spelled.
+//!
 //! [`load_score`] reads the three tables into the in-memory
 //! [`luma_patterns::Score`]; [`save_score`] diffs a candidate against what is
 //! stored and writes only what differs. There is no revision token — a stale
@@ -79,12 +85,19 @@ impl ClipRow {
             }
         };
         text("graph", &self.graph, &stored.graph);
-        text("selection_json", &self.selection_json, &stored.selection_json);
+        text(
+            "selection_json",
+            &self.selection_json,
+            &stored.selection_json,
+        );
         text("blend_mode", &self.blend_mode, &stored.blend_mode);
         text("inputs_json", &self.inputs_json, &stored.inputs_json);
         text("seed", &self.seed, &stored.seed);
         if self.selection_seed != stored.selection_seed {
-            changes.push(("selection_seed", Field::NullableText(self.selection_seed.as_deref())));
+            changes.push((
+                "selection_seed",
+                Field::NullableText(self.selection_seed.as_deref()),
+            ));
         }
         if self.start != stored.start {
             changes.push(("start", Field::Real(self.start)));
@@ -106,6 +119,19 @@ enum Field<'a> {
     Integer(i64),
 }
 
+/// The globally unique id of a row whose key is unique only inside its score.
+#[must_use]
+pub fn row_id(score_id: &str, key: &str) -> String {
+    format!("{score_id}:{key}")
+}
+
+fn key_of(score_id: &str, id: &str) -> Result<String, String> {
+    id.strip_prefix(score_id)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("row {id} does not belong to score {score_id}"))
+}
+
 /// Read one score's clips and local definitions back into a document.
 pub async fn load_score(
     connection: &mut SqliteConnection,
@@ -123,7 +149,9 @@ pub async fn load_score(
     .map_err(|error| format!("failed to read the score's clips: {error}"))?;
     for row in rows {
         let id: String = row.try_get("id").map_err(|error| error.to_string())?;
-        score.clips.insert(id, read_clip(&row)?.into_clip()?);
+        score
+            .clips
+            .insert(key_of(score_id, &id)?, read_clip(&row)?.into_clip()?);
     }
     let rows = sqlx::query(
         "SELECT id, definition_json FROM score_definitions WHERE score_id = ? ORDER BY id",
@@ -139,7 +167,7 @@ pub async fn load_score(
             .map_err(|error| error.to_string())?;
         score
             .definitions
-            .insert(id, from_json::<Definition>(&source)?);
+            .insert(key_of(score_id, &id)?, from_json::<Definition>(&source)?);
     }
     Ok(score)
 }
@@ -161,21 +189,25 @@ pub async fn save_score(
         let row = ClipRow::of(clip)?;
         match stored.clips.get(id) {
             None => {
-                insert_clip(&mut *connection, score_id, uid, id, &row).await?;
+                insert_clip(&mut *connection, score_id, uid, &row_id(score_id, id), &row).await?;
                 changed.inserted += 1;
             }
             Some(current) => {
                 let updates = row.changes(&ClipRow::of(current)?);
                 if !updates.is_empty() {
-                    update_clip(&mut *connection, id, &updates).await?;
+                    update_clip(&mut *connection, &row_id(score_id, id), &updates).await?;
                     changed.updated += 1;
                 }
             }
         }
     }
-    for id in stored.clips.keys().filter(|id| !candidate.clips.contains_key(*id)) {
+    for id in stored
+        .clips
+        .keys()
+        .filter(|id| !candidate.clips.contains_key(*id))
+    {
         sqlx::query("DELETE FROM clips WHERE id = ?")
-            .bind(id)
+            .bind(row_id(score_id, id))
             .execute(&mut *connection)
             .await
             .map_err(|error| format!("failed to delete clip {id}: {error}"))?;
@@ -190,7 +222,7 @@ pub async fn save_score(
                     "INSERT INTO score_definitions (id, uid, score_id, definition_json)
                      VALUES (?, ?, ?, ?)",
                 )
-                .bind(id)
+                .bind(row_id(score_id, id))
                 .bind(uid)
                 .bind(score_id)
                 .bind(&source)
@@ -202,7 +234,7 @@ pub async fn save_score(
             Some(current) if json(current)? != source => {
                 sqlx::query("UPDATE score_definitions SET definition_json = ? WHERE id = ?")
                     .bind(&source)
-                    .bind(id)
+                    .bind(row_id(score_id, id))
                     .execute(&mut *connection)
                     .await
                     .map_err(|error| format!("failed to update definition {id}: {error}"))?;
@@ -217,7 +249,7 @@ pub async fn save_score(
         .filter(|id| !candidate.definitions.contains_key(*id))
     {
         sqlx::query("DELETE FROM score_definitions WHERE id = ?")
-            .bind(id)
+            .bind(row_id(score_id, id))
             .execute(&mut *connection)
             .await
             .map_err(|error| format!("failed to delete definition {id}: {error}"))?;
@@ -227,11 +259,13 @@ pub async fn save_score(
     // The score row is what "last worked on" reads, and what the change log
     // records one entry per save under. Only touched when something moved.
     if changed.any() {
-        sqlx::query("UPDATE scores SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?")
-            .bind(score_id)
-            .execute(&mut *connection)
-            .await
-            .map_err(|error| format!("failed to touch the score: {error}"))?;
+        sqlx::query(
+            "UPDATE scores SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+        )
+        .bind(score_id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| format!("failed to touch the score: {error}"))?;
     }
     Ok(changed)
 }
@@ -361,7 +395,13 @@ pub async fn cutover(pool: &sqlx::SqlitePool) -> Result<(), String> {
             .begin()
             .await
             .map_err(|error| format!("failed to open the cutover transaction: {error}"))?;
-        save_score(&mut transaction, &score_id, uid.as_deref().unwrap_or(""), score).await?;
+        save_score(
+            &mut transaction,
+            &score_id,
+            uid.as_deref().unwrap_or(""),
+            score,
+        )
+        .await?;
         sqlx::query("DELETE FROM scores_pending_cutover WHERE score_id = ?")
             .bind(&score_id)
             .execute(&mut *transaction)
@@ -382,4 +422,142 @@ fn convert(document: &str) -> Result<Score, String> {
         return Ok(score);
     }
     luma_patterns::migration::upgrade(&score).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::local::scores::tests::test_pool;
+    use luma_patterns::{BlendMode, Clip, Selection};
+
+    async fn seeded() -> (tempfile::TempDir, sqlx::SqlitePool) {
+        let (directory, pool) = test_pool().await;
+        for statement in [
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('t', 'alice', 'h', '/t')",
+            "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Venue')",
+            "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('s', 'alice', 't', 'v')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        (directory, pool)
+    }
+
+    fn clip(seed: u64, start: f64) -> Clip {
+        Clip {
+            graph: "strobe".into(),
+            start,
+            duration: 4.0,
+            seed,
+            selection_seed: None,
+            selection: Selection::all(),
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            inputs: Default::default(),
+        }
+    }
+
+    /// A u64 seed does not fit a SQLite integer, and `json_extract` rounds it
+    /// through a double — which is exactly why the column is decimal text and
+    /// why this number, the one that exposed it, is the one asserted.
+    #[tokio::test]
+    async fn a_full_width_seed_round_trips() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut score = Score::default();
+        score
+            .clips
+            .insert("c".into(), clip(14_772_579_305_790_499_209, 0.0));
+        save_score(&mut connection, "s", "alice", &score)
+            .await
+            .unwrap();
+        let read = load_score(&mut connection, "s").await.unwrap();
+        assert_eq!(read.clips["c"].seed, 14_772_579_305_790_499_209);
+        assert_eq!(read, score);
+    }
+
+    /// The point of the diff: an unchanged candidate writes nothing, and a
+    /// changed one writes exactly the clips that moved.
+    #[tokio::test]
+    async fn a_save_writes_only_what_differs() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut score = Score::default();
+        score.clips.insert("a".into(), clip(1, 0.0));
+        score.clips.insert("b".into(), clip(2, 8.0));
+        assert_eq!(
+            save_score(&mut connection, "s", "alice", &score)
+                .await
+                .unwrap(),
+            Changed {
+                inserted: 2,
+                updated: 0,
+                deleted: 0
+            }
+        );
+        assert_eq!(
+            save_score(&mut connection, "s", "alice", &score)
+                .await
+                .unwrap(),
+            Changed::default(),
+            "re-sending an unchanged document must write nothing"
+        );
+
+        score.clips.get_mut("a").unwrap().start = 2.0;
+        score.clips.remove("b");
+        score.clips.insert("c".into(), clip(3, 16.0));
+        assert_eq!(
+            save_score(&mut connection, "s", "alice", &score)
+                .await
+                .unwrap(),
+            Changed {
+                inserted: 1,
+                updated: 1,
+                deleted: 1
+            }
+        );
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+    }
+
+    /// Only the columns that changed are named in the statement, so two people
+    /// editing different fields of one clip do not overwrite each other.
+    #[tokio::test]
+    async fn an_update_names_only_the_changed_columns() {
+        let mut stored = ClipRow::of(&clip(1, 0.0)).unwrap();
+        let mut moved = clip(1, 0.0);
+        moved.z_index = 4;
+        let row = ClipRow::of(&moved).unwrap();
+        let changes = row.changes(&stored);
+        assert_eq!(
+            changes.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec!["z_index"]
+        );
+        stored.z_index = 4;
+        assert!(row.changes(&stored).is_empty());
+    }
+
+    /// The score row is what "last worked on" reads, so it moves when — and
+    /// only when — something actually changed.
+    #[tokio::test]
+    async fn saving_touches_the_score_row_only_on_a_real_change() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let stamp = |pool: sqlx::SqlitePool| async move {
+            sqlx::query_scalar::<_, String>("SELECT updated_at FROM scores WHERE id = 's'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        let before = stamp(pool.clone()).await;
+        let mut score = Score::default();
+        score.clips.insert("a".into(), clip(1, 0.0));
+        save_score(&mut connection, "s", "alice", &score)
+            .await
+            .unwrap();
+        let after = stamp(pool.clone()).await;
+        assert_ne!(after, before);
+        save_score(&mut connection, "s", "alice", &score)
+            .await
+            .unwrap();
+        assert_eq!(stamp(pool).await, after);
+    }
 }

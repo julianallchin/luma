@@ -179,6 +179,5 @@ pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
         .with_events(Events::new(StderrEvents))
         .with_fixture_principal(config.fixture_principal.clone());
 
-
     Ok(services)
 }

@@ -36,15 +36,15 @@ pub async fn create_lighting_pattern(
         .clone();
     let principal = services.session_user_id().await?;
     let result = crate::services::catalog::create_pattern_with_graph(
-            &services.db.0,
-            principal.as_deref(),
-            &request_id,
-            name,
-            None,
-            Some(graph),
-            Some(&score_id),
-        )
-        .await?;
+        &services.db.0,
+        principal.as_deref(),
+        &request_id,
+        name,
+        None,
+        Some(graph),
+        Some(&score_id),
+    )
+    .await?;
     Ok(result)
 }
 
@@ -65,14 +65,14 @@ pub async fn copy_pattern_to_library(
     .await?;
     let principal = services.session_user_id().await?;
     let result = crate::services::catalog::create_pattern_with_graph(
-            &services.db.0,
-            principal.as_deref(),
-            &request_id,
-            source.name,
-            source.description,
-            Some(document.graph),
-            None,
-        )
-        .await?;
+        &services.db.0,
+        principal.as_deref(),
+        &request_id,
+        source.name,
+        source.description,
+        Some(document.graph),
+        None,
+    )
+    .await?;
     Ok(result)
 }

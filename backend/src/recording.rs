@@ -487,9 +487,14 @@ impl Session {
             return Err(RecordError::NoAudio(audio));
         }
 
-        let lighting =
-            crate::compositor::build_score_scene(pool, storage, fixtures_root, &spec.score_id, None)
-                .await?;
+        let lighting = crate::compositor::build_score_scene(
+            pool,
+            storage,
+            fixtures_root,
+            &spec.score_id,
+            None,
+        )
+        .await?;
         if lighting.annotations.is_empty() {
             return Err(RecordError::EmptyScore(spec.score_id));
         }

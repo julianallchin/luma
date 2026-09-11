@@ -68,7 +68,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 53
+        "line": 49
       },
       "name": "agent_thread_append_messages",
       "prose": {
@@ -117,7 +117,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 80
+        "line": 76
       },
       "name": "agent_thread_delete",
       "prose": {
@@ -142,7 +142,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 22
+        "line": 18
       },
       "name": "agent_thread_get",
       "prose": {
@@ -173,7 +173,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 33
+        "line": 29
       },
       "name": "agent_thread_list",
       "prose": {
@@ -196,7 +196,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 113
+        "line": 99
       },
       "name": "agent_thread_record_usage",
       "prose": {
@@ -218,7 +218,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 138
+        "line": 124
       },
       "name": "agent_thread_rename",
       "prose": {
@@ -245,7 +245,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 127
+        "line": 113
       },
       "name": "agent_thread_set_actor",
       "prose": {
@@ -267,7 +267,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 153
+        "line": 139
       },
       "name": "agent_thread_set_model",
       "returns": "AgentThread"
@@ -345,26 +345,18 @@
         {
           "name": "score",
           "rust": "luma_patterns::Score"
-        },
-        {
-          "name": "baseRevision",
-          "rust": "String"
-        },
-        {
-          "name": "operationId",
-          "rust": "String"
         }
       ],
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 72
+        "line": 26
       },
       "name": "apply_score_document",
       "prose": {
         "returns": "crate::models::authored_state::AppliedAuthoredState"
       },
-      "returns": "crate::models::authored_state::AppliedAuthoredState"
+      "returns": "()"
     },
     {
       "args": [
@@ -415,274 +407,6 @@
         "returns": "PlacementReport"
       },
       "returns": "PlacementReport"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "AuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 118
-      },
-      "name": "authored_state_check_workspace",
-      "prose": {
-        "callerUsage": "checkAuthoredWorkspace(input) with `{ input }`; snapshotId feeds straight into commit's `expectedSnapshotId`.",
-        "notes": "NOT a pure read — it repairs the workspace on disk. `snapshotId` is a hash of the exact raw files inspected and is the compare-and-swap token for commit_workspace, so check→commit must be adjacent with no intervening writes. `changed` means raw files diverge from the detached head; for track workspaces changed is effectively always false because raw divergence is repaired rather than reported (track children author only through structured Python ops). `document` is the CANDIDATE projection decoded from raw files, which may not equal any stored revision.",
-        "returns": "AuthoredWorkspaceCheck { id, headRevisionId, snapshotId, changed, document }",
-        "sideEffects": [
-          "reads the raw workspace directory; RESTORES any missing required files from the head revision",
-          "for TRACK-scope documents only, if raw files differ from head files it OVERWRITES the workspace directory with the head files (repairing a stale post-commit materialization) and reports changed=false"
-        ]
-      },
-      "returns": "AuthoredWorkspaceCheck"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "CommitAuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 134
-      },
-      "name": "authored_state_commit_workspace",
-      "prose": {
-        "callerUsage": "commitAuthoredWorkspace(input) with `{ input }`; expectedHeadRevisionId comes from the handle/check and expectedSnapshotId from check_workspace.",
-        "notes": "DOUBLE compare-and-swap: both expectedHeadRevisionId AND expectedSnapshotId must still hold. `operationId` is a validated idempotency token; `message` is normalized to a subject line (normalized_subject) and is required. Note the field is `appliedToCurrentWorkspace` here, whereas turn/restore/merge results use `appliedToCurrentProjection` — the semantics differ (workspace detached head vs document head) and a port must not unify them. Commit does NOT touch the document head; merge_workspace does.",
-        "returns": "AuthoredWorkspaceCommit { id, revisionId, appliedToCurrentWorkspace, changed, document }",
-        "sideEffects": [
-          "creates a new revision on the workspace's DETACHED branch (not the document head) and advances the workspace head",
-          "enqueues sync closure"
-        ]
-      },
-      "returns": "AuthoredWorkspaceCommit"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "CreateAuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 105
-      },
-      "name": "authored_state_create_workspace",
-      "prose": {
-        "callerUsage": "createAuthoredWorkspace(input) with `{ input }`; only id/baseRevisionId/headRevisionId reach the frontend.",
-        "notes": "The absolute workspace PATH is deliberately never serialized across IPC — AuthoredWorkspace (internal) has `path`, AuthoredWorkspaceHandle (IPC) does not, and there is a unit test (authored_state.rs:262) asserting the path never leaks. A port must keep that boundary. `requestId` is the idempotency key, validated as a token; reusing it against a different base/document errors ('workspace request id is already bound to another base or document'), and a retired request errors too. headRevisionId == baseRevisionId at creation. Workspace file limits: max 8 files, 16 MiB per file, 64 MiB total.",
-        "returns": "AuthoredWorkspaceHandle { id, baseRevisionId, headRevisionId }",
-        "sideEffects": [
-          "INSERT ... ON CONFLICT(owner_thread_id, request_id) DO NOTHING into authored_subagent_workspaces (idempotent reservation)",
-          "materializes the revision's files into a bounded plain directory on disk (the workspace path)"
-        ]
-      },
-      "returns": "AuthoredWorkspaceHandle"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "FinalizeAuthoredTurnInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 45
-      },
-      "name": "authored_state_finalize_turn",
-      "prose": {
-        "callerUsage": "finalizeAuthoredTurn(input) with `{ input }`; callers must branch on `status`.",
-        "notes": "A conflict is a NORMAL return value, not an error — do not treat non-committed as failure. On 'committed', `revisionId` is this operation's revision even if the head has since advanced; `appliedToCurrentProjection` tells you whether it is still the head, while `document` is ALWAYS the current projection and safe to hydrate. `changed` distinguishes a no-op commit. Conflicts carry a structured path (AuthoredMergePathSegment discriminated on `kind`/`value`) with base/ours/theirs as {state:'missing'} | {state:'present', value:unknown}; score_layer values are TS `number`, deliberately not bigint.",
-        "returns": "AuthoredTurnCommit — tagged by `status`: { status:'committed', documentId, revisionId, appliedToCurrentProjection, changed, document } | { status:'conflicted', documentId, preparedRevisionId, conflicts: AuthoredMergeConflict[] }",
-        "sideEffects": [
-          "commits the prepared revision into the document lineage (may 3-way merge against a head that advanced)",
-          "enqueues sync closure; retires/consumes the turn preparation row"
-        ]
-      },
-      "returns": "AuthoredTurnCommit"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        },
-        {
-          "name": "cursor",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "limit",
-          "rust": "Option<usize>"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 68
-      },
-      "name": "authored_state_list_history",
-      "prose": {
-        "callerUsage": "listAuthoredHistory(threadId, cursor = null, limit = 100) — the 100 default lives in TS, not in Rust.",
-        "notes": "Cursor is OPAQUE and stable over the union of current-lineage revisions and superseded proposal tips — never construct or parse it. Entry fields: revisionId, parentIds[] (merge revisions have >1), message, authoredAt (RFC 3339), threadId?, assistantMessageId?, kind (AuthoredOperationKind, snake_case: initial_import|edit|agent_turn|restore|pattern_fork|workspace_merge|sync_integration|revision — `revision` is the forward-compat catch-all for newer producers, so a port must NOT exhaustively reject unknown kinds), position (current|ancestor|superseded — superseded tips are still restorable), proposalSequence (i64 exported as `number | null`; server-assigned cross-device ordering), and conversationCheckpoint {threadId, assistantMessageId} present ONLY when the revision sits exactly on an immutable assistant-turn boundary — i.e. it gates whether state_and_conversation restore is offerable. `limit` being null means the backend default applies.",
-        "returns": "AuthoredHistoryPage { entries: AuthoredHistoryEntry[], nextCursor: string|null }",
-        "sideEffects": [
-          "read-only"
-        ]
-      },
-      "returns": "AuthoredHistoryPage"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "MergeAuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 145
-      },
-      "name": "authored_state_merge_workspace",
-      "prose": {
-        "callerUsage": "mergeAuthoredWorkspace(input) with `{ input }`; callers branch on `status`.",
-        "notes": "Conflicted is a normal outcome, not an error. Note the ASYMMETRY with AuthoredTurnCommit::Conflicted: this variant carries ONLY `conflicts` — no documentId, no preparedRevisionId — so a shared conflict-rendering component cannot assume those fields. `expectedHeadRevisionId` is the workspace head CAS (the document head may have advanced; that's what the merge resolves). The workspace is not automatically removed after a successful merge — see authored_state_remove_workspace.",
-        "returns": "AuthoredWorkspaceMerge — tagged by `status`: { status:'merged', documentId, revisionId, appliedToCurrentProjection, document } | { status:'conflicted', conflicts: AuthoredMergeConflict[] }",
-        "sideEffects": [
-          "3-way merges the workspace's detached head into the parent document and writes a merge revision (parentIds has 2 entries in history)",
-          "enqueues sync closure; on conflict nothing is written"
-        ]
-      },
-      "returns": "AuthoredWorkspaceMerge"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "PrepareAuthoredTurnInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 34
-      },
-      "name": "authored_state_prepare_turn",
-      "prose": {
-        "callerUsage": "prepareAuthoredTurn(input) invokes with `{ input }` and the returned preparedRevisionId is carried into finalize.",
-        "notes": "IDEMPOTENT on (threadId, assistantMessageId): a repeat returns the existing preparation, but if `graph` is supplied and its file encoding differs from the recorded snapshot it errors with 'assistant message id was already prepared with another graph'. `graph` is pattern-only: supplying it on a track thread errors ('track assistant turns cannot prepare a graph'); omitting it snapshots the current head files. `document` is the tagged union AuthoredProjectedDocument: {kind:'track_score', revision} | {kind:'pattern_graph', implementationId, revision, graph} — snake_case tag values, camelCase fields. Invariant (per project memory): one prepared authored turn per assistant row.",
-        "returns": "PreparedAuthoredTurn { documentId, preparedRevisionId, document: AuthoredProjectedDocument }",
-        "sideEffects": [
-          "takes the thread's authored write lock, inserts a new revision parented on the current head",
-          "INSERTs into authored_turn_preparations (thread_id, assistant_message_id, …) — one prepared turn per assistant message",
-          "enqueues the revision closure for sync and, when signed in, enqueues a local sync row for authored_turn_preparations"
-        ]
-      },
-      "returns": "PreparedAuthoredTurn"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 57
-      },
-      "name": "authored_state_recover_turns",
-      "prose": {
-        "callerUsage": "recoverAuthoredTurns(threadId) — flat `{ threadId }` payload (NOT wrapped in `input`, unlike its prepare/finalize siblings).",
-        "notes": "Crash-recovery sweep; safe to call on load. Argument-shape inconsistency with prepare/finalize is a real ergonomics smell for a port: some authored_state commands take `{ input: {...} }`, others take flat scalars. Ordering of the returned array follows preparation order; each element must be branched on `status` exactly like finalize.",
-        "returns": "AuthoredTurnCommit[] (same tagged union as finalize, one per recovered preparation)",
-        "sideEffects": [
-          "finalizes any prepared-but-unfinalized turns left behind by a crash/restart; writes revisions and sync closures for each"
-        ]
-      },
-      "returns": "Vec<AuthoredTurnCommit>"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "AuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 156
-      },
-      "name": "authored_state_remove_workspace",
-      "prose": {
-        "notes": "ORDERING IS LOAD-BEARING and must be preserved by any port: authorize -> retire python execution (drain in-flight cell) -> remove authored row+dir -> forget graph run. Retiring the Python side first is what stops a running host call from writing after the authored branch disappears. Note the Python execution namespace is keyed by workspaceId (the child execution id), not threadId. Idempotent-ish: safe to retry after a lost response because authorization does not require an active row; the closed admission gate is never reopened. Callers treat it as fire-and-forget cleanup (supervisor guards with a `workspaceRemoved` flag and calls it on failure paths and on conflict).",
-        "returns": "void (Result<(), String>)",
-        "sideEffects": [
-          "Resolves the admitted principal; authorize_workspace_removal accepts already-retired rows (ownership-based, so a lost-response retry still succeeds)",
-          "PythonWorkspaceService::retire_thread(workspaceId): closes the execution admission gate permanently, cancels and drains any in-flight cell, shuts down the kernel, and rm -rf's the Python workspace directory on disk",
-          "AuthoredDocuments::remove_workspace: retires the workspace row in SQLite (transactional) and deletes the authored workspace directory from disk",
-          "GraphRunStore::forget(workspaceId): drops the in-memory latest graph run for that execution id",
-          "No Tauri events emitted"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "RestoreAuthoredStateInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 87
-      },
-      "name": "authored_state_restore",
-      "prose": {
-        "callerUsage": "restoreAuthoredState(input) with `{ input }`; the command handler destructures the struct itself and passes the fields positionally to the service.",
-        "notes": "`operationId` is a caller-owned idempotency key — retry with the same value. `mode` is snake_case on the wire. `forkedThreadId` is set ONLY for state_and_conversation and is where the UI must navigate afterwards. `document` is always the current projection; `revisionId` may already be superseded — check appliedToCurrentProjection. Restore never deletes revisions, so the pre-restore state stays in history.",
-        "returns": "AuthoredRestoreResult { documentId, revisionId, appliedToCurrentProjection, document, forkedThreadId: string|null }",
-        "sideEffects": [
-          "writes a NEW forward revision (restore is roll-forward, never history rewrite)",
-          "for mode='state_and_conversation', creates a forked thread sharing the immutable transcript prefix (forkedFromThreadId/forkedAtMessageId on the new AgentThread); the original thread is left intact",
-          "enqueues sync closure"
-        ]
-      },
-      "returns": "AuthoredRestoreResult"
-    },
-    {
-      "args": [
-        {
-          "name": "actor",
-          "rust": "String"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/authored_state.rs",
-        "line": 25
-      },
-      "name": "authored_state_set_session_actor",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
     },
     {
       "args": [
@@ -746,7 +470,7 @@
       "domain": "agent_execution",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_execution.rs",
-        "line": 49
+        "line": 48
       },
       "name": "cancel_python_cell",
       "prose": {
@@ -767,14 +491,6 @@
           "rust": "String"
         },
         {
-          "name": "annotations",
-          "rust": "Option<Vec<LiveAnnotation>>"
-        },
-        {
-          "name": "skipCache",
-          "rust": "Option<bool>"
-        },
-        {
           "name": "graphScore",
           "rust": "Option<luma_patterns::Score>"
         }
@@ -782,7 +498,7 @@
       "domain": "compositor",
       "handler": {
         "file": "backend/src/dispatch/handlers/compositor.rs",
-        "line": 22
+        "line": 16
       },
       "name": "composite_track",
       "prose": {
@@ -1034,7 +750,7 @@
       "domain": "composable_patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/composable_patterns.rs",
-        "line": 55
+        "line": 52
       },
       "name": "copy_pattern_to_library",
       "prose": {
@@ -1126,7 +842,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 29
+        "line": 26
       },
       "name": "create_pattern",
       "prose": {
@@ -1161,7 +877,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 194
+        "line": 119
       },
       "name": "create_score",
       "prose": {
@@ -1174,30 +890,6 @@
         ]
       },
       "returns": "Score"
-    },
-    {
-      "args": [
-        {
-          "name": "payload",
-          "rust": "CreateTrackScoreInput"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 255
-      },
-      "name": "create_track_score",
-      "prose": {
-        "notes": "Single `payload` object arg (NOT flat args like create_score — the two creation commands disagree on calling convention). requestId is the idempotency key. The created clip's stable id is `createdClipId`; find it inside `clips` (smoke.ts does exactly that) — `clips` is the FULL post-edit clip list, not a delta. `appliedToCurrentProjection: false` means a replayed operation committed historically but a newer edit is now live. No frontend caller yet — the UI creates clips through replace_track_scores; only the headless smoke test exercises this path.",
-        "returns": "TrackEditResult — { revision: string; clips: TrackClip[]; idMap: Record<string,string>; createdClipId: string | null; added: number; updated: number; removed: number; appliedToCurrentProjection: boolean }",
-        "sideEffects": [
-          "commits a new revision to the score's git-backed authored document (commit message 'Create track clip')",
-          "rewrites the track_scores SQLite projection for that score",
-          "takes VenueAccess::<Write> on the score"
-        ]
-      },
-      "returns": "TrackEditResult"
     },
     {
       "args": [
@@ -1230,7 +922,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 101
+        "line": 98
       },
       "name": "current_account",
       "prose": {
@@ -1271,7 +963,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 79
+        "line": 63
       },
       "name": "delete_pattern",
       "prose": {
@@ -1294,7 +986,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 236
+        "line": 156
       },
       "name": "delete_score",
       "prose": {
@@ -1353,30 +1045,6 @@
         ]
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "payload",
-          "rust": "DeleteTrackScoreInput"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 269
-      },
-      "name": "delete_track_score",
-      "prose": {
-        "notes": "Deletes ONE clip. scoreId/trackId are explicit precisely so a retry after a lost success response can still resolve (the clip is already gone). track-score-commands.ts retries once with the same operationId; the second call must return Ok with removed=0 or the same result, never a missing-clip error. `clips` in the response is the full remaining clip list — callers can rebuild timeline state from it without a follow-up list_track_scores.",
-        "returns": "TrackEditResult (same shape as create/update)",
-        "sideEffects": [
-          "commits a delete revision to the score's authored document",
-          "rewrites the track_scores projection",
-          "VenueAccess::<Write> on the score"
-        ]
-      },
-      "returns": "TrackEditResult"
     },
     {
       "args": [
@@ -1698,7 +1366,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 215
+        "line": 138
       },
       "name": "ensure_venue_score",
       "prose": {
@@ -1789,7 +1457,7 @@
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 5
+        "line": 7
       },
       "name": "force_quit",
       "prose": {
@@ -1811,7 +1479,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 64
+        "line": 53
       },
       "name": "fork_pattern",
       "prose": {
@@ -1828,33 +1496,6 @@
     {
       "args": [
         {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "annotation_preview",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 34
-      },
-      "name": "generate_annotation_previews",
-      "prose": {
-        "notes": "One entry per persisted score row, in fetch order (z_index asc). Empty-graph annotations still yield an entry via empty_preview(). Returns [] when the track has no annotations. `pixels` crosses IPC as a JSON number array (Vec<u8>, no base64/serde_bytes) — the store feeds it straight to `new Uint8ClampedArray(...)` + ImageData + createImageBitmap. Width = STEPS_PER_BEAT(16) columns/beat clamped to [8,512]; height ≤ 32 rows (rows = fixtures, cols = time). Store closes previous ImageBitmaps before replacing (GPU leak otherwise) and bumps a generation counter.",
-        "returns": "AnnotationPreview[] — { annotationId, width, height, pixels: u8[] (RGBA), dominantColor: [f32,f32,f32] }",
-        "sideEffects": [
-          "read-only w.r.t. the DB; compiles + evaluates every annotation's pattern (CPU heavy)",
-          "resolves fixtures root + StorageRoot from AppHandle; may read audio/stem assets via build_resident_context"
-        ]
-      },
-      "returns": "Vec<AnnotationPreview>"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         }
@@ -1862,7 +1503,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 849
+        "line": 857
       },
       "name": "generate_venue_groups",
       "prose": {
@@ -1901,29 +1542,6 @@
         ]
       },
       "returns": "Vec<ArtNetNode>"
-    },
-    {
-      "args": [
-        {
-          "name": "uids",
-          "rust": "Vec<String>"
-        }
-      ],
-      "domain": "cloud_sync",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/cloud_sync.rs",
-        "line": 33
-      },
-      "name": "get_display_names",
-      "prose": {
-        "notes": "Sparse map: uids whose profile row has a NULL display_name are simply absent from the result, so callers must treat 'missing key' as 'unknown', not 'error'. The PostgREST filter is built by naive `uids.join(\",\")` string interpolation — uids containing a comma or paren would corrupt the filter (fine for UUIDs, a landmine for a port that allows other id shapes). Both callers dedupe via Set and exclude the current user; track-browser additionally diffs against already-fetched names to avoid refetching, and deliberately omits displayNames from its effect deps to avoid a loop.",
-        "returns": "HashMap<String,String> — uid → display_name",
-        "sideEffects": [
-          "requires auth (short-circuits to {} BEFORE the auth check when uids is empty — an empty request never errors on signed-out)",
-          "network call to Supabase"
-        ]
-      },
-      "returns": "HashMap<String, String>"
     },
     {
       "args": [
@@ -2060,7 +1678,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 20
+        "line": 17
       },
       "name": "get_pattern",
       "prose": {
@@ -2088,7 +1706,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 203
+        "line": 167
       },
       "name": "get_pattern_args",
       "prose": {
@@ -2112,7 +1730,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 104
+        "line": 83
       },
       "name": "get_pattern_graph_document",
       "prose": {
@@ -2149,7 +1767,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 116
+        "line": 95
       },
       "name": "get_pattern_score_template",
       "returns": "luma_patterns::Score"
@@ -2182,13 +1800,13 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 16
+        "line": 11
       },
       "name": "get_score_document",
       "prose": {
         "returns": "Option<crate::services::graph_scores::GraphScoreDocument>"
       },
-      "returns": "Option<crate::services::graph_scores::GraphScoreDocument>"
+      "returns": "Option<luma_patterns::Score>"
     },
     {
       "args": [
@@ -2200,7 +1818,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 163
+        "line": 160
       },
       "name": "get_session_item",
       "prose": {
@@ -2526,7 +2144,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 88
+        "line": 86
       },
       "name": "host_load_track",
       "prose": {
@@ -2551,7 +2169,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 181
+        "line": 177
       },
       "name": "host_pause",
       "prose": {
@@ -2577,7 +2195,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 171
+        "line": 167
       },
       "name": "host_play",
       "prose": {
@@ -2603,7 +2221,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 187
+        "line": 183
       },
       "name": "host_seek",
       "prose": {
@@ -2633,7 +2251,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 197
+        "line": 193
       },
       "name": "host_set_loop_region",
       "prose": {
@@ -2668,7 +2286,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 222
+        "line": 218
       },
       "name": "host_set_playback_range",
       "returns": "()"
@@ -2687,7 +2305,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 212
+        "line": 208
       },
       "name": "host_set_playback_rate",
       "prose": {
@@ -2704,7 +2322,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 240
+        "line": 236
       },
       "name": "host_snapshot",
       "prose": {
@@ -2726,7 +2344,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 152
+        "line": 150
       },
       "name": "import_tracks",
       "prose": {
@@ -2786,7 +2404,7 @@
       "domain": "compositor",
       "handler": {
         "file": "backend/src/dispatch/handlers/compositor.rs",
-        "line": 47
+        "line": 38
       },
       "name": "leave_track",
       "prose": {
@@ -2900,7 +2518,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 14
+        "line": 11
       },
       "name": "list_patterns",
       "prose": {
@@ -2920,7 +2538,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 185
+        "line": 110
       },
       "name": "list_scores_across_venues",
       "prose": {
@@ -2943,7 +2561,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 171
+        "line": 96
       },
       "name": "list_scores_for_track",
       "prose": {
@@ -2952,26 +2570,6 @@
         "sideEffects": []
       },
       "returns": "Vec<ScoreSummary>"
-    },
-    {
-      "args": [
-        {
-          "name": "scoreId",
-          "rust": "String"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 246
-      },
-      "name": "list_track_scores",
-      "prose": {
-        "notes": "Reads the SQLite projection of the authored document, not the git document. `args` comes back as a decoded JSON object (the row stores args_json TEXT); `blendMode` is decoded from a bare string column into the BlendMode enum. Frontend passes rows through toTimelineAnnotations(rows, patterns) before rendering. Same double VenueAccess::read smell as list_scores_for_track (scores.rs:52-53).",
-        "returns": "TrackScore[] — { id; uid: string|null; scoreId; patternId; startTime: number; endTime: number; zIndex: number; blendMode: BlendMode; args: Record<string, unknown>; createdAt; updatedAt }",
-        "sideEffects": []
-      },
-      "returns": "Vec<TrackScore>"
     },
     {
       "args": [],
@@ -2998,7 +2596,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 143
+        "line": 141
       },
       "name": "list_tracks_enriched",
       "prose": {
@@ -3382,7 +2980,7 @@
       "domain": "group_references",
       "handler": {
         "file": "backend/src/dispatch/handlers/group_references.rs",
-        "line": 66
+        "line": 47
       },
       "name": "missing_venue_groups",
       "prose": {
@@ -3791,36 +3389,6 @@
     {
       "args": [
         {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "annotation",
-          "rust": "LivePreviewInput"
-        }
-      ],
-      "domain": "annotation_preview",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 15
-      },
-      "name": "preview_annotation",
-      "prose": {
-        "notes": "Single-annotation version of generate_annotation_previews, driven live during a drag. LivePreviewInput has NO zIndex/blendMode (unlike compositor::LiveAnnotation) — the preview is always rendered alone with blend Replace, z 0, so it is per-clip output, not composite output. Host fills unset args from the pattern's arg defaults; the caller only sends overrides. Returned annotationId echoes the input id. Store coalesces: one in-flight call per annotation id, latest pending call replayed on completion.",
-        "returns": "AnnotationPreview (single)",
-        "sideEffects": [
-          "read-only; compile + eval of one pattern over the preview column grid"
-        ]
-      },
-      "returns": "AnnotationPreview"
-    },
-    {
-      "args": [
-        {
           "name": "request",
           "rust": "Value"
         }
@@ -3866,7 +3434,7 @@
       "domain": "annotation_preview",
       "handler": {
         "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 75
+        "line": 38
       },
       "name": "preview_graph_image",
       "prose": {
@@ -3912,7 +3480,7 @@
       "domain": "node_graph",
       "handler": {
         "file": "backend/src/dispatch/handlers/node_graph.rs",
-        "line": 126
+        "line": 119
       },
       "name": "preview_pattern",
       "prose": {
@@ -3955,7 +3523,7 @@
       "domain": "annotation_preview",
       "handler": {
         "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 50
+        "line": 13
       },
       "name": "preview_pattern_image",
       "prose": {
@@ -3985,7 +3553,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 107
+        "line": 48
       },
       "name": "preview_score_clip",
       "prose": {
@@ -4339,7 +3907,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 443
+        "line": 354
       },
       "name": "remove_session_item",
       "prose": {
@@ -4489,7 +4057,7 @@
       "domain": "perform",
       "handler": {
         "file": "backend/src/dispatch/handlers/perform.rs",
-        "line": 268
+        "line": 266
       },
       "name": "render_composite_deck_unmatched",
       "prose": {
@@ -4554,47 +4122,6 @@
     {
       "args": [
         {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "baseScores",
-          "rust": "Vec<TrackScore>"
-        },
-        {
-          "name": "scores",
-          "rust": "Vec<TrackScore>"
-        },
-        {
-          "name": "operationId",
-          "rust": "String"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 279
-      },
-      "name": "replace_track_scores",
-      "prose": {
-        "notes": "The ONE frontend primitive for multi-clip gestures — a whole-document compare-and-swap (base snapshot vs candidate snapshot), never per-row mutations. Caller builds operationId with crypto.randomUUID() and retries the *identical* request exactly once on failure (response-loss safety depends on operationId being reused verbatim). Response may return a main tip newer than the submitted candidate, so callers must rehydrate from result.clips and remap draft ids through result.idMap (rebaseTrackScoreIds/hydrateTrackReplacement in the same file). base/candidate arrays are normalized by trackScoreSnapshot before send. TrackScore.args is free-form JSON; ids in the candidate may be client-side drafts.",
-        "returns": "TrackEditResult { revision: string, clips: TrackClip[], idMap: Record<string,string|undefined>, createdClipId: string|null, added: number, updated: number, removed: number, appliedToCurrentProjection: boolean }",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Score(score_id); rejects if score.uid != current principal, and if score.track_id != track_id",
-          "Commits a new revision to the score's per-document Git repo (authored state) under subject 'Replace track score'",
-          "Updates the SQLite projection of track_scores for that score",
-          "Idempotent on operation_id + request fingerprint (replay-safe); does NOT notify the sync engine (delete_score does — see issues)"
-        ]
-      },
-      "returns": "TrackEditResult"
-    },
-    {
-      "args": [
-        {
           "name": "trackId",
           "rust": "String"
         }
@@ -4602,7 +4129,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 267
+        "line": 265
       },
       "name": "reprocess_track",
       "prose": {
@@ -4620,7 +4147,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "backend/src/dispatch/handlers/waveforms.rs",
-        "line": 42
+        "line": 38
       },
       "name": "reprocess_waveform",
       "prose": {
@@ -4655,7 +4182,7 @@
       "domain": "group_references",
       "handler": {
         "file": "backend/src/dispatch/handlers/group_references.rs",
-        "line": 100
+        "line": 82
       },
       "name": "resolve_venue_group",
       "prose": {
@@ -4779,10 +4306,6 @@
           "rust": "String"
         },
         {
-          "name": "operationId",
-          "rust": "String"
-        },
-        {
           "name": "baseRevision",
           "rust": "String"
         },
@@ -4794,7 +4317,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 219
+        "line": 184
       },
       "name": "save_pattern_graph_document",
       "prose": {
@@ -4833,124 +4356,13 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 823
+        "line": 831
       },
       "name": "save_venue_group",
       "prose": {
         "returns": "()"
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "includeClipIds",
-          "rust": "bool"
-        }
-      ],
-      "domain": "score_dsl",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/score_dsl.rs",
-        "line": 79
-      },
-      "name": "score_dsl_export",
-      "prose": {
-        "notes": "includeClipIds selects the export kind: true => ScoreDslExportKind::Canonical (round-trippable, clip ids embedded), false => Exemplar (clean source for showing an LLM). trackId+venueId are not lookup keys — they are asserted against the loaded score by require_score_scope, and a mismatch returns the deliberately opaque \"Venue resource not found\" (enumeration guard, not a real 404). Owner uid is read off the score row, never passed in. `revision` is the base for a later import.",
-        "returns": "ScoreDslExportResponse { source, revision, clipCount }",
-        "sideEffects": [
-          "VenueAccess::<Read> on VenueResource::Score(scoreId)"
-        ]
-      },
-      "returns": "ScoreDslExportResponse"
-    },
-    {
-      "args": [
-        {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "operationId",
-          "rust": "String"
-        },
-        {
-          "name": "source",
-          "rust": "String"
-        },
-        {
-          "name": "baseRevision",
-          "rust": "String"
-        }
-      ],
-      "domain": "score_dsl",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/score_dsl.rs",
-        "line": 250
-      },
-      "name": "score_dsl_import",
-      "prose": {
-        "notes": "`document` is the AuthoredProjectedDocument enum — for a score import it is the TrackScore variant ({ revision }), NOT PatternGraph; a port must handle the tagged union. The TS wrapper generates operationId with crypto.randomUUID() and retries the identical request exactly once on any failure — safe only because operationId makes the write idempotent; keep that property or the retry double-applies. Write access is taken and released before the apply, so the scope check is TOCTOU-ish relative to the authored write. Stale baseRevision surfaces as a conflict error string.",
-        "returns": "ScoreDslImportResponse { documentId, revisionId, changed, document: AuthoredProjectedDocument }",
-        "sideEffects": [
-          "commits a revision to the score's authored document, replacing the track's clips",
-          "VenueAccess::<Write> for the scope check, then dropped before the authored apply"
-        ]
-      },
-      "returns": "ScoreDslImportResponse"
-    },
-    {
-      "args": [
-        {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "source",
-          "rust": "String"
-        }
-      ],
-      "domain": "score_dsl",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/score_dsl.rs",
-        "line": 116
-      },
-      "name": "score_dsl_validate",
-      "prose": {
-        "notes": "Invalid source is NOT an error — it resolves with valid:false plus diagnostics; only Conflict/Storage TrackEditErrors (and the >6MiB size check) reject. clipCount is null whenever valid is false. Diagnostics are 1-indexed for line/column/endColumn (Rust spans are 0-indexed columns; +1 applied in diagnostic_with_span) and carry both structured fields and a pre-rendered `formatted` caret block for LLM consumption. Warnings only appear on the valid path, sorted by (line, column, severity) with errors before warnings; the invalid paths return a single unsorted diagnostic. `baseRevision` is the value to feed straight into score_dsl_import.",
-        "returns": "ScoreDslValidationResponse { valid, baseRevision, clipCount: number | null, diagnostics: ScoreDslDiagnostic[] }",
-        "sideEffects": [
-          "VenueAccess::<Read> only — nothing is written; the candidate is checked, not applied"
-        ]
-      },
-      "returns": "ScoreDslValidationResponse"
     },
     {
       "args": [
@@ -4985,41 +4397,6 @@
     {
       "args": [
         {
-          "name": "query",
-          "rust": "String"
-        },
-        {
-          "name": "categoryName",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "limit",
-          "rust": "Option<i32>"
-        },
-        {
-          "name": "offset",
-          "rust": "Option<i32>"
-        }
-      ],
-      "domain": "cloud_sync",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/cloud_sync.rs",
-        "line": 11
-      },
-      "name": "search_patterns_remote",
-      "prose": {
-        "notes": "FIELD-CASE SMELL: SearchPatternRow has no #[serde(rename_all)], so it crosses the IPC boundary snake_case, unlike PatternSummary (camelCase) which the same store renders alongside it. A port must not blindly camelCase this one. Caller never passes categoryName (dead param at every call site) and always passes limit:50/offset:0 explicitly, so the Rust defaults are never exercised; there is no pagination UI. Failure resets searchResults to [] and only console.errors. Note SearchPatternRowRaw is a byte-identical twin of SearchPatternRow with a hand-written From impl — duplication worth collapsing.",
-        "returns": "SearchPatternRow[] { id, uid, name, description, is_verified, author_name, category_name, created_at, updated_at }",
-        "sideEffects": [
-          "requires auth ('Not authenticated - please sign in first')",
-          "network call to Supabase with the user's access token"
-        ]
-      },
-      "returns": "Vec<SearchPatternRow>"
-    },
-    {
-      "args": [
-        {
           "name": "email",
           "rust": "String"
         }
@@ -5027,7 +4404,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 36
+        "line": 33
       },
       "name": "send_login_code",
       "prose": {
@@ -5165,7 +4542,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 91
+        "line": 70
       },
       "name": "set_pattern_category",
       "prose": {
@@ -5191,7 +4568,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 236
+        "line": 211
       },
       "name": "set_session_item",
       "prose": {
@@ -5273,7 +4650,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 188
+        "line": 185
       },
       "name": "set_venue_environment",
       "prose": {
@@ -5389,39 +4766,7 @@
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 16
-      },
-      "name": "sync_full",
-      "prose": {
-        "notes": "Fire-and-forget at both call sites; the SyncReport is only console.logged, never rendered — errors[] is silently discarded. App.tsx guards re-entry with module-level `syncInFlight` / `syncingForUserId` flags rather than backend state. A port must keep the `library-changed` event: the frontend refreshes patterns + venues stores off it (App.tsx listener).",
-        "returns": "SyncReport { pull: PullStats, pushed: number, files: FileSyncStats, errors: string[] } (serde camelCase)",
-        "sideEffects": [
-          "discovery → pull → push → file sync; writes to the local sqlite DB and downloads/uploads files",
-          "emits `library-changed` to the webview after pull (orchestrator.rs:138, :185) — well before file sync completes",
-          "serialized against the background sync loop by SyncEngine.sync_lock"
-        ]
-      },
-      "returns": "SyncReport"
-    },
-    {
-      "args": [],
-      "domain": "sync",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 34
-      },
-      "name": "sync_retry",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "sync",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 24
+        "line": 14
       },
       "name": "sync_status",
       "prose": {
@@ -5572,7 +4917,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 53
+        "line": 44
       },
       "name": "update_pattern",
       "prose": {
@@ -5606,7 +4951,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 449
+        "line": 445
       },
       "name": "update_track_metadata",
       "prose": {
@@ -5618,30 +4963,6 @@
         ]
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "payload",
-          "rust": "UpdateTrackScoreInput"
-        }
-      ],
-      "domain": "scores",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 262
-      },
-      "name": "update_track_score",
-      "prose": {
-        "notes": "Idempotency key is `operationId` here, but `requestId` on create — drifted naming for the same concept. scoreId+trackId are carried explicitly so an exact retry stays resolvable even after the clip row is gone. track-score-commands.ts wraps it in retryOnce() with the SAME operationId, which is the point of the design. Every optional field is Option<T>: omitted/absent means 'leave unchanged'; there is no way to null out `args`.",
-        "returns": "TrackEditResult (same shape as create_track_score)",
-        "sideEffects": [
-          "commits a revision to the score's authored document",
-          "rewrites the track_scores projection",
-          "VenueAccess::<Write> on the score; rejects when payload.trackId disagrees with the score's scope"
-        ]
-      },
-      "returns": "TrackEditResult"
     },
     {
       "args": [
@@ -5710,7 +5031,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 64
+        "line": 61
       },
       "name": "verify_login_code",
       "prose": {
@@ -5732,7 +5053,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 164
+        "line": 139
       },
       "name": "verify_pattern",
       "prose": {
@@ -5748,41 +5069,11 @@
       "returns": "PatternSummary"
     },
     {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "startTime",
-          "rust": "f32"
-        },
-        {
-          "name": "endTime",
-          "rust": "f32"
-        }
-      ],
-      "domain": "annotation_preview",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 100
-      },
-      "name": "view_composite_image",
-      "prose": {
-        "notes": "No venueId argument — the venue is inferred by get_accessible_venue_for_track(trackId), which errors 'No score with annotations for this track.' when none is accessible, and 'No annotations for this track/venue.' when the resolved score is empty. Smoke treats /No annotations|No score/ as a skip, not a failure. Renders Scope::Composite (all annotations blended by z/blend_mode), unlike the per-clip preview commands.",
-        "returns": "AnnotationPreview with annotationId = `composite_{trackId}`",
-        "sideEffects": [
-          "read-only; builds a throwaway Scene (does NOT install it on the render engine and does not touch PLAN_CACHE)"
-        ]
-      },
-      "returns": "AnnotationPreview"
-    },
-    {
       "args": [],
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 598
+        "line": 441
       },
       "name": "wipe_database",
       "prose": {
@@ -5817,7 +5108,7 @@
       "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
     },
     {
-      "commandCount": 5,
+      "commandCount": 2,
       "domain": "annotation_preview",
       "handlers": "backend/src/dispatch/handlers/annotation_preview.rs"
     },
@@ -5832,19 +5123,9 @@
       "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 11,
-      "domain": "authored_state",
-      "handlers": "backend/src/dispatch/handlers/authored_state.rs"
-    },
-    {
       "commandCount": 1,
       "domain": "categories",
       "handlers": "backend/src/dispatch/handlers/categories.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "cloud_sync",
-      "handlers": "backend/src/dispatch/handlers/cloud_sync.rs"
     },
     {
       "commandCount": 4,
@@ -5927,12 +5208,7 @@
       "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
     {
-      "commandCount": 3,
-      "domain": "score_dsl",
-      "handlers": "backend/src/dispatch/handlers/score_dsl.rs"
-    },
-    {
-      "commandCount": 13,
+      "commandCount": 8,
       "domain": "scores",
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
@@ -5952,7 +5228,7 @@
       "handlers": "backend/src/dispatch/handlers/stage.rs"
     },
     {
-      "commandCount": 4,
+      "commandCount": 2,
       "domain": "sync",
       "handlers": "backend/src/dispatch/handlers/sync.rs"
     },
@@ -6019,11 +5295,9 @@
     },
     {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:361",
-        "backend/src/dispatch/handlers/tracks.rs:399",
-        "backend/src/dispatch/handlers/tracks.rs:464",
-        "backend/src/sync/orchestrator.rs:251",
-        "backend/src/sync/orchestrator.rs:297"
+        "backend/src/dispatch/handlers/tracks.rs:357",
+        "backend/src/dispatch/handlers/tracks.rs:395",
+        "backend/src/dispatch/handlers/tracks.rs:460"
       ],
       "listeners": [],
       "name": "library-changed",
@@ -6084,9 +5358,9 @@
     },
     {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:315",
-        "backend/src/dispatch/handlers/tracks.rs:486",
-        "backend/src/dispatch/handlers/tracks.rs:556",
+        "backend/src/dispatch/handlers/tracks.rs:311",
+        "backend/src/dispatch/handlers/tracks.rs:482",
+        "backend/src/dispatch/handlers/tracks.rs:552",
         "backend/src/preprocessing/scheduler.rs:351",
         "backend/src/preprocessing/scheduler.rs:399",
         "backend/src/preprocessing/scheduler.rs:463",
@@ -6094,7 +5368,7 @@
         "backend/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:147"
+        "gpui/crates/app/src/library.rs:135"
       ],
       "name": "track-import-state",
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
@@ -6143,8 +5417,8 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 233,
-    "domainCount": 35,
+    "commandCount": 207,
+    "domainCount": 32,
     "eventCount": 18
   },
   "version": 2

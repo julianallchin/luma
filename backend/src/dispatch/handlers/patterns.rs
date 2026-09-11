@@ -30,7 +30,14 @@ pub async fn create_pattern(
     description: Option<String>,
 ) -> Result<PatternSummary, CommandError> {
     let uid = services.session_user_id().await?;
-    Ok(catalog::create_pattern(&services.db.0, uid.as_deref(), &request_id, name, description).await?)
+    Ok(catalog::create_pattern(
+        &services.db.0,
+        uid.as_deref(),
+        &request_id,
+        name,
+        description,
+    )
+    .await?)
 }
 
 /// A full replace of both metadata fields, not a patch.

@@ -15,12 +15,12 @@
 //! ([`groups::or_terms`]) rather than growing a second one.
 
 pub(crate) mod agent_execution;
+pub mod catalog;
 pub(crate) mod composable_patterns;
 pub mod distribute;
+pub(crate) mod drafts;
 pub mod fixture_create;
 pub mod fixtures;
-pub mod catalog;
-pub(crate) mod drafts;
 pub mod graph_documents;
 pub mod graph_scores;
 pub mod group_derivation;

@@ -212,7 +212,7 @@ pub async fn get_score(access: &mut impl AuthorizedVenue, id: &str) -> Result<Sc
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 

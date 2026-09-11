@@ -440,14 +440,9 @@ pub async fn delete_nodes(
     ids: &[String],
 ) -> Result<(), String> {
     for id in ids {
-        deletes::delete_where(
-            access.connection(),
-            "venue_nodes",
-            "id = ?",
-            &[id.as_str()],
-        )
-        .await
-        .map_err(|e| format!("Failed to delete venue node: {e}"))?;
+        deletes::delete_where(access.connection(), "venue_nodes", "id = ?", &[id.as_str()])
+            .await
+            .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
     graph_changed();
     Ok(())

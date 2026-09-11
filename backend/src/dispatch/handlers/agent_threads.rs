@@ -1,10 +1,10 @@
 use crate::database::local::agent_threads as db;
 use crate::dispatch::{AppServices, CommandError};
+use crate::models::actor::Actor;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
-use crate::models::actor::Actor;
 
 pub async fn agent_thread_create(
     services: &AppServices,
@@ -78,8 +78,7 @@ pub async fn agent_thread_delete(
     thread_id: String,
 ) -> Result<(), CommandError> {
     let owner_user_id = services.admitted_principal().await?;
-    let children =
-        db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
+    let children = db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
     for child in children {
         services.workspaces.retire_thread(&child).await?;
         services.graph_runs.forget(&child);
