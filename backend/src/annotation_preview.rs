@@ -276,7 +276,8 @@ fn compute_preview_width(beat_grid: Option<&BeatGrid>, start_time: f32, end_time
 /// Render a heatmap from a column-sampled grid of [`UniverseState`] frames
 /// (`frames[col]` = the state at preview column `col`). Rows are primitives,
 /// ordered by brightness-weighted center of mass in time so spatial patterns
-/// read as diagonals.
+/// read as diagonals; past [`MAX_PREVIEW_HEIGHT`] heads, a row is the
+/// brightest head of a band of neighbours in that order.
 pub(crate) fn render_preview(
     annotation_id: String,
     frames: &[UniverseState],
@@ -330,13 +331,20 @@ pub(crate) fn render_preview(
     let mut color_sum = [0.0f64; 3];
     let mut weight_sum = 0.0f64;
 
-    for (row, prim_id) in prim_ids.iter().take(height as usize).enumerate() {
+    // A rig with more heads than rows shares each row between a band of
+    // neighbours in that order and shows the brightest of them, so no head is
+    // dropped from the strip.
+    let band = |row: usize| {
+        let (n, h) = (prim_ids.len(), height as usize);
+        &prim_ids[row * n / h..(row + 1) * n / h]
+    };
+    for row in 0..height as usize {
         for col in 0..width as usize {
             let frame = &frames[col];
-            let (color, dimmer) = frame
-                .primitives
-                .get(prim_id)
-                .map(|p| (p.color, p.dimmer))
+            let (color, dimmer) = band(row)
+                .iter()
+                .filter_map(|id| frame.primitives.get(id).map(|p| (p.color, p.dimmer)))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
                 .unwrap_or(([1.0, 1.0, 1.0], 0.0));
 
             let r = (color[0] * dimmer * 255.0).clamp(0.0, 255.0) as u8;
@@ -541,4 +549,54 @@ pub async fn view_composite_image(
         start_time,
         end_time,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::universe::PrimitiveState;
+
+    fn frame(lit: impl Iterator<Item = usize>) -> UniverseState {
+        let mut primitives = HashMap::new();
+        for head in 0..64 {
+            primitives.insert(
+                format!("head-{head:02}"),
+                PrimitiveState {
+                    dimmer: 0.0,
+                    color: [0.0, 1.0, 0.0],
+                    strobe: 0.0,
+                    position: [0.0; 2],
+                    speed: 1.0,
+                },
+            );
+        }
+        for head in lit {
+            primitives
+                .get_mut(&format!("head-{head:02}"))
+                .unwrap()
+                .dimmer = 1.0;
+        }
+        UniverseState { primitives }
+    }
+
+    #[test]
+    fn every_head_reaches_the_strip_when_there_are_more_heads_than_rows() {
+        // Half the rig lights only at the start, the other half only at the
+        // end. A strip that kept the 32 earliest heads would go dark after
+        // the first column.
+        let mut frames = vec![frame(0..32)];
+        frames.extend((0..30).map(|_| frame(std::iter::empty())));
+        frames.push(frame(32..64));
+        let preview = render_preview("clip".into(), &frames, None, 0.0, 1.0);
+        assert_eq!((preview.width, preview.height), (32, MAX_PREVIEW_HEIGHT));
+        let green_at = |col: u32| {
+            (0..preview.height)
+                .map(|row| preview.pixels[((row * preview.width + col) * 4 + 1) as usize])
+                .max()
+                .unwrap()
+        };
+        assert_eq!(green_at(0), 255);
+        assert_eq!(green_at(15), 0);
+        assert_eq!(green_at(31), 255);
+    }
 }
