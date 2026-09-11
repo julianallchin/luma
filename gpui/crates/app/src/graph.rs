@@ -1362,6 +1362,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 },
                 luma_ui::Enabled::Yes,
             )
+            .w(px(128.))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 preview_app.update(cx, |this, cx| this.refresh_score_graph_preview(&target, cx))
             })
@@ -1817,30 +1818,31 @@ fn paint_ghost(card: Point<Pixels>, port: &Port, zoom: f32, output: bool, window
     ));
 }
 
-/// A port mark: a ring, and a dot inside it when the port is wired. gpui has
-/// no circle primitive, so both are fully rounded quads — which is exactly
-/// what the web side draws them as (`rounded-full`).
+/// Paths preserve the shared subpixel center. Rounded quads snap their outer
+/// edges independently, shifting an odd-sized ring relative to its even-sized dot.
 fn paint_ring(card: Point<Pixels>, port: &Port, zoom: f32, window: &mut Window) {
     let centre = point(card.x + px(port.at.x * zoom), card.y + px(port.at.y * zoom));
-    let diameter = px(PORT_RING * zoom);
-    window.paint_quad(quad(
-        Bounds::centered_at(centre, size(diameter, diameter)),
-        Corners::all(diameter / 2.),
-        transparent_black(),
-        Edges::all(px(PORT_RING_BORDER * zoom)),
-        port.color,
-        BorderStyle::Solid,
-    ));
-    if port.connected {
-        let dot = px(PORT_DOT * zoom);
-        window.paint_quad(quad(
-            Bounds::centered_at(centre, size(dot, dot)),
-            Corners::all(dot / 2.),
-            port.color,
-            Edges::default(),
-            transparent_black(),
-            BorderStyle::Solid,
-        ));
+    for (visible, radius, mut path) in [
+        (
+            true,
+            (PORT_RING - PORT_RING_BORDER) * zoom / 2.,
+            PathBuilder::stroke(px(PORT_RING_BORDER * zoom)),
+        ),
+        (port.connected, PORT_DOT * zoom / 2., PathBuilder::fill()),
+    ] {
+        if !visible {
+            continue;
+        }
+        let radius = px(radius);
+        let left = point(centre.x - radius, centre.y);
+        let right = point(centre.x + radius, centre.y);
+        path.move_to(left);
+        path.arc_to(point(radius, radius), px(0.), false, true, right);
+        path.arc_to(point(radius, radius), px(0.), false, true, left);
+        path.close();
+        if let Ok(path) = path.build() {
+            window.paint_path(path, port.color);
+        }
     }
 }
 

@@ -3548,10 +3548,12 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(last) = editor.composited.as_ref() else {
         return;
     };
-    let definitions_changed = editor
-        .graph_score
-        .as_ref()
-        .is_some_and(|graph| graph.definitions != graph.composited_definitions);
+    let definitions_changed = editor.graph_score.as_ref().is_some_and(|graph| {
+        !luma_patterns::definitions_have_same_computation(
+            &graph.definitions,
+            &graph.composited_definitions,
+        )
+    });
     if !definitions_changed && same_scene(last, &editor.clips) {
         return;
     }

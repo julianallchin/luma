@@ -437,14 +437,19 @@ pub(crate) fn controls(
         .py(px(6.))
         .text_size(px(12.))
         .text_color(ladder::foreground())
-        .child(format!("Preview · {}", view.label))
+        .child(
+            div()
+                .flex()
+                .gap(px(12.))
+                .child(format!("Preview · {}", view.label))
+                .when(view.loading, |el| el.child("Preparing preview…")),
+        )
         .child(row)
         .child(
             div()
                 .text_color(ladder::muted_foreground())
                 .child(view.context.clone()),
         )
-        .when(view.loading, |el| el.child("Preparing preview…"))
         .when_some(
             view.error
                 .clone()

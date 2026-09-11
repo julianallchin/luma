@@ -2,6 +2,18 @@ use crate::{Binding, Body, Definition, Error, Frame, Library, PreparedGraph, Res
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Compare executable graph content without invalidating previews for layout edits.
+pub fn definitions_have_same_computation(
+    a: &BTreeMap<String, Definition>,
+    b: &BTreeMap<String, Definition>,
+) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|(id, definition)| {
+            b.get(id)
+                .is_some_and(|other| definition.same_computation(other))
+        })
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
@@ -50,6 +62,12 @@ impl Default for Score {
     }
 }
 impl Score {
+    pub fn same_computation(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.clips == other.clips
+            && definitions_have_same_computation(&self.definitions, &other.definitions)
+    }
+
     pub fn version(&self) -> u32 {
         self.version
     }

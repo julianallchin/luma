@@ -283,7 +283,6 @@ impl Luma {
             editor.preview_error = None;
             {
                 let source = &mut editor.source;
-                source.preview.scene = None;
                 *source.preview.failure.borrow_mut() = None;
             }
         });
@@ -416,10 +415,18 @@ impl Luma {
                 (source.owner == *owner
                     && source.score_id == score_id
                     && (&source.published != published || source.draft.as_ref() != candidate))
-                    .then(|| (tab.target.clone(), published.clone(), draft.cloned()))
+                    .then(|| {
+                        (
+                            tab.target.clone(),
+                            published.clone(),
+                            draft.cloned(),
+                            !source.published.same_computation(published)
+                                || source.draft.is_some() != candidate.is_some(),
+                        )
+                    })
             })
             .collect();
-        for (target, published, draft) in targets {
+        for (target, published, draft, changed) in targets {
             self.edit_graph_tab(&target, cx, |editor| {
                 let source = &mut editor.source;
                 source.published = published;
@@ -432,7 +439,9 @@ impl Luma {
                     });
                 editor.refresh_score_view();
             });
-            self.refresh_score_graph_preview(&target, cx);
+            if changed {
+                self.refresh_score_graph_preview(&target, cx);
+            }
         }
     }
 
@@ -588,6 +597,7 @@ impl Luma {
             return;
         }
         let valid = validation.is_ok();
+        let changed = !previous.same_computation(&candidate) || had_draft;
         self.edit_graph_tab(target, cx, |editor| {
             let source = &mut editor.source;
             if source.draft.is_none() {
@@ -612,7 +622,9 @@ impl Luma {
         if valid {
             self.refresh_working_scene_for(&owner, cx);
             self.commit_graph_score_for(owner, cx);
-            self.refresh_score_graph_preview(target, cx);
+            if changed {
+                self.refresh_score_graph_preview(target, cx);
+            }
         } else {
             self.stop_graph_preview(target, cx);
         }
@@ -638,7 +650,6 @@ impl Luma {
         }
         self.refresh_working_scene_for(&owner, cx);
         self.commit_graph_score_for(owner, cx);
-        self.refresh_score_graph_preview(target, cx);
     }
 }
 
