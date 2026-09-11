@@ -29,8 +29,8 @@
 //!
 //! Every gesture and every keyboard command edits [`Editor::clips`] — the
 //! working copy — and nothing else. [`Luma::commit_clips`] publishes the whole
-//! list as a single compare-and-swap against [`Editor::base`], which is the
-//! last thing the seam said was stored.
+//! score in one write, compared against the document the seam last
+//! confirmed.
 //!
 //! That is the reason there is no per-clip write here. A duplicate, a split, a
 //! region delete or a paste each touch several clips at once, and the states
@@ -48,10 +48,9 @@
 //! # Clip bodies are heatmap previews
 //!
 //! A clip's body carries its pattern's space-time heatmap — the same picture
-//! the web timeline stretches over `drawAnnotations` — read once per open
-//! through `generate_annotation_previews` and patched one clip at a time
-//! through `preview_annotation` after each committed edit, coalesced per clip
-//! so a burst of writes costs one trailing render. The seam hands back a tiny
+//! the web timeline stretches over `drawAnnotations` — rendered one clip at a
+//! time through `preview_score_clip` after each committed edit, coalesced per
+//! clip so a burst of writes costs one trailing render. The seam hands back a tiny
 //! RGBA grid (a column per sixteenth-beat, a row per primitive); it is baked
 //! once into a block-per-cell image the GPU stretches over the body at any
 //! zoom — see [`bake`] and [`paint_preview`]. Previews are decoration: a track whose patterns
@@ -95,14 +94,11 @@ use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::Enabled;
 use luma_ui::{float, ladder, paint};
 
-use luma_lib::dispatch::CommandError;
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
 use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
-use luma_lib::models::scores::TrackScore;
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;
-use luma_lib::services::track_edits::TrackClip;
 
 use crate::history::History;
 use crate::shell::Body;
@@ -174,14 +170,6 @@ pub struct Editor {
     /// [`Luma::commit_clips`] is the only thing that writes, and it writes the
     /// whole list at once.
     clips: Rc<[Clip]>,
-    /// The last list the seam said was stored, which is the compare-and-swap
-    /// token [`Luma::commit_clips`] publishes against.
-    ///
-    /// A second field rather than a flag on the working copy because these are
-    /// two different facts — what is on screen and what is on disk — and a
-    /// write has to name both. It is also what makes "nothing changed" a
-    /// comparison rather than a guess.
-    base: Rc<[TrackClip]>,
     graph_score: Option<document::GraphState>,
     /// Every pattern in the library, by id: the clip labels, and what a
     /// right-click offers to insert.
@@ -248,13 +236,12 @@ pub struct Editor {
     /// which needs this; only `prepaint` knows it, and a `Cell` is how it gets
     /// written down there without notifying from inside a draw.
     canvas: Rc<Cell<Bounds<Pixels>>>,
-    /// The working copy has moved away from [`Self::base`] and owes a write.
-    /// A flag rather than a queue of edits: the unit of writing is the whole
-    /// list, so there is only ever one thing outstanding.
+    /// The working copy has moved away from the saved document and owes a
+    /// write. A flag rather than a queue of edits: the unit of writing is the
+    /// whole score, so there is only ever one thing outstanding.
     dirty: bool,
-    /// A write is in flight. Serialized rather than concurrent: a write is a
-    /// compare-and-swap against [`Self::base`], and a second one issued
-    /// against the same base would be refused by whichever landed later.
+    /// A write is in flight. Serialized rather than concurrent: two whole-score
+    /// writes in the air at once would land in an order nobody chose.
     saving: bool,
     error: Option<String>,
     /// Whether the screen's first load has finished. Written in one assignment
@@ -310,7 +297,6 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
     editor.history = History::default();
     editor.clipboard = None;
     editor.clips = Vec::new().into();
-    editor.base = Vec::new().into();
     editor.graph_score = None;
     editor.sheet.invalidate_defs();
     editor.composited = None;
@@ -319,9 +305,10 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
 
 /// One clip, with everything a draw *and* a write need already resolved.
 ///
-/// A superset of [`TrackClip`] rather than a projection of it: a gesture that
-/// creates, splits or restacks clips has to hand the seam a complete row, and
-/// a screen that kept only what it drew would have to go and re-read the rest.
+/// A superset of the authored [`luma_patterns::Clip`] rather than a projection
+/// of it: a gesture that creates, splits or restacks clips has to hand the
+/// seam a complete row, and a screen that kept only what it drew would have to
+/// go and re-read the rest.
 #[derive(Clone)]
 struct Clip {
     id: SharedString,
@@ -342,24 +329,7 @@ struct Clip {
 }
 
 impl Clip {
-    /// This clip as the seam's own row.
-    fn to_track_clip(&self) -> TrackClip {
-        TrackClip {
-            id: self.id.to_string(),
-            pattern_id: self.pattern.to_string(),
-            start_time: self.start,
-            end_time: self.end,
-            z_index: self.z,
-            blend_mode: self.blend,
-            args: self.args.clone(),
-        }
-    }
-
     /// A copy of this clip at a new span, under a fresh local id.
-    ///
-    /// The id is a `new:`-prefixed UUID, which is what tells
-    /// [`Luma::commit_clips`] the row is a create: the seam allocates the real
-    /// id and hands it back in `id_map`, so nothing here may assume one.
     fn copy(&self, start: f64, end: f64, z: i64) -> Self {
         Self {
             id: format!("new:{}", uuid::Uuid::new_v4()).into(),
@@ -1046,44 +1016,9 @@ impl Editor {
     /// This also keeps
     /// [`Editor::dirty`] from being something a caller can forget to set.
     fn replace_clips(&mut self, mut clips: Vec<Clip>) {
-        self.mint_unknown_ids(&mut clips);
         assign_rows(&mut clips);
         self.clips = clips.into();
         self.dirty = true;
-    }
-
-    /// Give a fresh `new:` id to any clip the seam has never heard of.
-    ///
-    /// The seam allocates clip identity and refuses a stored id it did not
-    /// issue, so a create has to arrive as a draft. Everything that mints a
-    /// clip here already does that — except an **undo of a delete**, which
-    /// brings back a clip under the id the write that removed it retired. This
-    /// is where that id is handed in and a draft taken out, which is what
-    /// makes "an undo is just a list this screen used to have" true rather
-    /// than nearly true.
-    fn mint_unknown_ids(&mut self, clips: &mut [Clip]) {
-        if self.graph_score.is_some() {
-            return;
-        }
-        let stored: std::collections::HashSet<&str> =
-            self.base.iter().map(|clip| clip.id.as_str()).collect();
-        let mut minted: HashMap<SharedString, SharedString> = HashMap::new();
-        for clip in clips.iter_mut() {
-            if clip.id.starts_with("new:") || stored.contains(clip.id.as_ref()) {
-                continue;
-            }
-            let fresh: SharedString = format!("new:{}", uuid::Uuid::new_v4()).into();
-            minted.insert(clip.id.clone(), fresh.clone());
-            clip.id = fresh;
-        }
-        if minted.is_empty() {
-            return;
-        }
-        for id in &mut self.selected {
-            if let Some(fresh) = minted.get(id) {
-                *id = fresh.clone();
-            }
-        }
     }
 
     /// Where the timeline is now, as something an undo could return to.
@@ -1258,49 +1193,6 @@ impl Editor {
         }
         let width = f32::from(self.canvas.get().size.width);
         self.set_scroll(self.transport.position * self.view.zoom - width / 2.);
-    }
-
-    /// Take up the ids the seam allocated for the clips this screen created.
-    ///
-    /// Not cosmetic: a working-copy clip that kept its local `new:` id after
-    /// the write that stored it would look like *another* create to the next
-    /// write, and the score would grow a duplicate every time it was saved.
-    fn adopt_ids(&mut self, minted: &std::collections::BTreeMap<String, String>) {
-        if minted.is_empty() {
-            return;
-        }
-        let rename = |id: &SharedString| -> SharedString {
-            minted
-                .get(id.as_ref())
-                .map_or_else(|| id.clone(), |stored| stored.clone().into())
-        };
-        let clips: Vec<Clip> = self
-            .clips
-            .iter()
-            .map(|clip| Clip {
-                id: rename(&clip.id),
-                ..clip.clone()
-            })
-            .collect();
-        self.clips = clips.into();
-        self.selected = self.selected.iter().map(rename).collect();
-    }
-
-    /// Adopt a whole track's previews, replacing whatever was here — the shape
-    /// `generate_annotation_previews` answers in. A clip the seam did not name
-    /// drops out; a clip it did keeps its atlas identity so the repaint
-    /// refreshes a tile rather than minting one.
-    fn install_previews(&mut self, rows: Vec<AnnotationPreview>) {
-        let mut previews = self.previews.borrow_mut();
-        let mut retired = std::mem::take(&mut *previews);
-        for row in rows {
-            let identity = retired
-                .remove(row.annotation_id.as_str())
-                .map(|previous| previous.image.id);
-            if let Some((id, preview)) = Preview::decode(row, identity) {
-                previews.insert(id, preview);
-            }
-        }
     }
 
     /// Adopt one clip's re-rendered preview — `preview_annotation`'s answer.
@@ -1622,19 +1514,14 @@ impl Editor {
     /// The pattern `Enter` would put down, with the insertion it belongs to.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
-        // A track without a graph document still stores typed pattern rows,
-        // which are projected from the version 2 vocabulary.
-        let typed_rows = self.graph_score.is_none();
-        let historical = luma_patterns::migration::v2_library();
         let mut choices: Vec<_> = luma_patterns::standard_library()
             .definitions
             .into_iter()
-            .filter(|(id, definition)| {
+            .filter(|(_, definition)| {
                 // The bare Apply terminal is a node, not a pattern.
                 definition.placeable()
                     && definition.body
                         != luma_patterns::Body::Primitive(luma_patterns::Primitive::Output)
-                    && (!typed_rows || historical.definitions.contains_key(id))
                     && definition
                         .inputs
                         .values()
@@ -1684,77 +1571,6 @@ impl Editor {
         let menu = self.menu?;
         Some((menu, self.insertion_choices().get(menu.active)?.clone()))
     }
-
-    /// Put a clip of `pattern` where `menu` says.
-    ///
-    /// Add mode drops it on the lane under the pointer; insert mode opens a
-    /// *new* lane at the boundary by lifting every layer at or above it,
-    /// which is the only command here that renumbers clips it did not touch.
-    ///
-    /// The target is an argument rather than a read of [`Self::menu`] because
-    /// a menu item *is* "this pattern, at that spot": the press that chooses
-    /// one is also a press that dismisses the menu, and a command that had to
-    /// find the menu still open would be a command racing its own gesture.
-    fn insert(&mut self, menu: InsertMenu, pattern: &PatternSummary) {
-        self.menu = None;
-        let layers = z_ladder(&self.clips);
-        let z = row_to_z(&layers, menu.row as i32 - 1);
-        let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
-        if menu.insert {
-            for clip in &mut clips {
-                if clip.z >= z {
-                    clip.z += 1;
-                }
-            }
-        }
-        let minted = Clip {
-            id: format!("new:{}", uuid::Uuid::new_v4()).into(),
-            pattern: pattern.id.clone().into(),
-            label: pattern.name.clone().into(),
-            color: ladder::pattern(&pattern.id),
-            start: menu.start,
-            end: menu.end,
-            row: 0,
-            z,
-            blend: BlendMode::Replace,
-            args: serde_json::Value::Object(serde_json::Map::new()),
-            core: None,
-        };
-        self.selected = vec![minted.id.clone()];
-        self.cursor = Some(Cursor {
-            row: menu.row.max(1),
-            row_end: None,
-            start: minted.start,
-            end: Some(minted.end),
-        });
-        clips.push(minted);
-        self.replace_clips(clips);
-    }
-}
-
-/// The seam's snapshot shape for a clip list.
-///
-/// `replace_track_scores` takes [`TrackScore`] rows and reads only the fields
-/// [`TrackClip`] has — the revision it compares against is taken over those
-/// alone — so the database bookkeeping a screen never sees is left empty
-/// rather than invented.
-fn rows_of(score_id: &str, clips: &[TrackClip]) -> Vec<TrackScore> {
-    clips
-        .iter()
-        .map(|clip| TrackScore {
-            id: clip.id.clone(),
-            uid: None,
-            score_id: score_id.to_string(),
-            pattern_id: clip.pattern_id.clone(),
-            start_time: clip.start_time,
-            end_time: clip.end_time,
-            z_index: clip.z_index,
-            blend_mode: clip.blend_mode,
-            args: clip.args.clone(),
-            created_at: String::new(),
-            updated_at: String::new(),
-        })
-        .collect()
 }
 
 /// Lighting priority for each visible row, from top to bottom. Overlapping
@@ -1843,28 +1659,6 @@ fn lane_count(clips: &[Clip]) -> usize {
         .max()
         .unwrap_or(1)
         .max(1)
-}
-
-/// Resolve the clips a load or a write returned into what the canvas draws.
-fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
-    let mut clips: Vec<Clip> = clips
-        .iter()
-        .map(|clip| Clip {
-            id: clip.id.clone().into(),
-            pattern: clip.pattern_id.clone().into(),
-            label: label_of(&clip.pattern_id, patterns),
-            color: ladder::pattern(&clip.pattern_id),
-            start: clip.start_time,
-            end: clip.end_time,
-            row: 0,
-            z: clip.z_index,
-            blend: clip.blend_mode,
-            args: clip.args.clone(),
-            core: None,
-        })
-        .collect();
-    assign_rows(&mut clips);
-    clips.into()
 }
 
 /// What a clip is called: its pattern's name, or the id spelled out for a
@@ -1965,7 +1759,6 @@ impl Luma {
             beat_validation_pending: false,
             beat_validation_error: None,
             clips: Vec::new().into(),
-            base: Vec::new().into(),
             graph_score: None,
             patterns: Rc::new(Vec::new()),
             previews: Rc::new(RefCell::new(HashMap::new())),
@@ -2010,32 +1803,6 @@ impl Luma {
         self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
         self.activate_track_audio(&target, cx);
 
-        // The previews ride their own task because they are the one slow read
-        // — the seam evaluates every clip's pattern over its span — and the
-        // timeline is complete without them. A failure installs nothing and
-        // says nothing: a library whose patterns have no graphs answers this
-        // with an error, and that is a track with flat clip bodies, not a
-        // broken screen.
-        let previews = self.library.annotation_previews(track_id, &venue_id);
-        let preview_target = target.clone();
-        cx.spawn(async move |this, cx| {
-            let result = previews.await;
-            this.update(cx, |this, cx| {
-                this.edit_track_tab(&preview_target, cx, |editor| match result {
-                    Ok(rows) if editor.graph_score.is_none() => editor.install_previews(rows),
-                    Ok(_) => {}
-                    Err(error) if editor.graph_score.is_none() => {
-                        editor
-                            .preview_errors
-                            .insert("initial".into(), format!("Preview: {error}"));
-                    }
-                    Err(_) => {}
-                });
-            })
-            .ok();
-        })
-        .detach();
-
         cx.spawn(async move |this, cx| {
             let waveform = waveform.await;
             let beats = beats.await;
@@ -2077,8 +1844,8 @@ impl Luma {
                     match scores {
                         // The venue in hand, in the order the seam listed —
                         // `scores.updated_at DESC`, which in practice is
-                        // creation order, because a clip write touches
-                        // `track_scores` and never bumps the score row (see
+                        // creation order, because a clip write touches the
+                        // `clips` rows and never bumps the score row (see
                         // `list_scores_for_track`). Only when nothing has been
                         // chosen yet: a gesture that named a *particular*
                         // score got here first — or took one away — and this
@@ -2160,15 +1927,13 @@ impl Luma {
                         return;
                     }
                     match contents {
-                        Ok(contents) => {
-                            if let Err(error) = editor.install_contents(contents) {
-                                editor.error = Some(error);
-                            }
-                            if editor.graph_score.is_some() {
+                        Ok(contents) => match editor.install_contents(contents) {
+                            Ok(()) => {
                                 previews =
                                     editor.clips.iter().map(|clip| clip.id.clone()).collect();
                             }
-                        }
+                            Err(error) => editor.error = Some(error),
+                        },
                         Err(error) => editor.error = Some(error.to_string()),
                     }
                 });
@@ -2555,19 +2320,13 @@ impl Luma {
         }) else {
             return;
         };
-        if state.graph_score.is_some() {
-            let owner = Target::TrackEditor {
-                track: state.track_id.to_string(),
-                venue: state.venue_id.clone(),
-            };
-            let id = clip.id.to_string();
-            self.commit_clips(cx);
-            self.open_score_graph(owner, id, cx);
-            return;
-        }
-        self.with_track_editor(cx, |editor| {
-            editor.error = Some("This score has missing or unsupported pattern implementations. Its saved clips remain intact; graph editing is available after those implementations are resolved.".into());
-        });
+        let owner = Target::TrackEditor {
+            track: state.track_id.to_string(),
+            venue: state.venue_id.clone(),
+        };
+        let id = clip.id.to_string();
+        self.commit_clips(cx);
+        self.open_score_graph(owner, id, cx);
     }
 
     /// `ArrowUp` / `ArrowDown` in the insertion menu. A no-op with no menu
@@ -2649,107 +2408,62 @@ impl Luma {
         ) {
             self.close_overlay(cx);
         }
-        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
-        {
-            if let InsertChoice::Pattern(pattern) = &choice {
-                let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
-                    return;
-                };
-                if !editor.writable() {
-                    return;
-                }
-                let Some(score_id) = editor.score_id().map(str::to_owned) else {
-                    return;
-                };
-                let target = Target::TrackEditor {
-                    track: editor.track_id.clone(),
-                    venue: editor.venue_id.clone(),
-                };
-                let pending = self
-                    .library
-                    .pattern_score_template(&pattern.id, &editor.venue_id);
-                self.with_track_editor(cx, |editor| editor.menu = None);
-                cx.spawn(async move |this, cx| {
-                    let result = pending.await;
-                    this.update(cx, |this, cx| {
-                        let mut inserted = false;
-                        this.edit_track_tab(&target, cx, |editor| {
-                            if editor.score_id() != Some(score_id.as_str()) || !editor.writable() {
-                                return;
-                            }
-                            match result {
-                                Ok(template) => {
-                                    editor.checkpoint();
-                                    match editor.insert_graph(menu, &choice, Some(&template)) {
-                                        Ok(()) => inserted = true,
-                                        Err(error) => editor.error = Some(error),
-                                    }
-                                    editor.abandon_checkpoint();
-                                }
-                                Err(error) => editor.error = Some(error.to_string()),
-                            }
-                        });
-                        if inserted {
-                            this.commit_graph_score_for(target.clone(), cx);
-                            this.refresh_working_scene_for(&target, cx);
-                        }
-                    })
-                    .ok();
-                })
-                .detach();
+        if let InsertChoice::Pattern(pattern) = &choice {
+            let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+                return;
+            };
+            if !editor.writable() {
                 return;
             }
-            self.track_command(
-                |editor| {
-                    if let Err(error) = editor.insert_graph(menu, &choice, None) {
-                        editor.error = Some(error);
+            let Some(score_id) = editor.score_id().map(str::to_owned) else {
+                return;
+            };
+            let target = Target::TrackEditor {
+                track: editor.track_id.clone(),
+                venue: editor.venue_id.clone(),
+            };
+            let pending = self
+                .library
+                .pattern_score_template(&pattern.id, &editor.venue_id);
+            self.with_track_editor(cx, |editor| editor.menu = None);
+            cx.spawn(async move |this, cx| {
+                let result = pending.await;
+                this.update(cx, |this, cx| {
+                    let mut inserted = false;
+                    this.edit_track_tab(&target, cx, |editor| {
+                        if editor.score_id() != Some(score_id.as_str()) || !editor.writable() {
+                            return;
+                        }
+                        match result {
+                            Ok(template) => {
+                                editor.checkpoint();
+                                match editor.insert_graph(menu, &choice, Some(&template)) {
+                                    Ok(()) => inserted = true,
+                                    Err(error) => editor.error = Some(error),
+                                }
+                                editor.abandon_checkpoint();
+                            }
+                            Err(error) => editor.error = Some(error.to_string()),
+                        }
+                    });
+                    if inserted {
+                        this.commit_graph_score_for(target.clone(), cx);
+                        this.refresh_working_scene_for(&target, cx);
                     }
-                },
-                cx,
-            );
+                })
+                .ok();
+            })
+            .detach();
             return;
         }
-        match choice {
-            InsertChoice::Graph { .. } => {}
-            InsertChoice::Pattern(pattern) => {
-                self.track_command(|editor| editor.insert(menu, &pattern), cx)
-            }
-            InsertChoice::Node { effect, .. } => {
-                let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
-                    return;
-                };
-                let Some(score) = editor.score.as_ref() else {
-                    return;
-                };
-                let score_id = score.id.clone();
-                let target = Target::TrackEditor {
-                    track: editor.track_id.to_string(),
-                    venue: editor.venue_id.clone(),
-                };
-                let pending = self.library.create_lighting_pattern(
-                    &effect,
-                    &score_id,
-                    &uuid::Uuid::new_v4().to_string(),
-                );
-                self.with_track_editor(cx, |editor| editor.menu = None);
-                cx.spawn(async move |this,cx| {
-                    let result=pending.await;
-                    this.update(cx,|this,cx| {
-                        let mut insert=None;
-                        this.edit_track_tab(&target,cx,|editor|{
-                            if editor.score.as_ref().map(|score|score.id.as_str())!=Some(score_id.as_str()){return;}
-                            match result { Ok(pattern)=>{Rc::make_mut(&mut editor.patterns).push(pattern.clone());insert=Some(pattern);},Err(error)=>editor.error=Some(error.to_string()) }
-                        });
-                        // Publish through the normal timeline transaction and undo history.
-                        if let Some(pattern)=insert {
-                            if matches!(this.workspace.active_body(),Some(Body::TrackEditor(editor)) if editor.score.as_ref().is_some_and(|score|score.id==score_id)) {
-                                this.track_command(|editor|editor.insert(menu,&pattern),cx);
-                            }
-                        }
-                    }).ok();
-                }).detach();
-            }
-        }
+        self.track_command(
+            |editor| {
+                if let Err(error) = editor.insert_graph(menu, &choice, None) {
+                    editor.error = Some(error);
+                }
+            },
+            cx,
+        );
     }
 
     /// A press on the canvas: take the playhead, a clip, or a sweep of empty
@@ -3097,182 +2811,20 @@ impl Luma {
         .detach();
     }
 
-    /// Publish the working copy: one compare-and-swap over the whole clip
-    /// list, whatever the gesture or the command changed.
+    /// Publish the working copy: one whole-score save, whatever the gesture
+    /// or the command changed.
     ///
     /// **The only write this screen makes.** A gesture that moves five clips,
     /// splits three and deletes one is one write, so it cannot half land and
     /// the score never passes through a state the editor's own rules forbid.
-    /// The candidate is refused if [`Editor::base`] is no longer what is
-    /// stored, which is the whole of this host's conflict story: there is no
-    /// merge, and the honest recovery is to say so and let a reopen re-read.
     ///
-    /// One write is in flight at a time — a second issued against the same
-    /// base would be refused by whichever landed later — and anything the user
-    /// did meanwhile is still on [`Editor::dirty`] and goes out on its return.
+    /// One write is in flight at a time, and anything the user did meanwhile
+    /// is still on [`Editor::dirty`] and goes out on its return.
     fn commit_clips(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
-        {
-            if let Some(target) = self.workspace.active().cloned() {
-                self.commit_graph_score_for(target, cx);
-            }
-            return;
-        }
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
+        let Some(target) = self.workspace.active().cloned() else {
             return;
         };
-        let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
-            return;
-        };
-        if state.saving || !state.dirty || !state.writable() {
-            return;
-        }
-        let candidate: Vec<TrackClip> = state.clips.iter().map(Clip::to_track_clip).collect();
-        state.dirty = false;
-        if candidate == *state.base {
-            return;
-        }
-        state.saving = true;
-        state.error = None;
-        // Which clips this write changes in a way their heatmap can see —
-        // created, or moved/re-argued; a restack or a blend change draws the
-        // same preview. Decided against the base *now*, because by the time
-        // the write lands the base is the candidate; renders are issued only
-        // once the write has, under whatever ids the seam minted.
-        let previous: HashMap<&str, &TrackClip> = state
-            .base
-            .iter()
-            .map(|clip| (clip.id.as_str(), clip))
-            .collect();
-        let stale: Vec<String> = candidate
-            .iter()
-            .filter(|clip| {
-                previous.get(clip.id.as_str()).map_or(true, |base| {
-                    base.pattern_id != clip.pattern_id
-                        || base.start_time != clip.start_time
-                        || base.end_time != clip.end_time
-                        || base.args != clip.args
-                })
-            })
-            .map(|clip| clip.id.clone())
-            .collect();
-        let removed: Vec<String> = state
-            .base
-            .iter()
-            .filter(|clip| !candidate.iter().any(|kept| kept.id == clip.id))
-            .map(|clip| clip.id.clone())
-            .collect();
-        drop(previous);
-        // Minted per *write*, not per attempt: this id is what lets the seam
-        // replay a durable outcome rather than guess from a later snapshot.
-        let operation = uuid::Uuid::new_v4().to_string();
-        let pending = self.library.replace_clips(
-            &score,
-            &state.track_id,
-            &rows_of(&score, &state.base),
-            &rows_of(&score, &candidate),
-            &operation,
-        );
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                let mut again = false;
-                let mut reload = false;
-                let mut refresh: Vec<SharedString> = Vec::new();
-                this.with_track_editor(cx, |editor| {
-                    editor.saving = false;
-                    // A write belongs to the score it was made against. The
-                    // rail can put a different one on the timeline while this
-                    // is in the air, and adopting the returned list then would
-                    // overwrite the arriving score with the outgoing one's.
-                    if editor.score.as_ref().map(|open| open.id.as_str()) != Some(score.as_str()) {
-                        return;
-                    }
-                    match result {
-                        Ok(saved) => {
-                            // The stored edit is what makes these renders
-                            // worth having: under the seam's ids for the
-                            // creates, and with the deleted clips' pictures
-                            // let go.
-                            refresh = stale
-                                .iter()
-                                .map(|id| {
-                                    saved
-                                        .id_map
-                                        .get(id)
-                                        .cloned()
-                                        .unwrap_or_else(|| id.clone())
-                                        .into()
-                                })
-                                .collect();
-                            let mut previews = editor.previews.borrow_mut();
-                            for id in &removed {
-                                previews.remove(id.as_str());
-                            }
-                            drop(previews);
-                            editor.base = saved.clips.clone().into();
-                            editor.adopt_ids(&saved.id_map);
-                            // The authoritative list is adopted whole only
-                            // when nothing is outstanding — under the pointer
-                            // it would undo a drag the user can see, and with
-                            // an edit still queued it would undo that.
-                            if !editor.dirty && editor.gesture.is_none() {
-                                editor.clips = resolve(&saved.clips, &editor.patterns);
-                            }
-                        }
-                        // The stale-base refusal is the one failure with a
-                        // recovery. Every later write would lose the same race
-                        // while the base stays stale, and there is no merge —
-                        // so the stored list is re-read and this write is
-                        // dropped, said plainly rather than left to a reopen.
-                        Err(error) => match error.command() {
-                            Some(CommandError::Conflict { .. }) => {
-                                reload = true;
-                                editor.error = Some(WRITE_CONFLICT.into());
-                            }
-                            _ => editor.error = Some(error.to_string()),
-                        },
-                    }
-                    if reload {
-                        // Anything queued was edited against the same stale
-                        // base, so it goes with the rest of the working copy.
-                        editor.dirty = false;
-                    }
-                    again = editor.dirty;
-                });
-                for id in refresh {
-                    this.refresh_clip_preview(id, cx);
-                }
-                if reload {
-                    this.reload_clips(cx);
-                } else if again {
-                    this.commit_clips(cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Re-read the stored clip list into the open editor, after a write lost
-    /// the race.
-    ///
-    /// The screen is kept — the waveform, the beats, the transport and the
-    /// message explaining what happened all survive; only the clips and the
-    /// base they are compared against are replaced.
-    fn reload_clips(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
-            return;
-        };
-        let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
-            return;
-        };
-        let target = Target::TrackEditor {
-            track: state.track_id.to_string(),
-            venue: state.venue_id.clone(),
-        };
-        self.reload_score_contents(target, score, cx);
+        self.commit_graph_score_for(target, cx);
     }
 
     /// Run `edit` against the track editor, if that is still what is showing.
@@ -3305,42 +2857,28 @@ impl Luma {
             return;
         }
         // A clip deleted since the edit that asked has no body to preview.
-        let Some(clip) = state.clips.iter().find(|clip| clip.id == id) else {
+        if !state.clips.iter().any(|clip| clip.id == id) {
+            return;
+        }
+        let score_id = state.score.as_ref().map(|score| score.id.clone());
+        let candidate = match state.graph_candidate() {
+            Ok(score) => score,
+            Err(error) => {
+                state.preview_errors.insert(id, error);
+                return;
+            }
+        };
+        let Some(score_id) = score_id else {
             return;
         };
-        let score_id = state.score.as_ref().map(|score| score.id.clone());
-        let pending: std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<AnnotationPreview, LibraryError>>>,
-        > = if state.graph_score.is_some() {
-            let candidate = match state.graph_candidate() {
-                Ok(score) => score,
-                Err(error) => {
-                    state.preview_errors.insert(id, error);
-                    return;
-                }
-            };
-            let Some(score_id) = score_id.as_ref() else {
-                return;
-            };
-            Box::pin(self.library.preview_score_clip(score_id, &id, &candidate))
-        } else {
-            Box::pin(self.library.preview_clip(
-                &state.track_id,
-                &state.venue_id,
-                &id,
-                &clip.pattern,
-                clip.start,
-                clip.end,
-                &clip.args,
-            ))
-        };
+        let pending = self.library.preview_score_clip(&score_id, &id, &candidate);
         state.preview_inflight.insert(id.clone());
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != score_id.as_ref() {
+                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
                         return;
                     }
                     if !editor.clips.iter().any(|clip| clip.id == id) {
@@ -3385,11 +2923,6 @@ impl Luma {
 /// types that only a `dyn` can hold in one list.
 pub(crate) type Transition =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), LibraryError>>>>;
-
-/// What a lost race says. The reload it describes is automatic, so the
-/// sentence has to account for the edit that went missing with it.
-const WRITE_CONFLICT: &str =
-    "another writer saved this score first — reloaded, and this change was not kept";
 
 /// How often the playhead is re-read while playing. 30 Hz — twice the rate the
 /// desktop app's broadcaster emits at, because a poll's phase is arbitrary and
@@ -3568,16 +3101,12 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(score) = editor.score.as_ref().map(|score| score.id.clone()) else {
         return;
     };
-    let graph_candidate = if editor.graph_score.is_some() {
-        match editor.graph_candidate() {
-            Ok(score) => Some(score),
-            Err(error) => {
-                editor.error = Some(error);
-                return;
-            }
+    let candidate = match editor.graph_candidate() {
+        Ok(score) => score,
+        Err(error) => {
+            editor.error = Some(error);
+            return;
         }
-    } else {
-        None
     };
     let sent = editor.clips.clone();
     let definitions = editor
@@ -3590,19 +3119,9 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     };
     editor.compositing = true;
     cx.spawn(async move |this, cx| {
-        let Ok(pending) =
-            this.update(cx, |this, _| -> Transition {
-                match graph_candidate {
-                    Some(candidate) => {
-                        Box::pin(this.library.composite_score_document(&score, &candidate))
-                    }
-                    None => Box::pin(this.library.composite_score(
-                        &score,
-                        Some(sent.iter().map(Clip::to_track_clip).collect()),
-                    )),
-                }
-            })
-        else {
+        let Ok(pending) = this.update(cx, |this, _| {
+            this.library.composite_score_document(&score, &candidate)
+        }) else {
             return;
         };
         let result = pending.await;
@@ -3692,8 +3211,9 @@ pub fn track_editor(
         .text_color(ladder::foreground())
         .child(toolbar(state, app))
         // An error only takes the screen when there is nothing behind it to
-        // show. A *write* that came back refused — a stale base, an overlap
-        // the seam forbids — leaves a perfectly good timeline on screen, and
+        // show. A *write* that came back refused — an overlap the seam
+        // forbids, a document it would not validate — leaves a perfectly
+        // good timeline on screen, and
         // replacing it with a sentence would throw away the picture the user
         // needs in order to understand the refusal. Those read out on the
         // toolbar instead.

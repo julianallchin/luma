@@ -564,10 +564,6 @@ pub async fn append_messages_at_head(
     if input.messages.is_empty() {
         return Err("Agent thread append must contain at least one message".into());
     }
-    // Bind the operation to the caller's request before filling omitted IDs.
-    // That makes response-loss retries replay the originally generated nodes
-    // instead of producing a new fingerprint on every invocation.
-    let request_fingerprint = append_request_fingerprint(&input);
     let expected_head_message_id = input.expected_head_message_id.clone();
     let input = with_generated_message_ids(input);
     let message_count = i64::try_from(input.messages.len())
@@ -598,32 +594,26 @@ pub async fn append_messages_at_head(
     ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
     let principal_key = principal_key(owner_user_id);
 
-    if let Some((stored_fingerprint, base_head, first_id, result_head, stored_count)) =
-        sqlx::query_as::<_, (String, Option<String>, String, String, i64)>(
-            "SELECT request_fingerprint, base_head_message_id, first_message_id,
-                    result_head_message_id, message_count
-             FROM agent_thread_message_appends
-             WHERE thread_id = ? AND operation_id = ?",
-        )
-        .bind(thread_id)
-        .bind(&input.operation_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to inspect agent thread append retry: {e}"))?
+    // A retry is recognised by its messages, not by a receipt: the ids are
+    // fixed before the first attempt, so the rows themselves say whether the
+    // append already landed.
+    let first_id = prepared[0].0.clone();
+    let result_head = prepared[prepared.len() - 1].0.clone();
+    if let Some(base_head) = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT parent_message_id FROM agent_thread_messages WHERE id = ?",
+    )
+    .bind(&first_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to inspect agent thread append retry: {e}"))?
     {
-        if stored_fingerprint != request_fingerprint {
-            return Err(format!(
-                "Agent thread append operation {} is already bound to different content",
-                input.operation_id
-            ));
-        }
         let messages = load_append_result(
             &mut tx,
             thread_id,
             base_head.as_deref(),
             &first_id,
             &result_head,
-            stored_count,
+            message_count,
         )
         .await?;
         tx.commit()
@@ -648,7 +638,6 @@ pub async fn append_messages_at_head(
         });
     }
 
-    let first_message_id = prepared[0].0.clone();
     let mut parent = current_head.clone();
     let mut next_depth = current_count;
     let mut appended = Vec::with_capacity(prepared.len());
@@ -707,25 +696,6 @@ pub async fn append_messages_at_head(
         return Err("Agent transcript head moved inside its append transaction".into());
     }
     touch(&mut tx, thread_id, owner_user_id).await?;
-    sqlx::query(
-        "INSERT INTO agent_thread_message_appends
-         (thread_id, uid, principal_key, operation_id,
-          request_fingerprint, base_head_message_id,
-          first_message_id, result_head_message_id, message_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .bind(&principal_key)
-    .bind(&input.operation_id)
-    .bind(&request_fingerprint)
-    .bind(current_head.as_deref())
-    .bind(&first_message_id)
-    .bind(&result_head)
-    .bind(message_count)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| format!("Failed to record agent thread append: {e}"))?;
     tx.commit()
         .await
         .map_err(|e| format!("Failed to commit agent thread append: {e}"))?;
@@ -1044,27 +1014,7 @@ fn validate_append_operation_id(operation_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn append_request_fingerprint(input: &AppendAgentThreadMessagesInput) -> String {
-    let mut hash = Sha256::new();
-    // The operation ID names the mutation. Its optimistic base is stored in
-    // the immutable receipt, but is intentionally not part of request
-    // identity: after a successful append the live head has moved, and an
-    // exact retry must still replay the original result.
-    hash.update(b"luma.agent-thread-append.v2\0");
-    hash.update((input.messages.len() as u64).to_be_bytes());
-    for message in &input.messages {
-        hash_append_field(&mut hash, message.id.as_deref().unwrap_or(""));
-        hash.update([u8::from(message.id.is_some())]);
-        hash_append_field(&mut hash, &message.role);
-        hash_append_field(&mut hash, &canonical_json::to_string(&message.parts));
-    }
-    format!("sha256:{:x}", hash.finalize())
-}
 
-fn hash_append_field(hash: &mut Sha256, value: &str) {
-    hash.update((value.len() as u64).to_be_bytes());
-    hash.update(value.as_bytes());
-}
 
 /// Delete a thread, its subagent children, and everything that belongs to
 /// them. A delete is a delete: there is no receipt and no `deleting` state to
@@ -1922,31 +1872,6 @@ mod tests {
         );
     }
 
-    /// Which trace tables currently owe the server something.
-    async fn undelivered(pool: &SqlitePool) -> Vec<String> {
-        let mut tables = Vec::new();
-        for table in [
-            "agent_threads",
-            "agent_thread_messages",
-            "agent_thread_message_appends",
-            "agent_thread_transcript_heads",
-        ] {
-            if !crate::sync::registry::has_delivery_marker(table) {
-                continue;
-            }
-            let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT COUNT(*) FROM {table} WHERE synced_at IS NULL"
-            )))
-            .fetch_one(pool)
-            .await
-            .unwrap();
-            if count > 0 {
-                tables.push(table.to_owned());
-            }
-        }
-        tables.sort();
-        tables
-    }
 
     #[tokio::test]
     async fn authored_thread_routes_are_exact_and_null_safe() {

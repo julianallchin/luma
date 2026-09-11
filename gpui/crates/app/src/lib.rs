@@ -175,9 +175,6 @@ pub struct Luma {
     /// A lapsed session is being asked online whether it still proves anyone;
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
-    /// The library is being brought up to date with the cloud before anything
-    /// opens; the window shows [`signin::splash`] until the pull lands.
-    pub(crate) syncing: bool,
     pub(crate) sync_status: sync_status::SidebarSync,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
     /// The dialog on screen, and — for the frames after it is dismissed —
@@ -271,7 +268,6 @@ impl Luma {
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
             sign_in: None,
             refreshing_session: false,
-            syncing: false,
             sync_status: sync_status::SidebarSync::default(),
             overlay: luma_ui::dialog::Popup::default(),
             account_menu: luma_ui::dialog::Popup::default(),
@@ -301,7 +297,7 @@ impl Luma {
         // gate. The gate is a first screen, not a failure, and it lands on
         // exactly what the signed-in branch opens.
         if app.library.user_id().is_some() {
-            app.sync_then_restore(cx);
+            app.restore_venue(cx);
         } else if app.library.lapsed().is_some() {
             app.refresh_session(cx);
         } else {
@@ -430,9 +426,6 @@ impl Render for Luma {
         }
         if self.restoring_venue {
             return signin::splash(window, "Opening your library…");
-        }
-        if self.syncing {
-            return signin::splash(window, "Syncing your library…");
         }
         if self.sign_in.is_some() {
             return signin::screen(self, window, cx);

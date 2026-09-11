@@ -2,7 +2,6 @@
 //! its beat positions; graphs and clips are always saved in one document.
 use super::*;
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
-use luma_lib::services::graph_scores::GraphScoreDocument;
 use luma_patterns as p;
 use std::collections::BTreeMap;
 
@@ -16,17 +15,19 @@ pub(crate) struct GraphDraft {
 }
 
 pub(super) struct GraphState {
-    pub base: GraphScoreDocument,
+    /// The document as the seam last confirmed it — what a save is compared
+    /// against, so an unchanged score writes nothing.
+    pub base: p::Score,
     pub definitions: Rc<BTreeMap<String, p::Definition>>,
     pub composited_definitions: Rc<BTreeMap<String, p::Definition>>,
     pub drafts: Rc<BTreeMap<String, GraphDraft>>,
 }
 
 impl GraphState {
-    pub fn new(document: GraphScoreDocument) -> Self {
-        let definitions = Rc::new(document.score.definitions.clone());
+    pub fn new(score: p::Score) -> Self {
+        let definitions = Rc::new(score.definitions.clone());
         Self {
-            base: document,
+            base: score,
             composited_definitions: definitions.clone(),
             definitions,
             drafts: Rc::default(),
@@ -45,22 +46,20 @@ pub(super) fn wire_value(value: &p::Value) -> serde_json::Value {
 }
 
 pub(super) fn resolve_document(
-    document: &GraphScoreDocument,
+    score: &p::Score,
     beats: Option<&BeatGrid>,
 ) -> Result<Rc<[Clip]>, String> {
-    if document.score.clips.is_empty() {
+    if score.clips.is_empty() {
         return Ok(Vec::new().into());
     }
     let clock = beats
         .ok_or("Waiting for the track's beat grid")?
         .timeline()
         .map_err(|error| error.to_string())?;
-    let library = document
-        .score
+    let library = score
         .library(&p::standard_library())
         .map_err(|error| error.to_string())?;
-    let mut clips = document
-        .score
+    let mut clips = score
         .clips
         .iter()
         .map(|(id, clip)| {
@@ -100,20 +99,10 @@ impl Editor {
         &mut self,
         contents: crate::library::ScoreContents,
     ) -> Result<(), String> {
-        match contents {
-            crate::library::ScoreContents::Graph { document, beats } => {
-                self.clips = resolve_document(&document, beats.as_ref())?;
-                self.beats = beats.map(Rc::new);
-                self.graph_score = Some(GraphState::new(document));
-                self.base = Vec::new().into();
-            }
-            crate::library::ScoreContents::Legacy(clips) => {
-                let clips: Vec<TrackClip> = clips.iter().map(TrackClip::from).collect();
-                self.clips = resolve(&clips, &self.patterns);
-                self.base = clips.into();
-                self.graph_score = None;
-            }
-        }
+        let crate::library::ScoreContents { score, beats } = contents;
+        self.clips = resolve_document(&score, beats.as_ref())?;
+        self.beats = beats.map(Rc::new);
+        self.graph_score = Some(GraphState::new(score));
         self.sheet.invalidate_defs();
         self.previews.borrow_mut().clear();
         self.preview_errors.clear();
@@ -122,13 +111,10 @@ impl Editor {
     }
 
     pub(crate) fn graph_candidate(&self) -> Result<p::Score, String> {
-        let graph = self
-            .graph_score
-            .as_ref()
-            .ok_or("this score uses legacy patterns")?;
+        let graph = self.graph_score.as_ref().ok_or("no score is open")?;
         // Keep the document version through native edits. Starting from the
         // current default would downgrade an upgraded score on its first save.
-        let mut score = graph.base.score.clone();
+        let mut score = graph.base.clone();
         score.clips.clear();
         score.definitions = (*graph.definitions).clone();
         if self.clips.is_empty() {
@@ -144,7 +130,7 @@ impl Editor {
             .library(&p::standard_library())
             .map_err(|error| error.to_string())?;
         for clip in self.clips.iter() {
-            let mut authored = clip.core.clone().ok_or("legacy clip in a graph score")?;
+            let mut authored = clip.core.clone().ok_or("clip has no authored body")?;
             // Preserve the exact authored beat when a gesture changed only
             // color/selection. Beat-to-second round trips need not be bit exact.
             if clock
@@ -232,18 +218,11 @@ impl Editor {
 }
 
 impl Editor {
-    /// Install a locally edited document without replacing the saved CAS base.
+    /// Install a locally edited document without replacing the saved base.
     pub(super) fn edit_graph_score(&mut self, score: p::Score) -> Result<(), String> {
-        let document = GraphScoreDocument {
-            revision: String::new(),
-            score,
-        };
-        let clips = resolve_document(&document, self.beats.as_deref())?;
-        let state = self
-            .graph_score
-            .as_mut()
-            .ok_or("this score uses legacy patterns")?;
-        state.definitions = Rc::new(document.score.definitions);
+        let clips = resolve_document(&score, self.beats.as_deref())?;
+        let state = self.graph_score.as_mut().ok_or("no score is open")?;
+        state.definitions = Rc::new(score.definitions);
         self.sheet.invalidate_defs();
         self.replace_clips(clips.to_vec());
         Ok(())
@@ -297,15 +276,10 @@ impl Luma {
         };
         let graph = editor.graph_score.as_ref().unwrap();
         editor.dirty = false;
-        if candidate == graph.base.score {
+        if candidate == graph.base {
             return;
         }
-        let pending = self.library.apply_score_document(
-            &score_id,
-            &candidate,
-            &graph.base.revision,
-            &uuid::Uuid::new_v4().to_string(),
-        );
+        let pending = self.library.apply_score_document(&score_id, &candidate);
         editor.saving = true;
         editor.error = None;
         cx.notify();
@@ -313,37 +287,49 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
-                let mut reload = false;
                 let mut previews = Vec::new();
                 this.edit_track_tab(&target, cx, |editor| {
-                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) { return; }
-                    editor.saving = false;
-                    let Some(graph) = editor.graph_score.as_mut() else { return; };
-                    match result {
-                        Ok(saved) => {
-                            let luma_lib::models::authored_state::AuthoredProjectedDocument::TrackScore { revision } = saved.document else {
-                                editor.error = Some("The saved document was not a score".into()); return;
-                            };
-                            let definitions_changed = !p::definitions_have_same_computation(&graph.base.score.definitions, &candidate.definitions);
-                            previews = candidate.clips.iter().filter(|(id, clip)| {
-                                definitions_changed || graph.base.score.clips.get(*id) != Some(*clip)
-                            }).map(|(id, _)| SharedString::from(id.clone())).collect();
-                            editor.previews.borrow_mut().retain(|id, _| candidate.clips.contains_key(id.as_ref()));
-                            graph.base = GraphScoreDocument { revision, score: candidate };
-                        }
-                        Err(error) => {
-                            reload = matches!(error.command(), Some(CommandError::Conflict { .. }));
-                            editor.error = Some(if reload { WRITE_CONFLICT.into() } else { error.to_string() });
-                        }
+                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
+                        return;
                     }
-                    if reload { editor.dirty = false; }
+                    editor.saving = false;
+                    let Some(graph) = editor.graph_score.as_mut() else {
+                        return;
+                    };
+                    match result {
+                        Ok(()) => {
+                            let definitions_changed = !p::definitions_have_same_computation(
+                                &graph.base.definitions,
+                                &candidate.definitions,
+                            );
+                            previews = candidate
+                                .clips
+                                .iter()
+                                .filter(|(id, clip)| {
+                                    definitions_changed || graph.base.clips.get(*id) != Some(*clip)
+                                })
+                                .map(|(id, _)| SharedString::from(id.clone()))
+                                .collect();
+                            editor
+                                .previews
+                                .borrow_mut()
+                                .retain(|id, _| candidate.clips.contains_key(id.as_ref()));
+                            graph.base = candidate;
+                        }
+                        Err(error) => editor.error = Some(error.to_string()),
+                    }
                     again = editor.dirty;
                 });
-                for id in previews { this.refresh_clip_preview_for(target.clone(), id, cx); }
-                if reload { this.reload_score_contents(target, score_id, cx); }
-                else if again { this.commit_graph_score_for(target, cx); }
-            }).ok();
-        }).detach();
+                for id in previews {
+                    this.refresh_clip_preview_for(target.clone(), id, cx);
+                }
+                if again {
+                    this.commit_graph_score_for(target, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn reload_score_contents(
@@ -370,20 +356,11 @@ impl Luma {
                             // Agent commits invalidate several tabs. An unchanged
                             // document must not discard this song's local edits,
                             // selection, previews, or undo history.
-                            let unchanged = match &contents {
-                                crate::library::ScoreContents::Graph { document, .. } => editor
-                                    .graph_score
-                                    .as_ref()
-                                    .is_some_and(|graph| graph.base.revision == document.revision),
-                                crate::library::ScoreContents::Legacy(clips) => {
-                                    editor.graph_score.is_none()
-                                        && clips
-                                            .iter()
-                                            .map(TrackClip::from)
-                                            .eq(editor.base.iter().cloned())
-                                }
-                            };
-                            if unchanged {
+                            if editor
+                                .graph_score
+                                .as_ref()
+                                .is_some_and(|graph| graph.base == contents.score)
+                            {
                                 return;
                             }
                             // Installing a read initializes its scene baseline. Keep
@@ -531,7 +508,7 @@ impl Editor {
             return Err("This score is read only".into());
         }
         if self.graph_score.is_none() {
-            return Err("this score uses legacy patterns".into());
+            return Err("No score is open".into());
         }
         self.checkpoint();
         Rc::make_mut(&mut self.graph_score.as_mut().unwrap().drafts).insert(root.to_owned(), draft);

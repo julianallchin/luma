@@ -90,8 +90,8 @@ mod tests {
         let zero = serde_json::json!({"value": 0});
         let large_integer = serde_json::json!({"value": 9_007_199_254_740_993_u64});
 
-        assert!(equivalent(&integer, &integral_float));
-        assert!(equivalent(&negative_zero, &zero));
+        assert_eq!(to_string(&integer), to_string(&integral_float));
+        assert_eq!(to_string(&negative_zero), to_string(&zero));
         assert_eq!(to_string(&large_integer), r#"{"value":9007199254740993}"#);
         assert_eq!(to_string(&serde_json::json!(1.25)), "1.25");
     }

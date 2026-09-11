@@ -215,48 +215,12 @@ impl Luma {
             this.update(cx, |this, cx| {
                 this.refreshing_session = false;
                 match result {
-                    Ok(Some(_)) => this.sync_then_restore(cx),
+                    Ok(Some(_)) => this.restore_venue(cx),
                     Ok(None) => this.show_sign_in(true, cx),
                     Err(error) => {
                         eprintln!("[luma] the stored session could not be refreshed: {error}");
                         this.session_refresh_error = Some(error.to_string());
                     }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Open a cached library immediately while the cloud catches up. A first
-    /// sign-in with no local venues still waits for the initial pull, avoiding
-    /// an empty picker that would offer to recreate existing rooms.
-    pub(crate) fn sync_then_restore(&mut self, cx: &mut Context<Self>) {
-        if self.syncing {
-            return;
-        }
-        self.syncing = true;
-        let pending = self.library.sync_pull();
-        let local = self.library.venues();
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            if local.await.is_ok_and(|venues| !venues.is_empty()) {
-                this.update(cx, |this, cx| {
-                    this.syncing = false;
-                    this.restore_venue(cx);
-                    cx.notify();
-                })
-                .ok();
-            }
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    eprintln!("[luma] the library could not be brought up to date: {error}");
-                }
-                if this.syncing {
-                    this.syncing = false;
-                    this.restore_venue(cx);
                 }
                 cx.notify();
             })
@@ -395,7 +359,7 @@ impl Luma {
                             .is_some_and(|state| state.generation == generation);
                         if current {
                             this.sign_in = None;
-                            this.sync_then_restore(cx);
+                            this.restore_venue(cx);
                             cx.notify();
                         }
                     }
@@ -466,10 +430,10 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
 }
 
 /// What stands in for the app while it is not yet anyone's to use — a stored
-/// session being turned back into a principal ([`Luma::refresh_session`]),
-/// the library being brought up to date ([`Luma::sync_then_restore`]): the
-/// same ground and chrome as the gate, the mark, and one quiet `line`. Not a
-/// place — the moment before one.
+/// session being turned back into a principal ([`Luma::refresh_session`]), or
+/// the last venue being reopened ([`Luma::restore_venue`]): the same ground
+/// and chrome as the gate, the mark, and one quiet `line`. Not a place — the
+/// moment before one.
 pub(crate) fn refresh_error(window: &Window, error: &str, cx: &Context<Luma>) -> AnyElement {
     ground(
         window,

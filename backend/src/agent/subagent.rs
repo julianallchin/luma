@@ -574,14 +574,4 @@ mod tests {
         assert!(running.slots.is_empty() && running.children.is_empty());
     }
 
-    #[test]
-    fn a_revision_subject_is_one_bounded_line() {
-        assert_eq!(
-            revision_subject("\n\n  Raised the ramp  \nand more"),
-            "Raised the ramp"
-        );
-        assert_eq!(revision_subject("   "), "Subagent result");
-        let long = "é".repeat(300);
-        assert!(revision_subject(&long).len() <= 200);
-    }
 }

@@ -1630,20 +1630,13 @@ mod tests {
     }
 
     #[test]
-    fn historical_file_decode_and_typed_merge_do_not_use_the_live_catalog() {
+    fn a_historical_file_decodes_without_the_live_catalog() {
         let base = file_round_trip(&catalog_unknown_graph(0.0));
-        let ours = file_round_trip(&catalog_unknown_graph(1.0));
-        let theirs = file_round_trip(&catalog_unknown_graph(0.0));
-
         assert!(validate_graph_structure(&base).is_ok());
         assert!(validate_graph(&base).unwrap_err().iter().any(|issue| {
             issue.path == "nodes[0].typeId" && issue.message.contains("unknown node type")
         }));
-        let merged = crate::services::authored_merge::merge_graphs(&base, &ours, &theirs)
-            .into_result()
-            .unwrap();
-        assert_eq!(merged.nodes[0].params["amount"].as_f64(), Some(1.0));
-        assert_eq!(merged.nodes[0].type_id, "retired_node_type");
+        assert_eq!(base.nodes[0].type_id, "retired_node_type");
     }
 
     #[test]
