@@ -163,10 +163,7 @@ pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(),
     if let Err(e) = client
         .delete_by_filter(
             "venue_members",
-            &format!(
-                "venue_id=eq.{}&uid=eq.{}",
-                venue_id, auth.principal.user_id
-            ),
+            &format!("venue_id=eq.{}&uid=eq.{}", venue_id, auth.principal.user_id),
             &auth.access_token,
         )
         .await

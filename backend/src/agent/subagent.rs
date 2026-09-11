@@ -108,9 +108,7 @@ pub enum SubagentOutcome {
     /// The child's changes are on the live score.
     Merged,
     /// The child did not publish into its parent. Its thread stays readable.
-    Failed {
-        message: String,
-    },
+    Failed { message: String },
 }
 
 /// What one lease occupies while its delegation runs: a slot against its
@@ -367,12 +365,10 @@ async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, _text: &str) -> S
             }
         }
     };
-    let draft = match sqlx::query_scalar::<_, String>(
-        "SELECT id FROM drafts WHERE thread_id = ?",
-    )
-    .bind(child_thread_id)
-    .fetch_optional(&mut *connection)
-    .await
+    let draft = match sqlx::query_scalar::<_, String>("SELECT id FROM drafts WHERE thread_id = ?")
+        .bind(child_thread_id)
+        .fetch_optional(&mut *connection)
+        .await
     {
         Ok(Some(draft)) => draft,
         // A child with no score in scope had nothing to draft and nothing to
@@ -573,5 +569,4 @@ mod tests {
         let running = registry.running.lock().expect("poisoned");
         assert!(running.slots.is_empty() && running.children.is_empty());
     }
-
 }

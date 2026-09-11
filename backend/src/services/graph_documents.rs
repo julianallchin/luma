@@ -363,7 +363,6 @@ struct ImplementationRow {
     graph_json: String,
 }
 
-
 /// Resolve the implementation a caller intends to use, before entering the
 /// authored-document layer. An explicit implementation is authoritative; a
 /// venue override is next; otherwise the sole unnamed implementation is the
@@ -541,7 +540,6 @@ fn canonical_graph_order(graph: &Graph) -> Graph {
     });
     graph
 }
-
 
 /// Revision of the exact authored graph, including layout coordinates.
 pub fn graph_revision(graph: &Graph) -> Result<String, GraphDocumentError> {
@@ -1036,7 +1034,6 @@ pub async fn load_graph_document_unscoped(
     load_document(&mut connection, pattern_id, implementation_id).await
 }
 
-
 /// Transaction-local exact-implementation read for compound authored
 /// operations such as pattern fork. The caller owns the surrounding SQLite
 /// snapshot, so pattern metadata and graph bytes cannot come from different
@@ -1183,7 +1180,6 @@ async fn load_document(
         graph,
     })
 }
-
 
 async fn implementation_rows(
     connection: &mut SqliteConnection,

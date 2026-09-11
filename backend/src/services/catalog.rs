@@ -59,17 +59,25 @@ pub async fn create_pattern_with_graph(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("begin pattern creation: {error}"))?;
-    sqlx::query("INSERT INTO patterns (id, uid, name, description, score_id) VALUES (?, ?, ?, ?, ?)")
-        .bind(&pattern_id)
-        .bind(principal)
-        .bind(&name)
-        .bind(&description)
-        .bind(score_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| format!("insert pattern: {error}"))?;
-    insert_implementation(&mut transaction, &implementation_id, principal, &pattern_id, &graph_json)
-        .await?;
+    sqlx::query(
+        "INSERT INTO patterns (id, uid, name, description, score_id) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&pattern_id)
+    .bind(principal)
+    .bind(&name)
+    .bind(&description)
+    .bind(score_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("insert pattern: {error}"))?;
+    insert_implementation(
+        &mut transaction,
+        &implementation_id,
+        principal,
+        &pattern_id,
+        &graph_json,
+    )
+    .await?;
     transaction
         .commit()
         .await
@@ -119,8 +127,14 @@ pub async fn fork_pattern(
     .execute(&mut *transaction)
     .await
     .map_err(|error| format!("insert forked pattern: {error}"))?;
-    insert_implementation(&mut transaction, &implementation_id, principal, &pattern_id, &graph_json)
-        .await?;
+    insert_implementation(
+        &mut transaction,
+        &implementation_id,
+        principal,
+        &pattern_id,
+        &graph_json,
+    )
+    .await?;
     transaction
         .commit()
         .await
@@ -191,7 +205,12 @@ async fn insert_score(
     let request_id = request_uuid(request_id)?;
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
     let owner = access.principal().map(str::to_owned);
-    let score_id = derived_id(&principal_key(owner.as_deref()), "score", &request_id, "subject");
+    let score_id = derived_id(
+        &principal_key(owner.as_deref()),
+        "score",
+        &request_id,
+        "subject",
+    );
     let existing: Option<String> = if reuse_existing {
         sqlx::query_scalar(
             "SELECT id FROM scores WHERE (track_id = ? AND venue_id = ?) OR id = ?
@@ -280,13 +299,7 @@ fn request_uuid(request_id: &str) -> Result<String, String> {
 /// retry is a lookup rather than a second creation.
 fn derived_id(principal_key: &str, kind: &str, request_id: &str, role: &str) -> String {
     let mut hash = Sha256::new();
-    for field in [
-        "luma.creation-id.v1",
-        principal_key,
-        kind,
-        request_id,
-        role,
-    ] {
+    for field in ["luma.creation-id.v1", principal_key, kind, request_id, role] {
         hash.update((field.len() as u64).to_be_bytes());
         hash.update(field.as_bytes());
     }

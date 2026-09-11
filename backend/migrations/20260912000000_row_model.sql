@@ -134,6 +134,52 @@ FROM venue_memberships AS m;
 
 DROP TABLE venue_memberships;
 
+-- A membership is granted by the server, never by the device: only a remote
+-- write may add one, only to the signed-in principal, and only for a venue
+-- somebody else owns.
+CREATE TRIGGER auth_venue_membership_insert
+BEFORE INSERT ON venue_members FOR EACH ROW
+WHEN NOT COALESCE((
+    SELECT armed = 1 AND accepting = 1 AND maintenance = 0
+           AND remote_writes = 1 AND active_uid IS NOT NULL
+           AND NEW.uid IS active_uid AND NEW.role = 'member'
+           AND EXISTS (
+               SELECT 1 FROM venues AS venue
+               WHERE venue.id = NEW.venue_id
+                 AND venue.uid IS NOT NEW.uid
+           )
+    FROM auth_write_admission WHERE singleton = 1
+), 0)
+BEGIN SELECT RAISE(ABORT, 'venue membership grant is not authorized'); END;
+
+CREATE TRIGGER auth_venue_membership_update
+BEFORE UPDATE ON venue_members FOR EACH ROW
+WHEN NEW.venue_id IS NOT OLD.venue_id
+  OR NEW.uid IS NOT OLD.uid
+  OR NEW.role IS NOT OLD.role
+  OR NEW.role != 'member'
+  OR NOT COALESCE((
+      SELECT armed = 1 AND accepting = 1 AND maintenance = 0
+             AND remote_writes = 1 AND active_uid IS NOT NULL
+             AND OLD.uid IS active_uid
+      FROM auth_write_admission WHERE singleton = 1
+  ), 0)
+BEGIN SELECT RAISE(ABORT, 'venue membership update is not authorized'); END;
+
+CREATE TRIGGER auth_venue_membership_delete
+BEFORE DELETE ON venue_members FOR EACH ROW
+WHEN NOT COALESCE((
+    SELECT armed = 1 AND (
+        maintenance = 1
+        OR (
+            accepting = 1 AND maintenance = 0
+            AND active_uid IS NOT NULL AND OLD.uid IS active_uid
+        )
+    )
+    FROM auth_write_admission WHERE singleton = 1
+), 0)
+BEGIN SELECT RAISE(ABORT, 'venue membership deletion is not authorized'); END;
+
 -- ---------------------------------------------------------------------------
 -- Retire the legacy score format
 -- ---------------------------------------------------------------------------
@@ -288,9 +334,6 @@ DROP TRIGGER IF EXISTS agent_thread_message_cannot_be_deleted;
 DROP TRIGGER IF EXISTS auth_admit_sync_state_insert;
 DROP TRIGGER IF EXISTS auth_admit_sync_state_update;
 DROP TRIGGER IF EXISTS auth_admit_sync_state_delete;
-DROP TRIGGER IF EXISTS auth_venue_membership_insert;
-DROP TRIGGER IF EXISTS auth_venue_membership_update;
-DROP TRIGGER IF EXISTS auth_venue_membership_delete;
 DROP TRIGGER IF EXISTS guard_unrecorded_delete_venues;
 DROP TRIGGER IF EXISTS guard_unrecorded_delete_tracks;
 DROP TRIGGER IF EXISTS guard_unrecorded_delete_fixtures;

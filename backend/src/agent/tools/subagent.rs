@@ -137,15 +137,14 @@ impl Tool for SubagentTool {
                     .acquire()
                     .await
                     .map_err(|error| error.to_string())?;
-                let proposal: Option<String> = sqlx::query_scalar(
-                    "SELECT state_json FROM drafts WHERE thread_id = ?",
-                )
-                .bind(&child_thread_id)
-                .fetch_optional(&mut *connection)
-                .await
-                .map_err(|error| error.to_string())?;
-                let proposal = proposal
-                    .ok_or_else(|| format!("{child_thread_id} has no draft to inspect"))?;
+                let proposal: Option<String> =
+                    sqlx::query_scalar("SELECT state_json FROM drafts WHERE thread_id = ?")
+                        .bind(&child_thread_id)
+                        .fetch_optional(&mut *connection)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                let proposal =
+                    proposal.ok_or_else(|| format!("{child_thread_id} has no draft to inspect"))?;
                 Ok(serde_json::json!({"proposal":proposal}))
             }
         }
@@ -215,17 +214,16 @@ mod tests {
     }
 
     #[test]
-    fn a_merged_subagent_reaches_the_model_as_its_answer_plus_the_revision() {
+    fn a_merged_subagent_reaches_the_model_as_its_answer_plus_its_status() {
         let stored = serde_json::json!({
             "childThreadId": "child-1",
             "text": "Raised the ramp.",
-            "outcome": { "status": "merged", "revisionId": "rev-9" },
+            "outcome": { "status": "merged" },
         });
         let ToolOutcome::Text(text) = SubagentTool.stored_output(&stored) else {
             panic!("a merged subagent must read as text");
         };
-        assert!(text.starts_with("<authored_merge"), "{text}");
+        assert!(text.starts_with(r#"<subagent status="merged"/>"#), "{text}");
         assert!(text.ends_with("Raised the ramp."), "{text}");
-        assert!(text.contains(r#"<authored_merge status="merged" revision_id="rev-9"/>"#));
     }
 }

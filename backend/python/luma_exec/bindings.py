@@ -897,27 +897,19 @@ def build_namespace(
 
     # A track thread gets one semantic object over the same manifest values and
     # artifact store. Graph threads retain the plain identity record: they have
-    # no authored timeline to transact against.
+    # no score to transact against.
     track_values = items.get("track")
     if manifest.get("agent_kind") == "track_copilot" and isinstance(
         track_values, LumaRecord
     ):
-        clips = track_values.get("clips")
-        revision = track_values.get("revision")
         document = track_values.get("document")
-        if revision is not None and not isinstance(revision, Unavailable):
-            if document is not None and not isinstance(document, Unavailable):
-                from .score import GraphTrack
-                items["track"] = GraphTrack(
-                    track_values, nodes=items.get("nodes"), features=items.get("features"),
-                    host_call=host_call, artifact_store=store,
-                )
-            elif clips is not None and not isinstance(clips, Unavailable):
-                from .track import Track
-                items["track"] = Track(
-                    track_values, patterns=items.get("patterns"), features=items.get("features"),
-                    host_call=host_call, artifact_store=store,
-                )
+        if document is not None and not isinstance(document, Unavailable):
+            from .score import GraphTrack
+
+            items["track"] = GraphTrack(
+                track_values, nodes=items.get("nodes"), features=items.get("features"),
+                host_call=host_call, artifact_store=store,
+            )
 
     # The room is a binding record plus one capability: a camera over it. Every
     # thread with a venue in scope gets it, track and graph alike — looking at a

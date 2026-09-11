@@ -320,23 +320,23 @@ pub async fn set_session_item(
             .await);
         }
         match crate::database::local::auth::arm_write_admission_for_identity_switch(
-                &db.0,
-                Some(&principal.user_id),
-            )
-            .await
-            {
-                Ok(_) => {}
-                Err(error) => {
-                    return Err(rollback_auth_switch(
-                        &db.0,
-                        &mut session_guard,
-                        &backup,
-                        &admission_backup,
-                        error,
-                    )
-                    .await);
-                }
-            };
+            &db.0,
+            Some(&principal.user_id),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                return Err(rollback_auth_switch(
+                    &db.0,
+                    &mut session_guard,
+                    &backup,
+                    &admission_backup,
+                    error,
+                )
+                .await);
+            }
+        };
         Ok(())
     } else {
         Ok(crate::database::local::auth::set_session_item(&state.0, &key, &value).await?)
@@ -383,20 +383,20 @@ pub async fn remove_session_item(services: &AppServices, key: String) -> Result<
             .await);
         }
         match crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, None)
-                .await
-            {
-                Ok(_) => {}
-                Err(error) => {
-                    return Err(rollback_auth_switch(
-                        &db.0,
-                        &mut session_guard,
-                        &backup,
-                        &admission_backup,
-                        error,
-                    )
-                    .await);
-                }
-            };
+            .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                return Err(rollback_auth_switch(
+                    &db.0,
+                    &mut session_guard,
+                    &backup,
+                    &admission_backup,
+                    error,
+                )
+                .await);
+            }
+        };
         return Ok(());
     }
     Ok(crate::database::local::auth::remove_session_item(&state.0, &key).await?)
@@ -433,7 +433,6 @@ async fn rollback_auth_switch(
         "Authenticated identity switch failed and the previous session was restored: {cause}"
     ))
 }
-
 
 /// Sign out's host-side commit boundary. The authenticated session remains
 /// installed while all cloud catalog state, authored revision history, and
@@ -640,11 +639,10 @@ mod tests {
 
         wipe_database_pool(&pool, "alice").await.unwrap();
 
-        let remaining: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM patterns ORDER BY id")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM patterns ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert_eq!(remaining, ["kept"]);
         // A track a score still annotates is not a leaf.
         assert_eq!(

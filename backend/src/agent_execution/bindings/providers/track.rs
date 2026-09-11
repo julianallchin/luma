@@ -54,7 +54,9 @@ pub(super) async fn resolve_document(
     };
     let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id)).await?;
     access.require_venue(venue_id)?;
-    rows::load_score(access.connection(), score_id).await.map(Some)
+    rows::load_score(access.connection(), score_id)
+        .await
+        .map(Some)
 }
 
 async fn provide_timeline(

@@ -26,6 +26,7 @@ use crate::agent_execution::bindings::providers::{
 };
 use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::track_host::TrackHost;
+use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::agent_execution::venue_host::VenueHost;
 use crate::agent_execution::worker_process::{ExecStatus, HostOperationScope};
 use crate::agent_execution::workspace::{
@@ -35,7 +36,6 @@ use crate::agent_execution::CellHost;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute, ThreadRoute};
-use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::storage::StorageRoot;
 
 /// How many bytes of PNG one cell may hand back to the model. Figures past the
@@ -93,12 +93,8 @@ pub fn resolve_execution_id(
         (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
             Ok(execution_id)
         }
-        (Some(_), Some(_)) => {
-            Err("child Python execution id must match its draft id".into())
-        }
-        _ => {
-            Err("child Python execution requires both an execution id and a draft id".into())
-        }
+        (Some(_), Some(_)) => Err("child Python execution id must match its draft id".into()),
+        _ => Err("child Python execution requires both an execution id and a draft id".into()),
     }
 }
 

@@ -69,7 +69,6 @@ pub(crate) fn to_string(value: &Value) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

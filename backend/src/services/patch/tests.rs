@@ -894,11 +894,12 @@ async fn stage_restore_only_changes_different_rows() {
     let fixtures = fixtures_root();
     let stage = crate::services::stage_ops::Stage::new(&pool, &fixtures, VENUE);
     let original = stage.rows().await.unwrap();
+    // `updated_at` is what a write moves now; an untouched row keeps its own.
     let versions = |pool: SqlitePool| async move {
-        sqlx::query_as::<_, (String, i64)>(
-            "SELECT 'node:' || id, version FROM venue_nodes
-             UNION ALL SELECT 'edge:' || child_id, version FROM venue_edges
-             UNION ALL SELECT 'param:' || node_id || ':' || key, version FROM venue_node_params
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT 'node:' || id, updated_at FROM venue_nodes
+             UNION ALL SELECT 'edge:' || child_id, updated_at FROM venue_edges
+             UNION ALL SELECT 'param:' || node_id || ':' || key, updated_at FROM venue_node_params
              ORDER BY 1",
         )
         .fetch_all(&pool)
@@ -926,15 +927,6 @@ async fn stage_restore_only_changes_different_rows() {
     assert_eq!(changed[0].1 .0, "param:run-downstage:span");
     stage.restore(&original).await.unwrap();
     assert_eq!(stage.rows().await.unwrap().params, original.params);
-    let tombstones: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_tombstones")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        tombstones, 0,
-        "undoing a parameter must not queue graph deletions"
-    );
-
     // Removing a parent deletes its children's edges. A snapshot that keeps
     // those children and reparents them must recreate the missing relations.
     let mut reduced = original.clone();

@@ -474,15 +474,21 @@ mod tests {
         let track = uuid::Uuid::new_v4().to_string();
         let score = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO tracks (id,uid,track_hash,file_path) VALUES (?,?,'repair-test','/tmp/repair.wav')").bind(&track).bind(&uid).execute(&services.db.0).await.unwrap();
-        let document=json!({"version":2,"definitions":{},"clips":{"flash":{"graph":"chase","start":0.,"duration":4.,"seed":0,"selection":{"expression":"missing_wash"}}}}).to_string();
+        sqlx::query("INSERT INTO scores (id,uid,track_id,venue_id) VALUES (?,?,?,?)")
+            .bind(&score)
+            .bind(&uid)
+            .bind(&track)
+            .bind(&venue)
+            .execute(&services.db.0)
+            .await
+            .unwrap();
         sqlx::query(
-            "INSERT INTO scores (id,uid,track_id,venue_id,graph_document_json) VALUES (?,?,?,?,?)",
+            "INSERT INTO clips (id,uid,score_id,graph,start,duration,seed,selection_json,blend_mode)
+             VALUES (?2 || ':flash',?1,?2,'chase',0,4,'0',
+                     '{\"expression\":\"missing_wash\"}','replace')",
         )
+        .bind(uid.clone().unwrap_or_default())
         .bind(&score)
-        .bind(&uid)
-        .bind(&track)
-        .bind(&venue)
-        .bind(&document)
         .execute(&services.db.0)
         .await
         .unwrap();
@@ -530,21 +536,23 @@ mod tests {
             json!([])
         );
         let stored: String =
-            sqlx::query_scalar("SELECT graph_document_json FROM scores WHERE id=?")
+            sqlx::query_scalar("SELECT selection_json FROM clips WHERE id = ? || ':flash'")
                 .bind(&score)
                 .fetch_one(&services.db.0)
                 .await
                 .unwrap();
         assert_eq!(
-            serde_json::from_str::<Value>(&stored).unwrap()["clips"]["flash"]["selection"]
-                ["expression"],
+            serde_json::from_str::<Value>(&stored).unwrap()["expression"],
             replacement
         );
-        let revisions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM authored_revisions")
-            .fetch_one(&services.db.0)
-            .await
-            .unwrap();
-        assert!(revisions > 0, "repair must create authored history");
+        let logged: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM changes WHERE table_name = 'clips' AND row_id = ? || ':flash'",
+        )
+        .bind(&score)
+        .fetch_one(&services.db.0)
+        .await
+        .unwrap();
+        assert!(logged > 0, "a repair is an edit, and the log says so");
     }
     #[tokio::test]
     async fn legacy_conversion_preserves_overridden_names_and_member_sets() {

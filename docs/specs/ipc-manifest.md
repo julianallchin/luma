@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**233 commands** across **35 domains** · **18 events**
+**207 commands** across **32 domains** · **18 events**
 
 ## Domains
 
@@ -17,12 +17,10 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `agent` | 3 | `backend/src/dispatch/handlers/agent.rs` |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 9 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `annotation_preview` | 5 | `backend/src/dispatch/handlers/annotation_preview.rs` |
+| `annotation_preview` | 2 | `backend/src/dispatch/handlers/annotation_preview.rs` |
 | `artnet` | 6 | `backend/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
-| `authored_state` | 11 | `backend/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `backend/src/dispatch/handlers/categories.rs` |
-| `cloud_sync` | 2 | `backend/src/dispatch/handlers/cloud_sync.rs` |
 | `composable_patterns` | 4 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
@@ -39,17 +37,16 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `perform` | 9 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
-| `score_dsl` | 3 | `backend/src/dispatch/handlers/score_dsl.rs` |
-| `scores` | 13 | `backend/src/dispatch/handlers/scores.rs` |
+| `scores` | 8 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `backend/src/dispatch/handlers/skills.rs` |
 | `stage` | 16 | `backend/src/dispatch/handlers/stage.rs` |
-| `sync` | 4 | `backend/src/dispatch/handlers/sync.rs` |
+| `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 14 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 2 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **233** | |
+| **total** | **207** | |
 
 ## Commands
 
@@ -88,11 +85,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `preview_annotation` | `trackId: String`<br>`venueId: String`<br>`annotation: LivePreviewInput` | `AnnotationPreview` |
-| `generate_annotation_previews` | `trackId: String`<br>`venueId: String` | `Vec<AnnotationPreview>` |
 | `preview_pattern_image` | `patternId: String`<br>`trackId: String`<br>`venueId: String`<br>`startTime: f32`<br>`endTime: f32`<br>`beatGrid: Option<BeatGrid>` | `AnnotationPreview` |
 | `preview_graph_image` | `graph: Graph`<br>`trackId: String`<br>`venueId: String`<br>`startTime: f32`<br>`endTime: f32`<br>`beatGrid: Option<BeatGrid>` | `AnnotationPreview` |
-| `view_composite_image` | `trackId: String`<br>`startTime: f32`<br>`endTime: f32` | `AnnotationPreview` |
 
 ### `artnet`
 
@@ -117,34 +111,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `remove_session_item` | `key: String` | `()` |
 | `wipe_database` | — | `()` |
 
-### `authored_state`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `authored_state_prepare_turn` | `input: PrepareAuthoredTurnInput` | `PreparedAuthoredTurn` |
-| `authored_state_finalize_turn` | `input: FinalizeAuthoredTurnInput` | `AuthoredTurnCommit` |
-| `authored_state_recover_turns` | `threadId: String` | `Vec<AuthoredTurnCommit>` |
-| `authored_state_set_session_actor` | `actor: String` | `()` |
-| `authored_state_list_history` | `threadId: String`<br>`cursor: Option<String>`<br>`limit: Option<usize>` | `AuthoredHistoryPage` |
-| `authored_state_restore` | `input: RestoreAuthoredStateInput` | `AuthoredRestoreResult` |
-| `authored_state_create_workspace` | `input: CreateAuthoredWorkspaceInput` | `AuthoredWorkspaceHandle` |
-| `authored_state_check_workspace` | `input: AuthoredWorkspaceInput` | `AuthoredWorkspaceCheck` |
-| `authored_state_commit_workspace` | `input: CommitAuthoredWorkspaceInput` | `AuthoredWorkspaceCommit` |
-| `authored_state_merge_workspace` | `input: MergeAuthoredWorkspaceInput` | `AuthoredWorkspaceMerge` |
-| `authored_state_remove_workspace` | `input: AuthoredWorkspaceInput` | `()` |
-
 ### `categories`
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `list_pattern_categories` | — | `Vec<PatternCategory>` |
-
-### `cloud_sync`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `search_patterns_remote` | `query: String`<br>`categoryName: Option<String>`<br>`limit: Option<i32>`<br>`offset: Option<i32>` | `Vec<SearchPatternRow>` |
-| `get_display_names` | `uids: Vec<String>` | `HashMap<String, String>` |
 
 ### `composable_patterns`
 
@@ -159,7 +130,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `composite_track` | `scoreId: String`<br>`annotations: Option<Vec<LiveAnnotation>>`<br>`skipCache: Option<bool>`<br>`graphScore: Option<luma_patterns::Score>` | `()` |
+| `composite_track` | `scoreId: String`<br>`graphScore: Option<luma_patterns::Score>` | `()` |
 | `leave_track` | `scoreId: String` | `()` |
 
 ### `controller`
@@ -311,7 +282,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_pattern_graph_document` | `id: String`<br>`implementationId: Option<String>` | `GraphDocument` |
 | `get_pattern_score_template` | `id: String`<br>`venueId: String` | `luma_patterns::Score` |
 | `get_pattern_args` | `id: String`<br>`venueId: Option<String>`<br>`implementationId: Option<String>` | `Vec<PatternArgDef>` |
-| `save_pattern_graph_document` | `id: String`<br>`implementationId: String`<br>`operationId: String`<br>`baseRevision: String`<br>`graph: Graph` | `GraphEditResult` |
+| `save_pattern_graph_document` | `id: String`<br>`implementationId: String`<br>`baseRevision: String`<br>`graph: Graph` | `GraphEditResult` |
 
 ### `perform`
 
@@ -347,14 +318,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `render_clear_active_layer` | `venueId: String` | `()` |
 | `render_identify` | `targets: Vec<String>` | `()` |
 
-### `score_dsl`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `score_dsl_export` | `scoreId: String`<br>`trackId: String`<br>`venueId: String`<br>`includeClipIds: bool` | `ScoreDslExportResponse` |
-| `score_dsl_validate` | `scoreId: String`<br>`trackId: String`<br>`venueId: String`<br>`source: String` | `ScoreDslValidationResponse` |
-| `score_dsl_import` | `scoreId: String`<br>`trackId: String`<br>`venueId: String`<br>`operationId: String`<br>`source: String`<br>`baseRevision: String` | `ScoreDslImportResponse` |
-
 ### `scores`
 
 | Command | Arguments | Returns |
@@ -364,14 +327,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `create_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
-| `list_track_scores` | `scoreId: String` | `Vec<TrackScore>` |
-| `get_score_document` | `scoreId: String` | `Option<crate::services::graph_scores::GraphScoreDocument>` |
-| `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score`<br>`baseRevision: String`<br>`operationId: String` | `crate::models::authored_state::AppliedAuthoredState` |
+| `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
+| `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score` | `()` |
 | `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
-| `create_track_score` | `payload: CreateTrackScoreInput` | `TrackEditResult` |
-| `update_track_score` | `payload: UpdateTrackScoreInput` | `TrackEditResult` |
-| `delete_track_score` | `payload: DeleteTrackScoreInput` | `TrackEditResult` |
-| `replace_track_scores` | `scoreId: String`<br>`trackId: String`<br>`baseScores: Vec<TrackScore>`<br>`scores: Vec<TrackScore>`<br>`operationId: String` | `TrackEditResult` |
 
 ### `settings`
 
@@ -413,9 +371,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `force_quit` | — | `()` |
-| `sync_full` | — | `SyncReport` |
 | `sync_status` | — | `SyncStatus` |
-| `sync_retry` | — | `()` |
 
 ### `telemetry`
 
@@ -477,7 +433,7 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `controller_state` | 3 | 0 | **orphan** |
 | `dmx://update` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `host-audio://state` | 0 | 0 | **orphan** |
-| `library-changed` | 5 | 0 | **orphan** |
+| `library-changed` | 3 | 0 | **orphan** |
 | `midi_learn_captured` | 2 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
 | `mixer_state` | 2 | 0 | **orphan** |
