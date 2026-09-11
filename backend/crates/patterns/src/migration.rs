@@ -35,18 +35,12 @@ pub fn validate(score: &Score) -> Result<()> {
             flatten::retire(&mut retired);
             retired.validate(&standard_library())
         }
-        6 => {
-            let mut opened = score.clone();
-            open_retired(&mut opened)?;
-            opened.validate(&standard_library())
-        }
         _ => score.validate(&standard_library()),
     }
 }
 
-/// Version 6 → 7: Shimmer and Random head events left the library. A call to
-/// either opens up into the nodes it was made of, so the document computes
-/// exactly what it did.
+/// Version 6 → 7: Shimmer and Random head events left the library. Nothing is
+/// rewritten; a document that still calls either is refused as unknown.
 pub fn upgrade_v6(score: &Score) -> Result<Score> {
     if score.version != 6 {
         return Err(Error(format!(
@@ -55,36 +49,9 @@ pub fn upgrade_v6(score: &Score) -> Result<Score> {
         )));
     }
     let mut upgraded = score.clone();
-    open_retired(&mut upgraded)?;
     upgraded.version = 7;
     upgraded.validate(&standard_library())?;
     Ok(upgraded)
-}
-
-fn retired_v6() -> &'static BTreeMap<String, Definition> {
-    static RETIRED: std::sync::OnceLock<BTreeMap<String, Definition>> = std::sync::OnceLock::new();
-    RETIRED.get_or_init(|| {
-        serde_json::from_str(include_str!("../migrations/v6-retired.json"))
-            .expect("frozen retired graphs")
-    })
-}
-
-fn open_retired(score: &mut Score) -> Result<()> {
-    let retired = retired_v6();
-    for definition in score.definitions.values_mut() {
-        let Body::Graph(graph) = &mut definition.body else {
-            continue;
-        };
-        // Shimmer opens up into a Random head events call, which opens up in turn.
-        while let Some((id, callee)) = graph.nodes.iter().find_map(|(id, node)| {
-            retired
-                .get(&node.definition)
-                .map(|callee| (id.clone(), callee))
-        }) {
-            graph.inline(&id, callee)?;
-        }
-    }
-    Ok(())
 }
 
 /// The original vocabulary is data, not another execution engine.

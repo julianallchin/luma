@@ -1,8 +1,5 @@
 use luma_patterns::*;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Debug)]
 struct Analysis;
@@ -614,76 +611,38 @@ fn documents_saved_with_library_copies_flatten_like_a_fresh_conversion() {
 }
 
 #[test]
-fn retired_shimmer_and_random_head_events_open_up_at_version_seven() {
-    let flat = serde_json::json!({"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}});
-    let score = serde_json::from_value::<Score>(serde_json::json!({
-        "version": 6,
-        "definitions": {
-            "sparkle": {
-                "name": "Sparkle",
-                "inputs": {},
-                "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
-                "body": {"kind": "graph", "body": {
-                    "nodes": {
-                        "beat": {"definition": "beat_trigger", "inputs": {
-                            "repeat": {"source": "value", "value": {"type": "beats", "value": 0.25}}}},
-                        "shimmer": {"definition": "shimmer", "inputs": {
-                            "trigger": {"source": "connection", "node": "beat", "output": "trigger"},
-                            "proportion": {"source": "value", "value": {"type": "proportion", "value": 0.15}}}},
-                        "color": {"definition": "core/multiply", "inputs": {
-                            "a": {"source": "value", "value": {"type": "color", "value": [1.0, 1.0, 1.0]}},
-                            "b": {"source": "connection", "node": "shimmer", "output": "mask"}}},
-                        "output": {"definition": "output", "inputs": {
-                            "color": {"source": "connection", "node": "color", "output": "value"}}}
-                    },
-                    "outputs": {"lighting": {"source": "connection", "node": "output", "output": "lighting"}}
-                }}
+fn version_seven_refuses_a_retired_shimmer_call_and_keeps_everything_else() {
+    let document = |call: &str| {
+        serde_json::from_value::<Score>(serde_json::json!({
+            "version": 6,
+            "definitions": {
+                "sparkle": {
+                    "name": "Sparkle",
+                    "inputs": {},
+                    "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
+                    "body": {"kind": "graph", "body": {
+                        "nodes": {
+                            "beat": {"definition": "beat_trigger", "inputs": {
+                                "repeat": {"source": "value", "value": {"type": "beats", "value": 0.25}}}},
+                            "heads": {"definition": call, "inputs": {
+                                "trigger": {"source": "connection", "node": "beat", "output": "trigger"}}},
+                            "color": {"definition": "core/multiply", "inputs": {
+                                "a": {"source": "value", "value": {"type": "color", "value": [1.0, 1.0, 1.0]}},
+                                "b": {"source": "connection", "node": "heads", "output": "mask"}}},
+                            "output": {"definition": "output", "inputs": {
+                                "color": {"source": "connection", "node": "color", "output": "value"}}}
+                        },
+                        "outputs": {"lighting": {"source": "connection", "node": "output", "output": "lighting"}}
+                    }}
+                }
             },
-            "flash": {
-                "name": "Flash",
-                "inputs": {},
-                "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
-                "body": {"kind": "graph", "body": {
-                    "nodes": {
-                        "beat": {"definition": "beat_trigger", "inputs": {
-                            "repeat": {"source": "value", "value": {"type": "beats", "value": 0.125}}}},
-                        "heads": {"definition": "random_head_events", "inputs": {
-                            "trigger": {"source": "connection", "node": "beat", "output": "trigger"},
-                            "duration": {"source": "value", "value": {"type": "beats", "value": 0.06}}}},
-                        "flash": {"definition": "event_envelope", "inputs": {
-                            "progress": {"source": "connection", "node": "heads", "output": "progress"},
-                            "weight": {"source": "connection", "node": "heads", "output": "weight"},
-                            "shape": {"source": "value", "value": flat}}},
-                        "color": {"definition": "core/multiply", "inputs": {
-                            "a": {"source": "value", "value": {"type": "color", "value": [1.0, 1.0, 1.0]}},
-                            "b": {"source": "connection", "node": "flash", "output": "mask"}}},
-                        "output": {"definition": "output", "inputs": {
-                            "color": {"source": "connection", "node": "color", "output": "value"}}}
-                    },
-                    "outputs": {"lighting": {"source": "connection", "node": "output", "output": "lighting"}}
-                }}
-            }
-        },
-        "clips": {}
-    }))
-    .unwrap();
-    migration::validate(&score).unwrap();
-    let upgraded = migration::upgrade(&score).unwrap();
+            "clips": {}
+        }))
+        .unwrap()
+    };
+    let refused = migration::upgrade(&document("shimmer")).unwrap_err();
+    assert!(refused.to_string().contains("shimmer"), "{refused}");
+    let upgraded = migration::upgrade(&document("dissolve")).unwrap();
     assert_eq!(upgraded.version(), Score::VERSION);
-    for (id, definition) in &upgraded.definitions {
-        let Body::Graph(graph) = &definition.body else {
-            panic!()
-        };
-        let calls: BTreeSet<&str> = graph
-            .nodes
-            .values()
-            .map(|n| n.definition.as_str())
-            .collect();
-        assert!(
-            !calls.contains("shimmer") && !calls.contains("random_head_events"),
-            "{id} still calls a retired graph: {calls:?}"
-        );
-        assert!(calls.contains("core/event_ages") && calls.contains("random_selection"));
-        assert!(calls.contains("event_envelope"));
-    }
+    assert_eq!(upgraded.definitions, document("dissolve").definitions);
 }
