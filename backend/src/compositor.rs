@@ -156,7 +156,8 @@ async fn resolve_pattern_graph_document(
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_pattern_graph, live_track_scores, score_scope};
+    use super::{fetch_pattern_graph, score_scope};
+    use crate::database::local::venue_access::AuthorizedVenue;
     use crate::models::node_graph::{Graph, NodeInstance, PatternArgDef, PatternArgType};
     use serde_json::json;
     use std::collections::HashMap;
@@ -201,25 +202,26 @@ mod tests {
         )
         .await
         .expect("authorize the venue");
-        let annotations = super::fetch_scores(&mut access, &track_id)
-            .await
-            .expect("fetch the score");
+        let score_id: String =
+            sqlx::query_scalar("SELECT id FROM scores WHERE track_id = ? AND venue_id = ?")
+                .bind(&track_id)
+                .bind(&venue_id)
+                .fetch_one(access.connection())
+                .await
+                .expect("find the score");
         drop(access);
-        println!("annotations: {}", annotations.len());
 
         let built = Instant::now();
-        let scene = super::build_scene(
-            &pool,
+        let scene = super::build_score_scene(
             &pool,
             &StorageRoot::from_path(db.parent().unwrap_or(Path::new(".")).to_path_buf()),
             &resource_root,
-            &track_id,
-            &venue_id,
-            &annotations,
+            &score_id,
+            None,
         )
         .await
         .expect("build the scene");
-        println!("build_scene: {:.1} ms", built.elapsed().as_secs_f64() * 1e3);
+        println!("build_score_scene: {:.1} ms", built.elapsed().as_secs_f64() * 1e3);
 
         // One frame at a time, exactly as the live path samples it — a batched
         // `times` slice would amortise per-call costs the renderer never gets to.
@@ -255,13 +257,6 @@ mod tests {
         }
         let mean: f64 = worst.iter().map(|(_, ms)| ms).sum::<f64>() / worst.len() as f64;
         println!("frames={} mean={:.3} ms", worst.len(), mean);
-    }
-
-    #[test]
-    fn explicit_empty_live_annotations_remain_authoritatively_empty() {
-        let scores = live_track_scores(Some(Vec::new()));
-        assert!(scores.is_some_and(|scores| scores.is_empty()));
-        assert!(live_track_scores(None).is_none());
     }
 
     #[tokio::test]

@@ -199,8 +199,9 @@ async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
     .await
     .expect("failed to seed a score");
     sqlx::query(
-        "INSERT INTO track_scores (id, uid, score_id, pattern_id, start_time, end_time)
-         VALUES (?, ?, ?, 'pattern', 0.0, 60.0)",
+        "INSERT INTO clips
+            (id, uid, score_id, graph, start, duration, seed, selection_json, blend_mode)
+         VALUES (?, ?, ?, 'pattern', 0.0, 120.0, '0', '{\"expression\":\"all\"}', 'replace')",
     )
     .bind(format!("clip-{score}"))
     .bind(session::PRINCIPAL)

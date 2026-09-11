@@ -3,14 +3,13 @@ use crate::Luma;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity};
 use luma_lib::models::sync::SyncStatus;
-use luma_ui::node::{AgentNode as _, Instrument as _, Role};
+use luma_ui::node::{Instrument as _, Role};
 
 #[derive(Default)]
 pub(crate) struct SidebarSync {
     pub status: SyncStatus,
     pub expanded: bool,
     pub read_error: Option<String>,
-    retrying: bool,
     activity_since: Option<std::time::Instant>,
     show_activity: bool,
 }
@@ -68,25 +67,6 @@ impl Luma {
         })
         .detach();
     }
-
-    fn retry_sidebar_sync(&mut self, cx: &mut Context<Self>) {
-        if self.sync_status.retrying || self.sync_status.status.syncing {
-            return;
-        }
-        self.sync_status.retrying = true;
-        let pending = self.library.retry_sync();
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.sync_status.retrying = false;
-                this.sync_status.read_error = result.err().map(|e| e.to_string());
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
 }
 
 pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
@@ -113,8 +93,6 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
     };
     let toggle = app.clone();
     let keyboard_toggle = app.clone();
-    let keyboard_retry = app.clone();
-    let retry = app.clone();
     let mut details = status.errors.clone();
     details.extend(state.read_error.iter().cloned());
     details.extend(status.failures.iter().map(|failure| {
@@ -206,27 +184,7 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
                                     ),
                             )
                     })
-                    .children(details.into_iter().map(|message| div().child(message)))
-                    .when(!status.syncing && count > 0, |el| {
-                        el.child(
-                            luma_ui::button(
-                                "Retry sync",
-                                (!state.retrying && !status.syncing).into(),
-                            )
-                            .id("retry-sync")
-                            .on_key_down(move |event, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    keyboard_retry
-                                        .update(cx, |this, cx| this.retry_sidebar_sync(cx));
-                                }
-                            })
-                            .on_click(move |_, _, cx| {
-                                retry.update(cx, |this, cx| this.retry_sidebar_sync(cx))
-                            })
-                            .agent_node(Role::Button, "Retry sync")
-                            .agent_disabled(state.retrying || status.syncing),
-                        )
-                    }),
+                    .children(details.into_iter().map(|message| div().child(message))),
             )
         })
         .into_any_element()

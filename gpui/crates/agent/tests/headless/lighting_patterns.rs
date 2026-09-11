@@ -487,10 +487,7 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
                 "native layout persists in the graph document"
             );
             assert_eq!(graph["outputs"]["lighting"]["node"], "output");
-            assert_eq!(
-                graph["nodes"]["output"]["inputs"]["color"]["node"],
-                "color"
-            );
+            assert_eq!(graph["nodes"]["output"]["inputs"]["color"]["node"], "color");
             assert_eq!(
                 graph["nodes"]["output"]["inputs"]["pan"]["node"],
                 "write_position_1"

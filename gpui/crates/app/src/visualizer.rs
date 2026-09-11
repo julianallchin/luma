@@ -811,7 +811,7 @@ impl Visualizer {
         let environment = VenueEnvironment::default();
         let composite = subject
             .clone()
-            .map(|lit| (library.composite_score(&lit.score, None), lit));
+            .map(|lit| (library.composite_score(&lit.score), lit));
         let venue = venue_id.to_string();
         cx.spawn(async move |this, cx| {
             // The composite first: it is what makes the sample non-empty, and
@@ -915,7 +915,7 @@ impl Visualizer {
             self.lit = None;
             return;
         };
-        let composite = library.composite_score(&lit.score, None);
+        let composite = library.composite_score(&lit.score);
         cx.spawn(async move |this, cx| {
             let landed = composite.await.is_ok().then_some(lit);
             this.update(cx, |this, cx| {

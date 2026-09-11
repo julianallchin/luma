@@ -41,7 +41,7 @@ async fn main() -> Result<(), String> {
     let (venue_id, title, venue_name): (String,String,String) = sqlx::query_as("SELECT s.venue_id,t.title,v.name FROM scores s JOIN tracks t ON t.id=s.track_id JOIN venues v ON v.id=s.venue_id WHERE s.id=?").bind(score).fetch_one(&pool).await.map_err(|e| e.to_string())?;
     let fixtures = luma_lib::headless_host::HostConfig::default().fixtures_root()?;
     let program =
-        luma_lib::build_score_scene(&pool, &storage, &fixtures, score, None, None, true).await?;
+        luma_lib::build_score_scene(&pool, &storage, &fixtures, score, None).await?;
     let geometry = VenueGeometry::load(&pool, &fixtures, &venue_id).await?;
     let (mut scene, definitions) = geometry.scene();
     scene.render.haze.resolution = luma_render::LIVE_HAZE_RESOLUTION;
