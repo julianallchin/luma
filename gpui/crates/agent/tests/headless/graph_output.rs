@@ -7,7 +7,7 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
     let name = "graph-signal-output";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version":5,
+            "version":6,
             "definitions": {
                 "custom": {
                     "name": "Signal output",

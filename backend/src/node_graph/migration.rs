@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_and_disconnected_controls_survive_with_labels_and_positions() {
+    fn shared_and_disconnected_controls_survive_with_labels() {
         let mut graph = crate::node_graph::lighting::pattern("chase").unwrap();
         let start = graph.args.iter_mut().find(|a| a.id == "start").unwrap();
         start.name = "Launch position".into();
@@ -416,12 +416,6 @@ mod tests {
             to_port: "end".into(),
             ..original
         });
-        graph
-            .nodes
-            .iter_mut()
-            .find(|n| n.id == "effect")
-            .unwrap()
-            .position_x = Some(432.);
         let converted = typed_pattern(&graph, "My Chase").unwrap();
         let root = &converted.definitions[ROOT];
         assert_eq!(root.inputs["start"].name, "Launch position");
@@ -429,13 +423,13 @@ mod tests {
             root.inputs.contains_key("end"),
             "disconnected control was lost"
         );
+        // The effect opens into its composition; the chase reads both.
         let Body::Graph(body) = &root.body else {
             panic!()
         };
-        assert_eq!(body.nodes["effect"].position.unwrap()[0], 432.);
         for port in ["start", "end"] {
             assert_eq!(
-                body.nodes["effect"].inputs[port],
+                body.nodes["chase"].inputs[port],
                 Binding::Input {
                     input: "start".into()
                 }

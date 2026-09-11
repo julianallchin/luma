@@ -1156,14 +1156,15 @@ impl Scene {
                 };
                 let y = wanted(&self.cards, i, &|j| settled[j]).unwrap_or(0.);
                 self.cards[i].origin = point(x, y);
-                // Below whatever it would cover.
+                // Below whatever it would cover, a gap away — strictly, so a
+                // card landing on that gap counts as clear.
                 while let Some(j) = (0..n).find(|&j| {
+                    let (a, b) = (&self.cards[i], &self.cards[j]);
                     settled[j]
-                        && self.cards[i].intersects(
-                            self.cards[j].origin - point(GAP, GAP),
-                            self.cards[j].origin
-                                + point(self.cards[j].width + GAP, self.cards[j].height + GAP),
-                        )
+                        && a.origin.x < b.origin.x + b.width + GAP
+                        && b.origin.x < a.origin.x + a.width + GAP
+                        && a.origin.y < b.origin.y + b.height + GAP
+                        && b.origin.y < a.origin.y + a.height + GAP
                 }) {
                     self.cards[i].origin.y = self.cards[j].origin.y + self.cards[j].height + GAP;
                 }

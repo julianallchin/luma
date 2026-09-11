@@ -73,7 +73,7 @@ async fn isolated_clip_preview_preserves_grid_selection_overrides_and_seek_order
             position: None,
         },
     );
-    graph.nodes.get_mut("effect").unwrap().inputs.insert(
+    graph.nodes.get_mut("output").unwrap().inputs.insert(
         "color".into(),
         luma_patterns::Binding::Connection {
             node: "tint".into(),

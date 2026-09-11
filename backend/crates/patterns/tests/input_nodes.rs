@@ -33,12 +33,12 @@ fn input_infers_a_shared_value_and_renames_without_losing_overrides() {
     edit(
         &mut score,
         GraphEdit::Bind {
-            node: "effect".into(),
+            node: "output".into(),
             input: "color".into(),
             binding: Some(Value::Color([0.2, 0.4, 0.8]).into()),
         },
     );
-    edit(&mut score, bind("accent", "effect", "color"));
+    edit(&mut score, bind("accent", "output", "color"));
     let spec = &score.definitions["custom"].inputs["accent"];
     assert_eq!(
         spec.value_type,
@@ -78,7 +78,7 @@ fn input_infers_a_shared_value_and_renames_without_losing_overrides() {
     edit(
         &mut score,
         GraphEdit::Bind {
-            node: "effect".into(),
+            node: "output".into(),
             input: "color".into(),
             binding: None,
         },
@@ -93,7 +93,7 @@ fn input_infers_a_shared_value_and_renames_without_losing_overrides() {
     );
     assert!(score.definitions["custom"].inputs.contains_key("accent"));
     assert!(score.clips["custom"].inputs.contains_key("accent"));
-    edit(&mut score, bind("accent", "effect", "color"));
+    edit(&mut score, bind("accent", "output", "color"));
     edit(
         &mut score,
         GraphEdit::RemoveInput {

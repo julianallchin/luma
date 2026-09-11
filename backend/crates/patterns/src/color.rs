@@ -206,15 +206,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             "color",
             ValueType::ColorField,
         ),
-        Primitive::MaskColor => (
-            "Mask color",
-            vec![
-                ("color", port("Color", ValueType::ColorField, None)),
-                ("mask", port("Mask", ValueType::Mask, None)),
-            ],
-            "color",
-            ValueType::ColorField,
-        ),
         Primitive::WriteColor => (
             "Color output",
             vec![("color", port("Color", ValueType::ColorField, None))],

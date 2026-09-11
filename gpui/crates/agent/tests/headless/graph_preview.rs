@@ -7,7 +7,7 @@ fn graph_preview_reports_dynamic_errors_stops_audio_and_recovers_on_seek() {
     let name = "graph-preview-runtime-error";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version":5,
+            "version":6,
             "definitions": {
                 "custom": {
                     "name": "Runtime preview",
@@ -150,7 +150,7 @@ fn graph_preview_reports_dynamic_errors_stops_audio_and_recovers_on_seek() {
 fn graph_preview_scrubs_real_clip_time_and_owns_its_transport() {
     let name = "graph-clip-preview";
     let expected = serde_json::json!({
-        "version":5,
+        "version":6,
         "definitions": {
             "custom": {
                 "name": "Preview chase",

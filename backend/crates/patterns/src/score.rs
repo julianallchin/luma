@@ -63,7 +63,7 @@ impl Default for Score {
 }
 impl Score {
     /// The document version written by this crate.
-    pub const VERSION: u32 = 5;
+    pub const VERSION: u32 = 6;
     pub fn same_computation(&self, other: &Self) -> bool {
         self.version == other.version
             && self.clips == other.clips

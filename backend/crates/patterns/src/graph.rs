@@ -182,6 +182,100 @@ pub struct InputNode {
     pub position: Option<[f64; 2]>,
 }
 
+impl Graph {
+    /// Replace the call `node` with the body of `callee`. The body's nodes
+    /// keep their ids where free and otherwise take `{node}/{id}`; its Inputs
+    /// read what the call bound, or their defaults; whatever read the call's
+    /// outputs reads what the body's outputs read.
+    pub fn inline(&mut self, node: &str, callee: &Definition) -> Result<()> {
+        let Body::Graph(body) = &callee.body else {
+            return Err(Error(format!("{node}: only a graph can be inlined")));
+        };
+        let call = self
+            .nodes
+            .get(node)
+            .cloned()
+            .ok_or_else(|| Error(format!("unknown node {node}")))?;
+        let clash = body.nodes.keys().any(|id| self.nodes.contains_key(id));
+        let names: BTreeMap<&str, String> = body
+            .nodes
+            .keys()
+            .map(|id| {
+                let mut name = if clash {
+                    format!("{node}/{id}")
+                } else {
+                    id.clone()
+                };
+                while self.nodes.contains_key(&name) {
+                    name.push('_');
+                }
+                (id.as_str(), name)
+            })
+            .collect();
+        let translate = |binding: &Binding| -> Result<Binding> {
+            Ok(match binding {
+                Binding::Input { input } => match call.inputs.get(input) {
+                    Some(bound) => bound.clone(),
+                    None => callee
+                        .inputs
+                        .get(input)
+                        .and_then(|spec| spec.default.clone())
+                        .map(Binding::from)
+                        .ok_or_else(|| Error(format!("{node}.{input}: nothing to inline")))?,
+                },
+                Binding::Connection {
+                    node: inner,
+                    output,
+                } => Binding::Connection {
+                    node: names[inner.as_str()].clone(),
+                    output: output.clone(),
+                },
+                value => value.clone(),
+            })
+        };
+        self.nodes.remove(node);
+        for (id, inner) in &body.nodes {
+            self.nodes.insert(
+                names[id.as_str()].clone(),
+                Node {
+                    position: None,
+                    definition: inner.definition.clone(),
+                    inputs: inner
+                        .inputs
+                        .iter()
+                        .map(|(key, binding)| Ok((key.clone(), translate(binding)?)))
+                        .collect::<Result<_>>()?,
+                },
+            );
+        }
+        let outputs = body
+            .outputs
+            .iter()
+            .map(|(key, binding)| Ok((key.as_str(), translate(binding)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        for binding in self
+            .nodes
+            .values_mut()
+            .flat_map(|inner| inner.inputs.values_mut())
+            .chain(self.outputs.values_mut())
+        {
+            if let Binding::Connection {
+                node: source,
+                output,
+            } = binding
+            {
+                if source == node {
+                    *binding = outputs
+                        .get(output.as_str())
+                        .cloned()
+                        .ok_or_else(|| Error(format!("{node}: unknown output {output}")))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl InputNode {
     pub(crate) fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() || self.name.chars().any(char::is_control) {
@@ -263,6 +357,8 @@ pub enum Primitive {
     MixPalette,
     PaletteFallback,
     ColorField,
+    /// Colour × mask, from before one Multiply took every signal. Decoded
+    /// from frozen documents only; migration rewrites it.
     MaskColor,
     WriteColor,
     Hsv,
@@ -436,9 +532,8 @@ impl Definition {
             })
     }
 
-    /// A placed effect is an editable graph with a visible terminal. Only its
-    /// supplied capability signals are connected; color can be set independently
-    /// on Output without changing the effect or its trigger.
+    /// A placed effect is its composition, wired to a visible Apply. A
+    /// complete clip graph placed again is called as it is.
     pub fn clip_instance(&self, definition: &str) -> Result<Definition> {
         if !self.placeable() {
             return Err(Error(
@@ -482,6 +577,9 @@ impl Definition {
             },
         );
         instance.outputs.extend(terminal.outputs);
+        if matches!(self.body, Body::Graph(_)) {
+            graph.inline("effect", self)?;
+        }
         Ok(instance)
     }
 }

@@ -126,10 +126,7 @@ pub(super) fn lower(
         .collect();
     Ok(Converted {
         node: Node {
-            definition: remap
-                .get(&upgraded.definition)
-                .cloned()
-                .unwrap_or(upgraded.definition),
+            definition: remap[&upgraded.definition].clone(),
             inputs: bindings,
             position: node.position_x.zip(node.position_y).map(|(x, y)| [x, y]),
         },

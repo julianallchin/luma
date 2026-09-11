@@ -20,16 +20,16 @@ grid, delay and angle overrides, over nine fixtures and nine sample times.
 Shimmer became graphs over the `core/event_ages` tensor. Version 3 documents
 validate against it; `migration::upgrade_v3` rewrites their effect nodes as the
 beat-driven patterns or the trigger-driven graphs plus an explicit Beat trigger.
-The v2 conversion copied every library effect a score used into it as a
-`<effect>/signals` graph, nested as deeply as that library was; `upgrade_v3`
-recognizes a copy that is still the library graph by content and replaces it
-with the shipped pattern of the same controls, folding the copy's dimmer into
-the pattern's color wherever an Apply node or a graph interface took the pair.
+The v2 conversion copies every library effect a score used into it as a
+`<effect>/signals` graph, nested as deeply as that library was.
 
-Version 4 documents written by the first build of that vocabulary still carry
-those copies, rewritten around the version 4 kernels. `upgrade_v4` recognizes
-that shape the same way (`tests/fixtures/v4-samples.json` is the v2 samples as
-that build saved them) and produces version 5, which has no library copies.
+Versions 5 and 6 flatten what the conversions leave: a clip's copies of the
+version 2 library effects dissolve into the clip, the hue/brightness split
+collapses back into one Mask color, and a copy that computes exactly what a
+shipped graph computes becomes that graph (`migration::flatten`). The step
+runs twice because the first builds of versions 4 and 5 saved documents with
+the copies still in them; `tests/fixtures/v4-samples.json` is the v2 samples
+as the version 4 build saved them, and converges on a fresh conversion.
 
 `v2-event-recipes.json` is part of the v2-to-v3 transformation. It replaces
 legacy cyclic Chase/Pulse/Dissolve recipes with event operations while retaining

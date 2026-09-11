@@ -160,15 +160,15 @@ fn invalid_envelopes_identify_the_authored_location_and_anchor() {
     };
     graph
         .nodes
-        .get_mut("effect")
+        .get_mut("chase")
         .unwrap()
         .inputs
         .insert("shape".into(), invalid.into());
-    check(&score, "graph intro, node effect, input shape");
+    check(&score, "graph intro, node chase, input shape");
     let Body::Graph(graph) = &mut score.definitions.get_mut("intro").unwrap().body else {
         unreachable!()
     };
-    graph.nodes.get_mut("effect").unwrap().inputs.insert(
+    graph.nodes.get_mut("chase").unwrap().inputs.insert(
         "shape".into(),
         Value::Envelope(Envelope::linear(vec![[0., 0.], [0.5, 1.], [1., 0.]])).into(),
     );

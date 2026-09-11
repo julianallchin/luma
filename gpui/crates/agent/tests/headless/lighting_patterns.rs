@@ -5,7 +5,7 @@ use std::time::Duration;
 #[test]
 fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
     let mut harness = Fixture::new("mapping-vector-mirror", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
@@ -48,7 +48,7 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
         app.click(node("button","Mapping: Reverse"));
         app.frames(12,{waitMs:80});
         app.click(node("card","Beat chase"),{count:2});
-        app.click(node("card","Beat chase"));
+        app.click(node("card","Resolve Mapping"));
         app.click(node("button","Edit Input Mapping"));
         reveal(node("select","Up (Z+)"));
         app.click(node("select","Up (Z+)"));
@@ -108,7 +108,7 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
 #[test]
 fn edit_gradient_stops_in_a_canonical_graph() {
     let mut harness = Fixture::new("lighting-gradient-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
@@ -177,7 +177,7 @@ fn edit_gradient_stops_in_a_canonical_graph() {
 #[test]
 fn insert_a_dissolve_pattern_in_the_native_score_editor() {
     let mut harness = Fixture::new("lighting-pattern-insert", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
@@ -245,7 +245,7 @@ fn insert_a_dissolve_pattern_in_the_native_score_editor() {
 #[test]
 fn edit_a_chase_envelope_per_clip() {
     let mut harness = Fixture::new("lighting-envelope-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
@@ -332,7 +332,7 @@ fn inspect_builtin_chase_and_customize_its_composition() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-nested-graphs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .open(mode);
     let result = harness.exec(&support::script(r#"
@@ -349,25 +349,25 @@ fn inspect_builtin_chase_and_customize_its_composition() {
         until("graph preview",s=>s.find({role:"card",label:"Graph workspace"}));
         const root=app.snapshot().findAll({role:"card"}).map(n=>n.label).sort();
         const rootShot=CAPTURE ? app.screenshot() : null;
-        app.click(app.snapshot().find({role:"card",label:"Beat chase"}),{count:2});
-        until("chase recipe",s=>s.find({role:"card",label:"Chase"}));
+        app.click(app.snapshot().find({role:"card",label:"Chase"}),{count:2});
+        until("chase recipe",s=>s.find({role:"card",label:"Pill"}));
         const chaseShot=CAPTURE ? app.screenshot() : null;
         const kernel=app.snapshot().findAll({role:"card"}).map(n=>n.label).sort();
-        app.click(app.snapshot().find({role:"card",label:"Chase"}));
+        app.click(app.snapshot().find({role:"card",label:"Pill"}));
         app.key("backspace"); app.frames(3);
         const afterDelete=app.snapshot().findAll({role:"card"}).map(n=>n.label).sort();
         app.click(app.snapshot().find({role:"button",label:"Graph: Beat chase"}));
-        until("back at root",s=>s.find({role:"card",label:"Beat chase"}));
+        until("back at root",s=>s.find({role:"card",label:"Chase"})&&!s.find({role:"card",label:"Pill"}));
         const rootAfter=app.snapshot().findAll({role:"card"}).map(n=>n.label).sort();
-        app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
+        app.click(app.snapshot().find({role:"card",label:"Chase"}));
         until("customize",s=>s.find({role:"button",label:"Edit a copy"}));
         app.click(app.snapshot().find({role:"button",label:"Edit a copy"}));
-        until("editable chase copy",s=>s.find({role:"card",label:"Chase"})&&s.find({role:"button",label:"Add node"}));
+        until("editable chase copy",s=>s.find({role:"card",label:"Pill"})&&s.find({role:"button",label:"Add node"}));
         app.key("secondary-z");
-        until("undo customization returns to parent",s=>s.find({role:"card",label:"Beat chase"})&&!s.find({role:"card",label:"Chase"}));
+        until("undo customization returns to parent",s=>s.find({role:"card",label:"Chase"})&&!s.find({role:"card",label:"Pill"}));
         app.key("secondary-shift-z");
-        app.click(app.snapshot().find({role:"card",label:"Beat chase"}),{count:2});
-        until("redo customization is editable",s=>s.find({role:"card",label:"Chase"})&&s.find({role:"button",label:"Add node"}));
+        app.click(app.snapshot().find({role:"card",label:"Chase"}),{count:2});
+        until("redo customization is editable",s=>s.find({role:"card",label:"Pill"})&&s.find({role:"button",label:"Add node"}));
         app.click(app.snapshot().find({role:"button",label:"Add node"}));
         until("search copy",s=>s.find({role:"input",label:"Search nodes…"}));
         app.type(app.snapshot().find({role:"input",label:"Search nodes…"}),"Position");
@@ -391,11 +391,16 @@ fn inspect_builtin_chase_and_customize_its_composition() {
         .unwrap()
         .iter()
         .any(|v| v == "Inputs"));
-    assert!(result.result["kernel"]
+    assert!(result.result["root"]
         .as_array()
         .unwrap()
         .iter()
         .any(|v| v == "Chase"));
+    assert!(result.result["kernel"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "Pill"));
     assert_eq!(result.result["kernel"], result.result["afterDelete"]);
     assert_eq!(result.result["root"], result.result["rootAfter"]);
     assert_eq!(result.result["customized"], true);
@@ -408,7 +413,7 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-compose-outputs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":5,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
         .with_rig()
         .window(1600., 1000.)
         .open(mode);
@@ -420,9 +425,9 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
         app.type(node("input","Search patterns…"),"chase"); app.frames(2); app.key("enter");
         app.click(node("card","Beat chase"));
         app.click(node("card","Beat chase"),{count:2});
-        app.drag(node("card","Beat chase"),{dx:28,dy:18},{steps:5});
+        app.drag(node("card","Chase"),{dx:28,dy:18},{steps:5});
         app.frames(8,{waitMs:30});
-        app.click(node("card","Beat chase"));
+        app.click(node("card","Chase"));
         app.click(node("button","Edit Input Boundary"));
         node("card","Boundary");
         app.click(node("select","Natural")); app.click(node("button","Wrap"));
@@ -436,13 +441,13 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
             const b=node("card",label).bounds, w=node("card","Graph workspace").bounds;
             app.drag({x:b.x+b.width/2,y:b.y+8},{dx:w.x+x-b.x,dy:w.y+y-b.y},{steps:8});
             const moved=node("card",label).bounds;
-            if(Math.abs(moved.x-w.x-x)>1 || Math.abs(moved.y-w.y-y)>1) throw new Error(JSON.stringify({label,b,w,moved,wanted:[w.x+x,w.y+y],cards:app.snapshot().findAll({role:"card"}).filter(n=>["Beat chase","Position","Add Lighting"].includes(n.label)).map(n=>({label:n.label,bounds:n.bounds}))}));
+            if(Math.abs(moved.x-w.x-x)>1 || Math.abs(moved.y-w.y-y)>1) throw new Error(JSON.stringify({label,b,w,moved,wanted:[w.x+x,w.y+y],cards:app.snapshot().findAll({role:"card"}).filter(n=>["Chase","Position","Add Lighting"].includes(n.label)).map(n=>({label:n.label,bounds:n.bounds}))}));
         };
         place("Position",500,620);
-        place("Beat chase",500,50);
+        place("Chase",500,50);
         place("Apply",760,430);
         const wire=(a,b)=>{app.drag(node("button",a),node("button",b),{steps:8,restale:"match"});app.frames(2);};
-        node("button","Edge effect.color → output.color");
+        node("button","Edge color.value → output.color");
         wire("write_position_1 output pan","output input pan");
         node("button","Edge write_position_1.pan → output.pan");
         wire("write_position_1 output tilt","output input tilt");
@@ -478,13 +483,13 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
                 .next()
                 .unwrap()["body"]["body"];
             assert!(
-                graph["nodes"]["effect"]["position"].is_array(),
+                graph["nodes"]["chase"]["position"].is_array(),
                 "native layout persists in the graph document"
             );
             assert_eq!(graph["outputs"]["lighting"]["node"], "output");
             assert_eq!(
                 graph["nodes"]["output"]["inputs"]["color"]["node"],
-                "effect"
+                "color"
             );
             assert_eq!(
                 graph["nodes"]["output"]["inputs"]["pan"]["node"],

@@ -163,16 +163,13 @@ fn gradient_and_color_fields_reject_bad_authored_values_and_mismatched_domains()
     let cells = cells();
     assert!(library
         .evaluate_effect(
-            "mask_color",
+            "core/multiply",
             &BTreeMap::from([
                 (
-                    "color".into(),
+                    "a".into(),
                     Value::ColorField(BTreeMap::from([("a".into(), [1.; 3])]))
                 ),
-                (
-                    "mask".into(),
-                    Value::Mask(BTreeMap::from([("b".into(), 1.)]))
-                ),
+                ("b".into(), Value::Mask(BTreeMap::from([("b".into(), 1.)]))),
             ]),
             frame(&cells)
         )

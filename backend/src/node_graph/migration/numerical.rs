@@ -408,11 +408,11 @@ pub(crate) fn convert(source: &Graph, name: &str) -> Result<p::Score, String> {
             brightness.clone(),
             Node {
                 position: None,
-                definition: "mask_color".into(),
-                inputs: BTreeMap::from([("color".into(), color), ("mask".into(), dimmer)]),
+                definition: "core/multiply".into(),
+                inputs: BTreeMap::from([("a".into(), color), ("b".into(), dimmer)]),
             },
         );
-        terminal.insert("color".into(), wire(&brightness, "color"));
+        terminal.insert("color".into(), wire(&brightness, "value"));
     }
     // Unfinished graphs get an explicit unwritten Output; they remain editable.
     let mut output = "output".to_string();
@@ -457,6 +457,7 @@ pub(crate) fn convert(source: &Graph, name: &str) -> Result<p::Score, String> {
             body: Body::Graph(root),
         },
     );
+    p::migration::flatten(&mut score).map_err(|e| e.to_string())?;
     score.validate(&base).map_err(|e| e.to_string())?;
     Ok(score)
 }
