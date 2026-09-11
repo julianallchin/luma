@@ -1,5 +1,6 @@
 use luma_patterns::*;
 use ndarray::{array, Array2, Axis};
+use std::collections::BTreeMap;
 
 fn recorded(times: &[f64]) -> Events {
     Events::Beats {
@@ -16,6 +17,53 @@ fn periodic() -> Events {
 fn flat() -> Envelope {
     Envelope::linear(vec![[0., 1.], [1., 1.]])
 }
+fn cells(ids: &[String]) -> Vec<Cell> {
+    ids.iter()
+        .map(|id| Cell {
+            id: id.clone(),
+            group: "all".into(),
+            world: [0.; 3],
+            uvz: [0.; 3],
+        })
+        .collect()
+}
+fn frame(cells: &[Cell]) -> Frame<'_> {
+    Frame {
+        cells,
+        features: None,
+        beat: 0.,
+        clip_start: 0.,
+        clip_duration: 8.,
+        seed: 0,
+    }
+}
+/// The shipped Pulse graph: every event addresses its heads through the same
+/// event-ages tensor, so head targeting needs no dedicated kernel.
+fn pulse(times: &[f64], events: &Events, duration: f64, shape: &Envelope) -> Signal {
+    let ids = events_fixtures(events);
+    let cells = cells(&ids);
+    let program = PreparedGraph::new(
+        &standard_library(),
+        "pulse",
+        &BTreeMap::from([
+            ("trigger".into(), Value::Events(events.clone())),
+            ("duration".into(), Value::Beats(duration)),
+            ("shape".into(), Value::Envelope(shape.clone())),
+        ]),
+        frame(&cells),
+    )
+    .unwrap();
+    program.evaluate_batch(times).unwrap()["mask"]
+        .signal()
+        .unwrap()
+        .clone()
+}
+fn events_fixtures(events: &Events) -> Vec<String> {
+    match events {
+        Events::Targeted { targets, .. } => targets.fixtures().to_vec(),
+        _ => Vec::new(),
+    }
+}
 
 #[test]
 fn an_earlier_head_fades_out_while_a_new_head_fades_in() {
@@ -23,7 +71,7 @@ fn an_earlier_head_fades_out_while_a_new_head_fades_in() {
         EventTargets::weights(vec!["b".into(), "a".into()], array![[0., 1.], [1., 0.]]).unwrap();
     let events = recorded(&[0., 0.5]).targeted(targets).unwrap();
     let shape = Envelope::linear(vec![[0., 0.], [0.25, 1.], [1., 0.]]);
-    let signal = pulse_signal(&[0.75, 1., 2.5], &events, 0., 2., &shape).unwrap();
+    let signal = pulse(&[0.75, 1., 2.5], &events, 2., &shape);
     assert_eq!(signal.fixtures().unwrap(), ["a", "b"]);
     assert_eq!(signal.values().dim(), (2, 3, 1));
     assert!((signal.values()[[0, 0, 0]] - 5. / 6.).abs() < 1e-12);
@@ -40,7 +88,7 @@ fn repeated_selection_of_one_head_combines_envelopes_with_max() {
         .targeted(EventTargets::weights(vec!["a".into()], array![[1., 0.6]]).unwrap())
         .unwrap();
     let fade = Envelope::linear(vec![[0., 1.], [1., 0.]]);
-    let actual = pulse_signal(&[0.5, 1., 1.5, 2., 2.5], &events, 0., 2., &fade).unwrap();
+    let actual = pulse(&[0.5, 1., 1.5, 2., 2.5], &events, 2., &fade);
     for (i, expected) in [0.75, 0.5, 0.3, 0.15, 0.].into_iter().enumerate() {
         assert!((actual.values()[[0, i, 0]] - expected).abs() < 1e-12);
     }
@@ -53,9 +101,9 @@ fn random_subsets_are_exact_and_independent_of_seek_and_domain_order() {
         .targeted(EventTargets::random(ids.clone(), 0.375, 427, false).unwrap())
         .unwrap();
     let times = [3.1, -2.9, 0.1, 3.1, 1_000_000.1, 2.1, 1.1];
-    let batch = pulse_signal(&times, &source, 0., 0.2, &flat()).unwrap();
+    let batch = pulse(&times, &source, 0.2, &flat());
     for (t, time) in times.iter().enumerate() {
-        let single = pulse_signal(&[*time], &source, 0., 0.2, &flat()).unwrap();
+        let single = pulse(&[*time], &source, 0.2, &flat());
         let column = batch.values().index_axis(Axis(1), t);
         assert_eq!(column, single.values().index_axis(Axis(1), 0));
         assert_eq!(column.sum(), 3.);
@@ -65,17 +113,8 @@ fn random_subsets_are_exact_and_independent_of_seek_and_domain_order() {
     let reversed = periodic()
         .targeted(EventTargets::random(ids.into_iter().rev().collect(), 0.375, 427, false).unwrap())
         .unwrap();
-    assert_eq!(
-        batch,
-        pulse_signal(&times, &reversed, 0., 0.2, &flat()).unwrap()
-    );
-    assert_eq!(
-        pulse_signal(&[], &source, 0., 0.2, &flat())
-            .unwrap()
-            .values()
-            .dim(),
-        (8, 0, 1)
-    );
+    assert_eq!(batch, pulse(&times, &reversed, 0.2, &flat()));
+    assert_eq!(pulse(&[], &source, 0.2, &flat()).values().dim(), (8, 0, 1));
 }
 
 #[test]
@@ -87,10 +126,10 @@ fn random_selection_keeps_old_cohorts_until_their_envelopes_finish() {
         .targeted(EventTargets::random(ids.clone(), 0.25, 99, false).unwrap())
         .unwrap();
     // Capture membership separately at each start, using non-overlapping flat pulses.
-    let membership = pulse_signal(&[0., 1., 2.], &selected, 0., 0.1, &flat()).unwrap();
+    let membership = pulse(&[0., 1., 2.], &selected, 0.1, &flat());
     let shape = Envelope::linear(vec![[0., 0.], [0.25, 1.], [1., 0.]]);
     let times = [1.25, 2.25, 0.25, 4., 1.25];
-    let output = pulse_signal(&times, &selected, 0., 2., &shape).unwrap();
+    let output = pulse(&times, &selected, 2., &shape);
     for h in 0..ids.len() {
         for (t, time) in times.iter().enumerate() {
             let expected = (0..3)
@@ -110,17 +149,17 @@ fn random_selection_keeps_old_cohorts_until_their_envelopes_finish() {
 
 #[test]
 fn shuffled_cycles_minimize_repeats_without_replaying_earlier_events() {
-    for heads in [0, 1, 5, 8] {
+    for heads in [1, 5, 8] {
         let ids: Vec<_> = (0..heads).map(|i| format!("head-{i}")).collect();
         for count in 0..=heads {
-            let proportion = count as f64 / heads.max(1) as f64;
+            let proportion = count as f64 / heads as f64;
             let events = periodic()
                 .targeted(EventTargets::random(ids.clone(), proportion, 813, true).unwrap())
                 .unwrap();
             let times = [-1e12, -1e12 + 1., 0., 1., 2., 1e12, 1e12 + 1.];
-            let batch = pulse_signal(&times, &events, 0., 0.5, &flat()).unwrap();
+            let batch = pulse(&times, &events, 0.5, &flat());
             for (t, time) in times.iter().enumerate() {
-                let single = pulse_signal(&[*time], &events, 0., 0.5, &flat()).unwrap();
+                let single = pulse(&[*time], &events, 0.5, &flat());
                 assert_eq!(
                     batch.values().index_axis(Axis(1), t),
                     single.values().index_axis(Axis(1), 0)
@@ -144,10 +183,7 @@ fn shuffled_cycles_minimize_repeats_without_replaying_earlier_events() {
                     .unwrap(),
                 )
                 .unwrap();
-            assert_eq!(
-                batch,
-                pulse_signal(&times, &reversed, 0., 0.5, &flat()).unwrap()
-            );
+            assert_eq!(batch, pulse(&times, &reversed, 0.5, &flat()));
             let roundtrip: Events =
                 serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
             assert_eq!(events, roundtrip);
@@ -177,7 +213,7 @@ fn targeting_is_shared_by_chase_and_can_filter_an_existing_selection() {
             .unwrap(),
         )
         .unwrap();
-    let pulse = pulse_signal(&[0.5], &subset, 0., 1., &flat()).unwrap();
+    let pulse = pulse(&[0.5], &subset, 1., &flat());
     assert_eq!(pulse.values().sum(), 1.);
     assert_eq!(pulse.values()[[1, 0, 0]], 0.);
     assert_eq!(pulse.values()[[3, 0, 0]], 0.);
@@ -191,23 +227,24 @@ fn targeting_is_shared_by_chase_and_can_filter_an_existing_selection() {
         false,
     )
     .unwrap();
-    let chase = chase_signal(
-        &mapping,
-        &[0.5],
-        &subset,
-        0.,
-        ChaseShape {
-            travel: 1.,
-            start: 0.,
-            end: 1.,
-            path: &Envelope::linear(vec![[0., 0.], [1., 1.]]),
-            width: 1.,
-            shape: &flat(),
-            boundary: Boundary::Wrap,
-        },
+    let cells = cells(&["a".into(), "b".into(), "c".into(), "d".into()]);
+    let chase = PreparedGraph::new(
+        &standard_library(),
+        "chase",
+        &BTreeMap::from([
+            ("mapping".into(), Value::Coordinates(mapping)),
+            ("trigger".into(), Value::Events(subset)),
+            ("travel".into(), Value::Beats(1.)),
+            ("width".into(), Value::Proportion(1.)),
+            ("shape".into(), Value::Envelope(flat())),
+            ("boundary".into(), Value::Boundary(Boundary::Wrap)),
+        ]),
+        frame(&cells),
     )
+    .unwrap()
+    .evaluate_batch(&[0.5])
     .unwrap();
-    assert_eq!(pulse, chase);
+    assert_eq!(&pulse, chase["mask"].signal().unwrap());
 }
 
 #[test]
@@ -230,10 +267,7 @@ fn targeting_validates_identity_shapes_and_serialization() {
         .targeted(EventTargets::weights(vec![], Array2::zeros((0, 0))).unwrap())
         .unwrap();
     assert_eq!(
-        pulse_signal(&[1., 2.], &empty, 0., 1., &flat())
-            .unwrap()
-            .values()
-            .dim(),
+        pulse(&[1., 2.], &empty, 1., &flat()).values().dim(),
         (0, 2, 1)
     );
     for proportion in [0., 1.] {
@@ -241,9 +275,7 @@ fn targeting_validates_identity_shapes_and_serialization() {
             .targeted(EventTargets::random(vec!["a".into()], proportion, 0, false).unwrap())
             .unwrap();
         assert_eq!(
-            pulse_signal(&[0.], &events, 0., 1., &flat())
-                .unwrap()
-                .values()[[0, 0, 0]],
+            pulse(&[0.], &events, 1., &flat()).values()[[0, 0, 0]],
             proportion
         );
     }

@@ -20,6 +20,119 @@ pub struct Input {
     pub value_type: ValueType,
     pub rate: Rate,
     pub default: Option<Value>,
+    /// How a person or agent writes a constant here. Wire compatibility is the
+    /// value type; this only shapes the control. Unset means the value type's
+    /// own editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<Author>,
+}
+
+/// A named literal offered by a control.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preset {
+    pub label: String,
+    pub value: Value,
+}
+
+/// The built-in control kit. Every graph input is authored with one of these;
+/// a graph never draws its own controls.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Author {
+    /// A number field, with slider bounds when both are given.
+    Number {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f64>,
+    },
+    /// Named literals in menu order. `custom` also offers the value type's own
+    /// editor for anything the menu does not name.
+    Choice {
+        options: Vec<Preset>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        custom: bool,
+    },
+    Toggle,
+    Color,
+    Curve,
+    Gradient,
+}
+
+impl Input {
+    /// The control this input is authored with: its declared author, or the
+    /// one implied by its value type.
+    pub fn author(&self) -> Option<Author> {
+        if let Some(author) = &self.author {
+            return Some(author.clone());
+        }
+        Some(match self.value_type {
+            ValueType::Boolean => Author::Toggle,
+            ValueType::Envelope => Author::Curve,
+            ValueType::Gradient => Author::Gradient,
+            kind => match kind.signal_type()? {
+                crate::SignalType {
+                    channels: Some(crate::Channels::Rgb),
+                    ..
+                } => Author::Color,
+                crate::SignalType {
+                    channels: Some(crate::Channels::Value) | None,
+                    unit,
+                } => Author::Number {
+                    min: match unit {
+                        Some(
+                            crate::Unit::Proportion | crate::Unit::Beats | crate::Unit::Seconds,
+                        ) => Some(0.0),
+                        _ => None,
+                    },
+                    max: (unit == Some(crate::Unit::Proportion)).then_some(1.0),
+                },
+                _ => return None,
+            },
+        })
+    }
+    pub(crate) fn validate_author(&self) -> Result<()> {
+        let Some(author) = &self.author else {
+            return Ok(());
+        };
+        let scalar = || {
+            self.value_type
+                .signal_type()
+                .is_some_and(|spec| matches!(spec.channels, Some(crate::Channels::Value) | None))
+        };
+        let valid = match author {
+            Author::Number { min, max } => {
+                scalar()
+                    && min.is_none_or(f64::is_finite)
+                    && max.is_none_or(f64::is_finite)
+                    && min.zip(*max).is_none_or(|(min, max)| min <= max)
+            }
+            Author::Choice { options, .. } => {
+                !options.is_empty()
+                    && options.iter().all(|preset| {
+                        !preset.label.trim().is_empty()
+                            && preset.value.validate().is_ok()
+                            && self.value_type.accepts(preset.value.value_type())
+                    })
+            }
+            Author::Toggle => self.value_type == ValueType::Boolean,
+            Author::Color => self
+                .value_type
+                .signal_type()
+                .is_some_and(|spec| spec.channels == Some(crate::Channels::Rgb)),
+            Author::Curve => self.value_type == ValueType::Envelope,
+            Author::Gradient => self.value_type == ValueType::Gradient,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(Error(format!(
+                "control {author:?} does not fit a {} input",
+                self.value_type
+            )))
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +243,9 @@ pub enum Primitive {
     EventSpacing,
     ThinEvents,
     RandomEventTargets,
+    EventAges,
+    /// Version 3 effect kernels. Decoded from frozen documents only; migration
+    /// rebuilds them as graphs before execution.
     ChaseEvents,
     PulseEvents,
     DissolveEvents,
@@ -192,9 +308,7 @@ impl Primitive {
             self,
             Self::Rhythm
                 | Self::ClipTime
-                | Self::ChaseEvents
-                | Self::PulseEvents
-                | Self::DissolveEvents
+                | Self::EventAges
                 | Self::TrackTime
                 | Self::BandEnergy
                 | Self::AudioSpectrum
@@ -485,6 +599,9 @@ impl Library {
                     return Err(Error(format!("{id}.{name}: default type mismatch")));
                 }
             }
+            input
+                .validate_author()
+                .map_err(|error| Error(format!("graph {id}, input {name}: {error}")))?;
         }
         let complexity = match &def.body {
             Body::Primitive(p) => {

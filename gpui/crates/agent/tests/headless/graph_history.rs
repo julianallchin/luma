@@ -6,7 +6,7 @@ use std::time::Duration;
 fn completed_graph_keeps_each_draft_gesture_and_reopens_an_undone_draft() {
     let mut harness = Fixture::new("graph-draft-history", 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version": 3,
+            "version": 4,
             "definitions": {
                 "custom": {
                     "name": "Draft history",

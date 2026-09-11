@@ -312,10 +312,12 @@ pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
                         param_type,
                         default_number: wire.as_f64().map(|v| v as f32),
                         default_text: Some(text),
-                        range: if input.value_type == ValueType::Proportion {
-                            Some((0., 1.))
-                        } else {
-                            None
+                        range: match input.author() {
+                            Some(p::Author::Number {
+                                min: Some(min),
+                                max: Some(max),
+                            }) => Some((min as f32, max as f32)),
+                            _ => None,
                         },
                     })
                 })

@@ -165,6 +165,10 @@ impl Library {
                                         ..result
                                     }
                                 }
+                                Primitive::RandomField => SignalType {
+                                    unit: Some(Unit::Number),
+                                    channels: signal("epoch").channels,
+                                },
                                 Primitive::FieldClamp => SignalType {
                                     unit: Some(Unit::Proportion),
                                     channels: signal("value").channels,

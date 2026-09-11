@@ -166,7 +166,7 @@ impl TrackHost {
             match method {
                 "track.score_upgrade" => {
                     let request: Upgrade = decode(payload)?;
-                    let candidate = luma_patterns::migration::upgrade_v2(&request.candidate)
+                    let candidate = luma_patterns::migration::upgrade(&request.candidate)
                         .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
                     Ok(json!(candidate))
                 }

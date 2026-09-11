@@ -38,9 +38,9 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
     let baseline: Baseline =
         serde_json::from_str(include_str!("fixtures/v2-samples.json")).unwrap();
     let original = serde_json::to_string(&baseline.score).unwrap();
-    let upgraded = migration::upgrade_v2(&baseline.score).unwrap();
+    let upgraded = migration::upgrade(&baseline.score).unwrap();
     assert_eq!(serde_json::to_string(&baseline.score).unwrap(), original);
-    assert_eq!(migration::upgrade_v2(&upgraded).unwrap(), upgraded);
+    assert_eq!(migration::upgrade(&upgraded).unwrap(), upgraded);
     assert_eq!(upgraded.clips.len(), 36);
     let library = upgraded.library(&standard_library()).unwrap();
     let original_library = baseline.score.library(&migration::v2_library()).unwrap();
@@ -74,11 +74,12 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
                 panic!()
             };
             let actual = batch["lighting"].lighting().unwrap().sample(time).unwrap();
-            assert_outputs(
-                &actual,
-                expected,
-                &format!("{id} at {}", baseline.times[time]),
-            );
+            let label = format!("{id} at {}", baseline.times[time]);
+            if original_library.display_name(&baseline.score.clips[id].graph) == "Dissolve Flash" {
+                assert_dissolve_order(&actual, expected, &label);
+            } else {
+                assert_outputs(&actual, expected, &label);
+            }
         }
     }
     for (id, definition) in &upgraded.definitions {
@@ -115,6 +116,35 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
             }
         }
     }
+}
+
+/// Dissolve now cuts its seeded random order at whole heads instead of at each
+/// head's own random threshold, and softness fades along ranks. The order is
+/// the original engine's, so the lit sets are prefixes of one another.
+fn assert_dissolve_order(
+    actual: &BTreeMap<String, FixtureOutput>,
+    expected: &BTreeMap<String, FixtureOutput>,
+    label: &str,
+) {
+    assert_eq!(
+        actual.keys().collect::<Vec<_>>(),
+        expected.keys().collect::<Vec<_>>()
+    );
+    let lit = |values: &BTreeMap<String, FixtureOutput>| {
+        values
+            .iter()
+            .filter(|(id, value)| {
+                assert_eq!(value.writes(), expected[*id].writes(), "{label} / {id}");
+                value.dimmer.is_some_and(|dimmer| dimmer > 0.0)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let (actual, expected) = (lit(actual), lit(expected));
+    assert!(
+        actual.is_subset(&expected) || expected.is_subset(&actual),
+        "{label}: {actual:?} and {expected:?} are not prefixes of one order"
+    );
 }
 
 fn assert_outputs(
@@ -268,7 +298,7 @@ fn shared_bundle_helpers_specialize_without_inventing_capability_writes() {
             },
         );
     }
-    let upgraded = migration::upgrade_v2(&score).unwrap();
+    let upgraded = migration::upgrade(&score).unwrap();
     assert_eq!(upgraded.clips, score.clips);
     assert_eq!(
         upgraded.definitions["root"].inputs["tint"].name,
@@ -328,15 +358,23 @@ fn shared_bundle_helpers_specialize_without_inventing_capability_writes() {
 fn migrated_repeating_effects_overlap_and_keep_original_override_keys() {
     let baseline: Baseline =
         serde_json::from_str(include_str!("fixtures/v2-samples.json")).unwrap();
-    let mut upgraded = migration::upgrade_v2(&baseline.score).unwrap();
-    for effect in ["chase", "pulse", "dissolve_flash"] {
+    let mut upgraded = migration::upgrade(&baseline.score).unwrap();
+    for (effect, pattern, length) in [
+        ("chase", "beat_chase", "travel"),
+        ("pulse", "beat_pulse", "duration"),
+        ("dissolve_flash", "beat_dissolve", "duration"),
+    ] {
         let clip = upgraded
             .clips
             .get_mut(&format!("sample-{effect}-0"))
             .unwrap();
+        // Migrated clips keep their original override keys.
         clip.inputs.insert("travel".into(), Value::Beats(6.0));
         clip.inputs.insert("repeat".into(), Value::Beats(2.0));
         let clip = clip.clone();
+        let mut reference_inputs = clip.inputs.clone();
+        let travel = reference_inputs.remove("travel").unwrap();
+        reference_inputs.insert(length.into(), travel);
         upgraded.validate(&standard_library()).unwrap();
         let lib = upgraded.library(&standard_library()).unwrap();
         let frame = Frame {
@@ -352,14 +390,15 @@ fn migrated_repeating_effects_overlap_and_keep_original_override_keys() {
         let mut reference_library = standard_library();
         reference_library.definitions.insert(
             "reference".into(),
-            reference_library.definitions[effect]
-                .clip_instance(effect)
+            reference_library.definitions[pattern]
+                .clip_instance(pattern)
                 .unwrap(),
         );
-        let reference = PreparedGraph::new(&reference_library, "reference", &clip.inputs, frame)
-            .unwrap()
-            .evaluate_batch(&[7.0, 3.0, 5.0, 7.0])
-            .unwrap();
+        let reference =
+            PreparedGraph::new(&reference_library, "reference", &reference_inputs, frame)
+                .unwrap()
+                .evaluate_batch(&[7.0, 3.0, 5.0, 7.0])
+                .unwrap();
         for time in 0..4 {
             let actual = batch["lighting"].lighting().unwrap().sample(time).unwrap();
             let expected = reference["lighting"]
@@ -386,7 +425,7 @@ fn migration_rejects_invalid_source_without_panicking_or_modifying_it() {
         standard_library().definitions["output"].clone(),
     );
     let original = score.clone();
-    assert!(migration::upgrade_v2(&score)
+    assert!(migration::upgrade(&score)
         .unwrap_err()
         .0
         .contains("score-local definitions"));
@@ -405,7 +444,7 @@ fn every_v2_node_can_survive_as_an_unused_authored_helper() {
         .iter()
         .map(|(id, definition)| (format!("saved-{id}"), definition.instance(id)))
         .collect();
-    let migrated = migration::upgrade_v2(&score).unwrap();
+    let migrated = migration::upgrade(&score).unwrap();
     migrated.validate(&standard_library()).unwrap();
     assert!(migrated.definitions.len() >= score.definitions.len());
     assert!(migrated.clips.is_empty());
@@ -415,7 +454,7 @@ fn every_v2_node_can_survive_as_an_unused_authored_helper() {
 fn migrated_drum_pulse_preserves_a_rising_tail_across_a_later_event() {
     let baseline: Baseline =
         serde_json::from_str(include_str!("fixtures/v2-samples.json")).unwrap();
-    let mut score = migration::upgrade_v2(&baseline.score).unwrap();
+    let mut score = migration::upgrade(&baseline.score).unwrap();
     let clip = score.clips.get_mut("sample-drum_pulse-0").unwrap();
     clip.inputs.insert("duration".into(), Value::Beats(2.0));
     clip.inputs.insert(
@@ -484,7 +523,7 @@ fn newly_reserved_names_do_not_replace_authored_helpers() {
     };
     graph.nodes.get_mut("effect").unwrap().definition = "drum_trigger".into();
     graph.nodes.get_mut("effect").unwrap().inputs.clear();
-    let upgraded = migration::upgrade_v2(&score).unwrap();
+    let upgraded = migration::upgrade(&score).unwrap();
     assert_ne!(upgraded.clips["output"].graph, "output");
     assert!(!upgraded.definitions.contains_key("output"));
     assert!(!upgraded.definitions.contains_key("drum_trigger"));

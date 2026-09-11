@@ -1,6 +1,9 @@
+//! Chase, Pulse and Dissolve are graphs over one event-ages tensor. Events
+//! within the window become channels; Max reduces them. No kernel replays a
+//! graph per event, and seeking never depends on playback history.
 mod support;
 use luma_patterns::*;
-use ndarray::{array, Array3};
+use ndarray::{array, Array3, Axis};
 use std::{collections::BTreeMap, sync::Arc};
 #[allow(unused_imports)]
 use support::EvaluateEffect;
@@ -13,23 +16,114 @@ fn events(times: &[f64]) -> Events {
         times: EventTimes::new(times.to_vec()).unwrap(),
     }
 }
-fn chase(times: &[f64], event_times: &[f64], travel: f64) -> Signal {
-    chase_signal(
-        &mapping(),
-        times,
-        &events(event_times),
-        0.0,
-        ChaseShape {
-            travel,
-            start: 0.0,
-            end: 1.0,
-            path: &Envelope::linear(vec![[0., 0.], [1., 1.]]),
+fn cells(mapping: &Mapping) -> Vec<Cell> {
+    mapping
+        .coordinates
+        .iter()
+        .map(|c| Cell {
+            id: c.cell.clone(),
+            group: "all".into(),
+            world: [0., 0., c.position],
+            uvz: [0., 0., c.position],
+        })
+        .collect()
+}
+fn frame(cells: &[Cell]) -> Frame<'_> {
+    Frame {
+        cells,
+        features: None,
+        beat: 0.,
+        clip_start: 0.,
+        clip_duration: 8.,
+        seed: 0,
+    }
+}
+struct Chase<'a> {
+    travel: f64,
+    start: f64,
+    end: f64,
+    path: Envelope,
+    width: f64,
+    shape: Envelope,
+    boundary: Boundary,
+    mapping: &'a Mapping,
+}
+impl Default for Chase<'static> {
+    fn default() -> Self {
+        static MAPPING: std::sync::OnceLock<Mapping> = std::sync::OnceLock::new();
+        Self {
+            travel: 2.,
+            start: 0.,
+            end: 1.,
+            path: Envelope::linear(vec![[0., 0.], [1., 1.]]),
             width: 0.2,
-            shape: &Envelope::soft_edges(0.0),
+            shape: Envelope::soft_edges(0.),
             boundary: Boundary::Clip,
+            mapping: MAPPING.get_or_init(mapping),
+        }
+    }
+}
+impl Chase<'_> {
+    fn signal(&self, times: &[f64], events: &Events) -> Signal {
+        let cells = cells(self.mapping);
+        PreparedGraph::new(
+            &standard_library(),
+            "chase",
+            &BTreeMap::from([
+                ("mapping".into(), Value::Coordinates(self.mapping.clone())),
+                ("trigger".into(), Value::Events(events.clone())),
+                ("travel".into(), Value::Beats(self.travel)),
+                ("start".into(), Value::Position(self.start)),
+                ("end".into(), Value::Position(self.end)),
+                ("path".into(), Value::Envelope(self.path.clone())),
+                ("width".into(), Value::Proportion(self.width)),
+                ("shape".into(), Value::Envelope(self.shape.clone())),
+                ("boundary".into(), Value::Boundary(self.boundary)),
+            ]),
+            frame(&cells),
+        )
+        .unwrap()
+        .evaluate_batch(times)
+        .unwrap()["mask"]
+            .signal()
+            .unwrap()
+            .clone()
+    }
+}
+fn chase(times: &[f64], event_times: &[f64], travel: f64) -> Signal {
+    Chase {
+        travel,
+        ..Chase::default()
+    }
+    .signal(times, &events(event_times))
+}
+fn pulse(
+    times: &[f64],
+    events: &Events,
+    clip_start: f64,
+    duration: f64,
+    shape: &Envelope,
+) -> Signal {
+    PreparedGraph::new(
+        &standard_library(),
+        "pulse",
+        &BTreeMap::from([
+            ("trigger".into(), Value::Events(events.clone())),
+            ("duration".into(), Value::Beats(duration)),
+            ("shape".into(), Value::Envelope(shape.clone())),
+        ]),
+        Frame {
+            clip_start,
+            beat: clip_start,
+            ..frame(&[])
         },
     )
     .unwrap()
+    .evaluate_batch(times)
+    .unwrap()["mask"]
+        .signal()
+        .unwrap()
+        .clone()
 }
 
 #[test]
@@ -66,8 +160,8 @@ fn time_axis_is_independent_of_event_axis_and_seek_order() {
     for (index, time) in times.iter().enumerate() {
         let single = chase(&[*time], &[1., 2.], 2.);
         assert_eq!(
-            batch.values().index_axis(ndarray::Axis(1), index),
-            single.values().index_axis(ndarray::Axis(1), 0)
+            batch.values().index_axis(Axis(1), index),
+            single.values().index_axis(Axis(1), 0)
         );
     }
     assert_eq!(chase(&[], &[1., 2.], 2.).values().dim(), (5, 0, 1));
@@ -77,140 +171,36 @@ fn time_axis_is_independent_of_event_axis_and_seek_order() {
 #[test]
 fn max_preserves_brightness_and_shape_when_events_coincide() {
     let dim = Envelope::linear(vec![[0., 0.6], [1., 0.6]]);
-    let result = chase_signal(
-        &mapping(),
-        &[1.3],
-        &events(&[1., 1.2]),
-        0.0,
-        ChaseShape {
-            travel: 2.,
-            start: 0.,
-            end: 1.,
-            path: &Envelope::linear(vec![[0., 0.], [1., 1.]]),
-            width: 1.,
-            shape: &dim,
-            boundary: Boundary::Wrap,
-        },
-    )
-    .unwrap();
+    let result = Chase {
+        width: 1.,
+        shape: dim.clone(),
+        boundary: Boundary::Wrap,
+        ..Chase::default()
+    }
+    .signal(&[1.3], &events(&[1., 1.2]));
     assert!(result.values().iter().all(|v| *v == 0.6));
-    let pulse = pulse_signal(&[1.3, 3.2], &events(&[1., 1.2]), 0., 2., &dim).unwrap();
+    let pulse = pulse(&[1.3, 3.2], &events(&[1., 1.2]), 0., 2., &dim);
     assert_eq!(pulse.values(), &array![[[0.6], [0.0]]]);
 }
 
 #[test]
 fn travel_curve_and_spatial_wrapping_are_independent_of_event_spacing() {
-    let result = chase_signal(
-        &mapping(),
-        &[1.5],
-        &events(&[1.]),
-        0.,
-        ChaseShape {
-            travel: 1.,
-            start: 0.,
-            end: 1.,
-            path: &Envelope::linear(vec![[0., 0.], [0.5, 0.25], [1., 1.]]),
-            width: 0.2,
-            shape: &Envelope::soft_edges(0.),
-            boundary: Boundary::Clip,
-        },
-    )
-    .unwrap();
+    let result = Chase {
+        travel: 1.,
+        path: Envelope::linear(vec![[0., 0.], [0.5, 0.25], [1., 1.]]),
+        ..Chase::default()
+    }
+    .signal(&[1.5], &events(&[1.]));
     assert_eq!(result.values()[[1, 0, 0]], 1.);
     assert_eq!(result.values()[[2, 0, 0]], 0.);
-    let result = chase_signal(
-        &mapping(),
-        &[1.0],
-        &events(&[1.]),
-        0.,
-        ChaseShape {
-            travel: 1.,
-            start: 0.,
-            end: 1.,
-            path: &Envelope::linear(vec![[0., 0.], [1., 1.]]),
-            width: 0.2,
-            shape: &Envelope::soft_edges(0.),
-            boundary: Boundary::Wrap,
-        },
-    )
-    .unwrap();
+    let result = Chase {
+        travel: 1.,
+        boundary: Boundary::Wrap,
+        ..Chase::default()
+    }
+    .signal(&[1.0], &events(&[1.]));
     assert_eq!(result.values()[[0, 0, 0]], 1.);
     assert_eq!(result.values()[[4, 0, 0]], 1.);
-}
-
-#[test]
-fn tensor_samples_preserve_existing_pill_edges_curves_and_wrapping() {
-    let library = standard_library();
-    let mut mapping = mapping();
-    let cells: Vec<_> = mapping
-        .coordinates
-        .iter()
-        .map(|coordinate| Cell {
-            id: coordinate.cell.clone(),
-            group: "all".into(),
-            world: [0., 0., coordinate.position],
-            uvz: [0., 0., coordinate.position],
-        })
-        .collect();
-    let frame = Frame {
-        cells: &cells,
-        features: None,
-        beat: 1.,
-        clip_start: 0.,
-        clip_duration: 4.,
-        seed: 0,
-    };
-    for closed in [false, true] {
-        for coordinate in &mut mapping.coordinates {
-            coordinate.closed = closed;
-        }
-        for boundary in [Boundary::Clip, Boundary::Wrap, Boundary::Natural] {
-            for width in [0., 0.1, 0.5, 1.] {
-                for center in [-0.5, 0., 0.173, 0.5, 1., 1.5] {
-                    for shape in [
-                        Envelope::soft_edges(0.),
-                        Envelope::soft_edges(0.1),
-                        Envelope::linear(vec![[0., 0.2], [1., 1.]]),
-                    ] {
-                        let reference = library
-                            .evaluate(
-                                "pill",
-                                &BTreeMap::from([
-                                    ("mapping".into(), Value::Coordinates(mapping.clone())),
-                                    ("position".into(), Value::Position(center)),
-                                    ("width".into(), Value::Proportion(width)),
-                                    ("shape".into(), Value::Envelope(shape.clone())),
-                                    ("boundary".into(), Value::Boundary(boundary)),
-                                ]),
-                                frame,
-                            )
-                            .unwrap();
-                        let reference = &support::field(&reference["mask"]);
-                        let tensor = chase_signal(
-                            &mapping,
-                            &[1.],
-                            &events(&[1.]),
-                            0.,
-                            ChaseShape {
-                                travel: 1.,
-                                start: center,
-                                end: center,
-                                path: &Envelope::linear(vec![[0., 0.], [1., 1.]]),
-                                width,
-                                shape: &shape,
-                                boundary,
-                            },
-                        )
-                        .unwrap();
-                        for (index, coordinate) in mapping.coordinates.iter().enumerate() {
-                            assert!((tensor.values()[[index, 0, 0]] - reference[&coordinate.cell]).abs() < 1e-10,
-                                "center={center}, width={width}, boundary={boundary:?}, fixture={index}");
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[test]
@@ -224,14 +214,12 @@ fn periodic_events_equal_explicit_timestamps_including_delays_and_grid_origin() 
     };
     let explicit = events(&[-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5]);
     assert_eq!(
-        pulse_signal(&times, &periodic, 2., 2.5, &shape).unwrap(),
-        pulse_signal(&times, &explicit, 2., 2.5, &shape).unwrap()
+        pulse(&times, &periodic, 2., 2.5, &shape),
+        pulse(&times, &explicit, 2., 2.5, &shape)
     );
     let flat = Envelope::soft_edges(0.0);
     assert_eq!(
-        pulse_signal(&[2.75, 3.75], &periodic, 2.25, 0.1, &flat)
-            .unwrap()
-            .values(),
+        pulse(&[2.75, 3.75], &periodic, 2.25, 0.1, &flat).values(),
         &array![[[1.0], [1.0]]]
     );
     let grid = Events::Periodic {
@@ -240,9 +228,7 @@ fn periodic_events_equal_explicit_timestamps_including_delays_and_grid_origin() 
         delay: 0.5,
     };
     assert_eq!(
-        pulse_signal(&[2.5, 3.5], &grid, 2.25, 0.1, &flat)
-            .unwrap()
-            .values(),
+        pulse(&[2.5, 3.5], &grid, 2.25, 0.1, &flat).values(),
         &array![[[1.0], [1.0]]]
     );
 }
@@ -261,49 +247,79 @@ impl FeatureSource for Analysis {
 #[test]
 fn drum_trigger_wires_into_the_same_chase_and_prepared_execution_matches_batch() {
     let mut library = standard_library();
-    let mut graph = library.definitions["chase"].clip_instance("chase").unwrap();
-    graph.inputs.remove("trigger");
-    let Body::Graph(body) = &mut graph.body else {
-        panic!()
+    let wire = |node: &str, output: &str| Binding::Connection {
+        node: node.into(),
+        output: output.into(),
     };
-    body.nodes.insert(
-        "snare".into(),
-        Node {
-            position: None,
-            definition: "drum_trigger".into(),
-            inputs: BTreeMap::from([("drum".into(), Value::Drum(Drum::Snare).into())]),
+    let node = |definition: &str, inputs: Vec<(&str, Binding)>| Node {
+        position: None,
+        definition: definition.into(),
+        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+    };
+    library.definitions.insert(
+        "snare_chase".into(),
+        Definition {
+            name: "Snare chase".into(),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::from([(
+                "lighting".into(),
+                Output {
+                    value_type: ValueType::Lighting,
+                    rate: Rate::Frame,
+                },
+            )]),
+            body: Body::Graph(Graph {
+                input_nodes: BTreeMap::new(),
+                nodes: BTreeMap::from([
+                    (
+                        "snare".into(),
+                        node(
+                            "drum_trigger",
+                            vec![("drum", Value::Drum(Drum::Snare).into())],
+                        ),
+                    ),
+                    (
+                        "mapping".into(),
+                        node(
+                            "resolve_mapping",
+                            vec![(
+                                "mapping",
+                                Value::Mapping(MappingSpec {
+                                    source: MappingSource::Z,
+                                    mirror: None,
+                                    per_group: false,
+                                    reverse: false,
+                                })
+                                .into(),
+                            )],
+                        ),
+                    ),
+                    (
+                        "chase".into(),
+                        node(
+                            "chase",
+                            vec![
+                                ("trigger", wire("snare", "trigger")),
+                                ("mapping", wire("mapping", "coordinates")),
+                                ("travel", Value::Beats(2.).into()),
+                                ("width", Value::Proportion(0.2).into()),
+                                ("shape", Value::Envelope(Envelope::soft_edges(0.)).into()),
+                                ("boundary", Value::Boundary(Boundary::Clip).into()),
+                            ],
+                        ),
+                    ),
+                    (
+                        "output".into(),
+                        node("output", vec![("dimmer", wire("chase", "mask"))]),
+                    ),
+                ]),
+                outputs: BTreeMap::from([("lighting".into(), wire("output", "lighting"))]),
+            }),
         },
     );
-    body.nodes.get_mut("effect").unwrap().inputs.insert(
-        "trigger".into(),
-        Binding::Connection {
-            node: "snare".into(),
-            output: "trigger".into(),
-        },
-    );
-    library.definitions.insert("snare_chase".into(), graph);
-    let cells: Vec<_> = (0..5)
-        .map(|i| Cell {
-            id: i.to_string(),
-            group: "all".into(),
-            world: [0., 0., i as f64],
-            uvz: [0., 0., i as f64],
-        })
-        .collect();
-    let frame = Frame {
-        cells: &cells,
-        features: None,
-        beat: 0.,
-        clip_start: 0.,
-        clip_duration: 8.,
-        seed: 0,
-    };
-    let input = BTreeMap::from([
-        ("travel".into(), Value::Beats(2.)),
-        ("width".into(), Value::Proportion(0.2)),
-        ("shape".into(), Value::Envelope(Envelope::soft_edges(0.))),
-    ]);
-    let prepared = PreparedGraph::new(&library, "snare_chase", &input, frame).unwrap();
+    let cells = cells(&mapping());
+    let prepared =
+        PreparedGraph::new(&library, "snare_chase", &BTreeMap::new(), frame(&cells)).unwrap();
     assert_eq!(
         prepared.feature_requests(),
         [FeatureRequest::Onsets(Drum::Snare)]
@@ -376,8 +392,18 @@ fn malformed_event_tensors_and_timing_fail_explicitly() {
     assert!(EventTimes::new(vec![2., 1.]).is_err());
     assert!(EventTimes::new(vec![f64::NAN]).is_err());
     let shape = Envelope::soft_edges(0.);
+    let library = standard_library();
     for duration in [0., -1., f64::INFINITY] {
-        assert!(pulse_signal(&[1.], &events(&[1.]), 0., duration, &shape).is_err());
+        assert!(PreparedGraph::new(
+            &library,
+            "pulse",
+            &BTreeMap::from([
+                ("trigger".into(), Value::Events(events(&[1.]))),
+                ("duration".into(), Value::Beats(duration)),
+            ]),
+            frame(&[]),
+        )
+        .is_err());
     }
     assert!(Events::Periodic {
         repeat: 0.,
@@ -386,9 +412,25 @@ fn malformed_event_tensors_and_timing_fail_explicitly() {
     }
     .validate()
     .is_err());
-    assert!(pulse_signal(&[f64::NAN], &events(&[1.]), 0., 1., &shape).is_err());
-    assert!(pulse_signal(&[], &events(&[1.]), f64::NAN, 1., &shape).is_err());
-    // A positive travel/repeat ratio may underflow; the event at this exact
+    let program = PreparedGraph::new(
+        &library,
+        "pulse",
+        &BTreeMap::from([("trigger".into(), Value::Events(events(&[1.])))]),
+        frame(&[]),
+    )
+    .unwrap();
+    assert!(program.evaluate_batch(&[f64::NAN]).is_err());
+    assert!(PreparedGraph::new(
+        &library,
+        "pulse",
+        &BTreeMap::new(),
+        Frame {
+            clip_start: f64::NAN,
+            ..frame(&[])
+        },
+    )
+    .is_err());
+    // A positive duration/repeat ratio may underflow; the event at this exact
     // sample still contributes its first instant.
     let sparse = Events::Periodic {
         repeat: f64::MAX,
@@ -396,9 +438,7 @@ fn malformed_event_tensors_and_timing_fail_explicitly() {
         delay: 0.0,
     };
     assert_eq!(
-        pulse_signal(&[0.0], &sparse, 0.0, f64::from_bits(1), &shape)
-            .unwrap()
-            .values()[[0, 0, 0]],
+        pulse(&[0.0], &sparse, 0.0, f64::from_bits(1), &shape).values()[[0, 0, 0]],
         1.0
     );
 }
@@ -414,34 +454,30 @@ fn long_span_batches_gather_only_relevant_events() {
         delay: 0.0,
     };
     let times = [39999.5, 2.5, 20000.5, 19998.2];
-    let shape = ChaseShape {
+    let shape = Chase {
         travel: 2.5,
-        start: 0.0,
-        end: 1.0,
-        path: &Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]]),
         width: 0.1,
-        shape: &Envelope::soft_edges(0.1),
+        shape: Envelope::soft_edges(0.1),
         boundary: Boundary::Wrap,
+        mapping: &mapping,
+        ..Chase::default()
     };
-    let explicit = chase_signal(&mapping, &times, &events, 0.0, shape).unwrap();
+    let explicit = shape.signal(&times, &events);
     assert_eq!(explicit.values().dim(), (512, 4, 1));
-    assert_eq!(
-        explicit,
-        chase_signal(&mapping, &times, &periodic, 0.0, shape).unwrap()
-    );
+    assert_eq!(explicit, shape.signal(&times, &periodic));
     for (t, beat) in times.iter().enumerate() {
         assert_eq!(
-            explicit.values().index_axis(ndarray::Axis(1), t),
-            chase_signal(&mapping, &[*beat], &events, 0.0, shape)
-                .unwrap()
+            explicit.values().index_axis(Axis(1), t),
+            shape
+                .signal(&[*beat], &events)
                 .values()
-                .index_axis(ndarray::Axis(1), 0)
+                .index_axis(Axis(1), 0)
         );
     }
 }
 
 #[test]
-fn overlapping_dissolves_match_independent_threshold_fields_and_replay_after_seeking() {
+fn overlapping_dissolves_match_independent_selections_and_replay_after_seeking() {
     let library = standard_library();
     let cells: Vec<_> = (0..16)
         .rev()
@@ -453,16 +489,13 @@ fn overlapping_dissolves_match_independent_threshold_fields_and_replay_after_see
         })
         .collect();
     let frame = Frame {
-        features: None,
-        cells: &cells,
-        beat: 0.0,
-        clip_start: 0.0,
-        clip_duration: 16.0,
         seed: 427,
+        clip_duration: 16.,
+        ..frame(&cells)
     };
     let times = [4.2, 0.2, 6.0, 3.0, 4.5, 10.0];
     let event_times = [0.0, 1.0, 2.0, 3.0];
-    let shape = Envelope::linear(vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]);
+    let coverage = Envelope::linear(vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]);
     let softness = Signal::new(
         Array3::from_shape_fn((cells.len(), 1, 1), |(n, t, _)| ((n + t) % 5) as f64 / 5.0),
         Unit::Proportion,
@@ -476,78 +509,64 @@ fn overlapping_dissolves_match_independent_threshold_fields_and_replay_after_see
         ),
     )
     .unwrap();
-    for reseed in [false, true] {
-        for refresh in [false, true] {
-            let args = BTreeMap::from([
-                ("trigger".into(), Value::Events(events(&event_times))),
-                ("travel".into(), Value::Beats(3.2)),
-                ("shape".into(), Value::Envelope(shape.clone())),
-                ("softness".into(), Value::Signal(softness.clone())),
-                ("reseed".into(), Value::Boolean(reseed)),
-                ("refresh".into(), Value::Boolean(refresh)),
-                ("refresh_every".into(), Value::Beats(0.5)),
-            ]);
-            let batch = PreparedGraph::new(&library, "core/dissolve_events", &args, frame)
-                .unwrap()
-                .evaluate_batch(&times)
+    let args = BTreeMap::from([
+        ("trigger".into(), Value::Events(events(&event_times))),
+        ("duration".into(), Value::Beats(3.2)),
+        ("proportion".into(), Value::Envelope(coverage.clone())),
+        ("softness".into(), Value::Signal(softness.clone())),
+    ]);
+    let batch = PreparedGraph::new(&library, "dissolve", &args, frame)
+        .unwrap()
+        .evaluate_batch(&times)
+        .unwrap();
+    let actual = batch["mask"].signal().unwrap();
+    for (t, time) in times.iter().enumerate() {
+        let mut expected: BTreeMap<_, f64> =
+            cells.iter().map(|cell| (cell.id.clone(), 0.0)).collect();
+        // Independent oracle: the selection graph sampled separately for each
+        // event, then Max. Production evaluates the event tensor once.
+        for (index, at) in event_times.iter().enumerate() {
+            let age = (time - at) / 3.2;
+            if !(0.0..1.0).contains(&age) {
+                continue;
+            }
+            let sample = library
+                .evaluate(
+                    "random_selection",
+                    &BTreeMap::from([
+                        ("index".into(), Value::Number(index as f64)),
+                        ("proportion".into(), Value::Proportion(coverage.sample(age))),
+                        ("softness".into(), Value::Signal(softness.clone())),
+                    ]),
+                    Frame {
+                        beat: *time,
+                        ..frame
+                    },
+                )
                 .unwrap();
-            let actual = batch["mask"].signal().unwrap();
-            for (t, time) in times.iter().enumerate() {
-                let mut expected: BTreeMap<_, f64> =
-                    cells.iter().map(|cell| (cell.id.clone(), 0.0)).collect();
-                // Independent test oracle: the established numerical threshold
-                // graph, sampled separately for each event, then Max. Production
-                // evaluates the event tensor once and never replays this graph.
-                for (index, at) in event_times.iter().enumerate() {
-                    let age = (time - at) / 3.2;
-                    if !(0.0..1.0).contains(&age) {
-                        continue;
-                    }
-                    let sample = library
-                        .evaluate(
-                            "dissolve_mask",
-                            &BTreeMap::from([
-                                ("cycle".into(), Value::Number(index as f64)),
-                                ("coverage".into(), Value::Proportion(shape.sample(age))),
-                                ("softness".into(), Value::Signal(softness.clone())),
-                                ("reseed".into(), Value::Boolean(reseed)),
-                                ("refresh".into(), Value::Boolean(refresh)),
-                                ("refresh_every".into(), Value::Beats(0.5)),
-                            ]),
-                            Frame {
-                                beat: *time,
-                                ..frame
-                            },
-                        )
-                        .unwrap();
-                    let mask = &support::field(&sample["mask"]);
-                    for (id, value) in mask {
-                        expected.insert(id.clone(), expected[id].max(*value));
-                    }
-                }
-                for (n, id) in actual.fixtures().unwrap().iter().enumerate() {
-                    assert!(
-                        (actual.values()[[n, t, 0]] - expected[id]).abs() < 1e-12,
-                        "{id} at {time}, reseed={reseed}, refresh={refresh}"
-                    );
-                }
-                let mut single_args = args.clone();
-                single_args.insert("softness".into(), Value::Signal(softness.clone()));
-                let single =
-                    PreparedGraph::new(&library, "core/dissolve_events", &single_args, frame)
-                        .unwrap()
-                        .evaluate_batch(&[*time])
-                        .unwrap();
-                assert_eq!(
-                    actual.values().index_axis(ndarray::Axis(1), t),
-                    single["mask"]
-                        .signal()
-                        .unwrap()
-                        .values()
-                        .index_axis(ndarray::Axis(1), 0)
-                );
+            let mask = &support::field(&sample["selected"]);
+            for (id, value) in mask {
+                expected.insert(id.clone(), expected[id].max(*value));
             }
         }
+        for (n, id) in actual.fixtures().unwrap().iter().enumerate() {
+            assert!(
+                (actual.values()[[n, t, 0]] - expected[id]).abs() < 1e-12,
+                "{id} at {time}"
+            );
+        }
+        let single = PreparedGraph::new(&library, "dissolve", &args, frame)
+            .unwrap()
+            .evaluate_batch(&[*time])
+            .unwrap();
+        assert_eq!(
+            actual.values().index_axis(Axis(1), t),
+            single["mask"]
+                .signal()
+                .unwrap()
+                .values()
+                .index_axis(Axis(1), 0)
+        );
     }
 }
 
@@ -592,7 +611,7 @@ fn chase_controls_follow_fixture_identity_across_mapping_order() {
     let times = [1.6, 0.2, 2.5, 1.6];
     let result = PreparedGraph::new(
         &standard_library(),
-        "core/chase_events",
+        "chase",
         &BTreeMap::from([
             ("mapping".into(), Value::Coordinates(mapping.clone())),
             ("trigger".into(), Value::Events(triggers.clone())),
@@ -603,36 +622,25 @@ fn chase_controls_follow_fixture_identity_across_mapping_order() {
             ("shape".into(), Value::Envelope(shape.clone())),
             ("path".into(), Value::Envelope(path.clone())),
         ]),
-        Frame {
-            features: None,
-            cells: &cells,
-            beat: 0.0,
-            clip_start: 0.0,
-            clip_duration: 8.0,
-            seed: 0,
-        },
+        frame(&cells),
     )
     .unwrap()
     .evaluate_batch(&times)
     .unwrap();
     let result = result["mask"].signal().unwrap();
     for (index, id) in ids.iter().enumerate() {
-        let expected = chase_signal(
-            &mapping,
-            &times,
-            &triggers,
-            0.0,
-            ChaseShape {
-                travel: 2.5,
-                start: start[index],
-                end: end[index],
-                width: width[index],
-                path: &path,
-                shape: &shape,
-                boundary: Boundary::Natural,
-            },
-        )
-        .unwrap();
+        // Every head's controls equal a whole-selection run with that head's values.
+        let expected = Chase {
+            travel: 2.5,
+            start: start[index],
+            end: end[index],
+            width: width[index],
+            path: path.clone(),
+            shape: shape.clone(),
+            boundary: Boundary::Natural,
+            mapping: &mapping,
+        }
+        .signal(&times, &triggers);
         let actual_row = result
             .fixtures()
             .unwrap()
@@ -646,8 +654,8 @@ fn chase_controls_follow_fixture_identity_across_mapping_order() {
             .position(|key| key == id)
             .unwrap();
         assert_eq!(
-            result.values().index_axis(ndarray::Axis(0), actual_row),
-            expected.values().index_axis(ndarray::Axis(0), expected_row),
+            result.values().index_axis(Axis(0), actual_row),
+            expected.values().index_axis(Axis(0), expected_row),
             "wrong controls for {id}"
         );
     }

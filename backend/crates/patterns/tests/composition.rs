@@ -63,9 +63,9 @@ fn all_builtins_validate_and_numerical_effects_get_explicit_terminals() {
     for id in lib.definitions.keys() {
         lib.validate(id).unwrap();
     }
-    assert!(lib.definitions["chase"].placeable());
-    assert!(lib.definitions["dissolve_flash"].placeable());
-    assert!(!lib.definitions["chase"].playable());
+    assert!(lib.definitions["beat_chase"].placeable());
+    assert!(lib.definitions["beat_dissolve"].placeable());
+    assert!(!lib.definitions["beat_chase"].playable());
     assert!(!lib.definitions.contains_key("chase_mask"));
     assert!(!lib.definitions.contains_key("pulse_mask"));
     for (id, definition) in &lib.definitions {
@@ -82,7 +82,7 @@ fn all_builtins_validate_and_numerical_effects_get_explicit_terminals() {
     }
     assert!(matches!(lib.definitions["pill"].body, Body::Graph(_)));
     assert!(matches!(
-        lib.definitions["dissolve_mask"].body,
+        lib.definitions["random_selection"].body,
         Body::Graph(_)
     ));
     assert!(matches!(
@@ -131,13 +131,15 @@ fn placement_keeps_auxiliary_outputs_and_rejects_mistyped_capabilities() {
 fn chase_rest_is_dark_and_seeking_is_deterministic() {
     let lib = standard_library();
     let i = inputs();
-    let mid = light(&lib, "chase", &i, 9.0);
+    let mid = light(&lib, "beat_chase", &i, 9.0);
     assert!(mid.values().any(|c| c[0] > 0.0));
     for t in [10.0, 10.5, 11.999] {
-        assert!(light(&lib, "chase", &i, t).values().all(|c| c[0] == 0.0));
+        assert!(light(&lib, "beat_chase", &i, t)
+            .values()
+            .all(|c| c[0] == 0.0));
     }
-    assert_eq!(mid, light(&lib, "chase", &i, 9.0));
-    assert_eq!(mid, light(&lib, "chase", &i, 13.0));
+    assert_eq!(mid, light(&lib, "beat_chase", &i, 9.0));
+    assert_eq!(mid, light(&lib, "beat_chase", &i, 13.0));
 }
 #[test]
 fn circle_wrap_preserves_the_two_halves_of_a_pill() {
@@ -212,16 +214,16 @@ fn entry_and_exit_account_for_the_entire_stroke() {
     }
 }
 #[test]
-fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
+fn random_selection_is_per_head_and_monotone_not_flicker() {
     let lib = standard_library();
     let evaluate = |progress, softness, cells: &[Cell]| {
         let values = BTreeMap::from([
-            ("coverage".into(), Value::Proportion(1.0 - progress)),
+            ("proportion".into(), Value::Proportion(1.0 - progress)),
             ("softness".into(), Value::Proportion(softness)),
         ]);
         let result = lib
             .evaluate_effect(
-                "dissolve_mask",
+                "random_selection",
                 &values,
                 Frame {
                     features: None,
@@ -230,7 +232,7 @@ fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
                 },
             )
             .unwrap();
-        support::field(&result["mask"])
+        support::field(&result["selected"])
     };
     for softness in [0.0, 0.2, 1.0] {
         let mut previous = evaluate(0.0, softness, cells());
@@ -245,39 +247,37 @@ fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
         assert!(previous.values().all(|v| *v == 0.0));
     }
     let middle = evaluate(0.5, 0.0, cells());
-    assert!(middle.values().any(|v| *v == 0.0));
-    assert!(middle.values().any(|v| *v == 1.0));
+    assert_eq!(middle.values().filter(|v| **v == 0.0).count(), 16);
+    assert_eq!(middle.values().filter(|v| **v == 1.0).count(), 16);
     let mut reordered = cells().to_vec();
     reordered.reverse();
     assert_eq!(middle, evaluate(0.5, 0.0, &reordered));
 }
+
 #[test]
-fn dissolve_reseeding_changes_between_strokes_only_when_requested() {
+fn each_dissolve_event_draws_a_new_order_and_the_rest_is_dark() {
     let lib = standard_library();
-    let mut i = BTreeMap::new();
-    let first = light(&lib, "dissolve_flash", &i, 9.0);
-    assert_ne!(first, light(&lib, "dissolve_flash", &i, 13.0));
-    i.insert("reseed".into(), Value::Boolean(false));
-    assert_eq!(
-        light(&lib, "dissolve_flash", &i, 9.0),
-        light(&lib, "dissolve_flash", &i, 13.0)
-    );
-    assert!(light(&lib, "dissolve_flash", &i, 8.0)
+    let i = BTreeMap::new();
+    let first = light(&lib, "beat_dissolve", &i, 9.0);
+    assert_ne!(first, light(&lib, "beat_dissolve", &i, 13.0));
+    assert_eq!(first, light(&lib, "beat_dissolve", &i, 9.0));
+    assert!(light(&lib, "beat_dissolve", &i, 8.0)
         .values()
         .all(|c| c[0] == 1.0));
-    assert!(light(&lib, "dissolve_flash", &i, 10.0)
+    assert!(light(&lib, "beat_dissolve", &i, 10.0)
         .values()
         .all(|c| c[0] == 0.0));
 }
+
 #[test]
 fn nested_pattern_exposes_inputs_without_flattening_their_types() {
     let mut lib = standard_library();
-    let chase = &lib.definitions["chase"];
+    let chase = &lib.definitions["beat_chase"];
     let exposed_inputs = chase.inputs.clone();
     let outputs = chase.outputs.clone();
     let node = Node {
         position: None,
-        definition: "chase".into(),
+        definition: "beat_chase".into(),
         inputs: exposed_inputs
             .keys()
             .map(|k| (k.clone(), Binding::Input { input: k.clone() }))
@@ -291,11 +291,11 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
             outputs,
             body: Body::Graph(Graph {
                 input_nodes: BTreeMap::new(),
-                nodes: BTreeMap::from([("chase".into(), node)]),
+                nodes: BTreeMap::from([("beat_chase".into(), node)]),
                 outputs: BTreeMap::from([(
                     "dimmer".into(),
                     Binding::Connection {
-                        node: "chase".into(),
+                        node: "beat_chase".into(),
                         output: "dimmer".into(),
                     },
                 )]),
@@ -304,7 +304,7 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
     );
     assert_eq!(
         light(&lib, "score-local", &inputs(), 9.0),
-        light(&lib, "chase", &inputs(), 9.0)
+        light(&lib, "beat_chase", &inputs(), 9.0)
     );
 }
 #[test]
@@ -318,19 +318,19 @@ fn rejects_units_missing_targets_and_invalid_values_but_allows_overlap() {
     let mut i = inputs();
     i.insert("travel".into(), Value::Number(2.0));
     assert!(lib
-        .evaluate_effect("chase", &i, frame(9.0))
+        .evaluate_effect("beat_chase", &i, frame(9.0))
         .unwrap_err()
         .0
         .contains("Beats"));
     i.insert("travel".into(), Value::Beats(8.0));
-    assert!(lib.evaluate_effect("chase", &i, frame(9.0)).is_ok());
+    assert!(lib.evaluate_effect("beat_chase", &i, frame(9.0)).is_ok());
     i.insert("travel".into(), Value::Beats(f64::NAN));
-    assert!(lib.evaluate_effect("chase", &i, frame(9.0)).is_err());
+    assert!(lib.evaluate_effect("beat_chase", &i, frame(9.0)).is_err());
 }
 #[test]
 fn rejects_signal_to_fixed_input_and_definition_cycles() {
     let mut lib = standard_library();
-    let Body::Graph(g) = &mut lib.definitions.get_mut("chase").unwrap().body else {
+    let Body::Graph(g) = &mut lib.definitions.get_mut("beat_chase").unwrap().body else {
         panic!()
     };
     g.nodes.insert(
@@ -348,13 +348,21 @@ fn rejects_signal_to_fixed_input_and_definition_cycles() {
             output: "elapsed".into(),
         },
     );
-    assert!(lib.validate("chase").unwrap_err().0.contains("fixed input"));
+    assert!(lib
+        .validate("beat_chase")
+        .unwrap_err()
+        .0
+        .contains("fixed input"));
     let mut lib = standard_library();
-    let Body::Graph(g) = &mut lib.definitions.get_mut("chase").unwrap().body else {
+    let Body::Graph(g) = &mut lib.definitions.get_mut("beat_chase").unwrap().body else {
         panic!()
     };
-    g.nodes.get_mut("chase").unwrap().definition = "chase".into();
-    assert!(lib.validate("chase").unwrap_err().0.contains("recursive"));
+    g.nodes.get_mut("chase").unwrap().definition = "beat_chase".into();
+    assert!(lib
+        .validate("beat_chase")
+        .unwrap_err()
+        .0
+        .contains("recursive"));
 }
 #[test]
 fn saved_graphs_roundtrip_without_losing_rich_values() {
@@ -362,8 +370,8 @@ fn saved_graphs_roundtrip_without_losing_rich_values() {
     let encoded = serde_json::to_string(&lib).unwrap();
     let restored: Library = serde_json::from_str(&encoded).unwrap();
     assert_eq!(
-        light(&lib, "chase", &inputs(), 9.0),
-        light(&restored, "chase", &inputs(), 9.0)
+        light(&lib, "beat_chase", &inputs(), 9.0),
+        light(&restored, "beat_chase", &inputs(), 9.0)
     );
     let result = restored
         .evaluate_effect(
@@ -426,9 +434,9 @@ fn angled_wings_each_get_their_own_principal_progression() {
     }
 }
 #[test]
-fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
+fn random_selection_can_modulate_chase_without_a_new_effect_kernel() {
     let mut lib = standard_library();
-    let mut definition = lib.definitions["chase"].instance("chase");
+    let mut definition = lib.definitions["beat_chase"].instance("beat_chase");
     let Body::Graph(graph) = &mut definition.body else {
         panic!()
     };
@@ -437,11 +445,11 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
         output: output.into(),
     };
     graph.nodes.insert(
-        "dissolve".into(),
+        "selection".into(),
         Node {
             position: None,
-            definition: "dissolve_mask".into(),
-            inputs: BTreeMap::from([("coverage".into(), Value::Proportion(0.5).into())]),
+            definition: "random_selection".into(),
+            inputs: BTreeMap::from([("proportion".into(), Value::Proportion(0.5).into())]),
         },
     );
     graph.nodes.insert(
@@ -451,7 +459,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             definition: "core/multiply".into(),
             inputs: BTreeMap::from([
                 ("a".into(), wire("effect", "dimmer")),
-                ("b".into(), wire("dissolve", "mask")),
+                ("b".into(), wire("selection", "selected")),
             ]),
         },
     );
@@ -461,15 +469,15 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
     lib.definitions
         .insert("dissolving-chase".into(), definition);
     let actual = light(&lib, "dissolving-chase", &inputs(), 9.0);
-    let chase = light(&lib, "chase", &inputs(), 9.0);
+    let chase = light(&lib, "beat_chase", &inputs(), 9.0);
     let mask = lib
         .evaluate(
-            "dissolve_mask",
-            &BTreeMap::from([("coverage".into(), Value::Proportion(0.5))]),
+            "random_selection",
+            &BTreeMap::from([("proportion".into(), Value::Proportion(0.5))]),
             frame(9.0),
         )
         .unwrap();
-    let mask = support::field(&mask["mask"]);
+    let mask = support::field(&mask["selected"]);
     for (id, color) in actual {
         assert_eq!(color, chase[&id].map(|v| v * mask[&id]));
     }
@@ -480,7 +488,7 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
     let lib = standard_library();
     let mut score = Score::default();
     score
-        .insert_effect(&lib, "chase", "local-1", 8.0, 8.0)
+        .insert_effect(&lib, "beat_chase", "local-1", 8.0, 8.0)
         .unwrap();
     // Color is exposed from Output; Chase remains an independently reusable intensity.
     for edit in [
@@ -530,19 +538,66 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
 #[test]
 fn score_event_literals_cannot_capture_a_venues_head_identities() {
     let library = standard_library();
-    let mut score = Score::default();
-    score
-        .insert_effect(&library, "chase", "local", 0., 8.)
-        .unwrap();
+    let wire = |node: &str, output: &str| Binding::Connection {
+        node: node.into(),
+        output: output.into(),
+    };
     let events = Events::Beats {
         times: EventTimes::new(vec![0., 1.]).unwrap(),
     };
-    score
-        .clips
-        .get_mut("local")
-        .unwrap()
-        .inputs
-        .insert("trigger".into(), Value::Events(events.clone()));
+    let mut score = Score::default();
+    score.definitions.insert(
+        "local".into(),
+        Definition {
+            name: "Pulse on events".into(),
+            inputs: BTreeMap::from([(
+                "trigger".into(),
+                library.definitions["pulse"].inputs["trigger"].clone(),
+            )]),
+            outputs: library.definitions["output"].outputs.clone(),
+            body: Body::Graph(Graph {
+                input_nodes: BTreeMap::new(),
+                nodes: BTreeMap::from([
+                    (
+                        "pulse".into(),
+                        Node {
+                            position: None,
+                            definition: "pulse".into(),
+                            inputs: BTreeMap::from([(
+                                "trigger".into(),
+                                Binding::Input {
+                                    input: "trigger".into(),
+                                },
+                            )]),
+                        },
+                    ),
+                    (
+                        "output".into(),
+                        Node {
+                            position: None,
+                            definition: "output".into(),
+                            inputs: BTreeMap::from([("dimmer".into(), wire("pulse", "mask"))]),
+                        },
+                    ),
+                ]),
+                outputs: BTreeMap::from([("lighting".into(), wire("output", "lighting"))]),
+            }),
+        },
+    );
+    score.clips.insert(
+        "local".into(),
+        Clip {
+            graph: "local".into(),
+            start: 0.,
+            duration: 8.,
+            seed: 0,
+            selection_seed: None,
+            selection: Selection::all(),
+            z_index: 0,
+            blend_mode: BlendMode::Replace,
+            inputs: BTreeMap::from([("trigger".into(), Value::Events(events.clone()))]),
+        },
+    );
     let saved = score.to_json(&library).unwrap();
     Score::from_json(&library, &saved).unwrap();
     let captured = Value::Events(
@@ -582,7 +637,7 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
     let lib = standard_library();
     let mut score = Score::default();
     score
-        .insert_effect(&lib, "chase", "local", 0.0, 8.0)
+        .insert_effect(&lib, "beat_chase", "local", 0.0, 8.0)
         .unwrap();
     score.clips.get_mut("local").unwrap().inputs.insert(
         "mapping".into(),
@@ -612,8 +667,8 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
 #[test]
 fn prepared_graph_matches_interpreter_when_seeking_across_strokes() {
     let library = standard_library();
-    for name in ["chase", "dissolve_flash"] {
-        let overrides = if name == "chase" {
+    for name in ["beat_chase", "beat_dissolve"] {
+        let overrides = if name == "beat_chase" {
             inputs()
         } else {
             BTreeMap::new()
@@ -633,7 +688,7 @@ fn prepared_clip_owns_its_overrides_and_obeys_the_score_span() {
     let lib = standard_library();
     let mut score = Score::default();
     score
-        .insert_effect(&lib, "chase", "local", 8.0, 4.0)
+        .insert_effect(&lib, "beat_chase", "local", 8.0, 4.0)
         .unwrap();
     score
         .clips
@@ -662,7 +717,7 @@ fn prepared_clip_owns_its_overrides_and_obeys_the_score_span() {
     );
     assert!(prepared.evaluate(f64::NAN).is_err());
     assert!(score
-        .insert_effect(&lib, "chase", "overflow", f64::MAX, f64::MAX)
+        .insert_effect(&lib, "beat_chase", "overflow", f64::MAX, f64::MAX)
         .is_err());
     assert!(!score.clips.contains_key("overflow"));
 }
@@ -754,16 +809,19 @@ fn clips_share_graphs_until_made_independent_including_local_dependencies() {
     let lib = standard_library();
     let mut score = Score::default();
     score
-        .insert_effect(&lib, "chase", "original", 0.0, 8.0)
+        .insert_effect(&lib, "beat_chase", "original", 0.0, 8.0)
         .unwrap();
     // Replace the built-in dependency with a local, editable copy.
     score
         .customize_node(&lib, "original", "effect", "local_chase")
         .unwrap();
-    assert_eq!(score.definitions["local_chase"], lib.definitions["chase"]);
+    assert_eq!(
+        score.definitions["local_chase"],
+        lib.definitions["beat_chase"]
+    );
     let before = score.clone();
     assert!(score
-        .customize_node(&lib, "original", "effect", "chase")
+        .customize_node(&lib, "original", "effect", "beat_chase")
         .is_err());
     assert_eq!(score, before);
     let mut repeat = score.clips["original"].clone();
@@ -796,13 +854,13 @@ fn importing_a_clip_copies_only_reachable_graphs_and_rejects_collisions_atomical
     let base = standard_library();
     let mut source = Score::default();
     source
-        .insert_effect(&base, "chase", "source", 4., 8.)
+        .insert_effect(&base, "beat_chase", "source", 4., 8.)
         .unwrap();
     source
         .customize_node(&base, "source", "effect", "local_chase")
         .unwrap();
     source
-        .insert_effect(&base, "chase", "unused", 0., 1.)
+        .insert_effect(&base, "beat_chase", "unused", 0., 1.)
         .unwrap();
     let clip = source.clips.get_mut("source").unwrap();
     clip.selection = Selection::new("back_movers");
@@ -846,7 +904,7 @@ fn importing_a_clip_copies_only_reachable_graphs_and_rejects_collisions_atomical
         ("source", "first"),
         ("source", "first/0"),
         ("absent", "third"),
-        ("source", "chase"),
+        ("source", "beat_chase"),
     ] {
         assert!(destination.import_clip(&base, &source, clip, id).is_err());
         assert_eq!(destination, before);
@@ -861,7 +919,7 @@ fn fixture_output_writers_preserve_unset_capabilities() {
         ("write_dimmer", [false, true, false, false, false]),
         ("write_strobe", [false, false, false, true, false]),
         ("write_speed", [false, false, false, false, true]),
-        ("chase", [false, true, false, false, false]),
+        ("beat_chase", [false, true, false, false, false]),
     ] {
         let output = lib
             .evaluate_effect(id, &BTreeMap::new(), frame(9.0))
@@ -896,31 +954,6 @@ fn internal_layering_preserves_color_when_only_movement_is_written() {
     );
     assert_eq!(output.rgb(), [0.0; 3]);
     assert_eq!(output.position, Some([0.0, 0.0]));
-}
-
-#[test]
-fn refreshing_dissolve_holds_each_interval_and_replays_after_seeking() {
-    let lib = standard_library();
-    let overrides = BTreeMap::from([
-        ("coverage".into(), Value::Proportion(0.5)),
-        ("refresh".into(), Value::Boolean(true)),
-        ("refresh_every".into(), Value::Beats(0.125)),
-    ]);
-    let prepared = PreparedGraph::new(&lib, "dissolve_mask", &overrides, frame(8.0)).unwrap();
-    let first = prepared.evaluate(8.0).unwrap();
-    assert_eq!(first, prepared.evaluate(8.124).unwrap());
-    let next = prepared.evaluate(8.125).unwrap();
-    assert_ne!(first, next);
-    prepared.evaluate(123.0).unwrap();
-    assert_eq!(first, prepared.evaluate(8.0).unwrap());
-    assert_eq!(next, prepared.evaluate(8.2).unwrap());
-    for beat in [8.0, 8.125, 9.0, 12.01] {
-        assert_eq!(
-            prepared.evaluate(beat).unwrap(),
-            lib.evaluate_effect("dissolve_mask", &overrides, frame(beat))
-                .unwrap()
-        );
-    }
 }
 
 #[test]
@@ -1037,16 +1070,19 @@ fn pill(
 }
 
 #[test]
-fn dissolve_flash_uses_the_shared_envelope_and_keeps_the_rest_dark() {
+fn dissolve_uses_the_shared_envelope_and_keeps_the_rest_dark() {
     let library = standard_library();
-    let inputs = BTreeMap::from([("shape".into(), Value::Envelope(Envelope::soft_edges(0.0)))]);
-    assert!(light(&library, "dissolve_flash", &inputs, 9.9)
+    let inputs = BTreeMap::from([(
+        "proportion".into(),
+        Value::Envelope(Envelope::soft_edges(0.0)),
+    )]);
+    assert!(light(&library, "beat_dissolve", &inputs, 9.9)
         .values()
         .all(|rgb| *rgb == [1.0; 3]));
-    assert!(light(&library, "dissolve_flash", &inputs, 10.0)
+    assert!(light(&library, "beat_dissolve", &inputs, 10.0)
         .values()
         .all(|rgb| *rgb == [0.0; 3]));
-    assert!(light(&library, "dissolve_flash", &inputs, 11.9)
+    assert!(light(&library, "beat_dissolve", &inputs, 11.9)
         .values()
         .all(|rgb| *rgb == [0.0; 3]));
 }
@@ -1055,7 +1091,7 @@ fn dissolve_flash_uses_the_shared_envelope_and_keeps_the_rest_dark() {
 fn preparation_rejects_duplicate_head_identities_for_every_effect() {
     let library = standard_library();
     let duplicate = vec![cells()[0].clone(), cells()[0].clone()];
-    for id in ["chase", "dissolve_flash", "write_strobe"] {
+    for id in ["beat_chase", "beat_dissolve", "write_strobe"] {
         let frame = Frame {
             features: None,
             cells: &duplicate,

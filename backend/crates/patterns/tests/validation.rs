@@ -85,7 +85,7 @@ fn score_validation_rejects_invalid_timing_even_without_a_resolved_venue() {
     let library = standard_library();
     let mut score = Score::default();
     score
-        .insert_effect(&library, "chase", "clip", 0.0, 16.0)
+        .insert_effect(&library, "beat_chase", "clip", 0.0, 16.0)
         .unwrap();
     score
         .clips
@@ -122,7 +122,7 @@ fn invalid_envelopes_identify_the_authored_location_and_anchor() {
     let library = standard_library();
     let mut original = Score::default();
     original
-        .insert_effect(&library, "chase", "intro", 0., 16.)
+        .insert_effect(&library, "beat_chase", "intro", 0., 16.)
         .unwrap();
     let invalid = Value::Envelope(Envelope::linear(vec![
         [0., 0.],

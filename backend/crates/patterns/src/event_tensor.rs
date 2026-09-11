@@ -1,5 +1,6 @@
-//! Stateless event → signal operations. Broadcasting forms T×E ages and N×T×E
-//! spatial samples; Max reduces E. There is no replay of a graph for each event.
+//! Stateless event → signal operations. Events within a window become a channel
+//! axis: broadcasting forms T×E ages and N×T×E weights, and ordinary graph
+//! operations reduce that axis with Max. No graph is replayed for each event.
 use crate::*;
 use ndarray::{Array1, Array2, Array3, Axis, Zip};
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,9 @@ pub enum Events {
         events: Box<Events>,
         targets: EventTargets,
     },
-    /// An unwired trigger uses the effect's repeat/grid/delay controls.
+    /// Historical sentinel from version 3 documents, where an unwired trigger
+    /// used the effect's repeat controls. Migration replaces it with an
+    /// explicit trigger node before execution.
     Automatic,
     Periodic {
         repeat: f64,
@@ -119,35 +122,10 @@ impl Events {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ChaseShape<'a> {
-    pub travel: f64,
-    pub start: f64,
-    pub end: f64,
-    pub path: &'a Envelope,
-    pub width: f64,
-    pub shape: &'a Envelope,
-    pub boundary: Boundary,
-}
-
-impl ChaseShape<'_> {
-    fn validate(&self) -> Result<()> {
-        self.path.validate()?;
-        self.shape.validate()?;
-        if !self.start.is_finite()
-            || !self.end.is_finite()
-            || !self.width.is_finite()
-            || !(0.0..=1.0).contains(&self.width)
-        {
-            return Err(Error(
-                "chase needs finite endpoints and width in 0..1".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
 struct EventAges {
+    /// Time since each event, in beats. Padding columns equal the window.
+    elapsed: Array2<f64>,
+    /// Elapsed over the window; padding columns are exactly 1.
     phase: Array2<f64>,
     origins: Array1<i64>,
     stride: i64,
@@ -192,11 +170,13 @@ fn ages(times: &[f64], events: &Events, travel: f64, clip_start: f64) -> Result<
         || times.iter().any(|v| !v.is_finite())
     {
         return Err(Error(
-            "travel must be finite and positive; sample times and clip start must be finite".into(),
+            "duration must be finite and positive; sample times and clip start must be finite"
+                .into(),
         ));
     }
     if times.is_empty() {
         return Ok(EventAges {
+            elapsed: Array2::zeros((0, 0)),
             phase: Array2::zeros((0, 0)),
             origins: Array1::zeros(0),
             stride: 1,
@@ -219,7 +199,7 @@ fn ages(times: &[f64], events: &Events, travel: f64, clip_start: f64) -> Result<
             Ok(())
         }
     };
-    let (phase, origins, stride) = match events.schedule() {
+    let (elapsed, phase, origins, stride) = match events.schedule() {
         Events::Targeted { .. } => unreachable!(),
         Events::Automatic => {
             return Err(Error(
@@ -239,10 +219,13 @@ fn ages(times: &[f64], events: &Events, travel: f64, clip_start: f64) -> Result<
                     samples[t]
                 }
             });
-            let phase = (&samples.insert_axis(Axis(1)) - &timestamps) / travel;
+            let elapsed = &samples.insert_axis(Axis(1)) - &timestamps;
+            let real = |t: usize, e: usize| starts[t] + e < ends[t];
             (
-                Zip::indexed(&phase)
-                    .map_collect(|(t, e), age| if starts[t] + e < ends[t] { *age } else { 1.0 }),
+                Zip::indexed(&elapsed)
+                    .map_collect(|(t, e), age| if real(t, e) { *age } else { travel }),
+                Zip::indexed(&elapsed)
+                    .map_collect(|(t, e), age| if real(t, e) { *age / travel } else { 1.0 }),
                 starts.mapv(|index| index as i64),
                 1,
             )
@@ -271,365 +254,175 @@ fn ages(times: &[f64], events: &Events, travel: f64, clip_start: f64) -> Result<
             let indices = last.insert_axis(Axis(1))
                 - Array1::range(0.0, width as f64, 1.0).insert_axis(Axis(0));
             let timestamps = indices.mapv(|index| origin + index * repeat);
+            let elapsed = &samples.insert_axis(Axis(1)) - &timestamps;
             (
-                (&samples.insert_axis(Axis(1)) - &timestamps) / travel,
+                elapsed.clone(),
+                elapsed.mapv(|age| age / travel),
                 origins,
                 -1,
             )
         }
     };
     Ok(EventAges {
+        elapsed,
         phase,
         origins,
         stride,
     })
 }
 
-/// All requested samples, including out-of-order seeks, in one array operation.
-pub fn chase_signal(
-    mapping: &Mapping,
+/// Events within `duration` beats of each sample, as channels. Padding columns
+/// are inactive: elapsed equals the duration and present is zero.
+pub(crate) fn event_ages(
     times: &[f64],
     events: &Events,
+    duration: f64,
     clip_start: f64,
-    shape: ChaseShape<'_>,
-) -> Result<Signal> {
-    shape.validate()?;
-    chase_sampled(mapping, times, events, clip_start, shape.travel, |_, _| {
-        shape
-    })
-}
-
-pub(crate) fn chase_sampled<'a>(
-    mapping: &Mapping,
-    times: &[f64],
-    events: &Events,
-    clip_start: f64,
-    travel: f64,
-    sample: impl Fn(usize, usize) -> ChaseShape<'a>,
-) -> Result<Signal> {
-    mapping.validate()?;
-    let ages = ages(times, events, travel, clip_start)?;
-    let ids: Vec<_> = mapping.coordinates.iter().map(|c| c.cell.clone()).collect();
-    let targets = ages.targets(events, &ids)?;
-    let phase = ages.phase;
-    let (n, t, e) = (mapping.coordinates.len(), times.len(), phase.ncols());
-    if n.checked_mul(t)
-        .and_then(|v| v.checked_mul(e.max(1)))
-        .is_none_or(|size| size > 16_777_216)
-    {
-        return Err(Error(
-            "chase sample tensor exceeds 16,777,216 elements; request fewer time samples".into(),
-        ));
-    }
-    let samples = Array2::from_shape_fn((n, t), |(n, t)| sample(n, t));
-    for shape in &samples {
-        shape.validate()?;
-    }
-    let fixtures = Some(
-        mapping
-            .coordinates
-            .iter()
-            .map(|c| c.cell.clone())
-            .collect::<Vec<_>>()
-            .into(),
-    );
-    if e == 0 {
-        return Signal::new(
-            Array3::zeros((n, t, 1)),
-            Unit::Proportion,
-            Channels::Value,
-            fixtures,
-        );
-    }
-    let active = phase.mapv(|p| if (0.0..1.0).contains(&p) { 1.0 } else { 0.0 });
-    let centers = Array3::from_shape_fn((n, t, e), |(n, t, e)| {
-        let shape = samples[[n, t]];
-        let p = phase[[t, e]];
-        shape.start + (shape.end - shape.start) * shape.path.sample(p.clamp(0.0, 1.0))
-    });
-    let position = Array1::from_iter(mapping.coordinates.iter().map(|c| c.position))
-        .insert_axis(Axis(1))
-        .insert_axis(Axis(2));
-    let wrap = Array2::from_shape_fn((n, t), |(n, t)| {
-        let boundary = samples[[n, t]].boundary;
-        boundary == Boundary::Wrap
-            || (boundary == Boundary::Natural && mapping.coordinates[n].closed)
-    })
-    .insert_axis(Axis(2));
-    let delta = &position - &centers;
-    let coverage = Zip::indexed(&delta)
-        .and_broadcast(&wrap)
-        .and_broadcast(active.view().insert_axis(Axis(0)))
-        .map_collect(|(n, t, e), delta, wrap, active| {
-            let shape = samples[[n, t]];
-            if shape.width == 0.0 {
-                return 0.0;
-            }
-            let delta = if *wrap {
-                (delta + 0.5).rem_euclid(1.0) - 0.5
-            } else {
-                *delta
-            };
-            let p = delta / shape.width + 0.5;
-            let inside = (p > 1e-12 && p < 1.0 - 1e-12) || (*wrap && shape.width == 1.0);
-            if inside {
-                shape.shape.sample(p) * active * targets.as_ref().map_or(1., |w| w.at(n, t, e))
-            } else {
-                0.0
-            }
-        });
-    let values = coverage
-        .fold_axis(Axis(2), 0.0_f64, |a, b| a.max(*b))
-        .insert_axis(Axis(2));
-    Signal::new(values, Unit::Proportion, Channels::Value, fixtures)
-}
-
-pub fn pulse_signal(
-    times: &[f64],
-    events: &Events,
-    clip_start: f64,
-    travel: f64,
-    shape: &Envelope,
-) -> Result<Signal> {
-    shape.validate()?;
-    pulse_sampled(times, events, clip_start, travel, |_| shape)
-}
-
-pub(crate) fn pulse_sampled<'a>(
-    times: &[f64],
-    events: &Events,
-    clip_start: f64,
-    travel: f64,
-    shape: impl Fn(usize) -> &'a Envelope,
-) -> Result<Signal> {
-    for t in 0..times.len() {
-        shape(t).validate()?;
-    }
-    let ages = ages(times, events, travel, clip_start)?;
-    let fixtures = events.fixtures().map(|ids| {
-        let mut ids = ids.to_vec();
-        ids.sort();
-        ids
-    });
-    let targets = ages.targets(events, fixtures.as_deref().unwrap_or(&[]))?;
-    let phase = ages.phase;
-    let n = fixtures.as_ref().map_or(1, Vec::len);
-    if n.checked_mul(phase.len())
-        .is_none_or(|size| size > 16_777_216)
-    {
-        return Err(Error("pulse tensor exceeds 16,777,216 elements".into()));
-    }
-    let coverage = Array3::from_shape_fn((n, phase.nrows(), phase.ncols()), |(n, t, e)| {
-        let p = phase[[t, e]];
-        if (0.0..1.0).contains(&p) {
-            shape(t).sample(p) * targets.as_ref().map_or(1., |w| w.at(n, t, e))
-        } else {
-            0.0
-        }
-    });
-    let values = coverage.fold_axis(Axis(2), 0.0_f64, |a, b| a.max(*b));
-    Signal::new(
-        values.insert_axis(Axis(2)),
-        Unit::Proportion,
-        Channels::Value,
-        fixtures.map(Into::into),
-    )
-}
-
-pub(crate) struct DissolveSettings {
-    pub travel: f64,
-    pub reseed: bool,
-    pub refresh_every: Option<f64>,
-}
-
-/// Event age, deterministic per-head thresholds and Max share the event axis.
-/// Random order is keyed by immutable event index; seeking requires no history.
-pub(crate) fn dissolve_sampled<'a>(
     fixtures: &[String],
-    times: &[f64],
-    events: &Events,
-    frame: Frame<'_>,
-    settings: DissolveSettings,
-    softness: &Signal,
-    shape: impl Fn(usize) -> &'a Envelope,
-) -> Result<Signal> {
-    let ages = ages(times, events, settings.travel, frame.clip_start)?;
+) -> Result<BTreeMap<&'static str, Signal>> {
+    let ages = ages(times, events, duration, clip_start)?;
     let targets = ages.targets(events, fixtures)?;
-    let (n, t, e) = (fixtures.len(), times.len(), ages.phase.ncols());
-    if n.checked_mul(t)
-        .and_then(|v| v.checked_mul(e.max(1)))
-        .is_none_or(|size| size > 16_777_216)
-    {
-        return Err(Error(
-            "dissolve sample tensor exceeds 16,777,216 elements; request fewer time samples".into(),
-        ));
-    }
-    let softness = softness.on_fixtures(fixtures)?;
-    if (softness.values().dim().1 != 1 && softness.values().dim().1 != t)
-        || softness.values().iter().any(|v| !(0.0..=1.0).contains(v))
-    {
-        return Err(Error(
-            "dissolve softness needs compatible samples within 0–1".into(),
-        ));
-    }
-    let refresh = settings
-        .refresh_every
-        .map(|period| {
-            if !period.is_finite() || period <= 0.0 {
-                return Err(Error("refresh interval must be positive".into()));
-            }
-            let indices = Array1::from_iter(
-                times
-                    .iter()
-                    .map(|time| ((time - frame.clip_start) / period).floor()),
-            );
-            if indices
-                .iter()
-                .any(|v| !v.is_finite() || v.abs() > 9_007_199_254_740_991.0)
+    let (t, e) = ages.phase.dim();
+    let width = e.max(1);
+    let channels = Channels::components(width)?;
+    let phase = Array3::from_shape_fn((1, t, width), |(_, t, e)| {
+        ages.phase.get((t, e)).copied().unwrap_or(1.0)
+    });
+    let present = phase.mapv(|p| if (0.0..1.0).contains(&p) { 1.0 } else { 0.0 });
+    let weight = match &targets {
+        Some(weights) => {
+            let n = fixtures.len();
+            if n.checked_mul(t)
+                .and_then(|v| v.checked_mul(width))
+                .is_none_or(|size| size > 16_777_216)
             {
                 return Err(Error(
-                    "refresh timestamps exceed supported precision".into(),
+                    "event weight tensor exceeds 16,777,216 elements; request fewer time samples"
+                        .into(),
                 ));
             }
-            Ok(indices.mapv(|v| v as i64))
-        })
-        .transpose()?;
-    for time in 0..t {
-        shape(time).validate()?;
-    }
-    let progress = Zip::indexed(&ages.phase)
-        .map_collect(|(t, _), phase| 1.0 - shape(t).sample(phase.clamp(0.0, 1.0)));
-    let coverage = Array3::from_shape_fn((n, t, e), |(n, t, e)| {
-        let weight = targets.as_ref().map_or(1., |w| w.at(n, t, e));
-        if weight == 0. || !(0.0..1.0).contains(&ages.phase[[t, e]]) {
-            return 0.0;
+            Signal::new(
+                Array3::from_shape_fn((n, t, width), |(n, t, e)| {
+                    if e < ages.phase.ncols() {
+                        present[[0, t, e]] * weights.at(n, t, e)
+                    } else {
+                        0.0
+                    }
+                }),
+                Unit::Proportion,
+                channels,
+                Some(fixtures.to_vec().into()),
+            )?
         }
-        let epoch = if let Some(refresh) = &refresh {
-            refresh[t]
-        } else if settings.reseed {
-            ages.origins[t] + ages.stride * e as i64
-        } else {
-            0
-        };
-        let random =
-            crate::spatial::threshold(&fixtures[n], crate::spatial::epoch_seed(frame.seed, epoch));
-        let softness = softness.at(n, t, 0);
-        if softness > 0.0 {
-            (1.0 - (progress[[t, e]] - random * (1.0 - softness)) / softness).clamp(0.0, 1.0)
-                * weight
-        } else if random > progress[[t, e]] {
-            weight
-        } else {
-            0.0
-        }
+        None => Signal::new(present.clone(), Unit::Proportion, channels, None)?,
+    };
+    let index = Array3::from_shape_fn((1, t, width), |(_, t, e)| {
+        (ages.origins[t] + ages.stride * e as i64) as f64
     });
-    let values = coverage
-        .fold_axis(Axis(2), 0.0_f64, |a, b| a.max(*b))
-        .insert_axis(Axis(2));
-    Signal::new(
-        values,
-        Unit::Proportion,
-        Channels::Value,
-        Some(fixtures.to_vec().into()),
-    )
+    Ok(BTreeMap::from([
+        (
+            "elapsed",
+            Signal::new(
+                Array3::from_shape_fn((1, t, width), |(_, t, e)| {
+                    ages.elapsed.get((t, e)).copied().unwrap_or(duration)
+                }),
+                Unit::Beats,
+                channels,
+                None,
+            )?,
+        ),
+        (
+            "progress",
+            Signal::new(
+                phase.mapv(|p| p.clamp(0.0, 1.0)),
+                Unit::Proportion,
+                channels,
+                None,
+            )?,
+        ),
+        (
+            "present",
+            Signal::new(present, Unit::Proportion, channels, None)?,
+        ),
+        ("weight", weight),
+        ("index", Signal::new(index, Unit::Number, channels, None)?),
+    ]))
 }
 
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
-    if !matches!(
-        op,
-        Primitive::BeatEvents
-            | Primitive::ChaseEvents
-            | Primitive::PulseEvents
-            | Primitive::DissolveEvents
-    ) {
-        return None;
-    }
-    let mut inputs = crate::catalog::primitive(Primitive::Rhythm).inputs;
-    let fixed = |name: &str, value: Value| Input {
+    let fixed = |name: &str, description: &str, value: Value| Input {
         optional: false,
         name: name.into(),
-        description: String::new(),
+        description: description.into(),
         value_type: value.value_type(),
         rate: Rate::Fixed,
         default: Some(value),
+        author: None,
     };
-    let (name, key, value_type, rate) = if op == Primitive::BeatEvents {
-        ("Beat trigger", "trigger", ValueType::Events, Rate::Fixed)
-    } else {
-        inputs.insert(
-            "trigger".into(),
-            Input {
-                optional: false,
-                rate: Rate::Frame,
-                description: "Event timestamps; unwired uses Repeat".into(),
-                ..fixed("Trigger", Value::Events(Events::Automatic))
-            },
-        );
-        inputs.insert("travel".into(), fixed("Travel time", Value::Beats(2.0)));
-        if op == Primitive::ChaseEvents {
-            inputs.extend(
-                crate::catalog::pill_inputs()
-                    .into_iter()
-                    .filter(|(key, _)| key != "position" && key != "active"),
-            );
-            for (key, name, value) in [
-                ("start", "Start position", Value::Position(0.0)),
-                ("end", "End position", Value::Position(1.0)),
+    let signal = |unit| {
+        ValueType::Signal(SignalType {
+            unit: Some(unit),
+            channels: None,
+        })
+    };
+    let (name, inputs, outputs) = match op {
+        Primitive::BeatEvents => (
+            "Beat trigger",
+            crate::catalog::primitive(Primitive::Rhythm).inputs,
+            vec![("trigger", ValueType::Events, Rate::Fixed)],
+        ),
+        Primitive::EventAges => (
+            "Event ages",
+            BTreeMap::from([
                 (
-                    "path",
-                    "Travel curve",
-                    Value::Envelope(Envelope::linear(vec![[0., 0.], [1., 1.]])),
+                    "events".into(),
+                    fixed(
+                        "Events",
+                        "Each event starts an independent response",
+                        Value::Events(Events::Beats {
+                            times: EventTimes::new(Vec::new()).expect("empty event stream"),
+                        }),
+                    ),
                 ),
-            ] {
-                inputs.insert(
-                    key.into(),
-                    Input {
-                        optional: false,
-                        rate: Rate::Frame,
-                        ..fixed(name, value)
-                    },
-                );
-            }
-            ("Chase events", "mask", ValueType::Mask, Rate::Frame)
-        } else {
-            inputs.insert(
-                "shape".into(),
-                crate::catalog::primitive(Primitive::Envelope).inputs["shape"].clone(),
-            );
-            if op == Primitive::DissolveEvents {
-                inputs.extend(
-                    crate::catalog::dissolve_inputs()
-                        .into_iter()
-                        .filter(|(key, _)| key != "coverage" && key != "cycle"),
-                );
-                ("Dissolve events", "mask", ValueType::Mask, Rate::Frame)
-            } else {
-                ("Pulse events", "mask", ValueType::Mask, Rate::Frame)
-            }
-        }
+                (
+                    "duration".into(),
+                    fixed(
+                        "Duration",
+                        "How long each event stays active, in beats",
+                        Value::Beats(2.0),
+                    ),
+                ),
+            ]),
+            vec![
+                ("elapsed", signal(Unit::Beats), Rate::Frame),
+                ("progress", signal(Unit::Proportion), Rate::Frame),
+                ("present", signal(Unit::Proportion), Rate::Frame),
+                ("weight", signal(Unit::Proportion), Rate::Frame),
+                ("index", signal(Unit::Number), Rate::Frame),
+            ],
+        ),
+        _ => return None,
     };
     Some(Definition {
         name: name.into(),
         inputs,
-        outputs: BTreeMap::from([(key.into(), Output { value_type, rate })]),
+        outputs: outputs
+            .into_iter()
+            .map(|(key, value_type, rate)| (key.into(), Output { value_type, rate }))
+            .collect(),
         body: Body::Primitive(op),
     })
 }
 
 pub(crate) fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Result<()> {
-    if matches!(
-        op,
-        Primitive::ChaseEvents | Primitive::PulseEvents | Primitive::DissolveEvents
-    ) && inputs.get("travel").is_some_and(|v| v.scalar() <= 0.0)
-    {
-        return Err(Error("travel must be positive".into()));
+    let positive = |key: &str| inputs.get(key).is_none_or(|v| v.scalar() > 0.0);
+    match op {
+        Primitive::EventAges if !positive("duration") => {
+            Err(Error("duration must be positive".into()))
+        }
+        Primitive::BeatEvents if !positive("repeat") => {
+            Err(Error("repeat interval must be greater than zero".into()))
+        }
+        _ => Ok(()),
     }
-    if op == Primitive::DissolveEvents
-        && inputs
-            .get("refresh_every")
-            .is_some_and(|v| v.scalar() <= 0.0)
-    {
-        return Err(Error("refresh interval must be positive".into()));
-    }
-    Ok(())
 }

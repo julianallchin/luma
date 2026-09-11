@@ -94,7 +94,7 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
 fn pulse_is_dark_in_the_rest_even_when_the_curve_ends_lit() {
     let library = standard_library();
     let cells = cells();
-    for effect in ["pulse", "pulse_dimmer"] {
+    for effect in ["beat_pulse"] {
         let inputs = BTreeMap::from([(
             "shape".into(),
             Value::Envelope(Envelope::linear(vec![[0., 1.], [1., 1.]])),
@@ -181,8 +181,7 @@ fn gradient_and_color_fields_reject_bad_authored_values_and_mismatched_domains()
         "wash",
         "gradient",
         "spatial_gradient",
-        "pulse",
-        "pulse_dimmer",
+        "beat_pulse",
         "noise_wash",
     ] {
         let mut score = Score::default();
@@ -261,7 +260,7 @@ fn audio_sources_require_explicit_data_and_event_envelopes_seek_without_history(
         .unwrap()
         .inputs
         .insert("duration".into(), Value::Beats(0.));
-    assert!(score.validate(&library).unwrap_err().0.contains("travel"));
+    assert!(score.validate(&library).unwrap_err().0.contains("duration"));
     assert!(support::prepare_effect(
         &library,
         "band_energy",

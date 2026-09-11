@@ -340,8 +340,8 @@ class Edit:
         """Stage an exact score.luma source. check/apply run Rust's validator."""
         self._open()
         candidate = json.loads(source)
-        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3):
-            raise TrackError("expected a version-2 or version-3 score document")
+        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3, 4):
+            raise TrackError("expected a version-2, version-3 or version-4 score document")
         self._candidate = candidate
 
     def source(self):

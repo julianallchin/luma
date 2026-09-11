@@ -2,6 +2,31 @@
 //! history: upgrading a copy must never change the revision of historical bytes.
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
+mod v3;
+pub use v3::{upgrade_v3, v3_library, validate_v3};
+
+/// Bring any supported document to the current version. A current document
+/// is validated and returned unchanged.
+pub fn upgrade(score: &Score) -> Result<Score> {
+    match score.version {
+        2 => upgrade_v3(&upgrade_v2(score)?),
+        3 => upgrade_v3(score),
+        Score::VERSION => {
+            score.validate(&standard_library())?;
+            Ok(score.clone())
+        }
+        version => Err(Error(format!("cannot migrate score version {version}"))),
+    }
+}
+
+/// Validate a document of any supported version against its own vocabulary.
+pub fn validate(score: &Score) -> Result<()> {
+    match score.version {
+        2 => validate_v2(score),
+        3 => validate_v3(score),
+        _ => score.validate(&standard_library()),
+    }
+}
 
 /// The original vocabulary is data, not another execution engine.
 pub fn v2_library() -> Library {
@@ -36,23 +61,20 @@ pub fn validate_v2(score: &Score) -> Result<()> {
 /// Lower a standalone historical pattern using the same conversion as a score.
 /// Hosts decode their old node/edge storage into this graph before execution.
 pub fn upgrade_v2_definition(id: &str, definition: Definition) -> Result<Score> {
-    upgrade_v2(&Score {
+    upgrade(&Score {
         version: 2,
         definitions: BTreeMap::from([(id.into(), definition)]),
         clips: BTreeMap::new(),
     })
 }
 
-/// Convert a v2 score into a reviewable v3 candidate. Clip identity, argument
-/// keys/defaults, selection, timing, seeds and layering remain intact. Intermediate
-/// capability bundles become numerical ports; only clip terminals pack output.
-/// Nothing is written, and an error leaves the source completely untouched.
+/// Convert a v2 score into a version 3 candidate against the frozen v3 catalog.
+/// Clip identity, argument keys/defaults, selection, timing, seeds and layering
+/// remain intact. Intermediate capability bundles become numerical ports; only
+/// clip terminals pack output. Nothing is written, and an error leaves the
+/// source completely untouched.
 pub fn upgrade_v2(score: &Score) -> Result<Score> {
-    let target = standard_library();
-    if score.version == 3 {
-        score.validate(&target)?;
-        return Ok(score.clone());
-    }
+    let target = v3_library();
     if score.version != 2 {
         return Err(Error(format!(
             "cannot migrate score version {}",
@@ -86,7 +108,7 @@ pub fn upgrade_v2(score: &Score) -> Result<Score> {
         definitions: conversion.definitions,
         clips,
     };
-    upgraded.validate(&target)?;
+    validate_v3(&upgraded)?;
     Ok(upgraded)
 }
 
@@ -225,8 +247,11 @@ pub fn upgrade_v2_node(
     id: &str,
     capabilities: BTreeMap<String, BTreeSet<Capability>>,
 ) -> Result<NodeUpgrade> {
-    let target = standard_library();
-    let source = source_with_events(&Score::default())?;
+    let target = v3_library();
+    let source = source_with_events(&Score {
+        version: 2,
+        ..Score::default()
+    })?;
     let old = source
         .definitions
         .get(id)
@@ -238,11 +263,11 @@ pub fn upgrade_v2_node(
     }
     let mut conversion = Conversion::new(&source, &target, std::iter::empty());
     let call = conversion.definition(id, capabilities, false)?;
-    let score = Score {
+    let score = upgrade_v3(&Score {
+        version: 3,
         definitions: conversion.definitions,
-        ..Score::default()
-    };
-    score.validate(&target)?;
+        clips: BTreeMap::new(),
+    })?;
     Ok(NodeUpgrade {
         definitions: score.definitions,
         definition: call.id,

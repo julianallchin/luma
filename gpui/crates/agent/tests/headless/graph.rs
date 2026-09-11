@@ -7,7 +7,7 @@ use std::time::Duration;
 fn fixture(name: &'static str) -> Harness {
     Fixture::new(name, 20, vec![])
         .with_graph_score(json!({
-            "version":3,
+            "version":4,
             "definitions":{"canvas":{"name":"Canvas test","inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{
@@ -29,6 +29,15 @@ fn fixture(name: &'static str) -> Harness {
         }))
         .with_rig().window(1600.,1000.).open(Mode::Headless)
 }
+
+/// The clip preview renders through the stage, so this variant keeps it on.
+const OPEN_WITH_STAGE: &str = r#"
+    nav.venue("Test Venue"); nav.track("Aurora"); nav.expand();
+    const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+    const check=(v,m)=>{if(!v)throw new Error(m);};
+    const open=()=>{app.click(node("card","Canvas test"),{count:2});node("card","Graph workspace");node("card","Multiply");};
+    open();
+"#;
 
 const OPEN: &str = r#"
     nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
@@ -91,8 +100,23 @@ fn graph_closes_with_its_score_and_reopens_with_saved_edits() {
 fn graph_drag_is_one_score_edit_and_survives_reopening() {
     let name = "graph-score-drag";
     let mut harness = fixture(name);
+    // The preview resolves the clip over the venue's fixtures.
+    let dir = support::config_dir(name);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let db = luma_lib::database::local::database::init_app_db_at(&dir)
+                .await
+                .unwrap();
+            luma_lib::venue_graph::ensure_migrated(&db.0, support::VENUE, &dir.join("fixtures"))
+                .await
+                .unwrap();
+            db.0.close().await;
+        });
     let result=harness.exec(&support::script(&format!(r#"
-        {OPEN}
+        {OPEN_WITH_STAGE}
         node("slider","Preview time");
         app.click(node("card","Multiply"));
         const workspace=node("card","Graph workspace").bounds;

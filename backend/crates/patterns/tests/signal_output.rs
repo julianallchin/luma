@@ -66,9 +66,18 @@ fn add(def: &mut Definition, lib: &Library, id: &str, node: &str) {
 fn intensity_and_rgb_compose_directly_into_an_output() {
     let mut library = standard_library();
     let mut def = graph();
+    add(&mut def, &library, "mapping", "resolve_mapping");
     add(&mut def, &library, "chase", "chase");
     add(&mut def, &library, "tint", "core/multiply");
     add(&mut def, &library, "output", "output");
+    bind(
+        &mut def,
+        &library,
+        "chase",
+        "mapping",
+        wire("mapping", "coordinates"),
+    )
+    .unwrap();
     bind(
         &mut def,
         &library,
@@ -88,7 +97,7 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
         Value::Proportion(0.3).into(),
     )
     .unwrap();
-    bind(&mut def, &library, "tint", "a", wire("chase", "dimmer")).unwrap();
+    bind(&mut def, &library, "tint", "a", wire("chase", "mask")).unwrap();
     bind(
         &mut def,
         &library,
@@ -125,7 +134,7 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
     };
     assert_eq!(
         body.nodes.len(),
-        3,
+        4,
         "no scalar/field/color broadcast adapter nodes"
     );
     assert_eq!(body.outputs["lighting"], wire("output", "lighting"));
@@ -137,10 +146,19 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
     let output = batch["lighting"].lighting().unwrap();
     assert_eq!(output.values().dim(), (5, 4, 8));
     assert_eq!(output.writes(), [true, true, false, false, false]);
+    let mapping = MappingSpec {
+        source: MappingSource::Z,
+        mirror: None,
+        per_group: false,
+        reverse: false,
+    }
+    .resolve(&cells)
+    .unwrap();
     let mask = PreparedGraph::new(
         &library,
         "chase",
         &BTreeMap::from([
+            ("mapping".into(), Value::Coordinates(mapping)),
             (
                 "trigger".into(),
                 Value::Events(Events::Beats {
@@ -154,7 +172,7 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
     .unwrap()
     .evaluate_batch(&times)
     .unwrap();
-    let mask = mask["dimmer"].signal().unwrap();
+    let mask = mask["mask"].signal().unwrap();
     for (t, _) in times.iter().enumerate() {
         let values = output.sample(t).unwrap();
         for (n, id) in mask.fixtures().unwrap().iter().enumerate() {

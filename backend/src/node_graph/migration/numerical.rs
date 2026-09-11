@@ -486,6 +486,7 @@ fn input(name: &str, kind: ValueType, default: Option<Value>) -> Input {
         value_type: kind,
         rate: Rate::Frame,
         default,
+        author: None,
     }
 }
 fn number(v: f64) -> B {

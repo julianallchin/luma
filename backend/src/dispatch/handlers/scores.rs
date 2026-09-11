@@ -29,11 +29,11 @@ pub async fn get_score_document(
     let document = crate::services::graph_scores::read_score_document(&mut access, &scope).await?;
     let (revision, mut upgraded) = match document {
         crate::services::graph_scores::ScoreDocument::Graph(document) => {
-            if document.score.version() != 2 {
+            if document.score.version() == luma_patterns::Score::VERSION {
                 return Ok(Some(document));
             }
             let upgraded = crate::services::graph_scores::GraphScoreDocument::new(
-                luma_patterns::migration::upgrade_v2(&document.score)
+                luma_patterns::migration::upgrade(&document.score)
                     .map_err(|error| CommandError::Invalid(error.to_string()))?,
             )
             .map_err(CommandError::Invalid)?;

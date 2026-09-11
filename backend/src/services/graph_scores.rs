@@ -61,12 +61,7 @@ pub struct GraphScoreDocument {
 }
 impl GraphScoreDocument {
     pub fn new(score: Score) -> Result<Self, String> {
-        if score.version() == 2 {
-            luma_patterns::migration::validate_v2(&score)
-        } else {
-            score.validate(&standard_library())
-        }
-        .map_err(|error| error.to_string())?;
+        luma_patterns::migration::validate(&score).map_err(|error| error.to_string())?;
         let source = source(&score)?;
         let mut hash = Sha256::new();
         hash.update(b"luma.graph-score.v2\0");
@@ -195,9 +190,8 @@ async fn prepare_scene_data(
     String,
 > {
     let migrated;
-    let score = if score.version() == 2 {
-        migrated =
-            luma_patterns::migration::upgrade_v2(score).map_err(|error| error.to_string())?;
+    let score = if score.version() != Score::VERSION {
+        migrated = luma_patterns::migration::upgrade(score).map_err(|error| error.to_string())?;
         &migrated
     } else {
         score

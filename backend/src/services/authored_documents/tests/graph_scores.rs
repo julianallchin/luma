@@ -302,7 +302,7 @@ fn chase() -> GraphScoreDocument {
     score
         .insert_effect(
             &luma_patterns::standard_library(),
-            "chase",
+            "beat_chase",
             "chase-1",
             0.0,
             16.0,
@@ -600,7 +600,7 @@ async fn tensor_score_migration_keeps_historical_bytes_and_is_reversible() {
         .unwrap();
     let before = current(&fixture, &scope).await;
     let candidate =
-        GraphScoreDocument::new(luma_patterns::migration::upgrade_v2(&original.score).unwrap())
+        GraphScoreDocument::new(luma_patterns::migration::upgrade(&original.score).unwrap())
             .unwrap();
     let source = candidate.source().unwrap();
     assert_ne!(candidate.revision, original.revision);
@@ -828,7 +828,7 @@ async fn graph_score_workspace_commits_graphs_and_clips_then_merges_independent_
     draft
         .insert_effect(
             &luma_patterns::standard_library(),
-            "dissolve_flash",
+            "beat_dissolve",
             "flash",
             24.0,
             4.0,

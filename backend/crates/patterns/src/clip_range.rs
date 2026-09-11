@@ -26,6 +26,7 @@ pub(crate) fn definition() -> Definition {
                     rate: Rate::Fixed,
                     optional: false,
                     default: Some(Value::Number(1024.)),
+                    author: None,
                 },
             ),
         ]),

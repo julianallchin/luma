@@ -110,6 +110,7 @@ pub(crate) fn terminal_definition() -> crate::Definition {
         value_type: value.value_type(),
         rate: Rate::Frame,
         default: Some(value),
+        author: None,
     };
     Definition {
         name: "Output".into(),

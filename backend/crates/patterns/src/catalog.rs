@@ -1,5 +1,4 @@
 use crate::*;
-use std::collections::BTreeMap;
 
 fn input(
     name: &str,
@@ -15,6 +14,7 @@ fn input(
         value_type,
         rate,
         default,
+        author: None,
     }
 }
 fn field(name: &str, description: &str, value: Value, rate: Rate) -> Input {
@@ -175,11 +175,15 @@ fn primitive_definition(p: Primitive) -> Definition {
                 ("mapping", mapping()),
                 (
                     "position",
-                    field(
+                    input(
                         "Position",
                         "Center in mapped coordinates",
-                        Value::Position(0.0),
+                        ValueType::Signal(SignalType {
+                            unit: Some(Unit::Position),
+                            channels: None,
+                        }),
                         Frame,
+                        Some(Value::Position(0.0)),
                     ),
                 ),
                 (
@@ -193,7 +197,14 @@ fn primitive_definition(p: Primitive) -> Definition {
                 ),
             ],
             vec![
-                ("value", ValueType::Field, Frame),
+                (
+                    "value",
+                    ValueType::Signal(SignalType {
+                        unit: Some(Unit::Number),
+                        channels: None,
+                    }),
+                    Frame,
+                ),
                 ("wrapped", ValueType::Mask, Frame),
             ],
         ),
@@ -362,11 +373,9 @@ pub fn standard_library() -> Library {
                 ("core/channel_count", Primitive::ChannelCount),
                 ("core/channel", Primitive::Channel),
                 ("core/join_channels", Primitive::JoinChannels),
-                ("core/chase_events", Primitive::ChaseEvents),
                 ("core/choose", Primitive::FieldSelect),
                 ("core/choose_number", Primitive::ChooseNumber),
                 ("core/clamp_coverage", Primitive::FieldClamp),
-                ("core/dissolve_events", Primitive::DissolveEvents),
                 ("core/divide", Primitive::FieldBinary(FieldMath::Divide)),
                 (
                     "core/field_maximum",
@@ -398,7 +407,6 @@ pub fn standard_library() -> Library {
                 ("core/domain_index", Primitive::DomainIndex),
                 ("core/align_domain", Primitive::AlignDomain),
                 ("core/power", Primitive::Power),
-                ("core/pulse_events", Primitive::PulseEvents),
                 ("core/random", Primitive::RandomField),
                 ("core/rank", Primitive::FieldRank),
                 ("core/field_first", Primitive::FieldFirst),
@@ -421,6 +429,7 @@ pub fn standard_library() -> Library {
                 ("core/track_time", Primitive::TrackTime),
                 ("core/grid_events", Primitive::GridEvents),
                 ("core/event_window", Primitive::EventWindow),
+                ("core/event_ages", Primitive::EventAges),
                 ("core/event_spacing", Primitive::EventSpacing),
                 ("core/thin_events", Primitive::ThinEvents),
                 ("random_subset", Primitive::RandomEventTargets),
@@ -448,97 +457,4 @@ pub fn standard_library() -> Library {
             library
         })
         .clone()
-}
-
-pub(crate) fn dissolve_inputs() -> BTreeMap<String, Input> {
-    let mut inputs = BTreeMap::new();
-    for (key, name, value, rate) in [
-        ("coverage", "Coverage", Value::Proportion(1.0), Rate::Frame),
-        (
-            "softness",
-            "Cell fade softness",
-            Value::Proportion(0.0),
-            Rate::Frame,
-        ),
-        ("cycle", "Stroke index", Value::Number(0.0), Rate::Frame),
-        (
-            "reseed",
-            "New order each stroke",
-            Value::Boolean(true),
-            Rate::Fixed,
-        ),
-        ("refresh", "Flicker", Value::Boolean(false), Rate::Fixed),
-        (
-            "refresh_every",
-            "Refresh every",
-            Value::Beats(0.125),
-            Rate::Fixed,
-        ),
-    ] {
-        inputs.insert(key.into(), field(name, name, value, rate));
-    }
-    inputs
-}
-
-pub(crate) fn pill_inputs() -> BTreeMap<String, Input> {
-    use Rate::{Fixed, Frame};
-    let mapping = || {
-        input(
-            "Mapping",
-            "Resolved coordinates",
-            ValueType::Coordinates,
-            Fixed,
-            None,
-        )
-    };
-    let proportion = |name, value| {
-        field(
-            name,
-            "Fraction of the selected domain",
-            Value::Proportion(value),
-            Frame,
-        )
-    };
-    let inputs = vec![
-        ("mapping", mapping()),
-        (
-            "position",
-            field(
-                "Position",
-                "Stroke center in mapped coordinates",
-                Value::Position(0.0),
-                Frame,
-            ),
-        ),
-        ("width", proportion("Width", 0.25)),
-        (
-            "shape",
-            field(
-                "Shape",
-                "Brightness across the stroke, from its negative to positive edge",
-                Value::Envelope(Envelope::linear(vec![
-                    [0., 0.],
-                    [0.05, 1.],
-                    [0.95, 1.],
-                    [1., 0.],
-                ])),
-                Frame,
-            ),
-        ),
-        ("active", proportion("Activity", 1.0)),
-        (
-            "boundary",
-            field(
-                "Boundary",
-                "Follow mapping, clip, or wrap",
-                Value::Boundary(Boundary::Natural),
-                Fixed,
-            ),
-        ),
-    ];
-
-    inputs
-        .into_iter()
-        .map(|(key, value)| (key.into(), value))
-        .collect()
 }

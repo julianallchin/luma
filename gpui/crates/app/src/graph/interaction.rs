@@ -326,15 +326,7 @@ fn matches(source: &score::ScoreGraph) -> Vec<(String, String)> {
         .filter(|(_, definition)| {
             // A complete clip is selected on the timeline. In the canvas,
             // composition uses its numerical graph and one explicit Output.
-            (!definition.playable() || definition.body == p::Body::Primitive(p::Primitive::Output))
-                && !matches!(
-                    definition.body,
-                    p::Body::Primitive(
-                        p::Primitive::ChaseEvents
-                            | p::Primitive::PulseEvents
-                            | p::Primitive::DissolveEvents
-                    )
-                )
+            !definition.playable() || definition.body == p::Body::Primitive(p::Primitive::Output)
         })
         .filter(|(id, definition)| {
             id.to_lowercase().contains(&query) || definition.name.to_lowercase().contains(&query)
