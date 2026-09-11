@@ -554,3 +554,22 @@ fn newly_reserved_names_do_not_replace_authored_helpers() {
         assert!((actual - expected).abs() < 1e-12);
     }
 }
+
+/// The build that introduced version 4 saved the version 2 samples with the
+/// library copies still in them. Those documents flatten to exactly what a
+/// fresh conversion of the same samples produces.
+#[test]
+fn documents_saved_with_library_copies_flatten_like_a_fresh_conversion() {
+    let baseline: Baseline =
+        serde_json::from_str(include_str!("fixtures/v2-samples.json")).unwrap();
+    let saved: Score = serde_json::from_str(include_str!("fixtures/v4-samples.json")).unwrap();
+    assert_eq!(saved.version(), 4);
+    assert!(saved.definitions.keys().any(|id| id.ends_with("/signals")));
+    let flattened = migration::upgrade(&saved).unwrap();
+    assert_eq!(flattened, migration::upgrade(&baseline.score).unwrap());
+    assert_eq!(flattened.version(), Score::VERSION);
+    assert!(flattened
+        .definitions
+        .keys()
+        .all(|id| id.starts_with("sample-")));
+}

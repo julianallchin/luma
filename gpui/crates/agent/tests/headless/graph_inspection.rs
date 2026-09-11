@@ -6,7 +6,7 @@ use std::time::Duration;
 fn graph_inspection_uses_clip_overrides_and_exposes_signal_heads_and_event_times() {
     let name = "graph-inspection";
     let score = serde_json::json!({
-        "version":4,"definitions":{"inspect":{"name":"Inspect preview",
+        "version":5,"definitions":{"inspect":{"name":"Inspect preview",
             "inputs":{"level":{"name":"Brightness","description":"","value_type":"proportion","rate":"fixed","default":{"type":"proportion","value":0.75}}},
             "outputs":{
                 "lighting":{"value_type":"lighting","rate":"frame"},

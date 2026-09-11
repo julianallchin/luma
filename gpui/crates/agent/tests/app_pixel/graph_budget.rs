@@ -62,7 +62,7 @@ fn harness() -> Harness {
     nodes.insert("output".into(),json!({"definition":"output","position":[COLUMNS*240,0],
         "inputs":{"dimmer":{"source":"connection","node":format!("0-{}",COLUMNS-1),"output":"value"}}}));
     Fixture::new("graph-budget",8,vec![]).with_graph_score(json!({
-        "version":4,"definitions":{"budget":{"name":"Budget Graph","inputs":{},
+        "version":5,"definitions":{"budget":{"name":"Budget Graph","inputs":{},
             "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
             "body":{"kind":"graph","body":{"nodes":nodes,
                 "outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
