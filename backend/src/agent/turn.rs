@@ -571,8 +571,20 @@ impl Turn {
             settings.insert("agent_provider".into(), provider.clone());
         }
         if let Some(model) = self.service.model_name.as_ref().or(thread.model.as_ref()) {
-            if engine == Engine::Api && ModelId::parse(model).is_none() {
-                return Err(AgentError::Invalid(format!("unknown API model '{model}'")));
+            if engine == Engine::Api {
+                let provider = settings
+                    .get("agent_provider")
+                    .map(String::as_str)
+                    .and_then(model::Provider::parse)
+                    .unwrap_or(model::Provider::DEFAULT);
+                let cache = self
+                    .service
+                    .services()
+                    .storage()
+                    .model_catalog_path(provider.as_str());
+                model::remote::ensure(provider, model, &cache)
+                    .await
+                    .map_err(|_| AgentError::Invalid(format!("unknown API model '{model}'")))?;
             }
             let key = match engine {
                 Engine::Api => "agent_model".to_string(),

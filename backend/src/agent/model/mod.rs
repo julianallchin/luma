@@ -8,6 +8,7 @@
 
 pub mod anthropic;
 pub mod openrouter;
+pub mod remote;
 pub mod scripted;
 mod sse;
 
@@ -389,7 +390,12 @@ pub fn configured(
     let requested = settings
         .get("agent_model")
         .map_or(DEFAULT_MODEL, String::as_str);
-    ModelId::parse(requested)
+    let provider = settings
+        .get("agent_provider")
+        .map(String::as_str)
+        .and_then(Provider::parse)
+        .unwrap_or(Provider::DEFAULT);
+    ModelId::resolve(requested, provider)
         .or_else(|| ModelId::parse(DEFAULT_MODEL))
         .ok_or_else(|| ModelError::Unknown(requested.to_string()))
 }
@@ -424,7 +430,67 @@ pub async fn configured_client(
     Ok((client, id, id.spec().default_reasoning))
 }
 
-/// A validated entry of [`MODELS`]. Constructing one is the only way to name a
+/// Models a gateway lists at run time, beside [`MODELS`].
+///
+/// A [`ModelId`] is a `&'static` reference into the model table, and this is
+/// the table's run-time half: [`register`] leaks one [`ModelSpec`] for each
+/// gateway model a turn runs, so the id stays `Copy` and every transport keeps
+/// asking the one question it already asks ([`ModelId::wire_id`]). The leak is
+/// bounded by the models one session actually runs.
+static REMOTE: std::sync::Mutex<Vec<&'static ModelSpec>> = std::sync::Mutex::new(Vec::new());
+
+fn remote_specs() -> std::sync::MutexGuard<'static, Vec<&'static ModelSpec>> {
+    REMOTE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Add a gateway model to the table's run-time half, routed over `provider`
+/// only. Registering the same model twice returns the first entry.
+///
+/// # Errors
+///
+/// [`ModelError::Unknown`] when `provider` publishes no list or `model.id` is
+/// not a wire id — see [`remote::is_wire_id`].
+pub fn register(provider: Provider, model: &remote::RemoteModel) -> Result<ModelId, ModelError> {
+    if let Some(id) = ModelId::resolve(&model.id, provider) {
+        return Ok(id);
+    }
+    if remote::url(provider).is_none() || !remote::is_wire_id(&model.id) {
+        return Err(ModelError::Unknown(model.id.clone()));
+    }
+    let mut specs = remote_specs();
+    // Looked up again under the lock: two turns may register one model.
+    if let Some(spec) = specs
+        .iter()
+        .find(|spec| spec.key == model.id && ModelId(*spec).wire_id(provider).is_ok())
+    {
+        return Ok(ModelId(*spec));
+    }
+    let key: &'static str = Box::leak(model.id.clone().into_boxed_str());
+    let spec: &'static ModelSpec = Box::leak(Box::new(ModelSpec {
+        key,
+        display: Box::leak(model.name.clone().into_boxed_str()),
+        anthropic: None,
+        openrouter: (provider == Provider::OpenRouter).then_some(key),
+        gateway: (provider == Provider::VercelAiGateway).then_some(key),
+        default_reasoning: if model.reasoning {
+            ReasoningLevel::Medium
+        } else {
+            ReasoningLevel::Off
+        },
+        context_window: match model.context_window {
+            0 => remote::FALLBACK_CONTEXT_WINDOW,
+            window => window,
+        },
+        long_cache_retention: false,
+    }));
+    specs.push(spec);
+    Ok(ModelId(spec))
+}
+
+/// A validated entry of the model table — [`MODELS`], or a gateway model
+/// [`register`]ed at run time. Constructing one is the only way to name a
 /// model, so an unvalidated free-form string cannot reach a provider.
 #[derive(Clone, Copy, Debug)]
 pub struct ModelId(&'static ModelSpec);
@@ -444,8 +510,32 @@ impl Eq for ModelId {}
 impl ModelId {
     /// Look a model up by its stable Luma key, or by any provider wire id it
     /// carries — settings written by the TypeScript stack stored wire ids.
+    /// A registered gateway model matches on any provider; use
+    /// [`ModelId::resolve`] when the provider is known.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
+        Self::listed(value).or_else(|| {
+            remote_specs()
+                .iter()
+                .find(|spec| spec.key == value)
+                .map(|spec| ModelId(*spec))
+        })
+    }
+
+    /// [`ModelId::parse`] for a known provider: a registered gateway model
+    /// only matches over the gateway it was registered for, since both
+    /// gateways can list one wire id.
+    #[must_use]
+    pub fn resolve(value: &str, provider: Provider) -> Option<Self> {
+        Self::listed(value).or_else(|| {
+            remote_specs()
+                .iter()
+                .find(|spec| spec.key == value && ModelId(*spec).wire_id(provider).is_ok())
+                .map(|spec| ModelId(*spec))
+        })
+    }
+
+    fn listed(value: &str) -> Option<Self> {
         MODELS
             .iter()
             .find(|spec| {

@@ -339,6 +339,8 @@ pub(super) async fn models(
         label: "Default".into(),
         resolved_model: None,
         effort_levels: Vec::new(),
+        context_window: None,
+        price: None,
     }];
     loop {
         let frame = process.read().await?;
@@ -369,6 +371,8 @@ pub(super) async fn models(
                             .filter_map(|value| value["reasoningEffort"].as_str())
                             .map(str::to_string)
                             .collect(),
+                        context_window: None,
+                        price: None,
                     });
                 }
                 if let Some(default) = page.iter().find(|model| model["isDefault"] == true) {

@@ -190,6 +190,19 @@ impl Agent {
         async move { task.await.map_err(|e| e.to_string())? }
     }
 
+    /// The gateway list saved by the last [`Self::models`], for rows to show
+    /// while the next read is on the wire.
+    pub fn cached_models(
+        &self,
+        service: Service,
+    ) -> impl std::future::Future<Output = Option<Vec<ModelChoice>>> + use<> {
+        let agent = self.service.clone();
+        let task = self
+            .runtime
+            .spawn(async move { agent.cached_models(service).await });
+        async move { task.await.ok().flatten() }
+    }
+
     /// Start a turn. The stream is built here rather than inside the spawned
     /// task so its steering handle can be handed back with it — a turn a host
     /// could not redirect would force the composer to lock while one ran.
@@ -520,6 +533,7 @@ impl AgentChat {
         self.model_picker.open = !self.model_picker.open;
         if self.model_picker.open {
             self.model_picker.models_open = false;
+            self.model_picker.clear_search(cx);
             window.focus(&self.model_picker.focus, cx);
             if let Some(selection) = &self.selection {
                 self.browse_models(selection.service, cx);
@@ -574,27 +588,62 @@ impl AgentChat {
         self.commit_effort(cx);
     }
 
+    /// Show `service`'s models, reading them if needed. A gateway's list is
+    /// read again every time — the picker calls this each time it opens — and
+    /// the rows already held, or saved on disk, show while it is on the wire,
+    /// so the list is never blank while it refreshes. A CLI's list is read
+    /// once per session: asking means starting the CLI.
     fn browse_models(&mut self, service: Service, cx: &mut Context<Self>) {
-        self.model_picker.service = service;
-        if matches!(self.model_picker.catalogs.get(&service), Some(Ok(_)))
-            || !self.model_picker.loading.insert(service)
-        {
+        self.model_picker.show(service, cx);
+        let held = matches!(self.model_picker.catalogs.get(&service), Some(Ok(_)));
+        if (held && !service.lists_models()) || !self.model_picker.loading.insert(service) {
             cx.notify();
             return;
         }
-        self.model_picker.catalogs.remove(&service);
+        if !held {
+            // A previous error, cleared so the retry reads as loading.
+            self.model_picker.catalogs.remove(&service);
+        }
+        let saved = (!held).then(|| self.agent.cached_models(service));
         let pending = self.agent.models(service);
         cx.notify();
         cx.spawn(async move |this, cx| {
+            // Applied before the fresh read, so the fresh read always wins.
+            if let Some(models) = match saved {
+                Some(saved) => saved.await,
+                None => None,
+            } {
+                this.update(cx, |this, cx| {
+                    if !matches!(this.model_picker.catalogs.get(&service), Some(Ok(_))) {
+                        this.model_picker.receive(service, Ok(models), cx);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
             let result = pending.await;
             this.update(cx, |this, cx| {
                 this.model_picker.loading.remove(&service);
-                this.model_picker.catalogs.insert(service, result);
+                this.model_picker.receive(service, result, cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Pick the model under the list's keyboard cursor.
+    fn choose_current_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(selection), Some(model)) =
+            (self.selection.as_ref(), self.model_picker.current())
+        else {
+            return;
+        };
+        let chosen = model.selection(self.model_picker.service, selection);
+        self.select_model(chosen, cx);
+        self.model_picker.models_open = false;
+        window.focus(&self.model_picker.focus, cx);
+        cx.notify();
     }
 
     fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
