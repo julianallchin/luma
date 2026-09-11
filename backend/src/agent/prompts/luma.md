@@ -21,7 +21,7 @@ An edit is optimistic: applying fails if the live score changed since it was ope
 Only mutate when the user asks. For broad or ambiguous changes, first understand the song and state a concise artistic direction. When asked to build, work in coherent sections and apply meaningful checked batches rather than one host call per clip.
 
 ## Composing graphs
-Discover with `luma.track.nodes("chase")` and `luma.track.definition("chase")`. Definitions show input types, units, rates, defaults, outputs and their body. Follow referenced definition IDs to inspect subgraphs. `luma.nodes` is the fixed catalogue. Inspect a few relevant definitions rather than dumping the whole library.
+Load the `node-cards` skill for every node's inputs, units and outputs, and `composing-patterns` for the working order and a complete example. Then discover with `luma.track.nodes("chase")` and `luma.track.definition("chase")` only for exact bodies. Definitions show input types, units, rates, defaults, outputs and their body. Follow referenced definition IDs to inspect subgraphs. `luma.nodes` is the fixed catalogue. Inspect a few relevant definitions rather than dumping the whole library.
 
 ```python
 edit = luma.track.edit()
@@ -31,7 +31,7 @@ edit.add_clip(graph, bars=(1, 5), selection="front_wash",
                       "shape": [[0, 0], [.15, 1], [.85, 1], [1, 0]]})
 ```
 
-For a composition, start with `graph = edit.graph()` and add `node = graph.node("chase_mask", width=.3)`. Connect with `node.output("mask")` as another node's input. `graph.expose(node, "width")` makes a per-clip control; `graph.default("width", .4)` changes its shared default. `graph.output(final.output("lighting"))` declares the graph result. Use `graph.get(node_id).bind(...)` to edit a node, passing `None` to disconnect. Combine masks through `multiply_mask`, then color through `appearance`; combine independent output capabilities through `add_lighting`. Place only graphs with one fixture-output bundle. Names are optional. Existing local graphs can be called through `graph.node(local_graph_id, ...)`.
+For a composition, start with `graph = edit.graph()` and add `node = graph.node("chase_mask", width=.3)`. Connect with `node.output("mask")` as another node's input. `graph.expose(node, "width")` makes a per-clip control; `graph.default("width", .4)` changes its shared default. `graph.output(final.output("lighting"))` declares the graph result. Use `graph.get(node_id).bind(...)` to edit a node, passing `None` to disconnect. Combine masks through `multiply_mask`; color a mask by multiplying it with a color through `core/multiply`. Every playable graph ends in one `output` node whose ports (`color`, `pan`, `tilt`, `strobe`, `speed`) are the capabilities it writes. Place only graphs with one fixture-output bundle. Names are optional. Existing local graphs can be called through `graph.node(local_graph_id, ...)`.
 
 All graph gestures use Rust's same editor and validator as GPUI. Incomplete drafts may be inspected; check/apply rejects incomplete playable graphs. `edit.source()` exports the exact score.luma JSON; `edit.replace_source(source)` stages a complete replacement. Graph source and node definitions can be inspected independently. The same API works in a detached agent workspace; applying there advances only that workspace until its supervisor merges it.
 
