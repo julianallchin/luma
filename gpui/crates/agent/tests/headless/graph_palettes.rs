@@ -7,7 +7,7 @@ fn graph_palettes_keep_empty_defaults_and_overrides_through_editing_and_undo() {
     let name = "graph-empty-palettes";
     let mut harness = Fixture::new(name,20,vec![])
         .with_graph_score(serde_json::json!({
-            "version":6,"definitions":{"ribbon":{"name":"Empty colors",
+            "version":7,"definitions":{"ribbon":{"name":"Empty colors",
                 "inputs":{"palette":{"name":"Palette","description":"","value_type":"gradient","rate":"fixed","default":{"type":"gradient","value":{"stops":[]}}}},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"input_nodes":{"palette":{"name":"Palette","position":[-250.,0.]}},"nodes":{

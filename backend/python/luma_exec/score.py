@@ -29,7 +29,7 @@ import json
 import math
 
 # The document version Rust writes; anything older is upgraded on open.
-SCORE_VERSION = 6
+SCORE_VERSION = 7
 import re
 import uuid
 from dataclasses import dataclass
@@ -343,7 +343,7 @@ class Edit:
         """Stage an exact score.luma source. check/apply run Rust's validator."""
         self._open()
         candidate = json.loads(source)
-        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3, 4, 5, 6):
+        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3, 4, 5, 6, 7):
             raise TrackError("expected a score document of version 2 to 6")
         self._candidate = candidate
 

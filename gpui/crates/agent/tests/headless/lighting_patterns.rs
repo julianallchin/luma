@@ -5,7 +5,7 @@ use std::time::Duration;
 #[test]
 fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
     let mut harness = Fixture::new("mapping-vector-mirror", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
@@ -108,7 +108,7 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
 #[test]
 fn edit_gradient_stops_in_a_canonical_graph() {
     let mut harness = Fixture::new("lighting-gradient-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
@@ -177,7 +177,7 @@ fn edit_gradient_stops_in_a_canonical_graph() {
 #[test]
 fn insert_a_dissolve_pattern_in_the_native_score_editor() {
     let mut harness = Fixture::new("lighting-pattern-insert", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
@@ -245,7 +245,7 @@ fn insert_a_dissolve_pattern_in_the_native_score_editor() {
 #[test]
 fn edit_a_chase_envelope_per_clip() {
     let mut harness = Fixture::new("lighting-envelope-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
@@ -332,7 +332,7 @@ fn inspect_builtin_chase_and_customize_its_composition() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-nested-graphs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .open(mode);
     let result = harness.exec(&support::script(r#"
@@ -413,7 +413,7 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-compose-outputs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":6,"definitions":{},"clips":{}}))
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
         .with_rig()
         .window(1600., 1000.)
         .open(mode);
