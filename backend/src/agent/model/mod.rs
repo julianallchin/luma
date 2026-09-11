@@ -463,9 +463,9 @@ pub fn register(provider: Provider, model: &remote::RemoteModel) -> Result<Model
     // Looked up again under the lock: two turns may register one model.
     if let Some(spec) = specs
         .iter()
-        .find(|spec| spec.key == model.id && ModelId(*spec).wire_id(provider).is_ok())
+        .find(|spec| spec.key == model.id && ModelId(spec).wire_id(provider).is_ok())
     {
-        return Ok(ModelId(*spec));
+        return Ok(ModelId(spec));
     }
     let key: &'static str = Box::leak(model.id.clone().into_boxed_str());
     let spec: &'static ModelSpec = Box::leak(Box::new(ModelSpec {
@@ -518,7 +518,7 @@ impl ModelId {
             remote_specs()
                 .iter()
                 .find(|spec| spec.key == value)
-                .map(|spec| ModelId(*spec))
+                .map(|spec| ModelId(spec))
         })
     }
 
@@ -530,8 +530,8 @@ impl ModelId {
         Self::listed(value).or_else(|| {
             remote_specs()
                 .iter()
-                .find(|spec| spec.key == value && ModelId(*spec).wire_id(provider).is_ok())
-                .map(|spec| ModelId(*spec))
+                .find(|spec| spec.key == value && ModelId(spec).wire_id(provider).is_ok())
+                .map(|spec| ModelId(spec))
         })
     }
 

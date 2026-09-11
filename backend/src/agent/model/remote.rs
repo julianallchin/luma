@@ -167,8 +167,7 @@ fn openrouter(entry: &Value) -> Option<RemoteModel> {
 
 fn vercel(entry: &Value) -> Option<RemoteModel> {
     let tags = strings(entry.get("tags"));
-    if text(entry, "type").as_deref() != Some("language") || !tags.iter().any(|t| t == "tool-use")
-    {
+    if text(entry, "type").as_deref() != Some("language") || !tags.iter().any(|t| t == "tool-use") {
         return None;
     }
     let effort = entry
@@ -288,7 +287,10 @@ pub async fn ensure(provider: Provider, value: &str, cache: &Path) -> Result<Mod
     let listed = read_cache(cache)
         .await
         .and_then(|models| models.into_iter().find(|model| model.id == value));
-    super::register(provider, &listed.unwrap_or_else(|| RemoteModel::unlisted(value)))
+    super::register(
+        provider,
+        &listed.unwrap_or_else(|| RemoteModel::unlisted(value)),
+    )
 }
 
 #[cfg(test)]
@@ -321,7 +323,11 @@ mod tests {
         let models = parse(Provider::OpenRouter, &openrouter_body());
         assert_eq!(
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            ["moonshotai/kimi-k3", "openai/gpt-4o-mini", "openrouter/auto"]
+            [
+                "moonshotai/kimi-k3",
+                "openai/gpt-4o-mini",
+                "openrouter/auto"
+            ]
         );
         let kimi = &models[0];
         assert_eq!(kimi.name, "Kimi K3");
@@ -331,7 +337,10 @@ mod tests {
         let (input, output) = kimi.price.expect("priced");
         assert!((input - 1.89).abs() < 1e-9 && (output - 9.48).abs() < 1e-9);
         assert!(!models[1].reasoning && models[1].efforts.is_empty());
-        assert_eq!(models[2].price, None, "per-request pricing is not a token price");
+        assert_eq!(
+            models[2].price, None,
+            "per-request pricing is not a token price"
+        );
     }
 
     #[test]
@@ -363,7 +372,11 @@ mod tests {
 
     #[test]
     fn a_wire_id_is_creator_slash_model() {
-        for good in ["openai/gpt-5.6-sol", "moonshotai/kimi-k3:batch", "~moonshotai/kimi-latest"] {
+        for good in [
+            "openai/gpt-5.6-sol",
+            "moonshotai/kimi-k3:batch",
+            "~moonshotai/kimi-latest",
+        ] {
             assert!(is_wire_id(good), "{good}");
         }
         for bad in ["gpt-5", "a/", "/b", "a/b/c", "a/b c", ""] {
@@ -395,7 +408,12 @@ mod tests {
                 models.len(),
                 models.iter().take(3).map(|m| &m.id).collect::<Vec<_>>()
             );
-            assert!(models.len() > 50, "{} listed {}", provider.as_str(), models.len());
+            assert!(
+                models.len() > 50,
+                "{} listed {}",
+                provider.as_str(),
+                models.len()
+            );
             assert!(priced * 2 > models.len());
         }
     }
@@ -423,15 +441,22 @@ mod tests {
             listed.wire_id(Provider::VercelAiGateway).is_err(),
             "registered for one gateway only"
         );
-        assert_eq!(listed.spec().default_reasoning, super::super::ReasoningLevel::Off);
+        assert_eq!(
+            listed.spec().default_reasoning,
+            super::super::ReasoningLevel::Off
+        );
 
         let unlisted = ensure(Provider::OpenRouter, "acme/unlisted-model", &path)
             .await
             .expect("registered");
         assert_eq!(unlisted.context_window(), FALLBACK_CONTEXT_WINDOW);
 
-        assert!(ensure(Provider::OpenRouter, "not a model", &path).await.is_err());
-        assert!(ensure(Provider::Anthropic, "acme/model", &path).await.is_err());
+        assert!(ensure(Provider::OpenRouter, "not a model", &path)
+            .await
+            .is_err());
+        assert!(ensure(Provider::Anthropic, "acme/model", &path)
+            .await
+            .is_err());
         // The static table still wins.
         assert_eq!(
             ensure(Provider::OpenRouter, "moonshotai/kimi-k3-fast", &path)
