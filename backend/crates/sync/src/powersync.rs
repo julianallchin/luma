@@ -1,0 +1,153 @@
+//! PowerSync and SQLx connections to the same local database.
+
+use std::{collections::HashSet, future::Future, path::Path, pin::Pin, time::Duration};
+
+pub use ::powersync as sdk;
+pub use powersync_http::Client as HttpClient;
+use sdk::{env::PowerSyncEnvironment, schema::Schema, ConnectionPool, PowerSyncDatabase};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    SqliteConnection, SqlitePool,
+};
+mod tasks;
+use tasks::Task;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Sqlite(#[from] sqlx::Error),
+    #[error(transparent)]
+    PowerSync(#[from] sdk::error::PowerSyncError),
+}
+
+/// Prepare the application schema before starting PowerSync on these connections.
+pub struct Connections {
+    sql: SqlitePool,
+    sync: ConnectionPool,
+}
+
+pub type Initialize =
+    for<'c> fn(
+        &'c mut SqliteConnection,
+    ) -> Pin<Box<dyn Future<Output = Result<(), sqlx::Error>> + Send + 'c>>;
+
+impl Connections {
+    pub async fn open(path: &Path, max_connections: u32) -> Result<Self, Error> {
+        Self::open_with(path, max_connections, |_| Box::pin(async { Ok(()) })).await
+    }
+
+    pub async fn open_with(
+        path: &Path,
+        max_connections: u32,
+        initialize: Initialize,
+    ) -> Result<Self, Error> {
+        PowerSyncEnvironment::powersync_auto_extension()?;
+        let sync = ConnectionPool::open(path)?;
+        let notifiers = sync.update_notifiers().clone();
+        let sql = SqlitePoolOptions::new()
+            .max_connections(max_connections)
+            .after_connect(move |connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SELECT powersync_update_hooks('install')")
+                        .execute(&mut *connection)
+                        .await?;
+                    initialize(connection).await
+                })
+            })
+            .after_release(move |connection, _| {
+                let notifiers = notifiers.clone();
+                Box::pin(async move {
+                    let json: String = sqlx::query_scalar("SELECT powersync_update_hooks('get')")
+                        .fetch_one(connection)
+                        .await?;
+                    let tables: HashSet<String> = serde_json::from_str(&json)
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+                    notifiers.notify_updates(&tables);
+                    Ok(true)
+                })
+            })
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true)
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .foreign_keys(true)
+                    .busy_timeout(Duration::from_secs(30)),
+            )
+            .await?;
+        Ok(Self { sql, sync })
+    }
+
+    /// Writers release their connection after committing to publish notifications.
+    pub fn sql(&self) -> &SqlitePool {
+        &self.sql
+    }
+
+    pub async fn start(self, schema: Schema, http: HttpClient) -> Result<Database, Error> {
+        let sync = PowerSyncDatabase::new(
+            PowerSyncEnvironment::custom(http, self.sync, PowerSyncEnvironment::tokio_timer()),
+            schema,
+        );
+        // Initialize managed views and raw-table mappings before any actors run.
+        drop(sync.reader().await?);
+        let tasks = sync.async_tasks().spawn_with(Task::spawn);
+        Ok(Database {
+            sql: self.sql,
+            sync,
+            tasks,
+        })
+    }
+}
+
+/// Owns the sync tasks; dropping it stops them even when a connector holds a clone.
+pub struct Database {
+    pub sql: SqlitePool,
+    pub sync: PowerSyncDatabase,
+    tasks: Vec<Task>,
+}
+
+impl Database {
+    pub async fn close(mut self) {
+        self.sync.disconnect().await;
+        self.sql.close().await;
+        for task in self.tasks.drain(..) {
+            task.stop().await;
+        }
+    }
+}
+
+/// Complete an upload inside the caller's SQLite transaction, so its durable
+/// outcome and account fence cannot be separated from queue acknowledgement.
+/// This is the pinned SDK's `complete_crud_items(None)` SQL; keep it here until
+/// the SDK accepts an existing transaction for completion.
+pub async fn complete_upload(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    upload: sdk::CrudTransaction<'_>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM ps_crud WHERE id <= ?")
+        .bind(upload.last_item_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("SELECT powersync_control('target_checkpoint_request_id', ?)")
+        .bind(i64::MAX)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+/// The pinned SDK clears its applied marker on every local write. Read its
+/// target and applied checkpoint together with the application projection.
+pub async fn uploads_confirmed(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT NOT EXISTS(SELECT 1 FROM ps_crud)
+         AND NOT EXISTS(SELECT 1 FROM ps_kv target
+             WHERE target.key = 'target_checkpoint_request_id'
+               AND NOT EXISTS(SELECT 1 FROM ps_kv applied
+                   WHERE applied.key = 'last_applied_checkpoint_request_id'
+                     AND CAST(applied.value AS INTEGER) >= CAST(target.value AS INTEGER)))",
+    )
+    .fetch_one(connection)
+    .await
+}

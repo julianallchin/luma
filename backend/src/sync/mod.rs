@@ -16,6 +16,16 @@
 //! the pull path builds SQL dynamically from column lists. Adding a new
 //! relational table requires both a `TableMeta` entry and a `Syncable` payload.
 
+// --- PowerSync client layer (docs/design/sync.md) ---
+pub mod connector;
+pub mod schema;
+pub mod service;
+pub mod triggers;
+#[cfg(test)]
+mod powersync_tests;
+#[cfg(test)]
+mod two_device_tests;
+// --- the engine PowerSync replaces ---
 pub mod authored_remote;
 pub mod error;
 pub mod progress;

@@ -41,7 +41,11 @@ pub mod stage_render;
 mod stagelinq_manager;
 mod stem_worker;
 pub mod storage;
-mod sync;
+/// Record sync. `sync::service::Service` is the whole seam: a host hands it the
+/// PowerSync database and the state pool, and it connects, reports status and
+/// announces downloaded change. Public because the host that starts it lives
+/// outside this crate.
+pub mod sync;
 mod topo;
 /// The venue graph: loading it, solving it, and converting what came before.
 pub mod venue_graph;

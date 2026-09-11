@@ -69,33 +69,19 @@ impl SyncEngine {
         else {
             return Ok(crate::models::sync::SyncStatus::default());
         };
-        let principal = crate::database::local::auth::principal_key(Some(&uid));
-        let failures = sqlx::query_as::<_, crate::models::sync::SyncFailure>(
-            "SELECT table_name, record_id, subject, attempts, permanent, last_error
-             FROM sync_push_failures WHERE principal_key = ?
-             ORDER BY permanent DESC, table_name, record_id, subject",
-        )
-        .bind(principal)
-        .fetch_all(&self.pool)
-        .await?;
-        // Use the same durability predicates as sign-out: include backoff,
-        // exclude permanently blocked rows (which are listed as failures).
-        let mut counts: Vec<String> = registry::TABLES
+        // The old engine no longer owns the status shape; PowerSync does.
+        // What it can still answer honestly is how much it has left to push.
+        let counts: Vec<String> = registry::TABLES
             .iter()
             .filter_map(|table| table.undelivered_count_sql())
             .map(|sql| format!("SELECT ({sql}) AS pending"))
+            .chain([
+                "SELECT COUNT(*) AS pending FROM sync_tombstones
+                 WHERE principal_key = 'signed-in:' || ?1"
+                    .to_owned(),
+            ])
             .collect();
-        counts.push(
-            "SELECT COUNT(*) AS pending FROM sync_tombstones AS tombstone
-            LEFT JOIN sync_push_failures AS failure
-              ON failure.principal_key = tombstone.principal_key
-             AND failure.table_name = tombstone.table_name
-             AND failure.record_id = tombstone.record_id AND failure.subject = 'tombstone'
-            WHERE tombstone.principal_key = 'signed-in:' || ?1
-              AND COALESCE(failure.permanent, 0) = 0"
-                .into(),
-        );
-        let pending_changes: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        let pending: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COALESCE(SUM(pending), 0) FROM ({})",
             counts.join(" UNION ALL ")
         )))
@@ -103,18 +89,19 @@ impl SyncEngine {
         .fetch_one(&self.pool)
         .await?;
         Ok(crate::models::sync::SyncStatus {
-            syncing: self.sync_lock.try_lock().is_err(),
-            progress: self.progress.snapshot(&uid),
-            pending_changes: pending_changes as usize,
-            errors: self
+            connected: false,
+            uploading: self.sync_lock.try_lock().is_err(),
+            downloading: false,
+            last_synced_at: None,
+            pending_uploads: pending as usize,
+            error: self
                 .last_errors
                 .lock()
                 .unwrap()
                 .iter()
                 .filter(|((owner, _), _)| owner == &uid)
                 .flat_map(|(_, errors)| errors.iter().cloned())
-                .collect(),
-            failures,
+                .next(),
         })
     }
 
