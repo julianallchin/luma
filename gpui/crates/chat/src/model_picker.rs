@@ -1,23 +1,34 @@
 use crate::AgentChat;
-use gpui::{div, prelude::*, px, rgb, AnyElement, Entity, FocusHandle, SharedString};
+use gpui::{
+    div, prelude::*, px, rgb, AnyElement, Entity, FocusHandle, Focusable, ScrollHandle,
+    SharedString, Subscription,
+};
 use gpui_component::Icon;
 use luma_lib::agent::{
     engine::catalog::{ModelChoice, Selection, Service},
     model::MODELS,
 };
 use luma_ui::{
-    float,
+    float::{self, RowState},
     icons::IconName,
     ladder, motion,
     node::{AgentNode, Instrument, Role},
+    text_input::{self, TextInput},
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    rc::Rc,
     time::Instant,
 };
 
 gpui::actions!(model_picker, [DismissPicker]);
+
+/// Most rows the models view mounts. A gateway lists hundreds; past this many
+/// the search is the way to reach the rest.
+const LIST_LIMIT: usize = 60;
+/// The tallest the scrolling list grows before it scrolls.
+const LIST_MAX_HEIGHT: f32 = 264.;
 
 pub(crate) struct Picker {
     pub focus: FocusHandle,
@@ -31,6 +42,18 @@ pub(crate) struct Picker {
     pub service: Service,
     pub catalogs: HashMap<Service, Result<Vec<ModelChoice>, String>>,
     pub loading: HashSet<Service>,
+    /// The search over a gateway's list. Shown only for services that
+    /// [`Service::lists_models`]; the others list a handful.
+    search: Entity<TextInput>,
+    _search: Subscription,
+    /// The shown service's rows, filtered by the search.
+    list: float::Picker<ModelChoice>,
+    scroll: ScrollHandle,
+    /// The models view's natural height, written as it paints. The card's
+    /// height is tweened, so it needs a number, and the view's height depends
+    /// on how the provider chips wrap and how many rows match — facts only
+    /// layout knows.
+    menu_height: Rc<Cell<Option<f32>>>,
 }
 
 impl Picker {
@@ -40,6 +63,14 @@ impl Picker {
             DismissPicker,
             Some("ModelEffortPicker"),
         )]);
+        let search = cx.new(|cx| TextInput::search("Search models…", cx));
+        let subscription = cx.subscribe(&search, |chat, field, event, cx| {
+            if event == &text_input::Event::Edited {
+                let query = field.read(cx).text().to_string();
+                chat.model_picker.filter(query);
+            }
+            cx.notify();
+        });
         Self {
             focus: cx.focus_handle(),
             open: false,
@@ -52,7 +83,82 @@ impl Picker {
             service: Service::Claude,
             catalogs: HashMap::new(),
             loading: HashSet::new(),
+            search,
+            _search: subscription,
+            list: float::Picker::new(matches).with_limit(LIST_LIMIT),
+            scroll: ScrollHandle::new(),
+            menu_height: Rc::default(),
         }
+    }
+
+    /// Show `service`'s rows.
+    pub fn show(&mut self, service: Service, cx: &gpui::App) {
+        self.service = service;
+        self.sync(cx);
+    }
+
+    /// Take a list read for `service`. A failed refresh keeps the rows
+    /// already shown: a stale list is more use than an error in its place.
+    pub fn receive(
+        &mut self,
+        service: Service,
+        result: Result<Vec<ModelChoice>, String>,
+        cx: &gpui::App,
+    ) {
+        if result.is_ok() || !matches!(self.catalogs.get(&service), Some(Ok(_))) {
+            self.catalogs.insert(service, result);
+        }
+        if service == self.service {
+            self.sync(cx);
+        }
+    }
+
+    /// Empty the search, for a picker that is opening fresh.
+    pub fn clear_search(&self, cx: &mut gpui::App) {
+        self.search.update(cx, |field, cx| field.set_text("", cx));
+    }
+
+    /// Where focus goes when the models view shows: the search when there is
+    /// one, so typing filters at once.
+    pub fn models_focus(&self, cx: &gpui::App) -> FocusHandle {
+        if self.service.lists_models() {
+            self.search.read(cx).focus_handle(cx)
+        } else {
+            self.focus.clone()
+        }
+    }
+
+    /// Move the list's keyboard cursor.
+    pub fn step(&mut self, delta: isize) {
+        if let Some(at) = self.list.step(delta) {
+            self.scroll.scroll_to_item(at);
+        }
+    }
+
+    /// The row under the keyboard cursor.
+    pub fn current(&self) -> Option<&ModelChoice> {
+        self.list.current()
+    }
+
+    fn filter(&mut self, query: String) {
+        if self.service.lists_models() {
+            self.list.set_query(query);
+            self.scroll.scroll_to_item(0);
+        }
+    }
+
+    fn sync(&mut self, cx: &gpui::App) {
+        let rows = match self.catalogs.get(&self.service) {
+            Some(Ok(models)) => models.clone(),
+            _ => Vec::new(),
+        };
+        self.list.set_rows(rows);
+        let query = if self.service.lists_models() {
+            self.search.read(cx).text().to_string()
+        } else {
+            String::new()
+        };
+        self.list.set_query(query);
     }
 
     fn model(&self, selection: &Selection) -> Option<&ModelChoice> {
@@ -113,16 +219,14 @@ impl Picker {
                 format!("{} · {}", selection.service.label(), self.label(selection)),
             )
             .agent_disabled(disabled);
+        // Until the models view has painted once, a guess; the tween turns
+        // toward the measured height from wherever the guess got to.
         let target_height = if self.open && self.models_open {
-            let rows = self
-                .catalogs
-                .get(&self.service)
-                .and_then(|r| r.as_ref().ok())
-                .map_or(2, |m| m.len());
-            102. + (rows as f32 * 30.).min(240.)
+            self.menu_height.get().unwrap_or(300.)
         } else {
             104.
         };
+        let models_open = self.models_open;
         let height = self.height.borrow_mut().sample(
             target_height,
             !self.open || motion::reduced_motion(cx),
@@ -135,7 +239,7 @@ impl Picker {
             .child(trigger)
             .when(self.open, |el| {
                 let content = if self.models_open {
-                    self.model_menu(selection, chat)
+                    self.model_menu(selection, chat, cx)
                 } else {
                     self.effort_card(selection, disabled, chat, window, cx)
                 };
@@ -171,6 +275,14 @@ impl Picker {
                                     .update(cx, |chat, cx| {
                                         chat.step_effort(&event.keystroke.key, cx)
                                     }),
+                                "up" | "down" if models_open => key_chat.update(cx, |chat, cx| {
+                                    let delta = if event.keystroke.key == "up" { -1 } else { 1 };
+                                    chat.model_picker.step(delta);
+                                    cx.notify();
+                                }),
+                                "enter" if models_open => key_chat.update(cx, |chat, cx| {
+                                    chat.choose_current_model(window, cx)
+                                }),
                                 _ => return,
                             }
                             cx.stop_propagation();
@@ -250,9 +362,10 @@ impl Picker {
                                 .agent_node(Role::Text, format!("Effort · {label}")),
                         )
                         .child(Icon::new(IconName::ChevronRight).size(px(15.)))
-                        .on_click(move |_, _, cx| {
+                        .on_click(move |_, window, cx| {
                             models.update(cx, |chat, cx| {
                                 chat.model_picker.models_open = true;
+                                window.focus(&chat.model_picker.models_focus(cx), cx);
                                 cx.notify();
                             })
                         })
@@ -404,49 +517,57 @@ impl Picker {
             .into_any_element()
     }
 
-    fn model_menu(&self, selection: &Selection, chat: &Entity<AgentChat>) -> AnyElement {
-        let mut menu = card().p(px(8.)).gap(px(4.));
-        match self.catalogs.get(&self.service) {
-            Some(Ok(models)) => {
-                let mut rows = div().id("model-list").max_h(px(240.)).overflow_y_scroll();
-                for (index, model) in models.iter().enumerate() {
-                    let target = chat.clone();
-                    let chosen = model.selection(self.service, selection);
-                    let active =
-                        selection.service == self.service && model.matches(&selection.model);
-                    rows = rows.child(
-                        div()
-                            .id(SharedString::from(format!("model-{index}")))
-                            .flex()
-                            .items_center()
-                            .h(px(30.))
-                            .px(px(2.))
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .hover(|el| el.bg(ladder::foreground_alpha(0.06)))
-                            .child(div().flex_1().truncate().child(model.label.clone()))
-                            .when(active, |el| {
-                                el.child(
-                                    Icon::new(IconName::Check)
-                                        .size(px(14.))
-                                        .text_color(ladder::muted_foreground()),
-                                )
-                            })
-                            .on_click(move |_, _, cx| {
-                                target.update(cx, |chat, cx| {
-                                    chat.select_model(chosen.clone(), cx);
-                                    chat.model_picker.models_open = false;
-                                })
-                            })
-                            .agent_node(Role::Button, model.label.clone()),
-                    );
-                }
-                menu = menu.child(rows);
-            }
+    /// Provider first, then — for a gateway — the search, then the models.
+    fn model_menu(
+        &self,
+        selection: &Selection,
+        chat: &Entity<AgentChat>,
+        cx: &gpui::App,
+    ) -> AnyElement {
+        let providers = div().flex().flex_wrap().gap(px(4.)).children(
+            Service::ALL.into_iter().map(|service| {
+                let target = chat.clone();
+                float::chip()
+                    .id(SharedString::from(format!("service-{service:?}")))
+                    .text_size(px(11.))
+                    .child(service.label())
+                    .when(service == self.service, |el| {
+                        el.bg(ladder::foreground_alpha(0.14))
+                    })
+                    .on_click(move |_, window, cx| {
+                        target.update(cx, |chat, cx| {
+                            chat.browse_models(service, cx);
+                            window.focus(&chat.model_picker.models_focus(cx), cx);
+                        })
+                    })
+                    .agent_node(Role::Button, service.label())
+            }),
+        );
+        let search = self.service.lists_models().then(|| {
+            let query = self.search.read(cx).text().to_string();
+            float::field()
+                .w_full()
+                .child(div().w_full().child(self.search.clone()))
+                .agent_node(
+                    Role::Input,
+                    if query.is_empty() { "Search models…".into() } else { query },
+                )
+        });
+        let body = match self.catalogs.get(&self.service) {
+            Some(Ok(_)) if self.list.is_empty() => div()
+                .py(px(8.))
+                .text_color(ladder::muted_foreground())
+                .child("No models match")
+                .agent_node(Role::Text, "No models match")
+                .into_any_element(),
+            Some(Ok(_)) => self.model_rows(selection, chat),
             Some(Err(error)) => {
                 let target = chat.clone();
                 let service = self.service;
-                menu = menu
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
                     .child(div().text_size(px(13.)).child(error.clone()))
                     .child(
                         div()
@@ -457,28 +578,163 @@ impl Picker {
                                 target.update(cx, |chat, cx| chat.browse_models(service, cx))
                             })
                             .agent_node(Role::Button, "Retry models"),
-                    );
+                    )
+                    .into_any_element()
             }
-            None => menu = menu.child("Loading models…"),
-        }
-        menu.child(float::divider())
-            .child(div().flex().flex_wrap().gap(px(4.)).pt(px(8.)).children(
-                Service::ALL.into_iter().map(|service| {
-                    let target = chat.clone();
-                    float::chip()
-                        .id(SharedString::from(format!("service-{service:?}")))
+            None => div().py(px(8.)).child("Loading models…").into_any_element(),
+        };
+        let measured = Rc::clone(&self.menu_height);
+        card()
+            .relative()
+            .p(px(8.))
+            .gap(px(6.))
+            .child(providers)
+            .children(search)
+            .child(float::divider())
+            .child(body)
+            .when(self.list.shown().len() == LIST_LIMIT, |el| {
+                el.child(
+                    div()
                         .text_size(px(11.))
-                        .child(service.label())
-                        .when(service == self.service, |el| {
-                            el.bg(ladder::foreground_alpha(0.14))
-                        })
-                        .on_click(move |_, _, cx| {
-                            target.update(cx, |chat, cx| chat.browse_models(service, cx))
-                        })
-                        .agent_node(Role::Button, service.label())
-                }),
-            ))
+                        .text_color(ladder::muted_foreground())
+                        .child(format!("Only the first {LIST_LIMIT} show. Type to find others.")),
+                )
+            })
+            .child(
+                gpui::canvas(
+                    move |bounds, window, _| {
+                        let height = f32::from(bounds.size.height);
+                        if measured.get() != Some(height) {
+                            measured.set(Some(height));
+                            window.refresh();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .into_any_element()
+    }
+
+    fn model_rows(&self, selection: &Selection, chat: &Entity<AgentChat>) -> AnyElement {
+        let cursor = self.list.cursor();
+        div()
+            .id("model-list")
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .max_h(px(LIST_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .children(self.list.shown().enumerate().map(|(index, model)| {
+                let target = chat.clone();
+                let chosen = model.selection(self.service, selection);
+                let active = selection.service == self.service && model.matches(&selection.model);
+                let key = format!(
+                    "model-{:?}-{}",
+                    self.service,
+                    model.id.as_deref().unwrap_or("default")
+                );
+                let detail = detail(model);
+                float::menu_row(RowState::of(active, index == cursor), key.clone())
+                    .id(SharedString::from(key))
+                    .flex_none()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().child(model.label.clone()))
+                            .children(detail.clone().map(|detail| {
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(ladder::muted_foreground())
+                                    .child(detail)
+                            })),
+                    )
+                    .child(float::check(active))
+                    .on_click(move |_, window, cx| {
+                        target.update(cx, |chat, cx| {
+                            chat.select_model(chosen.clone(), cx);
+                            chat.model_picker.models_open = false;
+                            window.focus(&chat.model_picker.focus, cx);
+                        })
+                    })
+                    .agent_node(
+                        Role::Button,
+                        match detail {
+                            Some(detail) => format!("{} · {detail}", model.label),
+                            None => model.label.clone(),
+                        },
+                    )
+            }))
+            .into_any_element()
+    }
+}
+
+/// Whether `model` matches every word of `query`, by name or wire id.
+fn matches(model: &ModelChoice, query: &str) -> bool {
+    let haystack = format!(
+        "{} {}",
+        model.label,
+        model.resolved_model.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    query
+        .split_whitespace()
+        .all(|word| haystack.contains(&word.to_lowercase()))
+}
+
+/// The line under a model's name: its window and its price per million
+/// tokens, as far as its list says.
+fn detail(model: &ModelChoice) -> Option<String> {
+    let window = model
+        .context_window
+        .map(|window| format!("{} context", tokens(window)));
+    let price = model.price.map(|(input, output)| {
+        if input == 0. && output == 0. {
+            "Free".to_string()
+        } else {
+            format!("{} in · {} out", dollars(input), dollars(output))
+        }
+    });
+    match (window, price) {
+        (Some(window), Some(price)) => Some(format!("{window} · {price}")),
+        (window, price) => window.or(price),
+    }
+}
+
+/// `1048576` → `1M`, `262144` → `262K`.
+fn tokens(count: u32) -> String {
+    let count = f64::from(count);
+    if count >= 1_000_000. {
+        format!("{}M", trimmed(count / 1_000_000., 1))
+    } else {
+        format!("{}K", (count / 1_000.).round())
+    }
+}
+
+/// USD per million tokens: cents above a dollar, two significant figures
+/// below — `$1.89`, `$0.15`, `$0.037`.
+fn dollars(per_million: f64) -> String {
+    let decimals = if per_million >= 1. || per_million <= 0. {
+        2
+    } else {
+        (1 - per_million.log10().floor() as i32).clamp(2, 6) as usize
+    };
+    format!("${}", trimmed(per_million, decimals))
+}
+
+fn trimmed(value: f64, decimals: usize) -> String {
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
     }
 }
 
@@ -621,6 +877,34 @@ fn effort_label(effort: Option<&str>) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn prices_and_windows_read_as_short_figures() {
+        assert_eq!(dollars(1.89), "$1.89");
+        assert_eq!(dollars(5.), "$5");
+        assert_eq!(dollars(0.15), "$0.15");
+        assert_eq!(dollars(0.037), "$0.037");
+        assert_eq!(dollars(0.1), "$0.1");
+        assert_eq!(tokens(1_048_576), "1M");
+        assert_eq!(tokens(2_000_000), "2M");
+        assert_eq!(tokens(262_144), "262K");
+        let model = |price| ModelChoice {
+            id: Some("openai/gpt-5.6-sol".into()),
+            label: "GPT-5.6 Sol".into(),
+            resolved_model: Some("openai/gpt-5.6-sol".into()),
+            effort_levels: Vec::new(),
+            context_window: Some(400_000),
+            price,
+        };
+        assert_eq!(
+            detail(&model(Some((1., 5.)))).as_deref(),
+            Some("400K context · $1 in · $5 out")
+        );
+        assert_eq!(detail(&model(Some((0., 0.)))).as_deref(), Some("400K context · Free"));
+        assert!(matches(&model(None), "gpt SOL"));
+        assert!(matches(&model(None), "openai/"));
+        assert!(!matches(&model(None), "kimi"));
+    }
 
     #[test]
     fn pointer_selects_discrete_ticks_and_clamps_outside_track() {

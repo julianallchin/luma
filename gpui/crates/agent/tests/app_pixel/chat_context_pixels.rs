@@ -101,3 +101,43 @@ fn model_picker_with_effort_slider() {
     assert_eq!(result.error, None, "capture failed: {}", result.stdout);
     shot(&result.result, "model-picker");
 }
+
+/// The models view: provider chips over the search, over priced rows — then
+/// the same view narrowed by a query. Reads the live gateway list, so it needs
+/// a network as well as a GPU.
+#[test]
+#[ignore = "capture generator: needs a GPU and a network"]
+fn model_list_with_search() {
+    let mut session = chat::session(Mode::Pixel, WINDOW);
+    let result = session.app.exec(
+        &format!(r#"
+            {until}
+            {open}
+            const trigger = {{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }};
+            until("model picker ready", (s) => s.find(trigger) !== undefined);
+            app.frames(8, {{ waitMs: 40 }});
+            app.click(app.snapshot().find(trigger));
+            app.frames(8, {{ waitMs: 40 }});
+            if (!app.snapshot().find({{ role: "button", label: "Choose model" }})) {{
+                app.click(app.snapshot().find(trigger));
+            }}
+            until("effort card", (s) => s.find({{ role: "button", label: "Choose model" }}) !== undefined);
+            app.click(app.snapshot().find({{ role: "button", label: "Choose model" }}));
+            const priced = (s) => s.findAll({{ role: "button" }}).filter((n) => n.label.includes(" in · ")).length;
+            until("priced rows", (s) => priced(s) > 5);
+            app.frames(12, {{ waitMs: 40 }});
+            const models = app.screenshot();
+            app.type(app.snapshot().find({{ role: "input", label: "Search models…" }}), "kimi");
+            until("narrowed", (s) => priced(s) > 0 && priced(s) < 12);
+            app.frames(12, {{ waitMs: 40 }});
+            const rows = app.snapshot().findAll({{ role: "button" }}).map((n) => n.label).filter((l) => l.includes(" in · "));
+            ({{ models, search: app.screenshot(), rows }})
+        "#, until = chat::UNTIL, open = chat::open_chat()),
+        Duration::from_secs(300),
+    );
+    assert_eq!(result.error, None, "capture failed: {}", result.stdout);
+    println!("{}", result.result["rows"]);
+    for name in ["models", "search"] {
+        shot(&result.result[name], &format!("model-list-{name}"));
+    }
+}

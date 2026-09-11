@@ -292,6 +292,8 @@ pub(super) async fn models(
                             .filter_map(Value::as_str)
                             .map(str::to_string)
                             .collect(),
+                        context_window: None,
+                        price: None,
                     })
                 })
                 .collect();

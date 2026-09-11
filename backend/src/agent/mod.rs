@@ -691,11 +691,39 @@ impl AgentService {
         }
     }
 
+    /// `service`'s models. A gateway's list is read fresh every call — the
+    /// picker asks each time it opens — and saved for [`Self::cached_models`].
     pub async fn models(
         &self,
         service: engine::catalog::Service,
     ) -> Result<Vec<engine::catalog::ModelChoice>, AgentError> {
-        engine::catalog::models(service, self.services.storage().path()).await
+        match self.gateway_cache(service) {
+            Some((provider, cache)) => engine::catalog::refresh_gateway(provider, &cache).await,
+            None => engine::catalog::models(service, self.services.storage().path()).await,
+        }
+    }
+
+    /// The gateway list [`Self::models`] saved last, or [`None`] for a service
+    /// that publishes none or has not been read yet.
+    pub async fn cached_models(
+        &self,
+        service: engine::catalog::Service,
+    ) -> Option<Vec<engine::catalog::ModelChoice>> {
+        let (provider, cache) = self.gateway_cache(service)?;
+        engine::catalog::cached_gateway(provider, &cache).await
+    }
+
+    fn gateway_cache(
+        &self,
+        service: engine::catalog::Service,
+    ) -> Option<(model::Provider, std::path::PathBuf)> {
+        let provider = service.provider().filter(|_| service.lists_models())?;
+        Some((
+            provider,
+            self.services
+                .storage()
+                .model_catalog_path(provider.as_str()),
+        ))
     }
 
     pub async fn set_thread_selection(

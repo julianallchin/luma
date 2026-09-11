@@ -1,5 +1,5 @@
 use super::{AgentError, Engine};
-use crate::agent::model::{self, ModelId, Provider};
+use crate::agent::model::{self, remote, ModelId, Provider};
 use crate::models::agent_threads::AgentThread;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,6 +48,12 @@ impl Service {
             Self::Anthropic => Some(Provider::Anthropic),
             _ => None,
         }
+    }
+
+    /// Whether this service's models come from a list its gateway publishes
+    /// — long, priced, and searched in the picker.
+    pub fn lists_models(self) -> bool {
+        self.provider().and_then(remote::url).is_some()
     }
 
     fn of(engine: Engine, provider: Option<&str>) -> Self {
@@ -121,12 +127,19 @@ impl Selection {
             }
         }
         if let Some(provider) = self.service.provider() {
-            let id = self
+            let model = self
                 .model
                 .as_deref()
-                .and_then(ModelId::parse)
                 .ok_or_else(|| AgentError::Invalid("Choose an API model".into()))?;
-            id.wire_id(provider)?;
+            match ModelId::resolve(model, provider) {
+                Some(id) => {
+                    id.wire_id(provider)?;
+                }
+                // Picked from the gateway's own list; the gateway checks it
+                // exists when a turn sends it.
+                None if remote::url(provider).is_some() && remote::is_wire_id(model) => {}
+                None => return Err(AgentError::Invalid("Choose an API model".into())),
+            }
         } else if self
             .model
             .as_ref()
@@ -154,6 +167,12 @@ pub struct ModelChoice {
     pub label: String,
     pub resolved_model: Option<String>,
     pub effort_levels: Vec<String>,
+    /// Prompt tokens the model accepts, when its list says.
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    /// USD per million input and output tokens, when its list says.
+    #[serde(default)]
+    pub price: Option<(f64, f64)>,
 }
 
 impl ModelChoice {
@@ -184,21 +203,10 @@ pub async fn models(
         match service {
             Service::Claude => super::claude::models(cwd).await,
             Service::Codex => super::codex::models(cwd).await,
-            _ => {
-                let provider = service.provider().expect("API service");
-                Ok(model::MODELS
-                    .iter()
-                    .filter(|spec| {
-                        ModelId::parse(spec.key).is_some_and(|id| id.wire_id(provider).is_ok())
-                    })
-                    .map(|spec| ModelChoice {
-                        id: Some(spec.key.into()),
-                        label: spec.display.into(),
-                        resolved_model: Some(spec.key.into()),
-                        effort_levels: ["low", "medium", "high"].map(str::to_string).into(),
-                    })
-                    .collect())
-            }
+            _ => Ok(api_choices(
+                service.provider().expect("API service"),
+                Vec::new(),
+            )),
         }
     };
     tokio::time::timeout(std::time::Duration::from_secs(15), models)
@@ -206,6 +214,87 @@ pub async fn models(
         .map_err(|_| {
             AgentError::Invalid(format!("{} model discovery timed out", service.label()))
         })?
+}
+
+/// Read `provider`'s list from the gateway and save it at `cache`. When the
+/// gateway cannot be reached, the saved copy, so the picker is never empty
+/// only because the network is.
+///
+/// # Errors
+///
+/// When the gateway cannot be reached and nothing is saved.
+pub async fn refresh_gateway(
+    provider: Provider,
+    cache: &std::path::Path,
+) -> Result<Vec<ModelChoice>, AgentError> {
+    let read = tokio::time::timeout(std::time::Duration::from_secs(15), remote::fetch(provider))
+        .await
+        .unwrap_or_else(|_| {
+            Err(model::ModelError::Transport(format!(
+                "{} model list timed out",
+                provider.as_str()
+            )))
+        });
+    match read {
+        Ok(models) => {
+            // A cache that cannot be written costs the next open its instant
+            // rows, not this one its list.
+            if let Err(error) = remote::write_cache(cache, &models).await {
+                eprintln!("[models] could not save the {} list: {error}", provider.as_str());
+            }
+            Ok(api_choices(provider, models))
+        }
+        Err(error) => match remote::read_cache(cache).await {
+            Some(models) => Ok(api_choices(provider, models)),
+            None => Err(error.into()),
+        },
+    }
+}
+
+/// `provider`'s list as last saved at `cache`, for the rows the picker shows
+/// while [`refresh_gateway`] is on the wire.
+pub async fn cached_gateway(provider: Provider, cache: &std::path::Path) -> Option<Vec<ModelChoice>> {
+    remote::read_cache(cache)
+        .await
+        .map(|models| api_choices(provider, models))
+}
+
+/// The table's models that `provider` routes, first and under their own names,
+/// then everything else the gateway lists. A table model takes its price and
+/// effort levels from the list when the list carries it.
+fn api_choices(provider: Provider, listed: Vec<remote::RemoteModel>) -> Vec<ModelChoice> {
+    let mut listed = listed;
+    let mut choices: Vec<ModelChoice> = model::MODELS
+        .iter()
+        .filter_map(|spec| {
+            let id = ModelId::parse(spec.key)?;
+            let wire = id.wire_id(provider).ok()?;
+            let entry = listed
+                .iter()
+                .position(|model| model.id == wire)
+                .map(|at| listed.remove(at));
+            Some(ModelChoice {
+                id: Some(spec.key.into()),
+                label: spec.display.into(),
+                resolved_model: Some(spec.key.into()),
+                effort_levels: entry.as_ref().map_or_else(
+                    || remote::EFFORTS.map(str::to_string).into(),
+                    |entry| entry.efforts.clone(),
+                ),
+                context_window: Some(spec.context_window),
+                price: entry.and_then(|entry| entry.price),
+            })
+        })
+        .collect();
+    choices.extend(listed.into_iter().map(|model| ModelChoice {
+        id: Some(model.id.clone()),
+        label: model.name,
+        resolved_model: Some(model.id),
+        effort_levels: model.efforts,
+        context_window: (model.context_window > 0).then_some(model.context_window),
+        price: model.price,
+    }));
+    choices
 }
 
 #[cfg(test)]
@@ -219,6 +308,8 @@ mod tests {
             resolved_model: Some("claude-sonnet-5".into()),
             label: "Sonnet 5".into(),
             effort_levels: vec!["low".into(), "high".into()],
+            context_window: None,
+            price: None,
         };
         let previous = Selection {
             service: Service::Claude,
@@ -268,6 +359,57 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    /// A model picked from a gateway's list is a wire id the table does not
+    /// carry. It is accepted over the gateways, which publish such lists, and
+    /// nowhere else.
+    #[test]
+    fn a_listed_gateway_model_is_a_valid_selection() {
+        let listed = |service| Selection {
+            service,
+            model: Some("openai/gpt-5.6-sol".into()),
+            effort: Some("high".into()),
+        };
+        assert!(listed(Service::OpenRouter).validate().is_ok());
+        assert!(listed(Service::Vercel).validate().is_ok());
+        assert!(listed(Service::Anthropic).validate().is_err());
+        assert!(Selection {
+            service: Service::OpenRouter,
+            model: Some("free text".into()),
+            effort: None
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn table_models_lead_the_list_and_take_its_prices() {
+        let listed = remote::parse(
+            Provider::OpenRouter,
+            &serde_json::json!({ "data": [
+                { "id": "moonshotai/kimi-k3-fast", "name": "MoonshotAI: Kimi K3 Fast",
+                  "created": 2, "context_length": 256_000,
+                  "pricing": { "prompt": "0.0000045", "completion": "0.00002" },
+                  "supported_parameters": ["tools", "reasoning"],
+                  "reasoning": { "supported_efforts": ["low", "high", "max"] } },
+                { "id": "openai/gpt-5.6-sol", "name": "OpenAI: GPT-5.6 Sol", "created": 3,
+                  "context_length": 400_000,
+                  "pricing": { "prompt": "0.000001", "completion": "0.000005" },
+                  "supported_parameters": ["tools"] }
+            ]}),
+        );
+        let choices = api_choices(Provider::OpenRouter, listed);
+        let ids: Vec<_> = choices.iter().filter_map(|c| c.id.as_deref()).collect();
+        assert_eq!(ids, ["claude-opus-5", "kimi-k3-fast", "grok-4.5", "openai/gpt-5.6-sol"]);
+        let kimi = &choices[1];
+        assert_eq!(kimi.label, "Kimi K3 Fast");
+        assert_eq!(kimi.effort_levels, ["low", "high"]);
+        assert!(kimi.price.is_some());
+        assert_eq!(choices[0].price, None, "not in this list: no price, all efforts");
+        assert_eq!(choices[0].effort_levels, remote::EFFORTS);
+        assert_eq!(choices[3].label, "GPT-5.6 Sol");
+        assert_eq!(choices[3].context_window, Some(400_000));
     }
 
     #[tokio::test]

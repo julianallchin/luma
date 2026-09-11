@@ -132,6 +132,15 @@ impl StorageRoot {
         self.0.join("models")
     }
 
+    /// `<root>/model-catalogs/<provider>.json` — the last model list a gateway
+    /// published, so the model picker has rows to show before the refresh
+    /// lands. A cache only: deleting it costs one network read.
+    pub fn model_catalog_path(&self, provider: &str) -> PathBuf {
+        self.0
+            .join("model-catalogs")
+            .join(format!("{provider}.json"))
+    }
+
     // -- agent execution ------------------------------------------------------
 
     /// `<root>/agent-workspaces` — parent of the per-thread python workspaces
