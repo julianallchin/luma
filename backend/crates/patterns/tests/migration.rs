@@ -75,10 +75,13 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
             };
             let actual = batch["lighting"].lighting().unwrap().sample(time).unwrap();
             let label = format!("{id} at {}", baseline.times[time]);
-            if original_library.display_name(&baseline.score.clips[id].graph) == "Dissolve Flash" {
-                assert_dissolve_order(&actual, expected, &label);
-            } else {
-                assert_outputs(&actual, expected, &label);
+            match original_library
+                .display_name(&baseline.score.clips[id].graph)
+                .as_str()
+            {
+                "Dissolve Flash" => assert_dissolve_order(&actual, expected, &label),
+                "Chase" => assert_chase_passage(&actual, expected, &label),
+                _ => assert_outputs(&actual, expected, &label),
             }
         }
     }
@@ -116,6 +119,39 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
             }
         }
     }
+}
+
+/// A chase stroke now runs in from before Start and out past End, so at any
+/// instant it sits half a width from where the original engine put it. The
+/// stroke is still the same size: the lit heads differ by at most a stroke.
+fn assert_chase_passage(
+    actual: &BTreeMap<String, FixtureOutput>,
+    expected: &BTreeMap<String, FixtureOutput>,
+    label: &str,
+) {
+    assert_eq!(
+        actual.keys().collect::<Vec<_>>(),
+        expected.keys().collect::<Vec<_>>()
+    );
+    let lit = |outputs: &BTreeMap<String, FixtureOutput>| {
+        outputs
+            .values()
+            .filter(|output| output.rgb().iter().any(|channel| *channel > 1e-6))
+            .count() as i64
+    };
+    for (id, value) in actual {
+        assert_eq!(
+            value.writes()[1..],
+            expected[id].writes()[1..],
+            "{label} / {id}"
+        );
+    }
+    assert!(
+        (lit(actual) - lit(expected)).abs() <= 3,
+        "{label}: {} heads lit, originally {}",
+        lit(actual),
+        lit(expected)
+    );
 }
 
 /// Dissolve now cuts its seeded random order at whole heads instead of at each

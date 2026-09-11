@@ -140,7 +140,11 @@ fn independent_journeys_are_a_fixture_time_event_broadcast_and_max() {
 
 #[test]
 fn equal_short_and_long_travel_have_exact_lifetimes() {
-    assert_eq!(chase(&[2.0], &[1., 2.], 1.).values()[[0, 0, 0]], 1.);
+    // On an open domain the stroke's front edge meets Start as the event
+    // begins, so the first head lights a moment later and the last head is
+    // clear by the time the event ends.
+    assert_eq!(chase(&[2.0], &[1., 2.], 1.).values()[[0, 0, 0]], 0.);
+    assert_eq!(chase(&[2.05], &[1., 2.], 1.).values()[[0, 0, 0]], 1.);
     assert_eq!(chase(&[2.0], &[1., 2.], 1.).values()[[4, 0, 0]], 0.);
     assert!(chase(&[1.5, 1.75], &[1., 2.], 0.5)
         .values()

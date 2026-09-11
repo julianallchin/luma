@@ -449,8 +449,9 @@ fn animated_chase_width_and_envelope_are_sampled_on_the_time_axis() {
             program.evaluate(*beat).unwrap()["lighting"]
         );
     }
+    // The stroke has left by 9.5 and is a wide band mid-passage at 7.0.
     assert_ne!(
         batch["lighting"].sample(0).unwrap(),
-        batch["lighting"].sample(2).unwrap()
+        batch["lighting"].sample(3).unwrap()
     );
 }

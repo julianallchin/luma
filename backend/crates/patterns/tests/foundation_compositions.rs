@@ -161,7 +161,9 @@ fn chase_journeys_keep_independent_lifetimes_through_the_output() {
         );
         graph.add("output", "output", [("color", wire("tint", "value"))]);
         let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);
-        let samples = program.evaluate_batch(&[1., 1.5, 0.75, 3.]).unwrap();
+        // The stroke's front edge is at Start as an event begins, so the first
+        // head lights a moment in.
+        let samples = program.evaluate_batch(&[1.05, 1.5, 0.75, 3.]).unwrap();
         let lighting = samples["lighting"].lighting().unwrap();
         assert_eq!(lighting.sample(0).unwrap()["head-0"].dimmer, Some(1.));
         assert!(lighting
@@ -225,7 +227,8 @@ fn triangle_and_ramp_chase_fields_directly_remap_to_pan_tilt_vectors() {
         );
         graph.motion_output(wire("pose", "value"));
         let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);
-        let result = program.evaluate_batch(&[2., 0.5, 3.5, 4., 2.]).unwrap();
+        // A full-width stroke runs from −0.5 to 1.5 over the four beats.
+        let result = program.evaluate_batch(&[2., 1.25, 2.75, 4., 2.]).unwrap();
         let lighting = result["lighting"].lighting().unwrap();
         for (t, amount) in amounts.into_iter().enumerate() {
             assert_eq!(

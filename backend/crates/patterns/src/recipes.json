@@ -612,7 +612,7 @@
       "path": {"name":"Travel curve","description":"Position over each journey","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Ramp","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},{"label":"Bounce","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Ease","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,0.15],[1.0,1.0]]}}}],"custom":true}},
       "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Soft edges","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},{"label":"Hard edges","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
       "start": {"name":"Start position","description":"Where each journey starts, in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0},"author":{"kind":"choice","options":[{"label":"Before start","value":{"type":"position","value":-0.25}},{"label":"Start","value":{"type":"position","value":0.0}},{"label":"Middle","value":{"type":"position","value":0.5}},{"label":"End","value":{"type":"position","value":1.0}},{"label":"After end","value":{"type":"position","value":1.25}}],"custom":true}},
-      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "travel": {"name":"Travel time","description":"Whole passage: the front edge enters at Start, the back edge leaves End, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
       "trigger": {"name":"Trigger","description":"Each event launches an independent journey","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}},
       "width": {"name":"Width","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}}
     },
@@ -620,9 +620,20 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"travel"},"events":{"source":"input","input":"trigger"}}},
-        "journey": {"definition":"motion","inputs":{"elapsed":{"source":"connection","node":"ages","output":"elapsed"},"end":{"source":"input","input":"end"},"path":{"source":"input","input":"path"},"start":{"source":"input","input":"start"},"travel":{"source":"input","input":"travel"}}},
+        "journey": {"definition":"motion","inputs":{"elapsed":{"source":"connection","node":"ages","output":"elapsed"},"end":{"source":"connection","node":"to","output":"value"},"path":{"source":"input","input":"path"},"start":{"source":"connection","node":"from","output":"value"},"travel":{"source":"input","input":"travel"}}},
         "stroke": {"definition":"pill","inputs":{"active":{"source":"connection","node":"ages","output":"weight"},"boundary":{"source":"input","input":"boundary"},"mapping":{"source":"input","input":"mapping"},"position":{"source":"connection","node":"journey","output":"position"},"shape":{"source":"input","input":"shape"},"width":{"source":"input","input":"width"}}},
-        "mask": {"definition":"core/channel_maximum","inputs":{"value":{"source":"connection","node":"stroke","output":"mask"}}}
+        "mask": {"definition":"core/channel_maximum","inputs":{"value":{"source":"connection","node":"stroke","output":"mask"}}},
+        "half": {"definition":"core/divide","inputs":{"a":{"source":"input","input":"width"},"b":{"source":"value","value":{"type":"number","value":2.0}}}},
+        "span": {"definition":"core/subtract","inputs":{"a":{"source":"input","input":"end"},"b":{"source":"input","input":"start"}}},
+        "size": {"definition":"core/absolute","inputs":{"value":{"source":"connection","node":"span","output":"value"}}},
+        "size/2": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"size","output":"value"},"b":{"source":"value","value":{"type":"number","value":1e-06}}}},
+        "direction": {"definition":"core/divide","inputs":{"a":{"source":"connection","node":"span","output":"value"},"b":{"source":"connection","node":"size/2","output":"value"}}},
+        "run": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"open","output":"value"},"b":{"source":"connection","node":"overrun","output":"value"}}},
+        "from": {"definition":"core/subtract","inputs":{"a":{"source":"input","input":"start"},"b":{"source":"connection","node":"run","output":"value"}}},
+        "to": {"definition":"core/add","inputs":{"a":{"source":"input","input":"end"},"b":{"source":"connection","node":"run","output":"value"}}},
+        "edge": {"definition":"coordinate_offset","inputs":{"boundary":{"source":"input","input":"boundary"},"mapping":{"source":"input","input":"mapping"},"position":{"source":"value","value":{"type":"position","value":0.0}}}},
+        "open": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"connection","node":"edge","output":"wrapped"}}},
+        "overrun": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"half","output":"value"},"b":{"source":"connection","node":"direction","output":"value"}}}
       },
       "outputs": {"mask":{"source":"connection","node":"mask","output":"value"}}
     }}
