@@ -2,8 +2,9 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 /// One head's contribution, preserving the distinction between an unwritten
-/// capability and a capability explicitly written as zero. Color stores RGB
-/// chromaticity; dimmer carries its value, matching the existing compositor.
+/// capability and a capability explicitly written as zero. A pattern applies
+/// color; brightness is its peak channel, split out here as the dimmer the
+/// compositor and fixtures expect. Chromaticity stays normalized.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureOutput {
@@ -113,10 +114,9 @@ pub(crate) fn terminal_definition() -> crate::Definition {
         author: None,
     };
     Definition {
-        name: "Output".into(),
+        name: "Apply".into(),
         inputs: BTreeMap::from([
             ("color".into(), port("Color", Value::Color([1.0; 3]))),
-            ("dimmer".into(), port("Dimmer", Value::Proportion(1.0))),
             ("pan".into(), port("Pan (degrees)", Value::Degrees(0.0))),
             ("tilt".into(), port("Tilt (degrees)", Value::Degrees(0.0))),
             ("strobe".into(), port("Strobe", Value::Proportion(0.0))),

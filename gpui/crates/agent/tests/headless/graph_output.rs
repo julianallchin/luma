@@ -39,7 +39,7 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
                                         "a": {
                                             "source": "connection",
                                             "node": "chase",
-                                            "output": "dimmer"
+                                            "output": "color"
                                         },
                                         "b": {
                                             "source": "value",
@@ -72,11 +72,6 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
                                             "source": "connection",
                                             "node": "wash",
                                             "output": "color"
-                                        },
-                                        "dimmer": {
-                                            "source": "connection",
-                                            "node": "wash",
-                                            "output": "dimmer"
                                         }
                                     }
                                 }
@@ -110,18 +105,18 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
         const check=(v,m)=>{if(!v)throw new Error(m);};
         const has=label=>app.snapshot().find({role:"button",label});
         app.click(node("card","Signal output")); app.click(node("card","Signal output"),{count:2});
-        app.click(node("card","Output")); app.key("delete");
+        app.click(node("card","Apply")); app.key("delete");
         const workspace=node("card","Graph workspace").bounds;
         app.drag({x:workspace.x+600,y:workspace.y+45},{dx:0,dy:0},{button:"right"});
-        app.type(node("input","Search nodes…"),"output"); app.click(node("button","Add Output"));
+        app.type(node("input","Search nodes…"),"apply"); app.click(node("button","Add Apply"));
         node("button","output_1 input color");
         check(!has("output_1 output lighting"),"Output exposed its internal bundle as a socket");
         check(!has("Use as graph output"),"terminal required a second output-selection action");
-        app.drag(node("button","tint output value"),node("button","output_1 input dimmer"),{steps:8,restale:"match"});
-        check(!has("Edge tint.value → output_1.dimmer"),"RGB wire connected to a one-channel dimmer socket");
+        app.drag(node("button","tint output value"),node("button","output_1 input pan"),{steps:8,restale:"match"});
+        check(!has("Edge tint.value → output_1.pan"),"RGB wire connected to a one-channel pan socket");
         app.drag(node("button","tint output value"),node("button","output_1 input color"),{steps:8,restale:"match"});
         node("button","Edge tint.value → output_1.color");
-        app.click(node("card","Output"));
+        app.click(node("card","Apply"));
         const field=prefix=>{
             until(prefix,s=>s.findAll({role:"input"}).some(n=>n.label.startsWith(prefix)));
             return app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith(prefix));

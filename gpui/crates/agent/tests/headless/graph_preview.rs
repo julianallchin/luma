@@ -52,12 +52,29 @@ fn graph_preview_reports_dynamic_errors_stops_audio_and_recovers_on_seek() {
                                         }
                                     }
                                 },
+                                "tint": {
+                                    "definition": "core/multiply",
+                                    "inputs": {
+                                        "a": {
+                                            "source": "connection",
+                                            "node": "root",
+                                            "output": "value"
+                                        },
+                                        "b": {
+                                            "source": "value",
+                                            "value": {
+                                                "type": "color",
+                                                "value": [1.0, 1.0, 1.0]
+                                            }
+                                        }
+                                    }
+                                },
                                 "output": {
                                     "definition": "output",
                                     "inputs": {
-                                        "dimmer": {
+                                        "color": {
                                             "source": "connection",
-                                            "node": "root",
+                                            "node": "tint",
                                             "output": "value"
                                         }
                                     }
@@ -175,10 +192,10 @@ fn graph_preview_scrubs_real_clip_time_and_owns_its_transport() {
                                     400
                                 ],
                                 "inputs": {
-                                    "dimmer": {
+                                    "color": {
                                         "source": "connection",
                                         "node": "chase",
-                                        "output": "dimmer"
+                                        "output": "color"
                                     }
                                 }
                             }

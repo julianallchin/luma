@@ -194,20 +194,38 @@ fn sampled_opacity_keeps_its_domain_and_can_drive_intensity_independently_of_rgb
             graph.outputs.contains_key("opacity"),
             "placement lost an inspectable output"
         );
-        assert!(!graph.nodes["output"].inputs.contains_key("dimmer"));
-        definition
-            .edit(
-                &library,
-                GraphEdit::Bind {
-                    node: "output".into(),
-                    input: "dimmer".into(),
-                    binding: Some(Binding::Connection {
-                        node: "effect".into(),
-                        output: "opacity".into(),
-                    }),
-                },
-            )
-            .unwrap();
+        for edit in [
+            GraphEdit::Add {
+                id: "lit".into(),
+                definition: "core/multiply".into(),
+            },
+            GraphEdit::Bind {
+                node: "lit".into(),
+                input: "a".into(),
+                binding: Some(Binding::Connection {
+                    node: "effect".into(),
+                    output: "color".into(),
+                }),
+            },
+            GraphEdit::Bind {
+                node: "lit".into(),
+                input: "b".into(),
+                binding: Some(Binding::Connection {
+                    node: "effect".into(),
+                    output: "opacity".into(),
+                }),
+            },
+            GraphEdit::Bind {
+                node: "output".into(),
+                input: "color".into(),
+                binding: Some(Binding::Connection {
+                    node: "lit".into(),
+                    output: "value".into(),
+                }),
+            },
+        ] {
+            definition.edit(&library, edit).unwrap();
+        }
         library.definitions.insert("test".into(), definition);
         let values = PreparedGraph::new(&library, "test", &inputs, frame)
             .unwrap()
@@ -220,7 +238,6 @@ fn sampled_opacity_keeps_its_domain_and_can_drive_intensity_independently_of_rgb
         for (time, expected) in [[0.5, 0.2], [0.35, 0.8]].into_iter().enumerate() {
             let lit = values["lighting"].lighting().unwrap().sample(time).unwrap();
             for (head, alpha) in ["a", "b"].into_iter().zip(expected) {
-                assert!((lit[head].dimmer.unwrap() - alpha).abs() < 1e-12);
                 for (value, color) in lit[head].rgb().into_iter().zip(rgb) {
                     assert!((value - alpha * color).abs() < 1e-6);
                 }

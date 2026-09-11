@@ -16,7 +16,8 @@ fn graph_inspection_uses_clip_overrides_and_exposes_signal_heads_and_event_times
             },
             "body":{"kind":"graph","body":{"nodes":{
                 "heads":{"definition":"fixture_geometry"},
-                "output":{"definition":"output","inputs":{"dimmer":{"source":"input","input":"level"}}}
+                "tint":{"definition":"core/multiply","inputs":{"a":{"source":"input","input":"level"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
+                "output":{"definition":"output","inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
             },"outputs":{
                 "lighting":{"source":"connection","node":"output","output":"lighting"},
                 "view/level":{"source":"input","input":"level"},

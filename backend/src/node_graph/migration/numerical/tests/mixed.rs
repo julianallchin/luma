@@ -190,7 +190,7 @@ fn mixed_graphs_compose_signals_in_both_directions_and_preserve_capability_write
                 let [pan, tilt] = value.position.unwrap();
                 assert!((pan - expected).abs() < 1e-6);
                 assert_eq!(tilt, gain);
-                assert_eq!(value.color, None);
+                assert_eq!(value.color, Some([1., 1., 1.]));
                 assert_eq!(value.speed, None);
             }
             assert!(

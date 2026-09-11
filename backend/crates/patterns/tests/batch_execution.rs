@@ -345,10 +345,20 @@ fn a_chase_batch_consumes_events_once_and_retains_overlapping_journeys() {
                     ),
                 ),
                 (
+                    "tint".into(),
+                    node(
+                        "core/multiply",
+                        BTreeMap::from([
+                            ("a".into(), wired("effect", "mask")),
+                            ("b".into(), Value::Color([1.0; 3]).into()),
+                        ]),
+                    ),
+                ),
+                (
                     "output".into(),
                     node(
                         "output",
-                        BTreeMap::from([("dimmer".into(), wired("effect", "mask"))]),
+                        BTreeMap::from([("color".into(), wired("tint", "value"))]),
                     ),
                 ),
             ]),
@@ -380,7 +390,7 @@ fn a_chase_batch_consumes_events_once_and_retains_overlapping_journeys() {
     );
     let output = batch["lighting"].lighting().unwrap();
     assert_eq!(output.values().dim(), (16, 4, 8));
-    assert!(!output.writes()[0] && output.writes()[1]);
+    assert_eq!(output.writes()[..2], [true, true]);
     for (t, beat) in times.iter().enumerate() {
         assert_eq!(
             batch["lighting"].sample(t).unwrap(),

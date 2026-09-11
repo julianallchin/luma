@@ -1622,11 +1622,19 @@ impl Editor {
     /// The pattern `Enter` would put down, with the insertion it belongs to.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
+        // A track without a graph document still stores typed pattern rows,
+        // which are projected from the version 2 vocabulary.
+        let typed_rows = self.graph_score.is_none();
+        let historical = luma_patterns::migration::v2_library();
         let mut choices: Vec<_> = luma_patterns::standard_library()
             .definitions
             .into_iter()
-            .filter(|(_, definition)| {
+            .filter(|(id, definition)| {
+                // The bare Apply terminal is a node, not a pattern.
                 definition.placeable()
+                    && definition.body
+                        != luma_patterns::Body::Primitive(luma_patterns::Primitive::Output)
+                    && (!typed_rows || historical.definitions.contains_key(id))
                     && definition
                         .inputs
                         .values()

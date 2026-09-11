@@ -353,9 +353,7 @@ pub(crate) fn convert(source: &Graph, name: &str) -> Result<p::Score, String> {
         }
         match node.type_id.as_str() {
             "apply_color" => {
-                for key in ["color", "dimmer"] {
-                    write(&mut terminal, key, wire(&node.id, key))?;
-                }
+                write(&mut terminal, "color", wire(&node.id, "color"))?;
             }
             "apply_dimmer" => {
                 write(&mut terminal, "dimmer", wire(&node.id, "out"))?;
@@ -396,6 +394,25 @@ pub(crate) fn convert(source: &Graph, name: &str) -> Result<p::Score, String> {
                 edge.from_node, edge.from_port, edge.to_node, edge.to_port
             ));
         }
+    }
+    // Brightness rides in the applied color.
+    if let Some(dimmer) = terminal.remove("dimmer") {
+        let color = terminal
+            .remove("color")
+            .unwrap_or_else(|| Value::Color([1.; 3]).into());
+        let mut brightness = "brightness".to_string();
+        while root.nodes.contains_key(&brightness) {
+            brightness.push('_');
+        }
+        root.nodes.insert(
+            brightness.clone(),
+            Node {
+                position: None,
+                definition: "mask_color".into(),
+                inputs: BTreeMap::from([("color".into(), color), ("mask".into(), dimmer)]),
+            },
+        );
+        terminal.insert("color".into(), wire(&brightness, "color"));
     }
     // Unfinished graphs get an explicit unwritten Output; they remain editable.
     let mut output = "output".to_string();
@@ -1030,17 +1047,7 @@ fn lower(
                 }
             }
             let rgb = b.math("multiply", raw, Value::Color([1.; 3]).into());
-            let parts = b.node(
-                "core/color_components",
-                [("color", rgb), ("mask", Value::Proportion(1.).into())],
-            );
-            return b.finish(
-                "Color output",
-                [
-                    ("color", wire(&parts, "color")),
-                    ("dimmer", wire(&parts, "dimmer")),
-                ],
-            );
+            return b.finish("Color output", [("color", rgb)]);
         }
         "apply_dimmer" | "apply_strobe" | "apply_speed" => {
             name = match kind {

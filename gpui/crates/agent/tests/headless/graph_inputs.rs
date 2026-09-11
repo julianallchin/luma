@@ -13,7 +13,7 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"input_nodes":{"palette":{"name":"Palette","position":[-250.,0.]}},"nodes":{
                     "mix":{"definition":"mix_palette","position":[50.,0.],"inputs":{"gradient":{"source":"input","input":"palette"},"weights":{"source":"value","value":{"type":"number","value":1.}}}},
-                    "output":{"definition":"output","position":[400.,0.],"inputs":{"color":{"source":"connection","node":"mix","output":"color"},"dimmer":{"source":"connection","node":"mix","output":"opacity"}}}
+                    "output":{"definition":"output","position":[400.,0.],"inputs":{"color":{"source":"connection","node":"mix","output":"color"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
             }},"clips":{"clip":{"graph":"ribbon","start":0.,"duration":8.,"seed":0}}
         }))
@@ -85,9 +85,8 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
                         "seed":{"source":"value","value":{"type":"seed","value":"18446744073709551614"}},
                         "position":{"source":"value","value":{"type":"number","value":0.25}}
                     }},
-                    "output":{"definition":"output","position":[650.,0.],"inputs":{
-                        "dimmer":{"source":"connection","node":"noise","output":"value"}
-                    }}
+                    "tint":{"definition":"core/multiply","position":[480.,0.],"inputs":{"a":{"source":"connection","node":"noise","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
+                    "output":{"definition":"output","position":[650.,0.],"inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
             }},"clips":{"clip":{"graph":"texture","start":0.,"duration":8.,"seed":0}}
         }))
@@ -222,11 +221,6 @@ fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
                                             "source": "connection",
                                             "node": "wash",
                                             "output": "color"
-                                        },
-                                        "dimmer": {
-                                            "source": "connection",
-                                            "node": "wash",
-                                            "output": "dimmer"
                                         }
                                     }
                                 }

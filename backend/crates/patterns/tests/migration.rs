@@ -158,12 +158,17 @@ fn assert_outputs(
     );
     for (id, value) in actual {
         let expected = &expected[id];
-        assert_eq!(value.writes(), expected.writes(), "{label} / {id}");
+        // Brightness now rides in the applied color: a historical dimmer-only
+        // write reads back as white, and chromaticity splits differently, so
+        // the product is what must agree.
+        assert_eq!(
+            value.writes()[1..],
+            expected.writes()[1..],
+            "{label} / {id}"
+        );
         let channels = |v: &FixtureOutput| {
-            v.color
+            v.rgb()
                 .into_iter()
-                .flatten()
-                .chain(v.dimmer)
                 .chain(v.position.into_iter().flatten())
                 .chain(v.strobe)
                 .chain(v.speed)

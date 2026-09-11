@@ -705,6 +705,7 @@ fn compare_reference_with_inputs(fixture: &Reference, inputs: &BTreeMap<String, 
             } else { crate::node_graph::lighting::wire_value(value) };
             (id.clone(), wire)
         }).collect();
+        let wrote_color = graph.nodes.iter().any(|node| node.type_id == "apply_color");
         let imported = crate::eval::compile::compile_pattern(
             graph,
             &args,
@@ -804,9 +805,20 @@ fn compare_reference_with_inputs(fixture: &Reference, inputs: &BTreeMap<String, 
             for id in &ids {
                 let a = &sample[id];
                 let e = &expected.primitives[id];
-                for (channel, (a, e)) in a
-                    .color
-                    .unwrap_or([1.; 3])
+                // The old evaluator left color black when a graph only wrote
+                // intensity; that now applies white, so color is compared
+                // only for graphs that wrote one.
+                let actual_color = if wrote_color {
+                    a.color.unwrap_or([1.; 3]).to_vec()
+                } else {
+                    Vec::new()
+                };
+                let expected_color = if wrote_color {
+                    e.color.map(|v| v.clamp(0., 1.)).to_vec()
+                } else {
+                    Vec::new()
+                };
+                for (channel, (a, e)) in actual_color
                     .into_iter()
                     .chain([
                         a.dimmer.unwrap_or(0.),
@@ -816,9 +828,8 @@ fn compare_reference_with_inputs(fixture: &Reference, inputs: &BTreeMap<String, 
                         a.position.unwrap_or([0.; 2])[1],
                     ])
                     .zip(
-                        e.color
+                        expected_color
                             .into_iter()
-                            .map(|v| v.clamp(0., 1.))
                             // The output bundle retains positive headroom;
                             // the compositor bounds it after master intensity.
                             .chain([
@@ -838,7 +849,7 @@ fn compare_reference_with_inputs(fixture: &Reference, inputs: &BTreeMap<String, 
                     );
                 }
             }
-            compare_master_response(name, &host[t], expected, &plan.outputs);
+            compare_master_response(name, &host[t], expected, &plan.outputs, wrote_color);
         }
     }
 }
@@ -848,6 +859,7 @@ fn compare_master_response(
     actual: &UniverseState,
     expected: &UniverseState,
     bindings: &crate::eval::OutputBinding,
+    wrote_color: bool,
 ) {
     use crate::eval::composite::{blank_frame, composite_frame};
     for master in [0., 0.25, 0.7, 1.] {
@@ -901,10 +913,11 @@ fn compare_master_response(
                 // The new output clamps it at the physical capability boundary.
                 // For ordinary colors also check the opacity of a layer, not
                 // just its dimmer value in isolation.
-                if expected.primitives[id]
-                    .color
-                    .iter()
-                    .all(|v| (0.0..=1.0).contains(v))
+                if wrote_color
+                    && expected.primitives[id]
+                        .color
+                        .iter()
+                        .all(|v| (0.0..=1.0).contains(v))
                 {
                     for (a, b) in value.color.iter().zip(reference.color) {
                         assert!(

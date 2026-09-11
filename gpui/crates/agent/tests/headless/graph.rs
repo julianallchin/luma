@@ -14,12 +14,11 @@ fn fixture(name: &'static str) -> Harness {
                     "nodes":{
                         "wash":{"definition":"wash","position":[0,0]},
                         "scale":{"definition":"core/multiply","position":[360,120],"inputs":{
-                            "a":{"source":"connection","node":"wash","output":"dimmer"},
+                            "a":{"source":"connection","node":"wash","output":"color"},
                             "b":{"source":"value","value":{"type":"proportion","value":0.5}}
                         }},
                         "output":{"definition":"output","position":[740,240],"inputs":{
-                            "color":{"source":"connection","node":"wash","output":"color"},
-                            "dimmer":{"source":"connection","node":"scale","output":"value"}
+                            "color":{"source":"connection","node":"scale","output":"value"}
                         }}
                     },
                     "outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}
@@ -83,9 +82,9 @@ fn graph_closes_with_its_score_and_reopens_with_saved_edits() {
         // Reopening fits the canvas again, so verify the authored offset by
         // comparing the relative positions rather than window coordinates.
         const wash=node("card","Wash").bounds;
-        const output=node("card","Output").bounds;
+        const output=node("card","Apply").bounds;
         check((restored.x-wash.x)/(output.x-wash.x)>0.5,"closing the score lost its graph edit");
-        node("button","Edge scale.value → output.dimmer");
+        node("button","Edge scale.value → output.color");
         app.click(node("card","Multiply"));app.key("delete");
         check(!app.snapshot().find({{role:"card",label:"Multiply"}}),"reopened graph does not edit");
         app.key("secondary-z");node("card","Multiply");
@@ -139,7 +138,7 @@ fn graph_drag_is_one_score_edit_and_survives_reopening() {
         moved=node("card","Multiply").bounds;
         check(Math.abs(moved.x-before.x-80)<2,"redo lost movement");
         app.frames(16,{{waitMs:80}});nav.closeTab();open();
-        node("card","Output");({{moved:true}})
+        node("card","Apply");({{moved:true}})
     "#)),Duration::from_secs(60));
     assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
     let directory = support::config_dir(name);
@@ -181,16 +180,16 @@ fn graph_ports_selection_and_marquee_keep_parameters_in_the_inspector() {
         check(selected().includes("Wash") && selected().includes("Multiply"),"shift selection failed");
         check(!app.snapshot().nodes.some(n=>n.label.includes(" param ")),"old card parameters remain");
         node("card","Node inspector");
-        const cards=["Wash","Multiply","Output"].map(label=>node("card",label).bounds);
+        const cards=["Wash","Multiply","Apply"].map(label=>node("card",label).bounds);
         const left=Math.min(...cards.map(b=>b.x)),top=Math.min(...cards.map(b=>b.y));
         const right=Math.max(...cards.map(b=>b.x+b.width)),bottom=Math.max(...cards.map(b=>b.y+b.height));
         app.drag({{x:left-6,y:top-6}},{{dx:right-left+12,dy:bottom-top+12}},{{modifiers:["shift"]}});
-        check(["Wash","Multiply","Output"].every(label=>selected().includes(label)),"marquee missed nodes");
+        check(["Wash","Multiply","Apply"].every(label=>selected().includes(label)),"marquee missed nodes");
         app.key("delete");
         check(!app.snapshot().find({{role:"card",label:"Multiply"}}),"multi-delete failed");
-        app.key("secondary-z");node("card","Multiply");node("card","Wash");node("card","Output");
+        app.key("secondary-z");node("card","Multiply");node("card","Wash");node("card","Apply");
         app.key("secondary-shift-z");check(!app.snapshot().find({{role:"card",label:"Multiply"}}),"redo failed");
-        app.key("secondary-z");node("button","Edge scale.value → output.dimmer");
+        app.key("secondary-z");node("button","Edge scale.value → output.color");
         ({{restored:true}})
     "#)),Duration::from_secs(60));
     assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
