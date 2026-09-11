@@ -17,8 +17,6 @@ pub(super) struct Controls {
     node: String,
     cells: Vec<InputControl>,
     name: Option<Entity<luma_ui::text_input::TextInput>>,
-    /// Preset inputs whose value editor is shown because Custom was chosen.
-    custom: std::collections::BTreeSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 struct InputControl {
@@ -386,7 +384,6 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         node: node_id,
         cells,
         name,
-        custom: std::collections::BTreeSet::new(),
         _subscriptions: subscriptions,
     });
 }
@@ -676,7 +673,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             let selected = matching
                 .map(|i| options[i].label.as_str())
                 .unwrap_or(if *custom { "Custom" } else { "Choose…" });
-            show_widget = *custom && (matching.is_none() || controls.custom.contains(&cell.id));
+            show_widget = *custom;
             let menu = format!("{}.{}#preset", controls.node, cell.id);
             let toggle = app.clone();
             let toggle_target = target.clone();
@@ -707,16 +704,9 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 move |index, _, cx| {
                     choose.update(cx, |this, cx| {
                         this.edit_graph_tab(&choose_target, cx, |editor| {
-                            let source = &mut editor.source;
-                            source.choice_open = None;
-                            if let Some(controls) = source.controls.as_mut() {
-                                if index < values.len() {
-                                    controls.custom.remove(&input);
-                                } else {
-                                    controls.custom.insert(input.clone());
-                                }
-                            }
+                            editor.source.choice_open = None;
                         });
+                        // Custom leaves the current value in the editor below.
                         if let Some(value) = values.get(index) {
                             this.set_graph_input_value(
                                 &choose_target,

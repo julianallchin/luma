@@ -39,11 +39,6 @@ fn completed_graph_keeps_each_draft_gesture_and_reopens_an_undone_draft() {
                                             "source": "connection",
                                             "node": "wash",
                                             "output": "color"
-                                        },
-                                        "dimmer": {
-                                            "source": "connection",
-                                            "node": "wash",
-                                            "output": "dimmer"
                                         }
                                     }
                                 }

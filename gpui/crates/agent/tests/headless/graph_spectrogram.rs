@@ -16,7 +16,7 @@ fn graph_spectrogram_uses_overridden_filters_and_keeps_missing_stem_errors_local
             },
             "body":{"kind":"graph","body":{"nodes":{
                 "filter":{"definition":"audio_lowpass","inputs":{"cutoff_hz":{"source":"input","input":"cutoff"}}},
-                "output":{"definition":"output","inputs":{"dimmer":{"source":"value","value":{"type":"proportion","value":0.25}}}}
+                "output":{"definition":"output","inputs":{"color":{"source":"value","value":{"type":"color","value":[0.25,0.25,0.25]}}}}
             },"outputs":{
                 "lighting":{"source":"connection","node":"output","output":"lighting"},
                 "view/filtered":{"source":"connection","node":"filter","output":"source"},

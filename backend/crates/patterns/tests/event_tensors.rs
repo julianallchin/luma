@@ -309,8 +309,18 @@ fn drum_trigger_wires_into_the_same_chase_and_prepared_execution_matches_batch()
                         ),
                     ),
                     (
+                        "tint".into(),
+                        node(
+                            "core/multiply",
+                            vec![
+                                ("a", wire("chase", "mask")),
+                                ("b", Value::Color([1.0; 3]).into()),
+                            ],
+                        ),
+                    ),
+                    (
                         "output".into(),
-                        node("output", vec![("dimmer", wire("chase", "mask"))]),
+                        node("output", vec![("color", wire("tint", "value"))]),
                     ),
                 ]),
                 outputs: BTreeMap::from([("lighting".into(), wire("output", "lighting"))]),

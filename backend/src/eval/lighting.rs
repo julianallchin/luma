@@ -365,7 +365,8 @@ mod tests {
                         "a":{"source":"value","value":{"type":"number","value":0.5}},
                         "b":{"source":"connection","node":"clock","output":"progress"}}},
                     "root":{"definition":"core/square_root","inputs":{"value":{"source":"connection","node":"subtract","output":"value"}}},
-                    "output":{"definition":"output","inputs":{"dimmer":{"source":"connection","node":"root","output":"value"}}}
+                    "tint":{"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"root","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
+                    "output":{"definition":"output","inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
             }},"clips":{"clip":{"graph":"custom","start":0,"duration":4,"seed":0}}
         })).unwrap();
@@ -595,7 +596,7 @@ mod tests {
         let ids: Vec<_> = (0..8).map(|n| format!("bar:{n}")).collect();
         for (effect, expected) in [
             ("write_position", [false, false, true, false, false]),
-            ("write_dimmer", [false, true, false, false, false]),
+            ("write_dimmer", [true, true, false, false, false]),
             ("write_strobe", [false, false, false, true, false]),
             ("write_speed", [false, false, false, false, true]),
         ] {

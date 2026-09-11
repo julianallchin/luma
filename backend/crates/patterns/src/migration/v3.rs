@@ -83,8 +83,10 @@ pub fn upgrade_v3(score: &Score) -> Result<Score> {
             break;
         }
     }
-    let local: BTreeSet<&str> = score.definitions.keys().map(String::as_str).collect();
     let mut definitions = score.definitions.clone();
+    inline_retired_graphs(&mut definitions);
+    let local: BTreeSet<String> = definitions.keys().cloned().collect();
+    let local: BTreeSet<&str> = local.iter().map(String::as_str).collect();
     let mut clips = score.clips.clone();
     let mut unused: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (id, definition) in &mut definitions {
@@ -158,6 +160,55 @@ pub fn upgrade_v3(score: &Score) -> Result<Score> {
     upgraded.validate(&standard_library())?;
     Ok(upgraded)
 }
+
+/// A version 3 library graph that version 4 no longer ships, but whose parts
+/// still exist, becomes a score-local copy under its old id. Chase, Pulse,
+/// Dissolve, Shimmer and their kernels are rebuilt instead.
+fn inline_retired_graphs(definitions: &mut BTreeMap<String, Definition>) {
+    let current = standard_library();
+    let frozen = v3_library();
+    loop {
+        let wanted: BTreeSet<String> = definitions
+            .values()
+            .filter_map(|definition| match &definition.body {
+                Body::Graph(graph) => Some(graph.nodes.values()),
+                Body::Primitive(_) => None,
+            })
+            .flatten()
+            .map(|node| node.definition.clone())
+            .filter(|id| {
+                !current.definitions.contains_key(id)
+                    && !definitions.contains_key(id)
+                    && !REBUILT.contains(&id.as_str())
+                    && frozen
+                        .definitions
+                        .get(id)
+                        .is_some_and(|definition| matches!(definition.body, Body::Graph(_)))
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        for id in wanted {
+            definitions.insert(id.clone(), frozen.definitions[&id].clone());
+        }
+    }
+}
+
+/// Version 3 ids whose nodes are rewritten rather than copied.
+const REBUILT: [&str; 11] = [
+    "chase",
+    "pulse",
+    "pulse_dimmer",
+    "dissolve_flash",
+    "shimmer",
+    "dissolve_mask",
+    "event_mask",
+    "write_dimmer",
+    "core/chase_events",
+    "core/pulse_events",
+    "core/dissolve_events",
+];
 
 /// Convert every node of an authored version 3 graph in place. Returns the
 /// exposed inputs whose only consumer was a removed control.
@@ -340,6 +391,39 @@ fn convert(
             {
                 let (key, trigger) = beat_trigger(node, id, &mut taken, &mut dropped);
                 added.insert(key, trigger);
+            }
+            "write_dimmer" => {
+                node.definition = "uniform_mask".into();
+                rename(node, "value", "coverage");
+                renamed_outputs.insert(id.clone(), BTreeMap::from([("dimmer", "mask")]));
+            }
+            "output" => {
+                // Brightness now rides in the applied color.
+                if let Some(dimmer) = node.inputs.remove("dimmer") {
+                    let color = node
+                        .inputs
+                        .remove("color")
+                        .unwrap_or_else(|| Value::Color([1.0; 3]).into());
+                    let brightness = super::unique(&mut taken, &format!("{id}/brightness"));
+                    added.insert(
+                        brightness.clone(),
+                        Node {
+                            position: None,
+                            definition: "mask_color".into(),
+                            inputs: BTreeMap::from([
+                                ("color".into(), color),
+                                ("mask".into(), dimmer),
+                            ]),
+                        },
+                    );
+                    node.inputs.insert(
+                        "color".into(),
+                        Binding::Connection {
+                            node: brightness,
+                            output: "color".into(),
+                        },
+                    );
+                }
             }
             "event_mask" => {
                 // duration/elapsed/present/shape → Motion, an activity product

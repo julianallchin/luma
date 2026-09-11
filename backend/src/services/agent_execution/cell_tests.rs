@@ -624,7 +624,7 @@ shape = graph.node('soft_edges', id='shape', softness=.3)
 path = {'points': [[0, 0], [1, 1]], 'curves': [{'kind': 'bezier', 'control1': [.3, 0], 'control2': [.7, 1]}]}
 chase = graph.node('beat_chase', id='chase', shape=shape.output(), path=path, mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
 position = graph.node('write_position', id='aim')
-output = graph.node('output', id='output', dimmer=chase.output(), pan=position.output('pan'), tilt=position.output('tilt'))
+output = graph.node('output', id='output', color=chase.output(), pan=position.output('pan'), tilt=position.output('tilt'))
 graph.output(output.output())
 graph.expose(chase, 'width', name='Stroke width')
 graph.expose(output, 'color')
@@ -1070,7 +1070,8 @@ palette = graph.node('sample_gradient', id='palette', position=.5, gradient={'st
     {'t': 0., 'color': '#4080ff', 'alpha': .2},
     {'t': 1., 'color': '#4080ff', 'alpha': .8}]})
 intensity = graph.node('core/multiply', a=chase.output(), b=palette.output('opacity'))
-output = graph.node('output', dimmer=intensity.output(), color=palette.output('color'))
+tinted = graph.node('core/multiply', id='tinted', a=intensity.output(), b=palette.output('color'))
+output = graph.node('output', color=tinted.output())
 graph.output(output.output())
 graph.expose(chase, 'width')
 graph.expose(palette, 'gradient', name='Colors')

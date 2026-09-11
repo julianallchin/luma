@@ -117,16 +117,12 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
         ValueType::Signal(SignalType::new(Unit::Proportion, Channels::Rgb))
     );
     let before = def.clone();
-    assert!(bind(
-        &mut def,
-        &library,
-        "output",
-        "dimmer",
-        wire("tint", "value")
-    )
-    .unwrap_err()
-    .0
-    .contains("expected"));
+    assert!(
+        bind(&mut def, &library, "output", "pan", wire("tint", "value"))
+            .unwrap_err()
+            .0
+            .contains("expected")
+    );
     assert_eq!(def, before, "reject incompatible channels atomically");
     bind(&mut def, &library, "output", "color", wire("tint", "value")).unwrap();
     let Body::Graph(body) = &def.body else {
@@ -215,12 +211,12 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
         &mut def,
         &library,
         "output",
-        "dimmer",
-        Value::Number(0.0).into(),
+        "color",
+        Value::Color([0.0; 3]).into(),
     )
     .unwrap();
     let zero = sample(&mut library, &def);
-    assert_eq!(zero.writes(), [false, true, false, false, false]);
+    assert_eq!(zero.writes(), [true, true, false, false, false]);
     assert!(zero
         .sample(0)
         .unwrap()
@@ -244,7 +240,7 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
         &library,
         GraphEdit::Bind {
             node: "output".into(),
-            input: "dimmer".into(),
+            input: "color".into(),
             binding: None,
         },
     )
@@ -337,14 +333,17 @@ fn required_numeric_input_gets_an_editable_broadcast_default() {
         ValueType::Signal(SignalType::new(Unit::Number, Channels::Value))
     );
     assert_eq!(def.inputs["level"].default, Some(Value::Number(0.0)));
+    add(&mut def, &library, "tint", "core/multiply");
+    bind(&mut def, &library, "tint", "a", wire("clamp", "mask")).unwrap();
     bind(
         &mut def,
         &library,
-        "output",
-        "dimmer",
-        wire("clamp", "mask"),
+        "tint",
+        "b",
+        Value::Color([1.0; 3]).into(),
     )
     .unwrap();
+    bind(&mut def, &library, "output", "color", wire("tint", "value")).unwrap();
     library.definitions.insert("test".into(), def);
     let cells = cells();
     let args = BTreeMap::from([("level".into(), Value::Number(0.6))]);
@@ -386,7 +385,7 @@ fn dimensions_flow_through_generic_nested_graphs_and_fail_at_the_wire() {
         &mut def,
         &library,
         "output",
-        "dimmer",
+        "color",
         wire("scaled", "value")
     )
     .is_err());
@@ -397,37 +396,28 @@ fn dimensions_flow_through_generic_nested_graphs_and_fail_at_the_wire() {
         &mut def,
         &library,
         "output",
-        "dimmer",
+        "color",
         wire("scaled", "value")
     )
     .is_err());
 }
 
 #[test]
-fn explicit_color_and_dimmer_preserve_both_capabilities_for_layer_opacity() {
+fn applied_color_splits_into_chromaticity_and_brightness() {
     let library = standard_library();
     let cells = cells();
-    let sample = |inputs| {
-        PreparedGraph::new(&library, "output", &inputs, frame(&cells))
-            .unwrap()
-            .evaluate_batch(&[0.0])
-            .unwrap()["lighting"]
-            .lighting()
-            .unwrap()
-            .sample(0)
-            .unwrap()
-    };
-    let color = BTreeMap::from([("color".into(), Value::Color([0.2, 0.1, 0.0]))]);
-    let automatic = sample(color.clone());
-    assert_eq!(automatic["head-0"].color, Some([1.0, 0.5, 0.0]));
-    assert_eq!(automatic["head-0"].dimmer, Some(0.2));
-    let mut explicit = color;
-    explicit.insert("dimmer".into(), Value::Proportion(0.4));
-    let explicit = sample(explicit);
-    let head = &explicit["head-0"];
-    assert_eq!(head.color, Some([0.2, 0.1, 0.0]));
-    assert_eq!(head.dimmer, Some(0.4));
-    for (a, b) in head.rgb().into_iter().zip([0.08, 0.04, 0.0]) {
+    let inputs = BTreeMap::from([("color".into(), Value::Color([0.2, 0.1, 0.0]))]);
+    let output = PreparedGraph::new(&library, "output", &inputs, frame(&cells))
+        .unwrap()
+        .evaluate_batch(&[0.0])
+        .unwrap()["lighting"]
+        .lighting()
+        .unwrap()
+        .sample(0)
+        .unwrap();
+    assert_eq!(output["head-0"].color, Some([1.0, 0.5, 0.0]));
+    assert_eq!(output["head-0"].dimmer, Some(0.2));
+    for (a, b) in output["head-0"].rgb().into_iter().zip([0.2, 0.1, 0.0]) {
         assert!((a - b).abs() < 1e-12);
     }
 }
@@ -603,15 +593,9 @@ fn output_preserves_intensity_headroom_until_master_compositing() {
         )
         .unwrap(),
     );
-    for (dimmer, expected_color, expected_dimmer) in [
-        (None, [1., 0.5, 0.25], 4.),
-        (Some(2.5), [1., 1., 1.], 2.5),
-        (Some(-2.), [1., 1., 1.], 0.),
-    ] {
-        let mut inputs = BTreeMap::from([("color".into(), color.clone())]);
-        if let Some(dimmer) = dimmer {
-            inputs.insert("dimmer".into(), Value::Number(dimmer));
-        }
+    {
+        let (expected_color, expected_dimmer) = ([1., 0.5, 0.25], 4.);
+        let inputs = BTreeMap::from([("color".into(), color.clone())]);
         let output = PreparedGraph::new(&library, "output", &inputs, frame(&cells))
             .unwrap()
             .evaluate_batch(&[0., 1.])

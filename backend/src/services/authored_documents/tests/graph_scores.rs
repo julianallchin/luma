@@ -28,19 +28,58 @@ async fn isolated_clip_preview_preserves_grid_selection_overrides_and_seek_order
     let library = luma_patterns::standard_library();
     let mut score = luma_patterns::Score::default();
     score
-        .insert_effect(&library, "write_dimmer", "preview", 4., 4.)
+        .insert_effect(&library, "wash", "preview", 4., 4.)
         .unwrap();
     score
-        .insert_effect(&library, "write_dimmer", "other", 4., 4.)
+        .insert_effect(&library, "wash", "other", 4., 4.)
         .unwrap();
     let clip = score.clips.get_mut("preview").unwrap();
     clip.selection.expression = "selected".into();
     clip.inputs
         .insert("value".into(), luma_patterns::Value::Proportion(0.25));
     let definition = score.definitions.get_mut(&clip.graph).unwrap();
+    // An inspected level that the wash itself does not consume.
+    definition.inputs.insert(
+        "value".into(),
+        luma_patterns::Input {
+            optional: false,
+            name: "Level".into(),
+            description: String::new(),
+            value_type: luma_patterns::ValueType::Proportion,
+            rate: luma_patterns::Rate::Fixed,
+            default: Some(luma_patterns::Value::Proportion(1.0)),
+            author: None,
+        },
+    );
     let luma_patterns::Body::Graph(graph) = &mut definition.body else {
         panic!()
     };
+    // The level applies as the wash's brightness.
+    graph.nodes.insert(
+        "tint".into(),
+        luma_patterns::Node {
+            definition: "core/multiply".into(),
+            inputs: [
+                (
+                    "a".into(),
+                    luma_patterns::Binding::Input {
+                        input: "value".into(),
+                    },
+                ),
+                ("b".into(), luma_patterns::Value::Color([1.0; 3]).into()),
+            ]
+            .into_iter()
+            .collect(),
+            position: None,
+        },
+    );
+    graph.nodes.get_mut("effect").unwrap().inputs.insert(
+        "color".into(),
+        luma_patterns::Binding::Connection {
+            node: "tint".into(),
+            output: "value".into(),
+        },
+    );
     graph.nodes.insert(
         "seconds".into(),
         luma_patterns::Node {

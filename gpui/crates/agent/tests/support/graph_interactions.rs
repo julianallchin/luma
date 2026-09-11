@@ -37,11 +37,6 @@ pub fn exercise(mode: Mode, name: &'static str) {
                                             "source": "connection",
                                             "node": "wash",
                                             "output": "color"
-                                        },
-                                        "dimmer": {
-                                            "source": "connection",
-                                            "node": "wash",
-                                            "output": "dimmer"
                                         }
                                     }
                                 }

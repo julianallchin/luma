@@ -12,7 +12,7 @@ fn graph_palettes_keep_empty_defaults_and_overrides_through_editing_and_undo() {
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"input_nodes":{"palette":{"name":"Palette","position":[-250.,0.]}},"nodes":{
                     "mix":{"definition":"mix_palette","position":[50.,0.],"inputs":{"gradient":{"source":"input","input":"palette"},"weights":{"source":"value","value":{"type":"number","value":1.}}}},
-                    "output":{"definition":"output","position":[400.,0.],"inputs":{"color":{"source":"connection","node":"mix","output":"color"},"dimmer":{"source":"connection","node":"mix","output":"opacity"}}}
+                    "output":{"definition":"output","position":[400.,0.],"inputs":{"color":{"source":"connection","node":"mix","output":"color"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
             }},"clips":{"clip":{"graph":"ribbon","start":0.,"duration":8.,"seed":0,
                 "inputs":{"palette":{"type":"gradient","value":{"stops":[{"t":0.4,"color":[1.,0.,0.],"alpha":0.25}]}}}

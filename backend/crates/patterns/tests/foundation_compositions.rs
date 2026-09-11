@@ -151,7 +151,15 @@ fn chase_journeys_keep_independent_lifetimes_through_the_output() {
                 ("shape", Value::Envelope(Envelope::soft_edges(0.)).into()),
             ],
         );
-        graph.add("output", "output", [("dimmer", wire("chase", "mask"))]);
+        graph.add(
+            "tint",
+            "core/multiply",
+            [
+                ("a", wire("chase", "mask")),
+                ("b", Value::Color([1.; 3]).into()),
+            ],
+        );
+        graph.add("output", "output", [("color", wire("tint", "value"))]);
         let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);
         let samples = program.evaluate_batch(&[1., 1.5, 0.75, 3.]).unwrap();
         let lighting = samples["lighting"].lighting().unwrap();
@@ -251,8 +259,8 @@ fn shimmer_is_random_head_events_under_an_event_envelope() {
     .unwrap();
     let times = [1.25, 0.25, 2.25, 1.25];
     let batch = program.evaluate_batch(&times).unwrap();
-    let signal = batch["dimmer"].signal().unwrap();
-    assert_eq!(signal.values().dim(), (5, 4, 1));
+    let signal = batch["color"].signal().unwrap();
+    assert_eq!(signal.values().dim(), (5, 4, 3));
     assert!(signal.values().iter().any(|v| *v > 0. && *v < 1.));
     assert!(
         signal
@@ -268,7 +276,7 @@ fn shimmer_is_random_head_events_under_an_event_envelope() {
         let single = program.evaluate_batch(&[beat]).unwrap();
         assert_eq!(
             signal.values().index_axis(Axis(1), t),
-            single["dimmer"]
+            single["color"]
                 .signal()
                 .unwrap()
                 .values()
@@ -369,13 +377,14 @@ fn a_wrapped_palette_ribbon_composes_with_independent_intensity() {
         ],
     );
     graph.add(
-        "output",
-        "output",
+        "lit",
+        "core/multiply",
         [
-            ("color", wire("palette", "color")),
-            ("dimmer", wire("pulse", "mask")),
+            ("a", wire("palette", "color")),
+            ("b", wire("pulse", "mask")),
         ],
     );
+    graph.add("output", "output", [("color", wire("lit", "value"))]);
     let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);
     for time in [0., 0.5, 1.5, -0.5, 0.] {
         let output = program.evaluate_batch(&[time]).unwrap();

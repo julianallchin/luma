@@ -293,10 +293,10 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
                 input_nodes: BTreeMap::new(),
                 nodes: BTreeMap::from([("beat_chase".into(), node)]),
                 outputs: BTreeMap::from([(
-                    "dimmer".into(),
+                    "color".into(),
                     Binding::Connection {
                         node: "beat_chase".into(),
-                        output: "dimmer".into(),
+                        output: "color".into(),
                     },
                 )]),
             }),
@@ -458,14 +458,14 @@ fn random_selection_can_modulate_chase_without_a_new_effect_kernel() {
             position: None,
             definition: "core/multiply".into(),
             inputs: BTreeMap::from([
-                ("a".into(), wire("effect", "dimmer")),
+                ("a".into(), wire("effect", "color")),
                 ("b".into(), wire("selection", "selected")),
             ]),
         },
     );
     graph
         .outputs
-        .insert("dimmer".into(), wire("multiply", "value"));
+        .insert("color".into(), wire("multiply", "value"));
     lib.definitions
         .insert("dissolving-chase".into(), definition);
     let actual = light(&lib, "dissolving-chase", &inputs(), 9.0);
@@ -490,23 +490,7 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
     score
         .insert_effect(&lib, "beat_chase", "local-1", 8.0, 8.0)
         .unwrap();
-    // Color is exposed from Output; Chase remains an independently reusable intensity.
-    for edit in [
-        GraphEdit::AddInput {
-            key: "color".into(),
-            name: "Color".into(),
-            position: [0., 0.],
-        },
-        GraphEdit::Bind {
-            node: "output".into(),
-            input: "color".into(),
-            binding: Some(Binding::Input {
-                input: "color".into(),
-            }),
-        },
-    ] {
-        score.edit_graph(&lib, "local-1", edit).unwrap();
-    }
+    // The pattern applies its color; the clip only overrides it.
     let original = serde_json::to_value(&score.definitions).unwrap();
     score
         .clips
@@ -572,11 +556,22 @@ fn score_event_literals_cannot_capture_a_venues_head_identities() {
                         },
                     ),
                     (
+                        "tint".into(),
+                        Node {
+                            position: None,
+                            definition: "core/multiply".into(),
+                            inputs: BTreeMap::from([
+                                ("a".into(), wire("pulse", "mask")),
+                                ("b".into(), Value::Color([1.0; 3]).into()),
+                            ]),
+                        },
+                    ),
+                    (
                         "output".into(),
                         Node {
                             position: None,
                             definition: "output".into(),
-                            inputs: BTreeMap::from([("dimmer".into(), wire("pulse", "mask"))]),
+                            inputs: BTreeMap::from([("color".into(), wire("tint", "value"))]),
                         },
                     ),
                 ]),
@@ -916,10 +911,9 @@ fn fixture_output_writers_preserve_unset_capabilities() {
     let lib = standard_library();
     for (id, expected) in [
         ("write_position", [false, false, true, false, false]),
-        ("write_dimmer", [false, true, false, false, false]),
         ("write_strobe", [false, false, false, true, false]),
         ("write_speed", [false, false, false, false, true]),
-        ("beat_chase", [false, true, false, false, false]),
+        ("beat_chase", [true, true, false, false, false]),
     ] {
         let output = lib
             .evaluate_effect(id, &BTreeMap::new(), frame(9.0))

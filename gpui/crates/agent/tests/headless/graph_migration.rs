@@ -32,8 +32,8 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
         app.type(field("Width (0–1)"),"0.4"); app.key("enter");
         app.frames(12,{waitMs:80});
         app.click(node("card","Chase"),{count:2});
-        node("card","Graph workspace"); node("card","Output");
-        const edge="Edge effect.color → output.color";
+        node("card","Graph workspace"); node("card","Apply");
+        const edge="Edge output/brightness.color → output.color";
         node("button",edge);
         check(!app.snapshot().find({role:"button",label:"effect output lighting"}),"migration retained a public Lighting socket");
         app.click(node("button",edge)); app.key("delete");
@@ -92,8 +92,8 @@ fn typed_pattern_rows_open_as_editable_score_graphs() {
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         app.click(node("card","My Chase"),{count:2});
-        node("card","Graph workspace"); node("card","Output");
-        const edge="Edge effect.color → output.color";
+        node("card","Graph workspace"); node("card","Apply");
+        const edge="Edge output/brightness.color → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("could not edit the converted graph");
         app.key("secondary-z"); node("button",edge);
@@ -158,7 +158,7 @@ fn numerical_pattern_rows_open_and_edit_in_the_native_graph() {
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         app.click(node("card","My Pulse"));
         app.click(node("card","My Pulse"),{count:2});
-        node("card","Graph workspace"); node("card","Output"); node("card","Multiply");
+        node("card","Graph workspace"); node("card","Apply"); node("card","Multiply");
         node("card","intensity"); node("card","tint");
         const edge="Edge red.out → mix.a";
         app.click(node("button",edge)); app.key("delete");
@@ -216,8 +216,8 @@ fn library_pattern_import_is_score_owned_undoable_and_opens_the_canonical_editor
         const clips=app.snapshot().findAll({role:"card",label:"Saved chase"});
         const imported=clips.reduce((a,b)=>a.bounds.x<b.bounds.x?a:b);
         app.click(imported,{count:2});
-        node("card","Graph workspace"); node("card","Output");
-        const edge="Edge effect.color → output.color";
+        node("card","Graph workspace"); node("card","Apply");
+        const edge="Edge output/brightness.color → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("imported graph is not editable");
         app.key("secondary-z"); node("button",edge);

@@ -106,7 +106,7 @@ fn pulse_is_dark_in_the_rest_even_when_the_curve_ends_lit() {
                 panic!()
             };
             assert!(light.values().all(|v| v.dimmer == Some(dimmer)));
-            assert!(light.values().all(|v| v.color.is_none()));
+            assert!(light.values().all(|v| v.color.is_some()));
         }
     }
 }

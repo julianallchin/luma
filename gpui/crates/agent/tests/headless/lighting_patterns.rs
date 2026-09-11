@@ -259,7 +259,7 @@ fn edit_a_chase_envelope_per_clip() {
         app.key("enter");
         until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
         app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
-        const inputs=until("typed clip inputs",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Duration"))?s:undefined);
+        const inputs=until("typed clip inputs",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Travel time"))?s:undefined);
         until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
         app.click(app.snapshot().find({role:"button",label:"Ramp down"}));
         app.frames(4,{waitMs:80});
@@ -440,9 +440,9 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
         };
         place("Position",500,620);
         place("Beat chase",500,50);
-        place("Output",760,430);
+        place("Apply",760,430);
         const wire=(a,b)=>{app.drag(node("button",a),node("button",b),{steps:8,restale:"match"});app.frames(2);};
-        node("button","Edge effect.dimmer → output.dimmer");
+        node("button","Edge effect.color → output.color");
         wire("write_position_1 output pan","output input pan");
         node("button","Edge write_position_1.pan → output.pan");
         wire("write_position_1 output tilt","output input tilt");
@@ -483,7 +483,7 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
             );
             assert_eq!(graph["outputs"]["lighting"]["node"], "output");
             assert_eq!(
-                graph["nodes"]["output"]["inputs"]["dimmer"]["node"],
+                graph["nodes"]["output"]["inputs"]["color"]["node"],
                 "effect"
             );
             assert_eq!(
