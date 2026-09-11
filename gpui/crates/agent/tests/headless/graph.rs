@@ -93,14 +93,25 @@ fn graph_drag_is_one_score_edit_and_survives_reopening() {
     let mut harness = fixture(name);
     let result=harness.exec(&support::script(&format!(r#"
         {OPEN}
+        node("slider","Preview time");
+        app.click(node("card","Multiply"));
+        const workspace=node("card","Graph workspace").bounds;
+        const stable=()=>{{
+            const now=app.snapshot().find({{role:"card",label:"Graph workspace"}}).bounds;
+            check(now.y===workspace.y && now.height===workspace.height,"layout edit shifted the toolbar");
+            check(!!app.snapshot().find({{role:"slider",label:"Preview time"}}),"layout edit discarded the preview");
+        }};
         const before=node("card","Multiply").bounds;
         app.drag(node("card","Multiply"),{{dx:80,dy:40}},{{steps:8}});
+        stable();
         let moved=node("card","Multiply").bounds;
         check(Math.abs(moved.x-before.x-80)<2 && Math.abs(moved.y-before.y-40)<2,"drag did not follow pointer");
         app.key("secondary-z");
+        stable();
         let undone=node("card","Multiply").bounds;
         check(Math.abs(undone.x-before.x)<2 && Math.abs(undone.y-before.y)<2,"drag took more than one undo");
         app.key("secondary-shift-z");
+        stable();
         moved=node("card","Multiply").bounds;
         check(Math.abs(moved.x-before.x-80)<2,"redo lost movement");
         app.frames(16,{{waitMs:80}});nav.closeTab();open();

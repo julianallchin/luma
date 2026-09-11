@@ -324,7 +324,7 @@ impl Luma {
                             let luma_lib::models::authored_state::AuthoredProjectedDocument::TrackScore { revision } = saved.document else {
                                 editor.error = Some("The saved document was not a score".into()); return;
                             };
-                            let definitions_changed = graph.base.score.definitions != candidate.definitions;
+                            let definitions_changed = !p::definitions_have_same_computation(&graph.base.score.definitions, &candidate.definitions);
                             previews = candidate.clips.iter().filter(|(id, clip)| {
                                 definitions_changed || graph.base.score.clips.get(*id) != Some(*clip)
                             }).map(|(id, _)| SharedString::from(id.clone())).collect();
