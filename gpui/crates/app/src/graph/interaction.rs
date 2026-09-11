@@ -18,18 +18,23 @@ impl Socket {
         } else {
             (other, self)
         };
+        let binding = match luma_lib::node_graph::lighting::input_node_key(&from.node) {
+            Some(key) => p::Binding::Input { input: key.into() },
+            None => p::Binding::Connection {
+                node: from.node.to_string(),
+                output: from.port.to_string(),
+            },
+        };
+        if to.node == luma_lib::node_graph::lighting::OUTPUTS_NODE {
+            return p::GraphEdit::Output {
+                key: to.port.to_string(),
+                binding,
+            };
+        }
         p::GraphEdit::Bind {
             node: to.node.to_string(),
             input: to.port.to_string(),
-            binding: Some(
-                match luma_lib::node_graph::lighting::input_node_key(&from.node) {
-                    Some(key) => p::Binding::Input { input: key.into() },
-                    None => p::Binding::Connection {
-                        node: from.node.to_string(),
-                        output: from.port.to_string(),
-                    },
-                },
-            ),
+            binding: Some(binding),
         }
     }
 }

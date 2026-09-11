@@ -246,3 +246,67 @@ fn graph_missing_implementation_reports_an_error_and_preserves_saved_rows() {
             pool.close().await;
         });
 }
+
+/// A document that places nothing is laid out along its wires: columns run
+/// left to right, each Input sits beside the card that reads it, and a graph
+/// without an Apply node ends at a card of its named outputs.
+#[test]
+fn graph_auto_layout_follows_the_wires_and_shows_named_outputs() {
+    let name = "graph-auto-layout";
+    let mut harness = Fixture::new(name, 20, vec![])
+        .with_graph_score(json!({
+            "version":4,
+            "definitions":{"loose":{"name":"Loose graph",
+                "inputs":{
+                    "tint":{"name":"Tint","description":"","value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame","default":{"type":"color","value":[1.0,0.5,0.25]}},
+                    "amount":{"name":"Amount","description":"","value_type":"proportion","rate":"frame","default":{"type":"proportion","value":0.5}}
+                },
+                "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
+                "body":{"kind":"graph","body":{
+                    "nodes":{
+                        "wash":{"definition":"wash","inputs":{"color":{"source":"input","input":"tint"}}},
+                        "scale":{"definition":"core/multiply","inputs":{
+                            "a":{"source":"connection","node":"wash","output":"color"},
+                            "b":{"source":"input","input":"amount"}
+                        }},
+                        "output":{"definition":"output","inputs":{
+                            "color":{"source":"connection","node":"scale","output":"value"}
+                        }}
+                    },
+                    "outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}
+                }}
+            }},
+            "clips":{"clip":{"graph":"loose","start":0,"duration":8,"seed":0}}
+        }))
+        .with_rig().window(1600.,1000.).open(Mode::Headless);
+    let result=harness.exec(&support::script(r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const check=(v,m)=>{if(!v)throw new Error(m);};
+        app.click(node("card","Loose graph"),{count:2});
+        node("card","Graph workspace");
+        const box=label=>node("card",label).bounds;
+        const [tint,amount,wash,scale,apply]=["Tint","Amount","Wash","Multiply","Apply"].map(box);
+        const leftOf=(a,b,m)=>check(a.x+a.width<b.x,m);
+        leftOf(tint,wash,"Tint is not left of Wash");
+        leftOf(wash,scale,"Wash is not left of Multiply");
+        leftOf(amount,scale,"Amount is not left of Multiply");
+        leftOf(scale,apply,"Multiply is not left of Apply");
+        check(amount.x>tint.x+tint.width/2,"Amount did not move beside the card that reads it");
+        const mid=b=>b.y+b.height/2;
+        check(mid(tint)>wash.y&&mid(tint)<wash.y+wash.height,"Tint is not level with Wash");
+        check(mid(amount)>scale.y&&mid(amount)<scale.y+scale.height,"Amount is not level with Multiply");
+        const cards=[tint,amount,wash,scale,apply];
+        for(let i=0;i<cards.length;i++)for(let j=i+1;j<cards.length;j++){
+            const a=cards[i],b=cards[j];
+            check(a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y,"cards overlap");
+        }
+        app.click(node("card","Wash"),{count:2});
+        node("card","Outputs"); node("card","Color");
+        node("button","Edge $input/color.value → $outputs.color");
+        const color=box("Color"), outputs=box("Outputs");
+        check(color.x+color.width<outputs.x,"the Input is not left of the outputs card");
+        ({laid_out:true})
+    "#),Duration::from_secs(60));
+    assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
+}

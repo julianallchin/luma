@@ -3,7 +3,7 @@
 use crate::models::node_graph::*;
 use luma_patterns::{self as p, ValueType};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 pub const PREFIX: &str = "lighting/";
 
@@ -279,6 +279,12 @@ pub fn input_node_key(id: &str) -> Option<&str> {
 fn input_type_id(definition: &str, key: &str) -> String {
     format!("{PREFIX}$input/{definition}/{key}")
 }
+/// The card a graph's named outputs are wired into. A pattern ends at its
+/// Apply node instead.
+pub const OUTPUTS_NODE: &str = "$outputs";
+fn outputs_type_id(definition: &str) -> String {
+    format!("{PREFIX}$outputs/{definition}")
+}
 
 pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
     let mut types: Vec<_> = library
@@ -362,6 +368,25 @@ pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
         let p::Body::Graph(graph) = &definition.body else {
             continue;
         };
+        if definition.lighting_output().is_none() && !definition.outputs.is_empty() {
+            types.push(NodeTypeDef {
+                id: outputs_type_id(id),
+                name: "Outputs".into(),
+                description: Some("What this graph provides to its callers".into()),
+                category: Some("Outputs".into()),
+                inputs: definition
+                    .outputs
+                    .iter()
+                    .map(|(key, output)| PortDef {
+                        id: key.clone(),
+                        name: key.clone(),
+                        port_type: port_type(output.value_type),
+                    })
+                    .collect(),
+                params: Vec::new(),
+                outputs: Vec::new(),
+            });
+        }
         let keys: std::collections::BTreeSet<_> = definition
             .inputs
             .keys()
@@ -586,88 +611,78 @@ pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
     changed
 }
 
-/// Read-only canvas projection of a built-in definition. This is never saved
-/// or compiled: the canonical graph remains the typed library definition.
-pub fn inspect_definition(id: &str) -> Option<Graph> {
-    project_definition(&p::migration::v2_library(), id)
-}
-
+/// Canvas projection of a definition. A node the document does not place
+/// carries no position: the canvas lays those out itself, once it knows how
+/// big each card is.
 pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
     let definition = library.definitions.get(id)?;
     let p::Body::Graph(body) = &definition.body else {
         return None;
     };
-    let mut graph = Graph {
-        nodes: Vec::new(),
-        edges: Vec::new(),
-        args: Vec::new(),
-    };
-    let mut depths = BTreeMap::new();
-    fn depth(id: &str, body: &p::Graph, depths: &mut BTreeMap<String, usize>) -> usize {
-        if let Some(value) = depths.get(id) {
-            return *value;
-        }
-        let value = body.nodes[id]
-            .inputs
-            .values()
-            .filter_map(|binding| match binding {
-                p::Binding::Connection { node, .. } => Some(depth(node, body, depths) + 1),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0);
-        depths.insert(id.into(), value);
-        value
-    }
-    let mut rows = BTreeMap::<usize, usize>::new();
-    for (id, node) in &body.nodes {
-        let column = depth(id, body, &mut depths);
-        let row = rows.entry(column).or_default();
-        let mut params = HashMap::new();
-        for (port, binding) in &node.inputs {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut wire =
+        |to: &str, port: &str, binding: &p::Binding, params: &mut HashMap<String, Value>| {
             let (source, output) = match binding {
                 p::Binding::Value { value } => {
-                    params.insert(port.clone(), wire_value(value));
-                    continue;
+                    params.insert(port.into(), wire_value(value));
+                    return;
                 }
                 p::Binding::Input { input } => (input_node_id(input), "value".into()),
                 p::Binding::Connection { node, output } => (node.clone(), output.clone()),
             };
-            graph.edges.push(Edge {
-                id: format!("{id}/{port}"),
+            edges.push(Edge {
+                id: format!("{to}/{port}"),
                 from_node: source,
                 from_port: output,
-                to_node: id.clone(),
-                to_port: port.clone(),
+                to_node: to.into(),
+                to_port: port.into(),
             });
+        };
+    for (id, node) in &body.nodes {
+        let mut params = HashMap::new();
+        for (port, binding) in &node.inputs {
+            wire(id, port, binding, &mut params);
         }
-        graph.nodes.push(NodeInstance {
+        nodes.push(NodeInstance {
             id: id.clone(),
             type_id: format!("{PREFIX}{}", node.definition),
             params,
-            position_x: Some(node.position.map_or(column as f64 * 520.0, |p| p[0])),
-            position_y: Some(node.position.map_or(*row as f64 * 360.0, |p| p[1])),
+            position_x: node.position.map(|p| p[0]),
+            position_y: node.position.map(|p| p[1]),
         });
-        *row += 1;
+    }
+    if definition.lighting_output().is_none() && !body.outputs.is_empty() {
+        let mut params = HashMap::new();
+        for (key, binding) in &body.outputs {
+            wire(OUTPUTS_NODE, key, binding, &mut params);
+        }
+        nodes.push(NodeInstance {
+            id: OUTPUTS_NODE.into(),
+            type_id: outputs_type_id(id),
+            params,
+            position_x: None,
+            position_y: None,
+        });
     }
     let keys: std::collections::BTreeSet<_> = definition
         .inputs
         .keys()
         .chain(body.input_nodes.keys())
         .collect();
-    for (index, key) in keys.into_iter().enumerate() {
-        let position = body
-            .input_nodes
-            .get(key)
-            .and_then(|node| node.position)
-            .unwrap_or([-240., index as f64 * 40.]);
-        graph.nodes.push(NodeInstance {
+    for key in keys {
+        let position = body.input_nodes.get(key).and_then(|node| node.position);
+        nodes.push(NodeInstance {
             id: input_node_id(key),
             type_id: input_type_id(id, key),
             params: HashMap::new(),
-            position_x: Some(position[0]),
-            position_y: Some(position[1]),
+            position_x: position.map(|p| p[0]),
+            position_y: position.map(|p| p[1]),
         });
     }
-    Some(graph)
+    Some(Graph {
+        nodes,
+        edges,
+        args: Vec::new(),
+    })
 }

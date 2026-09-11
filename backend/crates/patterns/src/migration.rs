@@ -3,7 +3,7 @@
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 mod v3;
-pub use v3::{upgrade_v3, v3_library, validate_v3};
+pub use v3::{upgrade_v3, v3_library, validate_v3, Pattern};
 
 /// Bring any supported document to the current version. A current document
 /// is validated and returned unchanged.
@@ -263,16 +263,74 @@ pub fn upgrade_v2_node(
     }
     let mut conversion = Conversion::new(&source, &target, std::iter::empty());
     let call = conversion.definition(id, capabilities, false)?;
-    let score = upgrade_v3(&Score {
+    let (score, retargeted) = v3::upgrade_v3_tracking(&Score {
         version: 3,
         definitions: conversion.definitions,
         clips: BTreeMap::new(),
     })?;
+    let Some(pattern) = retargeted.get(&call.id) else {
+        return Ok(NodeUpgrade {
+            definitions: score.definitions,
+            definition: call.id,
+            inputs: call.inputs,
+            outputs: call.outputs,
+        });
+    };
+    // The node is the pattern itself; its color carries the old dimmer.
+    let target = &standard_library().definitions[pattern.id];
+    let inputs = call
+        .inputs
+        .into_iter()
+        .filter(|(key, _)| !pattern.dropped.contains(&key.as_str()))
+        .map(|(key, ports)| {
+            let ports = match ports {
+                Expanded::Single(port) => Expanded::Single(
+                    pattern
+                        .renames
+                        .iter()
+                        .find(|(from, _)| *from == port)
+                        .map_or(port, |(_, to)| (*to).into()),
+                ),
+                bundle => bundle,
+            };
+            (key, ports)
+        })
+        .collect();
+    let outputs = call
+        .outputs
+        .into_iter()
+        .map(|(key, ports)| {
+            let ports = match ports {
+                Expanded::Bundle(caps) => {
+                    let mut caps: BTreeMap<_, _> = caps
+                        .into_iter()
+                        .filter_map(|(cap, port)| {
+                            if target.outputs.contains_key(&port) {
+                                Some((cap, port))
+                            } else if cap == Capability::Dimmer
+                                && target.outputs.contains_key("mask")
+                            {
+                                Some((cap, "mask".into()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if target.outputs.contains_key("color") {
+                        caps.insert(Capability::Color, "color".into());
+                    }
+                    Expanded::Bundle(caps)
+                }
+                single => single,
+            };
+            (key, ports)
+        })
+        .collect();
     Ok(NodeUpgrade {
         definitions: score.definitions,
-        definition: call.id,
-        inputs: call.inputs,
-        outputs: call.outputs,
+        definition: pattern.id.into(),
+        inputs,
+        outputs,
     })
 }
 struct Conversion<'a> {
@@ -662,6 +720,37 @@ impl Builder<'_, '_> {
         let lower = self.math(stem, "maximum", value, Value::Number(0.0).into());
         self.math(stem, "minimum", lower, Value::Number(1.0).into())
     }
+    /// A version 2 color wrote a hue and its peak channel as the dimmer.
+    fn split_brightness(&mut self, stem: &str, color: Binding) -> (Binding, Binding) {
+        let brightness = self.operation(
+            stem,
+            "core/channel_maximum",
+            "value",
+            &[("value", color.clone())],
+        );
+        let positive = self.operation(
+            stem,
+            "core/greater",
+            "mask",
+            &[
+                ("a", brightness.clone()),
+                ("b", Value::Number(1e-5).into()),
+                ("tolerance", Value::Number(0.0).into()),
+            ],
+        );
+        let normalized = self.math(stem, "divide", color, brightness.clone());
+        let normalized = self.operation(
+            stem,
+            "core/choose",
+            "value",
+            &[
+                ("condition", positive),
+                ("yes", normalized),
+                ("no", Value::Color([0.0; 3]).into()),
+            ],
+        );
+        (normalized, brightness)
+    }
     fn primitive(
         &mut self,
         id: &str,
@@ -742,39 +831,22 @@ impl Builder<'_, '_> {
                 })
                 .collect::<Result<_>>()?,
             Primitive::WriteColor => {
-                let color = arg("color")?;
-                let brightness = self.operation(
-                    id,
-                    "core/channel_maximum",
-                    "value",
-                    &[("value", color.clone())],
-                );
-                let positive = self.operation(
-                    id,
-                    "core/greater",
-                    "mask",
-                    &[
-                        ("a", brightness.clone()),
-                        ("b", Value::Number(1e-5).into()),
-                        ("tolerance", Value::Number(0.0).into()),
-                    ],
-                );
-                let normalized = self.math(id, "divide", color, brightness.clone());
-                let normalized = self.operation(
-                    id,
-                    "core/choose",
-                    "value",
-                    &[
-                        ("condition", positive),
-                        ("yes", normalized),
-                        ("no", Value::Color([0.0; 3]).into()),
-                    ],
-                );
+                let (normalized, brightness) = self.split_brightness(id, arg("color")?);
                 BTreeMap::from([(Color, normalized), (Dimmer, brightness)])
             }
             Primitive::AddLighting => {
                 let mut base = args["a"].bundle()?.clone();
-                let top = args["b"].bundle()?;
+                let mut top = args["b"].bundle()?.clone();
+                // A pattern's color carries its brightness; this blend was
+                // defined on a hue and a dimmer, so such a layer splits here.
+                for layer in [&mut base, &mut top] {
+                    if let (Some(color), None) = (layer.get(&Color).cloned(), layer.get(&Dimmer)) {
+                        let (normalized, brightness) = self.split_brightness(id, color);
+                        layer.insert(Color, normalized);
+                        layer.insert(Dimmer, brightness);
+                    }
+                }
+                let top = &top;
                 let opacity = self.clamp(
                     id,
                     top.get(&Dimmer)

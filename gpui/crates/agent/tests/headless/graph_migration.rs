@@ -33,7 +33,7 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
         app.frames(12,{waitMs:80});
         app.click(node("card","Chase"),{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge output/brightness.color → output.color";
+        const edge="Edge effect.color → output.color";
         node("button",edge);
         check(!app.snapshot().find({role:"button",label:"effect output lighting"}),"migration retained a public Lighting socket");
         app.click(node("button",edge)); app.key("delete");
@@ -93,7 +93,7 @@ fn typed_pattern_rows_open_as_editable_score_graphs() {
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         app.click(node("card","My Chase"),{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge output/brightness.color → output.color";
+        const edge="Edge effect.color → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("could not edit the converted graph");
         app.key("secondary-z"); node("button",edge);
@@ -217,7 +217,7 @@ fn library_pattern_import_is_score_owned_undoable_and_opens_the_canonical_editor
         const imported=clips.reduce((a,b)=>a.bounds.x<b.bounds.x?a:b);
         app.click(imported,{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge output/brightness.color → output.color";
+        const edge="Edge effect.color → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("imported graph is not editable");
         app.key("secondary-z"); node("button",edge);
