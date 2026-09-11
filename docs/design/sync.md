@@ -28,7 +28,13 @@ A score is rows.
 |---|---|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
 | `clips` | id, uid, score_id, graph, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
-| `score_definitions` | id (the definition key), uid, score_id, definition_json, created_at, updated_at |
+| `score_definitions` | id, uid, score_id, definition_json, created_at, updated_at |
+
+A clip key and a definition key are unique inside their score, not across the
+library — two scores may each have a `flash`. Sync addresses every row by one
+global `id`, so both tables store `score_id || ':' || key` and the key is read
+back off it. A score id is a uuid and carries no colon, so the split is
+unambiguous however the key is spelled.
 
 `luma_patterns::Score` stays the in-memory type. Loading a score reads the
 three tables into a `Score`. Saving a score diffs the candidate against the
