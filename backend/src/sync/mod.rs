@@ -1,20 +1,23 @@
-//! Sync: media transfer today, PowerSync row replication next.
+//! Sync: PowerSync row replication plus media transfer.
 //!
 //! [`schema`] names the synced tables once; [`triggers`] installs the local
-//! change log on every writer connection from that list. [`files`] moves audio,
-//! stems and album art, which is a separate concern from records and stays
-//! whatever the record transport is.
+//! change log and the PowerSync CRUD queue on every writer connection from
+//! that list. [`connector`] talks to PowerSync Cloud and Supabase PostgREST,
+//! and [`service`] owns the connection lifecycle. [`media`], [`files`] and
+//! [`progress`] move audio, stems and album art, which is a separate concern
+//! from records and runs on its own clock.
 
+pub mod connector;
 pub mod error;
-// Media transfer has no transport until phase two reconnects it; the code is
-// kept whole rather than rewritten from memory later.
-#[allow(dead_code)]
 pub mod files;
-#[allow(dead_code)]
 pub mod host;
-#[allow(dead_code)]
+pub mod media;
 pub mod progress;
 pub mod schema;
-#[allow(dead_code)]
-pub mod traits;
+pub mod service;
 pub mod triggers;
+
+#[cfg(test)]
+mod powersync_tests;
+#[cfg(test)]
+mod two_device_tests;

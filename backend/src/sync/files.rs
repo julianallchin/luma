@@ -12,7 +12,7 @@ use std::process::Command;
 
 use super::error::SyncError;
 use super::host::SyncHost;
-use super::traits::RemoteClient;
+use crate::database::remote::common::SupabaseClient;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,7 +121,7 @@ struct PendingAudioUpload {
 /// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -217,7 +217,7 @@ struct PendingStemUpload {
 /// Upload stem files that have a local file but no storage_path.
 pub async fn upload_pending_stems(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -310,7 +310,7 @@ struct PendingArtUpload {
 /// Upload album art that has a local file but no album_art_storage_path.
 pub async fn upload_pending_album_art(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -423,7 +423,7 @@ struct PendingStemDownload {
 /// Only download missing stem files for tracks whose main audio is local.
 pub async fn download_pending_stems(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
@@ -512,7 +512,7 @@ struct PendingArtDownload {
 /// Download album art for tracks that have a storage path but no local file.
 pub async fn download_pending_album_art(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,

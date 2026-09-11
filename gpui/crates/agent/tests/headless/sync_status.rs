@@ -1,22 +1,17 @@
-//! Sync is quiet until a backlog or slow operation is worth showing.
+//! Sync is quiet until a backlog, a slow operation or a fault is worth showing.
 #![cfg(feature = "app")]
 use super::support::Fixture;
 use gpui_agent::Mode;
-use luma_lib::models::sync::{SyncProgress, SyncStatus};
+use luma_lib::models::sync::SyncStatus;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[test]
-fn sync_status_shows_a_compact_backlog_and_expandable_live_counts() {
+fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
     let status = Arc::new(Mutex::new(SyncStatus {
-        syncing: true,
-        pending_changes: 12,
-        progress: Some(SyncProgress {
-            phase: "Uploading audio".into(),
-            completed: 3,
-            total: Some(8),
-            unit: "files".into(),
-        }),
+        connected: true,
+        uploading: true,
+        pending_uploads: 12,
         ..Default::default()
     }));
     let mut harness = Fixture::new("sync-progress", 4, vec![])
@@ -28,23 +23,26 @@ fn sync_status_shows_a_compact_backlog_and_expandable_live_counts() {
         r#"
         nav.trackEditor("Test Venue", "Aurora");
         until("sync backlog", s => s.find({role: "button", label: "Syncing · 12"}));
-        if (app.snapshot().find({role: "text", label: "Uploading audio"})) throw new Error("details should start collapsed");
-        app.click(app.snapshot().find({role: "button", label: "Syncing · 12"}));
-        until("live progress", s => s.find({role: "text", label: "3 / 8 files"}));
-        if (app.snapshot().find({role: "button", label: "Retry sync"})) throw new Error("retry should not appear during sync");
         true;
     "#
     );
     let result = harness.exec(&script, Duration::from_secs(30));
     assert_eq!(result.error, None, "{result:?}");
 
-    status.lock().unwrap().progress.as_mut().unwrap().completed = 6;
+    *status.lock().unwrap() = SyncStatus {
+        connected: false,
+        error: Some("upload refused".into()),
+        ..Default::default()
+    };
     let result = harness.exec(
         &format!(
             "{}\n{}",
             super::support::UNTIL,
             r#"
-        until("updated count", s => s.find({role: "text", label: "6 / 8 files"}));
+        until("fault", s => s.find({role: "button", label: "Sync needs attention"}));
+        app.click(app.snapshot().find({role: "button", label: "Sync needs attention"}));
+        until("reason", s => s.find({role: "text", label: "upload refused"}));
+        until("retry offered", s => s.find({role: "button", label: "Retry sync"}));
         true;
     "#
         ),
@@ -52,16 +50,10 @@ fn sync_status_shows_a_compact_backlog_and_expandable_live_counts() {
     );
     assert_eq!(result.error, None, "{result:?}");
 
-    status.lock().unwrap().progress.as_mut().unwrap().total = None;
-    let result = harness.exec(&format!("{}\n{}", super::support::UNTIL, r#"
-        until("unknown total", s => !s.find({role: "text", label: "6 / 8 files"}));
-        if (app.snapshot().find({role: "text", label: "Finding work…"})) throw new Error("no placeholder paragraphs");
-        if (app.snapshot().find({role: "text", label: "6 / 8 files"})) throw new Error("stale total");
-        true;
-    "#), Duration::from_secs(10));
-    assert_eq!(result.error, None, "{result:?}");
-
-    *status.lock().unwrap() = SyncStatus::default();
+    *status.lock().unwrap() = SyncStatus {
+        connected: true,
+        ..Default::default()
+    };
     let result = harness.exec(
         &format!(
             "{}\n{}",
