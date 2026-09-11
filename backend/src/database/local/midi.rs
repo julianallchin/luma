@@ -2,7 +2,7 @@ use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::midi::{
     CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, CueExecutionMode, MidiBinding,
@@ -252,7 +252,7 @@ pub async fn update_cue(
 
 pub async fn delete_cue(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let deleted = sync_delete::delete_synced_where(
+    let deleted = deletes::delete_where(
         access.connection(),
         "cues",
         "id = ? AND venue_id = ?",
@@ -354,7 +354,7 @@ pub async fn update_modifier(
 
 pub async fn delete_modifier(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let deleted = sync_delete::delete_synced_where(
+    let deleted = deletes::delete_where(
         access.connection(),
         "midi_modifiers",
         "id = ? AND venue_id = ?",
@@ -487,7 +487,7 @@ pub async fn update_binding(
 
 pub async fn delete_binding(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let deleted = sync_delete::delete_synced_where(
+    let deleted = deletes::delete_where(
         access.connection(),
         "midi_bindings",
         "id = ? AND venue_id = ?",

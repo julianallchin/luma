@@ -125,9 +125,7 @@ pub async fn get_track_audio_base64(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackAudioBase64, CommandError> {
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let (data, mime_type) =
@@ -265,9 +263,7 @@ pub async fn import_tracks(
 }
 
 pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let epoch = services.analysis_tasks.current_epoch()?;

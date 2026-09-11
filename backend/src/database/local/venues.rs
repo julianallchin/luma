@@ -56,10 +56,9 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
                 (admission.active_uid IS NOT NULL AND (
                     venue.uid = admission.active_uid
                     OR EXISTS(
-                        SELECT 1 FROM venue_memberships membership
+                        SELECT 1 FROM venue_members membership
                         WHERE membership.venue_id = venue.id
-                          AND membership.user_id = admission.active_uid
-                          AND membership.role = 'member'
+                          AND membership.uid = admission.active_uid
                     )
                 ))
            )
@@ -168,9 +167,9 @@ pub async fn insert_joined_venue(
     .await
     .map_err(|e| format!("Failed to insert joined venue: {}", e))?;
     sqlx::query(
-        "INSERT INTO venue_memberships (venue_id, user_id, role)
-         VALUES (?, ?, 'member')
-         ON CONFLICT(venue_id, user_id) DO NOTHING",
+        "INSERT INTO venue_members (id, uid, venue_id, role)
+         VALUES (?1 || ':' || ?2, ?2, ?1, 'member')
+         ON CONFLICT(venue_id, uid) DO NOTHING",
     )
     .bind(id)
     .bind(member_uid)
@@ -300,8 +299,8 @@ pub async fn remove_current_venue_membership(
              SELECT 1
              FROM auth_write_admission admission
              JOIN venues venue ON venue.id = ?
-             JOIN venue_memberships membership
-               ON membership.venue_id = venue.id AND membership.user_id = ?
+             JOIN venue_members membership
+               ON membership.venue_id = venue.id AND membership.uid = ?
               AND membership.role = 'member'
              WHERE admission.singleton = 1 AND admission.armed = 1
                AND admission.accepting = 1 AND admission.maintenance = 0
@@ -319,7 +318,7 @@ pub async fn remove_current_venue_membership(
     if admitted != 1 {
         return Err("Venue resource not found".into());
     }
-    let deleted = sqlx::query("DELETE FROM venue_memberships WHERE venue_id = ? AND user_id = ?")
+    let deleted = sqlx::query("DELETE FROM venue_members WHERE venue_id = ? AND uid = ?")
         .bind(venue_id)
         .bind(principal)
         .execute(&mut *transaction)
@@ -507,7 +506,7 @@ mod tests {
         insert_owned_venue(&pool).await;
         sqlx::query(
             "INSERT INTO agent_threads
-             (id, owner_user_id, agent_kind, subject_kind, subject_id, venue_id, score_id)
+             (id, uid, agent_kind, subject_kind, subject_id, venue_id, score_id)
              VALUES ('thread', 'alice', 'track_copilot', 'track', 'track', 'venue', 'score')",
         )
         .execute(&pool)

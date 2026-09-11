@@ -46,7 +46,7 @@ CREATE TABLE drafts (
     id TEXT PRIMARY KEY,
     uid TEXT NOT NULL,
     score_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
+    thread_id TEXT,
     base_json TEXT NOT NULL,
     state_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -73,13 +73,16 @@ CREATE TABLE changes (
 CREATE INDEX idx_changes_row ON changes(table_name, row_id);
 CREATE INDEX idx_changes_at ON changes(at);
 
+-- `uid` is the member: a membership row belongs to the person it admits, so
+-- there is no second `user_id` column saying the same thing.
 CREATE TABLE venue_members (
     id TEXT PRIMARY KEY,
     uid TEXT NOT NULL,
     venue_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (venue_id, uid),
     FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
 );
 CREATE INDEX idx_venue_members_venue ON venue_members(venue_id);
@@ -120,13 +123,13 @@ WHERE admission.singleton = 1
               SELECT 1
               FROM venue_members AS membership
               WHERE membership.venue_id = venue.id
-                AND membership.user_id = admission.active_uid
+                AND membership.uid = admission.active_uid
           )
       ))
   );
 
-INSERT INTO venue_members (id, uid, venue_id, user_id, created_at, updated_at)
-SELECT m.venue_id || ':' || m.user_id, m.user_id, m.venue_id, m.user_id, m.created_at, m.created_at
+INSERT INTO venue_members (id, uid, venue_id, role, created_at, updated_at)
+SELECT m.venue_id || ':' || m.user_id, m.user_id, m.venue_id, m.role, m.created_at, m.created_at
 FROM venue_memberships AS m;
 
 DROP TABLE venue_memberships;
@@ -540,6 +543,39 @@ ALTER TABLE venue_constraints DROP COLUMN synced_at;
 ALTER TABLE venue_constraints DROP COLUMN origin;
 ALTER TABLE agent_threads DROP COLUMN synced_at;
 ALTER TABLE agent_thread_messages DROP COLUMN synced_at;
+
+-- Every synced table has exactly one owner column, and it is called `uid`.
+-- RENAME COLUMN rewrites the triggers and indexes that read it.
+ALTER TABLE agent_threads RENAME COLUMN owner_user_id TO uid;
+ALTER TABLE agent_thread_messages RENAME COLUMN owner_user_id TO uid;
+ALTER TABLE agent_thread_transcript_heads RENAME COLUMN owner_user_id TO uid;
+
+-- `ALTER TABLE ADD COLUMN` refuses an expression default, so these arrive
+-- nullable and are backfilled; every writer sets them from here on.
+ALTER TABLE agent_thread_messages ADD COLUMN updated_at TEXT;
+UPDATE agent_thread_messages SET updated_at = created_at;
+ALTER TABLE agent_thread_transcript_heads ADD COLUMN created_at TEXT;
+UPDATE agent_thread_transcript_heads SET created_at = updated_at;
+
+-- PowerSync addresses a transcript head by `id`; locally the head *is* its
+-- thread, so the column is derived rather than stored twice.
+ALTER TABLE agent_thread_transcript_heads
+    ADD COLUMN id TEXT GENERATED ALWAYS AS (thread_id) VIRTUAL;
+CREATE UNIQUE INDEX idx_agent_thread_transcript_heads_id
+    ON agent_thread_transcript_heads(id);
+
+DROP TRIGGER agent_thread_create_empty_transcript;
+CREATE TRIGGER agent_thread_create_empty_transcript
+AFTER INSERT ON agent_threads FOR EACH ROW
+BEGIN
+    INSERT INTO agent_thread_transcript_heads (thread_id, uid, created_at, updated_at)
+    VALUES (NEW.id, NEW.uid, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+
+CREATE TRIGGER agent_thread_messages_updated_at
+AFTER UPDATE ON agent_thread_messages FOR EACH ROW
+BEGIN UPDATE agent_thread_messages SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = OLD.id; END;
 
 -- ---------------------------------------------------------------------------
 -- `updated_at` triggers, without the version counter

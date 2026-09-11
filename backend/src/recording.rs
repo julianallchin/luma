@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 use sqlx::SqlitePool;
 
 use crate::eval::{Arena, Scope};
-use crate::models::scores::TrackScore;
 use crate::models::universe::UniverseState;
 use crate::stage_render::{self, Continuity, Sequence, VenueGeometry};
 use crate::storage::StorageRoot;
@@ -473,10 +472,6 @@ impl Session {
         spec: Recording,
     ) -> Result<Self, RecordError> {
         let (track_id, venue_id) = score_scope(pool, &spec.score_id).await?;
-        let clips = clips_of(pool, &venue_id, &spec.score_id).await?;
-        if clips.is_empty() {
-            return Err(RecordError::EmptyScore(spec.score_id));
-        }
 
         let duration = crate::database::local::tracks::get_track_duration(pool, &track_id)
             .await?
@@ -492,16 +487,12 @@ impl Session {
             return Err(RecordError::NoAudio(audio));
         }
 
-        let lighting = crate::compositor::build_scene_strict(
-            pool,
-            pool,
-            storage,
-            fixtures_root,
-            &track_id,
-            &venue_id,
-            &clips,
-        )
-        .await?;
+        let lighting =
+            crate::compositor::build_score_scene(pool, storage, fixtures_root, &spec.score_id, None)
+                .await?;
+        if lighting.annotations.is_empty() {
+            return Err(RecordError::EmptyScore(spec.score_id));
+        }
 
         let geometry = VenueGeometry::load(pool, fixtures_root, &venue_id).await?;
         if geometry.is_empty() {
@@ -742,21 +733,6 @@ async fn score_scope(pool: &SqlitePool, score_id: &str) -> Result<(String, Strin
         .await
         .map_err(|error| RecordError::Library(format!("could not read the score: {error}")))?
         .ok_or_else(|| RecordError::NoScore(score_id.to_string()))
-}
-
-/// One score's own clips — the same document the live compositor installs
-/// ([`crate::compositor::install_score_scene`]), so a recording of score X and
-/// the rig showing score X are the same light.
-async fn clips_of(
-    pool: &SqlitePool,
-    venue_id: &str,
-    score_id: &str,
-) -> Result<Vec<TrackScore>, RecordError> {
-    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id))
-        .await
-        .map_err(|error| RecordError::Library(format!("the venue is not available: {error}")))?;
-    Ok(crate::database::local::scores::get_clips_of_score(&mut access, score_id).await?)
 }
 
 #[cfg(test)]

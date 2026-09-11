@@ -6,9 +6,7 @@ pub async fn get_track_waveform(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackWaveform, CommandError> {
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(
@@ -23,9 +21,7 @@ pub async fn get_track_waveform_signal(
     services: &AppServices,
     track_id: String,
 ) -> Result<WaveformSignal, CommandError> {
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(waveform_service::get_track_waveform_signal(
@@ -43,9 +39,7 @@ pub async fn reprocess_waveform(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackWaveform, CommandError> {
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(waveform_service::reprocess_track_waveform(

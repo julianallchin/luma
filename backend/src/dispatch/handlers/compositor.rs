@@ -1,7 +1,7 @@
 //! The track editor's two compositing commands: install a track's scene on the
 //! render engine, and tear it down again.
 
-use crate::compositor::{self, LiveAnnotation};
+use crate::compositor;
 use crate::dispatch::{AppServices, CommandError};
 
 /// Compile **one score** into a scene and install it as the render engine's
@@ -11,19 +11,11 @@ use crate::dispatch::{AppServices, CommandError};
 /// as many scores as there are people who annotated it, and the rig shows the
 /// one that is open, not a blend of all of them.
 ///
-/// `annotations` is load-bearing: omitted means "use the score's persisted
-/// rows", while an empty list is an authoritative empty document that clears
-/// the scene. The editor always sends the live list, whose args run ahead of
-/// the database mid-drag.
-///
-/// `_skip_cache` is dead — the plan cache is keyed by an input signature, so a
-/// changed annotation already recompiles. It stays on the wire until the
-/// frontend stops sending it.
+/// `graph_score` is the editor's working copy when it has one; omitted means
+/// "use the score's own rows".
 pub async fn composite_track(
     services: &AppServices,
     score_id: String,
-    annotations: Option<Vec<LiveAnnotation>>,
-    _skip_cache: Option<bool>,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), CommandError> {
     compositor::install_score_scene(
@@ -32,7 +24,6 @@ pub async fn composite_track(
         &services.fixtures_root,
         &services.render_engine,
         &score_id,
-        annotations,
         graph_score,
     )
     .await?;

@@ -18,7 +18,6 @@ use sqlx::SqlitePool;
 
 use crate::eval::graph_run::GraphEvaluation;
 use crate::models::agent_threads::AgentThread;
-use crate::services::authored_documents::AuthoredDocuments;
 
 #[derive(Default)]
 pub struct GraphRunStore {
@@ -37,14 +36,11 @@ impl GraphRunStore {
             .insert(execution_id.to_string(), evaluation);
     }
 
-    /// Publish an evaluation and its live-scene effect at one exact lifecycle
-    /// boundary. Deletion uses the same authored lifecycle gate for its
-    /// durable `active -> deleting` transition, so this closure runs wholly
-    /// before that transition or not at all after it.
+    /// Publish an evaluation and its live-scene effect together, once the
+    /// thread has been checked as a valid target.
     pub async fn commit_evaluation<ApplyScene>(
         &self,
         pool: &SqlitePool,
-        authored: &AuthoredDocuments,
         thread_id: &str,
         owner_user_id: Option<&str>,
         execution_id: &str,
@@ -54,28 +50,10 @@ impl GraphRunStore {
     where
         ApplyScene: FnOnce(),
     {
-        let publish = |thread: &AgentThread| {
-            validate_publish_target(thread)?;
-            self.publish_unchecked(execution_id, evaluation);
-            apply_scene();
-            Ok(())
-        };
-        let result = if execution_id == thread_id {
-            authored
-                .fence_active_thread_effect(pool, owner_user_id, thread_id, publish)
-                .await
-        } else {
-            authored
-                .fence_active_workspace_effect(
-                    pool,
-                    owner_user_id,
-                    thread_id,
-                    execution_id,
-                    publish,
-                )
-                .await
-        };
-        result.map_err(|error| error.to_string())
+        authorize_publish_target(pool, thread_id, owner_user_id).await?;
+        self.publish_unchecked(execution_id, evaluation);
+        apply_scene();
+        Ok(())
     }
 
     #[cfg(test)]
@@ -204,7 +182,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO agent_threads
-                (id, owner_user_id, agent_kind, subject_kind, subject_id,
+                (id, uid, agent_kind, subject_kind, subject_id,
                  implementation_id, venue_id, score_id, created_at, updated_at)
              VALUES
                 ('pattern-thread', 'alice', 'pattern_graph', 'pattern', 'pattern',

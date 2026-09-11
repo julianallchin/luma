@@ -14,17 +14,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-/// Topologically sort `nodes` into a flat order: parents before children.
-pub fn flat<'a, T, K>(
-    nodes: &'a [T],
-    key: impl Fn(&T) -> K,
-    parents: impl Fn(&T) -> Vec<K>,
-) -> Vec<&'a T>
-where
-    K: Eq + Hash + Copy + Debug,
-{
-    layers(nodes, key, parents).into_iter().flatten().collect()
-}
 
 /// Topologically sort `nodes` into parallel layers: every node in `layers[i]`
 /// has all its parents in `layers[0..i]`. Within a layer, nodes appear in

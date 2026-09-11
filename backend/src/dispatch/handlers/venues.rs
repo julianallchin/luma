@@ -164,7 +164,7 @@ pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(),
         .delete_by_filter(
             "venue_members",
             &format!(
-                "venue_id=eq.{}&user_id=eq.{}",
+                "venue_id=eq.{}&uid=eq.{}",
                 venue_id, auth.principal.user_id
             ),
             &auth.access_token,

@@ -561,10 +561,8 @@ pub enum TurnEvent {
     Subagent {
         snapshot: Value,
     },
-    /// The authored document moved; the editor should re-read it.
-    DocumentChanged {
-        revision: String,
-    },
+    /// The score moved; the editor should re-read it.
+    DocumentChanged,
     /// Ephemeral editor state the host may honour or ignore.
     PreviewSelection {
         expression: Option<String>,
@@ -797,16 +795,13 @@ impl AgentService {
     /// [`AgentError::Storage`] if the thread cannot be created.
     pub async fn new_thread(&self, scope: &ThreadScope) -> Result<AgentThreadDetail, AgentError> {
         let principal = self.principal().await?;
-        let created = self
-            .services
-            .authored()
-            .create_thread_with_authored_state(
-                &self.services.db().0,
-                scope.create_input(uuid::Uuid::new_v4().to_string()),
-                principal.as_deref(),
-            )
-            .await
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        let created = crate::database::local::agent_threads::create_thread(
+            &self.services.db().0,
+            scope.create_input(uuid::Uuid::new_v4().to_string()),
+            principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)?;
         Ok(AgentThreadDetail {
             thread: created,
             messages: Vec::new(),
@@ -848,16 +843,13 @@ impl AgentService {
             .map_err(AgentError::Storage);
         }
 
-        let created = self
-            .services
-            .authored()
-            .create_thread_with_authored_state(
-                pool,
-                scope.create_input(uuid::Uuid::new_v4().to_string()),
-                principal.as_deref(),
-            )
-            .await
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        let created = crate::database::local::agent_threads::create_thread(
+            pool,
+            scope.create_input(uuid::Uuid::new_v4().to_string()),
+            principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)?;
         Ok(AgentThreadDetail {
             thread: created,
             messages: Vec::new(),

@@ -4,18 +4,14 @@ use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
-use crate::services::authored_state::Actor;
+use crate::models::actor::Actor;
 
 pub async fn agent_thread_create(
     services: &AppServices,
     input: CreateAgentThreadInput,
 ) -> Result<AgentThread, CommandError> {
     let owner_user_id = services.admitted_principal().await?;
-    services
-        .authored
-        .create_thread_with_authored_state(&services.db.0, input, owner_user_id.as_deref())
-        .await
-        .map_err(CommandError::from)
+    Ok(db::create_thread(&services.db.0, input, owner_user_id.as_deref()).await?)
 }
 
 /// A thread owned by another principal is invisible, not forbidden.
@@ -82,23 +78,14 @@ pub async fn agent_thread_delete(
     thread_id: String,
 ) -> Result<(), CommandError> {
     let owner_user_id = services.admitted_principal().await?;
-    services
-        .authored
-        .delete_thread_with_authored_state(
-            &services.db.0,
-            owner_user_id.as_deref(),
-            &thread_id,
-            |workspace_ids| async {
-                for workspace_id in workspace_ids {
-                    services.workspaces.retire_thread(&workspace_id).await?;
-                    services.graph_runs.forget(&workspace_id);
-                }
-                services.workspaces.retire_thread(&thread_id).await?;
-                services.graph_runs.forget(&thread_id);
-                Ok(())
-            },
-        )
-        .await?;
+    let children =
+        db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
+    for child in children {
+        services.workspaces.retire_thread(&child).await?;
+        services.graph_runs.forget(&child);
+    }
+    services.workspaces.retire_thread(&thread_id).await?;
+    services.graph_runs.forget(&thread_id);
     Ok(())
 }
 
@@ -130,7 +117,7 @@ pub async fn agent_thread_set_actor(
     actor: String,
 ) -> Result<(), CommandError> {
     let owner_user_id = services.admitted_principal().await?;
-    Actor::parse(&actor).map_err(|error| CommandError::Invalid(error.to_string()))?;
+    Actor::parse(&actor).map_err(CommandError::Invalid)?;
     db::set_thread_actor(&services.db.0, &thread_id, &actor, owner_user_id.as_deref()).await?;
     Ok(())
 }

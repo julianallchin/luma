@@ -6,55 +6,14 @@
 //! [`Plan`] once, then `Scene::render` evaluates per-frame (cheap, seek-safe), so
 //! the legacy precomputed-`LayerTimeSeries` + composite-cache machinery is gone.
 
-use serde_json::Value;
 use std::path::Path;
 
 use crate::audio::StemCache;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
-use crate::eval::context::build_resident_context;
-use crate::eval::{compile::compile_pattern, CompiledAnnotation, Scene};
-use crate::models::node_graph::{BeatGrid, Graph};
-use crate::models::scores::TrackScore;
+use crate::eval::Scene;
+use crate::models::node_graph::BeatGrid;
 use crate::render_engine::RenderEngine;
 use crate::storage::StorageRoot;
-
-/// Compiled plan per annotation id + a signature of the inputs that determine it
-/// `(pattern, args, span, venue)`. Drives the **incremental composite**: a pass
-/// reuses an annotation's plan when its signature is unchanged and recompiles only
-/// the ones that actually changed — so tweaking one annotation's color recompiles
-/// one plan, not the whole track.
-type PlanCacheEntry = (u64, std::sync::Arc<crate::eval::Plan>);
-static PLAN_CACHE: once_cell::sync::Lazy<
-    std::sync::Mutex<std::collections::HashMap<String, PlanCacheEntry>>,
-> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-
-/// Drop all cached plans (called on `leave_track`; positions/audio context may
-/// differ for the next track, so plans must not carry over).
-pub fn clear_plan_cache() {
-    if let Ok(mut c) = PLAN_CACHE.lock() {
-        c.clear();
-    }
-}
-
-/// Signature of everything that determines an annotation's compiled plan. `z` and
-/// `blend_mode` are excluded — they're Scene metadata, not plan inputs.
-fn annotation_sig(
-    annotation: &TrackScore,
-    venue_id: &str,
-    implementation_id: &str,
-    graph_revision: &str,
-) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    annotation.pattern_id.hash(&mut h);
-    venue_id.hash(&mut h);
-    implementation_id.hash(&mut h);
-    graph_revision.hash(&mut h);
-    annotation.start_time.to_bits().hash(&mut h);
-    annotation.end_time.to_bits().hash(&mut h);
-    annotation.args.to_string().hash(&mut h);
-    h.finish()
-}
 
 /// Cancel compositing, clear the render engine's active scene, and unload audio.
 /// Called when navigating away from the track editor.
@@ -70,7 +29,6 @@ pub(crate) async fn leave_track(
     score_id: &str,
 ) -> Result<(), String> {
     let (_access, track_id) = score_scope(pool, score_id).await?;
-    clear_plan_cache();
     render_engine.set_active_scene(None);
     host_audio.unload();
     stem_cache.remove_track(&track_id);
@@ -95,278 +53,6 @@ async fn score_scope<'a>(
     Ok((access, track_id))
 }
 
-/// Compile one score row into a [`CompiledAnnotation`] (context + plan + timeline
-/// metadata). Returns `Ok(None)` for an empty graph (nothing to render).
-#[allow(clippy::too_many_arguments)]
-async fn compile_annotation(
-    local_pool: &sqlx::SqlitePool,
-    project_pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    track_id: &str,
-    venue_id: &str,
-    annotation: &TrackScore,
-    beat_grid: Option<BeatGrid>,
-    graph: &Graph,
-) -> Result<Option<CompiledAnnotation>, String> {
-    if graph.nodes.is_empty() {
-        return Ok(None);
-    }
-
-    let mut args: std::collections::HashMap<String, Value> = annotation
-        .args
-        .as_object()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    // The annotation only carries arg *overrides*; fill unset args from the
-    // pattern's own defaults (mirrors run_goldens / legacy
-    // `arg_values.get(id).unwrap_or(default)`). Without this, a pattern-arg-fed
-    // input (e.g. a gradient/stops) that the user didn't override fails to
-    // resolve at compile. Assembled before the context build because the
-    // selection pre-pass resolves arg-wired selections from this map.
-    for ad in &graph.args {
-        args.entry(ad.id.clone())
-            .or_insert_with(|| ad.default_value.clone());
-    }
-
-    let span = (annotation.start_time as f32, annotation.end_time as f32);
-    let (ctx, primitive_ids) = build_resident_context(
-        local_pool,
-        project_pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        Some(&annotation.id),
-        &graph.nodes,
-        &graph.edges,
-        &args,
-        span,
-        beat_grid,
-    )
-    .await;
-
-    let plan = compile_pattern(&graph, &args, ctx, primitive_ids).map_err(|e| {
-        format!(
-            "Failed to compile pattern {}: {:?}",
-            annotation.pattern_id, e
-        )
-    })?;
-
-    Ok(Some(CompiledAnnotation {
-        plan: std::sync::Arc::new(plan),
-        span,
-        z_index: annotation.z_index,
-        blend_mode: annotation.blend_mode,
-    }))
-}
-
-/// Build a [`Scene`] for a `(track, venue)` from the given score rows.
-pub(crate) async fn build_scene(
-    local_pool: &sqlx::SqlitePool,
-    project_pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    track_id: &str,
-    venue_id: &str,
-    annotations: &[TrackScore],
-) -> Result<Scene, String> {
-    build_scene_with_policy(
-        local_pool,
-        project_pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        annotations,
-        false,
-    )
-    .await
-}
-
-/// Build a candidate scene without the live compositor's fault tolerance.
-///
-/// The live renderer intentionally skips a broken legacy clip so one bad row
-/// cannot blank a running show. A staged agent edit has the opposite contract:
-/// `check()` and previews must expose every compile error before `apply()` can
-/// make the candidate live.
-pub(crate) async fn build_scene_strict(
-    local_pool: &sqlx::SqlitePool,
-    project_pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    track_id: &str,
-    venue_id: &str,
-    annotations: &[TrackScore],
-) -> Result<Scene, String> {
-    build_scene_with_policy(
-        local_pool,
-        project_pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        annotations,
-        true,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn build_scene_with_policy(
-    local_pool: &sqlx::SqlitePool,
-    project_pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    track_id: &str,
-    venue_id: &str,
-    annotations: &[TrackScore],
-    strict: bool,
-) -> Result<Scene, String> {
-    let beat_grid = load_beat_grid(local_pool, track_id).await?;
-    let mut compiled = Vec::with_capacity(annotations.len());
-    for annotation in annotations {
-        let graph_document = match resolve_pattern_graph_document(
-            local_pool,
-            &annotation.pattern_id,
-            Some(venue_id),
-        )
-        .await
-        {
-            Ok(document) => document,
-            Err(error) if strict => {
-                return Err(format!(
-                    "Clip {} (pattern {}) could not resolve its graph: {error}",
-                    annotation.id, annotation.pattern_id
-                ));
-            }
-            Err(error) => {
-                log::warn!(
-                    "[composite] skipping annotation {} (pattern {}): {error}",
-                    annotation.id,
-                    annotation.pattern_id
-                );
-                continue;
-            }
-        };
-        let sig = annotation_sig(
-            annotation,
-            venue_id,
-            &graph_document.implementation_id,
-            &graph_document.revision,
-        );
-        let span = (annotation.start_time as f32, annotation.end_time as f32);
-
-        // Incremental live compositing may reuse the cache. A strict candidate
-        // check must compile from authoritative inputs every time. Live cache
-        // entries include the resolved implementation and graph revision, so a
-        // save or venue-override change can never reuse another graph's plan.
-        // Beat grids, groups, and fixture geometry are invalidated by their
-        // owning lifecycle paths.
-        let hit = (!strict).then(|| {
-            PLAN_CACHE.lock().ok().and_then(|c| {
-                c.get(&annotation.id)
-                    .filter(|(s, _)| *s == sig)
-                    .map(|(_, p)| p.clone())
-            })
-        });
-        let hit = hit.flatten();
-        if let Some(plan) = hit {
-            compiled.push(CompiledAnnotation {
-                plan,
-                span,
-                z_index: annotation.z_index,
-                blend_mode: annotation.blend_mode,
-            });
-            continue;
-        }
-
-        // One bad/unlowered pattern must not blank the whole track — skip it with
-        // a warning and composite the rest (legacy tolerated this per-node).
-        match compile_annotation(
-            local_pool,
-            project_pool,
-            storage,
-            resource_root,
-            track_id,
-            venue_id,
-            annotation,
-            beat_grid.clone(),
-            &graph_document.graph,
-        )
-        .await
-        {
-            Ok(Some(ann)) => {
-                // Candidate plans may contain temporary ids and must not
-                // poison the live renderer's incremental cache.
-                if !strict {
-                    if let Ok(mut c) = PLAN_CACHE.lock() {
-                        c.insert(annotation.id.clone(), (sig, ann.plan.clone()));
-                    }
-                }
-                compiled.push(ann);
-            }
-            Ok(None) => {}
-            Err(e) if strict => {
-                return Err(format!(
-                    "Clip {} (pattern {}) could not compile: {e}",
-                    annotation.id, annotation.pattern_id
-                ));
-            }
-            Err(e) => log::warn!(
-                "[composite] skipping annotation {} (pattern {}): {e}",
-                annotation.id,
-                annotation.pattern_id
-            ),
-        }
-    }
-    Ok(Scene::new(compiled))
-}
-
-/// Live annotation passed from the editor — its in-memory state, which during a
-/// drag is *ahead* of the database (edits persist on a 300ms trailing edge). The
-/// editor sends these so compositing uses live args instead of stale DB rows.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveAnnotation {
-    pub id: String,
-    pub pattern_id: String,
-    pub start_time: f64,
-    pub end_time: f64,
-    pub z_index: i64,
-    pub blend_mode: crate::models::node_graph::BlendMode,
-    #[serde(default)]
-    pub args: Value,
-}
-
-impl LiveAnnotation {
-    fn into_track_score(self) -> TrackScore {
-        TrackScore {
-            id: self.id,
-            uid: None,
-            score_id: String::new(),
-            pattern_id: self.pattern_id,
-            start_time: self.start_time,
-            end_time: self.end_time,
-            z_index: self.z_index,
-            blend_mode: self.blend_mode,
-            args: self.args,
-            created_at: String::new(),
-            updated_at: String::new(),
-        }
-    }
-}
-
-fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<TrackScore>> {
-    annotations.map(|live| {
-        live.into_iter()
-            .map(LiveAnnotation::into_track_score)
-            .collect()
-    })
-}
-
 /// Install **one score's** light show as the render engine's active scene.
 ///
 /// The score is the subject, not the `(track, venue)` pair it sits on: a pair
@@ -375,30 +61,19 @@ fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<Tra
 /// on screen is the caller's fact. Building a candidate never changes another
 /// render slot, and installation rejects an update superseded while compiling.
 ///
-/// `annotations` is the editor's working copy when it has one (fresh args
-/// mid-drag), and `None` for a caller that is only *watching* the score, which
-/// then reads the score's own persisted rows. `Some([])` is an authoritative
-/// empty document and clears the scene; it is not a request to fall back.
+/// `graph_score` is the editor's working copy when it has one, and `None` for
+/// a caller that is only *watching* the score, which then reads the score's own
+/// rows.
 pub(crate) async fn install_score_scene(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,
     render_engine: &RenderEngine,
     score_id: &str,
-    annotations: Option<Vec<LiveAnnotation>>,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
     let update = render_engine.begin_scene_update(crate::render_engine::SceneTarget::Active);
-    let scene = build_score_scene(
-        pool,
-        storage,
-        resource_root,
-        score_id,
-        annotations,
-        graph_score,
-        false,
-    )
-    .await?;
+    let scene = build_score_scene(pool, storage, resource_root, score_id, graph_score).await?;
     render_engine.finish_scene_update(update, scene);
     Ok(())
 }
@@ -410,70 +85,23 @@ pub async fn build_score_scene(
     storage: &StorageRoot,
     resource_root: &Path,
     score_id: &str,
-    annotations: Option<Vec<LiveAnnotation>>,
     graph_score: Option<luma_patterns::Score>,
-    strict: bool,
 ) -> Result<Scene, String> {
-    if annotations.is_some() && graph_score.is_some() {
-        return Err("provide one score working copy".into());
-    }
     let (mut access, track_id) = score_scope(pool, score_id).await?;
-    let venue_id = access.venue_id().to_owned();
-    let source: Option<String> =
-        sqlx::query_scalar("SELECT graph_document_json FROM scores WHERE id = ?")
-            .bind(score_id)
-            .fetch_one(access.connection())
-            .await
-            .map_err(|error| error.to_string())?;
-    let document = match graph_score {
-        Some(score) => Some(crate::services::graph_scores::GraphScoreDocument::new(
-            score,
-        )?),
-        None => source
-            .as_deref()
-            .map(crate::services::graph_scores::GraphScoreDocument::from_source)
-            .transpose()?,
-    };
-    if let Some(document) = document {
-        if annotations.is_some() {
-            return Err("this score uses graphs; provide its complete score working copy".into());
+    let score = match graph_score {
+        Some(score) => score,
+        None => {
+            crate::database::local::scores::rows::load_score(access.connection(), score_id).await?
         }
-        return crate::services::graph_scores::prepare_scene(
-            &mut access,
-            resource_root,
-            storage,
-            &track_id,
-            &document.score,
-        )
-        .await;
-    }
-
-    let clips: Vec<TrackScore> = match live_track_scores(annotations) {
-        Some(live) => live,
-        None => crate::database::local::scores::get_clips_of_score(&mut access, score_id).await?,
     };
-    drop(access);
-    build_scene_with_policy(
-        pool,
-        pool,
-        storage,
+    crate::services::graph_scores::prepare_scene(
+        &mut access,
         resource_root,
+        storage,
         &track_id,
-        &venue_id,
-        &clips,
-        strict,
+        &score,
     )
     .await
-}
-
-/// Fetch annotations for a (track, venue) pair, sorted by z_index ascending.
-pub(crate) async fn fetch_scores(
-    access: &mut impl AuthorizedVenue,
-    track_id: &str,
-) -> Result<Vec<TrackScore>, String> {
-    crate::database::local::scores::get_scores_for_track(access, track_id)
-        .await
-        .map_err(|e| format!("Failed to fetch scores: {}", e))
 }
 
 /// Load beat grid for a track.
@@ -657,7 +285,7 @@ mod tests {
                 uid TEXT,
                 role TEXT NOT NULL DEFAULT 'owner'
              );
-             CREATE TABLE venue_memberships (
+             CREATE TABLE venue_members (
                 venue_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
                 role TEXT NOT NULL

@@ -48,6 +48,10 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
         .await
         .map_err(|e| format!("Failed to run app migrations: {}", e))?;
 
+    // The row-model migration parks every stored score document rather than
+    // splitting it in SQL — see `scores::rows::cutover`.
+    super::scores::rows::cutover(&migrate_pool).await?;
+
     migrate_pool.close().await;
 
     // Now open the real pool WITH foreign_keys enabled
@@ -57,8 +61,18 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
         .create_if_missing(true)
         .foreign_keys(true);
 
+    // Every pooled connection is a writer, so every one carries the change
+    // log. The sync SDK holds its own pool and deliberately does not, which is
+    // what keeps a download out of this database's history.
     let pool = SqlitePoolOptions::new()
         .max_connections(16)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                crate::sync::triggers::install_change_log(connection)
+                    .await
+                    .map_err(|error| sqlx::Error::Configuration(error.into()))
+            })
+        })
         .connect_with(connect_options)
         .await
         .map_err(|e| {

@@ -213,7 +213,7 @@ pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
 /// Canonical durable namespace shared by authored revision metadata and the sync
 /// queue. It is deliberately distinct from nullable SQL ownership so keys are
 /// stable in logs, hashes, and cross-table associations.
-pub(crate) fn principal_key(principal: Option<&str>) -> String {
+pub fn principal_key(principal: Option<&str>) -> String {
     principal.map_or_else(
         || SIGNED_OUT_PRINCIPAL_KEY.to_owned(),
         |id| format!("signed-in:{id}"),

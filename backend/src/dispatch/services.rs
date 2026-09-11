@@ -21,12 +21,10 @@ use crate::mixer_manager::MixerManager;
 use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
 use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
-use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::fixtures::FixtureState;
 use crate::stagelinq_manager::StageLinqManager;
 use crate::storage::StorageRoot;
 use crate::sync::host::SyncHost;
-use crate::sync::orchestrator::SyncEngine;
 
 /// External DJ catalog reads needed by import handlers.
 ///
@@ -226,11 +224,10 @@ impl Host for ProcessExitHost {
 ///
 /// Fields are `pub(crate)`: handlers read them directly, and an external host
 /// neither builds nor inspects them beyond the accessors below. That keeps
-/// `SyncEngine`, `RenderEngine` and friends out of the crate's public API.
+/// `RenderEngine` and friends out of the crate's public API.
 pub struct AppServices {
     pub(crate) db: Db,
     pub(crate) state_db: StateDb,
-    pub(crate) authored: AuthoredDocuments,
     pub(crate) workspaces: Arc<PythonWorkspaceService>,
     pub(crate) graph_runs: Arc<GraphRunStore>,
     pub(crate) analysis_tasks: AnalysisTaskGroup,
@@ -250,7 +247,6 @@ pub struct AppServices {
     pub(crate) stagelinq: Arc<StageLinqManager>,
     /// Pioneer Pro DJ Link deck telemetry. `Arc` for the same reason.
     pub(crate) prodjlink: Arc<ProDJLinkManager>,
-    pub(crate) sync: SyncEngine,
     /// Physical output is installed only by the desktop host.
     pub(crate) artnet: Option<Arc<ArtNetManager>>,
     pub(crate) host_audio: HostAudioState,
@@ -337,7 +333,6 @@ impl AppServices {
         fixtures_root: PathBuf,
         workspaces: Arc<PythonWorkspaceService>,
     ) -> Self {
-        let authored = AuthoredDocuments::new(storage.clone());
         let render_engine = RenderEngine::default();
         let host_audio = HostAudioState::default();
         // A host with no window or broadcaster must never probe or open the
@@ -345,19 +340,9 @@ impl AppServices {
         // and the deterministic 48 kHz decode path is the same one desktop
         // uses when output is disabled in settings.
         host_audio.set_audio_output_enabled(false);
-        let sync = SyncEngine::new(
-            db.0.clone(),
-            state_db.0.clone(),
-            Arc::new(crate::database::remote::common::SupabaseClient::new(
-                crate::config::SUPABASE_URL.to_string(),
-                crate::config::SUPABASE_ANON_KEY.to_string(),
-            )),
-            authored.clone(),
-        );
         Self {
             db,
             state_db,
-            authored,
             workspaces,
             graph_runs: Arc::new(GraphRunStore::new()),
             analysis_tasks: AnalysisTaskGroup::new(),
@@ -371,7 +356,6 @@ impl AppServices {
             mixer: Arc::new(MixerManager::new()),
             stagelinq: Arc::new(StageLinqManager::new()),
             prodjlink: Arc::new(ProDJLinkManager::new()),
-            sync,
             artnet: None,
             host_audio,
             storage,
@@ -522,27 +506,13 @@ impl AppServices {
         }
     }
 
-    /// What [`SyncEngine`] reaches outside its own handles. Derived from these
+    /// What media transfer reaches outside its own handles. Derived from these
     /// fields rather than stored, so the two cannot drift.
-    /// The background sync loop, for a host to spawn on its own reactor: dirty
-    /// rows pushed every ten seconds or on demand, a full pull and file sync
-    /// every minute, until `shutdown` says stop. The desktop runs one; so
-    /// must any host that wants the library to stay current between the syncs
-    /// it asks for by name.
-    pub fn sync_loop(
-        &self,
-        shutdown: tokio::sync::watch::Receiver<bool>,
-    ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        crate::sync::push::run_sync_loop(self.sync.clone(), self.sync_host(), shutdown)
-    }
-
+    #[allow(dead_code)] // Media transfer is reconnected in phase two.
     pub(crate) fn sync_host(&self) -> SyncHost {
         SyncHost {
             storage: self.storage.clone(),
             events: self.events.clone(),
-            workspaces: Arc::clone(&self.workspaces),
-            graph_runs: Arc::clone(&self.graph_runs),
-            subagents: Arc::clone(&self.subagents),
         }
     }
 
@@ -594,11 +564,6 @@ impl AppServices {
     /// paint time, synchronously, and an awaited snapshot is a frame late.
     pub fn host_audio(&self) -> &HostAudioState {
         &self.host_audio
-    }
-
-    /// Git-backed authored document store.
-    pub fn authored(&self) -> &AuthoredDocuments {
-        &self.authored
     }
 
     /// One Python kernel per agent thread.

@@ -22,8 +22,8 @@ pub async fn preview_composable_pattern(
     serde_json::to_value(result).map_err(|error| CommandError::Internal(error.to_string()))
 }
 
-/// Create the graph and its initial authored revision atomically. The score
-/// ownership constraint is enforced by SQLite in that same transaction.
+/// Create the pattern and its graph in one transaction. The score-ownership
+/// constraint is enforced by SQLite in that same transaction.
 pub async fn create_lighting_pattern(
     services: &AppServices,
     effect: String,
@@ -35,9 +35,7 @@ pub async fn create_lighting_pattern(
         .name
         .clone();
     let principal = services.session_user_id().await?;
-    let result = services
-        .authored
-        .create_pattern_with_graph(
+    let result = crate::services::catalog::create_pattern_with_graph(
             &services.db.0,
             principal.as_deref(),
             &request_id,
@@ -47,7 +45,6 @@ pub async fn create_lighting_pattern(
             Some(&score_id),
         )
         .await?;
-    services.sync.push_notify.notify_one();
     Ok(result)
 }
 
@@ -67,9 +64,7 @@ pub async fn copy_pattern_to_library(
     )
     .await?;
     let principal = services.session_user_id().await?;
-    let result = services
-        .authored
-        .create_pattern_with_graph(
+    let result = crate::services::catalog::create_pattern_with_graph(
             &services.db.0,
             principal.as_deref(),
             &request_id,
@@ -79,6 +74,5 @@ pub async fn copy_pattern_to_library(
             None,
         )
         .await?;
-    services.sync.push_notify.notify_one();
     Ok(result)
 }
