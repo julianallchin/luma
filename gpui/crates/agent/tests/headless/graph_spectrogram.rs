@@ -6,7 +6,7 @@ use std::time::Duration;
 fn graph_spectrogram_uses_overridden_filters_and_keeps_missing_stem_errors_local() {
     let name = "graph-spectrogram";
     let score = serde_json::json!({
-        "version":5,"definitions":{"audio":{"name":"Audio inspection",
+        "version":6,"definitions":{"audio":{"name":"Audio inspection",
             "inputs":{"cutoff":{"name":"Cutoff","description":"","value_type":"number","rate":"fixed","default":{"type":"number","value":800.}}},
             "outputs":{
                 "lighting":{"value_type":"lighting","rate":"frame"},

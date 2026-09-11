@@ -5,7 +5,7 @@ use std::time::Duration;
 pub fn exercise(mode: Mode, name: &'static str) {
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version":5,
+            "version":6,
             "definitions": {
                 "playground": {
                     "name": "Wire playground",

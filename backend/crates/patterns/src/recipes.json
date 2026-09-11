@@ -88,9 +88,9 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "mask": {"definition":"band_mask","inputs":{"gain":{"source":"input","input":"gain"},"high_hz":{"source":"input","input":"high_hz"},"low_hz":{"source":"input","input":"low_hz"},"shape":{"source":"input","input":"shape"},"source":{"source":"input","input":"source"}}},
-        "output": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"mask","output":"mask"}}}
+        "output": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"mask","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"output","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
     }}
   },
 
@@ -123,9 +123,9 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "mask": {"definition":"drum_mask","inputs":{"drum":{"source":"input","input":"drum"},"duration":{"source":"input","input":"duration"},"shape":{"source":"input","input":"shape"}}},
-        "output": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"mask","output":"mask"}}}
+        "output": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"mask","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"output","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
     }}
   },
 
@@ -156,11 +156,11 @@
         "coverage": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"position","output":"value"},"b":{"source":"value","value":{"type":"number","value":0.0}}}},
         "coverage/2": {"definition":"core/minimum","inputs":{"a":{"source":"connection","node":"coverage","output":"value"},"b":{"source":"value","value":{"type":"number","value":1.0}}}},
         "harmony": {"definition":"harmony","inputs":{}},
-        "output": {"definition":"mask_color","inputs":{"color":{"source":"connection","node":"color","output":"color"},"mask":{"source":"connection","node":"present","output":"mask"}}},
+        "output": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"color","output":"color"},"b":{"source":"connection","node":"present","output":"mask"}}},
         "position": {"definition":"core/divide","inputs":{"a":{"source":"connection","node":"harmony","output":"pitch_class"},"b":{"source":"value","value":{"type":"number","value":11.0}}}},
         "present": {"definition":"uniform_mask","inputs":{"coverage":{"source":"connection","node":"harmony","output":"present"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"output","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
     }}
   },
 
@@ -257,9 +257,9 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "mask": {"definition":"noise_mask","inputs":{"period":{"source":"input","input":"period"},"scale":{"source":"input","input":"scale"},"shape":{"source":"input","input":"shape"}}},
-        "output": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"mask","output":"mask"}}}
+        "output": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"mask","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"output","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
     }}
   },
 
@@ -392,9 +392,9 @@
     "body": {"kind":"graph","body":{
       "nodes": {
         "mask": {"definition":"random_heads_mask","inputs":{"count":{"source":"input","input":"count"},"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"},"shuffle":{"source":"input","input":"shuffle"}}},
-        "output": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"mask","output":"mask"}}}
+        "output": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"mask","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"output","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
     }}
   },
 
@@ -737,9 +737,9 @@
         "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
         "mapping": {"definition":"resolve_mapping","inputs":{"mapping":{"source":"input","input":"mapping"}}},
         "chase": {"definition":"chase","inputs":{"boundary":{"source":"input","input":"boundary"},"end":{"source":"input","input":"end"},"mapping":{"source":"connection","node":"mapping","output":"coordinates"},"path":{"source":"input","input":"path"},"shape":{"source":"input","input":"shape"},"start":{"source":"input","input":"start"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"connection","node":"events","output":"trigger"},"width":{"source":"input","input":"width"}}},
-        "color": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"chase","output":"mask"}}}
+        "color": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"chase","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"color","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"color","output":"value"}}
     }}
   },
 
@@ -758,9 +758,9 @@
       "nodes": {
         "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
         "pulse": {"definition":"pulse","inputs":{"duration":{"source":"input","input":"duration"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}},
-        "color": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"pulse","output":"mask"}}}
+        "color": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"pulse","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"color","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"color","output":"value"}}
     }}
   },
 
@@ -778,9 +778,9 @@
       "nodes": {
         "events": {"definition":"beat_trigger","inputs":{"repeat":{"source":"input","input":"repeat"}}},
         "shimmer": {"definition":"shimmer","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}},
-        "color": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"shimmer","output":"mask"}}}
+        "color": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"shimmer","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"color","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"color","output":"value"}}
     }}
   },
 
@@ -801,9 +801,9 @@
       "nodes": {
         "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
         "dissolve": {"definition":"dissolve","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"softness":{"source":"input","input":"softness"},"trigger":{"source":"connection","node":"events","output":"trigger"}}},
-        "color": {"definition":"mask_color","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"dissolve","output":"mask"}}}
+        "color": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"dissolve","output":"mask"}}}
       },
-      "outputs": {"color":{"source":"connection","node":"color","output":"color"}}
+      "outputs": {"color":{"source":"connection","node":"color","output":"value"}}
     }}
   }
 }

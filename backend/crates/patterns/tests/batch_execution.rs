@@ -420,7 +420,7 @@ fn animated_chase_width_and_envelope_are_sampled_on_the_time_axis() {
             BTreeMap::from([("softness".into(), wired("clock", "progress"))]),
         ),
     );
-    graph.nodes.get_mut("effect").unwrap().inputs.extend([
+    graph.nodes.get_mut("chase").unwrap().inputs.extend([
         ("width".into(), wired("clock", "progress")),
         ("shape".into(), wired("edges", "shape")),
     ]);

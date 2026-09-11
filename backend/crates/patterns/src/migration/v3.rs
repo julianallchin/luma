@@ -3,8 +3,10 @@
 //! pattern with the same argument keys, or the trigger-driven graph plus an
 //! explicit Beat trigger node when its trigger was left automatic.
 //!
-//! Version 4 → 5: the score-local copies of version 2 library effects that the
-//! earlier conversions left behind become the shipped patterns.
+//! Version 4 → 5 and 5 → 6: a placed effect is its composition. Both steps
+//! flatten the copies of version 2 library effects the earlier conversions
+//! left in a score; documents the first builds of those versions saved with
+//! the copies still in them converge on the same result.
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,16 +39,6 @@ pub fn validate_v3(score: &Score) -> Result<()> {
 }
 
 pub fn upgrade_v3(score: &Score) -> Result<Score> {
-    upgrade_v3_tracking(score, true).map(|(score, _)| score)
-}
-
-/// Upgrade, also reporting which score-local copies of version 2 library
-/// effects became which pattern. Without `retarget`, the copies stay: the
-/// shape the earlier builds wrote, which version 5 recognizes.
-pub(super) fn upgrade_v3_tracking(
-    score: &Score,
-    retarget: bool,
-) -> Result<(Score, BTreeMap<String, &'static Pattern>)> {
     if score.version != 3 {
         return Err(Error(format!(
             "cannot migrate score version {}",
@@ -97,11 +89,7 @@ pub(super) fn upgrade_v3_tracking(
         }
     }
     let mut definitions = score.definitions.clone();
-    let (retargeted, mut unused) = if retarget {
-        retarget_library_copies(&mut definitions, &score.clips, library_copies())
-    } else {
-        Default::default()
-    };
+    let mut unused: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     inline_retired_graphs(&mut definitions);
     let local: BTreeSet<String> = definitions.keys().cloned().collect();
     let local: BTreeSet<&str> = local.iter().map(String::as_str).collect();
@@ -119,7 +107,7 @@ pub(super) fn upgrade_v3_tracking(
         clips,
     };
     upgraded.validate(&standard_library())?;
-    Ok((upgraded, retargeted))
+    Ok(upgraded)
 }
 
 /// Exposed inputs that fed only a removed control leave the interface, and
@@ -186,462 +174,30 @@ fn remove_unused_exposures(
     }
 }
 
-/// Version 4 → 5. Documents an earlier build converted still carry the
-/// copies of version 2 library effects, already rewritten around the
-/// version 4 kernels; those become the shipped patterns too.
+/// Version 4 → 5.
 pub fn upgrade_v4(score: &Score) -> Result<Score> {
-    if score.version != 4 {
+    flatten_from(score, 4)
+}
+
+/// Version 5 → 6.
+pub fn upgrade_v5(score: &Score) -> Result<Score> {
+    flatten_from(score, 5)
+}
+
+fn flatten_from(score: &Score, version: u32) -> Result<Score> {
+    if score.version != version {
         return Err(Error(format!(
             "cannot migrate score version {}",
             score.version
         )));
     }
-    score.validate(&standard_library())?;
-    let mut definitions = score.definitions.clone();
-    let mut clips = score.clips.clone();
-    let (_, unused) = retarget_library_copies(&mut definitions, &clips, library_copies_v4());
-    remove_unused_exposures(&mut definitions, &mut clips, unused);
-    let upgraded = Score {
-        version: 5,
-        definitions,
-        clips,
-    };
+    let mut upgraded = score.clone();
+    super::flatten::retire(&mut upgraded);
+    upgraded.validate(&standard_library())?;
+    super::flatten(&mut upgraded)?;
+    upgraded.version = version + 1;
     upgraded.validate(&standard_library())?;
     Ok(upgraded)
-}
-
-/// A version 2 library effect a score used was copied into it as
-/// `<effect>/signals`, nested as deeply as that library was. A copy that is
-/// still the library graph becomes the pattern with the same controls.
-pub struct Pattern {
-    pub id: &'static str,
-    pub renames: &'static [(&'static str, &'static str)],
-    pub dropped: &'static [&'static str],
-}
-const fn keep(id: &'static str) -> (&'static str, Pattern) {
-    let pattern = Pattern {
-        id,
-        renames: &[],
-        dropped: &[],
-    };
-    (id, pattern)
-}
-const PATTERNS: [(&str, Pattern); 22] = [
-    (
-        "chase",
-        Pattern {
-            id: "beat_chase",
-            renames: &[],
-            dropped: &[],
-        },
-    ),
-    (
-        "pulse",
-        Pattern {
-            id: "beat_pulse",
-            renames: &[("travel", "duration")],
-            dropped: &[],
-        },
-    ),
-    (
-        "pulse_dimmer",
-        Pattern {
-            id: "beat_pulse",
-            renames: &[("travel", "duration")],
-            dropped: &[],
-        },
-    ),
-    (
-        "dissolve_flash",
-        Pattern {
-            id: "beat_dissolve",
-            renames: &[("travel", "duration"), ("shape", "proportion")],
-            dropped: &["refresh", "refresh_every", "reseed"],
-        },
-    ),
-    (
-        "write_dimmer",
-        Pattern {
-            id: "uniform_mask",
-            renames: &[("value", "coverage")],
-            dropped: &[],
-        },
-    ),
-    keep("drum_pulse"),
-    keep("band_pulse"),
-    keep("noise_wash"),
-    keep("random_heads"),
-    keep("rainbow"),
-    keep("spatial_gradient"),
-    keep("gradient"),
-    keep("harmony_color"),
-    keep("strobe"),
-    keep("wash"),
-    keep("write_strobe"),
-    keep("uniform_mask"),
-    keep("mapped_position"),
-    keep("noise_mask"),
-    keep("band_mask"),
-    keep("random_heads_mask"),
-    keep("drum_mask"),
-];
-
-/// The copies the version 2 conversion makes of the library effects above,
-/// for recognizing them in a document by content.
-fn library_copies() -> &'static BTreeMap<String, Definition> {
-    static COPIES: std::sync::OnceLock<BTreeMap<String, Definition>> = std::sync::OnceLock::new();
-    COPIES.get_or_init(|| {
-        let source = super::source_with_events(&Score {
-            version: 2,
-            ..Score::default()
-        })
-        .expect("version 2 library");
-        let target = v3_library();
-        let mut conversion = super::Conversion::new(&source, &target, std::iter::empty());
-        for (effect, _) in &PATTERNS {
-            conversion
-                .definition(effect, BTreeMap::new(), false)
-                .expect("library effect converts");
-        }
-        conversion.definitions
-    })
-}
-
-/// The same copies as the version 3 → 4 conversion of an earlier build left
-/// them: each placed the way a clip places an effect, so the conversion sees
-/// the controls a clip supplies.
-fn library_copies_v4() -> &'static BTreeMap<String, Definition> {
-    static COPIES: std::sync::OnceLock<BTreeMap<String, Definition>> = std::sync::OnceLock::new();
-    COPIES.get_or_init(|| {
-        let mut definitions = library_copies().clone();
-        for (effect, _) in &PATTERNS {
-            let id = format!("{effect}/signals");
-            definitions.insert(format!("{effect}/placed"), definitions[&id].instance(&id));
-        }
-        let score = Score {
-            version: 3,
-            definitions,
-            clips: BTreeMap::new(),
-        };
-        let (score, _) = upgrade_v3_tracking(&score, false).expect("library copies convert");
-        score
-            .definitions
-            .into_iter()
-            .filter(|(id, _)| id.ends_with("/signals"))
-            .collect()
-    })
-}
-
-/// Returns the copies replaced, and the exposed inputs of each graph that fed
-/// only a removed control.
-fn retarget_library_copies(
-    definitions: &mut BTreeMap<String, Definition>,
-    clips: &BTreeMap<String, Clip>,
-    canonical: &BTreeMap<String, Definition>,
-) -> (
-    BTreeMap<String, &'static Pattern>,
-    BTreeMap<String, BTreeSet<String>>,
-) {
-    let copies: BTreeMap<String, &'static Pattern> = definitions
-        .iter()
-        .filter_map(|(id, definition)| {
-            PATTERNS
-                .iter()
-                .find(|(effect, _)| canonical.get(&format!("{effect}/signals")) == Some(definition))
-                .map(|(_, pattern)| (id.clone(), pattern))
-        })
-        .collect();
-    let mut unused: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if copies.is_empty() {
-        return (copies, unused);
-    }
-    // Every library copy, including the helpers the effects above called,
-    // as they are before this pass rewires their insides.
-    let disposable: BTreeSet<String> = definitions
-        .iter()
-        .filter(|(_, definition)| canonical.values().any(|copy| copy == *definition))
-        .map(|(id, _)| id.clone())
-        .collect();
-    let library = standard_library();
-    let callers: Vec<String> = definitions.keys().cloned().collect();
-    for caller in &callers {
-        let Body::Graph(graph) = &mut definitions.get_mut(caller).unwrap().body else {
-            continue;
-        };
-        for node in graph.nodes.values_mut() {
-            let Some(pattern) = copies.get(&node.definition) else {
-                continue;
-            };
-            let target = &library.definitions[pattern.id];
-            if !target.inputs.contains_key("trigger") {
-                match node.inputs.get("trigger") {
-                    None => {}
-                    Some(Binding::Value {
-                        value: Value::Events(Events::Automatic),
-                    }) => {
-                        node.inputs.remove("trigger");
-                    }
-                    // Real events keep the copy; its kernel becomes the
-                    // trigger-driven graph below.
-                    Some(_) => continue,
-                }
-            }
-            node.definition = pattern.id.into();
-            for (from, to) in pattern.renames {
-                if let Some(binding) = node.inputs.remove(*from) {
-                    node.inputs.insert((*to).into(), binding);
-                }
-            }
-            for key in pattern.dropped {
-                if let Some(Binding::Input { input }) = node.inputs.remove(*key) {
-                    unused.entry(caller.clone()).or_default().insert(input);
-                }
-            }
-        }
-        // A dimmer that was only ever a mask is read as one.
-        let masks: BTreeSet<String> = graph
-            .nodes
-            .iter()
-            .filter(|(_, node)| {
-                library
-                    .definitions
-                    .get(&node.definition)
-                    .is_some_and(|definition| {
-                        definition.outputs.contains_key("mask")
-                            && !definition.outputs.contains_key("dimmer")
-                    })
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        for binding in graph
-            .nodes
-            .values_mut()
-            .flat_map(|node| node.inputs.values_mut())
-            .chain(graph.outputs.values_mut())
-        {
-            if let Binding::Connection { node, output } = binding {
-                if output == "dimmer" && masks.contains(node) {
-                    *output = "mask".into();
-                }
-            }
-        }
-    }
-    // Brightness rides in a pattern's color. An Apply, or a graph interface,
-    // that took the pair from one node takes the color alone, which may in
-    // turn fold its callers; any other reader of the old dimmer gets the
-    // peak, and the color's readers the hue, as before.
-    loop {
-        let mut changed = false;
-        for caller in &callers {
-            let interface = |id: &str| {
-                definitions
-                    .get(id)
-                    .or_else(|| library.definitions.get(id))
-                    .map(|definition| &definition.outputs)
-            };
-            let Body::Graph(graph) = &definitions[caller].body else {
-                continue;
-            };
-            let carrying: BTreeSet<String> = graph
-                .nodes
-                .iter()
-                .filter(|(_, node)| {
-                    interface(&node.definition).is_some_and(|outputs| {
-                        outputs.contains_key("color") && !outputs.contains_key("dimmer")
-                    })
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-            let reads = |binding: &Binding, output: &str| match binding {
-                Binding::Connection { node, output: port } if port == output => {
-                    carrying.contains(node).then(|| node.clone())
-                }
-                _ => None,
-            };
-            let mut folds: BTreeMap<String, (bool, Vec<String>)> = BTreeMap::new();
-            for (id, node) in &graph.nodes {
-                for (key, binding) in &node.inputs {
-                    let Some(source) = reads(binding, "dimmer") else {
-                        continue;
-                    };
-                    let same = Binding::Connection {
-                        node: source.clone(),
-                        output: "color".into(),
-                    };
-                    // White over a pattern left at its own color is that color.
-                    let white = |bound: &Binding| {
-                        *bound == Binding::from(Value::Color([1.0; 3]))
-                            && !graph.nodes[&source].inputs.contains_key("color")
-                    };
-                    let foldable = match node.definition.as_str() {
-                        "output" => {
-                            key == "dimmer"
-                                && node.inputs.get("color").is_none_or(|bound| *bound == same)
-                        }
-                        "mask_color" => {
-                            key == "mask"
-                                && node
-                                    .inputs
-                                    .get("color")
-                                    .is_some_and(|bound| *bound == same || white(bound))
-                        }
-                        _ => false,
-                    };
-                    let entry = folds.entry(source).or_insert((true, Vec::new()));
-                    entry.0 &= foldable;
-                    entry.1.push(id.clone());
-                }
-            }
-            for (key, binding) in &graph.outputs {
-                let Some(source) = reads(binding, "dimmer") else {
-                    continue;
-                };
-                let foldable = key == "dimmer"
-                    && graph.outputs.get("color")
-                        == Some(&Binding::Connection {
-                            node: source.clone(),
-                            output: "color".into(),
-                        });
-                let entry = folds.entry(source).or_insert((true, Vec::new()));
-                entry.0 &= foldable;
-            }
-            if folds.is_empty() {
-                continue;
-            }
-            changed = true;
-            let definition = definitions.get_mut(caller).unwrap();
-            let Body::Graph(graph) = &mut definition.body else {
-                unreachable!()
-            };
-            let mut taken: BTreeSet<String> = graph.nodes.keys().cloned().collect();
-            let mut added = BTreeMap::new();
-            for (source, (foldable, readers)) in folds {
-                let color = Binding::Connection {
-                    node: source.clone(),
-                    output: "color".into(),
-                };
-                if foldable {
-                    for reader in readers {
-                        if graph.nodes[&reader].definition == "output" {
-                            let apply = graph.nodes.get_mut(&reader).unwrap();
-                            apply.inputs.remove("dimmer");
-                            apply.inputs.insert("color".into(), color.clone());
-                            continue;
-                        }
-                        // A Mask color that re-applied the pattern's own
-                        // brightness was the pattern's color all along.
-                        graph.nodes.remove(&reader);
-                        for binding in graph
-                            .nodes
-                            .values_mut()
-                            .flat_map(|node| node.inputs.values_mut())
-                            .chain(graph.outputs.values_mut())
-                        {
-                            if matches!(binding, Binding::Connection { node, .. } if *node == reader)
-                            {
-                                *binding = color.clone();
-                            }
-                        }
-                    }
-                    if graph.outputs.remove("dimmer").is_some() {
-                        definition.outputs.remove("dimmer");
-                    }
-                    continue;
-                }
-                let brightness = super::unique(&mut taken, &format!("{source}/brightness"));
-                let lit = super::unique(&mut taken, &format!("{source}/lit"));
-                let ratio = super::unique(&mut taken, &format!("{source}/ratio"));
-                let hue = super::unique(&mut taken, &format!("{source}/hue"));
-                let wire = |node: &str, output: &str| Binding::Connection {
-                    node: node.into(),
-                    output: output.into(),
-                };
-                let node = |definition: &str, inputs: Vec<(&str, Binding)>| Node {
-                    position: None,
-                    definition: definition.into(),
-                    inputs: inputs
-                        .into_iter()
-                        .map(|(key, binding)| (key.into(), binding))
-                        .collect(),
-                };
-                added.insert(
-                    brightness.clone(),
-                    node("core/channel_maximum", vec![("value", color.clone())]),
-                );
-                added.insert(
-                    lit.clone(),
-                    node(
-                        "core/greater",
-                        vec![
-                            ("a", wire(&brightness, "value")),
-                            ("b", Value::Number(1e-5).into()),
-                            ("tolerance", Value::Number(0.0).into()),
-                        ],
-                    ),
-                );
-                added.insert(
-                    ratio.clone(),
-                    node(
-                        "core/divide",
-                        vec![("a", color.clone()), ("b", wire(&brightness, "value"))],
-                    ),
-                );
-                added.insert(
-                    hue.clone(),
-                    node(
-                        "core/choose",
-                        vec![
-                            ("condition", wire(&lit, "mask")),
-                            ("yes", wire(&ratio, "value")),
-                            ("no", Value::Color([0.0; 3]).into()),
-                        ],
-                    ),
-                );
-                let split = |binding: &mut Binding| {
-                    if let Binding::Connection { node, output } = binding {
-                        if *node == source {
-                            *node = if output == "dimmer" {
-                                &brightness
-                            } else {
-                                &hue
-                            }
-                            .clone();
-                            *output = "value".into();
-                        }
-                    }
-                };
-                graph
-                    .nodes
-                    .values_mut()
-                    .flat_map(|node| node.inputs.values_mut())
-                    .chain(graph.outputs.values_mut())
-                    .for_each(split);
-            }
-            graph.nodes.extend(added);
-        }
-        if !changed {
-            break;
-        }
-    }
-    // The copies, and the copies only they called, are unreferenced now.
-    loop {
-        let referenced: BTreeSet<String> = definitions
-            .values()
-            .filter_map(|definition| match &definition.body {
-                Body::Graph(graph) => Some(graph.nodes.values()),
-                Body::Primitive(_) => None,
-            })
-            .flatten()
-            .map(|node| node.definition.clone())
-            .chain(clips.values().map(|clip| clip.graph.clone()))
-            .collect();
-        let before = definitions.len();
-        definitions.retain(|id, _| referenced.contains(id) || !disposable.contains(id));
-        if definitions.len() == before {
-            break;
-        }
-    }
-    (copies, unused)
 }
 
 /// A version 3 library graph that version 4 no longer ships, but whose parts
@@ -875,6 +431,12 @@ fn convert(
                 let (key, trigger) = beat_trigger(node, id, &mut taken, &mut dropped);
                 added.insert(key, trigger);
             }
+            "mask_color" => {
+                node.definition = "core/multiply".into();
+                rename(node, "color", "a");
+                rename(node, "mask", "b");
+                renamed_outputs.insert(id.clone(), BTreeMap::from([("color", "value")]));
+            }
             "write_dimmer" => {
                 node.definition = "uniform_mask".into();
                 rename(node, "value", "coverage");
@@ -892,18 +454,15 @@ fn convert(
                         brightness.clone(),
                         Node {
                             position: None,
-                            definition: "mask_color".into(),
-                            inputs: BTreeMap::from([
-                                ("color".into(), color),
-                                ("mask".into(), dimmer),
-                            ]),
+                            definition: "core/multiply".into(),
+                            inputs: BTreeMap::from([("a".into(), color), ("b".into(), dimmer)]),
                         },
                     );
                     node.inputs.insert(
                         "color".into(),
                         Binding::Connection {
                             node: brightness,
-                            output: "color".into(),
+                            output: "value".into(),
                         },
                     );
                 }

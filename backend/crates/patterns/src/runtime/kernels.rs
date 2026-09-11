@@ -782,10 +782,6 @@ pub(crate) fn run(
             )?);
             Ok(result)
         }
-        Primitive::MaskColor => numeric(
-            "color",
-            signal("color").zip(signal("mask"), Unit::Proportion, |a, b| a * b)?,
-        ),
         Primitive::RotateHue => {
             let turns = signal("turns");
             let domain = signal("color").zip(turns, Unit::Proportion, |color, _| color)?;
@@ -848,7 +844,8 @@ pub(crate) fn run(
         | Primitive::AddLighting
         | Primitive::ChaseEvents
         | Primitive::PulseEvents
-        | Primitive::DissolveEvents => Err(Error(
+        | Primitive::DissolveEvents
+        | Primitive::MaskColor => Err(Error(
             "historical primitives must be migrated before execution".into(),
         )),
         Primitive::BeatEvents => structured(

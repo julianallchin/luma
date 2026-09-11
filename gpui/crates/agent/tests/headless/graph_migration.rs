@@ -33,7 +33,7 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
         app.frames(12,{waitMs:80});
         app.click(node("card","Chase"),{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge effect.color → output.color";
+        const edge="Edge appearance/mask.value → output.color";
         node("button",edge);
         check(!app.snapshot().find({role:"button",label:"effect output lighting"}),"migration retained a public Lighting socket");
         app.click(node("button",edge)); app.key("delete");
@@ -61,7 +61,7 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
             .unwrap();
             let saved: serde_json::Value = serde_json::from_str(&source).unwrap();
             assert_eq!(
-                saved["version"], 5,
+                saved["version"], 6,
                 "native editing downgraded the migrated document"
             );
             let saved: luma_patterns::Score = serde_json::from_value(saved).unwrap();
@@ -93,7 +93,7 @@ fn typed_pattern_rows_open_as_editable_score_graphs() {
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         app.click(node("card","My Chase"),{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge effect.color → output.color";
+        const edge="Edge appearance/mask.value → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("could not edit the converted graph");
         app.key("secondary-z"); node("button",edge);
@@ -118,7 +118,7 @@ fn typed_pattern_rows_open_as_editable_score_graphs() {
             .await
             .unwrap();
             let score: luma_patterns::Score = serde_json::from_str(&source).unwrap();
-            assert_eq!(score.version(), 5);
+            assert_eq!(score.version(), 6);
             assert_eq!(score.clips.len(), 1);
             let clip = score.clips.values().next().unwrap();
             assert_eq!((clip.start, clip.duration), (4., 8.));
@@ -174,7 +174,7 @@ fn numerical_pattern_rows_open_and_edit_in_the_native_graph() {
         let raw: String = sqlx::query_scalar("SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL").fetch_one(&pool).await.unwrap();
         let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
         score.validate(&luma_patterns::standard_library()).unwrap();
-        assert_eq!(score.version(),5);
+        assert_eq!(score.version(),6);
         let clip=score.clips.values().next().unwrap();
         let root=&score.definitions[&clip.graph];
         assert_eq!(root.name,"My Pulse");
@@ -217,7 +217,7 @@ fn library_pattern_import_is_score_owned_undoable_and_opens_the_canonical_editor
         const imported=clips.reduce((a,b)=>a.bounds.x<b.bounds.x?a:b);
         app.click(imported,{count:2});
         node("card","Graph workspace"); node("card","Apply");
-        const edge="Edge effect.color → output.color";
+        const edge="Edge appearance/mask.value → output.color";
         app.click(node("button",edge)); app.key("delete");
         if(app.snapshot().find({role:"button",label:edge}))throw new Error("imported graph is not editable");
         app.key("secondary-z"); node("button",edge);

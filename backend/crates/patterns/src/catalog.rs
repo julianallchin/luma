@@ -437,7 +437,6 @@ pub fn standard_library() -> Library {
                 ("harmony", Primitive::Harmony),
                 ("hsv", Primitive::Hsv),
                 ("rotate_hue", Primitive::RotateHue),
-                ("mask_color", Primitive::MaskColor),
                 ("mix_palette", Primitive::MixPalette),
                 ("palette_fallback", Primitive::PaletteFallback),
                 ("output", Primitive::Output),

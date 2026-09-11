@@ -617,7 +617,7 @@ async fn python_edits_canonical_graph_scores_and_detached_workspaces() {
 import json, numpy as np
 assert 'patterns' not in dir(luma)
 edit = luma.track.edit()
-assert edit.candidate['version'] == 5
+assert edit.candidate['version'] == 6
 assert luma.track.document['version'] == 2
 graph = edit.graph(id='effect')
 shape = graph.node('soft_edges', id='shape', softness=.3)

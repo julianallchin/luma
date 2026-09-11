@@ -808,15 +808,12 @@ fn clips_share_graphs_until_made_independent_including_local_dependencies() {
         .unwrap();
     // Replace the built-in dependency with a local, editable copy.
     score
-        .customize_node(&lib, "original", "effect", "local_chase")
+        .customize_node(&lib, "original", "chase", "local_chase")
         .unwrap();
-    assert_eq!(
-        score.definitions["local_chase"],
-        lib.definitions["beat_chase"]
-    );
+    assert_eq!(score.definitions["local_chase"], lib.definitions["chase"]);
     let before = score.clone();
     assert!(score
-        .customize_node(&lib, "original", "effect", "beat_chase")
+        .customize_node(&lib, "original", "chase", "chase")
         .is_err());
     assert_eq!(score, before);
     let mut repeat = score.clips["original"].clone();
@@ -830,7 +827,7 @@ fn clips_share_graphs_until_made_independent_including_local_dependencies() {
     let Body::Graph(graph) = &score.definitions["independent"].body else {
         panic!()
     };
-    let dependency = &graph.nodes["effect"].definition;
+    let dependency = &graph.nodes["chase"].definition;
     assert_ne!(dependency, "local_chase");
     assert!(score.definitions.contains_key(dependency));
     score.validate(&lib).unwrap();
@@ -852,7 +849,7 @@ fn importing_a_clip_copies_only_reachable_graphs_and_rejects_collisions_atomical
         .insert_effect(&base, "beat_chase", "source", 4., 8.)
         .unwrap();
     source
-        .customize_node(&base, "source", "effect", "local_chase")
+        .customize_node(&base, "source", "chase", "local_chase")
         .unwrap();
     source
         .insert_effect(&base, "beat_chase", "unused", 0., 1.)
@@ -887,11 +884,11 @@ fn importing_a_clip_copies_only_reachable_graphs_and_rejects_collisions_atomical
         panic!()
     };
     assert_ne!(
-        first.nodes["effect"].definition,
-        second.nodes["effect"].definition
+        first.nodes["chase"].definition,
+        second.nodes["chase"].definition
     );
     assert_eq!(
-        destination.definitions[&first.nodes["effect"].definition],
+        destination.definitions[&first.nodes["chase"].definition],
         source.definitions["local_chase"]
     );
     let before = destination.clone();
