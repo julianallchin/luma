@@ -5,9 +5,8 @@
 //! and pixel color = fixture RGB × dimmer.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
-use crate::compositor::{build_scene, fetch_pattern_graph, fetch_scores, load_beat_grid};
+use crate::compositor::fetch_pattern_graph;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::build_resident_context;
 use crate::eval::{compile::compile_pattern, Arena, Scene, Scope};
@@ -83,161 +82,6 @@ async fn eval_pattern_frames(
     }]);
     let mut arena = Arena::default();
     Ok(scene.render(times, Scope::Single(0), &mut arena))
-}
-
-/// One annotation's live editor state for a targeted preview regen (live args,
-/// ahead of the DB during a drag).
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LivePreviewInput {
-    pub id: String,
-    pub pattern_id: String,
-    pub start_time: f32,
-    pub end_time: f32,
-    #[serde(default)]
-    pub args: serde_json::Value,
-}
-
-/// Regenerate the heatmap preview for a SINGLE annotation using its live args.
-/// The editor calls this during a drag so the edited clip's thumbnail updates in
-/// real time, instead of waiting for the debounced full regeneration.
-pub async fn preview_annotation(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    track_id: &str,
-    venue_id: &str,
-    annotation: LivePreviewInput,
-) -> Result<AnnotationPreview, String> {
-    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-    let beat_grid = load_beat_grid(pool, track_id).await?;
-
-    let graph_json = fetch_pattern_graph(pool, &annotation.pattern_id, Some(venue_id)).await?;
-    let graph: Graph = serde_json::from_str(&graph_json)
-        .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
-    if graph.nodes.is_empty() {
-        return Ok(empty_preview(annotation.id));
-    }
-
-    let (start, end) = (annotation.start_time, annotation.end_time);
-    let times = preview_times(beat_grid.as_ref(), start, end);
-    let args: HashMap<String, serde_json::Value> = annotation
-        .args
-        .as_object()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-
-    let frames = eval_pattern_frames(
-        pool,
-        pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        Some(&annotation.id),
-        &graph,
-        &args,
-        start,
-        end,
-        beat_grid.clone(),
-        &times,
-    )
-    .await?;
-    let preview = render_preview(
-        annotation.id.clone(),
-        &frames,
-        beat_grid.as_ref(),
-        start,
-        end,
-    );
-    Ok(preview)
-}
-
-/// One heatmap preview per persisted score row on `(track_id, venue_id)`, in
-/// z-index order. Empty-graph annotations still yield an entry.
-pub async fn generate_annotation_previews(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    track_id: &str,
-    venue_id: &str,
-) -> Result<Vec<AnnotationPreview>, String> {
-    let gen_start = Instant::now();
-
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-    let annotations = fetch_scores(&mut access, track_id).await?;
-    drop(access);
-    if annotations.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let beat_grid = load_beat_grid(pool, track_id).await?;
-
-    let mut previews = Vec::with_capacity(annotations.len());
-    let mut generated = 0usize;
-
-    for annotation in &annotations {
-        let graph_json = fetch_pattern_graph(pool, &annotation.pattern_id, Some(venue_id)).await?;
-        let graph: Graph = serde_json::from_str(&graph_json)
-            .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
-
-        if graph.nodes.is_empty() {
-            previews.push(empty_preview(annotation.id.clone()));
-            continue;
-        }
-
-        let start = annotation.start_time as f32;
-        let end = annotation.end_time as f32;
-        let times = preview_times(beat_grid.as_ref(), start, end);
-        let args: HashMap<String, serde_json::Value> = annotation
-            .args
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-
-        let frames = eval_pattern_frames(
-            pool,
-            pool,
-            storage,
-            resource_root,
-            track_id,
-            venue_id,
-            Some(&annotation.id),
-            &graph,
-            &args,
-            start,
-            end,
-            beat_grid.clone(),
-            &times,
-        )
-        .await?;
-
-        let preview = render_preview(
-            annotation.id.clone(),
-            &frames,
-            beat_grid.as_ref(),
-            start,
-            end,
-        );
-
-        generated += 1;
-        previews.push(preview);
-    }
-
-    let total_ms = gen_start.elapsed().as_secs_f64() * 1000.0;
-    log::info!(
-        "[annotation_preview] track={} annotations={} generated={} total_ms={:.2}",
-        track_id,
-        annotations.len(),
-        generated,
-        total_ms
-    );
-
-    Ok(previews)
 }
 
 fn empty_preview(annotation_id: String) -> AnnotationPreview {
@@ -494,56 +338,6 @@ pub async fn preview_graph_image(
 
     Ok(render_preview(
         "preview_graph".to_string(),
-        &frames,
-        beat_grid.as_ref(),
-        start_time,
-        end_time,
-    ))
-}
-
-/// Render a heatmap preview of the *composited* track output over a time range.
-/// The scene is built fresh from the persisted scores and thrown away — it is
-/// never installed on the render engine.
-pub async fn view_composite_image(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    track_id: &str,
-    start_time: f32,
-    end_time: f32,
-) -> Result<AnnotationPreview, String> {
-    if end_time <= start_time {
-        return Err("end_time must be greater than start_time".into());
-    }
-
-    let venue_id = crate::database::local::scores::get_accessible_venue_for_track(pool, track_id)
-        .await?
-        .ok_or_else(|| "No score with annotations for this track.".to_string())?;
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-    let annotations = fetch_scores(&mut access, track_id).await?;
-    drop(access);
-    if annotations.is_empty() {
-        return Err("No annotations for this track/venue.".into());
-    }
-    let beat_grid = load_beat_grid(pool, track_id).await?;
-
-    let scene = build_scene(
-        pool,
-        pool,
-        storage,
-        resource_root,
-        track_id,
-        &venue_id,
-        &annotations,
-    )
-    .await?;
-
-    let times = preview_times(beat_grid.as_ref(), start_time, end_time);
-    let mut arena = Arena::default();
-    let frames = scene.render(&times, Scope::Composite, &mut arena);
-
-    Ok(render_preview(
-        format!("composite_{track_id}"),
         &frames,
         beat_grid.as_ref(),
         start_time,

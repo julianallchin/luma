@@ -19,9 +19,6 @@
 use sqlx::{Sqlite, SqliteConnection, Transaction};
 
 use crate::dispatch::{AppServices, CommandError};
-#[cfg(test)]
-use crate::services::authored_documents::AuthoredDocuments;
-use crate::sync::push;
 
 /// Ask Supabase to email a six-digit login code.
 ///
@@ -166,11 +163,9 @@ pub async fn get_session_item(
 ) -> Result<Option<String>, CommandError> {
     let state = &services.state_db;
     let db = &services.db;
-    let engine = &services.sync;
     if key != crate::database::local::auth::SUPABASE_SESSION_KEY {
         return Ok(crate::database::local::auth::get_session_item(&state.0, &key).await?);
     }
-    let _sync = engine.sync_lock.lock().await;
     let mut session_guard = state
         .0
         .acquire()
@@ -203,28 +198,8 @@ pub async fn get_session_item(
             .as_ref()
             .and_then(|(_, principal)| principal.as_ref())
             .map(|principal| principal.user_id.as_str());
-        let authored_barrier = engine.authored().begin_identity_switch().await;
-        let activated =
-            crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, principal)
-                .await?;
-        if let Err(error) = engine
-            .authored()
-            .bootstrap_live_projections_during_identity_switch(&db.0, principal, &authored_barrier)
-            .await
-        {
-            let close = crate::database::local::auth::suspend_write_admission_for_rollback(
-                &db.0, &activated,
-            )
-            .await;
-            return Err(CommandError::Internal(match close {
-                Ok(_) => format!(
-                    "Failed to bootstrap authored projections; signed writes remain closed: {error}"
-                ),
-                Err(close_error) => format!(
-                    "Failed to bootstrap authored projections, and closing the activated admission failed: {error}; {close_error}"
-                ),
-            }));
-        }
+        crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, principal)
+            .await?;
     }
     Ok(renderer.map(|(session, _)| session))
 }
@@ -240,11 +215,8 @@ pub async fn set_session_item(
 ) -> Result<(), CommandError> {
     let state = &services.state_db;
     let db = &services.db;
-    let engine = &services.sync;
-    let authored = &services.authored;
     let workspaces = &services.workspaces;
     let graph_runs = &services.graph_runs;
-    let subagents = &services.subagents;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let controller = &services.controller;
@@ -254,7 +226,6 @@ pub async fn set_session_item(
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let validated = crate::database::local::auth::validate_supabase_session(&value).await?;
         let principal = validated.principal();
-        let _sync = engine.sync_lock.lock().await;
         let mut session_guard = state
             .0
             .acquire()
@@ -275,48 +246,17 @@ pub async fn set_session_item(
         // rotation; app-database authority and every live capability remain
         // the same, so resetting Python/audio/render state would be wrong.
         if replacement == crate::database::local::auth::SessionReplacementKind::CredentialRefresh {
-            let authored_barrier = authored.begin_identity_switch().await;
             crate::database::local::auth::replace_session_for_connection(
                 &mut session_guard,
                 &validated,
             )
             .await?;
-            if let Err(error) = authored
-                .bootstrap_live_projections_during_identity_switch(
-                    &db.0,
-                    Some(&principal.user_id),
-                    &authored_barrier,
-                )
-                .await
-            {
-                let close = crate::database::local::auth::suspend_write_admission_for_rollback(
-                    &db.0,
-                    &admission_backup,
-                )
-                .await;
-                return Err(CommandError::Internal(match close {
-                    Ok(_) => format!(
-                        "Failed to bootstrap authored projections after credential refresh; signed writes remain closed: {error}"
-                    ),
-                    Err(close_error) => format!(
-                        "Failed to bootstrap authored projections after credential refresh, and closing admission failed: {error}; {close_error}"
-                    ),
-                }));
-            }
-            if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
-                &db.0, authored, workspaces, graph_runs, subagents,
-            )
-            .await
-            {
-                eprintln!("[agent-threads] identity-activation recovery: {error}");
-            }
             return Ok(());
         }
 
         let backup =
             crate::database::local::auth::capture_auth_state_for_connection(&mut session_guard)
                 .await?;
-        let _authored_barrier = authored.begin_identity_switch().await;
         // Imports may have published a phase-one track row and still own a
         // cancellation rollback. Drain them while the old principal remains
         // admitted; closing admission first would make the compensating
@@ -379,14 +319,13 @@ pub async fn set_session_item(
             )
             .await);
         }
-        let activated_admission =
-            match crate::database::local::auth::arm_write_admission_for_identity_switch(
+        match crate::database::local::auth::arm_write_admission_for_identity_switch(
                 &db.0,
                 Some(&principal.user_id),
             )
             .await
             {
-                Ok(admission) => admission,
+                Ok(_) => {}
                 Err(error) => {
                     return Err(rollback_auth_switch(
                         &db.0,
@@ -398,34 +337,6 @@ pub async fn set_session_item(
                     .await);
                 }
             };
-        if let Err(error) = authored
-            .bootstrap_live_projections_during_identity_switch(
-                &db.0,
-                Some(&principal.user_id),
-                &_authored_barrier,
-            )
-            .await
-        {
-            return Err(rollback_activated_auth_switch(
-                &db.0,
-                &mut session_guard,
-                &backup,
-                &admission_backup,
-                &activated_admission,
-                format!("authored projection bootstrap failed: {error}"),
-            )
-            .await);
-        }
-        if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
-            &db.0, authored, workspaces, graph_runs, subagents,
-        )
-        .await
-        {
-            // Session installation has already committed. Cleanup remains in
-            // its durable terminal state and will retry on refresh/startup;
-            // never report the identity switch itself as rolled back.
-            eprintln!("[agent-threads] identity-activation recovery: {error}");
-        }
         Ok(())
     } else {
         Ok(crate::database::local::auth::set_session_item(&state.0, &key, &value).await?)
@@ -443,10 +354,7 @@ pub async fn set_session_item(
 pub async fn remove_session_item(services: &AppServices, key: String) -> Result<(), CommandError> {
     let state = &services.state_db;
     let db = &services.db;
-    let engine = &services.sync;
-    let authored = &services.authored;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
-        let _sync = engine.sync_lock.lock().await;
         let mut session_guard = state
             .0
             .acquire()
@@ -459,7 +367,6 @@ pub async fn remove_session_item(services: &AppServices, key: String) -> Result<
         let admission_backup =
             crate::database::local::auth::capture_write_admission(&db.0, &mut session_guard)
                 .await?;
-        let _authored_barrier = authored.begin_identity_switch().await;
         crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
         if let Err(error) = crate::database::local::auth::consume_signout_transition_and_clear_session_for_connection(
             &mut session_guard,
@@ -475,11 +382,10 @@ pub async fn remove_session_item(services: &AppServices, key: String) -> Result<
             )
             .await);
         }
-        let activated_admission =
-            match crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, None)
+        match crate::database::local::auth::arm_write_admission_for_identity_switch(&db.0, None)
                 .await
             {
-                Ok(admission) => admission,
+                Ok(_) => {}
                 Err(error) => {
                     return Err(rollback_auth_switch(
                         &db.0,
@@ -491,20 +397,6 @@ pub async fn remove_session_item(services: &AppServices, key: String) -> Result<
                     .await);
                 }
             };
-        if let Err(error) = authored
-            .bootstrap_live_projections_during_identity_switch(&db.0, None, &_authored_barrier)
-            .await
-        {
-            return Err(rollback_activated_auth_switch(
-                &db.0,
-                &mut session_guard,
-                &backup,
-                &admission_backup,
-                &activated_admission,
-                format!("authored projection bootstrap failed: {error}"),
-            )
-            .await);
-        }
         return Ok(());
     }
     Ok(crate::database::local::auth::remove_session_item(&state.0, &key).await?)
@@ -542,54 +434,6 @@ async fn rollback_auth_switch(
     ))
 }
 
-/// Undo an identity switch that failed *after* the replacement was admitted.
-/// Same contract as [`rollback_auth_switch`], one extra fence.
-async fn rollback_activated_auth_switch(
-    pool: &sqlx::SqlitePool,
-    connection: &mut SqliteConnection,
-    backup: &crate::database::local::auth::AuthStateBackup,
-    previous_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
-    activated_admission: &crate::database::local::auth::WriteAdmissionSnapshot,
-    cause: String,
-) -> CommandError {
-    // Bootstrap failed after the replacement identity was admitted. Close
-    // that exact generation first; StateDb and the prior principal may only
-    // be restored while all durable writes remain fenced out.
-    let closed = match crate::database::local::auth::suspend_write_admission_for_rollback(
-        pool,
-        activated_admission,
-    )
-    .await
-    {
-        Ok(closed) => closed,
-        Err(close_error) => {
-            return CommandError::Internal(format!(
-                "Authenticated identity switch failed: {cause}. Closing the newly admitted identity also failed; refusing stale rollback: {close_error}"
-            ));
-        }
-    };
-    if let Err(rollback_error) =
-        crate::database::local::auth::restore_auth_state_for_connection(connection, backup).await
-    {
-        return CommandError::Internal(format!(
-            "Authenticated identity switch failed: {cause}. Signed writes were closed, but restoring the previous session failed: {rollback_error}"
-        ));
-    }
-    if let Err(rollback_error) = crate::database::local::auth::restore_write_admission_from_closed(
-        pool,
-        previous_admission,
-        &closed,
-    )
-    .await
-    {
-        return CommandError::Internal(format!(
-            "Authenticated identity switch failed: {cause}. The previous session was restored, but its write admission remains closed: {rollback_error}"
-        ));
-    }
-    CommandError::Internal(format!(
-        "Authenticated identity switch failed and the previous session was restored: {cause}"
-    ))
-}
 
 /// Sign out's host-side commit boundary. The authenticated session remains
 /// installed while all cloud catalog state, authored revision history, and
@@ -598,8 +442,6 @@ async fn rollback_activated_auth_switch(
 pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let db = &services.db;
     let state = &services.state_db;
-    let authored = &services.authored;
-    let engine = &services.sync;
     let workspaces = &services.workspaces;
     let graph_runs = &services.graph_runs;
     let host_audio = &services.host_audio;
@@ -609,10 +451,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let stem_cache = &services.stem_cache;
     let analysis_tasks = &services.analysis_tasks;
 
-    // Exclude the background pull/push loop for the whole boundary. It must
-    // not repopulate relational rows while logout is proving and removing the
-    // current projection.
-    let _sync = engine.sync_lock.lock().await;
     {
         let mut session_guard = state
             .0
@@ -625,70 +463,25 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
             return Ok(());
         }
     }
-    let (_, principal) = engine
-        .require_auth()
-        .await
-        .map_err(|error| format!("Cannot sign out without an authenticated session: {error}"))?;
-
-    // Tracks may need their file/storage metadata finalized before their
-    // catalog rows are safe to remove locally. Offline or partial sync is a
-    // logout failure, never permission to discard the only catalog copy.
-    engine
-        .sync_files_unlocked(&services.sync_host())
-        .await
-        .map_err(|error| format!("Cannot sign out before files are durable: {error}"))?;
-    // One flush delivers a bounded slice so the background loop is never held
-    // for minutes; sign-out wants the whole backlog gone, because the wipe
-    // audit refuses to discard a row the server has not seen.
-    loop {
-        let delivered = push::flush_pending_with_integrator(
-            &db.0,
-            &state.0,
-            engine.remote().as_ref(),
-            Some(engine.authored()),
-            &crate::sync::progress::Progress::default(),
-        )
-        .await
-        .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
-        if delivered == 0 {
-            break;
-        }
-    }
 
     // StateDb has one connection by construction. Keeping it checked out
-    // freezes session persistence until the wipe commits. Re-reading after all
-    // network work catches a concurrent refresh/sign-in/sign-out race.
+    // freezes session persistence until the wipe commits, which is what
+    // catches a concurrent refresh/sign-in/sign-out race.
     let mut session_guard = state
         .0
         .acquire()
         .await
         .map_err(|error| format!("Failed to lock authenticated session: {error}"))?;
-    let frozen_principal =
+    let principal =
         crate::database::local::auth::load_verified_principal_for_connection(&mut session_guard)
-            .await?;
-    if frozen_principal
-        .as_ref()
-        .map(|value| value.user_id.as_str())
-        != Some(principal.as_str())
-    {
-        return Err(
-            "Authenticated session changed while preparing sign-out; nothing was deleted".into(),
-        );
-    }
+            .await?
+            .map(|principal| principal.user_id)
+            .ok_or("Cannot sign out without an authenticated session")?;
 
     // Analysis owns SQLite and cache publication, so close its admission and
     // drain the current generation before taking the wipe transaction's write
-    // lock. No cache is cleared yet; the database fence below still precedes
-    // every process-global capability reset.
+    // lock.
     let _analysis_barrier = analysis_tasks.suspend_for_identity_switch().await?;
-
-    // Drain authored mutations and keep their global write guard through the
-    // wipe. The empty principal-scoped pending queue above proves every prior
-    // revision/trace is remote; later authored mutations cannot begin.
-    let _prepared = authored
-        .prepare_sign_out(&db.0)
-        .await
-        .map_err(|error| format!("Refusing database wipe: {error}"))?;
 
     let mut transaction =
         db.0.begin_with("BEGIN IMMEDIATE")
@@ -699,8 +492,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     // BEGIN IMMEDIATE first waits out every admitted live operation. Keeping
     // that write fence through the reset prevents new host-audio/render/device
     // effects from completing after prior-principal capabilities are cleared.
-    // The Python barrier additionally drains cells holding immutable manifests
-    // or a TrackHost before relational visibility changes.
     let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
     graph_runs.clear();
     host_audio.unload();
@@ -709,7 +500,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     mixer.disconnect()?;
     stem_cache.clear();
 
-    assert_signed_in_catalog_durable(&mut transaction, &principal).await?;
     wipe_signed_in_projection(&mut transaction, &principal).await?;
     transaction
         .commit()
@@ -720,12 +510,12 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
             .await
             .map_err(|error| {
                 format!(
-                    "Signed-in projection was made durable and removed, but sign-out recovery failed; writes remain disabled until recovery completes: {error}"
+                    "Signed-in projection was removed, but sign-out recovery failed; writes remain disabled until recovery completes: {error}"
                 )
             })?;
     if !recovered {
         return Err(
-            "Signed-in projection was made durable and removed, but its committed sign-out journal was not recoverable; writes remain disabled"
+            "Signed-in projection was removed, but its committed sign-out journal was not recoverable; writes remain disabled"
                 .into(),
         );
     }
@@ -758,21 +548,13 @@ async fn close_signed_write_admission(
 #[cfg(test)]
 pub(crate) async fn wipe_database_pool(
     pool: &sqlx::SqlitePool,
-    authored: &AuthoredDocuments,
     principal: &str,
 ) -> Result<(), String> {
-    // The lifecycle barrier prevents a concurrent authored mutation from
-    // appearing after the durability audit and before the wipe commits.
-    let _prepared = authored
-        .prepare_sign_out(pool)
-        .await
-        .map_err(|error| format!("Refusing database wipe: {error}"))?;
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin database wipe: {error}"))?;
     close_signed_write_admission(&mut transaction, principal).await?;
-    assert_signed_in_catalog_durable(&mut transaction, principal).await?;
     wipe_signed_in_projection(&mut transaction, principal).await?;
     transaction
         .commit()
@@ -781,198 +563,17 @@ pub(crate) async fn wipe_database_pool(
     Ok(())
 }
 
-async fn assert_signed_in_catalog_durable(
-    transaction: &mut Transaction<'_, Sqlite>,
-    principal: &str,
-) -> Result<(), String> {
-    audit_uid_bearing_tables(transaction).await?;
-    let pending_principal = crate::database::local::auth::principal_key(Some(principal));
-    // Push has no queue to count. Outstanding work is exactly what the tables
-    // say: rows whose delivery marker is behind their content, plus deletions
-    // the server has not been told about — minus whatever push has permanently
-    // given up on, which is abandoned rather than pending and is named below
-    // instead of blocking the wipe forever.
-    let mut undelivered: Vec<String> = Vec::new();
-    let tombstones: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sync_tombstones AS tombstone
-         LEFT JOIN sync_push_failures AS failure
-                ON failure.principal_key = tombstone.principal_key
-               AND failure.table_name = tombstone.table_name
-               AND failure.record_id = tombstone.record_id
-               AND failure.subject = 'tombstone'
-         WHERE tombstone.principal_key = ? AND COALESCE(failure.permanent, 0) = 0",
-    )
-    .bind(&pending_principal)
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(|error| format!("Failed to inspect pending catalog sync: {error}"))?;
-    if tombstones != 0 {
-        undelivered.push(format!("{tombstones} deletion(s)"));
-    }
-    for table in crate::sync::registry::TABLES {
-        // Every table push can deliver is audited here. A `DirtyUpsert` table
-        // without a principal column would be skipped silently, so say so.
-        if crate::sync::registry::push_policy(table.name)
-            == crate::sync::registry::PushPolicy::DirtyUpsert
-            && !table.has_principal()
-        {
-            return Err(format!(
-                "Refusing database wipe: sync table {} has no principal column",
-                table.name
-            ));
-        }
-        let Some(sql) = table.undelivered_count_sql() else {
-            continue;
-        };
-        let count = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
-            .bind(principal)
-            .fetch_one(&mut **transaction)
-            .await
-            .map_err(|error| {
-                format!("Failed to inspect {} sync durability: {error}", table.name)
-            })?;
-        if count != 0 {
-            undelivered.push(format!("{count} {}", table.name));
-        }
-    }
-    if !undelivered.is_empty() {
-        return Err(format!(
-            "Refusing database wipe: still pending remote sync: {}",
-            undelivered.join(", ")
-        ));
-    }
-    // Abandoned work is not hidden by the wipe: it is stated once, here, since
-    // this is the moment the local copy stops being the only copy that matters.
-    let abandoned: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT table_name, record_id, last_error FROM sync_push_failures
-         WHERE principal_key = ? AND permanent = 1
-         ORDER BY table_name, record_id",
-    )
-    .bind(&pending_principal)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(|error| format!("Failed to inspect abandoned sync work: {error}"))?;
-    if !abandoned.is_empty() {
-        eprintln!(
-            "[sync] signing out with {} record(s) the server never accepted:",
-            abandoned.len()
-        );
-        for (table, record, error) in &abandoned {
-            eprintln!(
-                "[sync]   {table}.{record}: {}",
-                error.as_deref().unwrap_or("no reason recorded")
-            );
-        }
-    }
-
-    let dirty_categories: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pattern_categories
-         WHERE uid = ? AND synced_at IS NULL",
-    )
-    .bind(principal)
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(|error| format!("Failed to inspect pattern category durability: {error}"))?;
-    if dirty_categories != 0 {
-        return Err(format!(
-            "Refusing database wipe: {dirty_categories} signed-in pattern category row(s) are not durably synced"
-        ));
-    }
-    Ok(())
-}
-
-/// Every principal-bearing table, each one *read by a human* and given a
-/// durability policy above.
-///
-/// This is deliberately a hand-maintained list and deliberately not derived
-/// from the schema. `venue_owned_tables` answers a different question — "which
-/// rows belong to this venue", for `sync::pull`'s delete guard — and deriving
-/// this one from it turned the audit into a tautology: a new table with a `uid`
-/// and a `venue_id` classified itself, which is exactly the review the audit
-/// exists to force. The cost of the list is one line per new table, paid by
-/// whoever knows what the table is for.
-const CLASSIFIED: &[&str] = &[
-    "cues",
-    "fixture_group_members",
-    "fixture_groups",
-    "fixtures",
-    "implementations",
-    "midi_bindings",
-    "midi_modifiers",
-    "pattern_categories",
-    "patterns",
-    "scores",
-    "stage_pieces",
-    "sync_state",
-    "track_bar_classifications",
-    "track_beats",
-    "track_drum_onsets",
-    "track_genres",
-    "track_roots",
-    "track_scores",
-    "track_stems",
-    "track_waveforms",
-    "tracks",
-    "venue_implementation_overrides",
-    // The venue graph. Synced since
-    // `supabase/migrations/20260902000000_venue_graph_sync_shape.sql`, and not
-    // wiped either — see `wipe_signed_in_projection`: venue content is a sealed
-    // local cache that survives sign-out, so a row that has not been pushed yet
-    // is still there to push next time.
-    "venue_constraints",
-    "venue_edges",
-    "venue_node_params",
-    "venue_nodes",
-    "venues",
-];
-
-async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(), String> {
-    let actual: Vec<String> = sqlx::query_scalar(
-        "SELECT schema.name
-         FROM sqlite_schema schema
-         JOIN pragma_table_info(schema.name) column ON column.name = 'uid'
-         WHERE schema.type = 'table'
-         ORDER BY schema.name",
-    )
-    .fetch_all(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to audit principal-bearing tables: {error}"))?;
-    let unknown: Vec<_> = actual
-        .iter()
-        .filter(|table| !CLASSIFIED.contains(&table.as_str()))
-        .collect();
-    if !unknown.is_empty() {
-        return Err(format!(
-            "Refusing database wipe: principal-bearing table(s) lack an explicit durability policy: {}",
-            unknown
-                .into_iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    Ok(())
-}
-
 async fn wipe_signed_in_projection(
     transaction: &mut Transaction<'_, Sqlite>,
     principal: &str,
 ) -> Result<(), String> {
     // Venue rows are a sealed local cache, not an ephemeral session
-    // projection. Relational revision history and its live projection also
-    // survive logout: removing either would require a second materialization
-    // ledger. Remove only catalog leaves that own no authored document;
-    // another cached principal and guest state are never touched.
+    // projection, and they survive logout. Remove only catalog leaves nothing
+    // else depends on; another cached principal and guest state are never
+    // touched.
     for statement in [
         "DELETE FROM patterns
          WHERE uid = ?
-           AND NOT EXISTS(
-               SELECT 1 FROM authored_documents document
-               WHERE document.document_kind = 'pattern_graph'
-                 AND document.subject_id = patterns.id
-           )
-           AND NOT EXISTS(SELECT 1 FROM track_scores clip
-                          WHERE clip.pattern_id = patterns.id)
            AND NOT EXISTS(SELECT 1 FROM cues cue
                           WHERE cue.pattern_id = patterns.id)
            AND NOT EXISTS(SELECT 1 FROM venue_implementation_overrides override
@@ -989,26 +590,6 @@ async fn wipe_signed_in_projection(
             .await
             .map_err(|error| format!("Failed to remove signed-in catalog projection: {error}"))?;
     }
-    sqlx::query("DELETE FROM sync_state WHERE uid = ?")
-        .bind(principal)
-        .execute(&mut **transaction)
-        .await
-        .map_err(|error| format!("Failed to reset signed-in pull cursors: {error}"))?;
-    // Push state is this session's, not the database's. The audit above proved
-    // nothing deliverable is left; what remains is abandoned verdicts and any
-    // tombstone that came with them, and both would otherwise be inherited by
-    // whoever signs in next at the same primary key.
-    let principal_key = crate::database::local::auth::principal_key(Some(principal));
-    for statement in [
-        "DELETE FROM sync_push_failures WHERE principal_key = ?",
-        "DELETE FROM sync_tombstones WHERE principal_key = ?",
-    ] {
-        sqlx::query(statement)
-            .bind(&principal_key)
-            .execute(&mut **transaction)
-            .await
-            .map_err(|error| format!("Failed to reset signed-in push state: {error}"))?;
-    }
     sqlx::query(
         "UPDATE auth_write_admission SET maintenance = 0
          WHERE singleton = 1 AND maintenance = 1 AND accepting = 0",
@@ -1021,147 +602,20 @@ async fn wipe_signed_in_projection(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::storage::StorageRoot;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-    use sqlx::SqlitePool;
 
+    /// Signing out removes the catalog leaves nothing else depends on, and
+    /// leaves everything that is still referenced — a pattern a cue plays, a
+    /// track a score annotates — exactly where it is.
     #[tokio::test]
-    async fn sign_out_wipe_preserves_relational_authored_history_and_projection() {
+    async fn sign_out_keeps_what_the_library_still_refers_to() {
         let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("luma-test.db");
-        let migrate_pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(&database)
-                    .journal_mode(SqliteJournalMode::Wal)
-                    .create_if_missing(true)
-                    .foreign_keys(false),
-            )
-            .await
-            .unwrap();
-        sqlx::migrate!("./migrations")
-            .run(&migrate_pool)
-            .await
-            .unwrap();
-        migrate_pool.close().await;
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new()
-                    .filename(&database)
-                    .journal_mode(SqliteJournalMode::Wal)
-                    .create_if_missing(true)
-                    .foreign_keys(true),
-            )
-            .await
-            .unwrap();
-        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('pattern', 'alice', 'p')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
-             VALUES ('implementation', 'alice', 'pattern', '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let authored =
-            AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
-        authored
-            .create_thread_with_authored_state(
-                &pool,
-                crate::models::agent_threads::CreateAgentThreadInput {
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                    agent_kind: "pattern_graph".into(),
-                    subject_kind: Some("pattern".into()),
-                    subject_id: Some("pattern".into()),
-                    implementation_id: Some("implementation".into()),
-                    ..Default::default()
-                },
-                Some("alice"),
-            )
-            .await
-            .unwrap();
-        // Model a completed remote flush. Delivery is a marker on the row, and
-        // an immutable row will only take one inside a sync-owned write.
-        let mut receipt = pool.begin().await.unwrap();
-        crate::database::local::write_admission::enter_remote_writes(&mut receipt)
-            .await
-            .unwrap();
-        for table in crate::sync::registry::TABLES {
-            if !crate::sync::registry::has_delivery_marker(table.name) {
-                continue;
-            }
-            let marker = if matches!(
-                crate::sync::registry::push_policy(table.name),
-                crate::sync::registry::PushPolicy::DirtyUpsert
-                    | crate::sync::registry::PushPolicy::ExplicitUpsert
-            ) {
-                "updated_at"
-            } else {
-                "CURRENT_TIMESTAMP"
-            };
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "UPDATE {} SET synced_at = {marker} WHERE synced_at IS NULL",
-                table.name
-            )))
-            .execute(&mut *receipt)
-            .await
-            .unwrap();
-        }
-        crate::database::local::write_admission::leave_remote_writes(&mut receipt)
-            .await
-            .unwrap();
-        receipt.commit().await.unwrap();
-        sqlx::query(
-            "UPDATE patterns
-             SET synced_at = updated_at, version = version + 1
-             WHERE uid = 'alice'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        wipe_database_pool(&pool, &authored, "alice").await.unwrap();
-
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM implementations")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM authored_revisions")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            1
-        );
-    }
-
-    /// A pool on a freshly migrated schema, with `alice` admitted to write.
-    async fn migrated_pool(directory: &Path) -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(directory.join("audit.db"))
+                    .filename(directory.path().join("wipe.db"))
                     .journal_mode(SqliteJournalMode::Wal)
                     .create_if_missing(true)
                     .foreign_keys(false),
@@ -1172,109 +626,52 @@ mod tests {
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
-        pool
-    }
-
-    /// The audit's whole job: a table nobody classified stops the wipe.
-    ///
-    /// It is a hand-maintained list on purpose. Derived from the schema — from
-    /// `venue_owned_tables`, say — a new table would answer for itself and this
-    /// test would pass with nobody having looked at it.
-    #[tokio::test]
-    async fn an_unclassified_principal_bearing_table_fails_the_audit() {
-        let directory = tempfile::tempdir().unwrap();
-        let pool = migrated_pool(directory.path()).await;
-        let mut connection = pool.acquire().await.unwrap();
-        audit_uid_bearing_tables(&mut connection)
-            .await
-            .expect("the shipped schema is fully classified");
-
-        sqlx::query(
-            "CREATE TABLE venue_annotations (
-                 id TEXT PRIMARY KEY, uid TEXT, venue_id TEXT NOT NULL, note TEXT)",
-        )
-        .execute(&mut *connection)
-        .await
-        .unwrap();
-        let error = audit_uid_bearing_tables(&mut connection)
-            .await
-            .expect_err("a new principal-bearing table has no durability policy yet");
-        assert!(
-            error.contains("venue_annotations"),
-            "the audit has to name what it does not know about: {error}"
-        );
-    }
-
-    /// An unsynced venue graph blocks sign-out, and sign-out keeps it.
-    ///
-    /// Two separate promises, and the graph needs both. The audit refuses the
-    /// wipe while any registered row of alice's is still dirty — the graph is
-    /// registered now, so it counts exactly as an unpushed fixture does. And
-    /// once it is clean, the wipe still leaves it alone:
-    /// `wipe_signed_in_projection` treats venue content as a sealed local
-    /// cache, so signing out never destroys a rig.
-    #[tokio::test]
-    async fn an_unsynced_venue_graph_blocks_sign_out_and_survives_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let pool = migrated_pool(directory.path()).await;
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO venue_nodes (id, uid, venue_id, kind, label)
-             VALUES ('ven:venue', 'alice', 'ven', 'venue', 'Room')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        // The venue row itself is in the sync registry and is durable; only the
-        // graph hanging off it is not, which is the case no sweep can see.
-        sqlx::query("UPDATE venues SET synced_at = updated_at, version = version + 1")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let authored =
-            AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
-        let error = wipe_database_pool(&pool, &authored, "alice")
-            .await
-            .expect_err("a dirty graph row is undelivered work");
-        assert!(error.contains("venue_nodes"), "{error}");
-
-        for table in [
-            "venue_nodes",
-            "venue_edges",
-            "venue_node_params",
-            "venue_constraints",
+        for statement in [
+            "INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')",
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('t', 'alice', 'h', '/t')",
+            "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('s', 'alice', 't', 'ven')",
+            "INSERT INTO patterns (id, uid, name) VALUES ('kept', 'alice', 'Kept')",
+            "INSERT INTO patterns (id, uid, name) VALUES ('loose', 'alice', 'Loose')",
+            "INSERT INTO cues (id, uid, venue_id, name, pattern_id)
+             VALUES ('c', 'alice', 'ven', 'Cue', 'kept')",
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "UPDATE {table} SET synced_at = updated_at, version = version + 1"
-            )))
-            .execute(&pool)
-            .await
-            .unwrap();
+            sqlx::query(statement).execute(&pool).await.unwrap();
         }
-        wipe_database_pool(&pool, &authored, "alice").await.unwrap();
 
+        wipe_database_pool(&pool, "alice").await.unwrap();
+
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM patterns ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, ["kept"]);
+        // A track a score still annotates is not a leaf.
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venue_nodes")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venues")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
             1,
-            "signing out must not destroy a venue graph"
+            "signing out must not destroy a venue"
         );
     }
 
     #[tokio::test]
-    async fn admission_and_explicit_dirtiness_are_database_invariants() {
+    async fn admission_is_a_database_invariant() {
         let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("admission.db");
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new()
-                    .filename(database)
+                    .filename(directory.path().join("admission.db"))
                     .journal_mode(SqliteJournalMode::Wal)
                     .create_if_missing(true)
                     .foreign_keys(false),
@@ -1290,35 +687,11 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
-            "UPDATE patterns SET synced_at = updated_at, version = version + 1
-             WHERE id = 'alice-pattern'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("UPDATE patterns SET name = 'edited' WHERE id = 'alice-pattern'")
+        let forged = sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('bob', 'bob', 'f')")
             .execute(&pool)
             .await
-            .unwrap();
-        assert_eq!(
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT synced_at FROM patterns WHERE id = 'alice-pattern'"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            None
-        );
-
-        let forged_remote = sqlx::query(
-            "INSERT INTO patterns (id, uid, name, origin)
-             VALUES ('bob-pattern', 'bob', 'forged', 'remote')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap_err();
-        assert!(forged_remote
+            .unwrap_err();
+        assert!(forged
             .to_string()
             .contains("signed-in write admission is closed or principal-mismatched"));
         assert!(

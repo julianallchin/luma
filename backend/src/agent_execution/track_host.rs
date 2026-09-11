@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
@@ -19,17 +18,42 @@ use crate::agent_execution::bindings::manifest::{AxisSpec, DType, Provenance, Te
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
-use crate::compositor::build_scene_strict;
 use crate::eval::context::resolve_primitive_ids;
 use crate::eval::{Arena, Scope};
-use crate::models::scores::TrackScore;
 use crate::models::universe::UniverseState;
-use crate::services::authored_documents::{AuthoredDocuments, AuthoredDocumentsError};
-use crate::services::track_edits::{
-    check_track_edit, TrackClip, TrackEditCheck, TrackEditError, TrackEditPlan, TrackEditScope,
-    TrackScope,
-};
 use crate::storage::StorageRoot;
+
+/// The score a cell may read, captured by the host from the durable thread.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackScope {
+    pub score_id: String,
+    pub track_id: String,
+    pub venue_id: String,
+}
+
+/// The same identity plus the principal allowed to write it. Deliberately
+/// separate from a candidate: Python may describe a score, but it may never
+/// choose which score that candidate replaces.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackEditScope {
+    pub score_id: String,
+    pub track_id: String,
+    pub venue_id: String,
+    /// Authenticated user captured from the app database's active admission.
+    pub user_id: String,
+}
+
+impl From<&TrackEditScope> for TrackScope {
+    fn from(scope: &TrackEditScope) -> Self {
+        Self {
+            score_id: scope.score_id.clone(),
+            track_id: scope.track_id.clone(),
+            venue_id: scope.venue_id.clone(),
+        }
+    }
+}
 
 mod score;
 
@@ -45,11 +69,11 @@ pub struct TrackHost {
     storage: StorageRoot,
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
-    authored: AuthoredDocuments,
-    thread_id: String,
     scope: TrackScope,
     edit_scope: Option<TrackEditScope>,
-    authored_workspace_id: Option<String>,
+    /// The draft this thread writes into, for a subagent. `None` means the
+    /// thread edits the live score.
+    draft_id: Option<String>,
 }
 
 impl TrackHost {
@@ -59,11 +83,9 @@ impl TrackHost {
         storage: StorageRoot,
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
-        authored: AuthoredDocuments,
-        thread_id: String,
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
-        authored_workspace_id: Option<String>,
+        draft_id: Option<String>,
     ) -> Self {
         Self {
             runtime,
@@ -71,94 +93,10 @@ impl TrackHost {
             storage,
             resource_root,
             workspace,
-            authored,
-            thread_id,
             scope,
             edit_scope,
-            authored_workspace_id,
+            draft_id,
         }
-    }
-
-    async fn check(&self, plan: TrackEditPlan) -> Result<TrackEditCheck, HostCallError> {
-        let edit_scope = self
-            .edit_scope
-            .as_ref()
-            .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let checked = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
-            self.authored
-                .check_track_workspace_edit(
-                    &self.pool,
-                    Some(&edit_scope.user_id),
-                    &self.thread_id,
-                    workspace_id,
-                    &self.scope,
-                    plan,
-                )
-                .await
-                .map_err(authored_error)?
-        } else {
-            check_track_edit(&self.pool, edit_scope, plan)
-                .await
-                .map_err(edit_error)?
-        };
-        self.compile_all(&checked.candidate).await?;
-        Ok(checked)
-    }
-
-    async fn compile_all(&self, clips: &[TrackClip]) -> Result<(), HostCallError> {
-        let scores = as_track_scores(&self.scope, clips);
-        build_scene_strict(
-            &self.pool,
-            &self.pool,
-            &self.storage,
-            &self.resource_root,
-            &self.scope.track_id,
-            &self.scope.venue_id,
-            &scores,
-        )
-        .await
-        .map(|_| ())
-        .map_err(|message| HostCallError::new("compile_error", message))
-    }
-
-    async fn render(&self, request: TrackRenderRequest) -> Result<Value, HostCallError> {
-        validate_window(
-            &self.pool,
-            &self.scope.track_id,
-            request.start_time,
-            request.end_time,
-        )
-        .await?;
-
-        let checked = self
-            .check(TrackEditPlan {
-                base_revision: request.base_revision,
-                candidate: request.candidate,
-            })
-            .await?;
-
-        // Keep full clip spans: span-relative patterns must retain their
-        // original phase when a window begins in the middle of a clip.
-        let visible: Vec<TrackClip> = checked
-            .candidate
-            .into_iter()
-            .filter(|clip| clip.end_time > request.start_time && clip.start_time < request.end_time)
-            .collect();
-        let scores = as_track_scores(&self.scope, &visible);
-        let scene = build_scene_strict(
-            &self.pool,
-            &self.pool,
-            &self.storage,
-            &self.resource_root,
-            &self.scope.track_id,
-            &self.scope.venue_id,
-            &scores,
-        )
-        .await
-        .map_err(|message| HostCallError::new("compile_error", message))?;
-
-        self.render_scene(scene, request.start_time, request.end_time)
-            .await
     }
 
     async fn render_scene(
@@ -244,92 +182,6 @@ impl TrackHost {
 
         Ok(json!({ "artifact": artifact, "tensor": tensor }))
     }
-
-    async fn commit(
-        &self,
-        plan: TrackEditPlan,
-        operation_id: &str,
-        request_fingerprint: &str,
-    ) -> Result<Value, HostCallError> {
-        let edit_scope = self
-            .edit_scope
-            .as_ref()
-            .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let result = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
-            self.authored
-                .apply_track_workspace_edit(
-                    &self.pool,
-                    Some(&edit_scope.user_id),
-                    &self.thread_id,
-                    workspace_id,
-                    &self.scope,
-                    operation_id,
-                    request_fingerprint,
-                    plan,
-                )
-                .await
-                .map_err(authored_error)?
-        } else {
-            self.authored
-                .apply_track_edit_for_thread(
-                    &self.pool,
-                    Some(&edit_scope.user_id),
-                    &self.thread_id,
-                    &self.scope,
-                    operation_id,
-                    request_fingerprint,
-                    plan,
-                    "Apply track agent edit",
-                )
-                .await
-                .map_err(authored_error)?
-                .edit
-        };
-        serde_json::to_value(result)
-            .map_err(|error| HostCallError::new("internal", error.to_string()))
-    }
-
-    async fn replay(
-        &self,
-        operation_id: &str,
-        request_fingerprint: &str,
-    ) -> Result<Option<Value>, HostCallError> {
-        let edit_scope = self
-            .edit_scope
-            .as_ref()
-            .ok_or_else(|| HostCallError::new("forbidden", "this authored track is read-only"))?;
-        let replayed = if let Some(workspace_id) = self.authored_workspace_id.as_deref() {
-            self.authored
-                .replay_track_workspace_edit(
-                    &self.pool,
-                    Some(&edit_scope.user_id),
-                    &self.thread_id,
-                    workspace_id,
-                    &self.scope,
-                    operation_id,
-                    request_fingerprint,
-                )
-                .await
-                .map_err(authored_error)?
-        } else {
-            self.authored
-                .replay_track_edit_for_thread(
-                    &self.pool,
-                    Some(&edit_scope.user_id),
-                    &self.thread_id,
-                    &self.scope,
-                    operation_id,
-                    request_fingerprint,
-                )
-                .await
-                .map_err(authored_error)?
-                .map(|result| result.edit)
-        };
-        replayed
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|error| HostCallError::new("internal", error.to_string()))
-    }
 }
 
 impl HostCallHandler for TrackHost {
@@ -358,136 +210,12 @@ impl HostCallHandler for TrackHost {
             ) {
                 return self.score_call(method, payload, context).await;
             }
-            if method == "track.apply" {
-                let plan: TrackEditPlan = decode(payload)?;
-                let edit_scope = self.edit_scope.as_ref().ok_or_else(|| {
-                    HostCallError::new("forbidden", "this authored track is read-only")
-                })?;
-                let operation_scope = context.operation_scope().ok_or_else(|| {
-                    HostCallError::new(
-                        "internal",
-                        "editable Python cell has no durable operation scope",
-                    )
-                })?;
-                let request_fingerprint = apply_request_fingerprint(
-                    edit_scope,
-                    self.authored_workspace_id.as_deref(),
-                    &plan,
-                )?;
-                let operation_id =
-                    apply_operation_id(operation_scope.operation_namespace(), &request_fingerprint);
-                if let Some(replayed) = supervise(
-                    self.replay(&operation_id, &request_fingerprint),
-                    context,
-                    limit,
-                )
-                .await?
-                {
-                    return Ok(replayed);
-                }
-                // Compilation and read-only validation remain cancellable. Once
-                // they pass, atomically choose between Stop and the write, then
-                // await COMMIT to an authoritative result. Dropping a SQLx
-                // commit future is commit-ambiguous and is never allowed here.
-                supervise(self.check(plan.clone()), context, limit).await?;
-                context.begin_irreversible()?;
-                return self.commit(plan, &operation_id, &request_fingerprint).await;
-            }
-
-            supervise(
-                async {
-                    match method {
-                        "track.check" => {
-                            let plan = decode(payload)?;
-                            let checked = self.check(plan).await?;
-                            serde_json::to_value(checked)
-                                .map_err(|error| HostCallError::new("internal", error.to_string()))
-                        }
-                        "track.render" => self.render(decode(payload)?).await,
-                        _ => Err(HostCallError::new(
-                            "unknown_method",
-                            format!("unknown track host method {method:?}"),
-                        )),
-                    }
-                },
-                context,
-                limit,
-            )
-            .await
+            let _ = (payload, limit);
+            Err(HostCallError::new(
+                "unknown_method",
+                format!("unknown track host method {method:?}"),
+            ))
         })
-    }
-}
-
-fn apply_operation_id(operation_namespace: &str, request_fingerprint: &str) -> String {
-    format!(
-        "python-{:x}",
-        scoped_apply_digest(
-            b"luma.python-track-apply-operation.v1",
-            &[operation_namespace, request_fingerprint],
-        )
-    )
-}
-
-fn apply_request_fingerprint(
-    scope: &TrackEditScope,
-    authored_workspace_id: Option<&str>,
-    plan: &TrackEditPlan,
-) -> Result<String, HostCallError> {
-    #[derive(Serialize)]
-    struct Request<'a> {
-        scope: &'a TrackEditScope,
-        authored_workspace_id: Option<&'a str>,
-        plan: &'a TrackEditPlan,
-    }
-
-    let value = serde_json::to_value(Request {
-        scope,
-        authored_workspace_id,
-        plan,
-    })
-    .map_err(|error| HostCallError::new("invalid_request", error.to_string()))?;
-    let canonical = crate::canonical_json::to_string(&value);
-    Ok(format!(
-        "sha256:{:x}",
-        scoped_apply_digest(b"luma.python-track-apply-request.v1", &[&canonical])
-    ))
-}
-
-fn scoped_apply_digest(domain: &[u8], values: &[&str]) -> impl std::fmt::LowerHex + AsRef<[u8]> {
-    let mut hash = Sha256::new();
-    hash.update(domain);
-    for value in values {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value.as_bytes());
-    }
-    hash.finalize()
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackRenderRequest {
-    base_revision: String,
-    candidate: Vec<TrackClip>,
-    start_time: f64,
-    end_time: f64,
-}
-
-fn edit_error(error: TrackEditError) -> HostCallError {
-    let code = match &error {
-        TrackEditError::Conflict { .. } => "conflict",
-        TrackEditError::Invalid { .. } => "invalid_edit",
-        TrackEditError::Scope { .. } => "forbidden",
-        TrackEditError::Storage { .. } => "internal",
-    };
-    HostCallError::new(code, error.to_string())
-}
-
-fn authored_error(error: AuthoredDocumentsError) -> HostCallError {
-    match error {
-        AuthoredDocumentsError::Track(error) => edit_error(error),
-        AuthoredDocumentsError::Invalid(message) => HostCallError::new("invalid_edit", message),
-        AuthoredDocumentsError::Scope(message) => HostCallError::new("forbidden", message),
-        error => HostCallError::new("internal", error.to_string()),
     }
 }
 
@@ -530,25 +258,6 @@ fn sample_times(start: f64, end: f64, bpm: Option<f64>) -> Vec<f64> {
     let step = (end - start) / count as f64;
     (0..count)
         .map(|index| start + index as f64 * step)
-        .collect()
-}
-
-fn as_track_scores(scope: &TrackScope, clips: &[TrackClip]) -> Vec<TrackScore> {
-    clips
-        .iter()
-        .map(|clip| TrackScore {
-            id: clip.id.clone(),
-            uid: None,
-            score_id: scope.score_id.clone(),
-            pattern_id: clip.pattern_id.clone(),
-            start_time: clip.start_time,
-            end_time: clip.end_time,
-            z_index: clip.z_index,
-            blend_mode: clip.blend_mode,
-            args: clip.args.clone(),
-            created_at: String::new(),
-            updated_at: String::new(),
-        })
         .collect()
 }
 

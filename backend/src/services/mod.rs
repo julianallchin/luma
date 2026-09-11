@@ -15,22 +15,17 @@
 //! ([`groups::or_terms`]) rather than growing a second one.
 
 pub(crate) mod agent_execution;
-pub(crate) mod authored_documents;
-pub(crate) mod authored_merge;
-pub(crate) mod authored_state;
-pub(crate) mod authored_sync_merge;
 pub(crate) mod composable_patterns;
 pub mod distribute;
 pub mod fixture_create;
 pub mod fixtures;
+pub mod catalog;
+pub(crate) mod drafts;
 pub mod graph_documents;
 pub mod graph_scores;
 pub mod group_derivation;
 pub mod groups;
 pub mod patch;
-pub(crate) mod score_dsl;
-pub(crate) mod score_mutations;
 pub mod stage_ops;
-pub mod track_edits;
 pub mod tracks;
 pub mod waveforms;

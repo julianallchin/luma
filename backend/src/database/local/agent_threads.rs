@@ -19,7 +19,7 @@ use crate::models::agent_threads::{
 };
 
 const THREAD_COLUMNS: &str =
-    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, effort, created_at, updated_at";
+    "id, uid, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, effort, created_at, updated_at";
 
 /// The FROM/WHERE every thread *read* shares: active threads, admitted by the
 /// write-admission singleton, owned by the bound principal (one `?`).
@@ -35,7 +35,7 @@ const LIVE_THREADS_FOR_PRINCIPAL: &str = "FROM agent_threads thread
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid
+           AND thread.uid IS admission.active_uid
            AND admission.active_uid IS ?";
 
 fn thread_not_found(thread_id: &str) -> String {
@@ -46,15 +46,9 @@ fn thread_not_found(thread_id: &str) -> String {
 // receipt and a deletion receipt all become visible to push by existing with an
 // unset `synced_at`; the row is the payload, so there is nothing to copy.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ThreadDeletionTransition {
-    Started,
-    Resuming,
-}
 
 /// Create a thread. The id is always generated here — thread identity is opaque
 /// and never supplied by the caller.
-#[cfg(test)]
 pub async fn create_thread(
     pool: &SqlitePool,
     input: CreateAgentThreadInput,
@@ -64,8 +58,8 @@ pub async fn create_thread(
     create_thread_with_id(pool, &id, input, owner_user_id).await
 }
 
-/// Insert a host-derived thread identity. The authored-state service uses a
-/// deterministic ID to close the response-loss window for thread creation.
+/// Insert a caller-derived thread identity, so a retried creation finds the
+/// thread it made rather than making a second one.
 pub(crate) async fn create_thread_with_id(
     pool: &SqlitePool,
     id: &str,
@@ -81,14 +75,14 @@ pub(crate) async fn create_thread_with_id(
         .await
         .map_err(|e| format!("Failed to begin agent thread creation: {e}"))?;
     sqlx::query(
-        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider, effort)
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider, effort)
          SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              COALESCE(parent.engine, ?),
              CASE WHEN parent.id IS NOT NULL THEN parent.model ELSE ? END,
              CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END,
              CASE WHEN parent.id IS NOT NULL THEN parent.effort ELSE ? END
          FROM auth_write_admission admission
-         LEFT JOIN agent_threads parent ON parent.id = ? AND parent.owner_user_id IS admission.active_uid
+         LEFT JOIN agent_threads parent ON parent.id = ? AND parent.uid IS admission.active_uid
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0 AND admission.active_uid IS ?",
@@ -198,7 +192,7 @@ pub(crate) async fn fork_thread_for_connection(
 
     sqlx::query(
         "INSERT INTO agent_threads
-         (id, owner_user_id, agent_kind, subject_kind, subject_id,
+         (id, uid, agent_kind, subject_kind, subject_id,
           implementation_id, venue_id, score_id, forked_from_thread_id,
           forked_at_message_id, title, engine, model, provider, effort)
          SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -231,7 +225,7 @@ pub(crate) async fn fork_thread_for_connection(
             "UPDATE agent_thread_transcript_heads
              SET head_message_id = ?, message_count = ?,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-             WHERE thread_id = ? AND owner_user_id IS ?
+             WHERE thread_id = ? AND uid IS ?
                AND head_message_id IS NULL AND message_count = 0",
         )
         .bind(message_id)
@@ -283,7 +277,7 @@ async fn get_thread_row_for_connection(
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid
+           AND thread.uid IS admission.active_uid
            AND admission.active_uid IS ?",
         THREAD_COLUMNS
             .split(", ")
@@ -299,236 +293,14 @@ async fn get_thread_row_for_connection(
     row.ok_or_else(|| thread_not_found(thread_id))
 }
 
-pub(crate) async fn find_thread_row_including_deleting(
-    pool: &SqlitePool,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<Option<AgentThread>, String> {
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|e| format!("Failed to open agent thread lifecycle read: {e}"))?;
-    match get_thread_row_for_connection(&mut connection, thread_id, owner_user_id, false).await {
-        Ok(thread) => Ok(Some(thread)),
-        Err(error) if error == thread_not_found(thread_id) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
 
-/// Exact-owner terminal receipt for a thread whose lifecycle row has already
-/// been removed. `None` is deliberately distinct from an unknown or
-/// differently-owned thread ID.
-pub(crate) async fn find_thread_deletion_receipt(
-    pool: &SqlitePool,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<Option<String>, String> {
-    sqlx::query_scalar(
-        "SELECT deletion.document_id FROM agent_thread_deletions deletion
-         CROSS JOIN auth_write_admission admission
-         WHERE deletion.thread_id = ? AND deletion.owner_user_id IS ?
-           AND admission.singleton = 1 AND admission.armed = 1
-           AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0
-           AND deletion.owner_user_id IS admission.active_uid",
-    )
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| format!("Failed to load agent thread deletion receipt: {error}"))
-}
 
-pub(crate) async fn insert_thread_deletion_receipt(
-    connection: &mut SqliteConnection,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-    document_id: Option<&str>,
-) -> Result<bool, String> {
-    let principal_key = principal_key(owner_user_id);
-    // The deleting projection owns the terminal timestamp. A remote thread
-    // row may arrive before its immutable deletion receipt; reusing the
-    // server-preserved `updated_at` makes crash/startup recovery synthesize
-    // the exact same receipt instead of an immutable identity collision.
-    let deleted_at: String = sqlx::query_scalar(
-        "SELECT updated_at FROM agent_threads
-         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'deleting'",
-    )
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to load agent thread deletion timestamp: {error}"))?
-    .ok_or_else(|| format!("Agent thread is not deleting: {thread_id}"))?;
-    let inserted = sqlx::query(
-        "INSERT INTO agent_thread_deletions
-         (thread_id, owner_user_id, principal_key, document_id, deleted_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(thread_id) DO NOTHING",
-    )
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .bind(&principal_key)
-    .bind(document_id)
-    .bind(&deleted_at)
-    .execute(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to record agent thread deletion: {error}"))?;
-    if inserted.rows_affected() == 0 {
-        let exact = sqlx::query_scalar::<_, i64>(
-            "SELECT 1 FROM agent_thread_deletions
-             WHERE thread_id = ? AND owner_user_id IS ?
-               AND principal_key = ? AND document_id IS ? AND deleted_at = ?",
-        )
-        .bind(thread_id)
-        .bind(owner_user_id)
-        .bind(&principal_key)
-        .bind(document_id)
-        .bind(&deleted_at)
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(|error| format!("Failed to verify agent thread deletion retry: {error}"))?
-        .is_some();
-        if !exact {
-            return Err(format!(
-                "Agent thread deletion receipt identity collision: {thread_id}"
-            ));
-        }
-    }
-    Ok(inserted.rows_affected() == 1)
-}
 
-/// Trusted startup maintenance query. Deleting rows are intentionally hidden
-/// from every user-facing read, so the host must enumerate them directly to
-/// resume cleanup after a crash without relying on remembered UI state.
-pub(crate) async fn list_deleting_threads(
-    pool: &SqlitePool,
-    owner_user_id: Option<&str>,
-) -> Result<Vec<AgentThread>, String> {
-    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
-        "SELECT {} FROM agent_threads thread
-         CROSS JOIN auth_write_admission admission
-         WHERE thread.lifecycle_state = 'deleting'
-           AND thread.owner_user_id IS ?
-           AND admission.singleton = 1 AND admission.armed = 1
-           AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid
-         ORDER BY updated_at ASC, id ASC",
-        THREAD_COLUMNS
-            .split(", ")
-            .map(|column| format!("thread.{column}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )))
-    .bind(owner_user_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list deleting agent threads: {e}"))
-}
 
-/// Every subagent thread that still owns an active authored workspace, for the
-/// currently admitted principal.
-///
-/// A workspace outlives the turn that opened it — a cancelled delegation or a
-/// process that died mid-run both leave one active — so this is a superset of
-/// what may be retired. Which of these rows is stranded and which is being
-/// written is live state the caller holds, not a fact any row records.
-pub(crate) async fn list_subagent_threads_with_active_workspaces(
-    pool: &SqlitePool,
-    owner_user_id: Option<&str>,
-) -> Result<Vec<AgentThread>, String> {
-    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
-        "SELECT {} FROM agent_threads thread
-         CROSS JOIN auth_write_admission admission
-         WHERE thread.parent_thread_id IS NOT NULL
-           AND thread.owner_user_id IS ?
-           AND EXISTS (
-               SELECT 1 FROM authored_subagent_workspaces workspace
-               WHERE workspace.owner_thread_id = thread.id
-                 AND workspace.status = 'active'
-           )
-           AND admission.singleton = 1 AND admission.armed = 1
-           AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid
-         ORDER BY thread.updated_at ASC, thread.id ASC",
-        THREAD_COLUMNS
-            .split(", ")
-            .map(|column| format!("thread.{column}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )))
-    .bind(owner_user_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list subagent threads with active workspaces: {e}"))
-}
 
-/// Atomically close an active thread to new work. Repeating the transition is
-/// how a cleanup retry resumes after a failure or process interruption.
-pub(crate) async fn mark_thread_deleting(
-    pool: &SqlitePool,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<ThreadDeletionTransition, String> {
-    let mut tx = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|e| format!("Failed to begin agent thread deletion: {e}"))?;
-    let changed = sqlx::query(
-        "UPDATE agent_threads SET lifecycle_state = 'deleting'
-         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'active'
-           AND owner_user_id IS (
-               SELECT active_uid FROM auth_write_admission
-               WHERE singleton = 1 AND armed = 1 AND accepting = 1
-                 AND maintenance = 0 AND remote_writes = 0
-           )",
-    )
-    .bind(thread_id)
-    .bind(owner_user_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| format!("Failed to mark agent thread deleting: {e}"))?
-    .rows_affected();
 
-    let transition = if changed == 1 {
-        ThreadDeletionTransition::Started
-    } else {
-        let state = sqlx::query_scalar::<_, String>(
-            "SELECT thread.lifecycle_state FROM agent_threads thread
-                 CROSS JOIN auth_write_admission admission
-                 WHERE thread.id = ? AND thread.owner_user_id IS ?
-                   AND admission.singleton = 1 AND admission.armed = 1
-                   AND admission.accepting = 1 AND admission.maintenance = 0
-                   AND admission.remote_writes = 0
-                   AND thread.owner_user_id IS admission.active_uid",
-        )
-        .bind(thread_id)
-        .bind(owner_user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to verify agent thread deletion: {e}"))?;
-        match state.as_deref() {
-            Some("deleting") => ThreadDeletionTransition::Resuming,
-            Some(other) => {
-                return Err(format!(
-                    "Agent thread {thread_id} has invalid lifecycle state: {other}"
-                ));
-            }
-            None => return Err(thread_not_found(thread_id)),
-        }
-    };
 
-    tx.commit()
-        .await
-        .map_err(|e| format!("Failed to commit agent thread deletion: {e}"))?;
-    Ok(transition)
-}
-
-/// Transaction-local lifecycle assertion for mutations that project authored
-/// state. It prevents another process from publishing a prepared revision
-/// after deletion has durably begun.
+/// Refuse a write to a thread this admission does not own.
 pub(crate) async fn assert_thread_active(
     connection: &mut SqliteConnection,
     thread_id: &str,
@@ -537,12 +309,12 @@ pub(crate) async fn assert_thread_active(
     let found = sqlx::query_scalar::<_, i64>(
         "SELECT 1 FROM agent_threads thread
          CROSS JOIN auth_write_admission admission
-         WHERE thread.id = ? AND thread.owner_user_id IS ?
+         WHERE thread.id = ? AND thread.uid IS ?
            AND thread.lifecycle_state = 'active'
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid",
+           AND thread.uid IS admission.active_uid",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -606,7 +378,7 @@ async fn list_messages_for_connection(
              FROM agent_thread_transcript_heads AS head
              JOIN agent_thread_messages AS message
                ON message.id = head.head_message_id
-             WHERE head.thread_id = ? AND head.owner_user_id IS ?
+             WHERE head.thread_id = ? AND head.uid IS ?
              UNION ALL
              SELECT parent.id, parent.parent_message_id, parent.depth,
                     parent.role, parent.parts_json, parent.created_at
@@ -625,7 +397,7 @@ async fn list_messages_for_connection(
     .map_err(|e| format!("Failed to load agent thread messages: {e}"))?;
     let expected = sqlx::query_scalar::<_, i64>(
         "SELECT message_count FROM agent_thread_transcript_heads
-         WHERE thread_id = ? AND owner_user_id IS ?",
+         WHERE thread_id = ? AND uid IS ?",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -671,7 +443,7 @@ async fn transcript_head_for_connection(
     sqlx::query_as(
         "SELECT head_message_id, message_count
          FROM agent_thread_transcript_heads
-         WHERE thread_id = ? AND owner_user_id IS ?",
+         WHERE thread_id = ? AND uid IS ?",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -734,7 +506,7 @@ pub async fn list_history_messages(
              FROM agent_thread_transcript_heads AS head
              JOIN agent_thread_messages AS message
                ON message.id = head.head_message_id
-             WHERE head.owner_user_id IS ?
+             WHERE head.uid IS ?
                AND head.thread_id IN (
                    SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL}
                )
@@ -892,7 +664,7 @@ pub async fn append_messages_at_head(
         }
         sqlx::query(
             "INSERT INTO agent_thread_messages
-             (id, owner_user_id, principal_key, created_in_thread_id, parent_message_id,
+             (id, uid, principal_key, created_in_thread_id, parent_message_id,
               depth, role, parts_json)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
@@ -918,7 +690,7 @@ pub async fn append_messages_at_head(
         "UPDATE agent_thread_transcript_heads
          SET head_message_id = ?, message_count = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-         WHERE thread_id = ? AND owner_user_id IS ?
+         WHERE thread_id = ? AND uid IS ?
            AND head_message_id IS ? AND message_count = ?",
     )
     .bind(&result_head)
@@ -937,7 +709,7 @@ pub async fn append_messages_at_head(
     touch(&mut tx, thread_id, owner_user_id).await?;
     sqlx::query(
         "INSERT INTO agent_thread_message_appends
-         (thread_id, owner_user_id, principal_key, operation_id,
+         (thread_id, uid, principal_key, operation_id,
           request_fingerprint, base_head_message_id,
           first_message_id, result_head_message_id, message_count)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1092,7 +864,7 @@ async fn reserve_test_assistant_turn(
 ) -> Result<(), String> {
     let (owner, track_id, venue_id, score_id): (Option<String>, String, String, String) =
         sqlx::query_as(
-            "SELECT owner_user_id, subject_id, venue_id, score_id
+            "SELECT uid, subject_id, venue_id, score_id
          FROM agent_threads WHERE id = ?",
         )
         .bind(thread_id)
@@ -1169,7 +941,7 @@ async fn reserve_test_assistant_turn(
     .map_err(|error| format!("Failed to parent test authored revision: {error}"))?;
     sqlx::query(
         "INSERT INTO authored_turn_preparations
-         (thread_id, assistant_message_id, owner_user_id, principal_key, document_id,
+         (thread_id, assistant_message_id, uid, principal_key, document_id,
           prepared_revision_id)
          VALUES (?, ?, ?, ?, ?, ?)",
     )
@@ -1294,35 +1066,74 @@ fn hash_append_field(hash: &mut Sha256, value: &str) {
     hash.update(value.as_bytes());
 }
 
-/// Test-only relational deletion primitive. Production thread deletion must
-/// go through `AuthoredDocuments` so execution resources and routing state
-/// retire as one lifecycle operation. Immutable transcript nodes and receipts
-/// deliberately survive the lifecycle row.
-#[cfg(test)]
-async fn delete_thread(
+/// Delete a thread, its subagent children, and everything that belongs to
+/// them. A delete is a delete: there is no receipt and no `deleting` state to
+/// resume from, because nothing downstream has to be told twice.
+///
+/// Answers with the child thread ids, so the caller can retire their Python
+/// workspaces and published runs.
+///
+/// # Errors
+///
+/// If the thread does not exist under this principal's admission.
+pub async fn delete_thread(
     pool: &SqlitePool,
     thread_id: &str,
     owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let result = sqlx::query(
+) -> Result<Vec<String>, String> {
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to begin agent thread deletion: {error}"))?;
+    let children: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM agent_threads WHERE parent_thread_id = ? AND uid IS ?",
+    )
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to list subagent threads: {error}"))?;
+    let mut ids = children.clone();
+    ids.push(thread_id.to_owned());
+    for id in &ids {
+        for statement in [
+            "DELETE FROM drafts WHERE thread_id = ?",
+            "DELETE FROM agent_thread_transcript_heads WHERE thread_id = ?",
+            "DELETE FROM agent_thread_messages WHERE created_in_thread_id = ?",
+            "DELETE FROM agent_thread_runs WHERE thread_id = ?",
+            "DELETE FROM agent_thread_usage WHERE thread_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("Failed to delete agent thread content: {error}"))?;
+        }
+    }
+    let deleted = sqlx::query(
         "DELETE FROM agent_threads
-         WHERE id = ? AND owner_user_id IS ?
-           AND owner_user_id IS (
+         WHERE (id = ? OR parent_thread_id = ?) AND uid IS ?
+           AND uid IS (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
            )",
     )
     .bind(thread_id)
+    .bind(thread_id)
     .bind(owner_user_id)
-    .execute(pool)
+    .execute(&mut *transaction)
     .await
-    .map_err(|e| format!("Failed to delete agent thread: {e}"))?;
-
-    if result.rows_affected() == 0 {
+    .map_err(|error| format!("Failed to delete agent thread: {error}"))?
+    .rows_affected();
+    if deleted == 0 {
         return Err(thread_not_found(thread_id));
     }
-    Ok(())
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to commit agent thread deletion: {error}"))?;
+    Ok(children)
 }
 
 /// What this thread has cost so far, or `None` if nobody has recorded it.
@@ -1409,8 +1220,8 @@ pub async fn rename_thread(
         .map_err(|e| format!("Failed to begin agent thread rename: {e}"))?;
     let result = sqlx::query(
         "UPDATE agent_threads SET title = ?
-         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'active'
-           AND owner_user_id IS (
+         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
+           AND uid IS (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1489,8 +1300,8 @@ pub async fn set_thread_actor(
 ) -> Result<(), String> {
     let result = sqlx::query(
         "UPDATE agent_threads SET actor = ?
-         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'active'
-           AND owner_user_id IS (
+         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
+           AND uid IS (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1526,8 +1337,8 @@ async fn touch(
 ) -> Result<(), String> {
     let result = sqlx::query(
         "UPDATE agent_threads SET updated_at = updated_at
-         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'active'
-           AND owner_user_id IS (
+         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
+           AND uid IS (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1747,7 +1558,7 @@ mod tests {
         sqlx::raw_sql(
             "CREATE TABLE agent_threads (
                 id TEXT PRIMARY KEY,
-                owner_user_id TEXT,
+                uid TEXT,
                 agent_kind TEXT NOT NULL,
                 subject_kind TEXT,
                 subject_id TEXT,
@@ -1879,7 +1690,7 @@ mod tests {
         let pool = legacy_graph_migration_pool().await;
         sqlx::raw_sql(
             "INSERT INTO agent_threads
-                (id, owner_user_id, agent_kind, subject_kind, subject_id, title)
+                (id, uid, agent_kind, subject_kind, subject_id, title)
              VALUES ('legacy', NULL, 'pattern_graph', 'pattern', 'missing-pattern', 'Offline chat');
              INSERT INTO agent_thread_messages
                 (id, thread_id, seq, role, parts_json)
@@ -2840,9 +2651,9 @@ mod tests {
             .unwrap();
         assert!(sqlx::query(
             "INSERT INTO authored_turn_preparations
-             (thread_id, assistant_message_id, owner_user_id, principal_key,
+             (thread_id, assistant_message_id, uid, principal_key,
               document_id, prepared_revision_id)
-             SELECT ?, assistant_message_id, owner_user_id, principal_key,
+             SELECT ?, assistant_message_id, uid, principal_key,
                     document_id, prepared_revision_id
              FROM authored_turn_preparations
              WHERE thread_id = ? AND assistant_message_id = 'reserved-assistant'",
@@ -2871,9 +2682,9 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO authored_turn_preparations
-             (thread_id, assistant_message_id, owner_user_id, principal_key,
+             (thread_id, assistant_message_id, uid, principal_key,
               document_id, prepared_revision_id)
-             SELECT thread_id, assistant_message_id, owner_user_id, principal_key,
+             SELECT thread_id, assistant_message_id, uid, principal_key,
                     document_id, prepared_revision_id
              FROM authored_turn_preparations
              WHERE thread_id = ? AND assistant_message_id = 'reserved-assistant'
@@ -2900,9 +2711,9 @@ mod tests {
                 .unwrap();
 
         let outcome_sql = "INSERT INTO authored_turn_outcomes
-             (thread_id, assistant_message_id, owner_user_id, principal_key,
+             (thread_id, assistant_message_id, uid, principal_key,
               document_id, prepared_revision_id, status, result_revision_id)
-             SELECT thread_id, assistant_message_id, owner_user_id, principal_key,
+             SELECT thread_id, assistant_message_id, uid, principal_key,
                     document_id, prepared_revision_id, 'committed', ?
              FROM authored_turn_preparations
              WHERE thread_id = ? AND assistant_message_id = 'assistant-outcome'";
@@ -3246,7 +3057,7 @@ mod tests {
             .unwrap();
         assert!(sqlx::query(
             "INSERT INTO agent_thread_messages
-             (id, owner_user_id, principal_key, created_in_thread_id,
+             (id, uid, principal_key, created_in_thread_id,
               parent_message_id, depth, role, parts_json)
              VALUES ('foreign-message', 'bob', 'signed-in:bob', ?,
                      NULL, 0, 'user', '[]')",
@@ -3257,7 +3068,7 @@ mod tests {
         .is_err());
         assert!(sqlx::query(
             "INSERT INTO agent_thread_messages
-             (id, owner_user_id, principal_key, created_in_thread_id,
+             (id, uid, principal_key, created_in_thread_id,
               parent_message_id, depth, role, parts_json)
              VALUES ('orphan-message', 'alice', 'signed-in:alice', ?,
                      'missing-parent', 1, 'user', '[]')",
@@ -3268,7 +3079,7 @@ mod tests {
         .is_err());
         sqlx::query(
             "INSERT INTO agent_thread_messages
-             (id, owner_user_id, principal_key, created_in_thread_id,
+             (id, uid, principal_key, created_in_thread_id,
               parent_message_id, depth, role, parts_json)
              VALUES ('remote-assistant', 'alice', 'signed-in:alice', ?,
                      NULL, 0, 'assistant', '[{\"type\":\"text\",\"text\":\"restored\"}]')",
@@ -3279,7 +3090,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO agent_thread_message_appends
-             (thread_id, owner_user_id, principal_key, operation_id,
+             (thread_id, uid, principal_key, operation_id,
               request_fingerprint, base_head_message_id, first_message_id,
               result_head_message_id, message_count)
              VALUES (?, 'alice', 'signed-in:alice', 'remote-operation',
@@ -3334,7 +3145,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO authored_turn_outcomes
-             (thread_id, assistant_message_id, owner_user_id, principal_key,
+             (thread_id, assistant_message_id, uid, principal_key,
               document_id, prepared_revision_id, status, result_revision_id)
              VALUES (?, 'remote-assistant', 'alice', 'signed-in:alice',
                      ?, ?, 'committed', ?)",
@@ -3348,7 +3159,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO agent_thread_deletions
-             (thread_id, owner_user_id, principal_key, document_id)
+             (thread_id, uid, principal_key, document_id)
              VALUES (?, 'alice', 'signed-in:alice', ?)",
         )
         .bind(&thread.id)
@@ -3364,7 +3175,7 @@ mod tests {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM agent_thread_messages
-                 WHERE id = 'remote-assistant' AND owner_user_id = 'alice'",
+                 WHERE id = 'remote-assistant' AND uid = 'alice'",
             )
             .fetch_one(&pool)
             .await

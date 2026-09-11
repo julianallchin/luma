@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, VenueNode};
 
@@ -244,7 +244,7 @@ pub async fn delete_constraint(
     node_id: &str,
     my_socket: &str,
 ) -> Result<(), String> {
-    sync_delete::delete_synced_where(
+    deletes::delete_where(
         access.connection(),
         "venue_constraints",
         "node_id = ? AND my_socket = ?",
@@ -342,7 +342,7 @@ pub async fn delete_edge(
     access: &mut VenueAccess<'_, Write>,
     child_id: &str,
 ) -> Result<(), String> {
-    sync_delete::delete_synced_where(
+    deletes::delete_where(
         access.connection(),
         "venue_edges",
         "child_id = ?",
@@ -385,7 +385,7 @@ pub async fn set_params(
             // A non-finite value is a cleared key, not a stored NaN: NaN in a
             // transform poisons every descendant's pose.
             _ => {
-                sync_delete::delete_synced_where(
+                deletes::delete_where(
                     access.connection(),
                     "venue_node_params",
                     "node_id = ? AND key = ?",
@@ -440,7 +440,7 @@ pub async fn delete_nodes(
     ids: &[String],
 ) -> Result<(), String> {
     for id in ids {
-        sync_delete::delete_synced_where(
+        deletes::delete_where(
             access.connection(),
             "venue_nodes",
             "id = ?",

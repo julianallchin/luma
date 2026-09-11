@@ -35,9 +35,7 @@ use crate::agent_execution::CellHost;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute, ThreadRoute};
-use crate::models::authored_state::AuthoredProjectedDocument;
-use crate::services::authored_documents::AuthoredDocuments;
-use crate::services::track_edits::{TrackEditScope, TrackScope};
+use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::storage::StorageRoot;
 
 /// How many bytes of PNG one cell may hand back to the model. Figures past the
@@ -88,18 +86,18 @@ pub fn cancel_python_cell_inner(service: &PythonWorkspaceService, thread_id: &st
 pub fn resolve_execution_id(
     thread_id: &str,
     execution_id: Option<String>,
-    authored_workspace_id: Option<&str>,
+    draft_id: Option<&str>,
 ) -> Result<String, String> {
-    match (execution_id, authored_workspace_id) {
+    match (execution_id, draft_id) {
         (None, None) => Ok(thread_id.to_string()),
         (Some(execution_id), Some(workspace_id)) if execution_id == workspace_id => {
             Ok(execution_id)
         }
         (Some(_), Some(_)) => {
-            Err("child Python execution id must match its authored workspace id".into())
+            Err("child Python execution id must match its draft id".into())
         }
         _ => {
-            Err("child Python execution requires both execution and authored workspace ids".into())
+            Err("child Python execution requires both an execution id and a draft id".into())
         }
     }
 }
@@ -286,26 +284,18 @@ pub async fn run_python_cell_inner(
     resource_root: &Path,
     service: &PythonWorkspaceService,
     graph_runs: &GraphRunStore,
-    authored: &AuthoredDocuments,
     thread_id: String,
     code: String,
     requested_scope: PythonScopeInput,
     turn_message_id: Option<String>,
     current_user_id: Option<String>,
     execution_id: Option<String>,
-    authored_workspace_id: Option<String>,
+    draft_id: Option<String>,
 ) -> Result<PythonCellResult, String> {
-    let execution_id =
-        resolve_execution_id(&thread_id, execution_id, authored_workspace_id.as_deref())?;
-    if let Some(workspace_id) = authored_workspace_id.as_deref() {
-        authored
-            .authorize_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
+    let execution_id = resolve_execution_id(&thread_id, execution_id, draft_id.as_deref())?;
     // The lifecycle lease begins before any database or binding work. Deletion
     // closes this admission gate, cancels us, and drains the guard before it can
-    // remove the Python workspace or authored child workspaces.
+    // remove the Python workspace.
     let lease = service.claim_cell(&execution_id)?;
     let cancel = lease.cancel_token();
 
@@ -351,29 +341,13 @@ pub async fn run_python_cell_inner(
 
     let mut resolved =
         resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;
-    if let Some(workspace_id) = authored_workspace_id.as_deref() {
-        if resolved.track.is_some() {
-            let workspace = authored
-                .track_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
-                .await
-                .map_err(|error| error.to_string())?;
-            if resolved.track.as_ref() != Some(&workspace.scope) {
-                return Err("authored workspace does not match the resolved track scope".into());
-            }
-            resolved.bindings.track_document = Some(workspace.document);
-        } else {
-            let workspace = authored
-                .check_workspace(pool, current_user_id.as_deref(), &thread_id, workspace_id)
-                .await
-                .map_err(|error| error.to_string())?;
-            let AuthoredProjectedDocument::PatternGraph { graph, .. } = workspace.document else {
-                return Err("authored workspace does not match the resolved pattern scope".into());
-            };
-            resolved.bindings.graph_definition = Some(
-                serde_json::to_value(graph)
-                    .map_err(|error| format!("encode workspace graph binding: {error}"))?,
-            );
-        }
+    if let Some(draft) = draft_id.as_deref() {
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(|error| format!("failed to read the thread's draft: {error}"))?;
+        resolved.bindings.track_document =
+            Some(crate::services::drafts::state(&mut connection, draft).await?);
     }
     if resolved.track_edit.is_some() && operation_scope.is_none() {
         return Err("editable Python cells require a durable turn message".into());
@@ -412,11 +386,9 @@ pub async fn run_python_cell_inner(
             storage.clone(),
             resource_root.to_path_buf(),
             Arc::clone(&workspace),
-            authored.clone(),
-            thread_id.clone(),
             track_scope,
             edit_scope,
-            authored_workspace_id.clone(),
+            draft_id.clone(),
         ))
     });
     let venue = scope.venue_id.clone().map(|venue_id| {

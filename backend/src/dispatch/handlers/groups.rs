@@ -555,7 +555,7 @@ mod tests {
         let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
             .await
             .unwrap();
-        crate::database::local::sync_delete::delete_synced_where(
+        crate::database::local::deletes::delete_where(
             access.connection(),
             "fixture_groups",
             "venue_id = ?",

@@ -128,25 +128,24 @@ impl Tool for SubagentTool {
                 let services = ctx.services();
                 if services.subagents.is_running(&child_thread_id) {
                     return Err(
-                        "the child is still running; inspect its proposal after completion".into(),
+                        "the child is still running; inspect its draft after completion".into(),
                     );
                 }
-                let principal = services
-                    .admitted_principal()
+                let mut connection = services
+                    .db()
+                    .0
+                    .acquire()
                     .await
                     .map_err(|error| error.to_string())?;
-                let proposal = services
-                    .authored()
-                    .subagent_proposal(
-                        &services.db().0,
-                        principal.as_deref(),
-                        ctx.thread_id,
-                        &child_thread_id,
-                        args.path.as_deref(),
-                        args.offset.unwrap_or(0),
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
+                let proposal: Option<String> = sqlx::query_scalar(
+                    "SELECT state_json FROM drafts WHERE thread_id = ?",
+                )
+                .bind(&child_thread_id)
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(|error| error.to_string())?;
+                let proposal = proposal
+                    .ok_or_else(|| format!("{child_thread_id} has no draft to inspect"))?;
                 Ok(serde_json::json!({"proposal":proposal}))
             }
         }

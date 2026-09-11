@@ -69,9 +69,6 @@ pub(crate) fn to_string(value: &Value) -> String {
     }
 }
 
-pub(crate) fn equivalent(left: &Value, right: &Value) -> bool {
-    to_string(left) == to_string(right)
-}
 
 #[cfg(test)]
 mod tests {

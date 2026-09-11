@@ -152,7 +152,7 @@ impl Tool for ProbeTool {
             .map_err(|error| error.to_string())?;
         let probe = Probe {
             thread_id: ctx.thread_id.to_string(),
-            workspace_id: ctx.authored_workspace_id.map(ToString::to_string),
+            workspace_id: ctx.draft_id.map(ToString::to_string),
             live_head: live.revision_id,
         };
         self.0.lock().expect("poisoned").push(probe.clone());

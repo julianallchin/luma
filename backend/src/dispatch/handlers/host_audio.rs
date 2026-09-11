@@ -27,9 +27,7 @@ pub async fn host_load_segment(
     if !services.host_audio.begin_load(session, track_id.clone()) {
         return Ok(());
     }
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let pool = &services.db.0;
@@ -93,9 +91,7 @@ pub async fn host_load_track(
     if !services.host_audio.begin_load(session, track_id.clone()) {
         return Ok(());
     }
-    services
-        .sync
-        .ensure_track_audio(&services.storage, &track_id)
+    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let pool = &services.db.0;
