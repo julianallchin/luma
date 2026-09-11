@@ -22,7 +22,7 @@ fn input_infers_a_shared_value_and_renames_without_losing_overrides() {
         GraphEdit::AddInput {
             key: "accent".into(),
             name: "Accent".into(),
-            position: [-200., 30.],
+            position: Some([-200., 30.]),
         },
     );
     assert!(
@@ -124,7 +124,7 @@ fn dropdown_inputs_keep_their_kind_and_reject_incompatible_destinations_atomical
             GraphEdit::AddInput {
                 key: "edges".into(),
                 name: "Edges".into(),
-                position: [0., 0.],
+                position: Some([0., 0.]),
             },
         )
         .unwrap();

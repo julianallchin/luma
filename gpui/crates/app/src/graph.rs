@@ -1133,9 +1133,29 @@ impl Scene {
             }
             (count > 0.).then(|| sum / count)
         };
+        // Wire order: producers before consumers. A cycle, which the
+        // document never validates, leaves its cards at the left.
+        let mut indegree: Vec<usize> = pred.iter().map(Vec::len).collect();
+        let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+        let mut topological = Vec::with_capacity(n);
+        let mut column = vec![0usize; n];
+        while let Some(i) = queue.pop_front() {
+            topological.push(i);
+            for &(j, ..) in &succ[i] {
+                column[j] = column[j].max(column[i] + 1);
+                indegree[j] -= 1;
+                if indegree[j] == 0 {
+                    queue.push_back(j);
+                }
+            }
+        }
+        let missing: Vec<usize> = (0..n).filter(|i| !topological.contains(i)).collect();
+        topological.extend(missing);
         if self.cards.iter().any(|card| card.placed) {
+            // Consumers first, so a chain of new cards grows leftward from
+            // what it feeds.
             let mut settled: Vec<bool> = self.cards.iter().map(|card| card.placed).collect();
-            for i in 0..n {
+            for &i in topological.iter().rev() {
                 if settled[i] {
                     continue;
                 }
@@ -1175,23 +1195,6 @@ impl Scene {
         // Columns: the longest wire path from a source, then each card slides
         // toward whichever side it has more wires on, as far as the other
         // side allows. Every slide shortens the wires, so this settles.
-        let mut column = vec![0usize; n];
-        let mut indegree: Vec<usize> = pred.iter().map(Vec::len).collect();
-        let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
-        let mut topological = Vec::with_capacity(n);
-        while let Some(i) = queue.pop_front() {
-            topological.push(i);
-            for &(j, ..) in &succ[i] {
-                column[j] = column[j].max(column[i] + 1);
-                indegree[j] -= 1;
-                if indegree[j] == 0 {
-                    queue.push_back(j);
-                }
-            }
-        }
-        // A cycle, which the document never validates, leaves its cards at the left.
-        let missing: Vec<usize> = (0..n).filter(|i| !topological.contains(i)).collect();
-        topological.extend(missing);
         loop {
             let mut changed = false;
             for &i in topological.iter().rev() {

@@ -12,7 +12,9 @@ pub enum GraphEdit {
     AddInput {
         key: String,
         name: String,
-        position: [f64; 2],
+        /// Where the editor put the card. Code leaves it to the layout.
+        #[serde(default)]
+        position: Option<[f64; 2]>,
     },
     RenameInput {
         key: String,
@@ -94,7 +96,7 @@ impl Definition {
                 }
                 let node = crate::InputNode {
                     name: name.trim().into(),
-                    position: Some(position),
+                    position,
                 };
                 node.validate()?;
                 graph.input_nodes.insert(key, node);
@@ -447,7 +449,7 @@ mod tests {
                 GraphEdit::AddInput {
                     key: "pill_size".into(),
                     name: "Pill size".into(),
-                    position: [0., 0.],
+                    position: None,
                 },
             )
             .unwrap();

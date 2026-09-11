@@ -697,7 +697,7 @@ impl Luma {
                 p::GraphEdit::AddInput {
                     key,
                     name: "Input".into(),
-                    position,
+                    position: Some(position),
                 },
                 cx,
             );

@@ -629,10 +629,16 @@ class Graph:
                           "binding": None if value is None else self._binding(value, spec["inputs"][key]["value_type"])})
         self._edit._gesture(self.id, edits)
 
-    def add_input(self, name, *, key=None, position=(0, 0)):
-        """Add a named Input; its first destination infers type and default."""
+    def add_input(self, name, *, key=None, position=None):
+        """Add a named Input; its first destination infers type and default.
+
+        Leave position alone and the canvas lays the card out beside its wire.
+        """
         key = key or str(uuid.uuid4())
-        self._edit._gesture(self.id, [{"op": "add_input", "key": key, "name": name, "position": list(position)}])
+        edit = {"op": "add_input", "key": key, "name": name}
+        if position is not None:
+            edit["position"] = list(position)
+        self._edit._gesture(self.id, [edit])
         return Input(self, key)
 
     def expose(self, node, input, *, key=None, name=None):
@@ -643,7 +649,7 @@ class Graph:
             raise TrackError(f"node {node.id} has no input {input!r}")
         key = key or input
         self._edit._gesture(self.id, [
-            {"op": "add_input", "key": key, "name": name or spec["name"], "position": [0, 0]},
+            {"op": "add_input", "key": key, "name": name or spec["name"]},
             {"op": "bind", "node": node.id, "input": input, "binding": {"source": "input", "input": key}},
         ])
         return Input(self, key)
