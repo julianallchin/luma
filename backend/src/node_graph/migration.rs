@@ -85,6 +85,7 @@ pub(crate) fn typed_pattern(source: &Graph, name: &str) -> Result<p::Score, Stri
                     value_type: kind,
                     rate: Rate::Fixed,
                     default: Some(argument_value(&arg.arg_type, kind, &arg.default_value)?),
+                    author: None,
                 },
             );
         }
@@ -378,20 +379,19 @@ mod tests {
             let Body::Graph(body) = &root.body else {
                 panic!()
             };
-            assert_eq!(
-                root.inputs.len(),
-                graph
+            // Controls the current engine no longer has (flicker, reseeding)
+            // leave the interface; every remaining input is an authored control.
+            assert_eq!(body.input_nodes.len(), root.inputs.len());
+            assert!(!root.inputs.is_empty(), "{id}");
+            for (key, input) in &root.inputs {
+                let arg = graph
                     .args
                     .iter()
-                    .filter(|a| a.arg_type != PatternArgType::Selection)
-                    .count()
-            );
-            assert_eq!(body.input_nodes.len(), root.inputs.len());
-            for arg in &graph.args {
-                if arg.arg_type != PatternArgType::Selection {
-                    assert_eq!(root.inputs[&arg.id].name, arg.name);
-                    assert_eq!(body.input_nodes[&arg.id].name, arg.name);
-                }
+                    .find(|a| a.id == *key)
+                    .unwrap_or_else(|| panic!("{id}: input {key} is not a typed control"));
+                assert_ne!(arg.arg_type, PatternArgType::Selection);
+                assert_eq!(input.name, arg.name);
+                assert_eq!(body.input_nodes[key].name, arg.name);
             }
             converted.validate(&p::standard_library()).unwrap();
             count += 1;

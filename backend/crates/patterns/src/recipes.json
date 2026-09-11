@@ -240,25 +240,6 @@
       }
     }
   },
-  "shimmer": {
-    "name": "Shimmer",
-    "inputs": {
-      "proportion": {"name":"Proportion","description":"Fraction of heads selected on each roll, rounded to the nearest head","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"fixed","default":{"type":"proportion","value":0.25}},
-      "repeat": {"name":"Reroll every","description":"Beats between selections","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.125}},
-      "duration": {"name":"Fade duration","description":"Independent lifetime of each selected head's envelope, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "shape": {"name":"Brightness curve","description":"Evaluated from each selection's start time","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},
-      "seed": {"name":"Seed","description":"Repeatable random selections","value_type":"seed","rate":"fixed","default":{"type":"seed","value":0}}
-    },
-    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "roll": {"definition":"beat_trigger","inputs":{"repeat":{"source":"input","input":"repeat"}}},
-        "select": {"definition":"random_subset","inputs":{"events":{"source":"connection","node":"roll","output":"trigger"},"proportion":{"source":"input","input":"proportion"},"seed":{"source":"input","input":"seed"}}},
-        "envelope": {"definition":"pulse","inputs":{"trigger":{"source":"connection","node":"select","output":"events"},"travel":{"source":"input","input":"duration"},"shape":{"source":"input","input":"shape"}}}
-      },
-      "outputs": {"dimmer":{"source":"connection","node":"envelope","output":"dimmer"}}
-    }}
-  },
   "circle": {
     "name": "Circle",
     "inputs": {
@@ -313,31 +294,6 @@
       "outputs": {"color":{"source":"connection","node":"output","output":"color"},"dimmer":{"source":"connection","node":"output","output":"dimmer"}}
     }}
   },
-  "chase": {
-    "name": "Chase",
-    "inputs": {
-      "boundary": {"name":"Boundary","description":"Follow mapping, clip, or wrap","value_type":"boundary","rate":"fixed","default":{"type":"boundary","value":"natural"}},
-      "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
-      "end": {"name":"End position","description":"Value","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":1.0}},
-      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "mapping": {"name":"Mapping","description":"Coordinate source, grouping, and orientation","value_type":"mapping","rate":"fixed","default":{"type":"mapping","value":{"source":{"kind":"z"},"per_group":false,"reverse":false}}},
-      "path": {"name":"Travel curve","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},
-      "repeat": {"name":"Repeat","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
-      "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},
-      "start": {"name":"Start position","description":"Value","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0}},
-      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
-      "trigger": {"name":"Trigger","description":"Event timestamps; unwired uses Repeat","value_type":"events","rate":"frame","default":{"type":"events","value":{"source":"automatic"}}},
-      "width": {"name":"Width","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}}
-    },
-    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "chase": {"definition":"core/chase_events","inputs":{"boundary":{"source":"input","input":"boundary"},"delay":{"source":"input","input":"delay"},"end":{"source":"input","input":"end"},"grid_aligned":{"source":"input","input":"grid_aligned"},"mapping":{"source":"connection","node":"mapping","output":"coordinates"},"path":{"source":"input","input":"path"},"repeat":{"source":"input","input":"repeat"},"shape":{"source":"input","input":"shape"},"start":{"source":"input","input":"start"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"input","input":"trigger"},"width":{"source":"input","input":"width"}}},
-        "mapping": {"definition":"resolve_mapping","inputs":{"mapping":{"source":"input","input":"mapping"}}}
-      },
-      "outputs": {"dimmer":{"source":"connection","node":"chase","output":"mask"}}
-    }}
-  },
   "core/color_components": {
     "name": "Color components",
     "inputs": {
@@ -356,73 +312,20 @@
       "outputs": {"color":{"source":"connection","node":"output/4","output":"value"},"dimmer":{"source":"connection","node":"output","output":"value"}}
     }}
   },
-  "dissolve_flash": {
-    "name": "Dissolve Flash",
-    "inputs": {
-      "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
-      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "refresh": {"name":"Flicker","description":"Flicker","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "refresh_every": {"name":"Refresh every","description":"Refresh every","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.125}},
-      "repeat": {"name":"Repeat","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
-      "reseed": {"name":"New order each stroke","description":"New order each stroke","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":true}},
-      "shape": {"name":"Fade shape","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},
-      "softness": {"name":"Cell fade softness","description":"Cell fade softness","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.0}},
-      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
-      "trigger": {"name":"Trigger","description":"Event timestamps; unwired uses Repeat","value_type":"events","rate":"frame","default":{"type":"events","value":{"source":"automatic"}}}
-    },
-    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "effect": {"definition":"core/dissolve_events","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"refresh":{"source":"input","input":"refresh"},"refresh_every":{"source":"input","input":"refresh_every"},"repeat":{"source":"input","input":"repeat"},"reseed":{"source":"input","input":"reseed"},"shape":{"source":"input","input":"shape"},"softness":{"source":"input","input":"softness"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"input","input":"trigger"}}}
-      },
-      "outputs": {"dimmer":{"source":"connection","node":"effect","output":"mask"}}
-    }}
-  },
-  "dissolve_mask": {
-    "name": "Dissolve Mask",
-    "inputs": {
-      "coverage": {"name":"Coverage","description":"Coverage","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":1.0}},
-      "cycle": {"name":"Stroke index","description":"Stroke index","value_type":{"signal":{"unit":"number","channels":"value"}},"rate":"frame","default":{"type":"number","value":0.0}},
-      "refresh": {"name":"Flicker","description":"Flicker","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "refresh_every": {"name":"Refresh every","description":"Refresh every","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.125}},
-      "reseed": {"name":"New order each stroke","description":"New order each stroke","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":true}},
-      "softness": {"name":"Cell fade softness","description":"Cell fade softness","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.0}}
-    },
-    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "choose": {"definition":"core/choose","inputs":{"condition":{"source":"connection","node":"soft","output":"mask"},"no":{"source":"connection","node":"hard","output":"mask"},"yes":{"source":"connection","node":"fade","output":"value"}}},
-        "coverage": {"definition":"core/clamp_coverage","inputs":{"value":{"source":"connection","node":"choose","output":"value"}}},
-        "elapsed": {"definition":"core/subtract","inputs":{"a":{"source":"connection","node":"progress","output":"value"},"b":{"source":"connection","node":"fade_start","output":"value"}}},
-        "epoch": {"definition":"core/choose_number","inputs":{"condition":{"source":"input","input":"refresh"},"no":{"source":"connection","node":"stroke","output":"value"},"yes":{"source":"connection","node":"refresh_clock","output":"cycle"}}},
-        "fade": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"connection","node":"fraction","output":"value"}}},
-        "fade_start": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"random","output":"value"},"b":{"source":"connection","node":"spread","output":"value"}}},
-        "fraction": {"definition":"core/divide","inputs":{"a":{"source":"connection","node":"elapsed","output":"value"},"b":{"source":"input","input":"softness"}}},
-        "hard": {"definition":"core/greater","inputs":{"a":{"source":"connection","node":"random","output":"value"},"b":{"source":"connection","node":"progress","output":"value"},"tolerance":{"source":"value","value":{"type":"number","value":0.0}}}},
-        "progress": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"input","input":"coverage"}}},
-        "random": {"definition":"core/random","inputs":{"epoch":{"source":"connection","node":"epoch","output":"value"}}},
-        "refresh_clock": {"definition":"rhythm","inputs":{"delay":{"source":"value","value":{"type":"beats","value":0.0}},"grid_aligned":{"source":"value","value":{"type":"boolean","value":false}},"repeat":{"source":"input","input":"refresh_every"}}},
-        "soft": {"definition":"core/greater","inputs":{"a":{"source":"input","input":"softness"},"b":{"source":"value","value":{"type":"number","value":0.0}},"tolerance":{"source":"value","value":{"type":"number","value":0.0}}}},
-        "spread": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"input","input":"softness"}}},
-        "stroke": {"definition":"core/choose_number","inputs":{"condition":{"source":"input","input":"reseed"},"no":{"source":"value","value":{"type":"number","value":0.0}},"yes":{"source":"input","input":"cycle"}}}
-      },
-      "outputs": {"mask":{"source":"connection","node":"coverage","output":"mask"}}
-    }}
-  },
   "drum_mask": {
     "name": "Drum pulse mask",
     "inputs": {
       "drum": {"name":"Drum","description":"Drum","value_type":"drum","rate":"fixed","default":{"type":"drum","value":"kick"}},
       "duration": {"name":"Fade duration","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}}
+      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}}
     },
     "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
       "nodes": {
         "events": {"definition":"drum_trigger","inputs":{"drum":{"source":"input","input":"drum"}}},
-        "shape": {"definition":"pulse","inputs":{"delay":{"source":"value","value":{"type":"beats","value":0.0}},"grid_aligned":{"source":"value","value":{"type":"boolean","value":false}},"repeat":{"source":"value","value":{"type":"beats","value":4.0}},"shape":{"source":"input","input":"shape"},"travel":{"source":"input","input":"duration"},"trigger":{"source":"connection","node":"events","output":"trigger"}}}
+        "shape": {"definition":"pulse","inputs":{"duration":{"source":"input","input":"duration"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}}
       },
-      "outputs": {"mask":{"source":"connection","node":"shape","output":"dimmer"}}
+      "outputs": {"mask":{"source":"connection","node":"shape","output":"mask"}}
     }}
   },
   "drum_pulse": {
@@ -431,7 +334,7 @@
       "color": {"name":"Color","description":"Color","value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame","default":{"type":"color","value":[1.0,1.0,1.0]}},
       "drum": {"name":"Drum","description":"Drum","value_type":"drum","rate":"fixed","default":{"type":"drum","value":"kick"}},
       "duration": {"name":"Fade duration","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}}
+      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}}
     },
     "outputs": {"color":{"value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame"},"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
@@ -440,26 +343,6 @@
         "output": {"definition":"core/color_components","inputs":{"color":{"source":"input","input":"color"},"mask":{"source":"connection","node":"mask","output":"mask"}}}
       },
       "outputs": {"color":{"source":"connection","node":"output","output":"color"},"dimmer":{"source":"connection","node":"output","output":"dimmer"}}
-    }}
-  },
-  "event_mask": {
-    "name": "Event envelope",
-    "inputs": {
-      "duration": {"name":"Fade duration","description":"Travel plus dark rest, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
-      "elapsed": {"name":"Elapsed","description":"Musical time since this stroke began","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"frame","default":{"type":"beats","value":0.0}},
-      "present": {"name":"Amount","description":"Mask strength","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":1.0}},
-      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}}
-    },
-    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "active": {"definition":"scale_mask","inputs":{"amount":{"source":"connection","node":"time","output":"active"},"mask":{"source":"connection","node":"mask","output":"mask"}}},
-        "mask": {"definition":"uniform_mask","inputs":{"coverage":{"source":"connection","node":"shape","output":"value"}}},
-        "present": {"definition":"scale_mask","inputs":{"amount":{"source":"input","input":"present"},"mask":{"source":"connection","node":"active","output":"mask"}}},
-        "shape": {"definition":"envelope","inputs":{"progress":{"source":"connection","node":"time","output":"progress"},"shape":{"source":"input","input":"shape"}}},
-        "time": {"definition":"motion","inputs":{"elapsed":{"source":"input","input":"elapsed"},"end":{"source":"value","value":{"type":"position","value":1.0}},"path":{"source":"value","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},"start":{"source":"value","value":{"type":"position","value":0.0}},"travel":{"source":"input","input":"duration"}}}
-      },
-      "outputs": {"mask":{"source":"connection","node":"present","output":"mask"}}
     }}
   },
   "gradient": {
@@ -513,13 +396,13 @@
   "motion": {
     "name": "Motion",
     "inputs": {
-      "elapsed": {"name":"Elapsed","description":"Musical time since this stroke began","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"frame","default":{"type":"beats","value":0.0}},
+      "elapsed": {"name":"Elapsed","description":"Musical time since this stroke began","value_type":{"signal":{"unit":"beats","channels":null}},"rate":"frame","default":{"type":"beats","value":0.0}},
       "end": {"name":"End position","description":"Value","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":1.0}},
-      "path": {"name":"Travel curve","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},
+      "path": {"name":"Travel curve","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Ramp","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},{"label":"Bounce","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Ease","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,0.15],[1.0,1.0]]}}}],"custom":true}},
       "start": {"name":"Start position","description":"Value","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0}},
       "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}}
     },
-    "outputs": {"active":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"},"position":{"value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame"},"progress":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "outputs": {"active":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"},"position":{"value_type":{"signal":{"unit":"position","channels":null}},"rate":"frame"},"progress":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
       "nodes": {
         "clock": {"definition":"core/divide","inputs":{"a":{"source":"input","input":"elapsed"},"b":{"source":"input","input":"travel"}}},
@@ -608,14 +491,14 @@
   "pill": {
     "name": "Pill",
     "inputs": {
-      "active": {"name":"Activity","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":1.0}},
+      "active": {"name":"Activity","description":"Scales the stroke; zero hides it","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":1.0}},
       "boundary": {"name":"Boundary","description":"Follow mapping, clip, or wrap","value_type":"boundary","rate":"fixed","default":{"type":"boundary","value":"natural"}},
       "mapping": {"name":"Mapping","description":"Resolved coordinates","value_type":"coordinates","rate":"fixed","default":null},
-      "position": {"name":"Position","description":"Stroke center in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0}},
-      "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},
+      "position": {"name":"Position","description":"Stroke center in mapped coordinates","value_type":{"signal":{"unit":"position","channels":null}},"rate":"frame","default":{"type":"position","value":0.0}},
+      "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Soft edges","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},{"label":"Hard edges","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
       "width": {"name":"Width","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}}
     },
-    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
       "nodes": {
         "before_end": {"definition":"core/greater","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"connection","node":"phase","output":"value"},"tolerance":{"source":"value","value":{"type":"number","value":1e-12}}}},
@@ -659,44 +542,6 @@
         "visible": {"definition":"multiply_mask","inputs":{"a":{"source":"connection","node":"inside","output":"mask"},"b":{"source":"connection","node":"nonzero","output":"mask"}}}
       },
       "outputs": {"mask":{"source":"connection","node":"result","output":"mask"}}
-    }}
-  },
-  "pulse": {
-    "name": "Pulse",
-    "inputs": {
-      "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
-      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "repeat": {"name":"Repeat","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
-      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},
-      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
-      "trigger": {"name":"Trigger","description":"Event timestamps; unwired uses Repeat","value_type":"events","rate":"frame","default":{"type":"events","value":{"source":"automatic"}}}
-    },
-    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "pulse": {"definition":"core/pulse_events","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"},"shape":{"source":"input","input":"shape"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"input","input":"trigger"}}}
-      },
-      "outputs": {"dimmer":{"source":"connection","node":"pulse","output":"mask"}}
-    }}
-  },
-  "pulse_dimmer": {
-    "name": "Dimmer pulse",
-    "inputs": {
-      "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
-      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
-      "repeat": {"name":"Repeat","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
-      "shape": {"name":"Envelope","description":"Normalized editable curve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},
-      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
-      "trigger": {"name":"Trigger","description":"Event timestamps; unwired uses Repeat","value_type":"events","rate":"frame","default":{"type":"events","value":{"source":"automatic"}}}
-    },
-    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
-    "body": {"kind":"graph","body":{
-      "nodes": {
-        "output": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"pulse","output":"dimmer"},"b":{"source":"value","value":{"type":"number","value":0.0}}}},
-        "output/2": {"definition":"core/minimum","inputs":{"a":{"source":"connection","node":"output","output":"value"},"b":{"source":"value","value":{"type":"number","value":1.0}}}},
-        "pulse": {"definition":"pulse","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"},"shape":{"source":"input","input":"shape"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"input","input":"trigger"}}}
-      },
-      "outputs": {"dimmer":{"source":"connection","node":"output/2","output":"value"}}
     }}
   },
   "radial_distance": {
@@ -784,7 +629,8 @@
         "index": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"fraction","output":"value"},"b":{"source":"connection","node":"size","output":"value"}}},
         "positive": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"floor","output":"value"},"b":{"source":"value","value":{"type":"number","value":0.0}}}},
         "random": {"definition":"core/random","inputs":{"epoch":{"source":"connection","node":"epoch","output":"value"}}},
-        "rank": {"definition":"core/rank","inputs":{"value":{"source":"connection","node":"random","output":"value"}}},
+        "order": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"connection","node":"random","output":"value"}}},
+        "rank": {"definition":"core/rank","inputs":{"value":{"source":"connection","node":"order","output":"value"}}},
         "rotated": {"definition":"core/subtract","inputs":{"a":{"source":"connection","node":"rank","output":"value"},"b":{"source":"connection","node":"advance","output":"value"}}},
         "selected": {"definition":"core/greater","inputs":{"a":{"source":"connection","node":"count","output":"value"},"b":{"source":"connection","node":"index","output":"value"},"tolerance":{"source":"value","value":{"type":"number","value":1e-09}}}},
         "size": {"definition":"core/head_count","inputs":{"value":{"source":"connection","node":"rank","output":"value"}}},
@@ -944,6 +790,237 @@
         "output/2": {"definition":"core/minimum","inputs":{"a":{"source":"connection","node":"output","output":"value"},"b":{"source":"value","value":{"type":"number","value":1.0}}}}
       },
       "outputs": {"strobe":{"source":"connection","node":"output/2","output":"value"}}
+    }}
+  },
+
+  "event_envelope": {
+    "name": "Event envelope",
+    "inputs": {
+      "progress": {"name":"Progress","description":"Each event's progress from 0 to 1","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.0}},
+      "shape": {"name":"Shape","description":"Brightness over each event's progress","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "weight": {"name":"Weight","description":"Per-head weight of each event; zero once it ends","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":1.0}}
+    },
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "curve": {"definition":"envelope","inputs":{"progress":{"source":"input","input":"progress"},"shape":{"source":"input","input":"shape"}}},
+        "lit": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"curve","output":"value"},"b":{"source":"input","input":"weight"}}},
+        "mask": {"definition":"core/channel_maximum","inputs":{"value":{"source":"connection","node":"lit","output":"value"}}}
+      },
+      "outputs": {"mask":{"source":"connection","node":"mask","output":"value"}}
+    }}
+  },
+
+  "pulse": {
+    "name": "Pulse",
+    "inputs": {
+      "duration": {"name":"Duration","description":"How long each pulse lasts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "shape": {"name":"Shape","description":"Brightness over each pulse","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "trigger": {"name":"Trigger","description":"Each event starts an independent pulse","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
+    },
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"duration"},"events":{"source":"input","input":"trigger"}}},
+        "envelope": {"definition":"event_envelope","inputs":{"progress":{"source":"connection","node":"ages","output":"progress"},"shape":{"source":"input","input":"shape"},"weight":{"source":"connection","node":"ages","output":"weight"}}}
+      },
+      "outputs": {"mask":{"source":"connection","node":"envelope","output":"mask"}}
+    }}
+  },
+
+  "chase": {
+    "name": "Chase",
+    "inputs": {
+      "boundary": {"name":"Boundary","description":"Follow mapping, clip, or wrap","value_type":"boundary","rate":"fixed","default":{"type":"boundary","value":"natural"}},
+      "end": {"name":"End position","description":"Where each journey ends, in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":1.0},"author":{"kind":"choice","options":[{"label":"Before start","value":{"type":"position","value":-0.25}},{"label":"Start","value":{"type":"position","value":0.0}},{"label":"Middle","value":{"type":"position","value":0.5}},{"label":"End","value":{"type":"position","value":1.0}},{"label":"After end","value":{"type":"position","value":1.25}}],"custom":true}},
+      "mapping": {"name":"Mapping","description":"Resolved coordinate of each head","value_type":"coordinates","rate":"fixed","default":null},
+      "path": {"name":"Travel curve","description":"Position over each journey","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Ramp","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},{"label":"Bounce","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Ease","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,0.15],[1.0,1.0]]}}}],"custom":true}},
+      "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Soft edges","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},{"label":"Hard edges","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "start": {"name":"Start position","description":"Where each journey starts, in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0},"author":{"kind":"choice","options":[{"label":"Before start","value":{"type":"position","value":-0.25}},{"label":"Start","value":{"type":"position","value":0.0}},{"label":"Middle","value":{"type":"position","value":0.5}},{"label":"End","value":{"type":"position","value":1.0}},{"label":"After end","value":{"type":"position","value":1.25}}],"custom":true}},
+      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "trigger": {"name":"Trigger","description":"Each event launches an independent journey","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}},
+      "width": {"name":"Width","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}}
+    },
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"travel"},"events":{"source":"input","input":"trigger"}}},
+        "journey": {"definition":"motion","inputs":{"elapsed":{"source":"connection","node":"ages","output":"elapsed"},"end":{"source":"input","input":"end"},"path":{"source":"input","input":"path"},"start":{"source":"input","input":"start"},"travel":{"source":"input","input":"travel"}}},
+        "stroke": {"definition":"pill","inputs":{"active":{"source":"connection","node":"ages","output":"weight"},"boundary":{"source":"input","input":"boundary"},"mapping":{"source":"input","input":"mapping"},"position":{"source":"connection","node":"journey","output":"position"},"shape":{"source":"input","input":"shape"},"width":{"source":"input","input":"width"}}},
+        "mask": {"definition":"core/channel_maximum","inputs":{"value":{"source":"connection","node":"stroke","output":"mask"}}}
+      },
+      "outputs": {"mask":{"source":"connection","node":"mask","output":"value"}}
+    }}
+  },
+
+  "random_selection": {
+    "name": "Random selection",
+    "inputs": {
+      "index": {"name":"Index","description":"Each distinct index draws a new random order of heads","value_type":{"signal":{"unit":"number","channels":null}},"rate":"frame","default":{"type":"number","value":0.0}},
+      "proportion": {"name":"Proportion","description":"Fraction of heads selected, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.25}},
+      "softness": {"name":"Softness","description":"Coverage span over which each head fades instead of switching","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.0}}
+    },
+    "outputs": {"selected":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "random": {"definition":"core/random","inputs":{"epoch":{"source":"input","input":"index"}}},
+        "order": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"connection","node":"random","output":"value"}}},
+        "rank": {"definition":"core/rank","inputs":{"value":{"source":"connection","node":"order","output":"value"}}},
+        "count": {"definition":"core/head_count","inputs":{"value":{"source":"connection","node":"rank","output":"value"}}},
+        "wanted": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"proportion"},"b":{"source":"connection","node":"count","output":"value"}}},
+        "hard": {"definition":"core/greater","inputs":{"a":{"source":"connection","node":"wanted","output":"value"},"b":{"source":"connection","node":"rank","output":"value"},"tolerance":{"source":"value","value":{"type":"number","value":0.0}}}},
+        "keep": {"definition":"core/subtract","inputs":{"a":{"source":"value","value":{"type":"number","value":1.0}},"b":{"source":"input","input":"softness"}}},
+        "scaled": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"rank","output":"value"},"b":{"source":"connection","node":"keep","output":"value"}}},
+        "margin": {"definition":"core/subtract","inputs":{"a":{"source":"connection","node":"wanted","output":"value"},"b":{"source":"connection","node":"scaled","output":"value"}}},
+        "band": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"softness"},"b":{"source":"connection","node":"count","output":"value"}}},
+        "soft": {"definition":"core/divide","inputs":{"a":{"source":"connection","node":"margin","output":"value"},"b":{"source":"connection","node":"band","output":"value"}}},
+        "faded": {"definition":"core/clamp_coverage","inputs":{"value":{"source":"connection","node":"soft","output":"value"}}},
+        "soften": {"definition":"core/greater","inputs":{"a":{"source":"input","input":"softness"},"b":{"source":"value","value":{"type":"number","value":0.0}},"tolerance":{"source":"value","value":{"type":"number","value":0.0}}}},
+        "selected": {"definition":"core/choose","inputs":{"condition":{"source":"connection","node":"soften","output":"mask"},"no":{"source":"connection","node":"hard","output":"mask"},"yes":{"source":"connection","node":"faded","output":"mask"}}}
+      },
+      "outputs": {"selected":{"source":"connection","node":"selected","output":"value"}}
+    }}
+  },
+
+  "random_head_events": {
+    "name": "Random head events",
+    "inputs": {
+      "duration": {"name":"Duration","description":"How long each event stays active, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
+      "proportion": {"name":"Proportion","description":"Fraction of heads each event addresses, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.25}},
+      "trigger": {"name":"Trigger","description":"Each event addresses a fresh random set of heads","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
+    },
+    "outputs": {"progress":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"},"weight":{"value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"duration"},"events":{"source":"input","input":"trigger"}}},
+        "heads": {"definition":"random_selection","inputs":{"index":{"source":"connection","node":"ages","output":"index"},"proportion":{"source":"input","input":"proportion"}}},
+        "weight": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"heads","output":"selected"},"b":{"source":"connection","node":"ages","output":"weight"}}}
+      },
+      "outputs": {"progress":{"source":"connection","node":"ages","output":"progress"},"weight":{"source":"connection","node":"weight","output":"value"}}
+    }}
+  },
+
+  "shimmer": {
+    "name": "Shimmer",
+    "inputs": {
+      "duration": {"name":"Duration","description":"Independent lifetime of each head's brightness curve, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
+      "proportion": {"name":"Proportion","description":"Fraction of heads each event lights, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":null}},"rate":"frame","default":{"type":"proportion","value":0.25}},
+      "shape": {"name":"Brightness curve","description":"Brightness over each head's event","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "trigger": {"name":"Trigger","description":"Each event lights a fresh random set of heads","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
+    },
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "heads": {"definition":"random_head_events","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"trigger":{"source":"input","input":"trigger"}}},
+        "envelope": {"definition":"event_envelope","inputs":{"progress":{"source":"connection","node":"heads","output":"progress"},"shape":{"source":"input","input":"shape"},"weight":{"source":"connection","node":"heads","output":"weight"}}}
+      },
+      "outputs": {"mask":{"source":"connection","node":"envelope","output":"mask"}}
+    }}
+  },
+
+  "dissolve": {
+    "name": "Dissolve",
+    "inputs": {
+      "duration": {"name":"Duration","description":"How long each dissolve takes, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "proportion": {"name":"Coverage","description":"Fraction of heads lit over each dissolve, in a seeded random order","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Hold then fade","value":{"type":"envelope","value":{"points":[[0.0,1.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Fade in","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}}],"custom":true}},
+      "shape": {"name":"Brightness curve","description":"Brightness of the lit heads over each dissolve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "softness": {"name":"Softness","description":"Fraction of heads that fade partially at the coverage edge","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.0}},
+      "trigger": {"name":"Trigger","description":"Each event starts an independent dissolve","value_type":"events","rate":"fixed","default":{"type":"events","value":{"source":"beats","times":[]}}}
+    },
+    "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "ages": {"definition":"core/event_ages","inputs":{"duration":{"source":"input","input":"duration"},"events":{"source":"input","input":"trigger"}}},
+        "coverage": {"definition":"envelope","inputs":{"progress":{"source":"connection","node":"ages","output":"progress"},"shape":{"source":"input","input":"proportion"}}},
+        "heads": {"definition":"random_selection","inputs":{"index":{"source":"connection","node":"ages","output":"index"},"proportion":{"source":"connection","node":"coverage","output":"value"},"softness":{"source":"input","input":"softness"}}},
+        "weight": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"heads","output":"selected"},"b":{"source":"connection","node":"ages","output":"weight"}}},
+        "envelope": {"definition":"event_envelope","inputs":{"progress":{"source":"connection","node":"ages","output":"progress"},"shape":{"source":"input","input":"shape"},"weight":{"source":"connection","node":"weight","output":"value"}}}
+      },
+      "outputs": {"mask":{"source":"connection","node":"envelope","output":"mask"}}
+    }}
+  },
+
+  "beat_chase": {
+    "name": "Beat chase",
+    "inputs": {
+      "boundary": {"name":"Boundary","description":"Follow mapping, clip, or wrap","value_type":"boundary","rate":"fixed","default":{"type":"boundary","value":"natural"}},
+      "delay": {"name":"Phase delay","description":"Shift event starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
+      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
+      "end": {"name":"End position","description":"Where each journey ends, in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":1.0},"author":{"kind":"choice","options":[{"label":"Before start","value":{"type":"position","value":-0.25}},{"label":"Start","value":{"type":"position","value":0.0}},{"label":"Middle","value":{"type":"position","value":0.5}},{"label":"End","value":{"type":"position","value":1.0}},{"label":"After end","value":{"type":"position","value":1.25}}],"custom":true}},
+      "mapping": {"name":"Mapping","description":"Coordinate source, grouping, and orientation","value_type":"mapping","rate":"fixed","default":{"type":"mapping","value":{"source":{"kind":"z"},"per_group":false,"reverse":false}}},
+      "path": {"name":"Travel curve","description":"Position over each journey","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Ramp","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}},{"label":"Bounce","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Ease","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,0.15],[1.0,1.0]]}}}],"custom":true}},
+      "repeat": {"name":"Repeat","description":"Beats between events","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
+      "shape": {"name":"Shape","description":"Brightness across the stroke, from its negative to positive edge","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Soft edges","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.05,1.0],[0.95,1.0],[1.0,0.0]]}}},{"label":"Hard edges","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "start": {"name":"Start position","description":"Where each journey starts, in mapped coordinates","value_type":{"signal":{"unit":"position","channels":"value"}},"rate":"frame","default":{"type":"position","value":0.0},"author":{"kind":"choice","options":[{"label":"Before start","value":{"type":"position","value":-0.25}},{"label":"Start","value":{"type":"position","value":0.0}},{"label":"Middle","value":{"type":"position","value":0.5}},{"label":"End","value":{"type":"position","value":1.0}},{"label":"After end","value":{"type":"position","value":1.25}}],"custom":true}},
+      "travel": {"name":"Travel time","description":"Complete start-to-end journey, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "width": {"name":"Width","description":"Fraction of the selected domain","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}}
+    },
+    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
+        "mapping": {"definition":"resolve_mapping","inputs":{"mapping":{"source":"input","input":"mapping"}}},
+        "chase": {"definition":"chase","inputs":{"boundary":{"source":"input","input":"boundary"},"end":{"source":"input","input":"end"},"mapping":{"source":"connection","node":"mapping","output":"coordinates"},"path":{"source":"input","input":"path"},"shape":{"source":"input","input":"shape"},"start":{"source":"input","input":"start"},"travel":{"source":"input","input":"travel"},"trigger":{"source":"connection","node":"events","output":"trigger"},"width":{"source":"input","input":"width"}}}
+      },
+      "outputs": {"dimmer":{"source":"connection","node":"chase","output":"mask"}}
+    }}
+  },
+
+  "beat_pulse": {
+    "name": "Beat pulse",
+    "inputs": {
+      "delay": {"name":"Phase delay","description":"Shift event starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
+      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
+      "duration": {"name":"Duration","description":"How long each pulse lasts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "repeat": {"name":"Repeat","description":"Beats between events","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
+      "shape": {"name":"Shape","description":"Brightness over each pulse","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}}
+    },
+    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
+        "pulse": {"definition":"pulse","inputs":{"duration":{"source":"input","input":"duration"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}}
+      },
+      "outputs": {"dimmer":{"source":"connection","node":"pulse","output":"mask"}}
+    }}
+  },
+
+  "beat_shimmer": {
+    "name": "Beat shimmer",
+    "inputs": {
+      "duration": {"name":"Duration","description":"Independent lifetime of each head's brightness curve, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.5}},
+      "proportion": {"name":"Proportion","description":"Fraction of heads each event lights, rounded up to whole heads","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.25}},
+      "repeat": {"name":"Repeat","description":"Beats between events","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.125}},
+      "shape": {"name":"Brightness curve","description":"Brightness over each head's event","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}}
+    },
+    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "events": {"definition":"beat_trigger","inputs":{"repeat":{"source":"input","input":"repeat"}}},
+        "shimmer": {"definition":"shimmer","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"trigger":{"source":"connection","node":"events","output":"trigger"}}}
+      },
+      "outputs": {"dimmer":{"source":"connection","node":"shimmer","output":"mask"}}
+    }}
+  },
+
+  "beat_dissolve": {
+    "name": "Beat dissolve",
+    "inputs": {
+      "delay": {"name":"Phase delay","description":"Shift event starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
+      "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
+      "duration": {"name":"Duration","description":"How long each dissolve takes, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":2.0}},
+      "proportion": {"name":"Coverage","description":"Fraction of heads lit over each dissolve, in a seeded random order","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Hold then fade","value":{"type":"envelope","value":{"points":[[0.0,1.0],[0.5,1.0],[1.0,0.0]]}}},{"label":"Fade in","value":{"type":"envelope","value":{"points":[[0.0,0.0],[1.0,1.0]]}}}],"custom":true}},
+      "repeat": {"name":"Repeat","description":"Beats between events","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":4.0}},
+      "shape": {"name":"Brightness curve","description":"Brightness of the lit heads over each dissolve","value_type":"envelope","rate":"frame","default":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}},"author":{"kind":"choice","options":[{"label":"Fade out","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,0.0]]}}},{"label":"Flat","value":{"type":"envelope","value":{"points":[[0.0,1.0],[1.0,1.0]]}}},{"label":"Attack","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.25,1.0],[1.0,0.0]]}}},{"label":"Triangle","value":{"type":"envelope","value":{"points":[[0.0,0.0],[0.5,1.0],[1.0,0.0]]}}}],"custom":true}},
+      "softness": {"name":"Softness","description":"Fraction of heads that fade partially at the coverage edge","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.0}}
+    },
+    "outputs": {"dimmer":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
+    "body": {"kind":"graph","body":{
+      "nodes": {
+        "events": {"definition":"beat_trigger","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
+        "dissolve": {"definition":"dissolve","inputs":{"duration":{"source":"input","input":"duration"},"proportion":{"source":"input","input":"proportion"},"shape":{"source":"input","input":"shape"},"softness":{"source":"input","input":"softness"},"trigger":{"source":"connection","node":"events","output":"trigger"}}}
+      },
+      "outputs": {"dimmer":{"source":"connection","node":"dissolve","output":"mask"}}
     }}
   }
 }

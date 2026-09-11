@@ -33,21 +33,26 @@ impl AuthoredDocuments {
     ) -> Result<super::GraphScoreDocument> {
         let candidate = super::GraphScoreDocument::new(candidate.score)
             .map_err(AuthoredDocumentsError::Invalid)?;
-        if candidate.score.version() != 3 {
-            return Err(AuthoredDocumentsError::Invalid(
-                "score conversion must produce version 3".into(),
-            ));
+        if candidate.score.version() != luma_patterns::Score::VERSION {
+            return Err(AuthoredDocumentsError::Invalid(format!(
+                "score conversion must produce version {}",
+                luma_patterns::Score::VERSION
+            )));
         }
         let files = super::projection::score_files(&candidate)?;
         let scope = ResolvedScope::track(principal, track_scope)?;
         let _guard = self.document_guard(&scope.document_id).await;
         let main = self.load_current_locked(pool, &scope).await?;
         if let AuthoredDocument::GraphScore(current) = &main.document {
-            if current.score.version() == 3 {
+            if current.score.version() == luma_patterns::Score::VERSION {
                 return Ok(current.clone());
             }
         }
-        let operation = format!("upgrade-v3-{}", main.head.as_str());
+        let operation = format!(
+            "upgrade-v{}-{}",
+            luma_patterns::Score::VERSION,
+            main.head.as_str()
+        );
         let fingerprint = operation_request_fingerprint(
             "graph_score_upgrade",
             &[expected_revision, &file_snapshot_id(&files)],

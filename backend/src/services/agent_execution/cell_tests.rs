@@ -617,12 +617,12 @@ async fn python_edits_canonical_graph_scores_and_detached_workspaces() {
 import json, numpy as np
 assert 'patterns' not in dir(luma)
 edit = luma.track.edit()
-assert edit.candidate['version'] == 3
+assert edit.candidate['version'] == 4
 assert luma.track.document['version'] == 2
 graph = edit.graph(id='effect')
 shape = graph.node('soft_edges', id='shape', softness=.3)
 path = {'points': [[0, 0], [1, 1]], 'curves': [{'kind': 'bezier', 'control1': [.3, 0], 'control2': [.7, 1]}]}
-chase = graph.node('chase', id='chase', shape=shape.output(), path=path, mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
+chase = graph.node('beat_chase', id='chase', shape=shape.output(), path=path, mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
 position = graph.node('write_position', id='aim')
 output = graph.node('output', id='output', dimmer=chase.output(), pan=position.output('pan'), tilt=position.output('tilt'))
 graph.output(output.output())
@@ -631,7 +631,7 @@ graph.expose(output, 'color')
 custom = chase.customize(id='my-chase')
 custom.rename('My chase')
 assert graph.definition()['body']['body']['nodes']['chase']['definition'] == 'my-chase'
-assert edit.definition('chase')['name'] == 'Chase'
+assert edit.definition('beat_chase')['name'] == 'Beat chase'
 first = edit.add_clip(graph, id='first', seed=(1 << 64)-1, seconds=(1.0, 2.0), inputs={'width': .8, 'color': '#4080ff'})
 edit.add_clip(graph, id='second', seconds=(2.0, 3.0), inputs={'width': .3})
 assert edit.check()
@@ -769,7 +769,7 @@ assert json.loads(latest)['clips']['second']['graph'] == 'independent'
 assert luma.track.definition('independent')['inputs']['color']['default']['value'] == [1.0, 1.0, 1.0]
 bad = luma.track.edit()
 try:
-    bad.graph('chase').rename('mutated built-in')
+    bad.graph('beat_chase').rename('mutated built-in')
     raise AssertionError('built-in changed')
 except RuntimeError as error:
     assert 'built-in' in str(error)
@@ -1064,7 +1064,7 @@ async fn python_authors_a_pattern_then_renders_and_places_it() {
 import numpy as np
 assert not hasattr(luma.track, 'pattern')
 shape = graph.node('soft_edges', softness=0.3)
-chase = graph.node('chase', shape=shape.output(), mapping='order', boundary='wrap', width=1.0,
+chase = graph.node('beat_chase', shape=shape.output(), mapping='order', boundary='wrap', width=1.0,
                    grid_aligned=False)
 palette = graph.node('sample_gradient', id='palette', position=.5, gradient={'stops': [
     {'t': 0., 'color': '#4080ff', 'alpha': .2},
@@ -1074,7 +1074,7 @@ output = graph.node('output', dimmer=intensity.output(), color=palette.output('c
 graph.output(output.output())
 graph.expose(chase, 'width')
 graph.expose(palette, 'gradient', name='Colors')
-assert edit.definition('chase')['body']['kind'] == 'graph'
+assert edit.definition('beat_chase')['body']['kind'] == 'graph'
 original = edit.candidate
 edit.replace_source(edit.source())
 assert edit.candidate == original
@@ -1121,7 +1121,7 @@ assert saved_document['clips']['clip']['inputs']['gradient']['value']['stops'][0
             turn,
             r#"
 bad = luma.track.edit()
-bad.graph('invalid').node('chase', shape={'points': [[0, 1], [0, 0]]})
+bad.graph('invalid').node('beat_chase', shape={'points': [[0, 1], [0, 0]]})
 bad.apply()
 "#,
         )

@@ -5,7 +5,7 @@ use std::time::Duration;
 pub fn exercise(mode: Mode, name: &'static str) {
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(serde_json::json!({
-            "version": 3,
+            "version": 4,
             "definitions": {
                 "playground": {
                     "name": "Wire playground",
@@ -101,7 +101,7 @@ pub fn exercise(mode: Mode, name: &'static str) {
         const insert={x:workspace.x+150,y:workspace.y+workspace.height-120};
         app.drag(insert,{dx:0,dy:0}); app.key("space");
         node("card","Add node menu");
-        app.key("b e a t");
+        app.key("b e a t space t r i g g e r");
         app.key("down up enter");
         node("button","beat_trigger_1 output trigger");
         const inserted=node("card","Beat trigger").bounds;

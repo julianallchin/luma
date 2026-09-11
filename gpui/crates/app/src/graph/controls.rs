@@ -17,6 +17,8 @@ pub(super) struct Controls {
     node: String,
     cells: Vec<InputControl>,
     name: Option<Entity<luma_ui::text_input::TextInput>>,
+    /// Preset inputs whose value editor is shown because Custom was chosen.
+    custom: std::collections::BTreeSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 struct InputControl {
@@ -25,6 +27,9 @@ struct InputControl {
     binding: Option<p::Binding>,
     value: Option<p::Value>,
     widget: Widget,
+    /// Named literals from the input's declared control, and whether the
+    /// value editor is offered for anything the menu does not name.
+    presets: Option<(Vec<p::Preset>, bool)>,
 }
 enum Widget {
     Seed(Entity<DraftedNumber<u64>>),
@@ -200,25 +205,25 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         let node_id = node_id.clone();
         let input = id.clone();
         let target = target.clone();
+        let author = spec.author();
+        let presets = match &author {
+            Some(p::Author::Choice { options, custom }) => Some((options.clone(), *custom)),
+            _ => None,
+        };
         let widget = match &value {
             Some(value) if value.scalar_value().is_some() => {
                 let v = value.scalar_value().unwrap();
                 let kind = spec.value_type;
-                let unit = kind.signal_type().and_then(|s| s.unit);
+                let (min, max) = match author {
+                    Some(p::Author::Number { min, max }) => (min, max),
+                    _ => (None, None),
+                };
                 let field = cx.new(|cx| {
                     DraftedNumber::new(
                         spec.name.clone(),
                         v,
-                        if matches!(unit, Some(p::Unit::Proportion | p::Unit::Beats)) {
-                            0.
-                        } else {
-                            -1e9
-                        },
-                        if unit == Some(p::Unit::Proportion) {
-                            1.
-                        } else {
-                            1e9
-                        },
+                        min.unwrap_or(-1e9),
+                        max.unwrap_or(1e9),
                         260.,
                         window,
                         cx,
@@ -373,6 +378,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
             binding,
             value,
             widget,
+            presets,
         });
     }
     source.controls = Some(Controls {
@@ -380,6 +386,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         node: node_id,
         cells,
         name,
+        custom: std::collections::BTreeSet::new(),
         _subscriptions: subscriptions,
     });
 }
@@ -659,7 +666,72 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             .flex_col()
             .gap(px(5.))
             .child(luma_ui::silkscreen(cell.spec.name.clone()));
+        let mut show_widget = true;
+        if let (Some((options, custom)), Some(value)) = (&cell.presets, &cell.value) {
+            let matching = options.iter().position(|preset| preset.value == *value);
+            let mut labels: Vec<&str> = options.iter().map(|p| p.label.as_str()).collect();
+            if *custom {
+                labels.push("Custom");
+            }
+            let selected = matching
+                .map(|i| options[i].label.as_str())
+                .unwrap_or(if *custom { "Custom" } else { "Choose…" });
+            show_widget = *custom && (matching.is_none() || controls.custom.contains(&cell.id));
+            let menu = format!("{}.{}#preset", controls.node, cell.id);
+            let toggle = app.clone();
+            let toggle_target = target.clone();
+            let toggle_menu = menu.clone();
+            let choose = app.clone();
+            let choose_target = target.clone();
+            let node = controls.node.clone();
+            let input = cell.id.clone();
+            let values: Vec<p::Value> = options.iter().map(|p| p.value.clone()).collect();
+            row = row.child(luma_ui::arg::select::luma_arg_select(
+                &format!("{} preset", cell.spec.name),
+                selected,
+                &labels,
+                source.choice_open.as_ref() == Some(&menu),
+                move |_, cx| {
+                    toggle.update(cx, |this, cx| {
+                        this.edit_graph_tab(&toggle_target, cx, |editor| {
+                            let source = &mut editor.source;
+                            source.choice_open =
+                                if source.choice_open.as_ref() == Some(&toggle_menu) {
+                                    None
+                                } else {
+                                    Some(toggle_menu.clone())
+                                };
+                        })
+                    });
+                },
+                move |index, _, cx| {
+                    choose.update(cx, |this, cx| {
+                        this.edit_graph_tab(&choose_target, cx, |editor| {
+                            let source = &mut editor.source;
+                            source.choice_open = None;
+                            if let Some(controls) = source.controls.as_mut() {
+                                if index < values.len() {
+                                    controls.custom.remove(&input);
+                                } else {
+                                    controls.custom.insert(input.clone());
+                                }
+                            }
+                        });
+                        if let Some(value) = values.get(index) {
+                            this.set_graph_input_value(
+                                &choose_target,
+                                &node,
+                                &input,
+                                value.clone(),
+                                cx,
+                            );
+                        }
+                    });
+                },
+            ));
+        }
         row = match &cell.widget {
+            _ if !show_widget => row,
             Widget::Number(field) => row.child(field.clone()),
             Widget::Signal(field) => row.child(field.clone()),
             Widget::Seed(field) => row.child(field.clone()),

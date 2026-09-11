@@ -303,24 +303,58 @@ fn nested_outputs_only_prepare_their_connected_analysis_and_reductions() {
 #[test]
 fn a_chase_batch_consumes_events_once_and_retains_overlapping_journeys() {
     let mut library = standard_library();
-    let mut definition = library.definitions["chase"].clip_instance("chase").unwrap();
-    definition.inputs.remove("trigger");
-    let Body::Graph(graph) = &mut definition.body else {
-        panic!()
+    let chase = &library.definitions["chase"];
+    let definition = Definition {
+        name: "Snare chase".into(),
+        inputs: BTreeMap::from([
+            ("travel".into(), chase.inputs["travel"].clone()),
+            ("width".into(), chase.inputs["width"].clone()),
+        ]),
+        outputs: library.definitions["output"].outputs.clone(),
+        body: Body::Graph(Graph {
+            input_nodes: BTreeMap::new(),
+            nodes: BTreeMap::from([
+                (
+                    "snare".into(),
+                    node(
+                        "drum_trigger",
+                        BTreeMap::from([("drum".into(), Value::Drum(Drum::Snare).into())]),
+                    ),
+                ),
+                ("mapping".into(), node("resolve_mapping", BTreeMap::new())),
+                (
+                    "effect".into(),
+                    node(
+                        "chase",
+                        BTreeMap::from([
+                            ("trigger".into(), wired("snare", "trigger")),
+                            ("mapping".into(), wired("mapping", "coordinates")),
+                            (
+                                "travel".into(),
+                                Binding::Input {
+                                    input: "travel".into(),
+                                },
+                            ),
+                            (
+                                "width".into(),
+                                Binding::Input {
+                                    input: "width".into(),
+                                },
+                            ),
+                        ]),
+                    ),
+                ),
+                (
+                    "output".into(),
+                    node(
+                        "output",
+                        BTreeMap::from([("dimmer".into(), wired("effect", "mask"))]),
+                    ),
+                ),
+            ]),
+            outputs: BTreeMap::from([("lighting".into(), wired("output", "lighting"))]),
+        }),
     };
-    graph.nodes.insert(
-        "snare".into(),
-        node(
-            "drum_trigger",
-            BTreeMap::from([("drum".into(), Value::Drum(Drum::Snare).into())]),
-        ),
-    );
-    graph
-        .nodes
-        .get_mut("effect")
-        .unwrap()
-        .inputs
-        .insert("trigger".into(), wired("snare", "trigger"));
     library.definitions.insert("test".into(), definition);
     let cells = cells();
     let analysis = Arc::new(Analysis::default());
@@ -329,7 +363,6 @@ fn a_chase_batch_consumes_events_once_and_retains_overlapping_journeys() {
         "test",
         &BTreeMap::from([
             ("travel".into(), Value::Beats(3.0)),
-            ("repeat".into(), Value::Beats(1.0)),
             ("width".into(), Value::Proportion(0.3)),
         ]),
         frame(&cells),
@@ -359,7 +392,9 @@ fn a_chase_batch_consumes_events_once_and_retains_overlapping_journeys() {
 #[test]
 fn animated_chase_width_and_envelope_are_sampled_on_the_time_axis() {
     let mut library = standard_library();
-    let mut definition = library.definitions["chase"].clip_instance("chase").unwrap();
+    let mut definition = library.definitions["beat_chase"]
+        .clip_instance("beat_chase")
+        .unwrap();
     definition.inputs.remove("width");
     definition.inputs.remove("shape");
     let Body::Graph(graph) = &mut definition.body else {

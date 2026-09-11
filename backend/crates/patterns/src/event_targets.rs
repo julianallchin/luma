@@ -198,6 +198,7 @@ pub(crate) fn definition() -> Definition {
         value_type: value.value_type(),
         rate: Rate::Fixed,
         default: Some(value),
+        author: None,
     };
     Definition {
         name: "Random subset".into(),

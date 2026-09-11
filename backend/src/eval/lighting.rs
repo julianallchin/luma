@@ -427,7 +427,7 @@ mod tests {
         let base = p::standard_library();
         let mut score = p::Score::default();
         score
-            .insert_effect(&base, "dissolve_flash", "flash", 1.0, 3.0)
+            .insert_effect(&base, "beat_dissolve", "flash", 1.0, 3.0)
             .unwrap();
         // The output name is author-owned; playback must follow the interface.
         let graph = score.definitions.get_mut("flash").unwrap();

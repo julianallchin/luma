@@ -35,7 +35,7 @@ pub use clock::*;
 pub use color::{ColorStop, Gradient};
 pub use edit::GraphEdit;
 pub use envelope::{Envelope, EnvelopeCurve};
-pub use event_tensor::{chase_signal, pulse_signal, ChaseShape, EventTimes, Events};
+pub use event_tensor::{EventTimes, Events};
 pub use features::*;
 mod event_targets;
 pub use event_targets::EventTargets;

@@ -501,7 +501,7 @@ mod tests {
         let base = standard_library();
         let mut score = crate::Score::default();
         score
-            .insert_effect(&base, "chase", "inner", 0., 4.)
+            .insert_effect(&base, "beat_chase", "inner", 0., 4.)
             .unwrap();
         let wrapper = score.definitions["inner"].instance("inner");
         score.definitions.insert("outer".into(), wrapper);

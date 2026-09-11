@@ -421,7 +421,8 @@ impl Luma {
                             published.clone(),
                             draft.cloned(),
                             !source.published.same_computation(published)
-                                || source.draft.is_some() != candidate.is_some(),
+                                || source.draft.is_some() != candidate.is_some()
+                                || (source.preview.scene.is_none() && !editor.preview_running),
                         )
                     })
             })

@@ -139,17 +139,19 @@ fn chase_journeys_keep_independent_lifetimes_through_the_output() {
     let cells = cells();
     for travel in [0.5, 1., 2.] {
         let mut graph = Patch::default();
+        graph.add("mapping", "resolve_mapping", []);
         graph.add(
             "chase",
             "chase",
             [
+                ("mapping", wire("mapping", "coordinates")),
                 ("trigger", starts(&[0., 1.])),
                 ("travel", Value::Beats(travel).into()),
                 ("width", Value::Proportion(0.2).into()),
                 ("shape", Value::Envelope(Envelope::soft_edges(0.)).into()),
             ],
         );
-        graph.add("output", "output", [("dimmer", wire("chase", "dimmer"))]);
+        graph.add("output", "output", [("dimmer", wire("chase", "mask"))]);
         let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);
         let samples = program.evaluate_batch(&[1., 1.5, 0.75, 3.]).unwrap();
         let lighting = samples["lighting"].lighting().unwrap();
@@ -185,10 +187,12 @@ fn triangle_and_ramp_chase_fields_directly_remap_to_pan_tilt_vectors() {
         ),
     ] {
         let mut graph = Patch::default();
+        graph.add("mapping", "resolve_mapping", []);
         graph.add(
             "chase",
             "chase",
             [
+                ("mapping", wire("mapping", "coordinates")),
                 ("trigger", starts(&[0.])),
                 ("travel", Value::Beats(4.).into()),
                 ("width", Value::Proportion(1.).into()),
@@ -199,7 +203,7 @@ fn triangle_and_ramp_chase_fields_directly_remap_to_pan_tilt_vectors() {
             "scale",
             "core/multiply",
             [
-                ("a", wire("chase", "dimmer")),
+                ("a", wire("chase", "mask")),
                 ("b", vector(&[40., -20.], Unit::Degrees)),
             ],
         );
@@ -225,16 +229,18 @@ fn triangle_and_ramp_chase_fields_directly_remap_to_pan_tilt_vectors() {
 }
 
 #[test]
-fn shimmer_is_three_composed_nodes_with_independent_per_head_fades() {
+fn shimmer_is_random_head_events_under_an_event_envelope() {
     let library = standard_library();
     let Body::Graph(graph) = &library.definitions["shimmer"].body else {
         panic!()
     };
-    assert_eq!(graph.nodes.len(), 3);
+    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(graph.nodes["heads"].definition, "random_head_events");
+    assert_eq!(graph.nodes["envelope"].definition, "event_envelope");
     let cells = cells();
     let program = PreparedGraph::new(
         &library,
-        "shimmer",
+        "beat_shimmer",
         &BTreeMap::from([
             ("proportion".into(), Value::Proportion(0.4)),
             ("repeat".into(), Value::Beats(1.)),
@@ -243,11 +249,6 @@ fn shimmer_is_three_composed_nodes_with_independent_per_head_fades() {
         frame(&cells),
     )
     .unwrap();
-    assert_eq!(
-        program.dynamic_step_count(),
-        1,
-        "fixed event source and selector prepare once"
-    );
     let times = [1.25, 0.25, 2.25, 1.25];
     let batch = program.evaluate_batch(&times).unwrap();
     let signal = batch["dimmer"].signal().unwrap();
@@ -355,11 +356,16 @@ fn a_wrapped_palette_ribbon_composes_with_independent_intensity() {
         ],
     );
     graph.add(
+        "beat",
+        "beat_trigger",
+        [("repeat", Value::Beats(1.).into())],
+    );
+    graph.add(
         "pulse",
         "pulse",
         [
-            ("repeat", Value::Beats(1.).into()),
-            ("travel", Value::Beats(1.).into()),
+            ("trigger", wire("beat", "trigger")),
+            ("duration", Value::Beats(1.).into()),
         ],
     );
     graph.add(
@@ -367,7 +373,7 @@ fn a_wrapped_palette_ribbon_composes_with_independent_intensity() {
         "output",
         [
             ("color", wire("palette", "color")),
-            ("dimmer", wire("pulse", "dimmer")),
+            ("dimmer", wire("pulse", "mask")),
         ],
     );
     let program = graph.prepare(&[("lighting", wire("output", "lighting"))], &cells);

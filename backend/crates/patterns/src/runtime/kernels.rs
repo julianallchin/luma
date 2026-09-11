@@ -487,7 +487,7 @@ pub(crate) fn run(
                 Signal::new(
                     values,
                     Unit::Number,
-                    Channels::Value,
+                    *epoch.channels(),
                     Some(fixtures.to_vec().into()),
                 )?,
             )
@@ -557,62 +557,59 @@ pub(crate) fn run(
             )
         }
         Primitive::CoordinateOffset => {
-            let mapping = mapping("mapping");
+            // Mapping order encodes selection order; numerical wires are
+            // canonical. Align rows by identity before combining them.
+            let mut coordinates = mapping("mapping").coordinates.clone();
+            coordinates.sort_by(|a, b| a.cell.cmp(&b.cell));
             let Value::Boundary(boundary) = control("boundary", 0) else {
                 unreachable!()
             };
-            let ids = Some(
-                mapping
-                    .coordinates
-                    .iter()
-                    .map(|c| c.cell.clone())
-                    .collect::<Vec<_>>()
-                    .into(),
-            );
+            let ids: std::sync::Arc<[String]> = coordinates
+                .iter()
+                .map(|c| c.cell.clone())
+                .collect::<Vec<_>>()
+                .into();
+            let wraps = |n: usize| {
+                *boundary == Boundary::Wrap
+                    || (*boundary == Boundary::Natural && coordinates[n].closed)
+            };
             let positions = Signal::new(
                 Array3::from_shape_vec(
-                    (mapping.coordinates.len(), 1, 1),
-                    mapping.coordinates.iter().map(|c| c.position).collect(),
+                    (coordinates.len(), 1, 1),
+                    coordinates.iter().map(|c| c.position).collect(),
                 )
                 .unwrap(),
                 Unit::Position,
                 Channels::Value,
-                ids,
+                Some(ids.clone()),
             )?;
             let delta = positions.zip(signal("position"), Unit::Number, |a, b| a - b)?;
             let values = Zip::indexed(delta.values()).map_collect(|(n, _, _), delta| {
-                let c = &mapping.coordinates[n];
-                if *boundary == Boundary::Wrap || (*boundary == Boundary::Natural && c.closed) {
+                if wraps(n) {
                     (delta + 0.5).rem_euclid(1.0) - 0.5
                 } else {
                     *delta
                 }
             });
-            let wrap = Signal::new(
-                Array3::from_shape_fn((mapping.coordinates.len(), 1, 1), |(n, _, _)| {
-                    if *boundary == Boundary::Wrap
-                        || (*boundary == Boundary::Natural && mapping.coordinates[n].closed)
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }),
-                Unit::Proportion,
-                Channels::Value,
-                positions.fixtures().map(|v| v.to_vec().into()),
-            )?;
+            let wrap =
+                Signal::new(
+                    Array3::from_shape_fn((coordinates.len(), 1, 1), |(n, _, _)| {
+                        if wraps(n) {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }),
+                    Unit::Proportion,
+                    Channels::Value,
+                    Some(ids.clone()),
+                )?;
             Ok(BTreeMap::from([
                 (
                     "value".into(),
                     EvaluatedValue::from_signal(
-                        ValueType::Field,
-                        Signal::new(
-                            values,
-                            Unit::Number,
-                            Channels::Value,
-                            delta.fixtures().map(|v| v.to_vec().into()),
-                        )?,
+                        outputs["value"].value_type,
+                        Signal::new(values, Unit::Number, *delta.channels(), Some(ids))?,
                     )?,
                 ),
                 (
@@ -848,100 +845,39 @@ pub(crate) fn run(
         | Primitive::WriteColor
         | Primitive::WriteSpeed
         | Primitive::WritePosition
-        | Primitive::AddLighting => Err(Error(
-            "historical primitives must be migrated before execution".into(),
-        )),
-        Primitive::BeatEvents
+        | Primitive::AddLighting
         | Primitive::ChaseEvents
         | Primitive::PulseEvents
-        | Primitive::DissolveEvents => {
-            let automatic = || {
-                Ok(Events::Periodic {
-                    repeat: fixed("repeat")?,
-                    grid_aligned: control("grid_aligned", 0) == &Value::Boolean(true),
-                    delay: fixed("delay")?,
-                })
-            };
-            if op == Primitive::BeatEvents {
-                return structured("trigger", vec![Value::Events(automatic()?)]);
-            }
-            let Value::Events(events) = control("trigger", 0) else {
+        | Primitive::DissolveEvents => Err(Error(
+            "historical primitives must be migrated before execution".into(),
+        )),
+        Primitive::BeatEvents => structured(
+            "trigger",
+            vec![Value::Events(Events::Periodic {
+                repeat: fixed("repeat")?,
+                grid_aligned: control("grid_aligned", 0) == &Value::Boolean(true),
+                delay: fixed("delay")?,
+            })],
+        ),
+        Primitive::EventAges => {
+            let Value::Events(events) = control("events", 0) else {
                 unreachable!()
             };
-            let default;
-            let events = if *events == Events::Automatic {
-                default = automatic()?;
-                &default
-            } else {
-                events
-            };
-            let travel = fixed("travel")?;
-            let result = if op == Primitive::ChaseEvents {
-                let Value::Boundary(boundary) = control("boundary", 0) else {
-                    unreachable!()
-                };
-                let mut mapping = mapping("mapping").clone();
-                // Mapping positions already encode selection order. Align rows
-                // by identity before combining them with numerical controls.
-                mapping.coordinates.sort_by(|a, b| a.cell.cmp(&b.cell));
-                let ids: Vec<_> = mapping.coordinates.iter().map(|c| c.cell.clone()).collect();
-                let controls = ["start", "end", "width"].map(|key| signal(key).on_fixtures(&ids));
-                let [start, end, width] = controls;
-                let (start, end, width) = (start?, end?, width?);
-                if [&start, &end, &width]
-                    .iter()
-                    .any(|s| s.values().dim().1 != 1 && s.values().dim().1 != batch.times.len())
-                {
-                    return Err(Error(
-                        "Chase controls have incompatible time samples".into(),
-                    ));
-                }
-                crate::event_tensor::chase_sampled(
-                    &mapping,
-                    batch.times,
-                    events,
-                    frame.clip_start,
-                    travel,
-                    |n, t| ChaseShape {
-                        travel,
-                        start: start.at(n, t, 0),
-                        end: end.at(n, t, 0),
-                        width: width.at(n, t, 0),
-                        path: shape("path", t),
-                        shape: shape("shape", t),
-                        boundary: *boundary,
-                    },
-                )?
-            } else if op == Primitive::DissolveEvents {
-                let period = fixed("refresh_every")?;
-                if period <= 0.0 {
-                    return Err(Error("refresh interval must be positive".into()));
-                }
-                crate::event_tensor::dissolve_sampled(
-                    fixtures,
-                    batch.times,
-                    events,
-                    frame,
-                    crate::event_tensor::DissolveSettings {
-                        travel,
-                        reseed: control("reseed", 0) == &Value::Boolean(true),
-                        refresh_every: (control("refresh", 0) == &Value::Boolean(true))
-                            .then_some(period),
-                    },
-                    signal("softness"),
-                    |t| shape("shape", t),
-                )?
-            } else {
-                crate::event_tensor::pulse_sampled(
-                    batch.times,
-                    events,
-                    frame.clip_start,
-                    travel,
-                    |t| shape("shape", t),
-                )?
-                .on_fixtures(fixtures)?
-            };
-            numeric("mask", result)
+            crate::event_tensor::event_ages(
+                batch.times,
+                events,
+                fixed("duration")?,
+                frame.clip_start,
+                fixtures,
+            )?
+            .into_iter()
+            .map(|(key, value)| {
+                Ok((
+                    key.into(),
+                    EvaluatedValue::from_signal(outputs[key].value_type, value)?,
+                ))
+            })
+            .collect()
         }
         Primitive::AudioSpectrum => {
             let literals = inputs

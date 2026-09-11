@@ -12,7 +12,7 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
         serde_json::from_value(baseline["score"].clone()).unwrap();
     score.clips.retain(|id, _| id == "sample-chase-1");
     score.definitions.retain(|id, _| id == "sample-chase-1");
-    let migrated = luma_patterns::migration::upgrade_v2(&score).unwrap();
+    let migrated = luma_patterns::migration::upgrade(&score).unwrap();
     let defaults = migrated.definitions["sample-chase-1"].inputs.clone();
     let original_clip = migrated.clips["sample-chase-1"].clone();
     let name = "graph-migrated-edit";
@@ -61,7 +61,7 @@ fn migrated_score_keeps_its_version_labels_and_overrides_after_native_edits() {
             .unwrap();
             let saved: serde_json::Value = serde_json::from_str(&source).unwrap();
             assert_eq!(
-                saved["version"], 3,
+                saved["version"], 4,
                 "native editing downgraded the migrated document"
             );
             let saved: luma_patterns::Score = serde_json::from_value(saved).unwrap();
@@ -118,7 +118,7 @@ fn typed_pattern_rows_open_as_editable_score_graphs() {
             .await
             .unwrap();
             let score: luma_patterns::Score = serde_json::from_str(&source).unwrap();
-            assert_eq!(score.version(), 3);
+            assert_eq!(score.version(), 4);
             assert_eq!(score.clips.len(), 1);
             let clip = score.clips.values().next().unwrap();
             assert_eq!((clip.start, clip.duration), (4., 8.));
@@ -174,7 +174,7 @@ fn numerical_pattern_rows_open_and_edit_in_the_native_graph() {
         let raw: String = sqlx::query_scalar("SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL").fetch_one(&pool).await.unwrap();
         let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
         score.validate(&luma_patterns::standard_library()).unwrap();
-        assert_eq!(score.version(),3);
+        assert_eq!(score.version(),4);
         let clip=score.clips.values().next().unwrap();
         let root=&score.definitions[&clip.graph];
         assert_eq!(root.name,"My Pulse");

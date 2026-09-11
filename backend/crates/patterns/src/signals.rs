@@ -21,6 +21,7 @@ pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input
         value_type: kind,
         rate: Rate::Frame,
         default,
+        author: None,
     }
 }
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {

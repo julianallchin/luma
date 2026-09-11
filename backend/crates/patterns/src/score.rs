@@ -55,13 +55,15 @@ pub struct Score {
 impl Default for Score {
     fn default() -> Self {
         Self {
-            version: 3,
+            version: Self::VERSION,
             definitions: BTreeMap::new(),
             clips: BTreeMap::new(),
         }
     }
 }
 impl Score {
+    /// The document version written by this crate.
+    pub const VERSION: u32 = 4;
     pub fn same_computation(&self, other: &Self) -> bool {
         self.version == other.version
             && self.clips == other.clips
@@ -100,7 +102,7 @@ impl Score {
         base: &Library,
         interface: &impl Fn(crate::Primitive) -> Definition,
     ) -> Result<Library> {
-        if !matches!(self.version, 2 | 3) {
+        if !(2..=Self::VERSION).contains(&self.version) {
             return Err(Error(format!("unsupported score version {}", self.version)));
         }
         if self

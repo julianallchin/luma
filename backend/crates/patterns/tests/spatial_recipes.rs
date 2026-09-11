@@ -238,7 +238,7 @@ fn chase_uses_an_editable_travel_envelope_for_bounce_and_offstage_endpoints() {
     }
     let mut score = Score::default();
     score
-        .insert_effect(&library, "chase", "bounce", 0., 8.)
+        .insert_effect(&library, "beat_chase", "bounce", 0., 8.)
         .unwrap();
     score
         .clips

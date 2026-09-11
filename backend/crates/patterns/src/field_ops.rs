@@ -41,6 +41,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         value_type: kind,
         rate: Rate::Frame,
         default: None,
+        author: None,
     };
     let (name, inputs, output, kind) = match op {
         Primitive::JoinChannels => (
@@ -65,6 +66,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         value_type: ValueType::Number,
                         rate: Rate::Fixed,
                         default: Some(Value::Number(0.)),
+                        author: None,
                     },
                 ),
             ],
@@ -145,6 +147,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         value_type: ValueType::Number,
                         rate: Rate::Frame,
                         default: Some(Value::Number(0.0)),
+                        author: None,
                     },
                 ),
             ],
@@ -192,13 +195,20 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     name: "Epoch".into(),
                     description: "Changing this index chooses a new deterministic random field"
                         .into(),
-                    value_type: ValueType::Number,
+                    value_type: ValueType::Signal(SignalType {
+                        unit: Some(Unit::Number),
+                        channels: None,
+                    }),
                     rate: Rate::Frame,
                     default: Some(Value::Number(0.0)),
+                    author: None,
                 },
             )],
             "value",
-            ValueType::Field,
+            ValueType::Signal(SignalType {
+                unit: Some(Unit::Number),
+                channels: None,
+            }),
         ),
         _ => return None,
     };
