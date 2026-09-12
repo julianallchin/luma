@@ -247,11 +247,13 @@ pub async fn add_member_to_group(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT OR IGNORE INTO fixture_group_members (id, uid, fixture_id, group_id, head_index, display_order)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO fixture_group_members
+             (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(access.principal().map(str::to_owned))
+    .bind(access.venue_id().to_owned())
     .bind(fixture_id)
     .bind(group_id)
     .bind(head_index)
@@ -334,11 +336,13 @@ pub async fn split_whole_fixture_membership(
 
     for &h in keep_heads {
         sqlx::query(
-            "INSERT OR IGNORE INTO fixture_group_members (id, uid, fixture_id, group_id, head_index, display_order)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO fixture_group_members
+                 (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(access.principal().map(str::to_owned))
+        .bind(access.venue_id().to_owned())
         .bind(fixture_id)
         .bind(group_id)
         .bind(h)

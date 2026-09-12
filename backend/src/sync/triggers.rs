@@ -49,6 +49,26 @@ const TOUCH_VALUE: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// If a trigger cannot be created — which means the table is missing, i.e. the
 /// migration and [`SYNCED_TABLES`] have drifted.
 pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
+    install_change_log(&mut *connection).await?;
+    for table in SYNCED_TABLES {
+        for statement in upload_queue(table) {
+            run(&mut *connection, &statement, "the upload queue", table.name).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Install the change log alone, for a connection with no upload queue.
+///
+/// `powersync_crud` belongs to the sync SDK's core extension. A process that
+/// opened the database without it — a test, a tool — still wants the history,
+/// which is ordinary SQL, but has nowhere to enqueue an upload and nothing
+/// that would ever drain one.
+///
+/// # Errors
+///
+/// If a trigger cannot be created.
+pub async fn install_change_log(connection: &mut SqliteConnection) -> Result<(), String> {
     sqlx::query("CREATE TEMP TABLE IF NOT EXISTS session_actor (actor TEXT NOT NULL)")
         .execute(&mut *connection)
         .await
@@ -58,28 +78,7 @@ pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
             run(&mut *connection, &statement, "the change log", table.name).await?;
         }
     }
-    if has_upload_queue(&mut *connection).await {
-        for table in SYNCED_TABLES {
-            for statement in upload_queue(table) {
-                run(&mut *connection, &statement, "the upload queue", table.name).await?;
-            }
-        }
-    }
     Ok(())
-}
-
-/// Whether this connection has somewhere to enqueue an upload.
-///
-/// `powersync_crud` comes from the sync SDK's core extension. A process that
-/// opened the database without it — a test, a tool — still wants the change
-/// log, which is ordinary SQL, but has no queue to write to and nothing that
-/// would ever drain one. Installing a trigger that writes to a table that does
-/// not exist would turn every write in that process into an error.
-async fn has_upload_queue(connection: &mut SqliteConnection) -> bool {
-    sqlx::query("SELECT 1 FROM powersync_crud LIMIT 1")
-        .fetch_optional(connection)
-        .await
-        .is_ok()
 }
 
 async fn run(

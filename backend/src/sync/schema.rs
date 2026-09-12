@@ -192,6 +192,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         [
             "id",
             "uid",
+            "venue_id",
             "fixture_id",
             "group_id",
             "head_index",
@@ -222,6 +223,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         [
             "child_id",
             "uid",
+            "venue_id",
             "parent_id",
             "my_socket",
             "their_socket",
@@ -234,7 +236,15 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         "venue_node_params",
         "@.node_id || ':' || @.key",
         "uid",
-        ["node_id", "uid", "key", "value", "created_at", "updated_at"]
+        [
+            "node_id",
+            "uid",
+            "venue_id",
+            "key",
+            "value",
+            "created_at",
+            "updated_at"
+        ]
     ),
     table!(
         "venue_constraints",
@@ -243,6 +253,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         [
             "node_id",
             "uid",
+            "venue_id",
             "my_socket",
             "target_node",
             "target_socket",
