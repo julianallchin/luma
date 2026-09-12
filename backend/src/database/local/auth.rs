@@ -208,19 +208,20 @@ pub(crate) enum SessionReplacementKind {
     IdentityTransition,
 }
 
-/// The durable namespace a row belongs to.
+/// The durable namespace a row belongs to. Distinct from the bare id so keys
+/// are stable in logs, hashes and cross-table associations.
 ///
-/// There is no signed-out namespace. Every synced row carries a `uid`, and a
-/// row belonging to nobody is a row the server would refuse and the other
-/// device would never see — so the caller has a principal or it has no
-/// business writing. Kept distinct from the bare id so keys are stable in
-/// logs, hashes and cross-table associations.
+/// `None` is the namespace of a row written before sign-in was required — a
+/// `uid` of SQL `NULL`, which `agent_thread_messages`' CHECK still admits
+/// because those rows are still in the library. A command that would write a
+/// new one is refused by `AppServices::require_session`.
 #[must_use]
-pub fn principal_key(principal: &str) -> String {
-    format!("signed-in:{principal}")
+pub fn principal_key(principal: Option<&str>) -> String {
+    principal.map_or_else(|| "signed-out".to_owned(), |id| format!("signed-in:{id}"))
 }
 
-/// What a write says when nobody is signed in.
+/// What a command says when it would write a synced row and nobody is signed
+/// in. The gate is `AppServices::require_session`; this is its words.
 pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma before changing anything";
 
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
@@ -1338,6 +1339,51 @@ impl VerifiedSnapshot {
             access_token: self.envelope.access_token.clone(),
         }
     }
+}
+
+/// Sign a test's state database in as `user_id`, session and host proof both.
+///
+/// A proof is minted by `/auth/v1/user`, so a test that went through the
+/// production path would need Supabase on the other end. This walks the same
+/// validation with a server that says yes, which is what makes the stored rows
+/// the real shape — [`capture_write_admission`] cross-checks them against the
+/// app database's gate, and a hand-written pair would not survive it.
+#[cfg(test)]
+pub(crate) async fn install_test_session(state_pool: &SqlitePool, user_id: &str) {
+    struct Accepts(String);
+    #[async_trait]
+    impl AuthServer for Accepts {
+        async fn authenticated_user_id(&self, _: &str) -> Result<String, String> {
+            Ok(self.0.clone())
+        }
+        async fn refresh(&self, _: &str) -> Result<String, RefreshError> {
+            Err(RefreshError::Failed("no network in a test".into()))
+        }
+    }
+    let now = unix_now();
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "sub": user_id,
+            "iss": format!("{SUPABASE_URL}/auth/v1"),
+            "aud": "authenticated",
+            "exp": now + 3600,
+        })
+        .to_string(),
+    );
+    let session = serde_json::json!({
+        "access_token": format!("{header}.{payload}.signature"),
+        "refresh_token": "refresh",
+        "user": { "id": user_id },
+    })
+    .to_string();
+    let validated = validate_session_with(&session, &Accepts(user_id.to_owned()), now)
+        .await
+        .expect("the fixture session validates");
+    let mut connection = state_pool.acquire().await.expect("state connection");
+    replace_session_for_connection(&mut connection, &validated)
+        .await
+        .expect("the fixture session installs");
 }
 
 async fn validate_session_with(

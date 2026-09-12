@@ -19,7 +19,6 @@ pub enum VenueResource<'a> {
     MidiModifier(&'a str),
     MidiBinding(&'a str),
     Score(&'a str),
-    TrackScore(&'a str),
     AgentThread(&'a str),
 }
 
@@ -158,8 +157,8 @@ async fn authorize<'a, Mode>(
         .await?
         .ok_or_else(not_found)?;
 
-    let row: Option<(Option<String>, String, i64, i64, i64, Option<String>, i64)> = sqlx::query_as(
-        "SELECT venue.uid, venue.role,
+    let row: Option<(Option<String>, i64, i64, i64, Option<String>, i64)> = sqlx::query_as(
+        "SELECT venue.uid,
                     admission.armed, admission.accepting, admission.maintenance,
                     admission.active_uid,
                     EXISTS(
@@ -175,7 +174,7 @@ async fn authorize<'a, Mode>(
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to authorize venue access: {error}"))?;
-    let Some((owner_uid, role, armed, accepting, maintenance, active_uid, is_member)) = row else {
+    let Some((owner_uid, armed, accepting, maintenance, active_uid, is_member)) = row else {
         return Err(not_found());
     };
     if armed != 1 || accepting != 1 || maintenance != 0 {
@@ -183,7 +182,9 @@ async fn authorize<'a, Mode>(
     }
 
     let principal = active_uid;
-    let guest_venue = owner_uid.is_none() && role != "member";
+    // A venue nobody owns is the guest namespace's, and signed out that is
+    // whose namespace this is.
+    let guest_venue = owner_uid.is_none();
     let owner = match principal.as_deref() {
         Some(principal) => owner_uid.as_deref() == Some(principal),
         None => guest_venue,
@@ -222,13 +223,6 @@ async fn resolve_venue_id(
         VenueResource::MidiModifier(id) => ("SELECT venue_id FROM midi_modifiers WHERE id = ?", id),
         VenueResource::MidiBinding(id) => ("SELECT venue_id FROM midi_bindings WHERE id = ?", id),
         VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
-        VenueResource::TrackScore(id) => (
-            "SELECT score.venue_id
-             FROM track_scores clip
-             JOIN scores score ON score.id = clip.score_id
-             WHERE clip.id = ?",
-            id,
-        ),
         VenueResource::AgentThread(id) => ("SELECT venue_id FROM agent_threads WHERE id = ?", id),
     };
     sqlx::query_scalar(sql)

@@ -44,17 +44,7 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score(&dir).await;
             let Some(luma_patterns::Value::Gradient(default)) =
                 &score.definitions["ribbon"].inputs["palette"].default
             else {
@@ -68,7 +58,6 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
             assert!((overridden.stops[0].alpha - 0.6).abs() < 1e-6);
             assert!((default.stops[1].alpha - 0.8).abs() < 1e-6);
             assert!((overridden.stops[1].alpha - 0.8).abs() < 1e-6);
-            pool.close().await;
         });
 }
 
@@ -130,17 +119,7 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score(&dir).await;
             let input = &score.definitions["texture"].inputs["input_1"];
             assert_eq!(input.name, "Texture variation");
             assert_eq!(input.value_type, luma_patterns::ValueType::Seed);
@@ -149,7 +128,6 @@ fn seed_inputs_preserve_exact_defaults_and_renamed_clip_overrides() {
                 score.clips["clip"].inputs["input_1"],
                 luma_patterns::Value::Seed(9_007_199_254_740_993)
             );
-            pool.close().await;
         });
 }
 
@@ -323,17 +301,7 @@ fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let text: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let score = support::stored_score_json(&root).await;
             let input = &score["definitions"]["custom"]["inputs"]["input_1"];
             assert_eq!(input["name"], "Stay on grid");
             assert_eq!(input["value_type"], "boolean");
@@ -352,7 +320,6 @@ fn input_nodes_infer_dropdowns_share_values_and_keep_renamed_clip_overrides() {
                     serde_json::json!({"source":"input","input":"input_1"})
                 );
             }
-            pool.close().await;
         });
 }
 
@@ -408,17 +375,7 @@ fn vector_inputs_infer_components_and_edit_defaults_and_clip_overrides_independe
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score(&dir).await;
             let input = &score.definitions["aim"].inputs["input_1"];
             assert_eq!(
                 input.value_type,
@@ -438,7 +395,6 @@ fn vector_inputs_infer_components_and_edit_defaults_and_clip_overrides_independe
             assert_eq!(clip.values()[[0, 0, 0]], 45.);
             assert_eq!(clip.values()[[0, 0, 1]], 20.);
             assert_eq!(clip.values()[[0, 0, 8]], 99.);
-            pool.close().await;
         });
 }
 
@@ -488,17 +444,7 @@ fn rgb_signal_inputs_use_the_color_picker_and_preserve_signal_metadata() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score(&dir).await;
             let luma_patterns::Value::Signal(default) = score.definitions["tint"].inputs["input_1"]
                 .default
                 .as_ref()
@@ -519,6 +465,5 @@ fn rgb_signal_inputs_use_the_color_picker_and_preserve_signal_metadata() {
                 clip.values()[[0, 0, 1]] > 0.9 && clip.values()[[0, 0, 0]] < 0.1,
                 "color picker did not save green: {clip:?}"
             );
-            pool.close().await;
         });
 }

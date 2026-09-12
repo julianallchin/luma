@@ -60,19 +60,8 @@ fn graph_inspection_uses_clip_overrides_and_exposes_signal_heads_and_event_times
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let stored: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let stored = support::stored_score(&dir).await;
             let expected: luma_patterns::Score = serde_json::from_value(score).unwrap();
             assert_eq!(stored, expected, "inspection changed the authored score");
-            pool.close().await;
         });
 }

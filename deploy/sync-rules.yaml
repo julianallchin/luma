@@ -1,37 +1,13 @@
 # PowerSync sync rules for the Luma row model.
 #
-# Three streams, matching the three shapes of row-level security in
-# supabase/migrations/20260912000000_row_model.sql:
-#
 #   owned    everything private to one user, plus the tracks and analysis
 #            behind any score that user can read
 #   venue    every venue the user owns or is a member of, and its content
 #   library  the verified pattern library, global to every signed-in client
 #
-# Edition 3 (sync streams) rather than the legacy `bucket_definitions`: legacy
-# parameter and data queries support neither JOINs nor subqueries, and the
-# venue content is two levels deep (venue -> score -> clip/definition).
-#
-# Two rules the service enforces and the error messages do not spell out:
-#   - a named `with:` clause may be referenced from `queries:`, never from
-#     another `with:` clause, so each clause below stands on its own;
-#   - subqueries nest one level. "Everything in an accessible venue" is
-#     therefore written as two OR'd subqueries, one for owned venues and one
-#     for membership, rather than one nested pair.
-#
-# And the rule that is not documented anywhere until it fails: a `with:` clause
-# is a parameter query, and one may return at most a thousand rows (PSYNC_S2305
-# — the whole stream fails, nothing syncs). So every clause here counts things
-# there are a handful of: venues a user can reach, their scores, the tracks
-# those scores play. Never their nodes: one real library has 1154, which is
-# what made the stage children carry a `venue_id` of their own
-# (`supabase/migrations/20260916000000_stage_child_venue_id.sql`).
-#
-# `accessible_scores` is the one left with room to grow: a library with a
-# thousand scores would hit the same wall.
-#
-# `SELECT *` is safe because every synced table has a real `id text primary
-# key`; the migration is the source of truth for the columns.
+# A `with:` clause is a parameter query and may return at most 1000 rows
+# (PSYNC_S2305 fails the whole stream), so every clause counts venues, scores
+# or tracks — never their children.
 
 config:
   edition: 3
@@ -43,7 +19,7 @@ streams:
       # A user's own scores, plus every score in a venue they can reach.
       accessible_scores: >-
         SELECT id FROM scores
-        WHERE uid = auth.user_id()
+        WHERE (uid = auth.user_id() AND venue_id IS NULL)
            OR venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
            OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
       # Tracks someone else owns that a shared score plays, so a venue member
@@ -88,6 +64,14 @@ streams:
         SELECT id FROM venues
         WHERE uid = auth.user_id()
            OR id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
+      # The patterns a venue's cues play. A member holds the cue, so it holds
+      # the pattern behind it or the cue is a row pointing at nothing — and
+      # `cues.pattern_id` is a foreign key, so a checkpoint carrying the cue
+      # without the pattern is one the local schema refuses.
+      cued_patterns: >-
+        SELECT pattern_id AS id FROM cues
+        WHERE venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
+           OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
     queries:
       - SELECT * FROM venues WHERE id IN accessible_venues
       - SELECT * FROM venue_members WHERE venue_id IN accessible_venues
@@ -101,6 +85,8 @@ streams:
       - SELECT * FROM cues WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_modifiers WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_bindings WHERE venue_id IN accessible_venues
+      - SELECT * FROM patterns WHERE id IN cued_patterns
+      - SELECT * FROM implementations WHERE pattern_id IN cued_patterns
 
   library:
     auto_subscribe: true

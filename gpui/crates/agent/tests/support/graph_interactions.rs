@@ -181,14 +181,15 @@ pub fn exercise(mode: Mode, name: &'static str) {
                 sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
                     .await
                     .unwrap();
+            // A definition is its own row, keyed `score_id:key`.
             let document: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
+                "SELECT definition_json FROM score_definitions WHERE id LIKE '%:playground'",
             )
             .fetch_one(&pool)
             .await
             .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&document).unwrap();
-            let nodes = &score["definitions"]["playground"]["body"]["body"]["nodes"];
+            let definition: serde_json::Value = serde_json::from_str(&document).unwrap();
+            let nodes = &definition["body"]["body"]["nodes"];
             assert_eq!(
                 nodes["wash"]["inputs"]["color"],
                 serde_json::json!({"source":"connection","node":"gradient","output":"color"})

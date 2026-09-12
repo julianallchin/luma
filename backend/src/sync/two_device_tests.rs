@@ -1,17 +1,12 @@
-//! Two app databases, one account, one PowerSync instance.
+//! Two app databases against one PowerSync instance.
 //!
-//! This is the only test that can prove the client layer is right: raw-table
-//! statements, upload triggers and the PostgREST translation only agree with
-//! each other through a real server. `experiments/powersync/run.py` brings up
-//! disposable Postgres, PostgREST and PowerSync containers and exports the
-//! three variables below; without them the test skips.
-//!
-//! Ignored by default because it needs those containers:
+//! Raw-table statements, upload triggers and the PostgREST translation only
+//! agree with each other through a real server, so these are the only tests
+//! that can prove the client layer right. They need the containers
+//! `experiments/powersync/run.py` brings up, and skip without them:
 //!
 //! ```text
-//! python experiments/powersync/run.py -- \
-//!   cargo +1.97.1 test --manifest-path backend/Cargo.toml -p luma --lib \
-//!   sync::two_device_tests -- --ignored
+//! python3 experiments/powersync/run.py --test sync::two_device_tests
 //! ```
 
 use std::path::Path;
@@ -32,28 +27,10 @@ use super::schema::schema;
 /// server's foreign keys are real: a row whose `uid` is nobody is refused.
 const USER: &str = "00000000-0000-0000-0000-0000000000aa";
 const OTHER: &str = "00000000-0000-0000-0000-0000000000bb";
+/// A third account that joins nothing. Every row it can see or write is a hole
+/// in the policies.
+const STRANGER: &str = "00000000-0000-0000-0000-0000000000cc";
 const CONVERGE: Duration = Duration::from_secs(30);
-
-/// Print the SDK's own log to stderr.
-///
-/// Called from a scenario while diagnosing one: a download that does not
-/// arrive says nothing on its own, and the SDK's warnings are where the reason
-/// shows up.
-#[allow(dead_code)]
-fn logging() {
-    struct Stderr;
-    impl log::Log for Stderr {
-        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record<'_>) {
-            eprintln!("[{}] {}", record.level(), record.args());
-        }
-        fn flush(&self) {}
-    }
-    static LOGGER: Stderr = Stderr;
-    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Warn));
-}
 
 /// The key id in `experiments/powersync/service.yaml`'s inline JWKS.
 const JWT_KID: &str = "luma-row-model-test";
@@ -107,9 +84,8 @@ fn mint_jwt(secret: &str, user: &str) -> String {
     // The `kid` names the key in the service's inline JWKS — see
     // `experiments/powersync/service.yaml`. PowerSync refuses a token whose
     // header names no key it knows.
-    let header = URL_SAFE_NO_PAD.encode(
-        serde_json::json!({ "alg": "HS256", "kid": JWT_KID, "typ": "JWT" }).to_string(),
-    );
+    let header = URL_SAFE_NO_PAD
+        .encode(serde_json::json!({ "alg": "HS256", "kid": JWT_KID, "typ": "JWT" }).to_string());
     let claims = URL_SAFE_NO_PAD.encode(
         serde_json::json!({
             "sub": user,
@@ -251,16 +227,27 @@ async fn settles(pool: &SqlitePool, query: &str, expected: &str, what: &str) {
 /// say "nothing arrived".
 async fn inventory(pool: &SqlitePool) -> String {
     let mut lines = Vec::new();
-    for table in ["venues", "venue_members", "tracks", "scores", "clips", "changes", "drafts"] {
-        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM {table}"
-        )))
-        .fetch_one(pool)
-        .await
-        .unwrap_or(-1);
+    for table in [
+        "venues",
+        "venue_members",
+        "tracks",
+        "scores",
+        "clips",
+        "changes",
+        "drafts",
+    ] {
+        let count: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                .fetch_one(pool)
+                .await
+                .unwrap_or(-1);
         lines.push(format!("{table}={count}"));
     }
-    for (table, column) in [("ps_crud", "id"), ("ps_buckets", "id"), ("ps_oplog", "bucket")] {
+    for (table, column) in [
+        ("ps_crud", "id"),
+        ("ps_buckets", "id"),
+        ("ps_oplog", "bucket"),
+    ] {
         let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT({column}) FROM {table}"
         )))
@@ -287,27 +274,16 @@ async fn refused(pool: &SqlitePool) -> String {
             Ok(rows) => rows,
             Err(error) => return format!("oplog unreadable: {error}"),
         };
-    // The SDK's own connection has foreign keys off, which is what makes a
-    // checkpoint's arbitrary row order survivable. Match it, or every replay
-    // fails on a parent that has not been written yet.
+    // Foreign keys stay on: this build of SQLite enables them by default, so
+    // the SDK's own connection enforces them too, and a deferred violation is
+    // only visible at the commit.
     let mut connection = match pool.acquire().await {
         Ok(connection) => connection,
         Err(error) => return format!("could not replay the oplog: {error}"),
     };
-    let keys = std::env::var("LUMA_REPLAY_FK").unwrap_or_else(|_| "OFF".into());
-    if let Err(error) = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA foreign_keys = {keys}"
-    )))
-    .execute(&mut *connection)
-    .await
-    {
-        return format!("could not replay the oplog: {error}");
-    }
     // One transaction, like a checkpoint: a row that only conflicts with
     // another row in the same batch would pass a one-at-a-time replay.
-    let _ = sqlx::query("BEGIN")
-        .execute(&mut *connection)
-        .await;
+    let _ = sqlx::query("BEGIN").execute(&mut *connection).await;
     for (name, data) in rows {
         let Some(table) = super::schema::table(&name) else {
             continue;
@@ -325,7 +301,10 @@ async fn refused(pool: &SqlitePool) -> String {
                 Some(value) => Some(value.to_string()),
             });
         }
-        let id = row.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
+        let id = row
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         for _ in 0..table
             .local_defaults
             .iter()
@@ -340,12 +319,10 @@ async fn refused(pool: &SqlitePool) -> String {
         }
     }
     if let Err(error) = sqlx::query("COMMIT").execute(&mut *connection).await {
+        let violations = super::service::violations(&mut connection).await;
         let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
-        return format!("refused at commit ({keys}): {error}");
+        return format!("refused at commit: {error} ({violations})");
     }
-    let _ = sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&mut *connection)
-        .await;
     "refused: nothing".to_owned()
 }
 
@@ -766,7 +743,7 @@ async fn a_conversation_follows_its_owner() {
     .execute(&a.sql)
     .await
     .expect("thread");
-    let principal = crate::database::local::auth::principal_key(USER);
+    let principal = crate::database::local::auth::principal_key(Some(USER));
     let mut parent: Option<String> = None;
     for (index, role) in ["user", "assistant"].into_iter().enumerate() {
         let id = format!("{thread}-m{index}");
@@ -810,6 +787,387 @@ async fn a_conversation_follows_its_owner() {
 
     a.close().await;
     b.close().await;
+}
+
+/// The two shapes of access that are not a venue: the verified pattern library
+/// reaches every signed-in account and only its owner may edit it, and a
+/// person's private rows reach nobody else at all.
+///
+/// The pattern is written last, so B receiving it proves A's earlier uploads
+/// have been replicated too — which is what makes the counts of zero below an
+/// assertion rather than a race.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+async fn the_verified_library_is_public_and_private_rows_are_not() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, OTHER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    let draft = unique("draft");
+    sqlx::query(
+        "INSERT INTO drafts (id, uid, score_id, base_json, state_json)
+         VALUES (?, ?, ?, '{}', '{}')",
+    )
+    .bind(&draft)
+    .bind(USER)
+    .bind(&score)
+    .execute(&a.sql)
+    .await
+    .expect("draft");
+    let thread = unique("thread");
+    sqlx::query(
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id)
+         VALUES (?, ?, 'track', 'none', NULL)",
+    )
+    .bind(&thread)
+    .bind(USER)
+    .execute(&a.sql)
+    .await
+    .expect("thread");
+
+    let pattern = unique("pattern");
+    sqlx::query("INSERT INTO patterns (id, uid, name, is_verified) VALUES (?, ?, 'Strobe', 1)")
+        .bind(&pattern)
+        .bind(USER)
+        .execute(&a.sql)
+        .await
+        .expect("pattern");
+    wait_for_upload(&a.sql).await;
+
+    settles(
+        &b.sql,
+        &count("patterns", "id", &pattern),
+        "1",
+        "the verified library never reached the other account",
+    )
+    .await;
+    for (table, column, scope) in [
+        ("drafts", "id", draft.as_str()),
+        ("agent_threads", "id", thread.as_str()),
+        ("changes", "row_id", score.as_str()),
+        ("venues", "id", venue.as_str()),
+    ] {
+        let held: String = sqlx::query_scalar(sqlx::AssertSqlSafe(count(table, column, scope)))
+            .fetch_one(&b.sql)
+            .await
+            .expect("query");
+        assert_eq!(
+            held, "0",
+            "{table} reached an account it does not belong to"
+        );
+    }
+
+    // Verified does not mean writable: the policy filters the row out of the
+    // other account's update, which PostgREST reports as a success over zero
+    // rows. The owner's name is what proves nothing was written.
+    patch(
+        &containers,
+        OTHER,
+        &format!("/patterns?id=eq.{pattern}"),
+        &serde_json::json!({ "name": "Hijack" }),
+    )
+    .await;
+    assert_eq!(
+        get(
+            &containers,
+            USER,
+            &format!("/patterns?id=eq.{pattern}&select=name")
+        )
+        .await,
+        serde_json::json!([{ "name": "Strobe" }]),
+        "another account rewrote a verified pattern"
+    );
+
+    a.close().await;
+    b.close().await;
+}
+
+/// What a venue shares, and what it does not, from the far side of the wire.
+///
+/// The share-code test covers the member's happy path. These are the refusals
+/// beside it: a stranger sees nothing of the venue, cannot write into it, and
+/// cannot talk their way in with a code that is not the code. Asserted over
+/// PostgREST rather than over a device, because a refusal is the server's
+/// answer and a client that never asked would pass either way.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+async fn a_stranger_reaches_nothing_of_a_shared_venue() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, OTHER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    let code = unique("code");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    let track = format!("{venue}-track");
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("share code");
+    wait_for_upload(&a.sql).await;
+
+    for path in [
+        format!("/venues?id=eq.{venue}&select=id"),
+        format!("/tracks?id=eq.{track}&select=id"),
+        format!("/clips?score_id=eq.{score}&select=id"),
+    ] {
+        assert_eq!(
+            get(&containers, STRANGER, &path).await,
+            serde_json::json!([]),
+            "a stranger read {path}"
+        );
+    }
+
+    let (status, body) = try_rest(
+        &containers,
+        STRANGER,
+        reqwest::Method::POST,
+        "/clips",
+        Some(&serde_json::json!({
+            "id": unique("clip"), "score_id": score, "graph": "strobe",
+            "start": 0.0, "duration": 1.0, "seed": "1",
+            "selection_json": "{\"expression\":\"all\"}",
+        })),
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "a stranger wrote into the shared score: {body}"
+    );
+
+    let (status, body) = try_rest(
+        &containers,
+        STRANGER,
+        reqwest::Method::POST,
+        "/rpc/join_venue",
+        Some(&serde_json::json!({ "code": format!("{code}-not") })),
+    )
+    .await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "a wrong share code joined the venue: {status} {body}"
+    );
+
+    // The member's side of the same policies, so a stranger seeing nothing is
+    // not merely a venue nobody can reach.
+    assert_eq!(rpc_join(&containers, OTHER, &code).await, venue);
+    settles(
+        &b.sql,
+        &count("tracks", "id", &track),
+        "1",
+        "the track behind the shared score never reached the member",
+    )
+    .await;
+
+    a.close().await;
+    b.close().await;
+}
+
+/// One row of every venue-child shape, and all of it on the member's device.
+///
+/// This is what evaluates each query in `deploy/sync-rules.yaml` against real
+/// data: a rule that names a column the table does not have, or a subquery the
+/// service refuses, fails the whole stream, and the only symptom is rows that
+/// never arrive.
+///
+/// The cue's pattern is here for a second reason: `cues.pattern_id` is a
+/// foreign key, so a member who receives the cue without it receives a
+/// checkpoint the local schema refuses at the commit — and refuses again on
+/// every retry, which stops that account's device applying anything at all.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
+async fn every_venue_child_shape_reaches_a_member() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, OTHER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    let code = unique("code");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    let track = format!("{venue}-track");
+    let pattern = unique("pattern");
+    let root = format!("{venue}:venue");
+    let child = unique("node");
+    let fixture = unique("fixture");
+    let group = unique("group");
+    for statement in [
+        format!("UPDATE venues SET share_code = '{code}' WHERE id = '{venue}'"),
+        format!("INSERT INTO patterns (id, uid, name) VALUES ('{pattern}', '{USER}', 'Strobe')"),
+        format!(
+            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
+             VALUES ('{pattern}-impl', '{USER}', '{pattern}', '{{}}')"
+        ),
+        format!(
+            "INSERT INTO score_definitions (id, uid, score_id, definition_json)
+             VALUES ('{score}:strobe', '{USER}', '{score}', '{{}}')"
+        ),
+        format!(
+            "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json)
+             VALUES ('{track}', '{USER}', '[]', '[]')"
+        ),
+        format!(
+            "INSERT INTO venue_nodes (id, uid, venue_id, kind)
+             VALUES ('{root}', '{USER}', '{venue}', 'venue'),
+                    ('{child}', '{USER}', '{venue}', 'run')"
+        ),
+        format!(
+            "INSERT INTO venue_edges (child_id, uid, venue_id, parent_id, my_socket, their_socket)
+             VALUES ('{child}', '{USER}', '{venue}', '{root}', 'base', 'top')"
+        ),
+        format!(
+            "INSERT INTO venue_node_params (uid, venue_id, node_id, key, value)
+             VALUES ('{USER}', '{venue}', '{child}', 'length', 3.0)"
+        ),
+        format!(
+            "INSERT INTO venue_constraints
+                 (uid, venue_id, node_id, my_socket, target_node, target_socket)
+             VALUES ('{USER}', '{venue}', '{child}', 'base', '{root}', 'top')"
+        ),
+        format!(
+            "INSERT INTO fixtures
+                 (id, uid, venue_id, address, num_channels, manufacturer, model,
+                  mode_name, fixture_path)
+             VALUES ('{fixture}', '{USER}', '{venue}', 1, 8, 'Luma', 'Mover',
+                     'Default', 'Luma/Mover.qxf')"
+        ),
+        format!(
+            "INSERT INTO fixture_groups (id, uid, venue_id, name)
+             VALUES ('{group}', '{USER}', '{venue}', 'front_wash')"
+        ),
+        format!(
+            "INSERT INTO fixture_group_members (id, uid, venue_id, group_id, fixture_id)
+             VALUES ('{group}:{fixture}', '{USER}', '{venue}', '{group}', '{fixture}')"
+        ),
+        format!(
+            "INSERT INTO cues (id, uid, venue_id, name, pattern_id)
+             VALUES ('{venue}-cue', '{USER}', '{venue}', 'Blinder', '{pattern}')"
+        ),
+        format!(
+            "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
+             VALUES ('{venue}-mod', '{USER}', '{venue}', 'shift', '{{}}')"
+        ),
+        format!(
+            "INSERT INTO midi_bindings (id, uid, venue_id, trigger_json, action_json)
+             VALUES ('{venue}-bind', '{USER}', '{venue}', '{{}}', '{{}}')"
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(statement.clone()))
+            .execute(&a.sql)
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    wait_for_upload(&a.sql).await;
+    assert_eq!(rpc_join(&containers, OTHER, &code).await, venue);
+
+    for (table, column, scope) in [
+        ("venues", "id", venue.as_str()),
+        ("venue_members", "venue_id", venue.as_str()),
+        ("venue_nodes", "venue_id", venue.as_str()),
+        ("venue_edges", "venue_id", venue.as_str()),
+        ("venue_node_params", "venue_id", venue.as_str()),
+        ("venue_constraints", "venue_id", venue.as_str()),
+        ("fixtures", "venue_id", venue.as_str()),
+        ("fixture_groups", "venue_id", venue.as_str()),
+        ("fixture_group_members", "venue_id", venue.as_str()),
+        ("cues", "venue_id", venue.as_str()),
+        ("midi_modifiers", "venue_id", venue.as_str()),
+        ("midi_bindings", "venue_id", venue.as_str()),
+        ("scores", "venue_id", venue.as_str()),
+        ("clips", "score_id", score.as_str()),
+        ("score_definitions", "score_id", score.as_str()),
+        ("tracks", "id", track.as_str()),
+        ("track_beats", "track_id", track.as_str()),
+        ("patterns", "id", pattern.as_str()),
+        ("implementations", "pattern_id", pattern.as_str()),
+    ] {
+        settles(
+            &b.sql,
+            &count(table, column, scope),
+            if table == "venue_nodes" { "2" } else { "1" },
+            &format!("{table} never reached the member"),
+        )
+        .await;
+    }
+
+    // The sync rules and the policies say the same thing about that pattern:
+    // the member may read it, and nobody else has been let in with them.
+    let selection = format!("/patterns?id=eq.{pattern}&select=id");
+    assert_eq!(
+        get(&containers, OTHER, &selection).await,
+        serde_json::json!([{ "id": pattern }]),
+        "the member may not read the pattern their cue plays"
+    );
+    assert_eq!(
+        get(&containers, STRANGER, &selection).await,
+        serde_json::json!([]),
+        "a stranger read a venue's cue pattern"
+    );
+
+    a.close().await;
+    b.close().await;
+}
+
+/// One PostgREST read as `user`.
+async fn get(containers: &Containers, user: &str, path: &str) -> serde_json::Value {
+    rest(containers, user, reqwest::Method::GET, path, None).await
+}
+
+/// One PostgREST update as `user`.
+async fn patch(containers: &Containers, user: &str, path: &str, body: &serde_json::Value) {
+    rest(containers, user, reqwest::Method::PATCH, path, Some(body)).await;
+}
+
+async fn rest(
+    containers: &Containers,
+    user: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let (status, text) = try_rest(containers, user, method, path, body).await;
+    assert!(status.is_success(), "{path} {status}: {text}");
+    serde_json::from_str(text.trim()).unwrap_or(serde_json::Value::Null)
+}
+
+/// One PostgREST call whose refusal is the answer.
+async fn try_rest(
+    containers: &Containers,
+    user: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&serde_json::Value>,
+) -> (reqwest::StatusCode, String) {
+    let token = mint_jwt(&containers.secret, user);
+    let url = format!("{}{path}", containers.postgrest.trim_end_matches('/'));
+    let mut request = reqwest::Client::new()
+        .request(method, &url)
+        .header("apikey", &token)
+        .header("Authorization", format!("Bearer {token}"));
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request.send().await.expect("postgrest");
+    let status = response.status();
+    (status, response.text().await.unwrap_or_default())
 }
 
 /// A fresh id, so two runs against a kept stack do not collide.

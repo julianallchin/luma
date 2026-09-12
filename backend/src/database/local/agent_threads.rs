@@ -583,8 +583,7 @@ pub async fn append_messages_at_head(
         .await
         .map_err(|e| format!("Failed to begin agent thread append: {e}"))?;
     ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
-    let principal_key =
-        principal_key(owner_user_id.ok_or(crate::database::local::auth::SIGN_IN_REQUIRED)?);
+    let principal_key = principal_key(owner_user_id);
 
     // A retry is recognised by its messages, not by a receipt: the ids are
     // fixed before the first attempt, so the rows themselves say whether the

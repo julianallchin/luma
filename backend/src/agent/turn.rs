@@ -799,7 +799,7 @@ async fn execute_tool(
     let progress = ToolProgress::new(events.clone());
     let context = ToolContext {
         agent: service,
-        thread_id: thread_id,
+        thread_id,
         call_id: &call.id,
         turn_message_id,
         // A subagent thread's Python namespace *is* its draft: the

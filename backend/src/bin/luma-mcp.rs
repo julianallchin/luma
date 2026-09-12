@@ -333,25 +333,10 @@ async fn open(
     let track_id = string(&track, "id");
     let label = track_label(&track);
 
-    // Who this session's revisions belong to. The connection already named the
-    // client; the model refines it, because "Claude Code" is a program and the
-    // thing that actually authored the edit is the model driving it.
-    // Cloned rather than read in place: this holds across an `invoke`, and no
-    // lock this process takes should span one.
-    //
-    // Refined *before* the score is bound, because minting one is itself an
-    // authored revision and it carries the host's session actor — a score this
-    // client created should not read as the operator's, or as a nameless
-    // client's.
+    // Who this session's threads belong to. Cloned rather than read in place:
+    // this holds across an `invoke`, and no lock this process takes should
+    // span one.
     let connected = client.read().await.clone();
-    if let (Some(connected), Some(model)) = (&connected, model) {
-        set_actor(
-            services,
-            "authored_state_set_session_actor",
-            json!({ "actor": client_actor(connected, Some(model)) }),
-        )
-        .await;
-    }
 
     let (venue_id, score_id) =
         bind_venue(services, &track_id, &label, venue_id, &venues, new_score).await?;
@@ -1065,7 +1050,7 @@ async fn run() -> Result<(), String> {
                 // `open` mints for a track that has none — is the client's
                 // work, not the operator's.
                 if let Some(connected) = client {
-                    adopt(&services, &connected, &client_cell).await;
+                    adopt(&connected, &client_cell).await;
                 }
                 write(&stdout, &response).await;
                 continue;
@@ -1106,19 +1091,9 @@ fn client_actor(client: &ClientInfo, model: Option<&str>) -> String {
     }
 }
 
-/// Tell the host to attribute its authored revisions to the connected client,
-/// and remember the client only if that took.
-async fn adopt(services: &AppServices, client: &ClientInfo, label: &ClientCell) {
-    let actor = client_actor(client, None);
-    if set_actor(
-        services,
-        "authored_state_set_session_actor",
-        json!({ "actor": actor }),
-    )
-    .await
-    {
-        *label.write().await = Some(client.clone());
-    }
+/// Remember the connected client, so the threads it opens are attributed to it.
+async fn adopt(client: &ClientInfo, label: &ClientCell) {
+    *label.write().await = Some(client.clone());
 }
 
 /// Point one of the host's actor commands at a name, and say whether it took.

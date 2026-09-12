@@ -51,7 +51,7 @@ The global library database `luma.db` stays in the platform app config directory
 - Windows: `%APPDATA%\\com.luma.luma\\luma.db`
 - Linux: `~/.config/com.luma.luma/luma.db`
 
-Venues, scores, patterns and authored history all live in that one database — there is no per-venue project file.
+Venues, scores, patterns and the `changes` log all live in that one database — there is no per-venue project file. Sync replicates those rows through PowerSync; see [docs/design/sync.md](docs/design/sync.md).
 
 ## UI Conventions
 
