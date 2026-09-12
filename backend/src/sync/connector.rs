@@ -97,11 +97,7 @@ impl Connector {
         );
         let filter = [("id", format!("eq.{}", entry.id))];
         let builder = match entry.update_type {
-            UpdateType::Put => self
-                .http
-                .post(&url)
-                .header("Prefer", "resolution=merge-duplicates,return=minimal")
-                .json(&Value::Array(vec![Value::Object(body(entry))])),
+            UpdateType::Put => return self.put_request(entry.table.as_ref(), &[entry], token),
             UpdateType::Patch => self
                 .http
                 .patch(&url)
@@ -118,6 +114,68 @@ impl Connector {
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
+    }
+
+    /// One upsert for a run of rows in the same table.
+    ///
+    /// PostgREST takes an array, so a first sync of a real library is one
+    /// request per few hundred rows instead of one per row — the difference
+    /// between minutes and seconds. The header is the same as for a single
+    /// row, because a batch *is* a single row repeated: `merge-duplicates`
+    /// makes every one of them an upsert.
+    fn put_request(
+        &self,
+        table: &str,
+        entries: &[&CrudEntry],
+        token: &str,
+    ) -> reqwest::RequestBuilder {
+        let url = format!("{}/{}", self.postgrest_url.trim_end_matches('/'), table);
+        self.http
+            .post(&url)
+            .header("Prefer", "resolution=merge-duplicates,return=minimal")
+            .json(&Value::Array(
+                entries
+                    .iter()
+                    .map(|entry| Value::Object(body(entry)))
+                    .collect(),
+            ))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+    }
+
+    /// Send one batch of upserts, refreshing the token once on a 401.
+    async fn send_put_batch(&self, table: &str, entries: &[&CrudEntry]) -> Result<(), Failure> {
+        let mut token = self
+            .token()
+            .await
+            .map_err(|e| Failure::Transient(e.to_string()))?;
+        for attempt in 0..2 {
+            let response = self
+                .put_request(table, entries, &token)
+                .send()
+                .await
+                .map_err(|error| Failure::Transient(error.to_string()))?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(());
+            }
+            let body = response.text().await.unwrap_or_default();
+            let code = status.as_u16();
+            if code == 401 && attempt == 0 {
+                token = self
+                    .token()
+                    .await
+                    .map_err(|e| Failure::Transient(e.to_string()))?;
+                continue;
+            }
+            return Err(if transient(code) {
+                Failure::Transient(format!("{code}: {body}"))
+            } else {
+                Failure::Rejected { status: code, body }
+            });
+        }
+        unreachable!("the retry loop returns on every path")
     }
 
     /// Send one entry, refreshing the token once on a 401.
@@ -237,6 +295,41 @@ pub async fn join_venue(state_pool: &SqlitePool, code: &str) -> Result<String, S
         .map_err(|_| format!("unexpected join_venue response: {body}"))
 }
 
+/// Split a transaction's entries into the requests they become.
+///
+/// A run of consecutive upserts of one table is one request; everything else
+/// is one request per entry. Consecutive is load-bearing: the queue is ordered
+/// and an update or a delete between two upserts of the same row is not
+/// something to reorder around.
+#[must_use]
+fn batches(entries: &[CrudEntry]) -> Vec<&[CrudEntry]> {
+    let mut batches = Vec::new();
+    let mut rest = entries;
+    while let Some(first) = rest.first() {
+        let run = if matches!(first.update_type, UpdateType::Put) {
+            rest.iter()
+                .take(PUT_BATCH)
+                .take_while(|next| {
+                    matches!(next.update_type, UpdateType::Put) && next.table == first.table
+                })
+                .count()
+        } else {
+            1
+        };
+        let (batch, tail) = rest.split_at(run);
+        batches.push(batch);
+        rest = tail;
+    }
+    batches
+}
+
+/// How many upserts go in one request.
+///
+/// PostgREST holds the whole body in memory and Supabase caps the request size;
+/// five hundred rows of a clip or a track is well inside both, and the
+/// remaining round trips are no longer what the first sync is waiting on.
+const PUT_BATCH: usize = 500;
+
 fn transient(status: u16) -> bool {
     status >= 500 || status == 408 || status == 429
 }
@@ -265,9 +358,37 @@ impl BackendConnector for Connector {
 
     async fn upload_data(&self) -> Result<(), PowerSyncError> {
         while let Some(transaction) = self.db.next_crud_transaction().await? {
-            for entry in &transaction.crud {
-                match self.send(entry).await {
+            for batch in batches(&transaction.crud) {
+                let entry = &batch[0];
+                let outcome = if batch.len() > 1 {
+                    let entries: Vec<_> = batch.iter().collect();
+                    self.send_put_batch(entry.table.as_ref(), &entries).await
+                } else {
+                    self.send(entry).await
+                };
+                match outcome {
                     Ok(()) => {}
+                    Err(Failure::Rejected { status, body }) if batch.len() > 1 => {
+                        // One row in the batch is bad and the server refused
+                        // the lot. Retry them one at a time so the bad one is
+                        // the only one that lands in `sync_rejections`.
+                        log::warn!(
+                            "[sync] a batch of {} {} upserts was refused ({status}): {body}",
+                            batch.len(),
+                            entry.table
+                        );
+                        for entry in batch {
+                            match self.send(entry).await {
+                                Ok(()) => {}
+                                Err(Failure::Rejected { status, body }) => {
+                                    self.reject(entry, status, &body).await;
+                                }
+                                Err(Failure::Transient(message)) => {
+                                    return Err(upload_error(message));
+                                }
+                            }
+                        }
+                    }
                     Err(Failure::Rejected { status, body }) => {
                         self.reject(entry, status, &body).await;
                     }
@@ -325,16 +446,68 @@ mod tests {
     }
 
     fn entry(update_type: UpdateType, data: Option<Map<String, Value>>) -> CrudEntry {
+        in_table("clips", "clip-1", update_type, data)
+    }
+
+    fn in_table(
+        table: &str,
+        id: &str,
+        update_type: UpdateType,
+        data: Option<Map<String, Value>>,
+    ) -> CrudEntry {
         CrudEntry {
             client_id: 1,
             transaction_id: 1,
             update_type,
-            table: "clips".into(),
-            id: "clip-1".into(),
+            table: table.into(),
+            id: id.into(),
             metadata: None,
             data,
             previous_values: None,
         }
+    }
+
+    /// Consecutive upserts of one table are one request. A first sync is
+    /// thousands of rows, and one request each is the difference between
+    /// minutes and seconds.
+    #[tokio::test]
+    async fn consecutive_upserts_of_one_table_are_one_request() {
+        let entries = vec![
+            in_table("clips", "clip-1", UpdateType::Put, Some(row())),
+            in_table("clips", "clip-2", UpdateType::Put, Some(row())),
+            in_table("clips", "clip-3", UpdateType::Put, Some(row())),
+            in_table("venues", "venue-1", UpdateType::Put, Some(row())),
+        ];
+        let batches = batches(&entries);
+        assert_eq!(batches.len(), 2, "three clips and a venue are two requests");
+        assert_eq!(batches[0].len(), 3);
+        assert_eq!(batches[1].len(), 1);
+
+        let request = connector()
+            .put_request("clips", &batches[0].iter().collect::<Vec<_>>(), "token")
+            .build()
+            .expect("request");
+        assert_eq!(request.method(), reqwest::Method::POST);
+        let body: Value =
+            serde_json::from_slice(request.body().and_then(|b| b.as_bytes()).expect("body"))
+                .expect("json");
+        let rows = body.as_array().expect("an array of rows");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], "clip-1");
+        assert_eq!(rows[2]["id"], "clip-3");
+    }
+
+    /// A PATCH or a DELETE between two upserts breaks the run: the queue is
+    /// ordered, and reordering around it would change what the server sees.
+    #[test]
+    fn an_update_between_two_upserts_is_its_own_request() {
+        let entries = vec![
+            in_table("clips", "clip-1", UpdateType::Put, Some(row())),
+            in_table("clips", "clip-1", UpdateType::Patch, Some(row())),
+            in_table("clips", "clip-2", UpdateType::Put, Some(row())),
+        ];
+        let batches = batches(&entries);
+        assert_eq!(batches.len(), 3);
     }
 
     fn row() -> Map<String, Value> {
