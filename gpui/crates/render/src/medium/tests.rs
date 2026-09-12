@@ -11,10 +11,6 @@ struct Ray {
 
 #[test]
 fn global_height_fog_matches_closed_form_paths() {
-    let context = DeviceContext::shared().unwrap();
-    let device = &context.device;
-    let queue = &context.queue;
-    let field = HazeField::bake(device, queue);
     let ray = |height: f32, up: f32, distance: f32| Ray {
         origin: [2500.0, -5000.0, height, 0.0],
         direction: [(1.0_f32 - up * up).sqrt(), 0.0, up, distance],
@@ -38,6 +34,45 @@ fn global_height_fog_matches_closed_form_paths() {
         min: [-1.0, -1.0, -1.0, 0.0144],
         max: [1.0, 1.0, 1.0, OUTDOOR_SCALE_HEIGHT_M],
     };
+    let values = measure_rays(uniform, &rays);
+    let near_horizontal = 0.0144 * 30.0 * (-20.0_f32 / 50.0).exp();
+    let expected = [
+        0.144,
+        1.44 / std::f32::consts::E,
+        0.72,
+        0.72,
+        0.72,
+        1.44,
+        0.72,
+        16.0,
+        near_horizontal,
+        near_horizontal,
+    ];
+    for (i, (&want, value)) in expected.iter().zip(values).enumerate() {
+        assert!(value.iter().all(|v| v.is_finite()), "ray {i}: {value:?}");
+        assert!(
+            (value[0] - want).abs() < 0.0002,
+            "ray {i}: {} vs {want}",
+            value[0]
+        );
+        assert!(
+            (value[1] - want).abs() < 0.0002,
+            "prefix ray {i}: {} vs {want}",
+            value[1]
+        );
+        assert_eq!(
+            value[2].to_bits(),
+            value[3].to_bits(),
+            "density changed outside the lighting volume"
+        );
+    }
+}
+
+fn measure_rays(uniform: Uniform, rays: &[Ray]) -> Vec<[f32; 4]> {
+    let context = DeviceContext::shared().unwrap();
+    let device = &context.device;
+    let queue = &context.queue;
+    let field = HazeField::bake(device, queue);
     let source = format!(
         "{}{}{}",
         crate::haze_field::prelude(),
@@ -79,7 +114,7 @@ fn global_height_fog_matches_closed_form_paths() {
     });
     let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
-        contents: bytemuck::cast_slice(&rays),
+        contents: bytemuck::cast_slice(rays),
         usage: wgpu::BufferUsages::STORAGE,
     });
     let bytes = (rays.len() * 16) as u64;
@@ -138,35 +173,43 @@ fn global_height_fog_matches_closed_form_paths() {
     rx.recv().unwrap().unwrap();
     let data = readback.slice(..).get_mapped_range().unwrap();
     let values: &[[f32; 4]] = bytemuck::cast_slice(&data);
-    let near_horizontal = 0.0144 * 30.0 * (-20.0_f32 / 50.0).exp();
-    let expected = [
-        0.144,
-        1.44 / std::f32::consts::E,
-        0.72,
-        0.72,
-        0.72,
-        1.44,
-        0.72,
-        16.0,
-        near_horizontal,
-        near_horizontal,
-    ];
-    for (i, (&want, value)) in expected.iter().zip(values).enumerate() {
-        assert!(value.iter().all(|v| v.is_finite()), "ray {i}: {value:?}");
-        assert!(
-            (value[0] - want).abs() < 0.0002,
-            "ray {i}: {} vs {want}",
-            value[0]
-        );
-        assert!(
-            (value[1] - want).abs() < 0.0002,
-            "prefix ray {i}: {} vs {want}",
-            value[1]
-        );
-        assert_eq!(
-            value[2].to_bits(),
-            value[3].to_bits(),
-            "density changed outside the lighting volume"
-        );
+    values.to_vec()
+}
+
+#[test]
+fn scalar_cloud_depth_matches_complete_prefix() {
+    // Exercise both room boundaries and the global outdoor field, including
+    // ground crossings, near-horizontal paths and moving cloud deformation.
+    let mut rays = Vec::new();
+    for height in [-4.0, 0.0, 1.7, 27.0, 60.0] {
+        for up in [-1.0_f32, -0.37, -0.00001, 0.0, 0.00001, 0.37, 1.0] {
+            for distance in [0.0, 0.1, 3.0, 25.0, 130.0, 199.0] {
+                rays.push(Ray {
+                    origin: [-2.0, 3.0, height, 0.0],
+                    direction: [(1.0 - up * up).sqrt(), 0.0, up, distance],
+                });
+            }
+        }
+    }
+    for scale_height in [0.0, OUTDOOR_SCALE_HEIGHT_M] {
+        for time in [0.0, 3.0, 17.3] {
+            let uniform = Uniform {
+                shape: [0.35, 4.0, 0.3, 16.0],
+                wind: [0.13, 0.075, 0.0, time],
+                min: [-20.0, -30.0, 0.0, 0.0144],
+                max: [20.0, 30.0, 30.0, scale_height],
+            };
+            for (i, value) in measure_rays(uniform, &rays).iter().enumerate() {
+                assert!(
+                    value[0].is_finite() && value[0] >= 0.0,
+                    "ray {i}: {value:?}"
+                );
+                assert_eq!(
+                    value[0].to_bits(),
+                    value[1].to_bits(),
+                    "scalar/prefix mismatch: ray {i}, scale height {scale_height}, time {time}"
+                );
+            }
+        }
     }
 }

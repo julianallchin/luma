@@ -27,6 +27,13 @@ struct Globals {
     params: vec4<f32>,
     medium: ProceduralMedium,
     outdoor_sun: vec4<f32>,
+    // Outdoor surface transmittance source. x: the fog grid's radial extent
+    // in metres (the haze pass's `shadow.w`), y: 0 marches `medium_optical_depth`
+    // per fragment, 1 reads the grid's camera transmittance, 2 reads the grid
+    // only beyond z metres and marches nearer fragments. w unused.
+    surface_fog: vec4<f32>,
+    // xy: output size in pixels, zw: its reciprocal.
+    viewport: vec4<f32>,
 };
 
 struct Instance {
@@ -72,6 +79,8 @@ struct EnvironmentParams {
 @group(2) @binding(2) var environment_brdf: texture_2d<f32>;
 @group(2) @binding(3) var environment_sampler: sampler;
 @group(2) @binding(4) var<uniform> environment_params: EnvironmentParams;
+// The probe's frame-constant mean lobe radiance (`environment_ambient.wgsl`).
+@group(2) @binding(5) var<uniform> outdoor_ambient_mean: vec4<f32>;
 
 struct FixtureLightCore {
     position: vec3<f32>,
@@ -101,7 +110,8 @@ struct FixtureLightRest {
 };
 
 struct SurfaceClusterParams {
-    // x: fixture surface lighting enabled, y: cluster-occupancy debug view.
+    // x: fixture surface lighting enabled, y: cluster-occupancy debug, z: depth-refined surface mask,
+    // w: surface depth buckets per tile (0 = one sphere, 2 = split planes; see `light_index_build.wgsl`).
     // The culling structure itself is the shared light index (group 3,
     // bindings 8–10); only the pass flags remain here.
     flags: vec4<f32>,
@@ -126,6 +136,13 @@ struct FixtureShadowMatrix {
 @group(3) @binding(4) var<uniform> surface_clusters: SurfaceClusterParams;
 @group(3) @binding(5) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
 @group(3) @binding(6) var fixture_shadow_map: texture_depth_2d_array;
-@group(3) @binding(7) var fixture_shadow_sampler: sampler_comparison;
+@group(3) @binding(7) var fixture_depth_sampler: sampler;
 
 @group(3) @binding(12) var fixture_shadow_map_extra: texture_depth_2d_array;
+// The far-field fog prefix (`haze_integrate.wgsl`): cumulative camera
+// transmittance in `.a` per fog column and quadratic radial slice. Read by
+// `surface_transmittance` when `globals.surface_fog.y` selects the grid.
+@group(3) @binding(13) var surface_fog_grid: texture_3d<f32>;
+// Per-tile surface depth split (`light_index_build.wgsl::surface_fill`):
+// the depth between the tile's two surface mask buckets, or a large sentinel.
+@group(3) @binding(14) var<storage, read> surface_splits: array<f32>;

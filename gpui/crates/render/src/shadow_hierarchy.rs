@@ -131,7 +131,9 @@ impl Targets {
         encoder: &mut wgpu::CommandEncoder,
         maps: [&wgpu::TextureView; 2],
         dirty: &[bool],
-    ) {
+        profile: &mut crate::pass_profile::PassQueries<'_>,
+    ) -> usize {
+        let mut updated = 0;
         for (bank, map) in maps.iter().enumerate() {
             let layers: Vec<u32> = dirty
                 .iter()
@@ -142,6 +144,7 @@ impl Targets {
             if layers.is_empty() {
                 continue;
             }
+            updated += layers.len();
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("dirty-shadow-depth-ranges"),
                 contents: bytemuck::cast_slice(&layers),
@@ -174,7 +177,7 @@ impl Targets {
                 });
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("shadow-depth-ranges"),
-                    timestamp_writes: None,
+                    timestamp_writes: profile.compute("shadow-hierarchy", None),
                 });
                 pass.set_pipeline(&pipelines.pipelines[kind]);
                 pass.set_bind_group(0, &bind_group, &[]);
@@ -186,5 +189,6 @@ impl Targets {
                 );
             }
         }
+        updated
     }
 }

@@ -806,9 +806,9 @@ fn profile_case(
             aim_at_camera,
         );
         samples.push(renderer.profile_live_frame(&frame, WIDTH, HEIGHT, LIVE_SUBFRAMES)?);
-        // The counter readback is a blocking GPU round trip; taken every
-        // frame it serialises the pipeline and roughly quadruples the run.
-        // One frame in sixteen still averages ~40 samples per case.
+        // Explicitly dispatch and read the fragment counter after the timed
+        // frame. This blocking diagnostic runs once in sixteen frames;
+        // normal rendering and haze-lab captures do not pay for it.
         if sample % 16 == 0 {
             if let Some((frame_count, candidates)) = renderer.fragment_stats()? {
                 fragments_total += frame_count;
@@ -841,6 +841,8 @@ fn profile_case(
     // subdivisions of `gpu_total_ms`, already covered by it, and adding them
     // would invalidate every stored profile for no new information.
     for FrameTimings {
+        passes: _,
+        cpu: _,
         gpu_total_ms,
         gpu_volumetric_ms,
         gpu_scene_ms: _,

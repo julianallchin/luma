@@ -4031,7 +4031,12 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
         .frame
         .as_ref()
         .and_then(|frame| frame.camera)
-        .filter(|(view, _)| state.follow && state.transport.playing && view.zoom == state.view.zoom)
+        .filter(|(view, _)| {
+            state.follow
+                && state.transport.playing
+                && view.zoom == state.view.zoom
+                && !waveform::updates_frozen()
+        })
         .map(|(view, position)| {
             // At either scroll limit the waveform is stationary and reusable;
             // its original capture time must not freeze the moving playhead.

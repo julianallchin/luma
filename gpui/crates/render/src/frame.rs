@@ -28,6 +28,10 @@ pub const MAX_FIXTURE_CONES: usize = 512;
 const FLOOR_EXTENT_M: f32 = 2000.0;
 
 /// One uploadable triangle list.
+///
+/// Cloning shares the data: both buffers are `Arc`s, so a cached mesh is
+/// handed to a frame for the price of two refcounts.
+#[derive(Clone)]
 pub struct MeshData {
     /// Stable identity of this immutable mesh inside the asset/procedural bank.
     ///
@@ -352,7 +356,11 @@ pub(crate) fn piece_draws(
                 .collect()
         }
         Geometry::Procedural(procedural) => {
-            let mesh = bank.insert(procedural.mesh_key(), || procedural.mesh());
+            let key = procedural.mesh_key();
+            // Baked once per process, not once per frame: the bank is rebuilt
+            // every frame and the lattice is the most expensive geometry in
+            // the venue to generate.
+            let mesh = bank.insert(key.clone(), || lib.procedural(&key, || procedural.mesh()));
             vec![Draw {
                 mesh,
                 model: root,

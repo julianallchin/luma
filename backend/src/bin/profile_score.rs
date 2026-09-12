@@ -1,6 +1,7 @@
 //! Read-only replay of a saved score through production evaluation and rendering.
-//! profile_score SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot]
-//! `snapshot` exports frozen renderer scenes at 1, 3 and 7 seconds, without playback.
+//! profile_score SCORE_ID OUTPUT [width height seconds] [all|no-haze|uniform|snapshot] [TIMES_JSON]
+//! `snapshot` exports score states without GPU rendering: 1, 3 and 7 seconds by
+//! default, or a JSON array of strictly increasing times from TIMES_JSON.
 use luma_lib::{
     eval::{Arena, Scope},
     stage_render::{primitive_state, VenueGeometry},
@@ -28,7 +29,30 @@ async fn main() -> Result<(), String> {
     if !["all", "no-haze", "uniform", "snapshot"].contains(&mode) {
         return Err("unknown isolation mode".into());
     }
-    let storage = StorageRoot::from_env_default()?;
+    if args.len() > 8 || (args.get(7).is_some() && mode != "snapshot") {
+        return Err("TIMES_JSON is only supported for snapshot mode".into());
+    }
+    let snapshot_times: Vec<f32> = if let Some(path) = args.get(7) {
+        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?
+    } else {
+        vec![1.0, 3.0, 7.0]
+    };
+    if snapshot_times.is_empty()
+        || snapshot_times.len() > 64
+        || snapshot_times
+            .iter()
+            .any(|time| !time.is_finite() || *time < 0.0)
+        || snapshot_times.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(
+            "snapshot requires 1..64 finite, nonnegative, strictly increasing times".into(),
+        );
+    }
+    let storage = match std::env::var_os("LUMA_CONFIG_DIR") {
+        Some(path) => StorageRoot::from_path(path.into()),
+        None => StorageRoot::from_env_default()?,
+    };
     let pool = SqlitePoolOptions::new()
         .max_connections(2)
         .connect_with(
@@ -68,7 +92,7 @@ async fn main() -> Result<(), String> {
     if mode == "snapshot" {
         let mut scenes = Vec::new();
         let mut arena = Arena::default();
-        for time in [1.0, 3.0, 7.0] {
+        for time in snapshot_times {
             let state = program
                 .render(&[time], Scope::Composite, &mut arena)
                 .pop()
@@ -90,7 +114,7 @@ async fn main() -> Result<(), String> {
                 &mut library,
             )
             .map_err(|e| e.to_string())?;
-            scene.id = format!("gasworks-get-lucky-{time:.0}s");
+            scene.id = format!("gasworks-get-lucky-{time}s");
             scene.times = vec![time];
             scene.state = pinned.into_inner();
             scenes.push(serde_json::to_value(&scene).map_err(|e| e.to_string())?);
@@ -134,7 +158,7 @@ async fn main() -> Result<(), String> {
             .profile_live_frame(&frame, width, height, luma_render::LIVE_SUBFRAMES)
             .map_err(|e| e.to_string())?;
         if i >= 60 {
-            rows.push(serde_json::json!({"time":time,"eval_ms":eval_ms,"build_ms":build_ms,"gpu_ms":timing.gpu_total_ms,"scene_ms":timing.gpu_scene_ms,"haze_ms":timing.gpu_volumetric_ms,"grid_ms":timing.gpu_fog_grid_ms,"prepare_ms":timing.gpu_fog_prepare_ms,"lighting_ms":timing.gpu_fog_light_ms,"integrate_ms":timing.gpu_fog_integrate_ms,"composite_ms":timing.gpu_composite_ms,"encode_ms":timing.cpu_encode_submit_ms,"cluster_ms":timing.cpu_cluster_ms,"cones":frame.fixture_cones.len(),"shadow_redraws":renderer.shadow_stats().redrawn_maps}));
+            rows.push(serde_json::json!({"time":time,"eval_ms":eval_ms,"build_ms":build_ms,"gpu_ms":timing.gpu_total_ms,"scene_ms":timing.gpu_scene_ms,"haze_ms":timing.gpu_volumetric_ms,"grid_ms":timing.gpu_fog_grid_ms,"prepare_ms":timing.gpu_fog_prepare_ms,"lighting_ms":timing.gpu_fog_light_ms,"integrate_ms":timing.gpu_fog_integrate_ms,"composite_ms":timing.gpu_composite_ms,"encode_ms":timing.cpu_encode_submit_ms,"cluster_ms":timing.cpu_cluster_ms,"detail":timing,"cones":frame.fixture_cones.len(),"shadow_redraws":renderer.shadow_stats().redrawn_maps}));
         }
     }
     let artifact = serde_json::json!({"score":score,"title":title,"venue":venue_name,"mode":mode,"size":[width,height],"camera":"fitted front; not the live orbit", "haze":scene.render.haze,"adapter":renderer.gpu().adapter_profile().name,"sample_rate":144,"note":"offscreen production score replay; excludes GPUI layout, picking and presentation; GPU timestamps every frame", "frames":rows});

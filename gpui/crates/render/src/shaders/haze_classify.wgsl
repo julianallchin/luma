@@ -14,9 +14,59 @@ fn block_visibility(lo: vec3<f32>, hi: vec3<f32>, li: u32) -> u32 {
     let matrix = fixture_shadow_matrices[layer].view_proj;
     var pmin = vec3<f32>(1e20);
     var pmax = vec3<f32>(-1e20);
-    for (var corner = 0u; corner < 8u; corner += 1u) {
-        let p = select(lo, hi, (vec3<u32>(corner) & vec3<u32>(1u, 2u, 4u)) != vec3<u32>(0u));
-        let clip = matrix * vec4<f32>(p, 1.0);
+    // Explicit corners measured faster on Metal. Keep the original order
+    // and early exit so the conservative visibility test is unchanged.
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(lo.x, lo.y, lo.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(hi.x, lo.y, lo.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(lo.x, hi.y, lo.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(hi.x, hi.y, lo.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(lo.x, lo.y, hi.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(hi.x, lo.y, hi.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(lo.x, hi.y, hi.z), 1.0);
+        if clip.w <= 0.0 { return 2u; }
+        let ndc = clip.xyz / clip.w;
+        pmin = min(pmin, ndc);
+        pmax = max(pmax, ndc);
+    }
+    {
+        let clip = matrix * vec4<f32>(vec3<f32>(hi.x, hi.y, hi.z), 1.0);
         if clip.w <= 0.0 { return 2u; }
         let ndc = clip.xyz / clip.w;
         pmin = min(pmin, ndc);

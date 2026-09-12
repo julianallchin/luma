@@ -7,8 +7,12 @@
 //! range of *depth-sorted* light ids. Point consumers intersect mask with the
 //! bin range; ray consumers walk the mask alone. The structure is fixed-size,
 //! so building it cannot fail and never allocates per frame. A second mask
-//! plane retains only the analytic source regions used by shared fog lighting;
-//! it uses the same tiles, sort order, and SoA as the full-range plane.
+//! plane retains only the analytic source regions used by shared fog lighting.
+//! A third and a fourth plane refine surfaces against all MSAA samples'
+//! visible shading depths, split per tile into a near and a far depth bucket
+//! when the tile's span exceeds 1.5× (a cable over the ground). All four
+//! share the same tiles, sort order, and SoA. Z-bins end at the farthest
+//! cone, not the camera far plane, so a sky's 100 km far cannot widen them.
 //!
 //! The sort order is private. Consumers receive light ids in sorted space and
 //! index a reordered SoA this module uploads; source order stays canonical for
@@ -46,6 +50,26 @@ const _: () = assert!(MAX_FIXTURE_CONES == MASK_WORDS * 32);
 /// shader gets it injected at pipeline creation), so the bit-identity gate
 /// covers the narrow phase too.
 pub(crate) const NARROW_PHASE: bool = true;
+
+/// Mask planes in the tile-mask buffer, all indexed by sorted id: full range,
+/// analytic source, surface depth bucket A (the tile's whole visible span
+/// when the tile is not split) and surface depth bucket B.
+pub(crate) const MASK_PLANES: usize = 4;
+
+/// Per-tile depth buckets the surface refinement builds:
+/// `LUMA_SURFACE_DEPTH_SPLIT=0|2`. `0` is the single sphere over the tile's
+/// whole visible depth span; `2` splits a tile whose span exceeds 1.5× at the
+/// geometric mean of its bounds (a cable or truss member over the ground
+/// otherwise admits every cone between them). Read once at pipeline creation.
+pub(crate) fn surface_depth_split() -> u32 {
+    match std::env::var("LUMA_SURFACE_DEPTH_SPLIT").ok().as_deref() {
+        None | Some("2") => 2,
+        Some("0") => 0,
+        Some(other) => panic!(
+            "LUMA_SURFACE_DEPTH_SPLIT must be 0 or 2 (4 was not built: the depth pre-check showed two-layer tiles dominate), got {other:?}"
+        ),
+    }
+}
 
 /// Sentinel Z-bin: `min > max`, so the id-range walk is empty.
 const EMPTY_BIN: u32 = 0xFFFF_0000;
@@ -92,6 +116,9 @@ pub struct CpuLightIndex {
     pub sorted_to_source: Vec<u32>,
     near: f32,
     far: f32,
+    /// Far end of the Z-bin range: the farthest cone's depth end plus a
+    /// margin, not the camera far plane (100 km under a sky, 24 m bins).
+    bin_far: f32,
     view: View,
 }
 
@@ -108,6 +135,19 @@ struct Prepared {
     /// the cone rides along for the GPU narrow phase's upload.
     extents: Vec<(u32, SanitizedCone, LightExtent)>,
     z_bins: Vec<u32>,
+    /// See [`CpuLightIndex::bin_far`].
+    bin_far: f32,
+}
+
+/// The Z-bin range's far end for a sorted extent set: the farthest depth any
+/// cone reaches plus a relative margin. Depths beyond it clamp into the last
+/// bin, which holds exactly the farthest cones — a superset, never a hole.
+fn bin_far_for(extents: &[(u32, SanitizedCone, LightExtent)], near: f32, far: f32) -> f32 {
+    let z_max = extents
+        .iter()
+        .map(|(_, _, extent)| extent.z1)
+        .fold(near, f32::max);
+    (z_max + z_max * 0.001 + 0.01).clamp(near + 0.001, far)
 }
 
 fn prepare(input: &LightIndexInput<'_>) -> Prepared {
@@ -132,10 +172,11 @@ fn prepare(input: &LightIndexInput<'_>) -> Prepared {
     // source index so the build is reproducible.
     extents.sort_by(|(a_src, _, a), (b_src, _, b)| a.z0.total_cmp(&b.z0).then(a_src.cmp(b_src)));
 
+    let bin_far = bin_far_for(&extents, near, far);
     let mut z_bins = vec![EMPTY_BIN; Z_BINS];
     for (sorted, (_, _, extent)) in extents.iter().enumerate() {
-        let bin0 = depth_bin(extent.z0, near, far);
-        let bin1 = depth_bin(extent.z1, near, far);
+        let bin0 = depth_bin(extent.z0, near, bin_far);
+        let bin1 = depth_bin(extent.z1, near, bin_far);
         let sorted = sorted as u32;
         for bin in &mut z_bins[bin0 as usize..=bin1 as usize] {
             let (min, max) = if *bin == EMPTY_BIN {
@@ -155,6 +196,7 @@ fn prepare(input: &LightIndexInput<'_>) -> Prepared {
         view,
         extents,
         z_bins,
+        bin_far,
     }
 }
 
@@ -171,9 +213,9 @@ impl CpuLightIndex {
             for tile_y in extent.y0..=extent.y1 {
                 for tile_x in extent.x0..=extent.x1 {
                     if NARROW_PHASE {
-                        let (centre, radius) = prepared
-                            .view
-                            .wedge_sphere(tile_x, tile_y, extent.z0, extent.z1);
+                        let wedge = prepared.view.tile_wedge(tile_x, tile_y);
+                        let (centre, radius) =
+                            prepared.view.wedge_sphere(&wedge, extent.z0, extent.z1);
                         if !cone_reaches_sphere(
                             cone.position,
                             cone.direction,
@@ -203,6 +245,7 @@ impl CpuLightIndex {
                 .collect(),
             near: prepared.near,
             far: prepared.far,
+            bin_far: prepared.bin_far,
             view: prepared.view,
         }
     }
@@ -219,7 +262,7 @@ impl CpuLightIndex {
     /// depth — the point consumer's query, mask ∩ Z-bin range.
     #[must_use]
     pub fn lights_at(&self, pixel_x: u32, pixel_y: u32, view_depth: f32) -> Vec<u32> {
-        let bin = self.z_bins[depth_bin(view_depth, self.near, self.far) as usize];
+        let bin = self.z_bins[depth_bin(view_depth, self.near, self.bin_far) as usize];
         if bin == EMPTY_BIN {
             return Vec::new();
         }
@@ -331,8 +374,8 @@ struct IndexParams {
 }
 
 /// Per-light culling record, sorted order, mirrored in
-/// `light_index_build.wgsl`. Carries the cone and depth span the narrow phase
-/// will use so switching that on is a shader change, not a layout change.
+/// `light_index_build.wgsl`. Carries the full cone for surface/ray culling and
+/// the spherical source range for deterministic haze culling.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct LightCull {
@@ -341,6 +384,7 @@ struct LightCull {
     near_rect: [u32; 4],
     apex_range: [f32; 4],
     dir_cos: [f32; 4],
+    /// View-depth span, analytic-source range (zero for full-range lights), unused.
     span: [f32; 4],
 }
 
@@ -353,19 +397,18 @@ pub struct LightIndexPipelines {
     build_layout: wgpu::BindGroupLayout,
     prepass: wgpu::ComputePipeline,
     fill: wgpu::ComputePipeline,
+    surface_layout: wgpu::BindGroupLayout,
+    surface_fill: wgpu::ComputePipeline,
+    /// Depth buckets `surface_fill` was compiled for; see [`surface_depth_split`].
+    surface_split: u32,
     count_layout: wgpu::BindGroupLayout,
     count: wgpu::ComputePipeline,
 }
 
-/// The GPU-resident index: persistent buffers and the consumer bind group.
-/// See the module docs for the structure; the CPU half of a build (sanitise,
-/// sort, Z-bins, screen rects) is [`prepare`], shared with [`CpuLightIndex`]
-/// so the two builders cannot drift.
 /// Broad-phase metrics of the latest build, derived on the CPU from the
-/// per-light tile rects — free relative to the build itself. The
-/// mask-popcount numbers (`mean_lights_per_fragment`, per-tile max) need the
-/// GPU counter pass and land with the narrow phase (design doc §8); until
-/// then `tile_references` over `total_tiles` is the honest broad-phase bound.
+/// per-light tile rects. These are conservative bounds, not actual fragment
+/// work. The separate `Renderer::fragment_stats` diagnostic counts the
+/// original ray-mask/Z-bin candidates on demand.
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub struct LightIndexStats {
     /// Cones the frame submitted, before culling.
@@ -409,6 +452,7 @@ impl LightIndexStats {
 /// drift; this struct owns the reordered light SoA upload (§3).
 pub struct LightIndex {
     stats: LightIndexStats,
+    count_planes: [f32; 2],
     params: wgpu::Buffer,
     lights: wgpu::Buffer,
     z_bins: wgpu::Buffer,
@@ -420,6 +464,14 @@ pub struct LightIndex {
     rest: wgpu::Buffer,
     fragment_counters: wgpu::Buffer,
     sized: Option<SizedBuffers>,
+    /// Latest build's clipped tile rect `[x0, y0, x1, y1]` per *source* cone,
+    /// `None` when the cone cannot touch the screen. The lit-interval cache
+    /// sizes its per-slot regions from these.
+    rects: Vec<Option<[u32; 4]>>,
+    /// Latest build's sorted id per *source* cone, `None` when the cone is
+    /// not in the index. Valid for this frame only: the residual compaction
+    /// keys its list by shadow slot and maps back through this each frame.
+    source_to_sorted: Vec<Option<u32>>,
 }
 
 /// Buffer handles a consumer needs to compose the index into its own bind
@@ -429,12 +481,13 @@ pub struct LightIndex {
 pub(crate) struct LightIndexBindings {
     pub params: wgpu::Buffer,
     pub tile_masks: wgpu::Buffer,
+    /// Per-tile surface split depth; see `SizedBuffers::surface_splits`.
+    pub surface_splits: wgpu::Buffer,
     pub z_bins: wgpu::Buffer,
     pub core: wgpu::Buffer,
     pub rest: wgpu::Buffer,
-    /// Two words the surface pass atomically accumulates under the profiler's
-    /// flag: lit fragments, and candidates those fragments walked. Always
-    /// bound (8 bytes); only written when the flag is on.
+    /// Two words written by the separate fragment-count diagnostic. Never bind
+    /// this read-write buffer in a hot surface or haze pass: it serializes them.
     pub fragment_counters: wgpu::Buffer,
 }
 
@@ -445,6 +498,9 @@ struct SizedBuffers {
     columns: u32,
     rows: u32,
     tile_masks: wgpu::Buffer,
+    /// One f32 per tile: the depth `surface_fill` split the tile's buckets
+    /// at, or a large sentinel for an unsplit tile.
+    surface_splits: wgpu::Buffer,
     build_bind_group: wgpu::BindGroup,
     consumer_bind_group: wgpu::BindGroup,
 }
@@ -491,11 +547,12 @@ impl LightIndexPipelines {
             ],
         });
 
+        let surface_split = surface_depth_split();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("light-index-build"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const NARROW_PHASE: bool = {NARROW_PHASE};\n{}",
+                    "const NARROW_PHASE: bool = {NARROW_PHASE};\nconst SURFACE_SPLIT: u32 = {surface_split}u;\n{}",
                     include_str!("shaders/light_index_build.wgsl")
                 )
                 .into(),
@@ -516,6 +573,40 @@ impl LightIndexPipelines {
                 cache: None,
             })
         };
+
+        let surface_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("surface-light-index"),
+            entries: &[
+                entry(0, wgpu::ShaderStages::COMPUTE, uniform),
+                entry(1, wgpu::ShaderStages::COMPUTE, storage(true)),
+                entry(3, wgpu::ShaderStages::COMPUTE, storage(false)),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: true,
+                    },
+                    count: None,
+                },
+                entry(5, wgpu::ShaderStages::COMPUTE, storage(false)),
+            ],
+        });
+        let surface_fill = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("surface-light-index"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("surface-light-index"),
+                    bind_group_layouts: &[Some(&surface_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            module: &module,
+            entry_point: Some("surface_fill"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
 
         // Profiler-only fragment counting: its own pass and layout so the
         // read-write counter buffer never touches the hot passes (bound
@@ -566,6 +657,9 @@ impl LightIndexPipelines {
         Self {
             prepass: pipeline("big_tile_prepass"),
             fill: pipeline("tile_fill"),
+            surface_layout,
+            surface_fill,
+            surface_split,
             consumer_layout,
             build_layout,
             count_layout,
@@ -577,6 +671,12 @@ impl LightIndexPipelines {
     #[must_use]
     pub fn layout(&self) -> &wgpu::BindGroupLayout {
         &self.consumer_layout
+    }
+
+    /// Depth buckets per tile the surface refinement builds (0 or 2).
+    #[must_use]
+    pub fn surface_split(&self) -> u32 {
+        self.surface_split
     }
 }
 
@@ -626,6 +726,7 @@ impl LightIndex {
 
         Self {
             stats: LightIndexStats::default(),
+            count_planes: [0.0; 2],
             params,
             lights,
             z_bins,
@@ -633,7 +734,19 @@ impl LightIndex {
             rest,
             fragment_counters,
             sized: None,
+            rects: Vec::new(),
+            source_to_sorted: Vec::new(),
         }
+    }
+
+    /// Tile rects of the latest [`Self::build`], by source cone index.
+    pub(crate) fn source_rects(&self) -> &[Option<[u32; 4]>] {
+        &self.rects
+    }
+
+    /// Sorted ids of the latest [`Self::build`], by source cone index.
+    pub(crate) fn source_to_sorted(&self) -> &[Option<u32>] {
+        &self.source_to_sorted
     }
 
     /// Metrics of the latest [`Self::build`].
@@ -643,24 +756,21 @@ impl LightIndex {
     }
 
     /// Records the profiler's fragment-count pass: one thread per depth
-    /// texel, walking `lights_at` exactly as the surface pass does, into the
+    /// texel, walking the original ray-mask/Z-bin candidates into the
     /// counter pair [`LightIndexBindings::fragment_counters`]. Measurement
-    /// path only — the encoder must already contain the frame's depth
-    /// prepass and this frame's [`Self::build`].
+    /// path only, requested after the frame. Queue order must place the
+    /// frame's depth prepass and [`Self::build`] before this dispatch.
     pub(crate) fn record_fragment_count(
         &self,
         pipelines: &LightIndexPipelines,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         depth_view: &wgpu::TextureView,
-        near: f32,
-        far: f32,
-        viewport: [u32; 2],
     ) {
         let sized = self.sized.as_ref().expect("light index built this frame");
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("light-index-count-params"),
-            contents: bytemuck::cast_slice(&[near, far, 0.0, 0.0]),
+            contents: bytemuck::cast_slice(&[self.count_planes[0], self.count_planes[1], 0.0, 0.0]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -689,7 +799,7 @@ impl LightIndex {
         pass.set_pipeline(&pipelines.count);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_bind_group(1, &sized.consumer_bind_group, &[]);
-        pass.dispatch_workgroups(viewport[0].div_ceil(8), viewport[1].div_ceil(8), 1);
+        pass.dispatch_workgroups(sized.columns, sized.rows, 1);
     }
 
     /// The buffers a consumer composes into its own bind group.
@@ -702,6 +812,7 @@ impl LightIndex {
         LightIndexBindings {
             params: self.params.clone(),
             tile_masks: sized.tile_masks.clone(),
+            surface_splits: sized.surface_splits.clone(),
             z_bins: self.z_bins.clone(),
             core: self.core.clone(),
             rest: self.rest.clone(),
@@ -736,6 +847,19 @@ impl LightIndex {
         let big_columns = columns.div_ceil(BIG_FACTOR);
         let big_rows = rows.div_ceil(BIG_FACTOR);
         self.stats = LightIndexStats::of(&prepared, input.cones.len());
+        self.count_planes = [prepared.near, prepared.far];
+        self.rects.clear();
+        self.rects
+            .resize(input.cones.len().min(MAX_FIXTURE_CONES), None);
+        for (source, _, extent) in &prepared.extents {
+            self.rects[*source as usize] = Some([extent.x0, extent.y0, extent.x1, extent.y1]);
+        }
+        self.source_to_sorted.clear();
+        self.source_to_sorted
+            .resize(input.cones.len().min(MAX_FIXTURE_CONES), None);
+        for (sorted, (source, _, _)) in prepared.extents.iter().enumerate() {
+            self.source_to_sorted[*source as usize] = Some(sorted as u32);
+        }
 
         if self
             .sized
@@ -757,7 +881,7 @@ impl LightIndex {
             ],
             depth: [
                 prepared.near,
-                Z_BINS as f32 / (prepared.far - prepared.near),
+                Z_BINS as f32 / (prepared.bin_far - prepared.near),
                 0.0,
                 0.0,
             ],
@@ -771,30 +895,29 @@ impl LightIndex {
         let lights: Vec<LightCull> = prepared
             .extents
             .iter()
-            .map(|(source, cone, extent)| LightCull {
-                near_rect: {
-                    let rest = rests[*source as usize];
-                    let mut near = *cone;
-                    if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
-                        near.range = near.range.min(crate::fog_grid::SOURCE_OUTER);
-                    }
-                    view.extent_for(&near)
-                        .map_or([u32::MAX, u32::MAX, 0, 0], |r| [r.x0, r.y0, r.x1, r.y1])
-                },
-                rect: [extent.x0, extent.y0, extent.x1, extent.y1],
-                apex_range: [
-                    cone.position.x,
-                    cone.position.y,
-                    cone.position.z,
-                    cone.range,
-                ],
-                dir_cos: [
-                    cone.direction.x,
-                    cone.direction.y,
-                    cone.direction.z,
-                    cone.cos_field,
-                ],
-                span: [extent.z0, extent.z1, 0.0, 0.0],
+            .map(|(source, cone, extent)| {
+                let rest = rests[*source as usize];
+                let source_range = if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                    cone.range.min(crate::fog_grid::SOURCE_OUTER)
+                } else {
+                    0.0
+                };
+                let near_extent = if source_range > 0.0 {
+                    view.source_extent_for(&SanitizedCone {
+                        range: source_range,
+                        ..*cone
+                    })
+                } else {
+                    Some(*extent)
+                };
+                LightCull {
+                    near_rect: near_extent
+                        .map_or([u32::MAX, u32::MAX, 0, 0], |r| [r.x0, r.y0, r.x1, r.y1]),
+                    rect: [extent.x0, extent.y0, extent.x1, extent.y1],
+                    apex_range: cone.position.extend(cone.range).to_array(),
+                    dir_cos: cone.direction.extend(cone.cos_field).to_array(),
+                    span: [extent.z0, extent.z1, source_range, 0.0],
+                }
             })
             .collect();
         if !lights.is_empty() {
@@ -823,6 +946,54 @@ impl LightIndex {
         &sized.consumer_bind_group
     }
 
+    /// Refine only the surface plane; ray and analytic-source masks stay intact.
+    pub(crate) fn refine_surface(
+        &self,
+        pipelines: &LightIndexPipelines,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_depth: &wgpu::TextureView,
+        timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
+    ) {
+        let sized = self
+            .sized
+            .as_ref()
+            .expect("light index built before surface refinement");
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("surface-light-index"),
+            layout: &pipelines.surface_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.lights.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: sized.tile_masks.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(surface_depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: sized.surface_splits.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("surface-light-index"),
+            timestamp_writes: timestamps,
+        });
+        pass.set_pipeline(&pipelines.surface_fill);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(sized.columns, sized.rows, 1);
+    }
+
     fn allocate(
         &self,
         pipelines: &LightIndexPipelines,
@@ -841,8 +1012,15 @@ impl LightIndex {
         });
         let tile_masks = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("light-index-tile-masks"),
-            // Full-range plane followed by analytic-source plane, with identical ids.
-            size: 2 * words(u64::from(columns) * u64::from(rows)),
+            // Full-range, analytic-source and the two surface-depth bucket
+            // planes share identical ids.
+            size: MASK_PLANES as u64 * words(u64::from(columns) * u64::from(rows)),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let surface_splits = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("light-index-surface-splits"),
+            size: u64::from(columns) * u64::from(rows) * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -879,6 +1057,7 @@ impl LightIndex {
                 &[(8, &self.params), (9, &tile_masks), (10, &self.z_bins)],
             ),
             tile_masks,
+            surface_splits,
         }
     }
 }
@@ -901,6 +1080,14 @@ struct LightExtent {
 /// applies — so the culler can never disagree with the shaded light about how
 /// far it reaches. (A validity bound, not a beam-length clamp: nothing scales
 /// it by content.)
+/// Screen-space corner coordinates of one 8 px tile scaled by tan(fov/2):
+/// the part of a wedge sphere that does not depend on the depth span.
+#[derive(Debug, Clone, Copy)]
+struct TileWedge {
+    sx: [f32; 2],
+    sy: [f32; 2],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct View {
     eye: Vec3,
@@ -946,17 +1133,29 @@ impl View {
     /// rect — the broad phase, moved from `clusters::BuildInput::bounds_for`.
     /// `None` means the light cannot touch the screen at all.
     fn extent_for(&self, cone: &SanitizedCone) -> Option<LightExtent> {
-        let base = cone.position + cone.direction * cone.range;
-        let radial =
-            cone.range * (1.0 - cone.cos_field * cone.cos_field).max(0.0).sqrt() / cone.cos_field;
-        let radial_extent = Vec3::new(
-            (1.0 - cone.direction.x * cone.direction.x).max(0.0).sqrt(),
-            (1.0 - cone.direction.y * cone.direction.y).max(0.0).sqrt(),
-            (1.0 - cone.direction.z * cone.direction.z).max(0.0).sqrt(),
-        ) * radial;
-        let min = cone.position.min(base - radial_extent);
-        let max = cone.position.max(base + radial_extent);
+        let [min, max] = cone.bounds();
+        self.extent_for_bounds(min, max)
+    }
 
+    // Native broad-wash integration intersects a cone with a range ball.
+    // The flat cone alone can be much wider than that ball. Tighten only the
+    // source mask so full-light depth ordering and accumulation stay intact.
+    fn source_extent_for(&self, cone: &SanitizedCone) -> Option<LightExtent> {
+        let [min, max] = cone.bounds();
+        // Leave slack for the shader's ray/sphere discriminant and world
+        // coordinate rounding; this bound only removes definite misses.
+        let radius = Vec3::splat(
+            cone.range
+                + 0.001 * cone.range.max(1.0)
+                + 32.0 * f32::EPSILON * cone.position.abs().max_element(),
+        );
+        self.extent_for_bounds(
+            min.max(cone.position - radius),
+            max.min(cone.position + radius),
+        )
+    }
+
+    fn extent_for_bounds(&self, min: Vec3, max: Vec3) -> Option<LightExtent> {
         let corners = box_corners(min, max);
         let depths = corners.map(|corner| (corner - self.eye).dot(self.forward));
         let min_depth = depths.iter().copied().fold(f32::INFINITY, f32::min);
@@ -1003,27 +1202,44 @@ impl View {
         })
     }
 
-    /// Bounding sphere of one tile's frustum wedge clipped to a depth span.
-    ///
-    /// Mirrored operation-for-operation in `light_index_build.wgsl`'s
-    /// `wedge_sphere` — the bit-identity gate depends on the two staying in
-    /// lockstep.
-    fn wedge_sphere(&self, tile_x: u32, tile_y: u32, z0: f32, z1: f32) -> (Vec3, f32) {
+    /// The z-independent half of one tile's frustum wedge — mirrored from
+    /// `light_index_build.wgsl::tile_wedge`.
+    fn tile_wedge(&self, tile_x: u32, tile_y: u32) -> TileWedge {
         let vw = self.viewport[0] as f32;
         let vh = self.viewport[1] as f32;
         let px0 = (tile_x * TILE_SIZE) as f32;
         let py0 = (tile_y * TILE_SIZE) as f32;
         let px1 = (px0 + TILE_SIZE as f32).min(vw);
         let py1 = (py0 + TILE_SIZE as f32).min(vh);
+        TileWedge {
+            sx: [
+                (2.0 * px0 / vw - 1.0) * self.tan_half_fov * self.aspect,
+                (2.0 * px1 / vw - 1.0) * self.tan_half_fov * self.aspect,
+            ],
+            sy: [
+                (1.0 - 2.0 * py0 / vh) * self.tan_half_fov,
+                (1.0 - 2.0 * py1 / vh) * self.tan_half_fov,
+            ],
+        }
+    }
+
+    fn wedge_corner(&self, sx: f32, sy: f32, z: f32) -> Vec3 {
+        self.eye + self.right * (sx * z) + self.up * (sy * z) + self.forward * z
+    }
+
+    /// Bounding sphere of one tile's frustum wedge clipped to a depth span.
+    ///
+    /// Mirrored operation-for-operation in `light_index_build.wgsl`'s
+    /// `wedge_sphere` — the bit-identity gate depends on the two staying in
+    /// lockstep: eight corners in z-outer, y, x order, summed sequentially,
+    /// radius as the running maximum of the squared distances.
+    fn wedge_sphere(&self, wedge: &TileWedge, z0: f32, z1: f32) -> (Vec3, f32) {
         let mut corners = [Vec3::ZERO; 8];
         let mut cursor = 0;
         for &z in &[z0, z1] {
-            for &py in &[py0, py1] {
-                for &px in &[px0, px1] {
-                    let sx = (2.0 * px / vw - 1.0) * self.tan_half_fov * self.aspect;
-                    let sy = (1.0 - 2.0 * py / vh) * self.tan_half_fov;
-                    corners[cursor] =
-                        self.eye + self.right * (sx * z) + self.up * (sy * z) + self.forward * z;
+            for &sy in &wedge.sy {
+                for &sx in &wedge.sx {
+                    corners[cursor] = self.wedge_corner(sx, sy, z);
                     cursor += 1;
                 }
             }
@@ -1067,6 +1283,21 @@ struct SanitizedCone {
 }
 
 impl SanitizedCone {
+    fn bounds(&self) -> [Vec3; 2] {
+        let base = self.position + self.direction * self.range;
+        let radial =
+            self.range * (1.0 - self.cos_field * self.cos_field).max(0.0).sqrt() / self.cos_field;
+        let radial_extent = Vec3::new(
+            (1.0 - self.direction.x * self.direction.x).max(0.0).sqrt(),
+            (1.0 - self.direction.y * self.direction.y).max(0.0).sqrt(),
+            (1.0 - self.direction.z * self.direction.z).max(0.0).sqrt(),
+        ) * radial;
+        let min = self.position.min(base - radial_extent);
+        let max = self.position.max(base + radial_extent);
+
+        [min, max]
+    }
+
     fn new(light: &FixtureCone) -> Self {
         Self {
             position: finite_vec(light.position, Vec3::ZERO)
@@ -1283,6 +1514,68 @@ mod tests {
         points
     }
 
+    fn source_support_points(light: &SanitizedCone) -> Vec<Vec3> {
+        let side = light.direction.any_orthonormal_vector();
+        let up = light.direction.cross(side);
+        let mut points = vec![light.position];
+        for radial in [0.01, 0.5, 0.99999, 1.0] {
+            for polar in [0.0, 0.5, 0.99999, 1.0] {
+                let cosine = 1.0 - polar * (1.0 - light.cos_field);
+                let sine = (1.0 - cosine * cosine).max(0.0).sqrt();
+                for spoke in 0..16 {
+                    let angle = spoke as f32 * std::f32::consts::TAU / 16.0;
+                    let direction =
+                        light.direction * cosine + (side * angle.cos() + up * angle.sin()) * sine;
+                    points.push(light.position + light.range * radial * direction);
+                }
+            }
+        }
+        points
+    }
+
+    #[test]
+    fn source_bounds_preserve_spherical_cone_support() {
+        let mut checked = 0;
+        let mut tightened = 0;
+        for eye in [
+            Vec3::ZERO,
+            Vec3::new(2.0, 2.0, 1.0),
+            Vec3::new(-3.0, 5.0, 4.0),
+        ] {
+            let view = View::new(Camera { eye, ..camera() }, [1279, 719], 0.1, 100.0);
+            for position in [Vec3::new(0.0, 10.0, 1.0), Vec3::new(2.0, 0.2, 0.5)] {
+                for direction in [Vec3::Y, Vec3::NEG_Z, Vec3::new(-0.5, -0.8, 0.3).normalize()] {
+                    for cosine in [0.01, 0.1, 0.5, 0.9, 1.0] {
+                        let light = SanitizedCone::new(&cone(position, direction, 4.0, cosine));
+                        let extent = view.source_extent_for(&light);
+                        if let (Some(full), Some(near)) = (view.extent_for(&light), extent) {
+                            let area = |r: LightExtent| (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1);
+                            assert!(area(near) <= area(full));
+                            tightened += usize::from(area(near) < area(full));
+                        }
+                        for point in source_support_points(&light) {
+                            if (point - view.eye).dot(view.forward) < view.near {
+                                continue;
+                            }
+                            let Some([px, py]) = view.project(point) else {
+                                continue;
+                            };
+                            let r = extent.expect("visible support has an extent");
+                            let x = px / TILE_SIZE;
+                            let y = py / TILE_SIZE;
+                            assert!(
+                                x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1,
+                                "dropped {point:?} for {light:?}, eye {eye:?}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000 && tightened > 0);
+    }
+
     #[test]
     fn interior_points_are_conservatively_indexed() {
         let lights = [
@@ -1382,9 +1675,9 @@ mod tests {
         }
     }
 
-    /// The GPU builder must reproduce the CPU reference bit for bit. This is
-    /// the only thing that will catch a WGSL/Rust drift in the culling tests,
-    /// so it stays permanently.
+    /// Full-range GPU masks must reproduce the CPU reference bit for bit.
+    /// Source masks must preserve independently sampled spherical-cone support,
+    /// leave narrow/gobo masks intact, and keep the vertical-view fallback.
     #[test]
     fn gpu_builder_matches_cpu_reference_bit_for_bit() {
         let instance = wgpu::Instance::default();
@@ -1424,124 +1717,187 @@ mod tests {
                 0.75 + (i % 5) as f32 * 0.04,
             ));
         }
-        let input = input(&lights, camera());
-        let reference = CpuLightIndex::build(&input);
-
-        let cores: Vec<LightCore> = lights
-            .iter()
-            .map(|light| LightCore {
-                position: light.position.to_array(),
-                range: light.range,
-            })
-            .collect();
-        let rests: Vec<_> = lights
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let mut rest = LightRest::zeroed();
-                rest.wash = if i % 2 == 0 { 0.9 } else { 0.0 };
-                rest.gobo = if i % 3 == 0 { 1.0 } else { 0.0 };
-                rest.haze_gain = 1.0;
-                rest
-            })
-            .collect();
-        let pipelines = LightIndexPipelines::new(&device);
-        let mut index = LightIndex::new(&device);
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        index.build(
-            &pipelines,
-            &device,
-            &queue,
-            &mut encoder,
-            &input,
-            &cores,
-            &rests,
-            None,
-        );
-        let sized = index.sized.as_ref().expect("sized buffers");
-        let size = sized.tile_masks.size();
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("light-index-readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_buffer_to_buffer(&sized.tile_masks, 0, &readback, 0, size);
-        queue.submit([encoder.finish()]);
-        readback.slice(..).map_async(wgpu::MapMode::Read, |result| {
-            result.expect("map readback");
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll");
-        let view = readback.slice(..).get_mapped_range().expect("mapped");
-        let gpu_masks: &[u32] = bytemuck::cast_slice(&view);
-        let words = reference.tile_masks.len();
-        assert_eq!(gpu_masks.len(), words * 2);
-        assert_eq!(
-            &gpu_masks[..words],
-            &reference.tile_masks[..],
-            "tile masks diverged"
-        );
-        let near_masks = &gpu_masks[words..];
-        let mut clipped = lights.clone();
-        for (light, rest) in clipped.iter_mut().zip(&rests) {
-            if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
-                light.range = finite(light.range, 0.05)
-                    .clamp(0.05, 100.0)
-                    .min(crate::fog_grid::SOURCE_OUTER);
+        let source_edge_start = lights.len();
+        for cosine in [0.01, 0.1, 0.5, 0.99999, 1.0] {
+            for (position, direction, range) in [
+                (Vec3::ZERO, Vec3::Y, 4.0),
+                (Vec3::new(1.0, -1.0, 0.5), Vec3::Y, 4.0),
+                (Vec3::new(-2.0, 3.0, 2.0), Vec3::NEG_Z, 30.0),
+                (Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.05),
+            ] {
+                lights.push(cone(position, direction, range, cosine));
             }
         }
-        // Independently build fully clipped cones, including a different depth
-        // sort and narrow phase. Candidates also retained by the full-range
-        // reference must survive the cheaper near-rectangle mask.
-        let near_reference = CpuLightIndex::build(&LightIndexInput {
-            cones: &clipped,
-            ..input
-        });
-        for y in 0..reference.rows {
-            for x in 0..reference.columns {
-                let base = (y * reference.columns + x) as usize * MASK_WORDS;
-                for source in near_reference.lights_along(x * TILE_SIZE, y * TILE_SIZE) {
-                    let sorted = reference
-                        .sorted_to_source
-                        .iter()
-                        .position(|&i| i == source)
-                        .unwrap();
-                    if gpu_masks[base + sorted / 32] & (1 << (sorted % 32)) == 0 {
+        for test_camera in [
+            camera(),
+            Camera {
+                eye: Vec3::new(0.0, 5.0, -3.0),
+                target: Vec3::new(0.0, 5.02, -2.0),
+                fov_y_deg: 90.0,
+            },
+        ] {
+            let standard_basis = (test_camera.target - test_camera.eye).normalize().z.abs() <= 0.99;
+            let input = LightIndexInput {
+                viewport: [1279, 719],
+                ..input(&lights, test_camera)
+            };
+            let reference = CpuLightIndex::build(&input);
+
+            let cores: Vec<LightCore> = lights
+                .iter()
+                .map(|light| LightCore {
+                    position: light.position.to_array(),
+                    range: light.range,
+                })
+                .collect();
+            let rests: Vec<_> = lights
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let mut rest = LightRest::zeroed();
+                    rest.wash = if i >= source_edge_start || i % 2 == 0 {
+                        0.9
+                    } else {
+                        0.0
+                    };
+                    rest.gobo = if i < source_edge_start && i % 3 == 0 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    rest.haze_gain = 1.0;
+                    rest
+                })
+                .collect();
+            let pipelines = LightIndexPipelines::new(&device);
+            let mut index = LightIndex::new(&device);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            index.build(
+                &pipelines,
+                &device,
+                &queue,
+                &mut encoder,
+                &input,
+                &cores,
+                &rests,
+                None,
+            );
+            let sized = index.sized.as_ref().expect("sized buffers");
+            let size = sized.tile_masks.size();
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("light-index-readback"),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(&sized.tile_masks, 0, &readback, 0, size);
+            queue.submit([encoder.finish()]);
+            readback.slice(..).map_async(wgpu::MapMode::Read, |result| {
+                result.expect("map readback");
+            });
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+            let view = readback.slice(..).get_mapped_range().expect("mapped");
+            let gpu_masks: &[u32] = bytemuck::cast_slice(&view);
+            let words = reference.tile_masks.len();
+            // Scope: this build never runs `surface_fill`, so the two surface
+            // bucket planes are unwritten here; `gpu.rs` covers them against
+            // an unculled render (`surface_depth_culling_preserves_...`).
+            assert_eq!(gpu_masks.len(), words * MASK_PLANES);
+            assert_eq!(
+                &gpu_masks[..words],
+                &reference.tile_masks[..],
+                "tile masks diverged"
+            );
+            let near_masks = &gpu_masks[words..2 * words];
+            let mut clipped = lights.clone();
+            for (light, rest) in clipped.iter_mut().zip(&rests) {
+                if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                    light.range = finite(light.range, 0.05)
+                        .clamp(0.05, 100.0)
+                        .min(crate::fog_grid::SOURCE_OUTER);
+                }
+            }
+            // Sample actual spherical-cone support independently of the plane
+            // rejection algebra. Rectangles deliberately keep false positives,
+            // so equality with the old rectangle mask would defeat this refinement.
+            let mut checked_support = 0;
+            let mut checked_edges = 0;
+            for (sorted, &source) in reference.sorted_to_source.iter().enumerate() {
+                let light = SanitizedCone::new(&clipped[source as usize]);
+                for point in source_support_points(&light) {
+                    let depth = reference.view_depth(point);
+                    if depth < reference.near || depth > reference.far {
                         continue;
                     }
+                    let Some([px, py]) = reference.project(point) else {
+                        continue;
+                    };
+                    let base = ((py / TILE_SIZE) * reference.columns + px / TILE_SIZE) as usize
+                        * MASK_WORDS;
                     assert_ne!(
                         near_masks[base + sorted / 32] & (1 << (sorted % 32)),
                         0,
-                        "near mask lost source {source} at tile {x},{y}"
+                        "near mask lost actual support {point:?} for source {source}"
                     );
+                    checked_support += 1;
+                    checked_edges += usize::from(source as usize >= source_edge_start);
                 }
-                for (sorted, &source) in reference.sorted_to_source.iter().enumerate() {
-                    let rest = rests[source as usize];
-                    let bit = 1 << (sorted % 32);
-                    let at = base + sorted / 32;
-                    assert_eq!(
-                        near_masks[at] & !gpu_masks[at],
-                        0,
-                        "near mask added a full-range rejection"
-                    );
-                    if rest.wash < crate::fog_grid::BROAD_WASH || rest.gobo >= 0.5 {
+            }
+            assert!(
+                checked_edges > if standard_basis { 1000 } else { 0 },
+                "too few cone-boundary samples: {checked_edges}"
+            );
+            println!("{checked_support} source support samples retained, including {checked_edges} wide/degenerate/near-plane samples");
+            assert!(
+                checked_support > if standard_basis { 1000 } else { 0 },
+                "too little visible support: {checked_support}"
+            );
+            for y in 0..reference.rows {
+                for x in 0..reference.columns {
+                    let base = (y * reference.columns + x) as usize * MASK_WORDS;
+                    for (sorted, &source) in reference.sorted_to_source.iter().enumerate() {
+                        let rest = rests[source as usize];
+                        let bit = 1 << (sorted % 32);
+                        let at = base + sorted / 32;
                         assert_eq!(
-                            near_masks[at] & bit,
-                            gpu_masks[at] & bit,
-                            "a narrow or gobo cone was shortened"
+                            near_masks[at] & !gpu_masks[at],
+                            0,
+                            "near mask added a full-range rejection"
                         );
+                        if !standard_basis
+                            && rest.wash >= crate::fog_grid::BROAD_WASH
+                            && rest.gobo < 0.5
+                        {
+                            let light = SanitizedCone::new(&clipped[source as usize]);
+                            let in_rect = reference
+                                .view
+                                .source_extent_for(&light)
+                                .is_some_and(|r| x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+                            assert_eq!(
+                                near_masks[at] & bit,
+                                if in_rect { gpu_masks[at] & bit } else { 0 },
+                                "vertical-camera fallback changed the original rectangle mask"
+                            );
+                        }
+                        if rest.wash < crate::fog_grid::BROAD_WASH || rest.gobo >= 0.5 {
+                            assert_eq!(
+                                near_masks[at] & bit,
+                                gpu_masks[at] & bit,
+                                "a narrow or gobo cone was shortened"
+                            );
+                        }
                     }
                 }
             }
+            assert_ne!(
+                near_masks,
+                &gpu_masks[..words],
+                "source-region culling did no work"
+            );
         }
-        assert_ne!(
-            near_masks,
-            &gpu_masks[..words],
-            "source-region culling did no work"
-        );
     }
 
     #[test]

@@ -105,6 +105,16 @@ fn medium_detail_span(m: ProceduralMedium, origin: vec3<f32>, direction: vec3<f3
     return vec2<f32>(span.x, clamp(end, span.x, span.y));
 }
 
+// Both total-depth and prefix consumers use the same outdoor quadrature.
+fn medium_outdoor_segment(m: ProceduralMedium, origin: vec3<f32>, direction: vec3<f32>,
+    a: f32, b: f32, detail: f32) -> f32 {
+    var cloud = 1.0;
+    if detail > 0.0 && m.shape.x > 0.0 {
+        cloud = mix(1.0, medium_cloud(m, origin + direction * (0.5 * (a + b))), detail);
+    }
+    return medium_height_depth(m, origin, direction, vec2<f32>(a, b)) * cloud;
+}
+
 // Fixed 32 strata for resolved cloud detail; global mean density is analytic.
 // Used once per camera ray, independently of the number of lights.
 struct MediumRay {
@@ -124,11 +134,7 @@ fn medium_ray(m: ProceduralMedium, origin: vec3<f32>, direction: vec3<f32>, dist
         for (var i = 0u; i < 32u; i += 1u) {
             let a = result.span.x + f32(i) * step;
             let b = a + step;
-            var cloud = 1.0;
-            if detail > 0.0 && m.shape.x > 0.0 {
-                cloud = mix(1.0, medium_cloud(m, origin + direction * (0.5 * (a + b))), detail);
-            }
-            result.optical[i + 1u] = result.optical[i] + medium_height_depth(m, origin, direction, vec2<f32>(a, b)) * cloud;
+            result.optical[i + 1u] = result.optical[i] + medium_outdoor_segment(m, origin, direction, a, b, detail);
         }
         return result;
     }
@@ -141,15 +147,34 @@ fn medium_ray(m: ProceduralMedium, origin: vec3<f32>, direction: vec3<f32>, dist
     return result;
 }
 
+// Total-depth consumers do not need the 33-element prefix or its indexed
+// reads/writes. Preserve the same strata and running addition order.
 fn medium_optical_depth(m: ProceduralMedium, origin: vec3<f32>, direction: vec3<f32>, distance: f32) -> f32 {
     if m.min.w <= 0.0 { return 0.0; }
+    var span = medium_span(m, origin, direction, distance);
     if m.max.w > 0.0 {
-        let span = medium_detail_span(m, origin, direction, medium_span(m, origin, direction, distance));
+        span = medium_detail_span(m, origin, direction, span);
         if m.shape.x <= 0.0 || (span.y - span.x) / 32.0 >= 2.0 * m.shape.y {
             return medium_height_depth(m, origin, direction, span);
         }
     }
-    return medium_ray(m, origin, direction, distance).optical[32];
+    if span.y <= span.x { return 0.0; }
+    let step = (span.y - span.x) / 32.0;
+    var optical = 0.0;
+    if m.max.w > 0.0 {
+        let detail = 1.0 - smoothstep(m.shape.y, 2.0 * m.shape.y, step);
+        for (var i = 0u; i < 32u; i += 1u) {
+            let a = span.x + f32(i) * step;
+            let b = a + step;
+            optical += medium_outdoor_segment(m, origin, direction, a, b, detail);
+        }
+    } else {
+        for (var i = 0u; i < 32u; i += 1u) {
+            let p = origin + direction * (span.x + (f32(i) + 0.5) * step);
+            optical += m.min.w * step * medium_density(m, p);
+        }
+    }
+    return optical;
 }
 fn medium_depth(ray: MediumRay, distance: f32) -> f32 {
     let z = clamp((distance - ray.span.x) / max(ray.span.y - ray.span.x, 1e-5) * 32.0, 0.0, 32.0);

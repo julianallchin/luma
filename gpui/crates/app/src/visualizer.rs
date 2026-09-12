@@ -122,11 +122,16 @@ enum Drag {
     Dolly,
 }
 
-/// CPU geometry and authored provenance for one submitted render frame.
-/// It is immutable after submission and only becomes interactive when the
-/// presentation carrying the same serial becomes the displayed image.
-struct PickSnapshot {
-    camera: Camera,
+/// The hit-test geometry itself: what a ray can hit and which authored object
+/// each hit names.
+///
+/// Separated from [`PickSnapshot`] because it is the expensive half and the
+/// half that almost never changes. A playing score moves colour through a
+/// static rig: the same meshes at the same transforms, frame after frame.
+/// Rebuilding this per frame cost more than the whole rest of the UI thread's
+/// share of a frame, so it is built once and shared by every snapshot whose
+/// draw list still matches [`Self::draws`].
+struct PickGeometry {
     graph: SceneGraph,
     meshes: Vec<Arc<TriMesh>>,
     /// Frame node → the authored object it draws. Identity is the *authored
@@ -139,6 +144,60 @@ struct PickSnapshot {
     anchors: HashMap<EditorObject, Vec3>,
     /// Geometry bounds in camera world space, including every draw of an object.
     bounds: HashMap<EditorObject, Aabb>,
+    /// The mesh set this was built against, by key: a mesh index means nothing
+    /// on its own, and a re-banked frame can keep an index while changing what
+    /// it points at.
+    mesh_keys: Vec<String>,
+    /// The picked draws this was built from, in order — mesh, transform and
+    /// the object the draw names. Every input the build reads is in here, so
+    /// an equal list is the same geometry.
+    draws: Vec<(usize, Mat4, EditorObject)>,
+}
+
+impl PickGeometry {
+    /// Whether `frame` would build exactly this geometry again.
+    ///
+    /// Compared in place against the stored draw list rather than by building
+    /// a fresh key: the whole point is to touch no allocator on the frames
+    /// that match, which is nearly all of them.
+    fn matches(&self, frame: &luma_render::Frame) -> bool {
+        if self.mesh_keys.len() != frame.meshes.len()
+            || !self
+                .mesh_keys
+                .iter()
+                .zip(&frame.meshes)
+                .all(|(key, mesh)| key == &mesh.key)
+        {
+            return false;
+        }
+        let mut resident = self.draws.iter();
+        for draw in picked_draws(frame) {
+            let Some(object) = draw.editor_object.as_ref() else {
+                continue;
+            };
+            let Some((mesh, model, was)) = resident.next() else {
+                return false;
+            };
+            if *mesh != draw.mesh || *model != draw.model || was != object {
+                return false;
+            }
+        }
+        resident.next().is_none()
+    }
+}
+
+/// The opaque draws a ray can hit: transparent draws trail the opaque ones and
+/// are grid, compass and cables, none of which is an authored object.
+fn picked_draws(frame: &luma_render::Frame) -> &[luma_render::frame::Draw] {
+    &frame.draws[..frame.draws.len().saturating_sub(frame.transparent.len())]
+}
+
+/// CPU geometry and authored provenance for one submitted render frame.
+/// It is immutable after submission and only becomes interactive when the
+/// presentation carrying the same serial becomes the displayed image.
+struct PickSnapshot {
+    camera: Camera,
+    geometry: Arc<PickGeometry>,
     /// The pivot the frame drew its gizmo on, carried over from
     /// [`luma_render::Frame::gizmo_pivot`] so a press tests the widget that is
     /// actually on screen.
@@ -146,9 +205,21 @@ struct PickSnapshot {
     gizmo_space: luma_scene::gizmo::GizmoSpace,
 }
 
+/// What survives between frames so the geometry above can be reused: the
+/// per-asset BVHs and the last geometry built from them.
+#[derive(Default)]
+struct PickCache {
+    /// Immutable per-asset CPU BVHs; frame snapshots only carry Arc handles.
+    meshes: HashMap<String, Arc<TriMesh>>,
+    geometry: Option<Arc<PickGeometry>>,
+}
+
 impl MeshSource for PickSnapshot {
     fn mesh(&self, handle: MeshHandle) -> Option<&TriMesh> {
-        self.meshes.get(handle.0 as usize).map(AsRef::as_ref)
+        self.geometry
+            .meshes
+            .get(handle.0 as usize)
+            .map(AsRef::as_ref)
     }
 }
 
@@ -157,6 +228,60 @@ impl PickSnapshot {
         frame: &luma_render::Frame,
         scene: &scene_desc::Scene,
         camera: Camera,
+        cache: &mut PickCache,
+    ) -> Self {
+        let geometry = match cache
+            .geometry
+            .take()
+            .filter(|resident| resident.matches(frame))
+        {
+            Some(resident) => resident,
+            None => Arc::new(PickGeometry::build(frame, scene, &mut cache.meshes)),
+        };
+        cache.geometry = Some(Arc::clone(&geometry));
+        Self {
+            camera,
+            geometry,
+            gizmo_pivot: frame.gizmo_pivot,
+            gizmo_space: scene.editor.gizmo_space,
+        }
+    }
+
+    fn ray(&self, at: Vec2, viewport: Vec2) -> luma_scene::Ray {
+        let ndc = Vec2::new(
+            at.x / viewport.x.max(1.0) * 2.0 - 1.0,
+            1.0 - at.y / viewport.y.max(1.0) * 2.0,
+        );
+        self.camera.ray(ndc, viewport.x / viewport.y.max(1.0))
+    }
+
+    fn pick(&self, at: Vec2, viewport: Vec2) -> Option<EditorObject> {
+        self.geometry
+            .graph
+            .raycast(self.ray(at, viewport), Default::default(), self)
+            .into_iter()
+            .find_map(|hit| self.geometry.objects.get(hit.node.0 as usize)?.clone())
+    }
+
+    fn marquee(&self, marquee: Marquee, viewport: Vec2) -> Vec<EditorObject> {
+        self.geometry
+            .ordered
+            .iter()
+            .filter(|object| {
+                self.geometry
+                    .anchors
+                    .get(*object)
+                    .is_some_and(|anchor| marquee.contains_world(&self.camera, viewport, *anchor))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+impl PickGeometry {
+    fn build(
+        frame: &luma_render::Frame,
+        scene: &scene_desc::Scene,
         cache: &mut HashMap<String, Arc<TriMesh>>,
     ) -> Self {
         let meshes: Vec<Arc<TriMesh>> = frame
@@ -182,10 +307,12 @@ impl PickSnapshot {
         let mut anchors = HashMap::new();
         let mut bounds: HashMap<EditorObject, Aabb> = HashMap::new();
         let mut ordered = Vec::new();
-        for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.transparent.len())] {
+        let mut picked = Vec::new();
+        for draw in picked_draws(frame) {
             let Some(object) = draw.editor_object.clone() else {
                 continue;
             };
+            picked.push((draw.mesh, draw.model, object.clone()));
             let mesh_bounds = meshes[draw.mesh].bounds();
             if !mesh_bounds.is_empty() {
                 let draw_bounds = Aabb::from_points(
@@ -227,43 +354,15 @@ impl PickSnapshot {
         }
         graph.update_world_transforms();
         Self {
-            camera,
             graph,
             meshes,
             objects,
             ordered,
             anchors,
             bounds,
-            gizmo_pivot: frame.gizmo_pivot,
-            gizmo_space: scene.editor.gizmo_space,
+            mesh_keys: frame.meshes.iter().map(|mesh| mesh.key.clone()).collect(),
+            draws: picked,
         }
-    }
-
-    fn ray(&self, at: Vec2, viewport: Vec2) -> luma_scene::Ray {
-        let ndc = Vec2::new(
-            at.x / viewport.x.max(1.0) * 2.0 - 1.0,
-            1.0 - at.y / viewport.y.max(1.0) * 2.0,
-        );
-        self.camera.ray(ndc, viewport.x / viewport.y.max(1.0))
-    }
-
-    fn pick(&self, at: Vec2, viewport: Vec2) -> Option<EditorObject> {
-        self.graph
-            .raycast(self.ray(at, viewport), Default::default(), self)
-            .into_iter()
-            .find_map(|hit| self.objects.get(hit.node.0 as usize)?.clone())
-    }
-
-    fn marquee(&self, marquee: Marquee, viewport: Vec2) -> Vec<EditorObject> {
-        self.ordered
-            .iter()
-            .filter(|object| {
-                self.anchors
-                    .get(*object)
-                    .is_some_and(|anchor| marquee.contains_world(&self.camera, viewport, *anchor))
-            })
-            .cloned()
-            .collect()
     }
 }
 
@@ -527,6 +626,75 @@ struct IdleKey {
 /// Frames of unchanged inputs the temporal haze needs before its blue-noise
 /// integration is visually converged and the stage may rest.
 const SETTLE_FRAMES: u32 = 16;
+
+/// The most pixels the stage renders, whatever the size of its element.
+///
+/// The live renderer costs per pixel: fullscreen 3600×2260 took 2.3× the GPU
+/// time of the 1984×1511 window and fell to 27 fps. Past this budget the stage
+/// renders smaller at the same aspect and the compositor upscales it (MetalFX
+/// Spatial on macOS — see `Window::paint_upscaled_surface`). The budget is the
+/// reference frame the renderer's timings are held to, so an ordinary window
+/// stays native.
+const RENDER_BUDGET_PIXELS: f64 = 2227.0 * 1391.0;
+
+/// How the stage's render size follows its element's physical size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RenderScale {
+    /// Native up to [`RENDER_BUDGET_PIXELS`], scaled down past it.
+    Budget,
+    /// Always this fraction of the element — `LUMA_RENDER_SCALE`, 0.25..=1.
+    Fixed(f32),
+    /// Always the element's own size — `LUMA_RENDER_BUDGET=off`.
+    Native,
+}
+
+impl RenderScale {
+    /// Read once per process; the choice is logged.
+    fn from_env() -> Self {
+        static SCALE: std::sync::OnceLock<RenderScale> = std::sync::OnceLock::new();
+        *SCALE.get_or_init(|| {
+            let scale = Self::parse(
+                std::env::var("LUMA_RENDER_SCALE").ok().as_deref(),
+                std::env::var("LUMA_RENDER_BUDGET").ok().as_deref(),
+            );
+            eprintln!("[stage] render size: {scale:?}");
+            scale
+        })
+    }
+
+    /// `LUMA_RENDER_SCALE` wins over `LUMA_RENDER_BUDGET`. A value that does
+    /// not parse is reported and ignored.
+    fn parse(scale: Option<&str>, budget: Option<&str>) -> Self {
+        if let Some(scale) = scale {
+            match scale.trim().parse::<f32>() {
+                Ok(value) if value.is_finite() => return Self::Fixed(value.clamp(0.25, 1.0)),
+                _ => eprintln!("[stage] ignoring LUMA_RENDER_SCALE={scale:?}; expected 0.25..1"),
+            }
+        }
+        match budget {
+            Some("off") => Self::Native,
+            Some(other) => {
+                eprintln!("[stage] ignoring LUMA_RENDER_BUDGET={other:?}; expected off");
+                Self::Budget
+            }
+            None => Self::Budget,
+        }
+    }
+
+    /// The size to render an element of `physical` device pixels at: the
+    /// same aspect, whole pixels, never larger than the element.
+    fn size(self, (width, height): (u32, u32)) -> (u32, u32) {
+        let scale = match self {
+            Self::Native => 1.0,
+            Self::Fixed(scale) => f64::from(scale),
+            Self::Budget => (RENDER_BUDGET_PIXELS / (f64::from(width) * f64::from(height)))
+                .sqrt()
+                .min(1.0),
+        };
+        let fit = |side: u32| ((f64::from(side) * scale).round() as u32).clamp(1, side.max(1));
+        (fit(width), fit(height))
+    }
+}
 
 /// What a finished press owes the app — see [`Visualizer::editor_release`].
 pub(crate) enum ReleaseAct {
@@ -1042,7 +1210,7 @@ impl Visualizer {
             submission: Submission::default(),
             assets: assets::Library::new(stage_render::meshes_root(None)),
             picks: PickTimeline::default(),
-            pick_meshes: HashMap::new(),
+            pick_cache: PickCache::default(),
             haze_started_at: Instant::now(),
         });
         true
@@ -1140,7 +1308,7 @@ impl Visualizer {
                 let bounds = stage
                     .displayed_pick
                     .as_ref()
-                    .and_then(|pick| pick.bounds.get(object).copied())
+                    .and_then(|pick| pick.geometry.bounds.get(object).copied())
                     .or_else(|| self.build.as_ref().and_then(|build| build.room_bounds(id)));
                 if let Some(bounds) = bounds {
                     for corner in bounds.corners() {
@@ -1179,7 +1347,7 @@ impl Visualizer {
                 if let Some(object_bounds) = stage
                     .displayed_pick
                     .as_ref()
-                    .and_then(|pick| pick.bounds.get(object).copied())
+                    .and_then(|pick| pick.geometry.bounds.get(object).copied())
                     .or_else(|| self.build.as_ref().and_then(|build| build.room_bounds(id)))
                 {
                     bounds.union(&object_bounds);
@@ -1630,11 +1798,12 @@ impl Visualizer {
         if let Some(pick) = stage.displayed_pick.as_ref() {
             let ray = pick.ray(point, viewport);
             let hit = pick
+                .geometry
                 .graph
                 .raycast(ray, Default::default(), pick)
                 .into_iter()
-                .find_map(
-                    |hit| match pick.objects.get(hit.node.0 as usize)?.as_ref()? {
+                .find_map(|hit| {
+                    match pick.geometry.objects.get(hit.node.0 as usize)?.as_ref()? {
                         EditorObject::StagePiece(id) => Some(crate::stage::hand::SurfaceHit {
                             piece: id.clone(),
                             point: coords::three_from_world(hit.point).as_dvec3(),
@@ -1643,8 +1812,8 @@ impl Visualizer {
                                 .normalize_or_zero(),
                         }),
                         EditorObject::Fixture(_) => None,
-                    },
-                );
+                    }
+                });
             if let Some(hit) = hit {
                 return Some((hit.point, Some(hit)));
             }
@@ -1944,14 +2113,16 @@ struct Gpu {
     submission: Submission,
     assets: assets::Library,
     picks: PickTimeline,
-    /// Immutable per-asset CPU BVHs; frame snapshots only carry Arc handles.
-    pick_meshes: HashMap<String, Arc<TriMesh>>,
+    /// The hit-test geometry and its per-asset BVHs, kept across frames.
+    pick_cache: PickCache,
     haze_started_at: Instant,
 }
 
 /// What the presentation seam did with one submitted frame.
 #[derive(Clone, Copy, Default)]
 struct Submission {
+    serial: u64,
+    haze_time_s: f32,
     /// This frame pushed an older, undelivered one out of the queue.
     replaced_undelivered: bool,
     slots: luma_render::Occupancy,
@@ -2004,6 +2175,8 @@ impl StageWork {
 }
 
 struct CompletedFrame {
+    serial: u64,
+    timings_serial: Option<u64>,
     frame: StageFrame,
     pick: PickSnapshot,
     draw_ms: f32,
@@ -2033,6 +2206,24 @@ struct CompletedFrame {
     /// The UI-thread spans measured when *this* frame was submitted, not when
     /// it came back — which is what makes them comparable with `interval_ms`.
     spans: UiSpans,
+}
+
+/// Explicit diagnostic only: capture every prepaint, including submissions
+/// that delivered nothing. Buffered writes avoid flushing the UI thread each frame.
+fn trace_stage_frame(sample: &FrameSample) {
+    use std::io::Write;
+    thread_local! {
+        static TRACE: std::cell::RefCell<Option<std::io::BufWriter<std::fs::File>>> =
+            std::cell::RefCell::new(std::env::var_os("LUMA_STAGE_TRACE").map(|path| {
+                std::io::BufWriter::new(std::fs::File::create(path).expect("create stage trace"))
+            }));
+    }
+    TRACE.with_borrow_mut(|trace| {
+        if let Some(trace) = trace {
+            serde_json::to_writer(&mut *trace, sample).expect("write stage trace");
+            writeln!(trace).expect("write stage trace newline");
+        }
+    });
 }
 
 /// One frame's cost, small enough to keep several seconds of them.
@@ -2105,6 +2296,15 @@ struct FrameSample {
     /// because a discarded frame's timings never reach a sample any other way.
     worker_finished: u64,
     worker_last_signalled_ms: f32,
+    /// Identity of this row's requested camera, transport time and dimensions.
+    submitted_serial: u64,
+    /// Delivered image, which can belong to an earlier request.
+    presented_serial: Option<u64>,
+    /// Source of the cached GPU timings. Join to `submitted_serial` for its
+    /// inputs and count each source once, even when several images reuse it.
+    profiled_serial: Option<u64>,
+    /// Air animation uses a wall clock independently of transport time.
+    haze_time_s: f32,
     /// Camera distance, so a report says how zoomed in the stage was.
     camera_radius: f32,
     /// Physical pixels the renderer was asked for.
@@ -2125,14 +2325,9 @@ struct FrameSample {
     /// window to be active. That is a property of the harness, not a finding
     /// about it — the field is only meaningful in a real session.
     window_active: bool,
-    /// Where the transport was, in track seconds.
-    ///
-    /// **The field that de-confounds every comparison.** A hitch report is a
-    /// ring dumped whenever a frame ran late, so two runs of the same test
-    /// capture whatever content happened to be playing then — and comparing a
-    /// camera change across two runs silently compared two pieces of music.
-    /// With this, any analysis can hold the playhead constant and vary one
-    /// thing, including analyses of captures that have already been taken.
+    /// Transport time of `submitted_serial`, in track seconds. Delivered
+    /// images and GPU timings can belong to older requests; use their serials
+    /// to join to the corresponding input row before comparing content.
     track_time_s: f32,
     /// Cones the score had lit — the content axis every other number scales on.
     lit_cones: u32,
@@ -2346,9 +2541,10 @@ impl Gpu {
         // Fixture state/strobe uses transport time above; air keeps moving
         // while playback is paused. Offline captures retain their pinned time.
         frame.time = self.haze_started_at.elapsed().as_secs_f32();
+        let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
-        let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_meshes);
+        let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_cache);
         self.work.pick_ms = picked.elapsed().as_secs_f32() * 1_000.0;
         let completed = self
             .viewport
@@ -2358,6 +2554,8 @@ impl Gpu {
         let (serial, outcome, occupancy) = self.viewport.submit_numbered(frame, width, height);
         let (finished, last_signalled) = self.viewport.finished();
         self.submission = Submission {
+            serial,
+            haze_time_s,
             replaced_undelivered: matches!(outcome, SubmitOutcome::Replaced { .. }),
             slots: occupancy,
             finished,
@@ -2398,6 +2596,8 @@ impl Gpu {
             .presented(presented.serial)
             .ok_or_else(|| format!("presentation {} lost its pick snapshot", presented.serial))?;
         Ok(Some(CompletedFrame {
+            serial: presented.serial,
+            timings_serial: presented.timings_serial,
             frame,
             pick: submitted.pick,
             spans: submitted.spans,
@@ -3545,10 +3745,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                 }
             };
             let scale = window.scale_factor();
-            let (width, height) = (
+            // The render size, not the element's: past the pixel budget the
+            // stage renders smaller and the compositor upscales it. Everything
+            // downstream — the idle key, the renderer, the trace — sees this.
+            let (width, height) = RenderScale::from_env().size((
                 (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
                 (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
-            );
+            ));
 
             let image = {
                 let mut stage = stage.borrow_mut();
@@ -3653,6 +3856,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     // that got nothing back, which is the point:
                                     // the silent ones are what a stall is made of.
                                     let mut sample = FrameSample {
+                                        submitted_serial: gpu.submission.serial,
+                                        haze_time_s: gpu.submission.haze_time_s,
                                         delivered: false,
                                         score_ms: sample_ms,
                                         build_ms: stage.last_work.build_ms,
@@ -3683,7 +3888,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     let painted = match outcome {
                                         Ok(Some(completed)) => {
                                             stage.last_draw_ms = Some(completed.draw_ms);
-                                            if let Some(timings) = completed.timings {
+                                            if let Some(timings) = &completed.timings {
                                                 stage.last_cpu_ms =
                                                     Some(timings.cpu_encode_submit_ms as f32);
                                                 stage.last_gpu_ms =
@@ -3698,6 +3903,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                             // frame, not the ones measured a moment
                                             // ago on the prepaint doing the reading.
                                             sample.delivered = true;
+                                            sample.presented_serial = Some(completed.serial);
+                                            sample.profiled_serial = completed.timings_serial;
                                             sample.interval_ms =
                                                 completed.interval_ms.unwrap_or(0.0);
                                             sample.draw_ms = completed.draw_ms;
@@ -3718,11 +3925,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                             sample.request_to_prepaint_ms =
                                                 completed.spans.request_to_prepaint_ms;
                                             sample.renders_in_gap = completed.spans.renders;
-                                            // `None` rather than the last frame's
-                                            // number: only one frame at a time is
-                                            // profiled, and a repeated value belongs
-                                            // to neither row.
-                                            if let Some(timings) = completed.timings {
+                                            // The worker retains the latest profile
+                                            // even when its image was discarded.
+                                            // `profiled_serial` identifies its source;
+                                            // it is not necessarily this delivery.
+                                            if let Some(timings) = &completed.timings {
                                                 sample.cpu_encode_ms =
                                                     Some(timings.cpu_encode_submit_ms as f32);
                                                 sample.gpu_total_ms =
@@ -3751,6 +3958,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                         // used to be missing entirely.
                                         _ => stage.previous.clone().map(|frame| (frame, None)),
                                     };
+                                    trace_stage_frame(&sample);
                                     if let Some(run_up) =
                                         stage.hitches.record(sample, Instant::now())
                                     {
@@ -3830,7 +4038,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         // Nothing to publish: the pixels are already in memory
                         // the compositor can address.
                         StageFrame::Shared(surface) => {
-                            window.paint_surface(bounds, surface.source());
+                            window.paint_upscaled_surface(bounds, surface.source());
                         }
                     }
                     stage.previous = Some(frame);
@@ -4060,6 +4268,61 @@ mod render_lab_tests {
         lab.toggle(LabToggle::FixtureShadows);
         assert!(!lab.fixture_shadows);
         assert_eq!(lab.house, house);
+    }
+}
+
+#[cfg(test)]
+mod render_scale_tests {
+    use super::RenderScale;
+
+    #[test]
+    fn an_ordinary_window_renders_native() {
+        assert_eq!(RenderScale::Budget.size((1984, 1511)), (1984, 1511));
+        assert_eq!(RenderScale::Budget.size((2227, 1391)), (2227, 1391));
+        assert_eq!(RenderScale::Budget.size((1, 1)), (1, 1));
+    }
+
+    #[test]
+    fn fullscreen_scales_to_the_budget_at_its_own_aspect() {
+        let (width, height) = RenderScale::Budget.size((3600, 2260));
+        let scale = f64::from(width) / 3600.0;
+        assert!((scale - 0.617).abs() < 0.002, "scale {scale}");
+        assert!(
+            (f64::from(width) / f64::from(height) - 3600.0 / 2260.0).abs() < 0.002,
+            "{width}x{height}"
+        );
+        let budget = super::RENDER_BUDGET_PIXELS;
+        let pixels = f64::from(width) * f64::from(height);
+        assert!(
+            (pixels / budget - 1.0).abs() < 0.002,
+            "{pixels} vs {budget}"
+        );
+    }
+
+    #[test]
+    fn overrides_parse_and_clamp() {
+        assert_eq!(RenderScale::parse(None, None), RenderScale::Budget);
+        assert_eq!(RenderScale::parse(None, Some("off")), RenderScale::Native);
+        assert_eq!(
+            RenderScale::parse(Some("0.5"), None),
+            RenderScale::Fixed(0.5)
+        );
+        assert_eq!(
+            RenderScale::parse(Some("0.1"), None),
+            RenderScale::Fixed(0.25)
+        );
+        assert_eq!(
+            RenderScale::parse(Some("3"), Some("off")),
+            RenderScale::Fixed(1.0)
+        );
+        assert_eq!(
+            RenderScale::parse(Some("soft"), Some("off")),
+            RenderScale::Native
+        );
+        assert_eq!(RenderScale::parse(None, Some("on")), RenderScale::Budget);
+        assert_eq!(RenderScale::Native.size((3600, 2260)), (3600, 2260));
+        assert_eq!(RenderScale::Fixed(0.5).size((3600, 2260)), (1800, 1130));
+        assert_eq!(RenderScale::Fixed(0.25).size((2, 2)), (1, 1));
     }
 }
 
@@ -4298,6 +4561,25 @@ mod selection_card_tests {
 mod orbit_selection_tests {
     use super::*;
 
+    /// A snapshot with nothing in it: the camera is all these tests read.
+    fn empty_pick(camera: Camera) -> PickSnapshot {
+        PickSnapshot {
+            camera,
+            geometry: Arc::new(PickGeometry {
+                graph: SceneGraph::new(),
+                meshes: Vec::new(),
+                objects: Vec::new(),
+                ordered: Vec::new(),
+                anchors: HashMap::new(),
+                bounds: HashMap::new(),
+                mesh_keys: Vec::new(),
+                draws: Vec::new(),
+            }),
+            gizmo_pivot: None,
+            gizmo_space: Default::default(),
+        }
+    }
+
     fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot) -> Visualizer {
         let camera = pick.camera;
         Visualizer {
@@ -4341,17 +4623,7 @@ mod orbit_selection_tests {
     #[test]
     fn height_preview_invalidates_a_settled_viewport_before_release() {
         let camera = Camera::default();
-        let pick = PickSnapshot {
-            camera,
-            graph: SceneGraph::new(),
-            meshes: Vec::new(),
-            objects: Vec::new(),
-            ordered: Vec::new(),
-            anchors: HashMap::new(),
-            bounds: HashMap::new(),
-            gizmo_pivot: None,
-            gizmo_space: Default::default(),
-        };
+        let pick = empty_pick(camera);
         let mut view = visualizer(None, pick);
         let lab = view.render_lab.clone();
         let key = || IdleKey {
@@ -4415,6 +4687,61 @@ mod orbit_selection_tests {
     }
 
     #[test]
+    fn the_pick_geometry_is_reused_until_a_draw_moves() {
+        let camera = Camera::default();
+        let mut scene = scene_desc::Scene {
+            id: "reuse".into(),
+            times: vec![0.0],
+            editing: true,
+            aim_arrows: false,
+            camera: scene_desc::CameraPose {
+                position: coords::three_from_world(camera.position()).to_array(),
+                target: coords::three_from_world(camera.target).to_array(),
+            },
+            render: scene_desc::RenderSettings::dark_stage(50.0, 0.5),
+            selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
+            fixtures: Vec::new(),
+            state: std::collections::BTreeMap::new(),
+            pieces: vec![scene_desc::Piece {
+                id: "deck".into(),
+                geometry: scene_desc::Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
+                kind: "floor".into(),
+                pos: [1.0, 2.0, 3.0],
+                rot: [0.0, 0.0, 0.6],
+                scale: 1.0,
+            }],
+        };
+        let mut library = assets::Library::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+        );
+        let mut cache = PickCache::default();
+        let mut snapshot = |scene: &scene_desc::Scene, cache: &mut PickCache| {
+            let frame =
+                build_frame_with(scene, &Default::default(), &|_, _| None, 0.0, &mut library)
+                    .unwrap();
+            PickSnapshot::from_frame(&frame, scene, camera, cache)
+        };
+        let first = snapshot(&scene, &mut cache);
+        let again = snapshot(&scene, &mut cache);
+        assert!(
+            Arc::ptr_eq(&first.geometry, &again.geometry),
+            "an unchanged draw list must not rebuild the hit-test geometry"
+        );
+        scene.pieces[0].pos[0] = 4.0;
+        let moved = snapshot(&scene, &mut cache);
+        assert!(
+            !Arc::ptr_eq(&again.geometry, &moved.geometry),
+            "a moved piece must rebuild it"
+        );
+        let object = EditorObject::StagePiece("deck".into());
+        assert_ne!(
+            again.geometry.bounds[&object].min, moved.geometry.bounds[&object].min,
+            "the rebuilt bounds must follow the piece"
+        );
+    }
+
+    #[test]
     fn panel_and_focus_use_the_rendered_objects_world_bounds_once() {
         let camera = Camera {
             target: Vec3::new(1.0, -2.0, 3.0),
@@ -4462,9 +4789,9 @@ mod orbit_selection_tests {
                 .iter()
                 .map(|vertex| cage.model.transform_point3(Vec3::from(vertex.position))),
         );
-        let pick = PickSnapshot::from_frame(&frame, &scene, camera, &mut HashMap::new());
+        let pick = PickSnapshot::from_frame(&frame, &scene, camera, &mut PickCache::default());
         let object = EditorObject::StagePiece("deck".into());
-        let actual = pick.bounds[&object];
+        let actual = pick.geometry.bounds[&object];
         assert!(
             actual.min.abs_diff_eq(expected.min, 1e-4),
             "{actual:?} != {expected:?}"
@@ -4505,17 +4832,7 @@ mod orbit_selection_tests {
     #[test]
     fn fullscreen_clicks_and_shift_drags_preserve_selection() {
         let camera = Camera::default();
-        let pick = PickSnapshot {
-            camera,
-            graph: SceneGraph::new(),
-            meshes: Vec::new(),
-            objects: Vec::new(),
-            ordered: Vec::new(),
-            anchors: HashMap::new(),
-            bounds: HashMap::new(),
-            gizmo_pivot: None,
-            gizmo_space: Default::default(),
-        };
+        let pick = empty_pick(camera);
         let mut state = visualizer(None, pick);
         let selected = EditorObject::Fixture("selected".into());
         state.selection.replace([selected.clone()]);
@@ -4566,17 +4883,7 @@ mod orbit_selection_tests {
         build.selected = Some("first".into());
         build.distribution = vec!["first".into(), "second".into()];
         let camera = Camera::default();
-        let pick = PickSnapshot {
-            camera,
-            graph: SceneGraph::new(),
-            meshes: Vec::new(),
-            objects: Vec::new(),
-            ordered: Vec::new(),
-            anchors: HashMap::new(),
-            bounds: HashMap::new(),
-            gizmo_pivot: None,
-            gizmo_space: Default::default(),
-        };
+        let pick = empty_pick(camera);
         let mut state = visualizer(Some(build), pick);
         state.selection.replace([
             EditorObject::Fixture("second".into()),

@@ -2,7 +2,6 @@
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
-#[cfg(feature = "profiler")]
 use crate::profiler;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
@@ -4700,6 +4699,25 @@ impl Window {
     /// This method should only be called as part of the paint phase of element drawing.
     // LUMA LOCAL EDIT: on every platform; see `SurfaceHandle`.
     pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, source: crate::SurfaceHandle) {
+        self.insert_surface(bounds, source, false);
+    }
+
+    /// [`Self::paint_surface`] for a rendered frame its producer drew smaller
+    /// than `bounds` on purpose, to save GPU time. The compositor may upscale
+    /// it with a content-aware scaler (MetalFX Spatial on macOS) rather than
+    /// stretch it bilinearly. Where no such scaler exists, or the sizes
+    /// already agree, this is exactly `paint_surface`.
+    // LUMA LOCAL EDIT: not upstream.
+    pub fn paint_upscaled_surface(&mut self, bounds: Bounds<Pixels>, source: crate::SurfaceHandle) {
+        self.insert_surface(bounds, source, true);
+    }
+
+    fn insert_surface(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        source: crate::SurfaceHandle,
+        upscale: bool,
+    ) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
@@ -4711,6 +4729,7 @@ impl Window {
             bounds,
             content_mask,
             source,
+            upscale,
         });
     }
 

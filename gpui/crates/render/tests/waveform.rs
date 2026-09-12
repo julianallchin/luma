@@ -233,3 +233,46 @@ fn compact_peaks_preserve_impulses_with_only_bin_edge_expansion() {
         }
     }
 }
+
+#[test]
+fn concurrent_completions_preserve_each_view_and_retained_surface() {
+    let bands = std::array::from_fn(|band| {
+        (0..6000)
+            .map(|i| ((i * (17 + band * 11) % 997) as f32 / 997.) * 0.9)
+            .collect()
+    });
+    let gpu = std::sync::Arc::new(
+        Waveform::new(context(), &bands, [1.; 3], [0.95, 0.8, 0.6], 1000).unwrap(),
+    );
+    let retained = gpu.render(view(0., 0.002, 640)).unwrap();
+    let retained_pixels = retained.pixels().unwrap();
+    let views = [
+        view(0.123, 0.0005, 959),
+        view(2.997, 0.003, 321),
+        view(5.993, 0.001, 37),
+    ];
+    let concurrent = std::thread::scope(|scope| {
+        let jobs: Vec<_> = views
+            .into_iter()
+            .map(|view| {
+                let gpu = gpu.clone();
+                scope.spawn(move || gpu.render(view).unwrap())
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| job.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    for (view, frame) in views.into_iter().zip(concurrent) {
+        assert_eq!(
+            frame.pixels().unwrap(),
+            gpu.render(view).unwrap().pixels().unwrap(),
+            "concurrent completion published another view or unfinished pixels"
+        );
+    }
+    assert_eq!(
+        retained.pixels().unwrap(),
+        retained_pixels,
+        "later submissions changed a surface retained by the compositor"
+    );
+}

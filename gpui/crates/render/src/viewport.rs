@@ -202,15 +202,16 @@ pub struct AsyncPresentation {
     /// Independent CPU encode/submit and GPU pass timings from the most
     /// recently profiled frame, which is usually an earlier one than this.
     ///
-    /// A profiled frame carries a second command submission and so retires
-    /// later than the unprofiled frames around it — late enough that on a
-    /// heavy scene it is always the stale one `complete` drops. Handing its
-    /// timings to the next frame out costs an attribution the consumers never
-    /// made anyway (they trend these) and is the difference between a number
-    /// and no number at all on exactly the frames worth measuring. `None` until
-    /// the first profiled frame lands, and on adapters without timestamp
+    /// A profiled frame carries a second command submission and can retire
+    /// after newer unprofiled images. Retaining its timings lets the stats
+    /// display report GPU work even when that image was discarded as stale.
+    /// `timings_serial` identifies the original submission for attribution.
+    /// `None` until the first profile lands, and on adapters without timestamp
     /// queries, which still present frames.
     pub timings: Option<FrameTimings>,
+    /// Submission that owns `timings`. May differ from `serial`; consumers
+    /// must deduplicate by this value before counting GPU measurements.
+    pub timings_serial: Option<u64>,
     /// What the fixture-shadow passes submitted for this frame. Always present:
     /// counted while encoding rather than measured by the adapter.
     pub shadows: ShadowStats,
@@ -1236,7 +1237,9 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                     if profile_slot == Some(slot) {
                         profile_slot = None;
                     }
-                    latest_timings = frame.profile.or(latest_timings);
+                    if let Some(timings) = frame.profile {
+                        latest_timings = Some((serial, timings));
+                    }
                     // Counted here, before `retire` decides whether anyone gets
                     // to see this frame: a frame dropped for being stale is
                     // still a frame the GPU finished, and it is the only
@@ -1261,7 +1264,8 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                             height: frame.height,
                             image: frame.image,
                             draw_time: frame.draw_time,
-                            timings: latest_timings,
+                            timings: latest_timings.as_ref().map(|(_, timings)| timings.clone()),
+                            timings_serial: latest_timings.as_ref().map(|(serial, _)| *serial),
                             shadows: frame.shadows,
                             clusters: frame.clusters,
                             queued: frame.queued,
@@ -1338,6 +1342,7 @@ mod supervision {
             image: Presented::Pixels(Vec::new()),
             draw_time: Duration::ZERO,
             timings: None,
+            timings_serial: None,
             shadows: crate::gpu::ShadowStats::default(),
             clusters: LightIndexStats::default(),
             queued: Duration::ZERO,

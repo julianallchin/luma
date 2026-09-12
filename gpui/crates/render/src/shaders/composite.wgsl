@@ -36,6 +36,8 @@ struct EnvironmentParams {
 @group(1) @binding(2) var environment_brdf: texture_2d<f32>;
 @group(1) @binding(3) var environment_sampler: sampler;
 @group(1) @binding(4) var<uniform> environment_params: EnvironmentParams;
+// The probe's frame-constant mean lobe radiance (`environment_ambient.wgsl`).
+@group(1) @binding(5) var<uniform> outdoor_ambient_mean: vec4<f32>;
 
 fn linear_view_depth(raw_depth: f32) -> f32 {
     let near = cfg.depth.x;

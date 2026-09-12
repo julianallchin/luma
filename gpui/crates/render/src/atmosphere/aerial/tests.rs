@@ -64,7 +64,14 @@ fn prepare(
     let mut encoder = context
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let textures = cache.prepare(pipelines, &context.device, &mut encoder, sky, height);
+    let textures = cache.prepare(
+        pipelines,
+        &context.device,
+        &mut encoder,
+        sky,
+        height,
+        &mut crate::pass_profile::PassQueries::new(None),
+    );
     context.queue.submit([encoder.finish()]);
     textures
 }

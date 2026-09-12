@@ -16,6 +16,7 @@ enum Event {
         position_s: f32,
         paint_ms: f64,
         window_active: bool,
+        waveform_updates_frozen: bool,
     },
     Window {
         ms: f64,
@@ -28,6 +29,7 @@ enum Event {
         queue_ms: f64,
         render_ms: f64,
         publish_ms: f64,
+        cpu: Option<luma_render::waveform::CpuTimings>,
     },
 }
 struct Capture {
@@ -35,6 +37,7 @@ struct Capture {
     start: Option<Instant>,
     events: Vec<Event>,
     done: bool,
+    duration_ms: f64,
 }
 fn capture() -> Option<&'static Mutex<Capture>> {
     static CAPTURE: OnceLock<Option<Mutex<Capture>>> = OnceLock::new();
@@ -46,6 +49,11 @@ fn capture() -> Option<&'static Mutex<Capture>> {
                     start: None,
                     events: Vec::with_capacity(12000),
                     done: false,
+                    duration_ms: std::env::var("LUMA_TIMELINE_TRACE_SECONDS")
+                        .ok()
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .map_or(30, |v| v.clamp(1, 30)) as f64
+                        * 1000.,
                 })
             })
         })
@@ -66,21 +74,26 @@ pub(super) fn frame(
     if capture.done || !active {
         return;
     }
+    let duration_ms = capture.duration_ms;
     let origin = *capture.start.get_or_insert_with(|| {
         gpui::profiler::start_frame_trace();
-        eprintln!("[timeline trace] recording 30 seconds of focus playback");
+        eprintln!(
+            "[timeline trace] recording {} seconds of focus playback",
+            duration_ms / 1000.
+        );
         started
     });
     let ms = started.duration_since(origin).as_secs_f64() * 1000.;
     capture.events.push(Event::Frame {
         ms,
         window_active,
+        waveform_updates_frozen: super::waveform::updates_frozen(),
         scroll_px: scroll,
         zoom,
         position_s: position,
         paint_ms: started.elapsed().as_secs_f64() * 1000.,
     });
-    if ms >= 30000. || capture.events.len() >= 12000 {
+    if ms >= capture.duration_ms || capture.events.len() >= 12000 {
         capture.done = true;
         let mut events = std::mem::take(&mut capture.events);
         events.extend(
@@ -104,7 +117,13 @@ pub(super) fn frame(
         });
     }
 }
-pub(super) fn waveform(overview: bool, queued: Instant, started: Instant, finished: Instant) {
+pub(super) fn waveform(
+    overview: bool,
+    queued: Instant,
+    started: Instant,
+    finished: Instant,
+    cpu: Option<luma_render::waveform::CpuTimings>,
+) {
     let Some(capture) = capture() else {
         return;
     };
@@ -122,5 +141,6 @@ pub(super) fn waveform(overview: bool, queued: Instant, started: Instant, finish
         queue_ms: started.duration_since(queued).as_secs_f64() * 1000.,
         render_ms: finished.duration_since(started).as_secs_f64() * 1000.,
         publish_ms: now.duration_since(finished).as_secs_f64() * 1000.,
+        cpu,
     });
 }

@@ -51,6 +51,9 @@ pub struct Waveform {
     ceilings: [f32; 4],
     sample_pipeline: wgpu::ComputePipeline,
     draw_pipeline: wgpu::RenderPipeline,
+    // The ignored shared-device benchmark changes only fence waiting.
+    #[cfg(test)]
+    wait_for_gpu: fn(&wgpu::Device, wgpu::SubmissionIndex) -> anyhow::Result<()>,
 }
 
 /// A completed render target. It is immutable once published to the compositor.
@@ -60,9 +63,26 @@ pub struct Frame {
     context: Arc<DeviceContext>,
     width: u32,
     height: u32,
+    cpu_timings: CpuTimings,
+}
+
+/// CPU wall-clock phases for a waveform submission. These are not GPU timings.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct CpuTimings {
+    /// View preparation, buffers, bindings and presentation-surface allocation.
+    pub prepare_ms: f64,
+    /// Command encoding and queue submission.
+    pub encode_submit_ms: f64,
+    /// Blocking device poll, including queued stage work and driver contention.
+    pub wait_ms: f64,
 }
 
 impl Frame {
+    /// Submission phases, excluding optional pixel readback and UI publication.
+    pub fn cpu_timings(&self) -> CpuTimings {
+        self.cpu_timings
+    }
+
     /// Zero-copy presentation on supported compositors.
     pub fn surface(&self) -> Option<Surface> {
         self.shared.as_ref().map(Shared::surface)
@@ -336,6 +356,8 @@ impl Waveform {
             ceilings: [ceilings[0], ceilings[1], ceilings[2], 0.],
             sample_pipeline,
             draw_pipeline,
+            #[cfg(test)]
+            wait_for_gpu,
         })
     }
 
@@ -352,6 +374,7 @@ impl Waveform {
     /// Render one physical-pixel strip. Queue completion is awaited here, so
     /// cross-device Metal surfaces are safe when published. Call on a worker.
     pub fn render(&self, view: View) -> anyhow::Result<Frame> {
+        let started = std::time::Instant::now();
         anyhow::ensure!(!self.is_lost(), "waveform GPU device lost");
         let device = &self.context.device;
         anyhow::ensure!(
@@ -435,6 +458,7 @@ impl Waveform {
             .map(Shared::view)
             .or(fallback_view.as_ref())
             .unwrap();
+        let prepared = std::time::Instant::now();
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -461,19 +485,37 @@ impl Waveform {
             pass.draw(0..3, 0..1);
         }
         let submission = self.context.queue.submit([encoder.finish()]);
-        device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: None,
-        })?;
+        let submitted = std::time::Instant::now();
+        #[cfg(not(test))]
+        let wait = wait_for_gpu;
+        #[cfg(test)]
+        let wait = self.wait_for_gpu;
+        wait(device, submission)?;
         Ok(Frame {
             shared,
             texture,
             context: self.context.clone(),
             width: view.width,
             height: view.height,
+            cpu_timings: CpuTimings {
+                prepare_ms: (prepared - started).as_secs_f64() * 1000.,
+                encode_submit_ms: (submitted - prepared).as_secs_f64() * 1000.,
+                wait_ms: submitted.elapsed().as_secs_f64() * 1000.,
+            },
         })
     }
 }
+
+fn wait_for_gpu(device: &wgpu::Device, submission: wgpu::SubmissionIndex) -> anyhow::Result<()> {
+    device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: None,
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;
 
 fn entry(binding: u32, resource: wgpu::BindingResource<'_>) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry { binding, resource }

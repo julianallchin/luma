@@ -89,3 +89,14 @@ target-pixel/
 # …and the agent friction log
 !/docs/AGENT_FRICTION.md
 .metadata_never_index
+
+# Leftovers from the native backend migration (d4b7ebdb): the Tauri app and the
+# React frontend were removed from git but not from disk. `target/` above
+# already covers src-tauri/target; these cover the rest of the stale trees.
+/src-tauri/
+/src/
+
+# Perf campaign captures — thousands of retina PNG frames per run. The JSON
+# measurements beside them are the durable artifact; the frames are re-shot by
+# re-running the capture.
+harness/perf/

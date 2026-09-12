@@ -1,4 +1,5 @@
 use crate::metal_atlas::MetalAtlas;
+use crate::metal_upscaler::SurfaceUpscaler;
 use anyhow::{Context as _, Result};
 use block::ConcreteBlock;
 use cocoa::{
@@ -331,6 +332,9 @@ pub struct MetalRenderer {
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     sprite_atlas: Arc<MetalAtlas>,
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
+    /// LUMA LOCAL EDIT: MetalFX for surfaces painted smaller than their
+    /// bounds on purpose; see `metal_upscaler`.
+    upscaler: SurfaceUpscaler,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
     path_sample_count: u32,
@@ -568,6 +572,7 @@ impl MetalRenderer {
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
+        let upscaler = SurfaceUpscaler::new(&device);
 
         Self {
             device,
@@ -607,6 +612,7 @@ impl MetalRenderer {
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
+            upscaler,
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
@@ -970,6 +976,10 @@ impl MetalRenderer {
             }
         }
 
+        // Compute work, so it has to be in the buffer before the first render
+        // encoder opens.
+        let upscaled = self.encode_surface_upscales(&scene.surfaces, command_buffer);
+
         let mut command_encoder = new_command_encoder_for_texture_at_origin(
             command_buffer,
             texture,
@@ -1076,6 +1086,7 @@ impl MetalRenderer {
                 PrimitiveBatch::Surfaces(range) => self.draw_surfaces(
                     &scene.surfaces[range.clone()],
                     range.start,
+                    &upscaled,
                     instance_bindings,
                     viewport_size,
                     command_encoder,
@@ -1881,10 +1892,59 @@ impl MetalRenderer {
         );
     }
 
+    /// LUMA LOCAL EDIT: run the upscaler over every surface that asked for
+    /// it. The result is indexed like `surfaces`; `None` (or an empty vector,
+    /// when nothing asked) means draw that surface as it is.
+    fn encode_surface_upscales(
+        &mut self,
+        surfaces: &[PaintSurface],
+        command_buffer: &metal::CommandBufferRef,
+    ) -> Vec<Option<metal::Texture>> {
+        if !surfaces.iter().any(|surface| surface.upscale) {
+            return Vec::new();
+        }
+        surfaces
+            .iter()
+            .map(|surface| {
+                if !surface.upscale
+                    || surface.source.get_pixel_format() != kCVPixelFormatType_32BGRA
+                {
+                    return None;
+                }
+                // The same wrapping the bilinear path uses: unorm, so the
+                // scaler sees the sRGB-encoded bytes it expects in perceptual
+                // mode (it refuses sRGB formats outright).
+                let wrapper = self
+                    .core_video_texture_cache
+                    .create_texture_from_image(
+                        surface.source.as_concrete_TypeRef(),
+                        None,
+                        MTLPixelFormat::BGRA8Unorm,
+                        surface.source.get_width(),
+                        surface.source.get_height(),
+                        0,
+                    )
+                    .ok()?;
+                let input = unsafe {
+                    metal::TextureRef::from_ptr(CVMetalTextureGetTexture(
+                        wrapper.as_concrete_TypeRef(),
+                    ) as *mut _)
+                };
+                let output = (
+                    surface.bounds.size.width.0.round().max(1.0) as u64,
+                    surface.bounds.size.height.0.round().max(1.0) as u64,
+                );
+                self.upscaler
+                    .encode(&self.device, command_buffer, input, output)
+            })
+            .collect()
+    }
+
     fn draw_surfaces(
         &mut self,
         surfaces: &[PaintSurface],
         first_surface: usize,
+        upscaled: &[Option<metal::Texture>],
         instance_bindings: &InstanceBindings,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
@@ -1910,6 +1970,31 @@ impl MetalRenderer {
         );
 
         for (index, surface) in surfaces.iter().enumerate() {
+            // Already at the size of its bounds: drawn 1:1 through the same
+            // pipeline a BGRA surface uses.
+            if let Some(Some(output)) = upscaled.get(first_surface + index) {
+                let texture_size = size(
+                    DevicePixels::from(output.width() as i32),
+                    DevicePixels::from(output.height() as i32),
+                );
+                command_encoder.set_vertex_bytes(
+                    SurfaceInputIndex::TextureSize as u64,
+                    mem::size_of_val(&texture_size) as u64,
+                    &texture_size as *const Size<DevicePixels> as *const _,
+                );
+                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
+                command_encoder
+                    .set_fragment_texture(SurfaceInputIndex::BgraTexture as u64, Some(output));
+                command_encoder.draw_primitives_instanced_base_instance(
+                    metal::MTLPrimitiveType::Triangle,
+                    0,
+                    6,
+                    1,
+                    (first_surface + index) as u64,
+                );
+                continue;
+            }
+
             let texture_size = size(
                 DevicePixels::from(surface.source.get_width() as i32),
                 DevicePixels::from(surface.source.get_height() as i32),

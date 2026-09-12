@@ -30,12 +30,30 @@ impl DeviceContext {
             apply_limit_buckets: false,
             ..Default::default()
         }))?;
-        let features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        // Subgroup ballots let the native haze pass write its lit-interval
+        // cache header in one store per (workgroup, light); without them the
+        // cache stays off and rendering is unchanged.
+        let features =
+            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::SUBGROUP);
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("luma"),
                 required_features: features,
-                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits {
+                    // The lit-interval cache pool is one storage binding of
+                    // roughly 4 B × blocks × shadow slots plus its payload
+                    // table; the 128 MiB default caps it below 4K.
+                    max_storage_buffer_binding_size: adapter
+                        .limits()
+                        .max_storage_buffer_binding_size,
+                    max_buffer_size: adapter.limits().max_buffer_size,
+                    // The cache adds three storage buffers to the native haze
+                    // kernel's eight.
+                    max_storage_buffers_per_shader_stage: adapter
+                        .limits()
+                        .max_storage_buffers_per_shader_stage,
+                    ..wgpu::Limits::default().using_resolution(adapter.limits())
+                },
                 ..Default::default()
             }))?;
         let lost = Arc::new(AtomicBool::new(false));
