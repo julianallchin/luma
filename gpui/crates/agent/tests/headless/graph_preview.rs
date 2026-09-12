@@ -246,14 +246,8 @@ fn graph_preview_scrubs_real_clip_time_and_owns_its_transport() {
             luma_lib::venue_graph::ensure_migrated(&db.0, support::VENUE, &dir.join("fixtures"))
                 .await
                 .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&db.0)
-            .await
-            .unwrap();
             db.0.close().await;
-            source
+            support::stored_score(&dir).await
         });
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand();
@@ -313,19 +307,10 @@ fn graph_preview_scrubs_real_clip_time_and_owns_its_transport() {
         .build()
         .unwrap()
         .block_on(async {
-            let db = luma_lib::database::local::database::init_app_db_at(&dir)
-                .await
-                .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&db.0)
-            .await
-            .unwrap();
             assert_eq!(
-                source, before,
+                support::stored_score(&dir).await,
+                before,
                 "preview controls changed the authored score or clip overrides"
             );
-            db.0.close().await;
         });
 }

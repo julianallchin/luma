@@ -47,17 +47,7 @@ fn graph_palettes_keep_empty_defaults_and_overrides_through_editing_and_undo() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: luma_patterns::Score = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score(&dir).await;
             let Some(luma_patterns::Value::Gradient(default)) =
                 &score.definitions["ribbon"].inputs["palette"].default
             else {
@@ -70,6 +60,5 @@ fn graph_palettes_keep_empty_defaults_and_overrides_through_editing_and_undo() {
             assert_eq!(default.stops.len(), 1);
             assert!((default.stops[0].alpha - 0.4).abs() < 1e-6);
             assert!(overridden.stops.is_empty());
-            pool.close().await;
         });
 }

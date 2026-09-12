@@ -156,17 +156,7 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let text: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let score = support::stored_score_json(&dir).await;
             let graph = &score["definitions"]["custom"]["body"]["body"];
             assert_eq!(
                 graph["outputs"]["lighting"],
@@ -191,6 +181,5 @@ fn graph_output_accepts_composed_signals_and_edits_optional_capabilities() {
             assert_eq!(override_value["type"], "degrees");
             assert_eq!(override_value["value"].as_f64(), Some(-30.0));
             assert!(inputs.get("dimmer").is_none());
-            pool.close().await;
         });
 }

@@ -133,7 +133,10 @@ agent_thread_usage, legacy_scores_backup, the auth session, and the columns
 - `supabase/migrations/20260912000000_row_model.sql`: drops the old schema and
   creates every synced table, its RLS policies and the `powersync`
   publication.
-- `deploy/sync-rules.yaml`: the PowerSync Cloud sync rules.
+- `deploy/sync-rules.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
+  a parameter query and may return at most a thousand rows, so every one of
+  them counts venues, scores or shared tracks — never their children. That is
+  why the stage and group child rows carry a `venue_id` of their own.
 - `experiments/powersync/run.py`: disposable Postgres, PostgREST and PowerSync
   containers for the two-device tests.
 

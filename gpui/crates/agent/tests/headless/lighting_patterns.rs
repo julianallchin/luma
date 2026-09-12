@@ -69,17 +69,7 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let score = support::stored_score_json(&root).await;
             let clip = score["clips"].as_object().unwrap().values().next().unwrap();
             let mapping = &clip["inputs"]["mapping"]["value"];
             assert_eq!(
@@ -101,7 +91,6 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
                 .unwrap(),
                 [1., 0., 3.]
             );
-            pool.close().await;
         });
 }
 
@@ -143,17 +132,7 @@ fn edit_gradient_stops_in_a_canonical_graph() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let score = support::stored_score_json(&root).await;
             let definition = score["definitions"]
                 .as_object()
                 .unwrap()
@@ -170,7 +149,6 @@ fn edit_gradient_stops_in_a_canonical_graph() {
                 .unwrap()
                 .iter()
                 .all(|c| c.as_f64() == Some(0.0)));
-            pool.close().await;
         });
 }
 
@@ -213,32 +191,28 @@ fn insert_a_dissolve_pattern_in_the_native_score_editor() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let score = support::stored_score_json(&root).await;
             assert_eq!(score["clips"].as_object().unwrap().len(), 1);
             assert_eq!(
                 score["definitions"].as_object().unwrap().len(),
                 2,
                 "make independent clones the clip graph"
             );
+            let pool = sqlx::SqlitePool::connect(&format!(
+                "sqlite:{}",
+                root.join("luma.db").display()
+            ))
+            .await
+            .unwrap();
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
+            pool.close().await;
             assert_eq!(
                 count, 0,
                 "native insertion never creates a separate pattern record"
             );
-            pool.close().await;
         });
 }
 
@@ -292,17 +266,7 @@ fn edit_a_chase_envelope_per_clip() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let score = support::stored_score_json(&root).await;
             let clip = score["clips"].as_object().unwrap().values().next().unwrap();
             let args = &clip["inputs"];
             let points = args["shape"]["value"]["points"].as_array().unwrap();
@@ -321,7 +285,6 @@ fn edit_a_chase_envelope_per_clip() {
                 args["shape"]["value"]["points"],
                 "clip envelope edits preserve graph defaults"
             );
-            pool.close().await;
         });
 }
 
@@ -465,17 +428,7 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool =
-                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
-                    .await
-                    .unwrap();
-            let source: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let score = support::stored_score_json(&root).await;
             let graph = &score["definitions"]
                 .as_object()
                 .unwrap()
@@ -492,6 +445,5 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
                 graph["nodes"]["output"]["inputs"]["pan"]["node"],
                 "write_position_1"
             );
-            pool.close().await;
         });
 }
