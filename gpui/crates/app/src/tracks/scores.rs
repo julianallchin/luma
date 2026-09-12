@@ -30,7 +30,6 @@ use luma_ui::float::{self, RowState};
 use luma_ui::glass;
 use luma_ui::node::{AgentNode, Instrument, Role};
 
-use luma_lib::models::actor::ActorLabel;
 use luma_lib::models::scores::ScoreSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
 
@@ -48,11 +47,7 @@ pub(crate) struct ScoreRow {
     pub(crate) ordinal: i64,
     pub(crate) venue_id: SharedString,
     pub(crate) venue: SharedString,
-    /// Who *wrote* it: the actor behind the score's last write, read through
-    /// [`ActorLabel`]. Not ownership — a score an agent authored through this
-    /// person's session is still their document, and the row that said "You"
-    /// for it was answering the wrong question. Falls back to the owner when
-    /// nothing recorded an actor at all.
+    /// Whose score it is.
     author: SharedString,
     /// The score's own name, when it was given one. Most are unnamed, which
     /// is why the owner and not this is the row's leading word.
@@ -81,14 +76,10 @@ pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreR
         .iter()
         .map(|score| {
             let read_only = score.uid.is_some() && score.uid.as_deref() != user;
-            // The principal, for the two cases the actor deliberately does not
-            // name: `user` records that a human wrote it, not which one.
-            let principal = || {
-                if read_only {
-                    SharedString::from(short_uid(score.uid.as_deref().unwrap_or_default()))
-                } else {
-                    SharedString::from("You")
-                }
+            let author = if read_only {
+                SharedString::from(short_uid(score.uid.as_deref().unwrap_or_default()))
+            } else {
+                SharedString::from("You")
             };
             ScoreRow {
                 id: score.id.clone().into(),
@@ -99,10 +90,7 @@ pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreR
                     .clone()
                     .unwrap_or_else(|| "Unknown venue".into())
                     .into(),
-                author: match score.last_actor.as_deref().map(ActorLabel::parse) {
-                    None | Some(ActorLabel::User) => principal(),
-                    Some(actor) => actor.to_string().into(),
-                },
+                author,
                 name: score.name.clone().map(SharedString::from),
                 clips: score.annotation_count,
                 age: crate::welcome::relative_age(
