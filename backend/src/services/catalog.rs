@@ -41,7 +41,7 @@ pub async fn create_pattern_with_graph(
     score_id: Option<&str>,
 ) -> Result<PatternSummary, String> {
     let request_id = request_uuid(request_id)?;
-    let key = principal_key(principal);
+    let key = principal_key(principal.ok_or(crate::database::local::auth::SIGN_IN_REQUIRED)?);
     let pattern_id = derived_id(&key, "pattern", &request_id, "subject");
     let implementation_id = derived_id(&key, "pattern", &request_id, "implementation");
     if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
@@ -92,7 +92,7 @@ pub async fn fork_pattern(
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, String> {
     let request_id = request_uuid(&input.request_id)?;
-    let key = principal_key(principal);
+    let key = principal_key(principal.ok_or(crate::database::local::auth::SIGN_IN_REQUIRED)?);
     let pattern_id = derived_id(&key, "pattern_fork", &request_id, "subject");
     let implementation_id = derived_id(&key, "pattern_fork", &request_id, "implementation");
     if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
@@ -206,7 +206,7 @@ async fn insert_score(
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
     let owner = access.principal().map(str::to_owned);
     let score_id = derived_id(
-        &principal_key(owner.as_deref()),
+        &principal_key(owner.as_deref().ok_or(crate::database::local::auth::SIGN_IN_REQUIRED)?),
         "score",
         &request_id,
         "subject",

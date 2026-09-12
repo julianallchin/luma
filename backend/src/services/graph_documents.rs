@@ -256,7 +256,8 @@ impl GraphLayoutFileV1 {
 pub struct GraphScope {
     pub pattern_id: String,
     pub implementation_id: String,
-    /// Trusted current principal. `None` owns only local signed-out patterns.
+    /// Trusted current principal. A write needs one; see
+    /// `AppServices::require_session`.
     pub owner_user_id: Option<String>,
 }
 

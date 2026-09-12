@@ -10,7 +10,7 @@ pub async fn agent_thread_create(
     services: &AppServices,
     input: CreateAgentThreadInput,
 ) -> Result<AgentThread, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     Ok(db::create_thread(&services.db.0, input, owner_user_id.as_deref()).await?)
 }
 
@@ -51,7 +51,7 @@ pub async fn agent_thread_append_messages(
     thread_id: String,
     input: AppendAgentThreadMessagesInput,
 ) -> Result<Vec<AgentThreadMessage>, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     match db::append_messages_at_head(&services.db.0, &thread_id, input, owner_user_id.as_deref())
         .await?
     {
@@ -77,7 +77,7 @@ pub async fn agent_thread_delete(
     services: &AppServices,
     thread_id: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     let children = db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
     for child in children {
         services.workspaces.retire_thread(&child).await?;
@@ -115,7 +115,7 @@ pub async fn agent_thread_set_actor(
     thread_id: String,
     actor: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     Actor::parse(&actor).map_err(CommandError::Invalid)?;
     db::set_thread_actor(&services.db.0, &thread_id, &actor, owner_user_id.as_deref()).await?;
     Ok(())
@@ -126,7 +126,7 @@ pub async fn agent_thread_rename(
     thread_id: String,
     title: Option<String>,
 ) -> Result<AgentThread, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     Ok(db::rename_thread(
         &services.db.0,
         &thread_id,

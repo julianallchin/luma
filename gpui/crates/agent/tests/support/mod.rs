@@ -87,6 +87,10 @@ pub fn seeded_prompt(index: usize) -> String {
     format!("Seeded question about score {index}")
 }
 
+/// The grid [`Fixture::seed_beats`] lays down: 120 bpm, so two beats a second.
+/// A clip is written in seconds and stored in beats.
+const BEATS_PER_SECOND: f64 = 2.0;
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";
@@ -690,8 +694,13 @@ impl Fixture {
             }
         }
 
-        if let Some(document) = &self.graph_score {
-            let score_id = score_id.as_ref().expect("graph fixture has a score");
+        let document = match &self.graph_score {
+            Some(document) => Some(document.clone()),
+            None if self.clips.is_empty() => None,
+            None => Some(self.timeline()),
+        };
+        if let Some(document) = document {
+            let score_id = score_id.as_ref().expect("a score fixture has a score");
             call(
                 &services,
                 "apply_score_document",
@@ -699,6 +708,72 @@ impl Fixture {
             )
             .await;
         }
+    }
+
+    /// The score document [`Fixture::clips`] describes.
+    ///
+    /// A clip is a row that names a graph, and the graph is what the editor
+    /// labels it by — so each clip gets one score-local definition named after
+    /// it. The body is the smallest thing that both validates and emits light:
+    /// a wash into the definition's lighting output. It is the same body for
+    /// every clip because a timeline clip is a rectangle, and the rectangle is
+    /// drawn from `start` and `duration` whatever is inside it.
+    ///
+    /// Times are beats, not seconds. [`Fixture::seed_beats`] lays a steady 120
+    /// bpm grid, so a beat is half a second.
+    fn timeline(&self) -> Value {
+        let mut definitions = serde_json::Map::new();
+        let mut clips = serde_json::Map::new();
+        for clip in &self.clips {
+            definitions.insert(
+                clip.pattern.clone(),
+                json!({
+                    "name": clip.name,
+                    "inputs": {},
+                    "outputs": { "lighting": { "value_type": "lighting", "rate": "frame" } },
+                    "body": {
+                        "kind": "graph",
+                        "body": {
+                            "nodes": {
+                                "wash": { "definition": "wash" },
+                                "out": {
+                                    "definition": "output",
+                                    "inputs": {
+                                        "color": {
+                                            "source": "connection",
+                                            "node": "wash",
+                                            "output": "color"
+                                        }
+                                    }
+                                }
+                            },
+                            "outputs": {
+                                "lighting": {
+                                    "source": "connection",
+                                    "node": "out",
+                                    "output": "lighting"
+                                }
+                            }
+                        }
+                    }
+                }),
+            );
+            clips.insert(
+                clip.pattern.clone(),
+                json!({
+                    "graph": clip.pattern,
+                    "start": clip.start * BEATS_PER_SECOND,
+                    "duration": (clip.end - clip.start) * BEATS_PER_SECOND,
+                    "seed": 0,
+                    "z_index": clip.z_index,
+                }),
+            );
+        }
+        json!({
+            "version": luma_patterns::Score::VERSION,
+            "definitions": definitions,
+            "clips": clips,
+        })
     }
 
     /// One track-agent conversation about `score`, with a prompt and a reply

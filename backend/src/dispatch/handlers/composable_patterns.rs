@@ -34,7 +34,7 @@ pub async fn create_lighting_pattern(
     let name = luma_patterns::standard_library().definitions[&effect]
         .name
         .clone();
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     let result = crate::services::catalog::create_pattern_with_graph(
         &services.db.0,
         principal.as_deref(),
@@ -63,7 +63,7 @@ pub async fn copy_pattern_to_library(
         None,
     )
     .await?;
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     let result = crate::services::catalog::create_pattern_with_graph(
         &services.db.0,
         principal.as_deref(),

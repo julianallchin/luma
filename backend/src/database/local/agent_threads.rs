@@ -1,7 +1,8 @@
 //! Durable principal-bound agent threads and immutable transcript nodes. Every
 //! operation receives its trusted principal separately from caller-controlled payloads:
 //! `Some(uid)` can access only that owner's rows, while `None` can access only
-//! legacy/signed-out rows whose owner is SQL `NULL`.
+//! legacy rows whose owner is SQL `NULL` — everything written since sign-in
+//! became required carries one.
 
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::HashSet;
@@ -582,7 +583,8 @@ pub async fn append_messages_at_head(
         .await
         .map_err(|e| format!("Failed to begin agent thread append: {e}"))?;
     ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
-    let principal_key = principal_key(owner_user_id);
+    let principal_key =
+        principal_key(owner_user_id.ok_or(crate::database::local::auth::SIGN_IN_REQUIRED)?);
 
     // A retry is recognised by its messages, not by a receipt: the ids are
     // fixed before the first attempt, so the rows themselves say whether the
