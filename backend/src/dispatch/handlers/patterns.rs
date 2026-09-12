@@ -29,15 +29,8 @@ pub async fn create_pattern(
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, CommandError> {
-    let uid = Some(services.require_session().await?);
-    Ok(catalog::create_pattern(
-        &services.db.0,
-        uid.as_deref(),
-        &request_id,
-        name,
-        description,
-    )
-    .await?)
+    let uid = services.require_session().await?;
+    Ok(catalog::create_pattern(&services.db.0, &uid, &request_id, name, description).await?)
 }
 
 /// A full replace of both metadata fields, not a patch.
@@ -54,15 +47,15 @@ pub async fn fork_pattern(
     services: &AppServices,
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, CommandError> {
-    let uid = Some(services.require_session().await?);
-    Ok(catalog::fork_pattern(&services.db.0, uid.as_deref(), input).await?)
+    let uid = services.require_session().await?;
+    Ok(catalog::fork_pattern(&services.db.0, &uid, input).await?)
 }
 
 /// A delete is a delete. Ownership is enforced inside [`catalog::delete_pattern`],
 /// which is the layer that owns the invariant.
 pub async fn delete_pattern(services: &AppServices, id: String) -> Result<(), CommandError> {
-    let principal = Some(services.require_session().await?);
-    Ok(catalog::delete_pattern(&services.db.0, principal.as_deref(), &id).await?)
+    let principal = services.require_session().await?;
+    Ok(catalog::delete_pattern(&services.db.0, &principal, &id).await?)
 }
 
 /// Does not notify the sync engine: a category change rides along with the next
@@ -320,12 +313,17 @@ mod tests {
         .expect("the pattern has no graph document")
     }
 
+    /// The principal this fixture writes as. A pattern is a synced row and a
+    /// synced row has an owner; the commands ask `require_session` for it.
+    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+
     async fn seed(directory: &Path) -> AppServices {
         let db = database::init_app_db_at(directory).await.unwrap();
         let state_db = state::init_state_db_at(directory).await.unwrap();
         auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .unwrap();
+        auth::arm_write_admission(&db.0, Some(OWNER)).await.unwrap();
         let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
         let workspaces = Arc::new(
             crate::agent_execution::workspace::PythonWorkspaceService::new(
@@ -334,5 +332,6 @@ mod tests {
             ),
         );
         AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
+            .with_fixture_principal(Some(OWNER.to_owned()))
     }
 }

@@ -232,8 +232,8 @@ pub async fn update_cue(
                          default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?
          WHERE id = ? AND venue_id = ?",
     )
-    .bind(&input.name.unwrap_or(existing.name))
-    .bind(&input.pattern_id.unwrap_or(existing.pattern_id))
+    .bind(input.name.unwrap_or(existing.name))
+    .bind(input.pattern_id.unwrap_or(existing.pattern_id))
     .bind(&args_json)
     .bind(z_index)
     .bind(&blend_mode_str)
@@ -340,7 +340,7 @@ pub async fn update_modifier(
         "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?
          WHERE id = ? AND venue_id = ?",
     )
-    .bind(&input.name.unwrap_or(existing.name))
+    .bind(input.name.unwrap_or(existing.name))
     .bind(&input_json)
     .bind(&groups_json)
     .bind(&input.id)

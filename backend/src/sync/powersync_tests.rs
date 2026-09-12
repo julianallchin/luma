@@ -35,7 +35,10 @@ async fn database(name: &str) -> (tempfile::TempDir, SqlitePool) {
         )
         .await
         .expect("open");
-    sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("migrate");
     crate::database::local::auth::arm_write_admission(&pool, Some("user-1"))
         .await
         .expect("arm");
@@ -489,15 +492,13 @@ async fn a_whole_checkpoint_applies_however_it_is_ordered() {
         .expect("begin");
     // The one row the generated statements cannot write for themselves: an
     // edge may not be its own parent, so there has to be a second node.
-    sqlx::query(
-        "INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')",
-    )
-    .bind(PARENT)
-    .bind(ROW)
-    .bind(ROW)
-    .execute(&mut *connection)
-    .await
-    .expect("the second node");
+    sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')")
+        .bind(PARENT)
+        .bind(ROW)
+        .bind(ROW)
+        .execute(&mut *connection)
+        .await
+        .expect("the second node");
     for round in 0..3 {
         for synced in SYNCED_TABLES.iter().rev() {
             let nullable: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -551,6 +552,47 @@ fn both_trigger_sets_describe_the_same_columns() {
             assert!(
                 put.contains(&format!("'{column}'")),
                 "{} does not upload {column}",
+                synced.name
+            );
+        }
+    }
+}
+
+/// Every foreign key left on a synced table points at another synced table.
+///
+/// A checkpoint is applied in one transaction with foreign keys on. A
+/// reference to a local-only table is a parent the server can never ship, so
+/// the deferred check fails at the commit, fails again on every retry, and the
+/// device stops applying checkpoints for good.
+#[tokio::test]
+async fn a_synced_table_only_references_synced_tables() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(":memory:")
+                .foreign_keys(false),
+        )
+        .await
+        .expect("open");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("migrate");
+    for synced in SYNCED_TABLES {
+        let parents: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT \"table\" FROM pragma_foreign_key_list('{}')",
+            synced.name
+        )))
+        .fetch_all(&pool)
+        .await
+        .expect("foreign keys");
+        for parent in parents {
+            assert!(
+                table(&parent).is_some(),
+                "{} references the local-only {parent}",
                 synced.name
             );
         }

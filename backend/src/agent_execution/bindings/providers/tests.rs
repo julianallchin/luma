@@ -26,6 +26,7 @@ use crate::storage::StorageRoot;
 const TRACK_ID: &str = "trk-1";
 const TRACK_HASH: &str = "hash1";
 const SCORE_ID: &str = "sc-1";
+const OWNER: &str = "11111111-2222-3333-4444-555555555555";
 const PATTERN_ID: &str = "pat-1";
 
 /// Temp-file pool built the way `init_app_db` builds the real one.
@@ -102,9 +103,9 @@ impl Fixture {
         f.seed_track().await;
         f.seed_venue().await;
         f.seed_patterns_and_score().await;
-        crate::database::local::auth::arm_write_admission(&f.pool, None)
+        crate::database::local::auth::arm_write_admission(&f.pool, Some(OWNER))
             .await
-            .expect("arm guest test admission");
+            .expect("arm test admission");
         f
     }
 
@@ -156,10 +157,11 @@ impl Fixture {
         let audio_path = self.storage.tracks_dir().join(format!("{TRACK_HASH}.wav"));
         std::fs::create_dir_all(self.storage.tracks_dir()).unwrap();
         sqlx::query(
-            "INSERT INTO tracks (id, track_hash, title, artist, album, duration_seconds, file_path)
-             VALUES (?, ?, 'Hex', 'Surgeon', 'Force + Form', 200.0, ?)",
+            "INSERT INTO tracks (id, uid, track_hash, title, artist, album, duration_seconds, file_path)
+             VALUES (?, ?, ?, 'Hex', 'Surgeon', 'Force + Form', 200.0, ?)",
         )
         .bind(TRACK_ID)
+        .bind(OWNER)
         .bind(TRACK_HASH)
         .bind(audio_path.to_string_lossy().to_string())
         .execute(&self.pool)
@@ -312,19 +314,21 @@ impl Fixture {
     }
 
     async fn seed_venue(&self) {
-        sqlx::query("INSERT INTO venues (id, name) VALUES (?, 'Basement')")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, 'Basement')")
             .bind(&self.venue_id)
+            .bind(OWNER)
             .execute(&self.pool)
             .await
             .unwrap();
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
-                "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
+                "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                     manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z)
-                 VALUES (?, ?, 1, ?, 8, 'Chauvet', 'SlimPAR', '8-Channel',
+                 VALUES (?, ?, ?, 1, ?, 8, 'Chauvet', 'SlimPAR', '8-Channel',
                     'Chauvet/SlimPAR.qxf', ?, ?, 0.0, 2.0)",
             )
             .bind(id)
+            .bind(OWNER)
             .bind(&self.venue_id)
             .bind(1 + i as i64 * 8)
             .bind(format!("PAR {}", i + 1))
@@ -377,10 +381,11 @@ impl Fixture {
 
     async fn seed_patterns_and_score(&self) {
         sqlx::query(
-            "INSERT INTO patterns (id, name, description, category_name, is_verified)
-             VALUES (?, 'Strobe', 'a strobe', 'Effects', 1)",
+            "INSERT INTO patterns (id, uid, name, description, category_name, is_verified)
+             VALUES (?, ?, 'Strobe', 'a strobe', 'Effects', 1)",
         )
         .bind(PATTERN_ID)
+        .bind(OWNER)
         .execute(&self.pool)
         .await
         .unwrap();
@@ -397,29 +402,34 @@ impl Fixture {
                       "defaultValue": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}}]
         });
         sqlx::query(
-            "INSERT INTO implementations (id, pattern_id, graph_json) VALUES ('imp-1', ?, ?)",
+            "INSERT INTO implementations (id, uid, pattern_id, graph_json) VALUES ('imp-1', ?, ?, ?)",
         )
+        .bind(OWNER)
         .bind(PATTERN_ID)
         .bind(graph.to_string())
         .execute(&self.pool)
         .await
         .unwrap();
 
-        sqlx::query("INSERT INTO scores (id, track_id, venue_id, name) VALUES (?, ?, ?, 'Main')")
-            .bind(SCORE_ID)
-            .bind(TRACK_ID)
-            .bind(&self.venue_id)
-            .execute(&self.pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, 'Main')",
+        )
+        .bind(SCORE_ID)
+        .bind(OWNER)
+        .bind(TRACK_ID)
+        .bind(&self.venue_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO clips
                 (id, uid, score_id, graph, start, duration, seed, selection_json,
                  z_index, blend_mode, inputs_json)
-             VALUES (? || ':ann-1', '', ?, 'strobe', 12.5, 7.5, '0',
+             VALUES (? || ':ann-1', ?, ?, 'strobe', 12.5, 7.5, '0',
                      '{\"expression\":\"all\"}', 3, 'add', '{}')",
         )
         .bind(SCORE_ID)
+        .bind(OWNER)
         .bind(SCORE_ID)
         .execute(&self.pool)
         .await

@@ -1,6 +1,7 @@
 use std::fmt;
 
-/// Unified error type for the sync engine.
+/// What media transfer can fail with. Record replication has its own error
+/// type in the SDK; this is only the bytes.
 #[derive(Debug)]
 pub enum SyncError {
     /// HTTP request to Supabase failed
@@ -11,28 +12,11 @@ pub enum SyncError {
     Parse(String),
     /// Local SQLite operation failed
     Local(String),
-    /// Required field was missing (e.g., uid on a record)
-    MissingField(String),
-    /// Record not found locally or remotely
-    NotFound { table: String, id: String },
     /// Authentication required or token expired
     AuthRequired,
     /// The stored session was revoked by Supabase; only a sign-in can
     /// replace it, so nothing here retries.
     SessionRevoked,
-    /// The row cannot be delivered as it stands, and no retry can change that:
-    /// an identity the remote column type cannot hold, or an immutable row that
-    /// collided with different bytes. Distinct from `Parse` so the push
-    /// boundary can tell "never" from "not yet" without reading the message.
-    Unpushable(String),
-    /// A remote tombstone was declined because the local row still owns
-    /// authored state, durable history, local artifacts, or dependent rows.
-    /// This is a decision, not a failure: retrying can only repeat it.
-    RemoteDeleteRefused {
-        table: String,
-        id: String,
-        reason: String,
-    },
 }
 
 impl fmt::Display for SyncError {
@@ -42,15 +26,8 @@ impl fmt::Display for SyncError {
             SyncError::Api { status, message } => write!(f, "API error {status}: {message}"),
             SyncError::Parse(msg) => write!(f, "parse error: {msg}"),
             SyncError::Local(msg) => write!(f, "local DB error: {msg}"),
-            SyncError::MissingField(field) => write!(f, "missing field: {field}"),
-            SyncError::NotFound { table, id } => write!(f, "{table} {id} not found"),
             SyncError::AuthRequired => write!(f, "authentication required"),
             SyncError::SessionRevoked => write!(f, "session revoked; sign in again"),
-            SyncError::Unpushable(reason) => write!(f, "not deliverable: {reason}"),
-            SyncError::RemoteDeleteRefused { table, id, reason } => write!(
-                f,
-                "remote tombstone for {table}.{id} requires an authored-state deletion: {reason}"
-            ),
         }
     }
 }

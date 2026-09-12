@@ -4,8 +4,11 @@ use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venues::Venue;
 use luma_render::scene_desc::VenueEnvironment;
 
+/// `role` is not read off the row: it is derived per reader — see
+/// [`get_venue`] — so a venue the admitted principal does not own reads as a
+/// member's however the column was written.
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
+    "id, uid, name, description, share_code, 'owner' AS role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
@@ -50,8 +53,7 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
            AND admission.accepting = 1
            AND admission.maintenance = 0
            AND (
-                (admission.active_uid IS NULL
-                 AND venue.uid IS NULL AND venue.role != 'member')
+                (admission.active_uid IS NULL AND venue.uid IS NULL)
                 OR
                 (admission.active_uid IS NOT NULL AND (
                     venue.uid = admission.active_uid

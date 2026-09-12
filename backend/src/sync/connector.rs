@@ -1,11 +1,9 @@
 //! Uploads: the PowerSync CRUD queue drained into Supabase PostgREST.
 //!
-//! There is no write server. A local write becomes a row in `ps_crud` (see
-//! `triggers.rs`) and this connector replays it against PostgREST as the
-//! signed-in user, so Postgres row-level security is the only authorization.
-//!
-//! Downloads do not come through here at all — the SDK streams them and applies
-//! the raw-table statements in `schema.rs`.
+//! A local write becomes a row in `ps_crud` (see `triggers.rs`) and this
+//! connector replays it against PostgREST as the signed-in user, so Postgres
+//! row-level security is the only authorization. Downloads do not come through
+//! here: the SDK streams them and applies the statements in `schema.rs`.
 
 use std::time::Duration;
 
@@ -277,7 +275,10 @@ pub async fn join_venue(state_pool: &SqlitePool, code: &str) -> Result<String, S
         .ok_or("joining a venue needs a signed-in session")?;
     let postgrest = crate::config::postgrest_url();
     let response = reqwest::Client::new()
-        .post(format!("{}/rpc/join_venue", postgrest.trim_end_matches('/')))
+        .post(format!(
+            "{}/rpc/join_venue",
+            postgrest.trim_end_matches('/')
+        ))
         .header("apikey", crate::config::supabase_anon_key())
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")

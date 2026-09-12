@@ -91,6 +91,49 @@ pub fn seeded_prompt(index: usize) -> String {
 /// A clip is written in seconds and stored in beats.
 const BEATS_PER_SECOND: f64 = 2.0;
 
+/// One score-local definition called `name`, whose body is the smallest thing
+/// that both validates and emits light: a wash into the lighting output.
+///
+/// A clip names a definition, and the definition's name is what the editor
+/// labels the clip by — so a score document written by hand needs one of these
+/// for every graph its clips name.
+#[must_use]
+pub fn definition(name: &str) -> Value {
+    json!({
+        "name": name,
+        "inputs": {},
+        "outputs": { "lighting": { "value_type": "lighting", "rate": "frame" } },
+        "body": {
+            "kind": "graph",
+            "body": {
+                "nodes": {
+                    "wash": { "definition": "wash" },
+                    "out": {
+                        "definition": "output",
+                        "inputs": {
+                            "color": { "source": "connection", "node": "wash", "output": "color" }
+                        }
+                    }
+                },
+                "outputs": {
+                    "lighting": { "source": "connection", "node": "out", "output": "lighting" }
+                }
+            }
+        }
+    })
+}
+
+/// A whole score document in the current format, from definitions and clips
+/// spelled by the caller.
+#[must_use]
+pub fn score(definitions: Value, clips: Value) -> Value {
+    json!({
+        "version": luma_patterns::Score::VERSION,
+        "definitions": definitions,
+        "clips": clips,
+    })
+}
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";
@@ -625,6 +668,28 @@ impl Fixture {
         luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .expect("failed to arm admission");
+        // A patched venue is not yet a room: the graph its fixtures hang off
+        // is built the first time a venue is opened, and both a clip preview
+        // and playback evaluate against it. Here rather than in `seed_rig`
+        // because the conversion takes a venue write, which needs admission
+        // armed — and for every fixture, rigged or not, because an empty
+        // venue still has a root.
+        //
+        // `migrate` rather than `ensure_migrated`: the latter also snapshots
+        // the derived groups, which is the venue page's job. A fixture that
+        // did it here would hand every picker groups no test asked for.
+        {
+            use luma_lib::database::local::venue_access::{VenueAccess, VenueResource, Write};
+            let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(VENUE))
+                .await
+                .expect("failed to open the fixture venue");
+            luma_lib::venue_graph::migrate(&mut access, &config_dir.join("fixtures"))
+                .await
+                .expect("failed to build the venue graph");
+            luma_lib::venue_graph::commit_graph(access)
+                .await
+                .expect("failed to commit the venue graph");
+        }
         let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
         let workspaces = Arc::new(
             luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
@@ -710,14 +775,8 @@ impl Fixture {
         }
     }
 
-    /// The score document [`Fixture::clips`] describes.
-    ///
-    /// A clip is a row that names a graph, and the graph is what the editor
-    /// labels it by — so each clip gets one score-local definition named after
-    /// it. The body is the smallest thing that both validates and emits light:
-    /// a wash into the definition's lighting output. It is the same body for
-    /// every clip because a timeline clip is a rectangle, and the rectangle is
-    /// drawn from `start` and `duration` whatever is inside it.
+    /// The score document [`Fixture::clips`] describes. One definition per
+    /// clip, named after it.
     ///
     /// Times are beats, not seconds. [`Fixture::seed_beats`] lays a steady 120
     /// bpm grid, so a beat is half a second.
@@ -725,39 +784,7 @@ impl Fixture {
         let mut definitions = serde_json::Map::new();
         let mut clips = serde_json::Map::new();
         for clip in &self.clips {
-            definitions.insert(
-                clip.pattern.clone(),
-                json!({
-                    "name": clip.name,
-                    "inputs": {},
-                    "outputs": { "lighting": { "value_type": "lighting", "rate": "frame" } },
-                    "body": {
-                        "kind": "graph",
-                        "body": {
-                            "nodes": {
-                                "wash": { "definition": "wash" },
-                                "out": {
-                                    "definition": "output",
-                                    "inputs": {
-                                        "color": {
-                                            "source": "connection",
-                                            "node": "wash",
-                                            "output": "color"
-                                        }
-                                    }
-                                }
-                            },
-                            "outputs": {
-                                "lighting": {
-                                    "source": "connection",
-                                    "node": "out",
-                                    "output": "lighting"
-                                }
-                            }
-                        }
-                    }
-                }),
-            );
+            definitions.insert(clip.pattern.clone(), definition(&clip.name));
             clips.insert(
                 clip.pattern.clone(),
                 json!({
@@ -769,11 +796,7 @@ impl Fixture {
                 }),
             );
         }
-        json!({
-            "version": luma_patterns::Score::VERSION,
-            "definitions": definitions,
-            "clips": clips,
-        })
+        score(Value::Object(definitions), Value::Object(clips))
     }
 
     /// One track-agent conversation about `score`, with a prompt and a reply
@@ -1034,6 +1057,37 @@ impl Fixture {
         .await
         .expect("failed to seed the beat grid");
     }
+}
+
+/// The score the fixture seeded, read back from its rows.
+///
+/// A score is `scores`, `clips` and `score_definitions`; there is no document
+/// column to read any more. Tests assert on a `luma_patterns::Score`, which is
+/// what those rows load into — so this is the one place that knows the
+/// difference, rather than eighteen copies of a `SELECT`.
+pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
+        .await
+        .expect("open the fixture library");
+    let id: String = sqlx::query_scalar(
+        "SELECT score_id FROM clips UNION SELECT score_id FROM score_definitions LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the fixture seeded a score with something in it");
+    let mut connection = pool.acquire().await.expect("a connection");
+    let score = luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
+        .await
+        .expect("load the seeded score");
+    drop(connection);
+    pool.close().await;
+    score
+}
+
+/// [`stored_score`] as JSON, for an assertion that reaches into the document
+/// by key rather than by field.
+pub async fn stored_score_json(dir: &Path) -> Value {
+    serde_json::to_value(stored_score(dir).await).expect("a score serializes")
 }
 
 /// How many eight-channel movers fit in one DMX universe.
