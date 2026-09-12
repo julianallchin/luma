@@ -208,22 +208,16 @@ pub(crate) enum SessionReplacementKind {
     IdentityTransition,
 }
 
-/// The namespace of a row written before sign-in was required.
-///
-/// Not something a new row is ever given: `AppServices::require_session`
-/// refuses a command that would write one. It stays because the rows it names
-/// are still in the library — a `uid` of SQL `NULL`, from before every synced
-/// table had an owner — and reading them has to be possible.
-pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
-
 /// The durable namespace a row belongs to. Distinct from the bare id so keys
 /// are stable in logs, hashes and cross-table associations.
+///
+/// Rows written before sign-in was required carry `signed-out` here and a
+/// `uid` of SQL `NULL`. Nothing writes that any more — a command that would
+/// is refused by `AppServices::require_session` — but the rows are still in
+/// the library, so the column's CHECK still admits it.
 #[must_use]
-pub fn principal_key(principal: Option<&str>) -> String {
-    principal.map_or_else(
-        || SIGNED_OUT_PRINCIPAL_KEY.to_owned(),
-        |id| format!("signed-in:{id}"),
-    )
+pub fn principal_key(principal: &str) -> String {
+    format!("signed-in:{principal}")
 }
 
 /// What a command says when it would write a synced row and nobody is signed

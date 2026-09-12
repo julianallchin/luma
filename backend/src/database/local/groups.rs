@@ -59,7 +59,7 @@ pub async fn create_group(
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, String> {
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     // Normalize and validate the name if provided
     let normalized_name = name.map(|n| {
         let norm = normalize_group_name(n);
@@ -252,7 +252,7 @@ pub async fn add_member_to_group(
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().map(str::to_owned))
+    .bind(access.principal().to_owned())
     .bind(access.venue_id().to_owned())
     .bind(fixture_id)
     .bind(group_id)
@@ -341,7 +341,7 @@ pub async fn split_whole_fixture_membership(
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
-        .bind(access.principal().map(str::to_owned))
+        .bind(access.principal().to_owned())
         .bind(access.venue_id().to_owned())
         .bind(fixture_id)
         .bind(group_id)
