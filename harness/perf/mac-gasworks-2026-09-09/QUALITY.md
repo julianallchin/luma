@@ -7,6 +7,21 @@ does not approve a later build by itself.
 
 ## Current evidence (2026-09-12)
 
+**Blackout surface regression corrected:** the user identified a large truss
+shading jump that earlier same-frame P1/P8 comparisons missed because both paths
+shared the bug. The surface shader now marches only to the opaque surface when
+the active fixture grid has an empty/missed span or starts behind that surface.
+The valid grid path is unchanged. At the frozen 2227x1391 Gasworks truss camera,
+the corrected blackout is byte-exact to the independent per-fragment March
+control, and the lit frame is byte-exact to the old grid frame. The old blackout
+had truss-region RMSE 6.4001 and peak error 30 against March; corrected error is
+zero. These corrected blackout captures supersede the erroneous surface shading
+in prior blackout references; they do not loosen cloud or shadow tolerances.
+The focused regression fails the old shader and passes the fix; all six outdoor
+haze tests pass. Evidence: `run-20260911-full-score/zero-light-truss-surface-repro-v1/`
+and `run-20260911-full-score/blackout-surface-regression/`. The native app was rebuilt.
+These are correctness captures, not a new performance measurement.
+
 The latest full-score timing witnesses are the immutable P8/P4/P8 bracket in
 `run-20260911-full-score/scalar-k-period8-v1-report.md`. Each covers 6,380 samples
 through bar 41 with the same executable and 192 MiB arena. P8 GPU p95 is

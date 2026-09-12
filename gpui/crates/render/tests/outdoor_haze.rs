@@ -75,6 +75,124 @@ fn capture(name: &str, pixels: &[u8]) {
     }
 }
 
+fn add_near_opaque_surface(frame: &mut Frame) {
+    let mesh = frame.meshes.len();
+    frame.meshes.push(MeshData {
+        key: "::outdoor-haze-near-surface".into(),
+        vertices: [
+            [-35.0, 0.0, -25.0],
+            [35.0, 0.0, -25.0],
+            [35.0, 0.0, 25.0],
+            [-35.0, 0.0, 25.0],
+        ]
+        .map(|position| Vertex {
+            position,
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0; 2],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        })
+        .into(),
+        indices: [0, 1, 2, 0, 2, 3].into(),
+    });
+    frame.draws.push(Draw {
+        mesh,
+        // `build_frame_with` converts the catalogue camera to world
+        // (0,-120,30) looking toward +Y. This card is ten metres ahead and
+        // faces the camera.
+        model: Mat4::from_translation(Vec3::new(0.0, -110.0, 30.0)),
+        material: Material {
+            base_color: Vec3::splat(0.18),
+            metallic: 0.0,
+            roughness: 0.8,
+            ..Default::default()
+        },
+        textures: MaterialTextures::default(),
+        editor_object: None,
+    });
+}
+
+fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32) -> FixtureCone {
+    FixtureCone {
+        // A real scheduling volume near the visible surface. Its radiance and
+        // haze gain make it physically irrelevant, so only an accidental use
+        // of fixture work bounds can distinguish it from no fixture at all.
+        position,
+        range,
+        direction: Vec3::new(0.2, -0.3, -1.0).normalize(),
+        cos_beam: 0.8,
+        color,
+        intensity,
+        cos_field: 0.55,
+        wash: 0.25,
+        gobo: 0,
+        gobo_rotation: 0.0,
+        haze_gain: 0.0,
+    }
+}
+
+#[test]
+fn outdoor_surface_and_atmosphere_ignore_noncontributing_fixture_bounds() {
+    let mut renderer = Renderer::new().unwrap();
+    let mut empty = venue(30.0);
+    empty.geometry_shadows = true;
+    empty.fixture_shadows = true;
+    add_near_opaque_surface(&mut empty);
+    let expected = renderer.render(&empty, WIDTH, HEIGHT, 1).unwrap();
+    capture("fixture-bounds-empty", &expected);
+
+    for (label, position, range, color, intensity, tolerance) in [
+        // The card is at world y=-110 and the camera at y=-120. This volume
+        // starts at y=-24, wholly behind the card, so its nonzero scheduling
+        // span must not make the surface receive atmosphere behind it.
+        (
+            "remote-zero-intensity",
+            Vec3::new(0.0, 0.0, 30.0),
+            24.0,
+            Vec3::new(1.0, 0.2, 0.7),
+            0.0,
+            0,
+        ),
+        // This second volume covers the surface and exercises the ordinary
+        // nonempty grid domain against the empty-domain result.
+        (
+            "covering-zero-intensity",
+            Vec3::new(-24.0, -80.0, 30.0),
+            80.0,
+            Vec3::new(1.0, 0.2, 0.7),
+            0.0,
+            2,
+        ),
+        (
+            "covering-epsilon-radiance",
+            Vec3::new(-24.0, -80.0, 30.0),
+            80.0,
+            Vec3::splat(1.0e-8),
+            1.0e-8,
+            2,
+        ),
+    ] {
+        let mut frame = venue(30.0);
+        frame.geometry_shadows = true;
+        frame.fixture_shadows = true;
+        add_near_opaque_surface(&mut frame);
+        frame
+            .fixture_cones
+            .push(noncontributing_cone(position, range, color, intensity));
+        let actual = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+        capture(&format!("fixture-bounds-{label}"), &actual);
+        let max_delta = expected
+            .iter()
+            .zip(&actual)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_delta <= tolerance,
+            "{label}: a noncontributing fixture changed outdoor surface/atmosphere shading (max channel delta {max_delta})"
+        );
+    }
+}
+
 #[test]
 fn daylight_and_twilight_illuminate_haze_without_stage_lights() {
     let mut renderer = Renderer::new().unwrap();
