@@ -287,6 +287,14 @@ pub async fn pull_all(
                 .errors
                 .push(format!("authored archive reconciliation: {error}"));
         }
+        // The head branches below advance the cursor past a refusal, so a
+        // document whose *first* head was refused is left with no head and no
+        // row left to redeliver one. Retry from the local integration trace.
+        if let Err(error) = authored.reconcile_headless_documents(pool, uid).await {
+            stats
+                .errors
+                .push(format!("authored head reconciliation: {error}"));
+        }
     }
 
     // A server deletion is terminal as soon as its thread projection reaches

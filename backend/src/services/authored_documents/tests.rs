@@ -3229,6 +3229,168 @@ async fn score_local_pattern_creation_scope_and_archive_are_durable() {
     );
 }
 
+/// A pulled document whose first head was refused keeps its revisions but has
+/// no head, and the pull cursor is already past the row that would install
+/// one. The recovery scan is the only route back, and it works from the
+/// integration trace that came down with the revisions.
+#[tokio::test]
+async fn a_document_left_without_a_head_is_repaired_from_its_integration_trace() {
+    let owner = "score-owner";
+    let fixture = Fixture::signed_in(owner).await;
+    let track_scope = fixture.track_scope().await;
+    let scope = ResolvedScope::track(Some(owner), track_scope).unwrap();
+    let principal = format!("signed-in:{owner}");
+
+    let mut transaction = fixture.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    fixture
+        .authored
+        .store
+        .insert_document(&mut transaction, &scope.specification().unwrap())
+        .await
+        .unwrap();
+    // A score this build cannot read. The live case was a document format
+    // several versions ahead, authored on a device running a newer build.
+    let refused = fixture
+        .authored
+        .store
+        .insert_revision(
+            &mut transaction,
+            &scope.document_id,
+            &[],
+            &FileMap::from([(
+                SCORE_PATH.to_owned(),
+                br#"{"version":99,"definitions":{},"clips":{}}"#.to_vec(),
+            )]),
+            &revision_metadata("score_edit", Some("refused-head"), "Refused").unwrap(),
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    record_integration(
+        &fixture.pool,
+        &principal,
+        &scope,
+        &refused.id.to_string(),
+        1,
+    )
+    .await;
+
+    assert_eq!(
+        fixture
+            .authored
+            .reconcile_headless_documents(&fixture.pool, owner)
+            .await
+            .unwrap(),
+        0,
+        "a document this build still cannot read is reported, not an error"
+    );
+    assert!(head_of(&fixture.pool, &scope).await.is_none());
+
+    // The next server head for the same document arrives while the local one
+    // is still missing. Nothing re-delivers it through the head tables, so the
+    // scan has to pick it up.
+    let readable =
+        crate::services::graph_scores::GraphScoreDocument::new(luma_patterns::Score::default())
+            .unwrap();
+    let mut transaction = fixture.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let accepted = fixture
+        .authored
+        .store
+        .insert_revision(
+            &mut transaction,
+            &scope.document_id,
+            std::slice::from_ref(&refused.id),
+            &FileMap::from([(
+                SCORE_PATH.to_owned(),
+                readable.source().unwrap().into_bytes(),
+            )]),
+            &revision_metadata("score_edit", Some("accepted-head"), "Accepted").unwrap(),
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    record_integration(
+        &fixture.pool,
+        &principal,
+        &scope,
+        &accepted.id.to_string(),
+        2,
+    )
+    .await;
+
+    assert_eq!(
+        fixture
+            .authored
+            .reconcile_headless_documents(&fixture.pool, owner)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        head_of(&fixture.pool, &scope).await.as_deref(),
+        Some(accepted.id.to_string().as_str())
+    );
+    assert!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT graph_document_json FROM scores WHERE id = 'score'"
+        )
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap()
+        .is_some(),
+        "the head carries the live projection with it"
+    );
+}
+
+async fn head_of(pool: &SqlitePool, scope: &ResolvedScope) -> Option<String> {
+    sqlx::query_scalar("SELECT revision_id FROM authored_document_heads WHERE document_id = ?")
+        .bind(scope.document_id.as_str())
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+/// The pulled proposal and its terminal integration, the pair that names a
+/// server head after the head tables have been read past.
+async fn record_integration(
+    pool: &SqlitePool,
+    principal: &str,
+    scope: &ResolvedScope,
+    revision_id: &str,
+    seq: i64,
+) {
+    let proposal_id = format!("ap-{seq:064}");
+    sqlx::query(
+        "INSERT INTO authored_head_proposals
+         (proposal_id, principal_key, document_id, device_id, operation_id,
+          base_revision_id, proposed_revision_id, created_at, server_proposal_seq)
+         VALUES (?, ?, ?, 'other-device', ?, NULL, ?, '2026-09-11T18:49:22.575Z', ?)",
+    )
+    .bind(&proposal_id)
+    .bind(principal)
+    .bind(scope.document_id.as_str())
+    .bind(format!("operation-{seq}"))
+    .bind(revision_id)
+    .bind(seq)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO authored_head_integrations
+         (proposal_id, principal_key, document_id, prior_revision_id,
+          result_revision_id, resolution_kind, server_integration_seq, integrated_at)
+         VALUES (?, ?, ?, NULL, ?, 'fast_forward', ?, '2026-09-11T18:49:23Z')",
+    )
+    .bind(&proposal_id)
+    .bind(principal)
+    .bind(scope.document_id.as_str())
+    .bind(revision_id)
+    .bind(seq)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[path = "tests/graph_scores.rs"]
 mod graph_scores;
 
