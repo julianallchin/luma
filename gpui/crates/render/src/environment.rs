@@ -53,8 +53,10 @@ pub(crate) struct EnvironmentPipelines {
     scene_layout: wgpu::BindGroupLayout,
     equirect_layout: wgpu::BindGroupLayout,
     filter_layout: wgpu::BindGroupLayout,
+    ambient_layout: wgpu::BindGroupLayout,
     equirect_pipeline: wgpu::ComputePipeline,
     filter_pipeline: wgpu::ComputePipeline,
+    ambient_pipeline: wgpu::ComputePipeline,
     sampler: wgpu::Sampler,
     fallback_cube: wgpu::TextureView,
     /// The split-sum lookup table. It is a function of the BRDF and nothing
@@ -75,6 +77,9 @@ pub(crate) struct EnvironmentCache {
     /// a uniform buffer and a five-entry bind group every frame was per-frame
     /// garbage for a value that had not moved.
     cached: Option<(SceneParams, wgpu::Buffer, wgpu::BindGroup)>,
+    /// This renderer's frame-constant ambient value. One buffer per renderer,
+    /// because two renderers on one device can hold different probes.
+    ambient: Option<wgpu::Buffer>,
 }
 
 impl EnvironmentPipelines {
@@ -87,6 +92,10 @@ impl EnvironmentPipelines {
                 sampled_2d(2),
                 sampler_entry(3),
                 uniform_entry(4),
+                // The probe's frame-constant mean lobe radiance, written by
+                // `ambient_pipeline` once per frame instead of by six cube
+                // samples in every surface and composite fragment.
+                uniform_entry(5),
             ],
         });
         let equirect_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -107,6 +116,16 @@ impl EnvironmentPipelines {
                 uniform_entry(3),
             ],
         });
+        let ambient_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("environment-ambient"),
+            entries: &[sampled_cube(0), sampler_entry(1), storage_rw(2)],
+        });
+        let ambient_pipeline = compute_pipeline(
+            device,
+            "environment-ambient",
+            &ambient_layout,
+            include_str!("shaders/environment_ambient.wgsl"),
+        );
         let equirect_pipeline = compute_pipeline(
             device,
             "environment-equirect",
@@ -135,8 +154,10 @@ impl EnvironmentPipelines {
             scene_layout,
             equirect_layout,
             filter_layout,
+            ambient_layout,
             equirect_pipeline,
             filter_pipeline,
+            ambient_pipeline,
             sampler,
             fallback_cube,
             brdf,
@@ -219,6 +240,7 @@ impl EnvironmentPipelines {
         &self,
         device: &wgpu::Device,
         probe: &(wgpu::TextureView, wgpu::TextureView),
+        ambient: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         let uniform = buffer(
             device,
@@ -240,8 +262,38 @@ impl EnvironmentPipelines {
                 binding(2, wgpu::BindingResource::TextureView(&self.brdf)),
                 binding(3, wgpu::BindingResource::Sampler(&self.sampler)),
                 binding(4, uniform.as_entire_binding()),
+                binding(5, ambient.as_entire_binding()),
             ],
         })
+    }
+
+    /// Reduce the diffuse probe to its mean lobe radiance, once per frame.
+    ///
+    /// Encoded before every pass that reads it; the fragment shaders load one
+    /// uniform where they used to take six cube samples each.
+    pub(crate) fn dispatch_ambient(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        irradiance: &wgpu::TextureView,
+        ambient: &wgpu::Buffer,
+    ) {
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("environment-ambient"),
+            layout: &self.ambient_layout,
+            entries: &[
+                binding(0, wgpu::BindingResource::TextureView(irradiance)),
+                binding(1, wgpu::BindingResource::Sampler(&self.sampler)),
+                binding(2, ambient.as_entire_binding()),
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("environment-ambient"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.ambient_pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
     }
 }
 
@@ -299,11 +351,36 @@ impl EnvironmentCache {
         true
     }
 
+    /// The probe view the scene bindings name, so the ambient reduction reads
+    /// exactly the texture the fragment samples would have read.
+    pub(crate) fn irradiance<'a>(
+        &'a self,
+        pipelines: &'a EnvironmentPipelines,
+    ) -> &'a wgpu::TextureView {
+        self.resident
+            .as_ref()
+            .map_or(&pipelines.fallback_cube, |resident| &resident.irradiance)
+    }
+
+    pub(crate) fn ambient(&mut self, device: &wgpu::Device) -> wgpu::Buffer {
+        self.ambient
+            .get_or_insert_with(|| {
+                buffer(
+                    device,
+                    &[[0.0_f32; 4]],
+                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::STORAGE,
+                    "environment-ambient",
+                )
+            })
+            .clone()
+    }
+
     pub(crate) fn bind_group(
         &mut self,
         pipelines: &EnvironmentPipelines,
         device: &wgpu::Device,
         environment: Option<&EnvironmentImage>,
+        ambient: &wgpu::Buffer,
     ) -> (wgpu::Buffer, wgpu::BindGroup) {
         let enabled = environment.is_some() && self.resident.is_some();
         let params = environment.map_or(
@@ -346,6 +423,7 @@ impl EnvironmentCache {
                 binding(2, wgpu::BindingResource::TextureView(&pipelines.brdf)),
                 binding(3, wgpu::BindingResource::Sampler(&pipelines.sampler)),
                 binding(4, uniform.as_entire_binding()),
+                binding(5, ambient.as_entire_binding()),
             ],
         });
         self.cached = Some((params, uniform.clone(), bind_group.clone()));
@@ -688,6 +766,18 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+fn storage_rw(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
             has_dynamic_offset: false,
             min_binding_size: None,
         },

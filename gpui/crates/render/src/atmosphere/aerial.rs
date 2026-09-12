@@ -152,6 +152,7 @@ impl Cache {
         encoder: &mut wgpu::CommandEncoder,
         sky: Option<&SkyFrame>,
         height_m: f32,
+        profile: &mut crate::pass_profile::PassQueries<'_>,
     ) -> Textures {
         let Some(sky) = sky else {
             return pipelines.aerial.off.clone();
@@ -204,7 +205,7 @@ impl Cache {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("atmosphere-aerial"),
-                timestamp_writes: None,
+                timestamp_writes: profile.compute("atmosphere-aerial", None),
             });
             pass.set_pipeline(&pipelines.aerial.pipeline);
             pass.set_bind_group(0, &group, &[]);

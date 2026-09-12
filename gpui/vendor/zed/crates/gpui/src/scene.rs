@@ -964,6 +964,9 @@ pub struct PaintSurface {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub source: SurfaceHandle,
+    /// LUMA LOCAL EDIT: painted with `Window::paint_upscaled_surface`; the
+    /// compositor may upscale it with something better than bilinear.
+    pub upscale: bool,
 }
 
 impl From<PaintSurface> for Primitive {

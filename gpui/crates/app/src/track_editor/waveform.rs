@@ -5,6 +5,13 @@ use luma_render::{
     waveform::{View as GpuView, Waveform},
 };
 
+/// Diagnostic isolation: retain the first strip while playback and layout keep
+/// running. This changes the displayed waveform and is never a quality mode.
+pub(super) fn updates_frozen() -> bool {
+    static FROZEN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FROZEN.get_or_init(|| std::env::var("LUMA_WAVEFORM_FREEZE").as_deref() == Ok("1"))
+}
+
 #[derive(Default)]
 pub(super) struct Resource {
     gpu: Option<Arc<Waveform>>,
@@ -61,6 +68,9 @@ pub(super) fn prepaint(
     };
     let strip = editor.waveform_strip(overview);
     strip.bounds.set(bounds);
+    if updates_frozen() && strip.frame.is_some() {
+        return;
+    }
     let target = Target::TrackEditor {
         track: editor.track_id.clone(),
         venue: editor.venue_id.clone(),
@@ -223,10 +233,11 @@ pub(super) fn prepaint(
             let queued = std::time::Instant::now();
             let work = cx.background_spawn(async move {
                 let started = std::time::Instant::now();
-                let result = (|| -> Result<Image, String> {
+                let result = (|| -> Result<(Image, luma_render::waveform::CpuTimings), String> {
                     let frame = gpu.render(desired).map_err(|e| e.to_string())?;
+                    let timings = frame.cpu_timings();
                     match frame.surface() {
-                        Some(surface) => Ok(Image::Surface(surface)),
+                        Some(surface) => Ok((Image::Surface(surface), timings)),
                         None => {
                             let mut pixels = frame.pixels().map_err(|e| e.to_string())?;
                             for pixel in pixels.chunks_exact_mut(4) {
@@ -235,9 +246,12 @@ pub(super) fn prepaint(
                             let buffer =
                                 image::RgbaImage::from_raw(desired.width, desired.height, pixels)
                                     .ok_or("Invalid waveform image")?;
-                            Ok(Image::Pixels(Arc::new(gpui::RenderImage::new([
-                                image::Frame::new(buffer),
-                            ]))))
+                            Ok((
+                                Image::Pixels(Arc::new(gpui::RenderImage::new([
+                                    image::Frame::new(buffer),
+                                ]))),
+                                timings,
+                            ))
                         }
                     }
                 })();
@@ -245,7 +259,13 @@ pub(super) fn prepaint(
             });
             cx.spawn(async move |this, cx| {
                 let (result, started, finished) = work.await;
-                trace::waveform(overview, queued, started, finished);
+                trace::waveform(
+                    overview,
+                    queued,
+                    started,
+                    finished,
+                    result.as_ref().ok().map(|(_, timings)| *timings),
+                );
                 this.update(cx, |this, cx| {
                     this.edit_waveform_tab(&target, cx, |editor| {
                         if !Rc::ptr_eq(&identity, &editor.gpu_waveform) {
@@ -254,7 +274,7 @@ pub(super) fn prepaint(
                         let strip = editor.waveform_strip_mut(overview);
                         strip.pending = false;
                         match result {
-                            Ok(image) => {
+                            Ok((image, _)) => {
                                 strip.frame = Some(Rc::new(Painted {
                                     camera,
                                     view: desired,

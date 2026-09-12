@@ -5,6 +5,7 @@
 @group(2) @binding(1) var fog_columns: texture_2d<f32>;
 @group(2) @binding(2) var<storage, read> candidates: array<u32>;
 override BLOCK_VISIBILITY: bool = true;
+override PROFILE_SKIP_GRID_SHADOW_TESTS: bool = false;
 
 @compute @workgroup_size(FOG_BLOCK_SIDE, FOG_BLOCK_SIDE, FOG_BLOCK_SIDE)
 fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
@@ -46,7 +47,8 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             bits &= bits - 1u;
             let li = word * 32u + bit;
             let rest = light_rest[li];
-            if rest.wash < FOG_BROAD_WASH || rest.gobo >= 0.5 || rest.haze_gain <= 0.0 { continue; }
+            // Classified candidates already passed the source eligibility test.
+            if !BLOCK_VISIBILITY && (rest.wash < FOG_BROAD_WASH || rest.gobo >= 0.5 || rest.haze_gain <= 0.0) { continue; }
             let core = light_core[li];
             let q = world - core.position;
             let d2 = dot(q, q);
@@ -55,7 +57,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             let angular = angular_profile(dot(q, rest.direction) / max(dist, 1e-4), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             var visibility = 1.0;
-            if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u {
+            if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u && !PROFILE_SKIP_GRID_SHADOW_TESTS {
                 visibility = segment_shadow_visibility(ray_dir, start, end, li);
             }
             if visibility <= 0.0 { continue; }

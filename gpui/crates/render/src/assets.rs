@@ -130,6 +130,11 @@ pub struct Glb {
     pub primitives: Vec<Primitive>,
     /// Every image in the file, referenced by index from [`Material`].
     pub images: Vec<Image>,
+    /// [`Self::bounds`], measured once. The walk is over every vertex of the
+    /// file, and frame assembly asks for it once per fixture and once per
+    /// piece, every frame, for an answer that cannot change: a loaded GLB is
+    /// immutable.
+    measured: std::sync::OnceLock<(Vec3, Vec3)>,
 }
 
 impl Glb {
@@ -158,6 +163,10 @@ impl Glb {
     /// `applyPhysicalDimensionScaling` measures.
     #[must_use]
     pub fn bounds(&self) -> (Vec3, Vec3) {
+        *self.measured.get_or_init(|| self.measure())
+    }
+
+    fn measure(&self) -> (Vec3, Vec3) {
         let worlds = self.world_matrices(Mat4::IDENTITY, &HashMap::new());
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
@@ -184,6 +193,7 @@ pub struct Library {
     root: PathBuf,
     loaded: HashMap<String, Glb>,
     environments: HashMap<String, HdrImage>,
+    procedural: HashMap<String, crate::frame::MeshData>,
 }
 
 impl Library {
@@ -194,7 +204,28 @@ impl Library {
             root: root.into(),
             loaded: HashMap::new(),
             environments: HashMap::new(),
+            procedural: HashMap::new(),
         }
+    }
+
+    /// Generated geometry under a key that already names every parameter
+    /// that changes a vertex — [`crate::frame::MeshData::key`]'s contract.
+    ///
+    /// The frame's own mesh bank is rebuilt per frame, so without this the
+    /// lattice of every truss in the venue is baked again for every frame
+    /// drawn. The data is immutable and `MeshData` is two `Arc`s, so a hit
+    /// costs a hash and two refcounts.
+    pub fn procedural(
+        &mut self,
+        key: &str,
+        build: impl FnOnce() -> crate::frame::MeshData,
+    ) -> crate::frame::MeshData {
+        if let Some(mesh) = self.procedural.get(key) {
+            return mesh.clone();
+        }
+        let mesh = build();
+        self.procedural.insert(key.to_string(), mesh.clone());
+        mesh
     }
 
     /// The parsed asset at `rel`, loading it on first use.
@@ -288,6 +319,7 @@ fn load(path: &Path) -> anyhow::Result<Glb> {
         nodes,
         primitives,
         images: images.iter().map(to_rgba8).collect(),
+        measured: std::sync::OnceLock::new(),
     })
 }
 

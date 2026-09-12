@@ -1,3 +1,8 @@
+// Diagnostic omissions specialize away at pipeline creation. Never quality references.
+override PROFILE_SKIP_FIXTURES: bool = false;
+override PROFILE_SKIP_FACE_LIGHTS: bool = false;
+override PROFILE_SKIP_SURFACE_SHADOWS: bool = false;
+
 // Opaque scene pass. One material path, three.js `MeshStandardMaterial`
 // semantics: metallic-roughness GGX, one ambient term, one shadowed
 // directional light, plus the per-fixture face point lights.
@@ -129,7 +134,26 @@ fn occupancy_color(count: u32) -> vec3<f32> {
     return mix(vec3<f32>(0.0, 0.25, 0.9), vec3<f32>(1.0, 0.12, 0.0), t);
 }
 
+fn fixture_shadow_quad(uv: vec2<f32>, layer: i32) -> vec4<f32> {
+    if layer < 256 {
+        return textureGather(fixture_shadow_map, fixture_depth_sampler, uv, layer);
+    }
+    return textureGather(fixture_shadow_map_extra, fixture_depth_sampler, uv, layer - 256);
+}
+
+// Literal tap offsets keep Metal from dynamically indexing private arrays in
+// this hot filter. The caller preserves the original row-major sum order.
+fn fixture_shadow_tap(base: vec2<f32>, offset: vec2<f32>, uv: vec2<f32>,
+    gradient: vec2<f32>, raw_depth: f32, planes: vec2<f32>, texel: f32,
+    weight: f32, depth: f32) -> f32 {
+    let tap_uv = clamp((base + offset - 0.5) * texel,
+        vec2<f32>(0.5 * texel), vec2<f32>(1.0 - 0.5 * texel));
+    let reference = shadow_compare_reference(raw_depth + dot(gradient, tap_uv - uv), planes.x, planes.y, 0.02);
+    return weight * select(0.0, 1.0, reference >= depth);
+}
+
 fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
+    if PROFILE_SKIP_SURFACE_SHADOWS { return 1.0; }
     // The software oracle is populated only by the reference harness.
     let slot = fixture_rests[light_index].shadow_slot;
     if slot < 0.0 {
@@ -167,32 +191,53 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
     // texels so hardware filtering cannot mix comparisons at different depths.
     let weights_x = array<f32, 4>(1.0 - fraction.x, 1.0, 1.0, fraction.x);
     let weights_y = array<f32, 4>(1.0 - fraction.y, 1.0, 1.0, fraction.y);
+    // Gather the same sixteen texels in four reads. Each still gets its own
+    // receiver-plane comparison; gathering comparisons would mix depths.
+    let top_left = fixture_shadow_quad(base * texel, layer);
+    let top_right = fixture_shadow_quad((base + vec2<f32>(2.0, 0.0)) * texel, layer);
+    let bottom_left = fixture_shadow_quad((base + vec2<f32>(0.0, 2.0)) * texel, layer);
+    let bottom_right = fixture_shadow_quad((base + vec2<f32>(2.0)) * texel, layer);
+    let depths = array<vec4<f32>, 4>(
+        vec4<f32>(top_left.wz, top_right.wz),
+        vec4<f32>(top_left.xy, top_right.xy),
+        vec4<f32>(bottom_left.wz, bottom_right.wz),
+        vec4<f32>(bottom_left.xy, bottom_right.xy),
+    );
+    // Explicit offsets/indexes retain all sixteen comparisons and additions.
+    // A nested dynamic loop costs about 1.9 ms more in the M3 Max stress view.
     var visible = 0.0;
-    for (var y = 0u; y < 4u; y += 1u) {
-        for (var x = 0u; x < 4u; x += 1u) {
-            let tap_uv = clamp((base + vec2<f32>(f32(x), f32(y)) - 0.5) * texel,
-                vec2<f32>(0.5 * texel), vec2<f32>(1.0 - 0.5 * texel));
-            let reference = shadow_compare_reference(ndc.z + dot(gradient, tap_uv - uv), planes.x, planes.y, 0.02);
-            let weight = weights_x[x] * weights_y[y];
-            if layer < 256 {
-                visible += weight * textureSampleCompareLevel(
-                    fixture_shadow_map,
-                    fixture_shadow_sampler,
-                    tap_uv,
-                    layer,
-                    reference,
-                );
-            } else {
-                visible += weight * textureSampleCompareLevel(
-                    fixture_shadow_map_extra,
-                    fixture_shadow_sampler,
-                    tap_uv,
-                    layer - 256,
-                    reference,
-                );
-            }
-        }
-    }
+    visible += fixture_shadow_tap(base, vec2<f32>(0.0, 0.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[0] * weights_y[0], depths[0][0]);
+    visible += fixture_shadow_tap(base, vec2<f32>(1.0, 0.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[1] * weights_y[0], depths[0][1]);
+    visible += fixture_shadow_tap(base, vec2<f32>(2.0, 0.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[2] * weights_y[0], depths[0][2]);
+    visible += fixture_shadow_tap(base, vec2<f32>(3.0, 0.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[3] * weights_y[0], depths[0][3]);
+    visible += fixture_shadow_tap(base, vec2<f32>(0.0, 1.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[0] * weights_y[1], depths[1][0]);
+    visible += fixture_shadow_tap(base, vec2<f32>(1.0, 1.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[1] * weights_y[1], depths[1][1]);
+    visible += fixture_shadow_tap(base, vec2<f32>(2.0, 1.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[2] * weights_y[1], depths[1][2]);
+    visible += fixture_shadow_tap(base, vec2<f32>(3.0, 1.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[3] * weights_y[1], depths[1][3]);
+    visible += fixture_shadow_tap(base, vec2<f32>(0.0, 2.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[0] * weights_y[2], depths[2][0]);
+    visible += fixture_shadow_tap(base, vec2<f32>(1.0, 2.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[1] * weights_y[2], depths[2][1]);
+    visible += fixture_shadow_tap(base, vec2<f32>(2.0, 2.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[2] * weights_y[2], depths[2][2]);
+    visible += fixture_shadow_tap(base, vec2<f32>(3.0, 2.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[3] * weights_y[2], depths[2][3]);
+    visible += fixture_shadow_tap(base, vec2<f32>(0.0, 3.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[0] * weights_y[3], depths[3][0]);
+    visible += fixture_shadow_tap(base, vec2<f32>(1.0, 3.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[1] * weights_y[3], depths[3][1]);
+    visible += fixture_shadow_tap(base, vec2<f32>(2.0, 3.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[2] * weights_y[3], depths[3][2]);
+    visible += fixture_shadow_tap(base, vec2<f32>(3.0, 3.0), uv, gradient,
+        ndc.z, planes.xy, texel, weights_x[3] * weights_y[3], depths[3][3]);
     return visible / 9.0;
 }
 
@@ -428,7 +473,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         }
     }
 
-    let count = u32(globals.params.x);
+    let count = select(u32(globals.params.x), 0u, PROFILE_SKIP_FACE_LIGHTS);
     for (var i = 0u; i < count; i = i + 1u) {
         let light = point_lights[i];
         let delta = light.position.xyz - in.world;
@@ -446,8 +491,28 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         out += irradiance * brdf_ggx(n, v, l, f0, roughness);
     }
 
-    if surface_clusters.flags.x > 0.5 {
+    if surface_clusters.flags.x > 0.5 && !PROFILE_SKIP_FIXTURES {
         var cursor = lights_at(in.clip.xy, view_depth);
+        if surface_clusters.flags.z > 0.5 {
+            // Plane 2 is the tile's surface bucket A; plane 3 bucket B beyond
+            // the tile's split depth. Within the R16 margin of the split the
+            // fragment's stored sample may sit in either bucket, so it keeps
+            // the full-range plane 0, a superset of both.
+            var plane = 2u;
+            if surface_clusters.flags.w > 0.5 {
+                let split = surface_splits[cursor.base / LIGHT_INDEX_WORDS];
+                let margin = abs(view_depth) * 0.001 + 0.001;
+                if view_depth > split + margin {
+                    plane = 3u;
+                } else if view_depth >= split - margin {
+                    plane = 0u;
+                }
+            }
+            if plane != 0u {
+                cursor.base += plane * light_index_params.grid.x * light_index_params.grid.y * LIGHT_INDEX_WORDS;
+                cursor.bits = light_index_masks[cursor.base + cursor.word];
+            }
+        }
         var light_index = 0u;
         while light_index_next(&cursor, &light_index) {
             let core = fixture_cores[light_index];
@@ -491,5 +556,13 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     // This opaque pipeline replaces the target, so write premultiplied
     // radiance directly. Depth still occludes geometry behind the surface.
     let coverage = horizon_coverage(view_depth);
-    return vec4<f32>(scene_radiance(out, in.world - globals.camera_pos.xyz) * coverage, coverage);
+    return vec4<f32>(surface_radiance(out, in.world - globals.camera_pos.xyz, in.clip.xy) * coverage, coverage);
+}
+
+// Store the shading invocation's centre depth separately in every covered
+// MSAA sample, so subpixel geometry participates in surface light bounds.
+@fragment
+fn fs_surface_depth(in: VsOut) -> @location(0) f32 {
+    let depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);
+    return select(depth, -1.0, depth <= 0.0);
 }

@@ -451,9 +451,10 @@ impl AtmosphereCache {
         encoder: &mut wgpu::CommandEncoder,
         sky: Option<&SkyFrame>,
         height_m: f32,
+        profile: &mut crate::pass_profile::PassQueries<'_>,
     ) -> AerialTextures {
         self.aerial
-            .prepare(pipelines, device, encoder, sky, height_m)
+            .prepare(pipelines, device, encoder, sky, height_m, profile)
     }
 
     /// Bring the sky-view table and the environment probe up to date with

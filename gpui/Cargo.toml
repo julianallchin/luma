@@ -68,3 +68,14 @@ opt-level = 2
 
 [profile.dev.package.luma-scene]
 opt-level = 2
+
+# objc2 checks every selector's runtime type signature against the class on
+# every `msg_send!` while its own debug assertions are on. The Metal command
+# encoder sends thousands of those per frame — one per bind, per draw, per
+# pass — and a `sample` of the renderer worker during playback attributed
+# 66% of `CommandEncoder::finish` to `msg_send_check` and
+# `verify_method_signature`. The check guards against a wrong selector
+# signature written in a binding crate, which is not a class of bug this
+# tree's dev loop is exercising.
+[profile.dev.package.objc2]
+debug-assertions = false
