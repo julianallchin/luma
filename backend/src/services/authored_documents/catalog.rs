@@ -384,6 +384,82 @@ impl AuthoredDocuments {
         Ok(document_ids.len())
     }
 
+    /// Recovery scan run after every pull. Reinstall the permanent head of
+    /// every pulled document that has none.
+    ///
+    /// The head-projection branches in `sync::pull` tolerate a refusal and
+    /// advance the cursor past it, because a refused revision is immutable and
+    /// stopping there would pin the table forever. What that leaves behind,
+    /// when the refused row was the document's *first* head, is an
+    /// `authored_documents` row without the head every other authored read
+    /// asserts — `ensure_current_on_connection` calls that state out by name —
+    /// and a cursor already past the only row that would have installed it.
+    /// The score then has no live projection and cannot even be edited.
+    ///
+    /// The refusal is not necessarily permanent. A document authored by a
+    /// build this one has not caught up to decodes only there, so the same
+    /// revision starts applying after an upgrade with no new remote rows to
+    /// re-deliver it. The local integration trace is immutable, already
+    /// pulled, and names the server's terminal revision, so it is the retry
+    /// queue: this costs one indexed query when there is no work, and repairs
+    /// itself on the first launch that can read the document.
+    pub(crate) async fn reconcile_headless_documents(
+        &self,
+        pool: &SqlitePool,
+        principal: &str,
+    ) -> Result<usize> {
+        let expected_principal = principal_key(Some(principal));
+        // The latest terminal integration per document is the server head we
+        // failed to install. `cancelled_archived` carries no revision and
+        // archived documents want no head at all, so both drop out here.
+        let pending: Vec<(String, String)> = sqlx::query_as(
+            "SELECT document.document_id, (
+                 SELECT integration.result_revision_id
+                 FROM authored_head_integrations integration
+                 WHERE integration.document_id = document.document_id
+                   AND integration.principal_key = document.principal_key
+                   AND integration.result_revision_id IS NOT NULL
+                 ORDER BY integration.server_integration_seq DESC
+                 LIMIT 1
+             ) AS revision_id
+             FROM authored_documents document
+             WHERE document.principal_key = ?
+               AND document.archived_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM authored_document_heads head
+                   WHERE head.document_id = document.document_id
+               )
+               AND revision_id IS NOT NULL
+             ORDER BY document.document_id",
+        )
+        .bind(&expected_principal)
+        .fetch_all(pool)
+        .await
+        .map_err(storage("scan authored documents without a head"))?;
+
+        let mut repaired = 0;
+        for (document_id, revision_id) in pending {
+            match self
+                .apply_integrated_server_head(pool, principal, &document_id, &revision_id)
+                .await
+            {
+                Ok(()) => repaired += 1,
+                // Still refused by this build. Say so on every pull rather
+                // than once, three hours ago, into a stderr nobody kept: a
+                // score with no projection is invisible in the app, and this
+                // line is the only thing that connects it to a cause.
+                Err(error) if error.is_refusal() => {
+                    eprintln!(
+                        "[sync] Score projection for {document_id} is still refused at \
+                         {revision_id}: {error}"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(repaired)
+    }
+
     /// Materialize the terminal effect of a pulled server archive fact. The
     /// immutable archive row, not a best-effort later catalog tombstone, is
     /// the authority for removing the live score/graph projection. This is
