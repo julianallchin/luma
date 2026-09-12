@@ -185,9 +185,19 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
             ))
             .await
             .unwrap();
-            let layers: std::collections::BTreeMap<String,i64> = sqlx::query_as::<_, (String,i64)>(
-            "SELECT p.name, c.z_index FROM track_scores c JOIN patterns p ON p.id = c.pattern_id"
-        ).fetch_all(&pool).await.unwrap().into_iter().collect();
+            // A clip names a score-local definition, and the definition's
+            // name is what the timeline labelled it by.
+            let layers: std::collections::BTreeMap<String, i64> = sqlx::query_as::<_, (String, i64)>(
+                "SELECT json_extract(definition.definition_json, '$.name'), clip.z_index
+                 FROM clips clip
+                 JOIN score_definitions definition
+                   ON definition.id = clip.score_id || ':' || clip.graph",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
             assert_eq!(
                 (
                     layers["Alpha"],

@@ -508,9 +508,17 @@ mod import_tests {
         std::fs::write(path, bytes).unwrap();
     }
 
+    /// The principal the import writes as. A track is a synced row and a
+    /// synced row has an owner; `import_tracks` asks `require_session` for it.
+    /// Signed in for real rather than pinned with `with_fixture_principal`,
+    /// because what is under test is the identity transition closing the gate,
+    /// and that transition cross-checks the gate against the stored session.
+    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+
     async fn services(directory: &Path, events: Events) -> crate::dispatch::SharedServices {
         let db = database::init_app_db_at(directory).await.unwrap();
         let state_db = state::init_state_db_at(directory).await.unwrap();
+        auth::install_test_session(&state_db.0, OWNER).await;
         auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .unwrap();

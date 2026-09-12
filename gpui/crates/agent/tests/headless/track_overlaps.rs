@@ -6,11 +6,16 @@ use std::time::Duration;
 #[test]
 fn agent_score_overlaps_have_separate_clickable_rows_and_independent_edits() {
     let mut harness = support::Fixture::new("track-overlaps", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":2,"definitions":{},"clips":{
-            "a":{"graph":"chase","start":2.,"duration":6.,"seed":0,"z_index":0},
-            "b":{"graph":"chase","start":2.,"duration":6.,"seed":1,"z_index":0},
-            "c":{"graph":"chase","start":2.,"duration":6.,"seed":2,"z_index":0}
-        }}))
+        // Three clips of one definition, deliberately: what is under test is
+        // that identical spans get separate rows and separate hit targets.
+        .with_graph_score(support::score(
+            serde_json::json!({ "overlap": support::definition("Chase") }),
+            serde_json::json!({
+                "a":{"graph":"overlap","start":2.,"duration":6.,"seed":0,"z_index":0},
+                "b":{"graph":"overlap","start":2.,"duration":6.,"seed":1,"z_index":0},
+                "c":{"graph":"overlap","start":2.,"duration":6.,"seed":2,"z_index":0}
+            }),
+        ))
         .window(1400., 1000.)
         .open(Mode::Headless);
     let result = harness.exec(

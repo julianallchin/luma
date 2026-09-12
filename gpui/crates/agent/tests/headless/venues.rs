@@ -146,7 +146,6 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         luma_app::NavigationFixture {
             track_delays: HashMap::new(),
             catalogue_responses: vec![
-                (Duration::ZERO, None), // Initial local-cache probe before restoration.
                 (Duration::from_millis(180), None),
                 (Duration::ZERO, None),
                 (Duration::ZERO, None),

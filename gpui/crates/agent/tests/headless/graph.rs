@@ -151,8 +151,18 @@ fn graph_drag_is_one_score_edit_and_survives_reopening() {
             let nodes = &score["definitions"]["canvas"]["body"]["body"]["nodes"];
             assert!(nodes["scale"]["position"][0].as_f64().unwrap() > 360.);
             assert!(nodes["scale"]["position"][1].as_f64().unwrap() > 120.);
-            assert_eq!(nodes["wash"]["position"], json!([0, 0]));
-            assert_eq!(nodes["output"]["position"], json!([740, 240]));
+            // A position round-trips through the definition row as JSON
+            // reals, so `0` comes back as `0.0`; compare the numbers.
+            let at = |node: &str| -> Vec<f64> {
+                nodes[node]["position"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{node} has no position: {nodes:#}"))
+                    .iter()
+                    .map(|value| value.as_f64().expect("a position is a number"))
+                    .collect()
+            };
+            assert_eq!(at("wash"), [0., 0.]);
+            assert_eq!(at("output"), [740., 240.]);
         });
 }
 
