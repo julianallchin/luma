@@ -901,7 +901,7 @@ impl VenueHost {
     async fn state_at(
         &self,
         time: f32,
-        edit: Option<&crate::services::graph_scores::GraphScoreEdit>,
+        edit: Option<&luma_patterns::Score>,
     ) -> Result<Option<UniverseState>, HostCallError> {
         let Some(track) = self.lighting.as_ref() else {
             if edit.is_some() {
@@ -1560,7 +1560,7 @@ struct RenderRequest {
     highlight: Option<String>,
     /// A private candidate score, evaluated by the same compositor as apply.
     /// Omitted for the saved score. Never persisted or sent to the live viewport.
-    edit: Option<crate::services::graph_scores::GraphScoreEdit>,
+    edit: Option<luma_patterns::Score>,
     /// Draw each fixture's rest aim as an arrow. Defaulted on the Python side
     /// rather than here, so the answer to "on or off by default" has one home;
     /// this channel is a verification channel, and a picture that does not say

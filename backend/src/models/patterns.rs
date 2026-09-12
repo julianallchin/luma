@@ -43,7 +43,7 @@ pub struct ForkPatternInput {
     pub source_pattern_id: String,
     pub source_implementation_id: String,
     /// Caller-owned idempotency key. Retrying this exact request returns the
-    /// same target pattern, implementation, and authored revision.
+    /// pattern and implementation it made the first time.
     pub request_id: String,
 }
 
@@ -53,9 +53,6 @@ pub struct ForkPatternInput {
 pub struct ForkPatternResult {
     pub pattern: PatternSummary,
     pub implementation_id: String,
-    pub document_id: String,
-    pub revision_id: String,
-    pub applied_to_current_projection: bool,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]

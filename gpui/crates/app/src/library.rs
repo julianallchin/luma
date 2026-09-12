@@ -58,7 +58,7 @@ use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
-use luma_lib::database::local::database::init_app_db_at;
+use luma_lib::database::local::database::{init_app_db_at, open_app_db_at};
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
@@ -75,9 +75,7 @@ use luma_lib::models::patch::{
     ArtNetNode, AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput,
 };
 use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
-use luma_lib::models::scores::{
-    CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
-};
+use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
@@ -86,19 +84,15 @@ use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::group_derivation::FixtureRole;
-use luma_lib::services::track_edits::{TrackClip, TrackEditResult};
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 use luma_render::scene_desc::VenueEnvironment;
 
-/// A native timeline reads either the new whole score or an existing score
-/// still awaiting manual migration. The editor never infers its storage format.
-pub(crate) enum ScoreContents {
-    Graph {
-        document: luma_lib::services::graph_scores::GraphScoreDocument,
-        beats: Option<BeatGrid>,
-    },
-    Legacy(Vec<TrackScore>),
+/// Everything the native timeline needs to draw a score: the document itself
+/// and the grid its beat positions are read in.
+pub(crate) struct ScoreContents {
+    pub score: luma_patterns::Score,
+    pub beats: Option<BeatGrid>,
 }
 
 #[cfg(feature = "agent")]
@@ -127,21 +121,32 @@ pub struct NavigationFixture {
 
 struct LibraryEvents {
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
-    /// A sync's pull has landed — see [`Library::sync_pull`].
-    sync_pulled: tokio::sync::broadcast::Sender<()>,
     /// The stored session stopped proving anyone — see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
+    /// Rows arrived from another device — see [`Library::replica_changed`].
+    replica_changed: tokio::sync::broadcast::Sender<Vec<String>>,
 }
 
 impl EventSink for LibraryEvents {
     fn emit(&self, event: &str, payload: Value) {
-        if event == "sync-pulled" {
-            let _ = self.sync_pulled.send(());
-            return;
-        }
         if event == "session-revoked" {
             let _ = self.session_revoked.send(());
+            return;
+        }
+        if event == "replica-changed" {
+            let tables = payload
+                .get("tables")
+                .and_then(Value::as_array)
+                .map(|tables| {
+                    tables
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = self.replica_changed.send(tables);
             return;
         }
         if event != "track-import-state" {
@@ -572,11 +577,11 @@ pub struct Library {
     cloud: bool,
     #[cfg(feature = "agent")]
     sync_status_fixture: Option<Arc<Mutex<luma_lib::models::sync::SyncStatus>>>,
-    /// Fires when a sync's pull phase is over; see [`Library::sync_pull`].
-    sync_pulled: tokio::sync::broadcast::Sender<()>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
+    /// Rows arrived from another device — see [`Library::replica_changed`].
+    replica_changed: tokio::sync::broadcast::Sender<Vec<String>>,
     /// Tells the background sync loop to stop. Sent on drop; the reactor
     /// going with it is what makes the stop take.
     sync_shutdown: tokio::sync::watch::Sender<bool>,
@@ -640,16 +645,21 @@ impl Library {
         let fixtures_root = fixtures_root()?;
 
         let (progress_tx, _) = tokio::sync::broadcast::channel(256);
-        let (sync_pulled, _) = tokio::sync::broadcast::channel(16);
         let (session_revoked, _) = tokio::sync::broadcast::channel(4);
+        let (replica_changed, _) = tokio::sync::broadcast::channel(64);
         let events = Events::new(LibraryEvents {
             import_progress: progress_tx.clone(),
-            sync_pulled: sync_pulled.clone(),
             session_revoked: session_revoked.clone(),
+            replica_changed: replica_changed.clone(),
         });
         // Whether this process may talk to the cloud at all — see
         // `Runtime::cloud`. Unasked is a launched app, which may.
         let cloud = luma_ui::runtime::Runtime::with(|runtime| runtime.cloud);
+        // …and whether there is anywhere to sync to. A process that will not
+        // sync opens the database without the SDK entirely: loading its core
+        // extension is not free, and a library nobody is replicating has no
+        // use for an upload queue.
+        let syncing = cloud && !luma_lib::config::powersync_url().is_empty();
         #[cfg(feature = "agent")]
         let source_fixture = Arc::new(Mutex::new(None));
         #[cfg(feature = "agent")]
@@ -663,7 +673,12 @@ impl Library {
             fallback: system_track_sources(),
         });
         let (services, account, lapsed) = runtime.block_on(async {
-            let db = init_app_db_at(storage.path()).await?;
+            let (db, connections) = if syncing {
+                let (db, connections) = open_app_db_at(storage.path()).await?;
+                (db, Some(connections))
+            } else {
+                (init_app_db_at(storage.path()).await?, None)
+            };
             let state_db = init_state_db_at(storage.path()).await?;
             // Admission is host bootstrap, not a command: until it is armed
             // every `auth_visible_*` view is empty, so a host that skipped
@@ -713,8 +728,33 @@ impl Library {
                 &storage,
                 headless_env::cache_dir()?,
             ));
+            let state_pool = state_db.0.clone();
             let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
                 .with_events(events.clone());
+            // Record replication, on this library's reactor. Off when the
+            // process may not talk to the cloud (a harness) or when no
+            // PowerSync instance is configured — the app is then exactly what
+            // it was before sync existed, a local SQLite library.
+            let services = match connections {
+                Some(connections) => {
+                    match luma_lib::sync::service::Service::open(
+                        connections,
+                        state_pool.clone(),
+                        events.clone(),
+                    )
+                    .await
+                    {
+                        Ok(sync) => services.with_sync(sync),
+                        // Not a launch failure: a library that cannot reach the
+                        // cloud is still a library.
+                        Err(error) => {
+                            eprintln!("[luma] record sync did not start: {error}");
+                            services
+                        }
+                    }
+                }
+                None => services,
+            };
             let services = if desktop {
                 services.with_artnet().await?
             } else {
@@ -783,9 +823,19 @@ impl Library {
             });
         }
 
-        if cloud {
-            runtime.spawn(services.sync_loop(shutdown_rx));
+        // Bytes move on their own clock: audio, stems and album art go through
+        // Supabase Storage, not through the row protocol, and a 40 MB stem has
+        // nothing to do with a checkpoint.
+        if syncing {
+            let host = services.sync_host();
+            let media = luma_lib::sync::media::Media::new(
+                services.db().0.clone(),
+                services.state_pool().clone(),
+            );
+            let media_shutdown = shutdown_rx.clone();
+            runtime.spawn(async move { media.run(host, media_shutdown).await });
         }
+        drop(shutdown_rx);
         let (session_writes, mut session_write_rx) =
             tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
         let session_services = services.clone();
@@ -822,8 +872,8 @@ impl Library {
             cloud,
             #[cfg(feature = "agent")]
             sync_status_fixture: None,
-            sync_pulled,
             session_revoked,
+            replica_changed,
             sync_shutdown,
             session_writes,
             model: None,
@@ -966,9 +1016,8 @@ impl Library {
         }
     }
 
-    /// Bring the library up to date with the cloud, resolving the moment the
-    /// pull has landed.
-    ///
+    /// Whether this library talks to the cloud at all — the one thing the
+    /// sidebar's sync row is conditioned on.
     pub(crate) fn cloud_sync_enabled(&self) -> bool {
         #[cfg(feature = "agent")]
         if self.sync_status_fixture.is_some() {
@@ -999,77 +1048,6 @@ impl Library {
                 return Ok(fixture.lock().unwrap().clone());
             }
             pending.await
-        }
-    }
-
-    pub(crate) fn retry_sync(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("sync_retry", json!({}))
-    }
-
-    /// A full sync — discovery, pull, files, push — is started on this
-    /// library's reactor and left to finish; what the returned future waits
-    /// for is only the pull, because that is the phase after which every
-    /// venue, track and score the account owns is in the local database. Audio
-    /// and stems keep downloading behind whatever the caller opens next, and
-    /// the push has nothing to do with being current.
-    ///
-    /// `Err` is a sync that failed before its pull could land — no network, a
-    /// session the server refused. The library is then whatever it was, and
-    /// the caller decides whether that is usable.
-    ///
-    /// Immediate on a library that does not talk to the cloud.
-    pub fn sync_pull(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-        if !self.cloud {
-            let _ = done_tx.send(Ok(()));
-        } else {
-            // Subscribed before the sync starts, so a pull that lands before
-            // the task is even polled is still seen.
-            let mut pulled = self.sync_pulled.subscribe();
-            let services = self.services.clone();
-            self.runtime.spawn(async move {
-                let args = json!({});
-                let mut sync = Box::pin(command::<Value>(&services, "sync_full", &args));
-                let mut done_tx = Some(done_tx);
-                let finished = tokio::select! {
-                    _ = pulled.recv() => {
-                        if let Some(done) = done_tx.take() {
-                            let _ = done.send(Ok(()));
-                        }
-                        None
-                    }
-                    result = &mut sync => Some(result),
-                };
-                let report = match finished {
-                    Some(result) => {
-                        let outcome = result.as_ref().map(|_| ()).map_err(|error| {
-                            LibraryError::at("sync_pull", Cause::Cancelled(error.to_string()))
-                        });
-                        if let Some(done) = done_tx.take() {
-                            let _ = done.send(outcome);
-                        }
-                        result
-                    }
-                    None => sync.await,
-                };
-                match report {
-                    Ok(report) => {
-                        if let Some(errors) = report["errors"].as_array().filter(|e| !e.is_empty())
-                        {
-                            eprintln!("[luma] sync finished with errors: {errors:?}");
-                        }
-                    }
-                    Err(error) => eprintln!("[luma] sync failed: {error}"),
-                }
-            });
-        }
-        async move {
-            done_rx.await.map_err(|_| {
-                LibraryError::at(
-                    "sync_pull",
-                    Cause::Cancelled("the sync task was dropped".into()),
-                )
-            })?
         }
     }
 
@@ -1326,6 +1304,14 @@ impl Library {
     /// Fires when Supabase refuses to renew the stored session — its refresh
     /// token was spent by another process, or the session was revoked. The
     /// backend stops presenting it; the app's answer is the sign-in gate.
+    /// The tables a download just wrote, coalesced by the sync service.
+    ///
+    /// A download is not an edit anybody made on this device, so nothing the
+    /// UI holds knows it happened. This is how it finds out.
+    pub fn replica_changed(&self) -> tokio::sync::broadcast::Receiver<Vec<String>> {
+        self.replica_changed.subscribe()
+    }
+
     pub fn session_revoked(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.session_revoked.subscribe()
     }
@@ -1635,32 +1621,11 @@ impl Library {
         }
     }
 
-    /// Display names for other people's uids, as `uid -> name`. Sparse: a uid
-    /// the directory does not know is simply absent.
-    pub fn display_names(
-        &self,
-        uids: Vec<String>,
-    ) -> impl Future<Output = Result<HashMap<String, String>, LibraryError>> + use<> {
-        self.call("get_display_names", json!({ "uids": uids }))
-    }
-
     /// Every pattern in the library.
     pub fn patterns(
         &self,
     ) -> impl Future<Output = Result<Vec<PatternSummary>, LibraryError>> + use<> {
         self.call("list_patterns", json!({}))
-    }
-
-    pub fn create_lighting_pattern(
-        &self,
-        effect: &str,
-        score_id: &str,
-        request_id: &str,
-    ) -> impl Future<Output = Result<PatternSummary, LibraryError>> + use<> {
-        self.call(
-            "create_lighting_pattern",
-            json!({"effect":effect,"scoreId":score_id,"requestId":request_id}),
-        )
     }
 
     /// One pattern's arg definitions, resolved against a venue — the schema
@@ -1851,9 +1816,7 @@ impl Library {
         )
     }
 
-    /// Archive a score. The authored document keeps its history — the seam
-    /// tombstones the row rather than rewriting it — so this is "take it off
-    /// the list", not "unmake it".
+    /// Delete a score, and with it every clip and definition row under it.
     pub fn delete_score(&self, id: &str) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call("delete_score", json!({ "id": id }))
     }
@@ -1887,22 +1850,20 @@ impl Library {
         let score_id = score_id.to_owned();
         let track_id = track_id.to_owned();
         let task = self.runtime.spawn(async move {
-            let document: Option<luma_lib::services::graph_scores::GraphScoreDocument> = command(
+            let score: Option<luma_patterns::Score> = command(
                 &services,
                 "get_score_document",
                 &json!({"scoreId":score_id}),
             )
             .await?;
-            match document {
-                Some(document) => {
-                    let beats =
-                        command(&services, "get_track_beats", &json!({"trackId":track_id})).await?;
-                    Ok(ScoreContents::Graph { document, beats })
-                }
-                None => Ok(ScoreContents::Legacy(
-                    command(&services, "list_track_scores", &json!({"scoreId":score_id})).await?,
-                )),
-            }
+            let score = score.ok_or_else(|| {
+                LibraryError::at(
+                    "get_score_document",
+                    Cause::Command(CommandError::NotFound("score does not exist".into())),
+                )
+            })?;
+            let beats = command(&services, "get_track_beats", &json!({"trackId":track_id})).await?;
+            Ok(ScoreContents { score, beats })
         });
         async move {
             task.await.map_err(|error| {
@@ -1911,16 +1872,17 @@ impl Library {
         }
     }
 
+    /// Save a whole score. The rows it touches are overwritten — there is no
+    /// revision to compare against and nothing to lose a race with.
     pub(crate) fn apply_score_document(
         &self,
         score_id: &str,
         score: &luma_patterns::Score,
-        base_revision: &str,
-        operation_id: &str,
-    ) -> impl Future<
-        Output = Result<luma_lib::models::authored_state::AppliedAuthoredState, LibraryError>,
-    > + use<> {
-        self.call("apply_score_document", json!({"scoreId":score_id,"score":score,"baseRevision":base_revision,"operationId":operation_id}))
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "apply_score_document",
+            json!({"scoreId":score_id,"score":score}),
+        )
     }
 
     pub(crate) fn preview_score_clip(
@@ -1969,60 +1931,6 @@ impl Library {
         self.call(
             "composite_track",
             json!({"scoreId":score_id,"graphScore":score}),
-        )
-    }
-
-    /// One score's clips.
-    pub fn track_scores(
-        &self,
-        score_id: &str,
-    ) -> impl Future<Output = Result<Vec<TrackScore>, LibraryError>> + use<> {
-        self.call("list_track_scores", json!({ "scoreId": score_id }))
-    }
-
-    /// Every persisted clip's heatmap preview for `(track_id, venue_id)`, in
-    /// z-index order. Slow — the seam evaluates every clip's pattern over its
-    /// span — so a screen asks once per open and patches single clips with
-    /// [`Self::preview_clip`] afterwards.
-    pub fn annotation_previews(
-        &self,
-        track_id: &str,
-        venue_id: &str,
-    ) -> impl Future<Output = Result<Vec<AnnotationPreview>, LibraryError>> + use<> {
-        self.call(
-            "generate_annotation_previews",
-            json!({ "trackId": track_id, "venueId": venue_id }),
-        )
-    }
-
-    /// One clip's heatmap preview, rendered from the state the editor holds
-    /// rather than the persisted row — which is what lets an edited clip's
-    /// thumbnail be redrawn before (or without) the edit being written. The
-    /// clip's id is echoed back as `annotation_id`, so an uncommitted clip is
-    /// previewable too.
-    pub fn preview_clip(
-        &self,
-        track_id: &str,
-        venue_id: &str,
-        clip_id: &str,
-        pattern_id: &str,
-        start: f64,
-        end: f64,
-        args: &serde_json::Value,
-    ) -> impl Future<Output = Result<AnnotationPreview, LibraryError>> + use<> {
-        self.call(
-            "preview_annotation",
-            json!({
-                "trackId": track_id,
-                "venueId": venue_id,
-                "annotation": {
-                    "id": clip_id,
-                    "patternId": pattern_id,
-                    "startTime": start,
-                    "endTime": end,
-                    "args": args,
-                },
-            }),
         )
     }
 
@@ -2086,70 +1994,6 @@ impl Library {
             "set_track_beat_validation",
             json!({
                 "trackId": track_id, "grid": grid, "verdict": verdict, "reason": reason,
-            }),
-        )
-    }
-
-    /// Create one clip.
-    ///
-    /// `request_id` is the idempotency key and the clip's id is derived from
-    /// it, so a replay returns the clip the first attempt made instead of
-    /// minting a second one at the same spot. Read the id back from
-    /// [`TrackEditResult::created_clip_id`]; do not assume it.
-    pub fn create_clip(
-        &self,
-        input: CreateTrackScoreInput,
-    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
-        self.call("create_track_score", json!({ "payload": input }))
-    }
-
-    /// Delete one clip.
-    ///
-    /// `operation_id` is the idempotency key, and the containing score is
-    /// named explicitly so a replay stays resolvable *after* the clip row is
-    /// gone — which is the case that matters, because the response a client
-    /// lost is the one it will retry.
-    pub fn delete_clip(
-        &self,
-        input: DeleteTrackScoreInput,
-    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
-        self.call("delete_track_score", json!({ "payload": input }))
-    }
-
-    /// Publish one complete clip list as a single compare-and-swap.
-    ///
-    /// **This is the only way to express a gesture that touches more than one
-    /// clip** — duplicate, split, delete-selection, paste, a group drag's
-    /// z-index change. Fanning such a gesture out into per-clip calls would
-    /// let it half-land, and the intermediate states are ones the editor's own
-    /// rules forbid (a clip gone before its replacement lands, a lane briefly
-    /// empty).
-    ///
-    /// `base` is the list the caller edited and `candidate` is what it should
-    /// become; the seam refuses the write if the stored list has moved on
-    /// since `base`. A candidate clip whose id is not in `base` is a create,
-    /// an id in `base` and not in `candidate` is a delete, and
-    /// [`TrackEditResult::id_map`] carries the ids the seam allocated for the
-    /// creates. `operation_id` is the idempotency key for the whole batch.
-    ///
-    /// The result's `clips` are authoritative and may be *newer* than the
-    /// candidate on a replay, so adopt them rather than the candidate.
-    pub fn replace_clips(
-        &self,
-        score_id: &str,
-        track_id: &str,
-        base: &[TrackScore],
-        candidate: &[TrackScore],
-        operation_id: &str,
-    ) -> impl Future<Output = Result<TrackEditResult, LibraryError>> + use<> {
-        self.call(
-            "replace_track_scores",
-            json!({
-                "scoreId": score_id,
-                "trackId": track_id,
-                "baseScores": base,
-                "scores": candidate,
-                "operationId": operation_id,
             }),
         )
     }
@@ -2418,25 +2262,16 @@ impl Library {
     /// shows the one that is open rather than a blend of all of them — which is
     /// why this takes the id the editor holds and does not look one up.
     ///
-    /// `clips` is load-bearing three ways. `None` says "use the score's
-    /// persisted rows" — the right answer for a screen that is only *watching*
-    /// it, which has no working copy to offer. `Some(list)` composites that
-    /// list instead, which is how an editor's live edits reach the rig before
-    /// the trailing write does. An empty `Some` is an authoritative empty
-    /// document and clears the scene; `None` and `Some(vec![])` are therefore
-    /// *not* the same request (see `dispatch::handlers::compositor`).
+    /// The score's persisted rows are what gets compiled — the right answer
+    /// for a screen that is only *watching* it, which has no working copy to
+    /// offer. An editor whose live edits must reach the rig before the
+    /// trailing write does sends them with
+    /// [`Self::composite_score_document`] instead.
     pub fn composite_score(
         &self,
         score_id: &str,
-        clips: Option<Vec<TrackClip>>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "composite_track",
-            json!({
-                "scoreId": score_id,
-                "annotations": clips,
-            }),
-        )
+        self.call("composite_track", json!({ "scoreId": score_id }))
     }
 
     /// Everything the 3D view needs to draw a venue: its patched fixtures, its

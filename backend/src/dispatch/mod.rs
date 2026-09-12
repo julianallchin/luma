@@ -99,22 +99,12 @@ macro_rules! commands {
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::annotation_preview::LivePreviewInput;
-use crate::compositor::LiveAnnotation;
-use crate::database::remote::queries::SearchPatternRow;
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
 use crate::host_audio::HostAudioSnapshot;
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AgentThread, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
-};
-use crate::models::authored_state::{
-    AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit, AuthoredWorkspaceCheck,
-    AuthoredWorkspaceCommit, AuthoredWorkspaceHandle, AuthoredWorkspaceInput,
-    AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput,
-    FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput, PrepareAuthoredTurnInput,
-    PreparedAuthoredTurn, RestoreAuthoredStateInput,
 };
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
@@ -133,10 +123,7 @@ use crate::models::patterns::{
     AnnotationPreview, ForkPatternInput, ForkPatternResult, PatternCategory, PatternSummary,
 };
 use crate::models::perform::PerformTrackMatch;
-use crate::models::scores::{
-    CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
-    UpdateTrackScoreInput,
-};
+use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
 use crate::models::tracks::{
@@ -154,13 +141,8 @@ use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, Rekordbox
 use crate::render_engine::PerformDeckInput;
 use crate::services::graph_documents::{GraphDocument, GraphEditResult};
 use crate::services::group_derivation::FixtureRole;
-use crate::services::track_edits::TrackEditResult;
 use crate::services::tracks::TrackBarClassifications;
 use crate::settings::AppSettings;
-use crate::sync::orchestrator::SyncReport;
-use handlers::score_dsl::{
-    ScoreDslExportResponse, ScoreDslImportResponse, ScoreDslValidationResponse,
-};
 pub use handlers::scores::prepare_score_clip_preview;
 use handlers::tracks::TrackAudioBase64;
 /// Large native audio payload; retains the dispatcher's visibility checks.
@@ -222,7 +204,6 @@ commands! {
     patterns::save_pattern_graph_document(
         id: String,
         implementation_id: String,
-        operation_id: String,
         base_revision: String,
         graph: Graph,
     ) -> GraphEditResult;
@@ -256,36 +237,6 @@ commands! {
     // them itself.
     skills::skills_listing() -> String;
     skills::get_skill(name: String) -> String;
-
-    authored_state::authored_state_prepare_turn(
-        input: PrepareAuthoredTurnInput,
-    ) -> PreparedAuthoredTurn;
-    authored_state::authored_state_finalize_turn(
-        input: FinalizeAuthoredTurnInput,
-    ) -> AuthoredTurnCommit;
-    authored_state::authored_state_recover_turns(thread_id: String) -> Vec<AuthoredTurnCommit>;
-    authored_state::authored_state_set_session_actor(actor: String) -> ();
-    authored_state::authored_state_list_history(
-        thread_id: String,
-        cursor: Option<String>,
-        limit: Option<usize>,
-    ) -> AuthoredHistoryPage;
-    authored_state::authored_state_restore(
-        input: RestoreAuthoredStateInput,
-    ) -> AuthoredRestoreResult;
-    authored_state::authored_state_create_workspace(
-        input: CreateAuthoredWorkspaceInput,
-    ) -> AuthoredWorkspaceHandle;
-    authored_state::authored_state_check_workspace(
-        input: AuthoredWorkspaceInput,
-    ) -> AuthoredWorkspaceCheck;
-    authored_state::authored_state_commit_workspace(
-        input: CommitAuthoredWorkspaceInput,
-    ) -> AuthoredWorkspaceCommit;
-    authored_state::authored_state_merge_workspace(
-        input: MergeAuthoredWorkspaceInput,
-    ) -> AuthoredWorkspaceMerge;
-    authored_state::authored_state_remove_workspace(input: AuthoredWorkspaceInput) -> ();
 
     agent_execution::run_python_cell(
         thread_id: String,
@@ -423,21 +374,10 @@ commands! {
 
     compositor::composite_track(
         score_id: String,
-        annotations: Option<Vec<LiveAnnotation>>,
-        skip_cache: Option<bool>,
-            graph_score: Option<luma_patterns::Score>,
+        graph_score: Option<luma_patterns::Score>,
     ) -> ();
     compositor::leave_track(score_id: String) -> ();
 
-    annotation_preview::preview_annotation(
-        track_id: String,
-        venue_id: String,
-        annotation: LivePreviewInput,
-    ) -> AnnotationPreview;
-    annotation_preview::generate_annotation_previews(
-        track_id: String,
-        venue_id: String,
-    ) -> Vec<AnnotationPreview>;
     annotation_preview::preview_pattern_image(
         pattern_id: String,
         track_id: String,
@@ -454,12 +394,6 @@ commands! {
         end_time: f32,
         beat_grid: Option<BeatGrid>,
     ) -> AnnotationPreview;
-    annotation_preview::view_composite_image(
-        track_id: String,
-        start_time: f32,
-        end_time: f32,
-    ) -> AnnotationPreview;
-
     categories::list_pattern_categories() -> Vec<PatternCategory>;
 
     scores::list_scores_for_track(track_id: String, venue_id: String) -> Vec<ScoreSummary>;
@@ -477,49 +411,9 @@ commands! {
         name: Option<String>,
     ) -> Score;
     scores::delete_score(id: String) -> ();
-    scores::list_track_scores(score_id: String) -> Vec<TrackScore>;
-    scores::get_score_document(score_id: String) -> Option<crate::services::graph_scores::GraphScoreDocument>;
-    scores::apply_score_document(score_id: String, score: luma_patterns::Score, base_revision: String, operation_id: String) -> crate::models::authored_state::AppliedAuthoredState;
+    scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
+    scores::apply_score_document(score_id: String, score: luma_patterns::Score) -> ();
     scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
-    scores::create_track_score(payload: CreateTrackScoreInput) -> TrackEditResult;
-    scores::update_track_score(payload: UpdateTrackScoreInput) -> TrackEditResult;
-    scores::delete_track_score(payload: DeleteTrackScoreInput) -> TrackEditResult;
-    scores::replace_track_scores(
-        score_id: String,
-        track_id: String,
-        base_scores: Vec<TrackScore>,
-        scores: Vec<TrackScore>,
-        operation_id: String,
-    ) -> TrackEditResult;
-
-    score_dsl::score_dsl_export(
-        score_id: String,
-        track_id: String,
-        venue_id: String,
-        include_clip_ids: bool,
-    ) -> ScoreDslExportResponse;
-    score_dsl::score_dsl_validate(
-        score_id: String,
-        track_id: String,
-        venue_id: String,
-        source: String,
-    ) -> ScoreDslValidationResponse;
-    score_dsl::score_dsl_import(
-        score_id: String,
-        track_id: String,
-        venue_id: String,
-        operation_id: String,
-        source: String,
-        base_revision: String,
-    ) -> ScoreDslImportResponse;
-
-    cloud_sync::search_patterns_remote(
-        query: String,
-        category_name: Option<String>,
-        limit: Option<i32>,
-        offset: Option<i32>,
-    ) -> Vec<SearchPatternRow>;
-    cloud_sync::get_display_names(uids: Vec<String>) -> HashMap<String, String>;
 
     distribute::distribute(
         venue_id: String,
@@ -725,9 +619,7 @@ commands! {
     host_audio::host_snapshot() -> HostAudioSnapshot;
 
     sync::force_quit() -> ();
-    sync::sync_full() -> SyncReport;
     sync::sync_status() -> SyncStatus;
-    sync::sync_retry() -> ();
 
     rekordbox::rekordbox_open_library() -> RekordboxLibraryInfo;
     rekordbox::rekordbox_list_tracks() -> Vec<RekordboxTrack>;

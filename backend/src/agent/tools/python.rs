@@ -73,7 +73,7 @@ impl Tool for PythonTool {
         let execution_id = resolve_execution_id(
             ctx.thread_id,
             ctx.execution_id.map(str::to_string),
-            ctx.authored_workspace_id,
+            ctx.draft_id,
         )?;
         let guard = InterruptOnDrop {
             workspaces: Arc::clone(&ctx.services().workspaces),
@@ -92,14 +92,13 @@ impl Tool for PythonTool {
             &ctx.services().fixtures_root,
             &ctx.services().workspaces,
             &ctx.services().graph_runs,
-            &ctx.services().authored,
             ctx.thread_id.to_string(),
             args.code,
             ctx.scope.clone(),
             Some(ctx.turn_message_id.to_string()),
             principal,
             ctx.execution_id.map(str::to_string),
-            ctx.authored_workspace_id.map(str::to_string),
+            ctx.draft_id.map(str::to_string),
         )
         .await;
         drop(guard.disarm());

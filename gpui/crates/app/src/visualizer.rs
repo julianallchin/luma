@@ -979,7 +979,7 @@ impl Visualizer {
         let environment = VenueEnvironment::default();
         let composite = subject
             .clone()
-            .map(|lit| (library.composite_score(&lit.score, None), lit));
+            .map(|lit| (library.composite_score(&lit.score), lit));
         let venue = venue_id.to_string();
         cx.spawn(async move |this, cx| {
             // The composite first: it is what makes the sample non-empty, and
@@ -1083,7 +1083,7 @@ impl Visualizer {
             self.lit = None;
             return;
         };
-        let composite = library.composite_score(&lit.score, None);
+        let composite = library.composite_score(&lit.score);
         cx.spawn(async move |this, cx| {
             let landed = composite.await.is_ok().then_some(lit);
             this.update(cx, |this, cx| {
@@ -2307,6 +2307,10 @@ struct FrameSample {
     haze_time_s: f32,
     /// Camera distance, so a report says how zoomed in the stage was.
     camera_radius: f32,
+    /// Exact camera handed to the renderer, in internal Z-up world space.
+    camera_eye: [f32; 3],
+    camera_target: [f32; 3],
+    camera_fov_y_deg: f32,
     /// Physical pixels the renderer was asked for.
     width: u32,
     height: u32,
@@ -3863,6 +3867,14 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                         build_ms: stage.last_work.build_ms,
                                         pick_ms: stage.last_work.pick_ms,
                                         camera_radius: camera.radius,
+                                        // `build_frame_with` converts the scene's
+                                        // Y-up camera back to this internal Z-up
+                                        // space before rendering. Recording the UI
+                                        // camera directly therefore matches the
+                                        // `Frame` camera a replay must supply.
+                                        camera_eye: camera.position().to_array(),
+                                        camera_target: camera.target.to_array(),
+                                        camera_fov_y_deg: camera.fov_y_deg,
                                         width,
                                         height,
                                         lit_cones,

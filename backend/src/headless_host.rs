@@ -179,17 +179,5 @@ pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
         .with_events(Events::new(StderrEvents))
         .with_fixture_principal(config.fixture_principal.clone());
 
-    if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
-        &services.db().0,
-        services.authored(),
-        services.workspaces(),
-        services.graph_runs(),
-        &services.subagents,
-    )
-    .await
-    {
-        eprintln!("[agent-threads] startup recovery: {error}");
-    }
-
     Ok(services)
 }

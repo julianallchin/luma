@@ -106,30 +106,22 @@ pub struct ScoreSummary {
     #[sqlx(rename = "annotation_count")]
     #[ts(type = "number")]
     pub annotation_count: i64,
-    /// Who wrote the newest revision of this score's authored document, in the
-    /// open vocabulary [`crate::models::authored_state::ActorLabel`] reads.
+    /// Who last wrote this score, in the open vocabulary
+    /// [`crate::models::actor::ActorLabel`] reads.
     ///
-    /// Provenance, not ownership: `uid` says whose document it is, and a score
-    /// an agent authored through its owner's session is still owned by that
-    /// person. `None` for a score with no authored history — one seeded
-    /// straight into the table, or written before the column existed.
+    /// Provenance, not ownership: `uid` says whose score it is, and a score an
+    /// agent wrote through its owner's session is still owned by that person.
+    /// `None` for a score nobody has edited since the change log existed.
     #[sqlx(rename = "last_actor")]
     pub last_actor: Option<String>,
-    /// When that revision was authored. The score row's own `updated_at` moves
-    /// for reasons that are not authorship, so this is what a surface showing
+    /// When that edit landed. The score row's own `updated_at` moves for
+    /// reasons that are not authorship, so this is what a surface showing
     /// "last worked on" should read.
     #[sqlx(rename = "last_authored_at")]
     pub last_authored_at: Option<String>,
-    /// How many revisions the document has, counting every one the history
-    /// list would show — including the prepare half of an agent turn, so the
-    /// number here and the rows there cannot disagree.
-    #[sqlx(rename = "revision_count")]
-    #[ts(type = "number")]
-    pub revision_count: i64,
-    /// What the agent runs that authored this score cost, in dollars, summed
-    /// over every thread whose revisions touched the document. `None` when no
-    /// run against it was ever priced — an operator's own edits, or a run
-    /// whose harness reported no cost.
+    /// What the agent runs against this score cost, in dollars, summed over
+    /// every thread bound to it. `None` when no run against it was ever priced
+    /// — an operator's own edits, or a run whose harness reported no cost.
     #[sqlx(rename = "cost_usd")]
     pub cost_usd: Option<f64>,
     /// Tokens those same runs spent, all four counts summed. Zero rather than

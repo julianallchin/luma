@@ -32,7 +32,6 @@ pub async fn run_python_cell(
         &services.fixtures_root,
         &services.workspaces,
         &services.graph_runs,
-        &services.authored,
         thread_id,
         code,
         scope,

@@ -30,7 +30,7 @@ use luma_ui::float::{self, RowState};
 use luma_ui::glass;
 use luma_ui::node::{AgentNode, Instrument, Role};
 
-use luma_lib::models::authored_state::ActorLabel;
+use luma_lib::models::actor::ActorLabel;
 use luma_lib::models::scores::ScoreSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
 
@@ -48,11 +48,11 @@ pub(crate) struct ScoreRow {
     pub(crate) ordinal: i64,
     pub(crate) venue_id: SharedString,
     pub(crate) venue: SharedString,
-    /// Who *wrote* it: the actor on the newest revision of its authored
-    /// document, read through [`ActorLabel`]. Not ownership — a score an agent
-    /// authored through this person's session is still their document, and the
-    /// row that said "You" for it was answering the wrong question. Falls back
-    /// to the owner when the score has no authored history at all.
+    /// Who *wrote* it: the actor behind the score's last write, read through
+    /// [`ActorLabel`]. Not ownership — a score an agent authored through this
+    /// person's session is still their document, and the row that said "You"
+    /// for it was answering the wrong question. Falls back to the owner when
+    /// nothing recorded an actor at all.
     author: SharedString,
     /// The score's own name, when it was given one. Most are unnamed, which
     /// is why the owner and not this is the row's leading word.
@@ -63,9 +63,6 @@ pub(crate) struct ScoreRow {
     /// authored timestamp when there is one: the score row's `updated_at`
     /// moves for reasons that are not authorship.
     age: SharedString,
-    /// How many revisions the document has. Shown only past one, because
-    /// every score has at least the revision that created it.
-    revisions: i64,
     /// What the agent runs behind this score cost and spent, already
     /// formatted, or empty when nothing recorded a run against it. One field
     /// rather than two: the pair is always shown together and a score with a
@@ -115,7 +112,6 @@ pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreR
                         .unwrap_or(&score.updated_at),
                 )
                 .into(),
-                revisions: score.revision_count,
                 spend: spend(score.cost_usd, score.total_tokens).into(),
                 read_only,
             }
@@ -704,13 +700,8 @@ fn score_row(
     press: Option<(&Entity<Luma>, &TrackBrowserRow)>,
 ) -> AnyElement {
     let id = SharedString::from(format!("score-{}", row.id));
-    let revisions = if row.revisions > 1 {
-        format!(" · {} rev", row.revisions)
-    } else {
-        String::new()
-    };
     let label = format!(
-        "#{} · {} · {} clips · {}{revisions}{}{}",
+        "#{} · {} · {} clips · {}{}{}",
         row.ordinal,
         row.author,
         row.clips,
@@ -791,10 +782,7 @@ fn score_row(
                     .truncate()
                     .text_size(px(10.))
                     .text_color(glass::ink(0.45))
-                    .child(format!(
-                        "{} clips · {}{revisions}{}",
-                        row.clips, row.age, row.spend
-                    )),
+                    .child(format!("{} clips · {}{}", row.clips, row.age, row.spend)),
             ),
     )
     .when(row.read_only, |el| {

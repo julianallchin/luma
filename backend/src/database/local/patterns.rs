@@ -23,6 +23,21 @@ pub async fn get_pattern_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<Patte
     Ok(row)
 }
 
+/// A pattern summary, or `None` when the id names nothing this caller sees.
+pub async fn optional_pattern(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<Option<PatternSummary>, String> {
+    sqlx::query_as::<_, PatternSummary>(sqlx::AssertSqlSafe(format!(
+        "{} WHERE pattern.id = ?",
+        PATTERN_SUMMARY_SELECT
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("Failed to fetch pattern: {error}"))
+}
+
 /// Core: list patterns
 pub async fn list_patterns_pool(pool: &sqlx::SqlitePool) -> Result<Vec<PatternSummary>, String> {
     let mut connection = pool

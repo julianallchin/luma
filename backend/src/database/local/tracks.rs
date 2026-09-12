@@ -2,7 +2,7 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::tracks::{
     ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
@@ -68,9 +68,8 @@ pub async fn get_venue_annotation_counts(
 ) -> Result<HashMap<String, i64>, String> {
     let venue_id = access.venue_id().to_string();
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
-                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
-                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
+        "SELECT s.track_id,
+                SUM((SELECT COUNT(*) FROM clips WHERE clips.score_id = s.id)) AS cnt
          FROM scores s
          JOIN auth_venue_access access ON access.venue_id = s.venue_id
          WHERE s.venue_id = ?
@@ -123,17 +122,15 @@ pub async fn list_tracks_enriched_for_connection(
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
          LEFT JOIN (
-             SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
-                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
-                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
+             SELECT s.track_id,
+                 SUM((SELECT COUNT(*) FROM clips WHERE clips.score_id = s.id)) AS cnt
              FROM scores s
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              GROUP BY s.track_id
          ) ac ON ac.track_id = t.id
          LEFT JOIN (
-             SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
-                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
-                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
+             SELECT s.track_id,
+                 SUM((SELECT COUNT(*) FROM clips WHERE clips.score_id = s.id)) AS cnt
              FROM scores s
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
@@ -164,29 +161,21 @@ pub async fn list_tracks_enriched_for_connection(
     // active venue. Done in Rust because SQLite gaps-and-islands SQL is
     // noisy and this set is small.
     if !vid.is_empty() {
-        let mut intervals: Vec<(String, f64, f64)> = sqlx::query_as(
-            "SELECT s.track_id, tsc.start_time, tsc.end_time
+        let mut intervals: Vec<(String, f64, f64)> = Vec::new();
+        let clips: Vec<(String, f64, f64)> = sqlx::query_as(
+            "SELECT s.track_id, clip.start, clip.duration
              FROM scores s
-             JOIN track_scores tsc ON tsc.score_id = s.id
+             JOIN clips clip ON clip.score_id = s.id
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
-             ORDER BY s.track_id, tsc.start_time",
+             ORDER BY s.track_id, clip.start",
         )
         .bind(vid)
         .fetch_all(&mut *connection)
         .await
-        .map_err(|e| format!("Failed to load annotation intervals: {}", e))?;
-        let graph_scores: Vec<(String, String)> = sqlx::query_as(
-            "SELECT s.track_id, s.graph_document_json FROM scores s
-             JOIN auth_venue_access access ON access.venue_id = s.venue_id
-             WHERE s.venue_id = ? AND s.graph_document_json IS NOT NULL",
-        )
-        .bind(vid)
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("Failed to load annotation intervals: {error}"))?;
         let mut clocks = HashMap::new();
-        for (track_id, source) in graph_scores {
+        for (track_id, start, duration) in clips {
             if !clocks.contains_key(&track_id) {
                 let grid =
                     crate::services::tracks::get_track_beats_for_connection(connection, &track_id)
@@ -198,26 +187,18 @@ pub async fn list_tracks_enriched_for_connection(
                         .map_err(|error| error.to_string())?,
                 );
             }
-            let score = crate::services::graph_scores::GraphScoreDocument::from_source(&source)?;
-            if score.score.clips.is_empty() {
-                continue;
-            }
-            // A score may arrive before its beat metadata during sync. Its
-            // clip count is already known; time coverage waits for that grid.
+            // A score may arrive before its beat metadata. Its clip count is
+            // already known; time coverage waits for that grid.
             let Some(clock) = clocks[&track_id].as_ref() else {
                 continue;
             };
-            for clip in score.score.clips.values() {
-                intervals.push((
-                    track_id.clone(),
-                    clock
-                        .seconds_at(clip.start)
-                        .map_err(|error| error.to_string())?,
-                    clock
-                        .seconds_at(clip.start + clip.duration)
-                        .map_err(|error| error.to_string())?,
-                ));
-            }
+            intervals.push((
+                track_id.clone(),
+                clock.seconds_at(start).map_err(|error| error.to_string())?,
+                clock
+                    .seconds_at(start + duration)
+                    .map_err(|error| error.to_string())?,
+            ));
         }
 
         intervals.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.total_cmp(&right.1)));
@@ -469,19 +450,6 @@ pub async fn prepare_track_deletion(
             "Track still owns durable conversations; delete those conversations first".into(),
         );
     }
-    let authored_history: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM authored_documents
-         WHERE document_kind = 'track_score' AND track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|e| format!("Failed to inspect track authored history: {e}"))?;
-    if authored_history != 0 {
-        return Err(
-            "Authored tracks must be retained so their score history remains restorable".into(),
-        );
-    }
     Ok(Some(row))
 }
 
@@ -492,7 +460,7 @@ pub async fn delete_prepared_track_record(
 ) -> Result<u64, String> {
     let deleted = match owner_user_id {
         Some(owner_user_id) => {
-            sync_delete::delete_synced_where(
+            deletes::delete_where(
                 connection,
                 "tracks",
                 "id = ? AND uid = ?",
@@ -501,13 +469,7 @@ pub async fn delete_prepared_track_record(
             .await
         }
         None => {
-            sync_delete::delete_synced_where(
-                connection,
-                "tracks",
-                "id = ? AND uid IS NULL",
-                &[track_id],
-            )
-            .await
+            deletes::delete_where(connection, "tracks", "id = ? AND uid IS NULL", &[track_id]).await
         }
     }
     .map_err(|e| format!("Failed to delete prepared track: {e}"))?;
@@ -1404,9 +1366,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO track_scores
-             (id, uid, score_id, pattern_id, start_time, end_time)
-             VALUES ('bob-clip', 'bob', 'bob-score', 'bob-pattern', 0, 1)",
+            "INSERT INTO clips
+             (id, uid, score_id, graph, start, duration, seed, selection_json, blend_mode)
+             VALUES ('bob-score:bob-clip', 'bob', 'bob-score', 'strobe', 0, 1, '0',
+                     '{\"expression\":\"all\"}', 'replace')",
         )
         .execute(&pool)
         .await

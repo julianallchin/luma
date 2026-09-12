@@ -7,6 +7,7 @@ members = [
     "crates/fixture-kinematics",
     "crates/mcp-stdio",
     "crates/patterns",
+    "crates/sync",
 ]
 
 [package]
@@ -63,6 +64,8 @@ scripted-model = []
 
 [dependencies]
 luma-patterns = { path = "crates/patterns" }
+# PowerSync SDK glue: the SQLx pool and the SDK pool over one SQLite file.
+luma-sync = { path = "crates/sync" }
 sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -56,10 +56,9 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
                 (admission.active_uid IS NOT NULL AND (
                     venue.uid = admission.active_uid
                     OR EXISTS(
-                        SELECT 1 FROM venue_memberships membership
+                        SELECT 1 FROM venue_members membership
                         WHERE membership.venue_id = venue.id
-                          AND membership.user_id = admission.active_uid
-                          AND membership.role = 'member'
+                          AND membership.uid = admission.active_uid
                     )
                 ))
            )
@@ -113,84 +112,6 @@ pub async fn create_venue(
     Ok(venue)
 }
 
-/// Insert a venue from a cloud join operation (role = 'member').
-/// `uid` should be the venue OWNER's uid (not the joiner's).
-/// Uses ON CONFLICT for idempotency (re-joining updates name/description).
-pub async fn insert_joined_venue(
-    pool: &sqlx::SqlitePool,
-    id: &str,
-    owner_uid: &str,
-    name: &str,
-    description: Option<&str>,
-    share_code: Option<&str>,
-    member_uid: &str,
-) -> Result<Venue, String> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| format!("Failed to begin joined venue installation: {error}"))?;
-    let active_uid: Option<String> = sqlx::query_scalar(
-        "SELECT active_uid FROM auth_write_admission
-         WHERE singleton = 1 AND armed = 1 AND accepting = 1
-           AND maintenance = 0 AND active_uid = ?",
-    )
-    .bind(member_uid)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to authorize joined venue installation: {error}"))?
-    .flatten();
-    if active_uid.as_deref() != Some(member_uid) {
-        return Err("Authenticated principal changed while joining venue".into());
-    }
-    let existing_owner: Option<Option<String>> =
-        sqlx::query_scalar("SELECT uid FROM venues WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|error| format!("Failed to inspect joined venue: {error}"))?;
-    if existing_owner.flatten().as_deref() == Some(member_uid) {
-        return Err("You already own this venue".into());
-    }
-    crate::database::local::write_admission::enter_remote_writes(&mut transaction).await?;
-    sqlx::query(
-        "INSERT INTO venues (id, uid, name, description, share_code, role) VALUES (?, ?, ?, ?, ?, 'member')
-         ON CONFLICT(id) DO UPDATE SET
-           uid = excluded.uid,
-           name = excluded.name,
-           description = excluded.description",
-    )
-    .bind(id)
-    .bind(owner_uid)
-    .bind(name)
-    .bind(description)
-    .bind(share_code)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|e| format!("Failed to insert joined venue: {}", e))?;
-    sqlx::query(
-        "INSERT INTO venue_memberships (venue_id, user_id, role)
-         VALUES (?, ?, 'member')
-         ON CONFLICT(venue_id, user_id) DO NOTHING",
-    )
-    .bind(id)
-    .bind(member_uid)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to install venue membership: {error}"))?;
-    let query = format!("SELECT {} FROM venues WHERE id = ?", VENUE_COLUMNS);
-    let venue = sqlx::query_as::<_, Venue>(sqlx::AssertSqlSafe(query))
-        .bind(id)
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to read joined venue: {error}"))?;
-    crate::database::local::write_admission::leave_remote_writes(&mut transaction).await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("Failed to commit joined venue installation: {error}"))?;
-    Ok(venue)
-}
-
 /// Update a venue
 pub async fn update_venue(
     access: &mut VenueAccess<'_, Write>,
@@ -234,18 +155,6 @@ pub async fn delete_venue(access: &mut VenueAccess<'_, Write>) -> Result<(), Str
     if threads != 0 {
         return Err(
             "Venue still owns durable conversations; delete those conversations first".into(),
-        );
-    }
-
-    let authored_history: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM authored_documents WHERE venue_id = ?")
-            .bind(&id)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|error| format!("Failed to inspect venue authored history: {error}"))?;
-    if authored_history != 0 {
-        return Err(
-            "Authored venues must be retained so their score history remains restorable".into(),
         );
     }
 
@@ -300,8 +209,8 @@ pub async fn remove_current_venue_membership(
              SELECT 1
              FROM auth_write_admission admission
              JOIN venues venue ON venue.id = ?
-             JOIN venue_memberships membership
-               ON membership.venue_id = venue.id AND membership.user_id = ?
+             JOIN venue_members membership
+               ON membership.venue_id = venue.id AND membership.uid = ?
               AND membership.role = 'member'
              WHERE admission.singleton = 1 AND admission.armed = 1
                AND admission.accepting = 1 AND admission.maintenance = 0
@@ -319,7 +228,7 @@ pub async fn remove_current_venue_membership(
     if admitted != 1 {
         return Err("Venue resource not found".into());
     }
-    let deleted = sqlx::query("DELETE FROM venue_memberships WHERE venue_id = ? AND user_id = ?")
+    let deleted = sqlx::query("DELETE FROM venue_members WHERE venue_id = ? AND uid = ?")
         .bind(venue_id)
         .bind(principal)
         .execute(&mut *transaction)
@@ -507,7 +416,7 @@ mod tests {
         insert_owned_venue(&pool).await;
         sqlx::query(
             "INSERT INTO agent_threads
-             (id, owner_user_id, agent_kind, subject_kind, subject_id, venue_id, score_id)
+             (id, uid, agent_kind, subject_kind, subject_id, venue_id, score_id)
              VALUES ('thread', 'alice', 'track_copilot', 'track', 'track', 'venue', 'score')",
         )
         .execute(&pool)
@@ -516,27 +425,6 @@ mod tests {
 
         let error = delete_owned_venue(&pool).await.unwrap_err();
         assert!(error.contains("durable conversations"));
-        assert!(venue_exists(&pool).await);
-    }
-
-    #[tokio::test]
-    async fn venue_deletion_refuses_authored_history() {
-        let (_directory, pool) = test_pool().await;
-        insert_owned_venue(&pool).await;
-        sqlx::query(
-            "INSERT INTO authored_documents
-             (document_id, document_kind, principal_key, subject_id,
-              track_id, venue_id, score_id)
-             VALUES (?, 'track_score', 'signed-in:alice', 'track',
-                     'track', 'venue', 'score')",
-        )
-        .bind(format!("ad-{}", "a".repeat(64)))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let error = delete_owned_venue(&pool).await.unwrap_err();
-        assert!(error.contains("score history remains restorable"));
         assert!(venue_exists(&pool).await);
     }
 

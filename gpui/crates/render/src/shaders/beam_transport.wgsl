@@ -19,8 +19,8 @@ override HAZE_WORK_HIST: bool = false;
 var<private> haze_hist: array<u32, 8>;
 
 // Lit-interval cache (`docs/design/haze-lit-interval-cache.md`). The shadow
-// traversal records every non-empty interval it hands to `lit_interval`, in
-// call order, so the compute kernel can store the sequence and replay it
+// traversal records every interval it hands to `lit_interval`, including empty
+// tails, in call order so the compute kernel can store and replay the sequence
 // bit-for-bit on later frames. The traversal itself is unchanged; only the
 // recording hook sits between it and the quadrature. Bindings and the cache
 // branch live in `haze.wgsl`, which alone reaches them.
@@ -28,6 +28,10 @@ override INTERVAL_CACHE: bool = false;
 // The compaction's fill pass (`haze_compact.wgsl`) records the traversal's
 // call list without integrating anything.
 override FILL_ONLY: bool = false;
+// Period-1 arithmetic-floor control for temporal residual reuse. Only the
+// three residual evaluator pipelines enable this; whole-lit and fused paths
+// retain their established RGB arithmetic.
+override RESID_SCALAR_K: bool = false;
 const CACHE_K: u32 = 8u;
 // Every call, empty tails included: the replay must add the same terms in
 // the same expression shape, or float contraction rounds differently.
@@ -208,16 +212,7 @@ fn projected_shadow_visibility(clip: vec4<f32>, layer: i32) -> f32 {
 
 // Use the cached conservative depth bounds to prove a whole segment lit or
 // shadowed. Only a segment containing a shadow edge needs the four samples.
-fn segment_shadow_visibility(ray_dir: vec3<f32>, a: f32, b: f32, li: u32) -> f32 {
-    let layer = i32(light_rest[li].shadow_slot);
-    if layer < 0 {
-        var visibility = 0.0;
-        for (var i = 0u; i < 4u; i += 1u) {
-            let t = mix(a, b, (f32(i) + 0.5) * 0.25);
-            visibility += fixture_shadow_visibility(haze.camera_pos.xyz + ray_dir * t, li) * 0.25;
-        }
-        return visibility;
-    }
+fn segment_shadow_visibility_layer(ray_dir: vec3<f32>, a: f32, b: f32, layer: i32) -> f32 {
     let matrix = fixture_shadow_matrices[layer].view_proj;
     let origin = matrix * vec4<f32>(haze.camera_pos.xyz, 1.0);
     let direction = matrix * vec4<f32>(ray_dir, 0.0);
@@ -247,6 +242,19 @@ fn segment_shadow_visibility(ray_dir: vec3<f32>, a: f32, b: f32, li: u32) -> f32
         + projected_shadow_visibility(first + delta, layer)
         + projected_shadow_visibility(first + delta * 2.0, layer)
         + projected_shadow_visibility(last, layer)) * 0.25;
+}
+
+fn segment_shadow_visibility(ray_dir: vec3<f32>, a: f32, b: f32, li: u32) -> f32 {
+    let layer = i32(light_rest[li].shadow_slot);
+    if layer >= 0 {
+        return segment_shadow_visibility_layer(ray_dir, a, b, layer);
+    }
+    var visibility = 0.0;
+    for (var i = 0u; i < 4u; i += 1u) {
+        let t = mix(a, b, (f32(i) + 0.5) * 0.25);
+        visibility += fixture_shadow_visibility(haze.camera_pos.xyz + ray_dir * t, li) * 0.25;
+    }
+    return visibility;
 }
 
 fn linear_view_depth(raw_depth: f32) -> f32 {
@@ -650,13 +658,14 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
         }
         left_field = right_field;
     }
+    if RESID_SCALAR_K { return vec3<f32>(sum); }
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // Every quadrature call the shadow traversal makes goes through here so the
-// cache (and the diagnostic histogram) sees the exact call sequence, tails
-// included. An empty interval returns zero before any arithmetic, and adding
-// that zero is exact, so only non-empty calls are recorded.
+// cache (and the diagnostic histogram) sees the exact call sequence, including
+// empty tails. An empty interval returns zero before any arithmetic, and adding
+// that zero is exact.
 fn lit_counted(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     if INTERVAL_CACHE || HAZE_WORK_HIST {
         if cache_count < CACHE_K { cache_intervals[cache_count] = vec2<f32>(a, b); }

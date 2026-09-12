@@ -85,10 +85,21 @@ async fn upgrade_in_transaction(connection: &mut SqliteConnection) -> Result<(),
     .map_err(|error| format!("Failed to load relational graphs for legacy upgrade: {error}"))?;
 
     // Transform and validate every candidate before taking admission or writing
-    // any row. One ambiguous graph aborts the whole upgrade.
+    // any row. An ambiguous graph aborts the whole upgrade; one this cannot
+    // read at all is left exactly as it is. Rows arrive from other devices
+    // now, and a row this pass cannot parse must not be a library that will
+    // not open — it is one implementation that will not evaluate.
     let mut updates = Vec::new();
     for (id, graph_json) in rows {
-        if let Some(upgraded_json) = upgrade_graph_json(&id, &graph_json)? {
+        let candidate = match upgrade_graph_json(&id, &graph_json) {
+            Ok(candidate) => candidate,
+            Err(error) if error.contains("invalid graph JSON") => {
+                log::warn!("[graphs] leaving {id} alone: {error}");
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(upgraded_json) = candidate {
             updates.push(PendingUpdate {
                 id,
                 previous_json: graph_json,

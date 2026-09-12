@@ -13,6 +13,17 @@ fn main() {
         std::process::exit(2);
     }
 
+    // Somewhere for the backend's `log::warn!` to go. Without this the sync
+    // layer's only account of a refused token or a rejected row is written to
+    // a logger nobody installed. Warnings from everything, and the sync
+    // layer's own narration, unless `RUST_LOG` says otherwise.
+    env_logger::Builder::new()
+        .parse_filters(
+            &std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,luma_lib::sync=info".to_owned()),
+        )
+        .format_timestamp_millis()
+        .init();
+
     // Resolve the environment's answer once, on the thread that will own the
     // app, so nothing downstream re-reads it. The harness installs its own
     // instead — see `luma_ui::runtime`.

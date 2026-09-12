@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, VenueNode};
 
@@ -244,7 +244,7 @@ pub async fn delete_constraint(
     node_id: &str,
     my_socket: &str,
 ) -> Result<(), String> {
-    sync_delete::delete_synced_where(
+    deletes::delete_where(
         access.connection(),
         "venue_constraints",
         "node_id = ? AND my_socket = ?",
@@ -271,11 +271,13 @@ pub async fn upsert_edge(
     roll: f64,
 ) -> Result<(), String> {
     let principal = access.principal().map(str::to_owned);
+    let venue_id = access.venue_id().to_owned();
     sqlx::query(
-        "INSERT INTO venue_edges (child_id, uid, parent_id, my_socket, their_socket, roll)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO venue_edges (child_id, uid, venue_id, parent_id, my_socket, their_socket, roll)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(child_id) DO UPDATE SET
              uid = excluded.uid,
+             venue_id = excluded.venue_id,
              parent_id = excluded.parent_id,
              my_socket = excluded.my_socket,
              their_socket = excluded.their_socket,
@@ -283,6 +285,7 @@ pub async fn upsert_edge(
     )
     .bind(child_id)
     .bind(principal)
+    .bind(venue_id)
     .bind(parent_id)
     .bind(my_socket)
     .bind(their_socket)
@@ -314,16 +317,20 @@ pub async fn upsert_constraint(
     target_socket: &str,
 ) -> Result<(), String> {
     let principal = access.principal().map(str::to_owned);
+    let venue_id = access.venue_id().to_owned();
     sqlx::query(
-        "INSERT INTO venue_constraints (node_id, uid, my_socket, target_node, target_socket)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO venue_constraints
+             (node_id, uid, venue_id, my_socket, target_node, target_socket)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(node_id, my_socket) DO UPDATE SET
              uid = excluded.uid,
+             venue_id = excluded.venue_id,
              target_node = excluded.target_node,
              target_socket = excluded.target_socket",
     )
     .bind(node_id)
     .bind(principal)
+    .bind(venue_id)
     .bind(my_socket)
     .bind(target_node)
     .bind(target_socket)
@@ -342,7 +349,7 @@ pub async fn delete_edge(
     access: &mut VenueAccess<'_, Write>,
     child_id: &str,
 ) -> Result<(), String> {
-    sync_delete::delete_synced_where(
+    deletes::delete_where(
         access.connection(),
         "venue_edges",
         "child_id = ?",
@@ -365,17 +372,21 @@ pub async fn set_params(
     params: &BTreeMap<String, Option<f64>>,
 ) -> Result<(), String> {
     let principal = access.principal().map(str::to_owned);
+    let venue_id = access.venue_id().to_owned();
     for (key, value) in params {
         match value {
             Some(value) if value.is_finite() => {
                 sqlx::query(
-                    "INSERT INTO venue_node_params (node_id, uid, key, value) VALUES (?, ?, ?, ?)
+                    "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
+                     VALUES (?, ?, ?, ?, ?)
                      ON CONFLICT(node_id, key) DO UPDATE SET
                          uid = excluded.uid,
+                         venue_id = excluded.venue_id,
                          value = excluded.value",
                 )
                 .bind(node_id)
                 .bind(principal.clone())
+                .bind(venue_id.clone())
                 .bind(key)
                 .bind(value)
                 .execute(&mut *access.connection())
@@ -385,7 +396,7 @@ pub async fn set_params(
             // A non-finite value is a cleared key, not a stored NaN: NaN in a
             // transform poisons every descendant's pose.
             _ => {
-                sync_delete::delete_synced_where(
+                deletes::delete_where(
                     access.connection(),
                     "venue_node_params",
                     "node_id = ? AND key = ?",
@@ -440,14 +451,9 @@ pub async fn delete_nodes(
     ids: &[String],
 ) -> Result<(), String> {
     for id in ids {
-        sync_delete::delete_synced_where(
-            access.connection(),
-            "venue_nodes",
-            "id = ?",
-            &[id.as_str()],
-        )
-        .await
-        .map_err(|e| format!("Failed to delete venue node: {e}"))?;
+        deletes::delete_where(access.connection(), "venue_nodes", "id = ?", &[id.as_str()])
+            .await
+            .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
     graph_changed();
     Ok(())

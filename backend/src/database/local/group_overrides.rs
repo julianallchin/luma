@@ -64,8 +64,7 @@ pub async fn put(access: &mut VenueAccess<'_, Write>, row: &GroupOverride) -> Re
              path = excluded.path,
              label = excluded.label,
              parent_id = excluded.parent_id,
-             merged_into = excluded.merged_into,
-             version = fixture_group_overrides.version",
+             merged_into = excluded.merged_into",
     )
     .bind(&row.group_id)
     .bind(venue_id)

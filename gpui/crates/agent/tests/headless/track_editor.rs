@@ -2,7 +2,7 @@
 //!
 //! The point of this test is that *a clip's bounds are a document and the
 //! playhead is not*. Dragging a clip's edge is a write — it goes through
-//! `update_track_score` and comes back as the authoritative clip list — so the
+//! `apply_score_document` and lands on the score's rows — so the
 //! test moves an edge, reads it, then leaves the screen and comes back,
 //! because only the second reading can tell a repaint from a write. Playback
 //! is the opposite: nothing is written, and the only honest evidence is that

@@ -1,13 +1,12 @@
 //! The turn protocol.
 //!
-//! The ordering is a durability contract, not UI logic:
-//!
 //! ```text
-//! persist(user) → model step(s) → prepare_turn → persist(assistant) → finalize_turn
+//! persist(user) → model step(s) → persist(assistant)
 //! ```
 //!
-//! Each assistant row prepares exactly one authored snapshot after its tools
-//! finish. Steering starts a new row and therefore a new preparation.
+//! A turn's tools write rows as they go; closing a row is just an append. The
+//! editor is told the score moved by comparing its `updated_at` across the
+//! turn, which is exactly what a save touches and nothing else does.
 
 use std::sync::Arc;
 
@@ -31,9 +30,6 @@ use crate::models::agent_execution::PythonScopeInput;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadUsage, AppendAgentThreadMessagesInput,
     NewAgentThreadMessage, ThreadRoute,
-};
-use crate::models::authored_state::{
-    AuthoredTurnCommit, FinalizeAuthoredTurnInput, PrepareAuthoredTurnInput,
 };
 
 /// Output ceiling for one model step. Generous: the ceiling exists to bound a
@@ -59,6 +55,7 @@ pub(super) async fn run(
         native_session: None,
         claim: None,
         actual_model: None,
+        score: None,
     };
     let outcome = match turn.drive(prompt).await {
         Ok(()) => TurnOutcome::Completed,
@@ -95,6 +92,20 @@ struct Turn {
     native_session: Option<engine::state::NativeSession>,
     claim: Option<engine::claim::Claim>,
     actual_model: Option<String>,
+    /// The score this thread edits and the `updated_at` this turn last saw on
+    /// it. A moved stamp is what tells the editor to re-read.
+    score: Option<(String, String)>,
+}
+
+/// The score row's `updated_at`. `save_score` moves it when — and only when —
+/// something changed.
+async fn score_stamp(pool: &sqlx::SqlitePool, score_id: &str) -> Result<String, AgentError> {
+    sqlx::query_scalar("SELECT updated_at FROM scores WHERE id = ?")
+        .bind(score_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| AgentError::Storage(error.to_string()))
+        .map(|stamp| stamp.unwrap_or_default())
 }
 
 /// What a turn resolves once and every assistant row in it then reuses. Only
@@ -108,14 +119,11 @@ struct TurnSetup<'a> {
     system: String,
     registry: &'a ToolRegistry,
     scope: &'a PythonScopeInput,
-    /// The private authored head this thread writes to, for a subagent
-    /// thread. Resolved once, from the thread, and handed to every tool call:
-    /// a child's Python namespace and its authored writes then address the
-    /// same detached state `prepare_turn` will finalize, and no tool is in a
-    /// position to disagree about which.
-    workspace_id: Option<&'a str>,
-    /// Whether this turn has an authored document to checkpoint.
-    authored: bool,
+    /// The draft this thread writes into, for a subagent thread. Resolved
+    /// once, from the thread, and handed to every tool call: a child's Python
+    /// namespace and its score writes then address the same draft, and no tool
+    /// is in a position to disagree about which.
+    draft_id: Option<&'a str>,
     /// Resolved once per turn rather than once per step: every step of a turn
     /// writes into the same prefix, and re-reading the environment mid-turn
     /// could change the TTL under a cache that is already warm.
@@ -180,16 +188,25 @@ impl Turn {
             .tools
             .clone()
             .unwrap_or_else(|| tools::registry_for_context(authored));
-        // Only an authored context can address a detached document workspace.
-        let workspace_id = match authored {
-            false => None,
-            true => self
-                .service
-                .services()
-                .authored()
-                .thread_workspace(&pool, self.principal.as_deref(), &self.thread_id)
-                .await
-                .map_err(|error| AgentError::Storage(error.to_string()))?,
+        // Only a subagent thread works on a draft; a root thread edits live.
+        let draft_id = match (authored, detail.thread.score_id.as_deref()) {
+            (true, Some(score_id)) if detail.thread.parent_thread_id.is_some() => {
+                let mut connection = pool
+                    .acquire()
+                    .await
+                    .map_err(|error| AgentError::Storage(error.to_string()))?;
+                crate::services::drafts::of_thread(&mut connection, &self.thread_id, score_id)
+                    .await
+                    .map_err(AgentError::Storage)?
+            }
+            _ => None,
+        };
+        self.score = match detail.thread.score_id.clone() {
+            Some(score_id) => {
+                let stamp = score_stamp(&pool, &score_id).await?;
+                Some((score_id, stamp))
+            }
+            None => None,
         };
         let execution = self.resolve_execution(&detail.thread).await?;
         let context = engine::context_fingerprint(
@@ -212,8 +229,7 @@ impl Turn {
             system,
             registry: &registry,
             scope: &scope,
-            workspace_id: workspace_id.as_deref(),
-            authored,
+            draft_id: draft_id.as_deref(),
             cache_retention: CacheRetention::from_env(),
         };
 
@@ -437,79 +453,28 @@ impl Turn {
         Ok(id)
     }
 
-    /// Close one assistant row: reserve its authored state, insert it, then
-    /// commit. The row becomes durable only after an immutable prepared
-    /// revision exists, so a crash between the two is recoverable
-    /// (`authored_state_recover_turns`) rather than a lost association.
+    /// Close one assistant row: append it, then say whether the score moved.
     ///
-    /// A thread that revises no authored document has nothing to reserve, and
-    /// its row is simply appended — see [`TurnSetup::authored`].
+    /// `save_score` touches the score row exactly when something changed, so a
+    /// moved `updated_at` is the one honest signal that the editor should
+    /// re-read — and a turn that only talked emits nothing.
     async fn close_row(
         &mut self,
-        setup: &TurnSetup<'_>,
+        _setup: &TurnSetup<'_>,
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
     ) -> Result<(), AgentError> {
-        if !setup.authored {
-            let row = self.assistant_row_of(assistant_id)?;
-            self.append(&row).await?;
-            self.emit(TurnEvent::MessageEnded {
-                id: assistant_id.to_string(),
-                stop_reason,
-                usage,
-            });
-            return Ok(());
-        }
-        let pool = self.service.services().db().0.clone();
-        let authored = self.service.services().authored().clone();
-        let prepared = authored
-            .prepare_turn(
-                &pool,
-                self.principal.as_deref(),
-                PrepareAuthoredTurnInput {
-                    thread_id: self.thread_id.clone(),
-                    assistant_message_id: assistant_id.to_string(),
-                    // The authored document is the source of truth; there is no
-                    // live editor graph to capture backend-side.
-                    graph: None,
-                },
-            )
-            .await
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
-
         let row = self.assistant_row_of(assistant_id)?;
         self.append(&row).await?;
-
-        let commit = authored
-            .finalize_turn(
-                &pool,
-                self.principal.as_deref(),
-                FinalizeAuthoredTurnInput {
-                    thread_id: self.thread_id.clone(),
-                    assistant_message_id: assistant_id.to_string(),
-                    prepared_revision_id: prepared.prepared_revision_id,
-                },
-            )
-            .await
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
-        match commit {
-            AuthoredTurnCommit::Committed {
-                revision_id,
-                changed: true,
-                ..
-            } => self.emit(TurnEvent::DocumentChanged {
-                revision: revision_id,
-            }),
-            AuthoredTurnCommit::Committed { .. } => {}
-            AuthoredTurnCommit::Conflicted { conflicts, .. } => {
-                return Err(AgentError::Storage(format!(
-                    "authored turn conflicted on {} path(s); reload before continuing",
-                    conflicts.len()
-                )))
+        if let Some((score_id, stamp)) = self.score.clone() {
+            let pool = self.service.services().db().0.clone();
+            let current = score_stamp(&pool, &score_id).await?;
+            if current != stamp {
+                self.score = Some((score_id, current));
+                self.emit(TurnEvent::DocumentChanged);
             }
         }
-
         self.emit(TurnEvent::MessageEnded {
             id: assistant_id.to_string(),
             stop_reason,
@@ -837,11 +802,11 @@ async fn execute_tool(
         thread_id: thread_id,
         call_id: &call.id,
         turn_message_id,
-        // A subagent thread's Python namespace *is* its workspace: the
+        // A subagent thread's Python namespace *is* its draft: the
         // execution service checks the two are the same string and
         // authorizes both against this thread.
-        execution_id: setup.workspace_id,
-        authored_workspace_id: setup.workspace_id,
+        execution_id: setup.draft_id,
+        draft_id: setup.draft_id,
         scope: setup.scope,
         progress: &progress,
     };

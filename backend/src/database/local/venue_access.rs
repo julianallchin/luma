@@ -163,10 +163,9 @@ async fn authorize<'a, Mode>(
                     admission.armed, admission.accepting, admission.maintenance,
                     admission.active_uid,
                     EXISTS(
-                        SELECT 1 FROM venue_memberships membership
+                        SELECT 1 FROM venue_members membership
                         WHERE membership.venue_id = venue.id
-                          AND membership.user_id = admission.active_uid
-                          AND membership.role = 'member'
+                          AND membership.uid = admission.active_uid
                     )
              FROM venues venue
              CROSS JOIN auth_write_admission admission
@@ -254,7 +253,7 @@ fn not_found() -> String {
 const NOT_VENUE_CONTENT: &[&str] = &[
     // Who may open the venue, not what is in it. A membership is the venue's
     // access-control row, and it goes when the venue goes.
-    "venue_memberships",
+    "venue_members",
 ];
 
 /// Every table whose rows are one venue's content, read off the live schema.
@@ -310,7 +309,7 @@ mod tests {
         }
         // The venue row itself is not its own content, and a membership is who
         // may open the venue rather than what is in it.
-        for excluded in ["venues", "venue_memberships"] {
+        for excluded in ["venues", "venue_members"] {
             assert!(
                 !tables.iter().any(|t| t == excluded),
                 "{excluded} is not venue content: {tables:?}"
@@ -369,8 +368,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO venue_memberships (venue_id, user_id, role)
-             VALUES ('shared', 'bob', 'member')",
+            "INSERT INTO venue_members (id, uid, venue_id, role)
+             VALUES ('shared:bob', 'bob', 'shared', 'member')",
         )
         .execute(&mut *membership)
         .await
@@ -445,24 +444,12 @@ mod tests {
                 .await
                 .is_err()
         );
-        let trigger_error =
-            sqlx::query("UPDATE fixtures SET label = 'member bypass' WHERE id = 'shared-fixture'")
-                .execute(&pool)
-                .await
-                .unwrap_err();
-        assert!(trigger_error
-            .to_string()
-            .contains("fixture write is not authorized"));
-        let grant_error = sqlx::query(
-            "INSERT INTO venue_memberships (venue_id, user_id, role)
-             VALUES ('alice', 'bob', 'member')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap_err();
-        assert!(grant_error
-            .to_string()
-            .contains("venue membership grant is not authorized"));
+        // A raw UPDATE that goes round `VenueAccess` used to be refused by a
+        // trigger as well. That second copy of the rule is gone — see
+        // `migrations/20260914000000_local_write_guards.sql`: a download writes
+        // these tables directly, in checkpoint order, and the triggers refused
+        // that too. The lease above is the app's check and Postgres is the
+        // authority.
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await

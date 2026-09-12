@@ -1398,6 +1398,8 @@ fn frame_with_lights(
         overlays: Vec::new(),
         point_lights: base.point_lights.clone(),
         fixture_cones: Vec::with_capacity(count),
+        fixture_shadow_capacity_hint: 0,
+        fixture_lighting_domain: None,
         fixture_surface_lighting: true,
         beam_proxy: false,
         fixture_shadows: true,

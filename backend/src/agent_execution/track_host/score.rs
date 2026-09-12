@@ -1,43 +1,29 @@
-//! The Python graph builder edits the canonical document with core GraphEdit
-//! operations. This adapter supplies scope, production rendering and history.
+//! The Python score builder edits a whole [`luma_patterns::Score`] and hands it
+//! back. This adapter owns authority: which score, whose, and whether the write
+//! lands on the live rows or on the thread's draft.
 use super::*;
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::services::graph_scores::{
-    self, GraphScoreDocument, GraphScoreEdit, GraphScoreOperation, ScoreDocument,
+use crate::database::local::scores::rows;
+use crate::database::local::venue_access::{
+    AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
+use crate::services::{drafts, graph_scores};
+use luma_patterns::Score;
 
 impl TrackHost {
-    async fn score_document(&self) -> Result<ScoreDocument, HostCallError> {
-        let document = if let Some(workspace) = self.authored_workspace_id.as_deref() {
-            self.authored
-                .track_workspace(
-                    &self.pool,
-                    self.edit_scope.as_ref().map(|scope| scope.user_id.as_str()),
-                    &self.thread_id,
-                    workspace,
-                )
+    /// The document this thread is working on: its draft's state when it has
+    /// one, the live rows otherwise.
+    async fn score_document(&self) -> Result<Score, HostCallError> {
+        let mut access =
+            VenueAccess::<Read>::read(&self.pool, VenueResource::Score(&self.scope.score_id))
                 .await
-                .map_err(authored_error)?
-                .document
-        } else {
-            let mut access =
-                VenueAccess::<Read>::read(&self.pool, VenueResource::Score(&self.scope.score_id))
-                    .await
-                    .map_err(|error| HostCallError::new("forbidden", error))?;
-            graph_scores::read_score_document(&mut access, &self.scope)
+                .map_err(|error| HostCallError::new("forbidden", error))?;
+        match self.draft_id.as_deref() {
+            Some(draft) => drafts::state(access.connection(), draft)
                 .await
-                .map_err(|error| HostCallError::new("invalid_score", error))?
-        };
-        Ok(document)
-    }
-
-    async fn graph_document(&self) -> Result<GraphScoreDocument, HostCallError> {
-        match self.score_document().await? {
-            ScoreDocument::Graph(document) => Ok(document),
-            ScoreDocument::Legacy(_) => Err(HostCallError::new(
-                "invalid_score",
-                "this score has not been migrated to graphs",
-            )),
+                .map_err(|error| HostCallError::new("invalid_score", error)),
+            None => rows::load_score(access.connection(), &self.scope.score_id)
+                .await
+                .map_err(|error| HostCallError::new("invalid_score", error)),
         }
     }
 
@@ -45,46 +31,25 @@ impl TrackHost {
         &self.scope.track_id
     }
 
-    /// Stage inspection follows the same live/detached source as Python
-    /// editing, including a save made earlier in this cell.
+    /// Stage inspection follows the same live/draft source as Python editing,
+    /// including a save made earlier in this cell.
     pub(crate) async fn saved_scene(&self) -> Result<crate::eval::Scene, HostCallError> {
-        match self.score_document().await? {
-            ScoreDocument::Graph(document) => crate::compositor::build_score_scene(
-                &self.pool,
-                &self.storage,
-                &self.resource_root,
-                &self.scope.score_id,
-                None,
-                Some(document.score),
-                true,
-            )
-            .await
-            .map_err(|error| HostCallError::new("compile_error", error)),
-            ScoreDocument::Legacy(document) => build_scene_strict(
-                &self.pool,
-                &self.pool,
-                &self.storage,
-                &self.resource_root,
-                &self.scope.track_id,
-                &self.scope.venue_id,
-                &as_track_scores(&self.scope, &document.clips),
-            )
-            .await
-            .map_err(|error| HostCallError::new("compile_error", error)),
-        }
+        let score = self.score_document().await?;
+        crate::compositor::build_score_scene(
+            &self.pool,
+            &self.storage,
+            &self.resource_root,
+            &self.scope.score_id,
+            Some(score),
+        )
+        .await
+        .map_err(|error| HostCallError::new("compile_error", error))
     }
 
     pub(crate) async fn prepare_score(
         &self,
-        plan: &GraphScoreEdit,
+        candidate: &Score,
     ) -> Result<crate::eval::Scene, HostCallError> {
-        let current = self.graph_document().await?;
-        if current.revision != plan.base_revision {
-            return Err(HostCallError::new(
-                "conflict",
-                "the score changed; start a new edit from the current document",
-            ));
-        }
         let mut access =
             VenueAccess::<Read>::read(&self.pool, VenueResource::Score(&self.scope.score_id))
                 .await
@@ -97,10 +62,43 @@ impl TrackHost {
             &self.resource_root,
             &self.storage,
             &self.scope.track_id,
-            &plan.candidate,
+            candidate,
         )
         .await
         .map_err(|error| HostCallError::new("compile_error", error))
+    }
+
+    /// Write the candidate where this thread is allowed to: a subagent's draft,
+    /// or the live rows. There is nothing to compare against first — the row
+    /// diff only touches what actually differs.
+    async fn apply_score(&self, candidate: &Score) -> Result<(), HostCallError> {
+        let scope = self
+            .edit_scope
+            .as_ref()
+            .ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
+        let mut access =
+            VenueAccess::<Write>::write(&self.pool, VenueResource::Score(&self.scope.score_id))
+                .await
+                .map_err(|error| HostCallError::new("forbidden", error))?;
+        match self.draft_id.as_deref() {
+            Some(draft) => drafts::apply(access.connection(), draft, candidate)
+                .await
+                .map_err(|error| HostCallError::new("internal", error))?,
+            None => {
+                rows::save_score(
+                    access.connection(),
+                    &self.scope.score_id,
+                    &scope.user_id,
+                    candidate,
+                )
+                .await
+                .map_err(|error| HostCallError::new("internal", error))?;
+            }
+        }
+        access
+            .commit()
+            .await
+            .map_err(|error| HostCallError::new("internal", error))
     }
 
     pub(super) async fn score_call(
@@ -111,61 +109,16 @@ impl TrackHost {
     ) -> Result<Value, HostCallError> {
         let limit = call_limit(context)?;
         if method == "track.score_apply" {
-            let plan: GraphScoreEdit = decode(payload)?;
-            let scope = self
-                .edit_scope
-                .as_ref()
-                .ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-            let operation_scope = context.operation_scope().ok_or_else(|| {
-                HostCallError::new(
-                    "internal",
-                    "editable Python cell has no durable operation scope",
-                )
-            })?;
-            let canonical = crate::canonical_json::to_string(
-                &json!({"scope": scope, "workspace": self.authored_workspace_id, "plan": plan}),
-            );
-            let fingerprint = format!(
-                "sha256:{:x}",
-                scoped_apply_digest(b"luma.python-graph-score-request.v2", &[&canonical])
-            );
-            let id = apply_operation_id(operation_scope.operation_namespace(), &fingerprint);
-            let operation = GraphScoreOperation {
-                thread_id: &self.thread_id,
-                workspace_id: self.authored_workspace_id.as_deref(),
-                scope: &self.scope,
-                id: &id,
-                fingerprint: &fingerprint,
-            };
-            let replay = supervise(
-                async {
-                    self.authored
-                        .graph_score_operation(&self.pool, Some(&scope.user_id), &operation, None)
-                        .await
-                        .map_err(authored_error)
-                },
-                context,
-                limit,
-            )
-            .await?;
-            if let Some(document) = replay {
-                return Ok(json!(document));
-            }
-            supervise(self.prepare_score(&plan), context, limit).await?;
+            let plan: Candidate = decode(payload)?;
+            supervise(self.prepare_score(&plan.candidate), context, limit).await?;
             context.begin_irreversible()?;
-            let document = self
-                .authored
-                .graph_score_operation(&self.pool, Some(&scope.user_id), &operation, Some(plan))
-                .await
-                .map_err(authored_error)?;
-            return Ok(json!(
-                document.expect("an applied score returns its document")
-            ));
+            self.apply_score(&plan.candidate).await?;
+            return Ok(json!(plan.candidate));
         }
         supervise(async {
             match method {
                 "track.score_upgrade" => {
-                    let request: Upgrade = decode(payload)?;
+                    let request: Candidate = decode(payload)?;
                     let candidate = luma_patterns::migration::upgrade(&request.candidate)
                         .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
                     Ok(json!(candidate))
@@ -184,14 +137,14 @@ impl TrackHost {
                     Ok(json!(instance))
                 }
                 "track.score_check" => {
-                    let plan: GraphScoreEdit = decode(payload)?;
-                    let scene = self.prepare_score(&plan).await?;
+                    let plan: Candidate = decode(payload)?;
+                    let scene = self.prepare_score(&plan.candidate).await?;
                     Ok(json!({"ok": true, "clips": plan.candidate.clips.len(), "compiledClips": scene.annotations.len()}))
                 }
                 "track.score_render" => {
                     let request: Render = decode(payload)?;
                     validate_window(&self.pool, &self.scope.track_id, request.start_time, request.end_time).await?;
-                    let scene = self.prepare_score(&GraphScoreEdit {base_revision: request.base_revision, candidate: request.candidate}).await?;
+                    let scene = self.prepare_score(&request.candidate).await?;
                     self.render_scene(scene, request.start_time, request.end_time).await
                 }
                 "track.graph_edit" => {
@@ -226,36 +179,37 @@ impl TrackHost {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Upgrade {
-    candidate: luma_patterns::Score,
+struct Candidate {
+    candidate: Score,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Instance {
-    candidate: luma_patterns::Score,
+    candidate: Score,
     definition: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Render {
-    base_revision: String,
-    candidate: luma_patterns::Score,
+    candidate: Score,
     start_time: f64,
     end_time: f64,
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Edit {
-    candidate: luma_patterns::Score,
+    candidate: Score,
     graph: String,
     edits: Vec<luma_patterns::GraphEdit>,
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Independent {
-    candidate: luma_patterns::Score,
+    candidate: Score,
     clip: String,
     id: String,
 }
@@ -263,7 +217,7 @@ struct Independent {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Customize {
-    candidate: luma_patterns::Score,
+    candidate: Score,
     graph: String,
     node: String,
     id: String,

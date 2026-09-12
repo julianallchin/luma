@@ -569,16 +569,13 @@ impl Luma {
         if candidate == previous {
             return;
         }
-        let mut validation = candidate
+        // A draft that becomes valid again is published as it stands. There
+        // is no three-way merge any more: a save overwrites the rows it
+        // touches, so a draft opened before another edit landed wins the
+        // fields it names and leaves the rest alone.
+        let validation = candidate
             .validate(&p::standard_library())
             .map_err(|e| e.to_string());
-        if validation.is_ok() && had_draft {
-            match luma_lib::services::graph_scores::merge_working_copy(&base, &current, &candidate)
-            {
-                Ok(merged) => candidate = merged,
-                Err(error) => validation = Err(error),
-            }
-        }
         let Some(TabBody::TrackEditor(timeline)) = self.workspace.body_mut(&owner) else {
             return;
         };

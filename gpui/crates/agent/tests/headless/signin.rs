@@ -21,7 +21,7 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
 
-async fn seed(dir: &Path, stored: Stored, synced: bool) {
+async fn seed(dir: &Path, stored: Stored) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
         .await
         .expect("failed to open fixture app database");
@@ -29,16 +29,8 @@ async fn seed(dir: &Path, stored: Stored, synced: bool) {
     // admitted principal's rows, so seeing this venue is itself proof that
     // admission was armed for the right identity.
     //
-    // `synced` decides whether it has reached the cloud. Sign-out flushes the
-    // principal's un-synced rows before it deletes anything, so a row that is
-    // already durable is the only way to reach the far side of that flush
-    // without a network — and a row that is not is how the refusal is
-    // provoked on purpose.
-    sqlx::query(
-        "INSERT INTO venues (id, uid, name, synced_at) VALUES ('venue', ?, 'Sign-in Venue', ?)",
-    )
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Sign-in Venue')")
     .bind(session::owner(stored))
-    .bind(synced.then_some("2026-01-01T00:00:00Z"))
     .execute(&db.0)
     .await
     .expect("failed to seed venue");
@@ -47,12 +39,6 @@ async fn seed(dir: &Path, stored: Stored, synced: bool) {
 }
 
 fn fixture_dir(name: &str, stored: Stored) -> PathBuf {
-    fixture_dir_at(name, stored, false)
-}
-
-/// [`fixture_dir`] saying whether the seeded venue has already reached the
-/// cloud — see [`seed`].
-fn fixture_dir_at(name: &str, stored: Stored, synced: bool) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("luma-gpui-signin-{name}-{}", std::process::id()));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).expect("failed to create fixture directory");
@@ -60,7 +46,7 @@ fn fixture_dir_at(name: &str, stored: Stored, synced: bool) -> PathBuf {
         .enable_all()
         .build()
         .expect("failed to start fixture runtime")
-        .block_on(seed(&dir, stored, synced));
+        .block_on(seed(&dir, stored));
     dir
 }
 
@@ -181,7 +167,7 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
 /// state, not the sync it fronts.
 #[test]
 fn signing_out_from_the_account_foot_lands_at_the_gate() {
-    let dir = fixture_dir_at("signout", Stored::Proven { expires_in: 3600 }, true);
+    let dir = fixture_dir("signout", Stored::Proven { expires_in: 3600 });
     let mut harness = harness(&dir);
     let out = exec(
         &mut harness,
@@ -223,58 +209,3 @@ fn signing_out_from_the_account_foot_lands_at_the_gate() {
     assert_eq!(out["menu"], false, "the account menu stayed open");
 }
 
-/// A sign-out that cannot land says so at the foot it was pressed from.
-///
-/// The principal owns a venue that has never reached the cloud, and the stored
-/// token cannot flush it — so the host refuses, which is the whole contract of
-/// `wipe_database`: offline is never permission to discard the only copy. What
-/// this pins is the *report*. The failure used to land in a field only the
-/// settings screen renders, so pressing sign-out from the sidebar looked like
-/// pressing nothing at all.
-#[test]
-fn a_sign_out_that_cannot_flush_says_so_at_the_foot() {
-    let dir = fixture_dir("signout-offline", Stored::Proven { expires_in: 3600 });
-    let mut harness = harness(&dir);
-    let out = exec(
-        &mut harness,
-        r#"
-        nav.venue("Sign-in Venue");
-        until("the shell", (s) =>
-            s.find({ role: "button", label: "Account" }) !== undefined
-                && s.find({ role: "card", label: "Venue dialog" }) === undefined);
-        nav.step("the account foot", "button", "Account");
-        nav.step("the sign-out row", "row", "Sign out");
-        const settled = until("the refusal", (s) =>
-            s.find((n) => n.role === "text"
-                && n.label.startsWith("Could not sign out")) !== undefined
-                || s.find({ role: "text", label: "Sign in to Luma" }) !== undefined
-                ? s : undefined);
-        ({
-            failure: (settled.find((n) => n.role === "text"
-                && n.label.startsWith("Could not sign out")) || {}).label || null,
-            // Nothing half-happened: the account is still this library's.
-            gate: settled.find({ role: "text", label: "Sign in to Luma" }) !== undefined,
-            // …and the gesture is pressable again rather than stuck mid-flight.
-            retry: (() => {
-                app.click(app.snapshot().find({ role: "button", label: "Account" }));
-                return until("the menu, offering the gesture again", (s) => {
-                    const row = s.find({ role: "row", label: "Sign out" });
-                    return row !== undefined && row.enabled !== false ? s : undefined;
-                }) !== undefined;
-            })(),
-        })
-    "#,
-    );
-    assert!(
-        out["failure"]
-            .as_str()
-            .is_some_and(|text| text.contains("Cannot sign out before catalog sync")),
-        "the refusal is not reported at the foot: {}",
-        out["failure"]
-    );
-    assert_eq!(
-        out["gate"], false,
-        "a refused sign-out must not read as signed out"
-    );
-    assert_eq!(out["retry"], true, "the gesture is stuck after a failure");
-}

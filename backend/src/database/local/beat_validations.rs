@@ -72,7 +72,7 @@ pub async fn set(
          ON CONFLICT(track_id) DO UPDATE SET
          uid = excluded.uid, track_hash = excluded.track_hash,
          grid_json = excluded.grid_json, processor_version = excluded.processor_version,
-         verdict = excluded.verdict, reason = excluded.reason, origin = 'local'",
+         verdict = excluded.verdict, reason = excluded.reason",
     )
     .bind(json)
     .bind(verdict)

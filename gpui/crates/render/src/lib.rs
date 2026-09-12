@@ -32,6 +32,7 @@ pub mod device;
 mod environment;
 pub mod face;
 mod fog_grid;
+mod fog_visibility_cache;
 pub mod frame;
 mod gpu;
 mod haze_field;
@@ -56,6 +57,7 @@ pub mod warmup;
 pub mod waveform;
 
 pub use fog_grid::FogBlockStats;
+pub use fog_visibility_cache::Stats as FogVisibilityCacheStats;
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
 pub use gpu::{
     CompactStats, CpuSpans, FixtureShadowCpuSpans, FrameTimings, Gpu, HazeWorkStats, Renderer, RendererProfile,
