@@ -96,8 +96,23 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
     if !state.show_activity && !unhealthy && !state.expanded {
         return div().into_any_element();
     }
-    let label = if unhealthy {
-        "Sync needs attention".to_owned()
+    // The row is one line, and a transport error is the one thing on it worth
+    // reading at a glance: "Sync needs attention" is what a user sees for
+    // twenty minutes while nothing syncs and nothing says why. The first
+    // sentence of the error goes in the row itself; the whole of it is one
+    // click away.
+    let label = if let Some(error) = status.error.as_ref().or(state.read_error.as_ref()) {
+        let headline = error
+            .split(['.', '\n'])
+            .next()
+            .unwrap_or(error)
+            .trim()
+            .to_owned();
+        if headline.is_empty() {
+            "Sync needs attention".to_owned()
+        } else {
+            headline
+        }
     } else if status.pending_uploads > 0 {
         format!("Syncing · {}", status.pending_uploads)
     } else if state.busy() {

@@ -29,9 +29,12 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
     let result = harness.exec(&script, Duration::from_secs(30));
     assert_eq!(result.error, None, "{result:?}");
 
+    // A transport fault reads on the row itself. PowerSync retries on its own,
+    // so there is nothing to press — what the row owes the user is the reason,
+    // and "Sync needs attention" is not one.
     *status.lock().unwrap() = SyncStatus {
         connected: false,
-        error: Some("upload refused".into()),
+        error: Some("Sync rejected this sign-in. 401 from the endpoint".into()),
         ..Default::default()
     };
     let result = harness.exec(
@@ -39,10 +42,9 @@ fn sync_status_shows_a_compact_backlog_and_expandable_detail() {
             "{}\n{}",
             super::support::UNTIL,
             r#"
-        until("fault", s => s.find({role: "button", label: "Sync needs attention"}));
-        app.click(app.snapshot().find({role: "button", label: "Sync needs attention"}));
-        until("reason", s => s.find({role: "text", label: "upload refused"}));
-        until("retry offered", s => s.find({role: "button", label: "Retry sync"}));
+        until("fault", s => s.find({role: "button", label: "Sync rejected this sign-in"}));
+        app.click(app.snapshot().find({role: "button", label: "Sync rejected this sign-in"}));
+        until("reason", s => s.find({role: "text", label: "Sync rejected this sign-in. 401 from the endpoint"}));
         true;
     "#
         ),
