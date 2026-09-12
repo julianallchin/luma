@@ -306,6 +306,7 @@ impl Luma {
         app.auto_repro(cx);
         app.watch_session(cx);
         app.watch_sync(cx);
+        app.watch_replica(cx);
         app
     }
 
@@ -337,6 +338,33 @@ impl Luma {
                 {
                     return;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// Reload what is on screen when rows arrive from another device.
+    ///
+    /// Every surface in this app was read once, into memory, from rows. A
+    /// download rewrites those rows behind it with nothing on this device
+    /// noticing — so the service says which tables moved and the shell reads
+    /// them again.
+    fn watch_replica(&mut self, cx: &mut Context<Self>) {
+        let mut changed = self.library.replica_changed();
+        cx.spawn(async move |this, cx| loop {
+            let tables = match changed.recv().await {
+                Ok(tables) => tables,
+                // Lagged: some notifications were dropped, which means *more*
+                // changed, not less. Reload on the next one rather than
+                // reloading on a guess.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            if this
+                .update(cx, |this, cx| this.replica_changed(&tables, cx))
+                .is_err()
+            {
+                return;
             }
         })
         .detach();

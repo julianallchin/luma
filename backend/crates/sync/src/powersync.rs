@@ -18,6 +18,24 @@ pub enum Error {
     Sqlite(#[from] sqlx::Error),
     #[error(transparent)]
     PowerSync(#[from] sdk::error::PowerSyncError),
+    #[error("loading the PowerSync core extension failed: {0}")]
+    Extension(String),
+}
+
+/// Register the core extension with SQLite, once per process.
+///
+/// `powersync_auto_extension` appends to SQLite's global auto-extension list.
+/// Calling it per database — which a test binary opening thirty of them does —
+/// runs the initializer that many times on every new connection, and the
+/// second run frees what the first one owns. The process only ever needs one.
+fn register_extension() -> Result<(), Error> {
+    static REGISTERED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    REGISTERED
+        .get_or_init(|| {
+            PowerSyncEnvironment::powersync_auto_extension().map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(Error::Extension)
 }
 
 /// Prepare the application schema before starting PowerSync on these connections.
@@ -41,7 +59,7 @@ impl Connections {
         max_connections: u32,
         initialize: Initialize,
     ) -> Result<Self, Error> {
-        PowerSyncEnvironment::powersync_auto_extension()?;
+        register_extension()?;
         let sync = ConnectionPool::open(path)?;
         let notifiers = sync.update_notifiers().clone();
         let sql = SqlitePoolOptions::new()

@@ -124,12 +124,29 @@ struct LibraryEvents {
     /// The stored session stopped proving anyone — see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
+    /// Rows arrived from another device — see [`Library::replica_changed`].
+    replica_changed: tokio::sync::broadcast::Sender<Vec<String>>,
 }
 
 impl EventSink for LibraryEvents {
     fn emit(&self, event: &str, payload: Value) {
         if event == "session-revoked" {
             let _ = self.session_revoked.send(());
+            return;
+        }
+        if event == "replica-changed" {
+            let tables = payload
+                .get("tables")
+                .and_then(Value::as_array)
+                .map(|tables| {
+                    tables
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = self.replica_changed.send(tables);
             return;
         }
         if event != "track-import-state" {
@@ -563,6 +580,8 @@ pub struct Library {
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
+    /// Rows arrived from another device — see [`Library::replica_changed`].
+    replica_changed: tokio::sync::broadcast::Sender<Vec<String>>,
     /// Tells the background sync loop to stop. Sent on drop; the reactor
     /// going with it is what makes the stop take.
     sync_shutdown: tokio::sync::watch::Sender<bool>,
@@ -627,9 +646,11 @@ impl Library {
 
         let (progress_tx, _) = tokio::sync::broadcast::channel(256);
         let (session_revoked, _) = tokio::sync::broadcast::channel(4);
+        let (replica_changed, _) = tokio::sync::broadcast::channel(64);
         let events = Events::new(LibraryEvents {
             import_progress: progress_tx.clone(),
             session_revoked: session_revoked.clone(),
+            replica_changed: replica_changed.clone(),
         });
         // Whether this process may talk to the cloud at all — see
         // `Runtime::cloud`. Unasked is a launched app, which may.
@@ -842,6 +863,7 @@ impl Library {
             #[cfg(feature = "agent")]
             sync_status_fixture: None,
             session_revoked,
+            replica_changed,
             sync_shutdown,
             session_writes,
             model: None,
@@ -1272,6 +1294,14 @@ impl Library {
     /// Fires when Supabase refuses to renew the stored session — its refresh
     /// token was spent by another process, or the session was revoked. The
     /// backend stops presenting it; the app's answer is the sign-in gate.
+    /// The tables a download just wrote, coalesced by the sync service.
+    ///
+    /// A download is not an edit anybody made on this device, so nothing the
+    /// UI holds knows it happened. This is how it finds out.
+    pub fn replica_changed(&self) -> tokio::sync::broadcast::Receiver<Vec<String>> {
+        self.replica_changed.subscribe()
+    }
+
     pub fn session_revoked(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.session_revoked.subscribe()
     }
