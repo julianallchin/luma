@@ -38,10 +38,12 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   download is one transaction holding a consistent snapshot of the server in
   whatever order the checkpoint delivers it, so a child can land before its
   parent; an immediate check would reject the whole checkpoint, forever.
-- Sign-in is required to write. Every synced row has an owner, and there is no
-  signed-out owner: `AppServices::require_session` refuses the command and the
-  shell shows the sign-in screen. Reading a library already on this machine
-  needs nothing.
+- Sign-in is required to write. Every synced row has an owner and there is no
+  signed-out owner, so a command that writes one asks
+  `AppServices::require_session` and a venue write goes through `VenueAccess`,
+  which admits the principal who owns the venue or a member and nobody else.
+  Either refusal raises the shell's sign-in screen. Reading a library already
+  on this machine needs nothing.
 
 ## Score model
 
