@@ -79,6 +79,40 @@ impl Luma {
         self.refresh_score_listing(cx);
     }
 
+    /// Rows arrived from another device. The same reload, for the same reason:
+    /// what is on screen was read from rows that have since changed under it,
+    /// and nothing on this device saw the write.
+    ///
+    /// `tables` is what moved, and it is only used to skip work — a download of
+    /// `changes` alone is somebody's history following them between devices and
+    /// costs the UI nothing.
+    pub(crate) fn replica_changed(&mut self, tables: &[String], cx: &mut Context<Self>) {
+        const UNINTERESTING: &[&str] = &["changes", "drafts"];
+        if tables
+            .iter()
+            .all(|table| UNINTERESTING.contains(&table.as_str()))
+        {
+            return;
+        }
+        self.agent_stale_tabs = self.parked.targets(&self.workspace);
+        self.refresh_agent_tabs(cx);
+        self.reload_stage(cx);
+        self.refresh_score_listing(cx);
+        // The venue list, when it is the thing on screen: a venue shared with
+        // this account arrives as rows and nothing else would say so.
+        if matches!(self.overlay.get(), Some(crate::shell::Overlay::Venues(_))) {
+            self.show_venues(cx);
+        }
+        // The chat list is a listing of rows, so it is stale the moment a
+        // conversation arrives — but only while it is the thing on screen.
+        if matches!(
+            self.overlay.get(),
+            Some(crate::shell::Overlay::ChatHistory(_))
+        ) {
+            self.show_chat_history(cx);
+        }
+    }
+
     pub(crate) fn refresh_agent_tabs(&mut self, cx: &mut Context<Self>) {
         if self.agent_stale_tabs.is_empty() {
             return;
