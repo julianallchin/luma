@@ -320,12 +320,17 @@ mod tests {
         .expect("the pattern has no graph document")
     }
 
+    /// The principal this fixture writes as. A pattern is a synced row and a
+    /// synced row has an owner; the commands ask `require_session` for it.
+    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+
     async fn seed(directory: &Path) -> AppServices {
         let db = database::init_app_db_at(directory).await.unwrap();
         let state_db = state::init_state_db_at(directory).await.unwrap();
         auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .unwrap();
+        auth::arm_write_admission(&db.0, Some(OWNER)).await.unwrap();
         let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());
         let workspaces = Arc::new(
             crate::agent_execution::workspace::PythonWorkspaceService::new(
@@ -334,5 +339,6 @@ mod tests {
             ),
         );
         AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
+            .with_fixture_principal(Some(OWNER.to_owned()))
     }
 }
