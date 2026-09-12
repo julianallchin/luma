@@ -48,7 +48,7 @@ pub async fn run_graph(
     let pool = &services.db.0;
     let venue_access =
         VenueAccess::<Read>::read(pool, VenueResource::Venue(&context.venue_id)).await?;
-    let admitted_principal = venue_access.principal().to_owned();
+    let admitted_principal = venue_access.principal().map(str::to_owned);
     drop(venue_access);
     let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
         let owner_user_id = auth::admitted_principal(pool).await?;
@@ -83,7 +83,7 @@ pub async fn run_graph(
     });
     let final_access =
         VenueAccess::<Operate>::operate(pool, VenueResource::Venue(&context.venue_id)).await?;
-    if final_access.principal() != admitted_principal {
+    if final_access.principal() != admitted_principal.as_deref() {
         return Err(CommandError::Unauthorized(
             "authenticated identity changed while running graph".into(),
         ));
@@ -139,7 +139,7 @@ pub async fn preview_pattern(
     let fps = fps.clamp(10.0, 30.0);
     let frame_count = ((duration * fps).ceil() as usize).clamp(1, 256);
     let venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-    let admitted_principal = venue_access.principal().to_owned();
+    let admitted_principal = venue_access.principal().map(str::to_owned);
     drop(venue_access);
 
     let graph_json = fetch_pattern_graph(pool, &pattern_id, Some(&venue_id)).await?;
@@ -182,7 +182,7 @@ pub async fn preview_pattern(
     let frames = crate::eval::try_eval(&plan, &times, &mut arena)?;
     let final_access =
         VenueAccess::<Operate>::operate(pool, VenueResource::Venue(&venue_id)).await?;
-    if final_access.principal() != admitted_principal {
+    if final_access.principal() != admitted_principal.as_deref() {
         return Err(CommandError::Unauthorized(
             "authenticated identity changed while rendering preview".into(),
         ));

@@ -36,9 +36,9 @@ impl Claim {
         };
         let run = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO agent_thread_runs (uid, thread_id, device_id, run_id)
+            "INSERT INTO agent_thread_runs (owner_user_id, thread_id, device_id, run_id)
              VALUES (?, ?, ?, ?)
-             ON CONFLICT(uid, thread_id) DO UPDATE
+             ON CONFLICT(owner_user_id, thread_id) DO UPDATE
                 SET device_id = excluded.device_id, run_id = excluded.run_id",
         )
         .bind(owner)
@@ -60,12 +60,13 @@ impl Drop for Claim {
     fn drop(&mut self) {
         let (pool, owner, thread) = (self.pool.clone(), self.owner.clone(), self.thread.clone());
         tokio::spawn(async move {
-            if let Err(error) =
-                sqlx::query("DELETE FROM agent_thread_runs WHERE uid = ? AND thread_id = ?")
-                    .bind(&owner)
-                    .bind(&thread)
-                    .execute(&pool)
-                    .await
+            if let Err(error) = sqlx::query(
+                "DELETE FROM agent_thread_runs WHERE owner_user_id = ? AND thread_id = ?",
+            )
+            .bind(&owner)
+            .bind(&thread)
+            .execute(&pool)
+            .await
             {
                 eprintln!("[agent] could not clear the execution claim: {error}");
             }

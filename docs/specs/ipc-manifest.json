@@ -963,7 +963,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 63
+        "line": 56
       },
       "name": "delete_pattern",
       "prose": {
@@ -1479,7 +1479,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 53
+        "line": 46
       },
       "name": "fork_pattern",
       "prose": {
@@ -1706,7 +1706,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 167
+        "line": 160
       },
       "name": "get_pattern_args",
       "prose": {
@@ -1730,7 +1730,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 83
+        "line": 76
       },
       "name": "get_pattern_graph_document",
       "prose": {
@@ -1767,7 +1767,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 95
+        "line": 88
       },
       "name": "get_pattern_score_template",
       "returns": "luma_patterns::Score"
@@ -4317,7 +4317,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 184
+        "line": 177
       },
       "name": "save_pattern_graph_document",
       "prose": {
@@ -4542,7 +4542,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 70
+        "line": 63
       },
       "name": "set_pattern_category",
       "prose": {
@@ -4917,7 +4917,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 44
+        "line": 37
       },
       "name": "update_pattern",
       "prose": {
@@ -5053,7 +5053,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 139
+        "line": 132
       },
       "name": "verify_pattern",
       "prose": {
@@ -5298,7 +5298,7 @@
         "backend/src/dispatch/handlers/tracks.rs:357",
         "backend/src/dispatch/handlers/tracks.rs:395",
         "backend/src/dispatch/handlers/tracks.rs:460",
-        "backend/src/sync/media.rs:145"
+        "backend/src/sync/media.rs:135"
       ],
       "listeners": [],
       "name": "library-changed",
@@ -5401,7 +5401,7 @@
     },
     {
       "emitters": [
-        "backend/src/sync/files.rs:26"
+        "backend/src/sync/files.rs:23"
       ],
       "listeners": [],
       "name": "upload-progress-start",
@@ -5409,7 +5409,7 @@
     },
     {
       "emitters": [
-        "backend/src/sync/files.rs:31"
+        "backend/src/sync/files.rs:28"
       ],
       "listeners": [],
       "name": "upload-progress-tick",
