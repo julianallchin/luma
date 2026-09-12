@@ -19,7 +19,7 @@ streams:
       # A user's own scores, plus every score in a venue they can reach.
       accessible_scores: >-
         SELECT id FROM scores
-        WHERE uid = auth.user_id()
+        WHERE (uid = auth.user_id() AND venue_id IS NULL)
            OR venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
            OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
       # Tracks someone else owns that a shared score plays, so a venue member
