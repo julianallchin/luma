@@ -662,8 +662,18 @@ mod tests {
         );
     }
 
+    /// The admission gate is who this device may write as.
+    ///
+    /// It used to be more than that: a trigger on every synced table refused a
+    /// row whose `uid` was not the admitted principal. That second copy of the
+    /// rule is gone — a download writes those tables directly and the triggers
+    /// refused that too (`migrations/20260914000000_local_write_guards.sql`).
+    /// What is left is the gate itself, which the commands read through
+    /// `AppServices::require_session`, and Postgres row-level security, which
+    /// is the authority a second device cannot talk its way past —
+    /// `experiments/powersync/run.py` is where that is checked.
     #[tokio::test]
-    async fn admission_is_a_database_invariant() {
+    async fn admission_names_the_principal_this_device_writes_as() {
         let directory = tempfile::tempdir().unwrap();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -677,46 +687,28 @@ mod tests {
             .await
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
-
-        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('alice-pattern', 'alice', 'p')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let forged = sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('bob', 'bob', 'f')")
-            .execute(&pool)
-            .await
-            .unwrap_err();
-        assert!(forged
-            .to_string()
-            .contains("signed-in write admission is closed or principal-mismatched"));
-        assert!(
-            sqlx::query("UPDATE patterns SET uid = NULL WHERE id = 'alice-pattern'")
-                .execute(&pool)
+        assert_eq!(
+            crate::database::local::auth::admitted_principal(&pool)
                 .await
-                .is_err()
+                .unwrap()
+                .as_deref(),
+            Some("alice")
         );
 
+        // Nobody signed in. The library still reads; a command that writes a
+        // synced row asks `require_session` and is refused.
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
-        assert!(
-            sqlx::query("UPDATE patterns SET name = 'stale' WHERE id = 'alice-pattern'")
-                .execute(&pool)
+        assert_eq!(
+            crate::database::local::auth::admitted_principal(&pool)
                 .await
-                .is_err()
+                .unwrap(),
+            None
         );
-        assert!(
-            sqlx::query("DELETE FROM patterns WHERE id = 'alice-pattern'")
-                .execute(&pool)
-                .await
-                .is_err()
-        );
-        sqlx::query("INSERT INTO patterns (id, name) VALUES ('guest-pattern', 'guest')")
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 }
