@@ -113,11 +113,17 @@ async fn seed(config_dir: &Path) {
         .expect("failed to open the fixture database");
     let pool = &db.0;
 
-    for (id, name) in [("venue-main", "Test Venue"), ("venue-other", "Other Venue")] {
+    // The picker is newest-first on `updated_at`, which now carries
+    // milliseconds — two rows written in one loop are no longer a tie broken
+    // by insertion order, so the fixture says which is newer.
+    for (id, name, updated_at) in [
+        ("venue-main", "Test Venue", "2026-08-19T12:01:00.000Z"),
+        ("venue-other", "Other Venue", "2026-08-19T12:00:00.000Z"),
+    ] {
         run(
             pool,
-            "INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)",
-            [id, session::PRINCIPAL, name],
+            "INSERT INTO venues (id, uid, name, updated_at) VALUES (?, ?, ?, ?)",
+            [id, session::PRINCIPAL, name, updated_at],
         )
         .await;
     }

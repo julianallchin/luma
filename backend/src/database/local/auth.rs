@@ -1347,6 +1347,51 @@ impl VerifiedSnapshot {
     }
 }
 
+/// Sign a test's state database in as `user_id`, session and host proof both.
+///
+/// A proof is minted by `/auth/v1/user`, so a test that went through the
+/// production path would need Supabase on the other end. This walks the same
+/// validation with a server that says yes, which is what makes the stored rows
+/// the real shape — [`capture_write_admission`] cross-checks them against the
+/// app database's gate, and a hand-written pair would not survive it.
+#[cfg(test)]
+pub(crate) async fn install_test_session(state_pool: &SqlitePool, user_id: &str) {
+    struct Accepts(String);
+    #[async_trait]
+    impl AuthServer for Accepts {
+        async fn authenticated_user_id(&self, _: &str) -> Result<String, String> {
+            Ok(self.0.clone())
+        }
+        async fn refresh(&self, _: &str) -> Result<String, RefreshError> {
+            Err(RefreshError::Failed("no network in a test".into()))
+        }
+    }
+    let now = unix_now();
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::json!({
+            "sub": user_id,
+            "iss": format!("{SUPABASE_URL}/auth/v1"),
+            "aud": "authenticated",
+            "exp": now + 3600,
+        })
+        .to_string(),
+    );
+    let session = serde_json::json!({
+        "access_token": format!("{header}.{payload}.signature"),
+        "refresh_token": "refresh",
+        "user": { "id": user_id },
+    })
+    .to_string();
+    let validated = validate_session_with(&session, &Accepts(user_id.to_owned()), now)
+        .await
+        .expect("the fixture session validates");
+    let mut connection = state_pool.acquire().await.expect("state connection");
+    replace_session_for_connection(&mut connection, &validated)
+        .await
+        .expect("the fixture session installs");
+}
+
 async fn validate_session_with(
     session_json: &str,
     server: &dyn AuthServer,
