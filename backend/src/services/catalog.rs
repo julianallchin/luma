@@ -3,8 +3,7 @@
 //!
 //! Every id here is derived from the caller's `request_id`, so a retried
 //! request finds the row it made the first time instead of making a second one.
-//! That is the whole of the idempotency story now — there is no operation
-//! ledger to consult, because the row either exists or it does not.
+//! There is no operation ledger: the row either exists or it does not.
 
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -21,7 +20,7 @@ use crate::services::graph_documents::exact_graph_json;
 /// Create a pattern and its single, empty implementation.
 pub async fn create_pattern(
     pool: &SqlitePool,
-    principal: Option<&str>,
+    principal: &str,
     request_id: &str,
     name: String,
     description: Option<String>,
@@ -33,7 +32,7 @@ pub async fn create_pattern(
 /// to one score.
 pub async fn create_pattern_with_graph(
     pool: &SqlitePool,
-    principal: Option<&str>,
+    principal: &str,
     request_id: &str,
     name: String,
     description: Option<String>,
@@ -88,7 +87,7 @@ pub async fn create_pattern_with_graph(
 /// Copy a pattern's graph into a new pattern of the caller's own.
 pub async fn fork_pattern(
     pool: &SqlitePool,
-    principal: Option<&str>,
+    principal: &str,
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, String> {
     let request_id = request_uuid(&input.request_id)?;
@@ -146,11 +145,7 @@ pub async fn fork_pattern(
 }
 
 /// Delete a pattern the caller owns. Its implementations go with it.
-pub async fn delete_pattern(
-    pool: &SqlitePool,
-    principal: Option<&str>,
-    id: &str,
-) -> Result<(), String> {
+pub async fn delete_pattern(pool: &SqlitePool, principal: &str, id: &str) -> Result<(), String> {
     let owner: Option<Option<String>> = sqlx::query_scalar("SELECT uid FROM patterns WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
@@ -159,7 +154,7 @@ pub async fn delete_pattern(
     let Some(owner) = owner else {
         return Err(format!("pattern {id} does not exist"));
     };
-    if owner.as_deref() != principal {
+    if owner.as_deref() != Some(principal) {
         return Err("you can only delete your own patterns".into());
     }
     sqlx::query("DELETE FROM patterns WHERE id = ?")
@@ -204,13 +199,8 @@ async fn insert_score(
 ) -> Result<Score, String> {
     let request_id = request_uuid(request_id)?;
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
-    let owner = access.principal().map(str::to_owned);
-    let score_id = derived_id(
-        &principal_key(owner.as_deref()),
-        "score",
-        &request_id,
-        "subject",
-    );
+    let owner = access.principal().to_owned();
+    let score_id = derived_id(&principal_key(&owner), "score", &request_id, "subject");
     let existing: Option<String> = if reuse_existing {
         sqlx::query_scalar(
             "SELECT id FROM scores WHERE (track_id = ? AND venue_id = ?) OR id = ?
@@ -244,7 +234,7 @@ async fn insert_score(
     }
     sqlx::query("INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)")
         .bind(&score_id)
-        .bind(owner.as_deref())
+        .bind(&owner)
         .bind(track_id)
         .bind(venue_id)
         .bind(name)
@@ -271,7 +261,7 @@ pub async fn delete_score(pool: &SqlitePool, score_id: &str) -> Result<(), Strin
 async fn insert_implementation(
     connection: &mut sqlx::SqliteConnection,
     id: &str,
-    principal: Option<&str>,
+    principal: &str,
     pattern_id: &str,
     graph_json: &str,
 ) -> Result<(), String> {

@@ -194,7 +194,7 @@ pub async fn create_cue(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().map(str::to_owned))
+    .bind(access.principal().to_owned())
     .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input.pattern_id)
@@ -232,8 +232,8 @@ pub async fn update_cue(
                          default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?
          WHERE id = ? AND venue_id = ?",
     )
-    .bind(&input.name.unwrap_or(existing.name))
-    .bind(&input.pattern_id.unwrap_or(existing.pattern_id))
+    .bind(input.name.unwrap_or(existing.name))
+    .bind(input.pattern_id.unwrap_or(existing.pattern_id))
     .bind(&args_json)
     .bind(z_index)
     .bind(&blend_mode_str)
@@ -311,7 +311,7 @@ pub async fn create_modifier(
          VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().map(str::to_owned))
+    .bind(access.principal().to_owned())
     .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input_json)
@@ -340,7 +340,7 @@ pub async fn update_modifier(
         "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?
          WHERE id = ? AND venue_id = ?",
     )
-    .bind(&input.name.unwrap_or(existing.name))
+    .bind(input.name.unwrap_or(existing.name))
     .bind(&input_json)
     .bind(&groups_json)
     .bind(&input.id)
@@ -422,7 +422,7 @@ pub async fn create_binding(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().map(str::to_owned))
+    .bind(access.principal().to_owned())
     .bind(access.venue_id().to_owned())
     .bind(&trigger_json)
     .bind(&required_modifiers_json)

@@ -29,15 +29,8 @@ pub async fn create_pattern(
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, CommandError> {
-    let uid = Some(services.require_session().await?);
-    Ok(catalog::create_pattern(
-        &services.db.0,
-        uid.as_deref(),
-        &request_id,
-        name,
-        description,
-    )
-    .await?)
+    let uid = services.require_session().await?;
+    Ok(catalog::create_pattern(&services.db.0, &uid, &request_id, name, description).await?)
 }
 
 /// A full replace of both metadata fields, not a patch.
@@ -54,15 +47,15 @@ pub async fn fork_pattern(
     services: &AppServices,
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, CommandError> {
-    let uid = Some(services.require_session().await?);
-    Ok(catalog::fork_pattern(&services.db.0, uid.as_deref(), input).await?)
+    let uid = services.require_session().await?;
+    Ok(catalog::fork_pattern(&services.db.0, &uid, input).await?)
 }
 
 /// A delete is a delete. Ownership is enforced inside [`catalog::delete_pattern`],
 /// which is the layer that owns the invariant.
 pub async fn delete_pattern(services: &AppServices, id: String) -> Result<(), CommandError> {
-    let principal = Some(services.require_session().await?);
-    Ok(catalog::delete_pattern(&services.db.0, principal.as_deref(), &id).await?)
+    let principal = services.require_session().await?;
+    Ok(catalog::delete_pattern(&services.db.0, &principal, &id).await?)
 }
 
 /// Does not notify the sync engine: a category change rides along with the next

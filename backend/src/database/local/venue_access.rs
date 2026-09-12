@@ -19,7 +19,6 @@ pub enum VenueResource<'a> {
     MidiModifier(&'a str),
     MidiBinding(&'a str),
     Score(&'a str),
-    TrackScore(&'a str),
     AgentThread(&'a str),
 }
 
@@ -30,7 +29,7 @@ pub enum VenueResource<'a> {
 pub struct VenueAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     venue_id: String,
-    principal: Option<String>,
+    principal: String,
     _mode: PhantomData<Mode>,
 }
 
@@ -42,7 +41,7 @@ mod sealed {
 /// either a read snapshot or the write transaction already held by a mutation.
 pub trait AuthorizedVenue: sealed::Sealed {
     fn venue_id(&self) -> &str;
-    fn principal(&self) -> Option<&str>;
+    fn principal(&self) -> &str;
     fn connection(&mut self) -> &mut SqliteConnection;
 }
 
@@ -53,8 +52,8 @@ impl<Mode> AuthorizedVenue for VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    fn principal(&self) -> Option<&str> {
-        self.principal.as_deref()
+    fn principal(&self) -> &str {
+        &self.principal
     }
 
     fn connection(&mut self) -> &mut SqliteConnection {
@@ -94,7 +93,7 @@ impl<'a> VenueAccess<'a, Write> {
     pub(crate) async fn enter_maintenance(&mut self) -> Result<(), String> {
         crate::database::local::write_admission::enter_maintenance_writes(
             &mut self.transaction,
-            self.principal.as_deref(),
+            Some(self.principal.as_str()),
         )
         .await
     }
@@ -102,7 +101,7 @@ impl<'a> VenueAccess<'a, Write> {
     pub(crate) async fn leave_maintenance(&mut self) -> Result<(), String> {
         crate::database::local::write_admission::leave_maintenance_writes(
             &mut self.transaction,
-            self.principal.as_deref(),
+            Some(self.principal.as_str()),
         )
         .await
     }
@@ -136,8 +135,8 @@ impl<Mode> VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    pub fn principal(&self) -> Option<&str> {
-        self.principal.as_deref()
+    pub fn principal(&self) -> &str {
+        &self.principal
     }
 
     pub fn require_venue(&self, venue_id: &str) -> Result<(), String> {
@@ -158,8 +157,8 @@ async fn authorize<'a, Mode>(
         .await?
         .ok_or_else(not_found)?;
 
-    let row: Option<(Option<String>, String, i64, i64, i64, Option<String>, i64)> = sqlx::query_as(
-        "SELECT venue.uid, venue.role,
+    let row: Option<(Option<String>, i64, i64, i64, Option<String>, i64)> = sqlx::query_as(
+        "SELECT venue.uid,
                     admission.armed, admission.accepting, admission.maintenance,
                     admission.active_uid,
                     EXISTS(
@@ -175,20 +174,20 @@ async fn authorize<'a, Mode>(
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to authorize venue access: {error}"))?;
-    let Some((owner_uid, role, armed, accepting, maintenance, active_uid, is_member)) = row else {
+    let Some((owner_uid, armed, accepting, maintenance, active_uid, is_member)) = row else {
         return Err(not_found());
     };
     if armed != 1 || accepting != 1 || maintenance != 0 {
         return Err(not_found());
     }
 
-    let principal = active_uid;
-    let guest_venue = owner_uid.is_none() && role != "member";
-    let owner = match principal.as_deref() {
-        Some(principal) => owner_uid.as_deref() == Some(principal),
-        None => guest_venue,
+    // Signed out there is no principal, and a venue belongs to one: no owner
+    // to match and no membership to hold.
+    let Some(principal) = active_uid else {
+        return Err(not_found());
     };
-    let member = principal.is_some() && is_member == 1;
+    let owner = owner_uid.as_deref() == Some(principal.as_str());
+    let member = is_member == 1;
     let allowed = if owner_only { owner } else { owner || member };
     if !allowed {
         return Err(not_found());
@@ -222,13 +221,6 @@ async fn resolve_venue_id(
         VenueResource::MidiModifier(id) => ("SELECT venue_id FROM midi_modifiers WHERE id = ?", id),
         VenueResource::MidiBinding(id) => ("SELECT venue_id FROM midi_bindings WHERE id = ?", id),
         VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
-        VenueResource::TrackScore(id) => (
-            "SELECT score.venue_id
-             FROM track_scores clip
-             JOIN scores score ON score.id = clip.score_id
-             WHERE clip.id = ?",
-            id,
-        ),
         VenueResource::AgentThread(id) => ("SELECT venue_id FROM agent_threads WHERE id = ?", id),
     };
     sqlx::query_scalar(sql)
@@ -389,7 +381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn members_are_read_only_while_owners_and_guests_can_write_their_aggregate() {
+    async fn members_are_read_only_and_nobody_signed_out_reaches_a_venue_at_all() {
         let (_directory, pool) = test_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
@@ -470,13 +462,16 @@ mod tests {
                 .is_err()
         );
 
+        // Armed with nobody is not a namespace of its own. Every synced row
+        // has an owner, so a venue is reachable only by the principal who owns
+        // it or a member — and signed out there is neither.
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
         assert!(
             VenueAccess::<Write>::write(&pool, VenueResource::Venue("guest"),)
                 .await
-                .is_ok()
+                .is_err()
         );
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)

@@ -4,19 +4,18 @@ use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venues::Venue;
 use luma_render::scene_desc::VenueEnvironment;
 
+/// `role` is not a column read here: it is derived per reader — see
+/// [`get_venue`] — so a venue the signed-in principal does not own reads as a
+/// member's however it was written.
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
+    "id, uid, name, description, share_code, 'owner' AS role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
     let venue_id = access.venue_id().to_string();
     let row = sqlx::query_as::<_, Venue>(
         "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
+                CASE WHEN venue.uid = admission.active_uid THEN 'owner' ELSE 'member' END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
                 venue.environment, venue.created_at, venue.updated_at
          FROM venues venue
@@ -31,16 +30,11 @@ pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, Strin
     Ok(row)
 }
 
-/// List exactly the venues admitted for the app database's current host-bound
-/// principal. Signed-out guest state never includes cached account venues.
+/// The venues the admitted principal owns or is a member of.
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
     let rows = sqlx::query_as::<_, Venue>(
         "SELECT venue.id, venue.uid, venue.name, venue.description, venue.share_code,
-                CASE
-                    WHEN admission.active_uid IS NULL OR venue.uid = admission.active_uid
-                    THEN 'owner'
-                    ELSE 'member'
-                END AS role,
+                CASE WHEN venue.uid = admission.active_uid THEN 'owner' ELSE 'member' END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
                 venue.environment, venue.created_at, venue.updated_at
          FROM venues venue
@@ -50,17 +44,12 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
            AND admission.accepting = 1
            AND admission.maintenance = 0
            AND (
-                (admission.active_uid IS NULL
-                 AND venue.uid IS NULL AND venue.role != 'member')
-                OR
-                (admission.active_uid IS NOT NULL AND (
-                    venue.uid = admission.active_uid
-                    OR EXISTS(
-                        SELECT 1 FROM venue_members membership
-                        WHERE membership.venue_id = venue.id
-                          AND membership.uid = admission.active_uid
-                    )
-                ))
+                venue.uid = admission.active_uid
+                OR EXISTS(
+                    SELECT 1 FROM venue_members membership
+                    WHERE membership.venue_id = venue.id
+                      AND membership.uid = admission.active_uid
+                )
            )
          ORDER BY venue.updated_at DESC",
     )
