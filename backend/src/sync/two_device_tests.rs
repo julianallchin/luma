@@ -274,20 +274,13 @@ async fn refused(pool: &SqlitePool) -> String {
             Ok(rows) => rows,
             Err(error) => return format!("oplog unreadable: {error}"),
         };
-    // The SDK's own connection has foreign keys off, which is what makes a
-    // checkpoint's arbitrary row order survivable. Match it, or every replay
-    // fails on a parent that has not been written yet.
+    // Foreign keys stay on: this build of SQLite enables them by default, so
+    // the SDK's own connection enforces them too, and a deferred violation is
+    // only visible at the commit.
     let mut connection = match pool.acquire().await {
         Ok(connection) => connection,
         Err(error) => return format!("could not replay the oplog: {error}"),
     };
-    let keys = std::env::var("LUMA_REPLAY_FK").unwrap_or_else(|_| "OFF".into());
-    if let Err(error) = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA foreign_keys = {keys}")))
-        .execute(&mut *connection)
-        .await
-    {
-        return format!("could not replay the oplog: {error}");
-    }
     // One transaction, like a checkpoint: a row that only conflicts with
     // another row in the same batch would pass a one-at-a-time replay.
     let _ = sqlx::query("BEGIN").execute(&mut *connection).await;
@@ -326,12 +319,10 @@ async fn refused(pool: &SqlitePool) -> String {
         }
     }
     if let Err(error) = sqlx::query("COMMIT").execute(&mut *connection).await {
+        let violations = super::service::violations(&mut connection).await;
         let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
-        return format!("refused at commit ({keys}): {error}");
+        return format!("refused at commit: {error} ({violations})");
     }
-    let _ = sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&mut *connection)
-        .await;
     "refused: nothing".to_owned()
 }
 
@@ -993,12 +984,10 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
 /// service refuses, fails the whole stream, and the only symptom is rows that
 /// never arrive.
 ///
-/// KNOWN RED, and not because of this test: once one account has joined a
-/// couple of venues, its device stops applying checkpoints — `ps_oplog` keeps
-/// growing, nothing lands in the app tables, and replaying those same rows
-/// through the generated statements succeeds, so it is not a local constraint.
-/// `a_share_code_admits_a_second_user_until_it_is_revoked` fails the same way
-/// on the same stack.
+/// The cue's pattern is here for a second reason: `cues.pattern_id` is a
+/// foreign key, so a member who receives the cue without it receives a
+/// checkpoint the local schema refuses at the commit — and refuses again on
+/// every retry, which stops that account's device applying anything at all.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
 async fn every_venue_child_shape_reaches_a_member() {
@@ -1118,6 +1107,20 @@ async fn every_venue_child_shape_reaches_a_member() {
         )
         .await;
     }
+
+    // The sync rules and the policies say the same thing about that pattern:
+    // the member may read it, and nobody else has been let in with them.
+    let selection = format!("/patterns?id=eq.{pattern}&select=id");
+    assert_eq!(
+        get(&containers, OTHER, &selection).await,
+        serde_json::json!([{ "id": pattern }]),
+        "the member may not read the pattern their cue plays"
+    );
+    assert_eq!(
+        get(&containers, STRANGER, &selection).await,
+        serde_json::json!([]),
+        "a stranger read a venue's cue pattern"
+    );
 
     a.close().await;
     b.close().await;

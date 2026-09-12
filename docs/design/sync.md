@@ -38,6 +38,10 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   download is one transaction holding a consistent snapshot of the server in
   whatever order the checkpoint delivers it, so a child can land before its
   parent; an immediate check would reject the whole checkpoint, forever.
+  Deferring only fixes the order. A parent the sync rules never ship is
+  refused at the commit and refused again on every retry, so a rule that
+  reaches a child reaches its parent too: the tracks behind a shared score,
+  the patterns behind a venue's cues.
 - Sign-in is required to write. Every synced row has an owner, and there is no
   signed-out owner: `AppServices::require_session` refuses the command and the
   shell shows the sign-in screen. Reading a library already on this machine
@@ -164,7 +168,9 @@ auth session, and the columns `venues.controller_port`, `venues.mixer_port`,
   publication. `supabase/migrations/20260916000000_stage_child_venue_id.sql`
   adds `venue_id` to `venue_edges`, `venue_node_params`, `venue_constraints`
   and `fixture_group_members` so the sync rules can filter on it in one hop.
-  Both are required on the server.
+  `supabase/migrations/20260918000000_cued_patterns.sql` lets a venue member
+  read the patterns that venue's cues play. All three are required on the
+  server.
 - `deploy/sync-rules.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
   a parameter query and may return at most a thousand rows, so every one of
   them counts venues, scores or shared tracks — never their children.

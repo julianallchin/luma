@@ -64,6 +64,14 @@ streams:
         SELECT id FROM venues
         WHERE uid = auth.user_id()
            OR id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
+      # The patterns a venue's cues play. A member holds the cue, so it holds
+      # the pattern behind it or the cue is a row pointing at nothing — and
+      # `cues.pattern_id` is a foreign key, so a checkpoint carrying the cue
+      # without the pattern is one the local schema refuses.
+      cued_patterns: >-
+        SELECT pattern_id AS id FROM cues
+        WHERE venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
+           OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
     queries:
       - SELECT * FROM venues WHERE id IN accessible_venues
       - SELECT * FROM venue_members WHERE venue_id IN accessible_venues
@@ -77,6 +85,8 @@ streams:
       - SELECT * FROM cues WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_modifiers WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_bindings WHERE venue_id IN accessible_venues
+      - SELECT * FROM patterns WHERE id IN cued_patterns
+      - SELECT * FROM implementations WHERE pattern_id IN cued_patterns
 
   library:
     auto_subscribe: true

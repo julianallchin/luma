@@ -25,6 +25,7 @@ REPO = ROOT.parent.parent
 MIGRATIONS = [
     REPO / "supabase/migrations/20260912000000_row_model.sql",
     REPO / "supabase/migrations/20260916000000_stage_child_venue_id.sql",
+    REPO / "supabase/migrations/20260918000000_cued_patterns.sql",
 ]
 SYNC_RULES = REPO / "deploy/sync-rules.yaml"
 
