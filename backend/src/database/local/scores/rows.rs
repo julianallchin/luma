@@ -362,68 +362,6 @@ fn parse_seed(text: &str) -> Result<u64, String> {
         .map_err(|_| format!("clip seed `{text}` is not a u64"))
 }
 
-/// Finish the row-model cutover for documents the migration could not split.
-///
-/// SQL cannot do this: a clip's `seed` is a full u64 and `json_extract` returns
-/// it through a double, and a document written before the current
-/// [`Score::VERSION`] needs the Rust migration in `luma_patterns`. So the
-/// migration parked every stored document in `scores_pending_cutover` and this
-/// converts them once, on the next startup. A document that cannot be read is
-/// left parked rather than dropped — the bytes are the only copy.
-pub async fn cutover(pool: &sqlx::SqlitePool) -> Result<(), String> {
-    let pending: Vec<(String, String)> =
-        sqlx::query_as("SELECT score_id, document_json FROM scores_pending_cutover")
-            .fetch_all(pool)
-            .await
-            .map_err(|error| format!("failed to read the pending score cutover: {error}"))?;
-    for (score_id, document) in pending {
-        let converted = convert(&document);
-        let Some(score) = converted.as_ref().ok() else {
-            log::warn!(
-                "[cutover] leaving score {score_id} parked: {}",
-                converted.unwrap_err()
-            );
-            continue;
-        };
-        let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM scores WHERE id = ?")
-            .bind(&score_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|error| error.to_string())?
-            .flatten();
-        let mut transaction = pool
-            .begin()
-            .await
-            .map_err(|error| format!("failed to open the cutover transaction: {error}"))?;
-        save_score(
-            &mut transaction,
-            &score_id,
-            uid.as_deref().unwrap_or(""),
-            score,
-        )
-        .await?;
-        sqlx::query("DELETE FROM scores_pending_cutover WHERE score_id = ?")
-            .bind(&score_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| error.to_string())?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| format!("failed to commit the cutover: {error}"))?;
-    }
-    Ok(())
-}
-
-fn convert(document: &str) -> Result<Score, String> {
-    let score: Score = serde_json::from_str(document)
-        .map_err(|error| format!("unreadable score document: {error}"))?;
-    if score.version() == Score::VERSION {
-        return Ok(score);
-    }
-    luma_patterns::migration::upgrade(&score).map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
