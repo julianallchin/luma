@@ -674,9 +674,22 @@ impl Fixture {
         // because the conversion takes a venue write, which needs admission
         // armed — and for every fixture, rigged or not, because an empty
         // venue still has a root.
-        luma_lib::venue_graph::ensure_migrated(&db.0, VENUE, &config_dir.join("fixtures"))
-            .await
-            .expect("failed to build the venue graph");
+        //
+        // `migrate` rather than `ensure_migrated`: the latter also snapshots
+        // the derived groups, which is the venue page's job. A fixture that
+        // did it here would hand every picker groups no test asked for.
+        {
+            use luma_lib::database::local::venue_access::{VenueAccess, VenueResource, Write};
+            let mut access = VenueAccess::<Write>::write(&db.0, VenueResource::Venue(VENUE))
+                .await
+                .expect("failed to open the fixture venue");
+            luma_lib::venue_graph::migrate(&mut access, &config_dir.join("fixtures"))
+                .await
+                .expect("failed to build the venue graph");
+            luma_lib::venue_graph::commit_graph(access)
+                .await
+                .expect("failed to commit the venue graph");
+        }
         let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
         let workspaces = Arc::new(
             luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
