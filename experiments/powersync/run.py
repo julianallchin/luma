@@ -387,7 +387,19 @@ def check():
         raise RuntimeError(f"{len(failures)} check(s) failed")
 
 
+# The accounts `backend/src/sync/two_device_tests.rs` signs its devices in as.
+# Fixed, because the server's foreign keys are real: a row whose `uid` is not in
+# `auth.users` is refused, and a test that minted its own would have to tell the
+# Rust side what it minted.
+TEST_USERS = [
+    "00000000-0000-0000-0000-0000000000aa",
+    "00000000-0000-0000-0000-0000000000bb",
+]
+
+
 def run_tests(names):
+    for user in TEST_USERS:
+        psql(f"insert into auth.users (id) values ('{user}') on conflict do nothing;")
     for name in names:
         print(f"cargo test {name}", flush=True)
         result = subprocess.run(

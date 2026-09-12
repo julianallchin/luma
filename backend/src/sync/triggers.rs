@@ -11,6 +11,11 @@
 //!
 //! Both sets read [`SyncedTable`], so they cannot describe different columns.
 //!
+//! A change belongs to whoever made it, not to whoever owns the row: a venue
+//! member editing the owner's clip writes a `changes` row of their own, and the
+//! server would refuse one stamped with the owner's id. So the log reads the
+//! signed-in principal off the admission gate rather than off `NEW.uid`.
+//!
 //! `uid` travels in every entry. Postgres defaults it to `auth.uid()`, so
 //! sending it is redundant for an insert — but an RLS `with check` on an
 //! `UPDATE` is evaluated against the row as it will be, and a PATCH that never
@@ -130,7 +135,6 @@ pub fn change_log(table: &SyncedTable) -> [String; 3] {
             "insert",
             "",
             &table.id_of("NEW"),
-            &table.uid_of("NEW"),
             "NULL",
             &table.json_object("NEW"),
         ),
@@ -139,7 +143,6 @@ pub fn change_log(table: &SyncedTable) -> [String; 3] {
             "update",
             &format!("WHEN {}", changed_beyond_the_timestamp(table)),
             &table.id_of("NEW"),
-            &table.uid_of("NEW"),
             &table.json_object("OLD"),
             &updated_object(table, "NEW"),
         ),
@@ -148,7 +151,6 @@ pub fn change_log(table: &SyncedTable) -> [String; 3] {
             "delete",
             "",
             &table.id_of("OLD"),
-            &table.uid_of("OLD"),
             &table.json_object("OLD"),
             "NULL",
         ),
@@ -160,7 +162,6 @@ fn append(
     op: &str,
     guard: &str,
     row_id: &str,
-    uid: &str,
     before: &str,
     after: &str,
 ) -> String {
@@ -174,7 +175,7 @@ fn append(
     INSERT INTO changes (id, uid, table_name, row_id, op, before_json, after_json, actor)
     VALUES (
         lower(hex(randomblob(16))),
-        COALESCE({uid}, ''),
+        COALESCE((SELECT active_uid FROM auth_write_admission WHERE singleton = 1), ''),
         '{table}',
         {row_id},
         '{op}',
