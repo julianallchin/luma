@@ -642,10 +642,13 @@ pub async fn append_messages_at_head(
             return Err(format!("Agent message id {id} already exists"));
         }
         sqlx::query(
+            // `updated_at` arrived by `ALTER TABLE ADD COLUMN`, which refuses an
+            // expression default, so the writer supplies it. Postgres declares
+            // it `not null`, and a message uploaded without one is refused.
             "INSERT INTO agent_thread_messages
              (id, uid, principal_key, created_in_thread_id, parent_message_id,
-              depth, role, parts_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              depth, role, parts_json, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
         )
         .bind(&id)
         .bind(owner_user_id)
