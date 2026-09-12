@@ -133,39 +133,3 @@ impl Database {
         }
     }
 }
-
-/// Complete an upload inside the caller's SQLite transaction, so its durable
-/// outcome and account fence cannot be separated from queue acknowledgement.
-/// This is the pinned SDK's `complete_crud_items(None)` SQL; keep it here until
-/// the SDK accepts an existing transaction for completion.
-pub async fn complete_upload(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    upload: sdk::CrudTransaction<'_>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM ps_crud WHERE id <= ?")
-        .bind(upload.last_item_id)
-        .execute(&mut **transaction)
-        .await?;
-    sqlx::query("SELECT powersync_control('target_checkpoint_request_id', ?)")
-        .bind(i64::MAX)
-        .execute(&mut **transaction)
-        .await?;
-    Ok(())
-}
-
-/// The pinned SDK clears its applied marker on every local write. Read its
-/// target and applied checkpoint together with the application projection.
-pub async fn uploads_confirmed(
-    connection: &mut sqlx::SqliteConnection,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT NOT EXISTS(SELECT 1 FROM ps_crud)
-         AND NOT EXISTS(SELECT 1 FROM ps_kv target
-             WHERE target.key = 'target_checkpoint_request_id'
-               AND NOT EXISTS(SELECT 1 FROM ps_kv applied
-                   WHERE applied.key = 'last_applied_checkpoint_request_id'
-                     AND CAST(applied.value AS INTEGER) >= CAST(target.value AS INTEGER)))",
-    )
-    .fetch_one(connection)
-    .await
-}
