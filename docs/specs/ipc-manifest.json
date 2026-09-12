@@ -1503,7 +1503,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 857
+        "line": 862
       },
       "name": "generate_venue_groups",
       "prose": {
@@ -4356,7 +4356,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 831
+        "line": 836
       },
       "name": "save_venue_group",
       "prose": {
