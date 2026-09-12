@@ -300,6 +300,19 @@ mod installed {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::SqlitePool;
 
+    /// A stand-in for the core extension's `powersync_crud` view. The app's
+    /// real pool has the extension loaded; these tests only need somewhere for
+    /// the upload triggers to write.
+    async fn crud_queue(connection: &mut sqlx::SqliteConnection) {
+        sqlx::query(
+            "CREATE TEMP TABLE IF NOT EXISTS powersync_crud
+                 (seq INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT, id TEXT, type TEXT, data TEXT)",
+        )
+        .execute(connection)
+        .await
+        .unwrap();
+    }
+
     async fn database(name: &str) -> (tempfile::TempDir, SqlitePool) {
         let directory = tempfile::tempdir().unwrap();
         let pool = SqlitePoolOptions::new()
@@ -326,6 +339,7 @@ mod installed {
     async fn every_write_to_a_synced_table_appends_one_change() {
         let (_directory, pool) = database("changes.db").await;
         let mut connection = pool.acquire().await.unwrap();
+        crud_queue(&mut connection).await;
         install(&mut connection).await.unwrap();
         set_session_actor(&mut connection, "user").await.unwrap();
 
@@ -406,12 +420,7 @@ mod installed {
     async fn the_uploaded_timestamp_is_the_one_the_row_keeps() {
         let (_directory, pool) = database("timestamp.db").await;
         let mut connection = pool.acquire().await.unwrap();
-        sqlx::query(
-            "CREATE TEMP TABLE powersync_crud (op TEXT, id TEXT, type TEXT, data TEXT)",
-        )
-        .execute(&mut *connection)
-        .await
-        .unwrap();
+        crud_queue(&mut connection).await;
         install(&mut connection).await.unwrap();
         sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Basement')")
             .execute(&mut *connection)
@@ -465,6 +474,7 @@ mod installed {
     async fn a_composite_key_row_is_logged_under_its_generated_id() {
         let (_directory, pool) = database("composite.db").await;
         let mut connection = pool.acquire().await.unwrap();
+        crud_queue(&mut connection).await;
         install(&mut connection).await.unwrap();
         for statement in [
             "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Basement')",

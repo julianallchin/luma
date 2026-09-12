@@ -5297,7 +5297,8 @@
       "emitters": [
         "backend/src/dispatch/handlers/tracks.rs:357",
         "backend/src/dispatch/handlers/tracks.rs:395",
-        "backend/src/dispatch/handlers/tracks.rs:460"
+        "backend/src/dispatch/handlers/tracks.rs:460",
+        "backend/src/sync/media.rs:145"
       ],
       "listeners": [],
       "name": "library-changed",

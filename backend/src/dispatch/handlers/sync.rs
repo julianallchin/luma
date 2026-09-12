@@ -9,8 +9,13 @@ pub async fn force_quit(services: &AppServices) -> Result<(), CommandError> {
     Ok(())
 }
 
-/// Not connected. Phase two answers this off the PowerSync client's own state;
-/// until then the app is local-only and there is nothing in flight to report.
-pub async fn sync_status(_services: &AppServices) -> Result<SyncStatus, CommandError> {
-    Ok(SyncStatus::default())
+/// What replication is doing, off the PowerSync client's own state.
+///
+/// A host that never started replication reports the default, which reads as
+/// "not connected, nothing pending" — the truth for a local-only process.
+pub async fn sync_status(services: &AppServices) -> Result<SyncStatus, CommandError> {
+    let Some(sync) = &services.sync else {
+        return Ok(SyncStatus::default());
+    };
+    sync.status().await.map_err(CommandError::Internal)
 }

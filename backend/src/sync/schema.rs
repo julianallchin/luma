@@ -28,6 +28,16 @@ pub struct SyncedTable {
     /// `id`: locally it is a `GENERATED ALWAYS` column, so nothing may write
     /// it, and it is reconstructed from the key columns that are here.
     pub columns: &'static [&'static str],
+    /// Local-only `NOT NULL` columns a download has to fill, and the SQL that
+    /// fills them. A `?` in the expression binds the row's id.
+    ///
+    /// There are two, and they are the same fact twice: where the bytes are on
+    /// *this* machine. A track that arrives from another device has no bytes
+    /// here, and the app's word for that is a `.stub` path — the one thing a
+    /// downloaded row can honestly say. Only an insert writes them; a later
+    /// download of the same row must not undo a real path this device earned
+    /// by actually fetching the file.
+    pub local_defaults: &'static [(&'static str, &'static str)],
 }
 
 impl SyncedTable {
@@ -89,7 +99,17 @@ impl SyncedTable {
 
 macro_rules! table {
     ($name:literal, $id:literal, $uid:literal, [$($column:literal),* $(,)?]) => {
-        SyncedTable { name: $name, id: $id, uid: $uid, columns: &[$($column),*] }
+        table!($name, $id, $uid, [$($column),*], [])
+    };
+    ($name:literal, $id:literal, $uid:literal, [$($column:literal),* $(,)?],
+     [$(($local:literal, $fill:literal)),* $(,)?]) => {
+        SyncedTable {
+            name: $name,
+            id: $id,
+            uid: $uid,
+            columns: &[$($column),*],
+            local_defaults: &[$(($local, $fill)),*],
+        }
     };
 }
 
@@ -252,7 +272,8 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "source_filename",
             "created_at",
             "updated_at"
-        ]
+        ],
+        [("file_path", "'downloaded/' || ? || '.stub'")]
     ),
     table!(
         "track_beats",
@@ -297,7 +318,8 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "processor_version",
             "created_at",
             "updated_at"
-        ]
+        ],
+        [("file_path", "'downloaded/' || ? || '.stub'")]
     ),
     table!(
         "track_drum_onsets",
@@ -653,6 +675,7 @@ pub fn statements(table: &SyncedTable) -> (String, String) {
         .columns
         .iter()
         .map(|column| column_expression(column))
+        .chain(table.local_defaults.iter().map(|(_, fill)| *fill))
         .collect::<Vec<_>>()
         .join(", ");
     let key = table.key();
@@ -666,6 +689,7 @@ pub fn statements(table: &SyncedTable) -> (String, String) {
     let names = table
         .columns
         .iter()
+        .chain(table.local_defaults.iter().map(|(column, _)| column))
         .map(|column| format!("\"{column}\""))
         .collect::<Vec<_>>()
         .join(", ");
@@ -694,7 +718,7 @@ pub fn raw_tables() -> Vec<RawTable> {
         .iter()
         .map(|table| {
             let (put, delete) = statements(table);
-            let params = table
+            let mut params: Vec<PendingStatementValue> = table
                 .columns
                 .iter()
                 .copied()
@@ -706,6 +730,14 @@ pub fn raw_tables() -> Vec<RawTable> {
                     }
                 })
                 .collect();
+            // Every `?` in a local default's expression is the row's id.
+            params.extend(
+                table
+                    .local_defaults
+                    .iter()
+                    .flat_map(|(_, fill)| fill.matches('?'))
+                    .map(|_| PendingStatementValue::Id),
+            );
             let mut raw = RawTable::with_statements(
                 table.name,
                 PendingStatement {

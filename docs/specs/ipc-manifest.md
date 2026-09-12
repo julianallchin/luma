@@ -433,7 +433,7 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `controller_state` | 3 | 0 | **orphan** |
 | `dmx://update` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `host-audio://state` | 0 | 0 | **orphan** |
-| `library-changed` | 3 | 0 | **orphan** |
+| `library-changed` | 4 | 0 | **orphan** |
 | `midi_learn_captured` | 2 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
 | `mixer_state` | 2 | 0 | **orphan** |
