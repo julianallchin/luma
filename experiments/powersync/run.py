@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Disposable Postgres, PostgREST and PowerSync for the row model.
 
-Starts the three services the client talks to, applies
-`supabase/migrations/` (the row model and everything after it) to an empty
-database, checks
-the row-level security with three minted users, and then runs whichever Rust
-tests were named on the command line against the live stack.
-
-Older migrations are not applied: they assume the deployed baseline the row
-model replaces, and the row model migration is self-sufficient by design.
+Starts the three services a Luma client talks to, applies the row model to an
+empty database, and runs whichever Rust tests were named against the live
+stack. Older migrations are not applied: the row-model migration is
+self-sufficient by design.
 """
 
 import argparse
@@ -20,9 +16,7 @@ import os
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -61,6 +55,39 @@ ENVIRONMENT = {
     "LUMA_TEST_PG_URI": PG_URI,
 }
 
+USAGE = f"""\
+containers, on loopback only, removed on exit unless --keep:
+
+  {PG:<22} {POSTGRES_IMAGE:<38} 127.0.0.1:{PG_PORT}   wal_level=logical
+  {REST:<22} {POSTGREST_IMAGE:<38} 127.0.0.1:{REST_PORT}
+  {PS:<22} {POWERSYNC_IMAGE:<38} 127.0.0.1:{PS_PORT}
+
+examples:
+
+  run.py --test sync::two_device_tests    run the Rust suite against it
+  run.py --keep --sql                     leave the stack up, open psql on it
+
+--test runs, once per NAME, from the repo root:
+
+  cargo +1.97.1 test --manifest-path backend/Cargo.toml -p luma --lib NAME \\
+      -- --ignored --nocapture
+
+with the stack in the environment, which is how the Rust tests find it:
+
+  LUMA_TEST_POWERSYNC_URL={PS_URL}
+  LUMA_TEST_POSTGREST_URL={REST_URL}
+  LUMA_TEST_PG_URI={PG_URI}
+  LUMA_TEST_JWT_SECRET={SECRET}
+
+That secret is also the inline JWKS key in this directory's service.yaml, so
+one minted token is accepted by both PostgREST and PowerSync. PowerSync reads
+that service.yaml and the repo's deploy/sync-rules.yaml, so the sync rules
+under test are the ones that ship.
+
+The runner refuses to start if a {PREFIX}* container already exists, and never
+removes one it did not create; after --keep, `docker rm -f` them yourself.
+"""
+
 # A minimal stand-in for the Supabase auth schema: enough for `auth.uid()`
 # defaults, the `auth.users` foreign keys and PostgREST's role switching.
 BOOTSTRAP = f"""
@@ -89,6 +116,16 @@ grant usage on schema public to anon, authenticated;
 REPLICATION = f"""
 alter role powersync_role with password '{PASSWORD}';
 """
+
+# The accounts `backend/src/sync/two_device_tests.rs` signs its devices in as.
+# Fixed, because the server's foreign keys are real: a row whose `uid` is not in
+# `auth.users` is refused, and a test that minted its own would have to tell the
+# Rust side what it minted.
+TEST_USERS = [
+    "00000000-0000-0000-0000-0000000000aa",
+    "00000000-0000-0000-0000-0000000000bb",
+    "00000000-0000-0000-0000-0000000000cc",
+]
 
 
 def docker(*args, **kwargs):
@@ -122,50 +159,6 @@ def mint_jwt(user_id, role="authenticated", lifetime=3600):
     body = f"{header}.{claims}"
     signature = hmac.new(SECRET.encode(), body.encode(), hashlib.sha256).digest()
     return body + "." + base64.urlsafe_b64encode(signature).decode().rstrip("=")
-
-
-def rest(token, method, path, body=None, prefer=None):
-    """One PostgREST call as the holder of `token`."""
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    if prefer:
-        headers["Prefer"] = prefer
-    request = urllib.request.Request(REST_URL + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request) as response:
-            payload = response.read().decode()
-            return response.status, json.loads(payload) if payload.strip() else None
-    except urllib.error.HTTPError as error:
-        payload = error.read().decode()
-        try:
-            return error.code, json.loads(payload)
-        except json.JSONDecodeError:
-            return error.code, payload
-
-
-def stream(token, timeout=30):
-    """One PowerSync checkpoint over the HTTP stream: table -> row count."""
-    request = urllib.request.Request(
-        PS_URL + "/sync/stream",
-        data=json.dumps({"buckets": [], "include_checksum": True, "raw_data": True}).encode(),
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST")
-    seen = {}
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        for line in response:
-            if not line.strip():
-                continue
-            message = json.loads(line)
-            for operation in message.get("data", {}).get("data", []):
-                table = operation.get("object_type")
-                if table:
-                    seen[table] = seen.get(table, 0) + 1
-            if "checkpoint_complete" in message:
-                break
-    return seen
 
 
 def wait(label, probe, attempts=300, delay=0.3):
@@ -217,7 +210,10 @@ def start(containers):
            "-e", "PGRST_LOG_LEVEL=error",
            POSTGREST_IMAGE)
     containers.append(REST)
-    wait("postgrest", lambda: rest(mint_jwt(str(uuid.uuid4())), "GET", "/venues?limit=1")[0] < 500)
+    wait("postgrest", lambda: urllib.request.urlopen(
+        urllib.request.Request(f"{REST_URL}/venues?limit=1",
+                               headers={"Authorization": f"Bearer {mint_jwt(TEST_USERS[0])}"}),
+        timeout=5).status < 500)
 
     print("powersync", flush=True)
     docker("run", "-d", "--name", PS, "--network", NETWORK,
@@ -234,178 +230,6 @@ def start(containers):
         capture_output=True).returncode == 0, attempts=400)
 
 
-def account(label):
-    """A user that exists in `auth.users`, with a token."""
-    user_id = str(uuid.uuid4())
-    psql(f"insert into auth.users (id) values ('{user_id}');")
-    print(f"  {label} = {user_id}", flush=True)
-    return user_id, mint_jwt(user_id)
-
-
-def check():
-    """Owner shares a venue by code; the joiner writes; a stranger sees nothing."""
-    failures = []
-
-    def expect(condition, message):
-        print(("  PASS " if condition else "  FAIL ") + message, flush=True)
-        if not condition:
-            failures.append(message)
-
-    print("row-level security", flush=True)
-    owner, owner_token = account("owner")
-    joiner, joiner_token = account("joiner")
-    _, stranger_token = account("stranger")
-
-    venue = str(uuid.uuid4())
-    code = "SHARE-" + venue[:8]
-    status, body = rest(owner_token, "POST", "/venues",
-                        {"id": venue, "name": "Warehouse", "share_code": code},
-                        prefer="return=representation,resolution=merge-duplicates")
-    expect(status in (200, 201), f"owner inserts a venue ({status} {body})")
-
-    status, body = rest(stranger_token, "GET", f"/venues?id=eq.{venue}")
-    expect(body == [], f"stranger cannot see the venue before joining ({body})")
-
-    status, body = rest(joiner_token, "POST", "/rpc/join_venue", {"code": code})
-    expect(status == 200 and body == venue, f"joiner joins by share code ({status} {body})")
-
-    status, body = rest(joiner_token, "GET", f"/venues?id=eq.{venue}&select=id")
-    expect(body == [{"id": venue}], f"joiner now reads the venue ({body})")
-
-    track, score, clip = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
-    status, body = rest(owner_token, "POST", "/tracks",
-                        {"id": track, "track_hash": "h", "title": "Test"},
-                        prefer="return=representation")
-    expect(status in (200, 201), f"owner inserts a track ({status} {body})")
-    status, body = rest(owner_token, "POST", "/scores",
-                        {"id": score, "track_id": track, "venue_id": venue, "name": "Set"},
-                        prefer="return=representation")
-    expect(status in (200, 201), f"owner inserts a score in the venue ({status} {body})")
-
-    status, body = rest(joiner_token, "POST", "/clips", {
-        "id": clip, "score_id": score, "graph": "{}", "start": 0.0, "duration": 8.0,
-        "seed": "12345678901234567890", "selection_json": "\"All\"",
-    }, prefer="return=representation")
-    expect(status in (200, 201), f"joiner inserts a clip into the shared score ({status} {body})")
-
-    status, body = rest(owner_token, "GET", f"/clips?id=eq.{clip}&select=id,uid")
-    expect(len(body or []) == 1 and body[0]["uid"] == joiner,
-           f"owner reads the joiner's clip ({body})")
-
-    status, body = rest(stranger_token, "GET", f"/clips?id=eq.{clip}")
-    expect(body == [], f"stranger cannot read the clip ({body})")
-
-    status, body = rest(stranger_token, "GET", f"/tracks?id=eq.{track}")
-    expect(body == [], f"stranger cannot read the track ({body})")
-
-    status, body = rest(joiner_token, "GET", f"/tracks?id=eq.{track}&select=id")
-    expect(body == [{"id": track}], f"joiner reads the track behind the shared score ({body})")
-
-    status, body = rest(stranger_token, "POST", "/clips", {
-        "id": str(uuid.uuid4()), "score_id": score, "graph": "{}", "start": 0.0,
-        "duration": 1.0, "seed": "1", "selection_json": "\"All\"",
-    })
-    expect(status == 403, f"stranger cannot write into the shared score ({status})")
-
-    status, body = rest(stranger_token, "POST", "/rpc/join_venue", {"code": "SHARE-nope"})
-    expect(status >= 400, f"a wrong share code does not join ({status})")
-
-    # Verified patterns are the global library.
-    pattern = str(uuid.uuid4())
-    rest(owner_token, "POST", "/patterns", {"id": pattern, "name": "Strobe", "is_verified": True},
-         prefer="return=representation")
-    status, body = rest(stranger_token, "GET", f"/patterns?id=eq.{pattern}&select=id")
-    expect(body == [{"id": pattern}], f"a verified pattern is readable by everyone ({body})")
-    status, body = rest(stranger_token, "PATCH", f"/patterns?id=eq.{pattern}", {"name": "Hijack"})
-    expect(status in (200, 204) and rest(owner_token, "GET", f"/patterns?id=eq.{pattern}&select=name")[1]
-           == [{"name": "Strobe"}], "a verified pattern is not writable by everyone")
-
-    # One row per venue-child shape, so every sync-rule query in
-    # deploy/sync-rules.yaml is evaluated against real data.
-    node, child, group, fixture = (str(uuid.uuid4()) for _ in range(4))
-    for path, row in [
-        ("/venue_nodes", {"id": node, "venue_id": venue, "kind": "venue"}),
-        ("/venue_nodes", {"id": child, "venue_id": venue, "kind": "truss"}),
-        ("/venue_edges", {"id": child, "venue_id": venue, "child_id": child,
-                          "parent_id": node,
-                          "my_socket": "base", "their_socket": "top"}),
-        ("/venue_node_params", {"id": child + ":length", "venue_id": venue,
-                                "node_id": child,
-                                "key": "length", "value": 3.0}),
-        ("/venue_constraints", {"id": child + ":base", "venue_id": venue,
-                                "node_id": child,
-                                "my_socket": "base", "target_node": node,
-                                "target_socket": "top"}),
-        ("/fixtures", {"id": fixture, "venue_id": venue, "address": 1, "num_channels": 8,
-                       "manufacturer": "m", "model": "x", "mode_name": "8ch",
-                       "fixture_path": "m/x", "address_pinned": False}),
-        ("/fixture_groups", {"id": group, "venue_id": venue, "name": "front_wash"}),
-        ("/fixture_group_members", {"id": group + ":" + fixture, "venue_id": venue,
-                                    "group_id": group,
-                                    "fixture_id": fixture}),
-        ("/cues", {"id": str(uuid.uuid4()), "venue_id": venue, "name": "Blinder",
-                   "pattern_id": pattern}),
-        ("/midi_modifiers", {"id": str(uuid.uuid4()), "venue_id": venue, "name": "shift",
-                             "input_json": "{}"}),
-        ("/midi_bindings", {"id": str(uuid.uuid4()), "venue_id": venue,
-                            "trigger_json": "{}", "action_json": "{}", "exclusive": False}),
-        ("/track_beats", {"id": track, "track_id": track, "beats_json": "[]",
-                          "downbeats_json": "[]"}),
-        ("/score_definitions", {"id": str(uuid.uuid4()), "score_id": score,
-                                "definition_json": "{}"}),
-        ("/implementations", {"id": str(uuid.uuid4()), "pattern_id": pattern,
-                              "graph_json": "{}"}),
-        ("/agent_threads", {"id": str(uuid.uuid4()), "agent_kind": "score"}),
-        ("/drafts", {"id": str(uuid.uuid4()), "score_id": score,
-                     "base_json": "{}", "state_json": "{}"}),
-        ("/changes", {"id": str(uuid.uuid4()), "table_name": "clips", "row_id": clip,
-                      "op": "insert", "after_json": "{}"}),
-    ]:
-        status, body = rest(owner_token, "POST", path, row)
-        if status not in (200, 201):
-            expect(False, f"insert into {path} ({status} {body})")
-
-    probe = subprocess.run(
-        ["docker", "exec", PS, "node", "-e",
-         "fetch('http://localhost:8080/probes/startup')"
-         ".then(r=>{console.log(r.status);process.exit(r.ok?0:1)}).catch(e=>{console.log(e);process.exit(1)})"],
-        capture_output=True, text=True)
-    expect(probe.returncode == 0, f"powersync /probes/startup is healthy ({probe.stdout.strip()})")
-
-    # Replication is asynchronous; give it a moment, then insist the service
-    # logged no sync-rule evaluation errors for the rows just written.
-    time.sleep(5)
-    logs = subprocess.run(["docker", "logs", PS], capture_output=True, text=True)
-    errors = [line for line in (logs.stdout + logs.stderr).splitlines() if "error" in line.lower()]
-    expect(not errors, "powersync replicated every row without a sync-rule error\n"
-                       + "\n".join("      " + line for line in errors[:5]))
-
-    # What the joiner's client actually receives over the sync stream.
-    delivered = stream(joiner_token)
-    shared = {"venues", "venue_members", "fixtures", "fixture_groups", "fixture_group_members",
-              "venue_nodes", "venue_edges", "venue_node_params", "venue_constraints",
-              "cues", "midi_modifiers", "midi_bindings", "scores", "clips",
-              "score_definitions", "tracks", "track_beats", "patterns", "implementations"}
-    expect(shared <= delivered.keys(),
-           f"the joiner's stream delivers the shared venue ({sorted(shared - delivered.keys())} missing)")
-    private = {"agent_threads", "drafts", "changes"}
-    expect(not (private & delivered.keys()),
-           f"the joiner's stream withholds the owner's private rows ({sorted(private & delivered.keys())})")
-
-    if failures:
-        raise RuntimeError(f"{len(failures)} check(s) failed")
-
-
-# The accounts `backend/src/sync/two_device_tests.rs` signs its devices in as.
-# Fixed, because the server's foreign keys are real: a row whose `uid` is not in
-# `auth.users` is refused, and a test that minted its own would have to tell the
-# Rust side what it minted.
-TEST_USERS = [
-    "00000000-0000-0000-0000-0000000000aa",
-    "00000000-0000-0000-0000-0000000000bb",
-]
-
-
 def run_tests(names):
     for user in TEST_USERS:
         psql(f"insert into auth.users (id) values ('{user}') on conflict do nothing;")
@@ -420,12 +244,17 @@ def run_tests(names):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--keep", action="store_true", help="leave the containers running")
-    parser.add_argument("--sql", action="store_true", help="open psql against the stack")
-    parser.add_argument("--no-check", action="store_true", help="skip the row-level security checks")
+    parser = argparse.ArgumentParser(
+        description="Bring up a disposable Postgres + PostgREST + PowerSync stack for the "
+                    "row model, and run Rust tests against it.",
+        epilog=USAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--keep", action="store_true",
+                        help=f"leave the {PREFIX}* containers running after the run")
+    parser.add_argument("--sql", action="store_true",
+                        help=f"open an interactive psql on {PG} (use with --keep to stay)")
     parser.add_argument("--test", action="append", default=[], metavar="NAME",
-                        help="a Rust test to run against the stack; repeatable")
+                        help="a Rust test filter to run against the stack; repeatable")
     args = parser.parse_args()
 
     refuse_existing()
@@ -435,8 +264,6 @@ def main():
         start(containers)
         for key, value in ENVIRONMENT.items():
             print(f"{key}={value}", flush=True)
-        if not args.no_check:
-            check()
         if args.test:
             run_tests(args.test)
         if args.sql:
