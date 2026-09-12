@@ -220,16 +220,43 @@ async fn statuses(
         observed.connected = status.is_connected();
         observed.downloading = status.is_downloading();
         observed.uploading = status.is_uploading();
-        observed.error = status
+        // The SDK retries forever and reports the failure on one tick. Keeping
+        // the last one is the difference between a user seeing "sync is
+        // rejecting your sign-in" and seeing nothing at all while nothing
+        // syncs; it is cleared when a direction actually succeeds.
+        match status
             .download_error()
             .or_else(|| status.upload_error())
-            .map(ToString::to_string);
+            .map(|error| readable(&error.to_string()))
+        {
+            Some(error) => {
+                log::warn!("[sync] {error}");
+                observed.error = Some(error);
+            }
+            None if observed.connected && !observed.downloading && !observed.uploading => {
+                observed.error = None;
+            }
+            None => {}
+        }
         // "Last synced" is the moment the two directions went quiet while
         // connected. The SDK reports it per stream; this is the whole database.
         if was_busy && observed.connected && !observed.downloading && !observed.uploading {
             observed.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
         }
     }
+}
+
+/// Say what a transport failure means, where the wire says it in codes.
+///
+/// A 401 is the one a person can act on: the token this build mints is not one
+/// the sync service will accept, which is a sign-in problem however it is
+/// spelled downstream. Everything else is passed through — an unfamiliar error
+/// in full is more use than a familiar one in the wrong words.
+fn readable(error: &str) -> String {
+    if error.contains("401") || error.to_lowercase().contains("unauthor") {
+        return format!("Sync rejected this sign-in. {error}");
+    }
+    error.to_owned()
 }
 
 /// Coalesce writes to synced tables into one `replica-changed` event.
