@@ -1,11 +1,8 @@
-//! Two-phase file sync for audio, stems, and album art.
+//! Audio, stems and album art between Supabase Storage and this machine.
 //!
-//! **Writer path**: Upload binary to Supabase Storage first, then update
-//! local `storage_path` (which marks the metadata dirty for push).
-//!
-//! **Reader path**: Audio is downloaded on demand and retained locally.
-//! Sync downloads album art; stems follow tracks with local audio.
-//! Downloads go to a temp file first and are atomically renamed on success.
+//! An upload writes the bytes first and `storage_path` second, so a row never
+//! claims bytes that are not there. A download lands in a temp file and is
+//! renamed atomically, for the same reason.
 
 use sqlx::SqlitePool;
 use std::process::Command;
@@ -173,14 +170,12 @@ pub async fn upload_pending_audio(
                 )
             };
 
-        // Phase 1: Upload binary
         match remote
             .upload_file("track-audio", &storage_path, bytes, content_type, token)
             .await
         {
             Ok(full_path) => {
-                // Phase 2: Update local metadata (marks record dirty for push).
-                // Log-and-continue on DB failure so remaining uploads aren't skipped.
+                // Log and continue: one row's failure must not skip the rest.
                 if let Err(e) = sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
                     .bind(&full_path)
                     .bind(&row.id)
@@ -574,11 +569,8 @@ pub async fn download_pending_album_art(
     Ok(())
 }
 
-/// Is this track's audio on this device?
-///
-/// Phase one is local-only, so this is a check rather than a fetch: there is
-/// no record transport to ask for the bytes yet. Phase two restores the
-/// download here, behind the same call.
+/// Is this track's audio on this device? A check, not a fetch: an on-demand
+/// download would belong behind this call, and there is not one yet.
 pub async fn ensure_track_audio(pool: &SqlitePool, track_id: &str) -> Result<(), SyncError> {
     use crate::database::local::track_access::{Read, VisibleTrackAccess};
 

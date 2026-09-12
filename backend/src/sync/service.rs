@@ -1,14 +1,9 @@
-//! The sync service: connect while signed in, publish status, announce change.
+//! Connect while signed in, publish status, announce change.
 //!
-//! It owns three long-lived tasks over one `PowerSyncDatabase`:
-//!
-//! 1. the session watcher, which connects on sign-in and disconnects on
-//!    sign-out — the connector's credentials are only valid for one account, so
-//!    an identity change is a reconnect, not a token swap;
-//! 2. the status watcher, which turns the SDK's status stream into the one
-//!    [`SyncStatus`] the UI reads;
-//! 3. the table watcher, which coalesces downloaded writes into a single
-//!    `replica-changed` event naming the tables that moved.
+//! Three long-lived tasks over one `PowerSyncDatabase`: the session watcher
+//! (credentials are valid for one account, so an identity change is a
+//! reconnect, not a token swap), the status watcher, and the table watcher that
+//! coalesces downloaded writes into one `replica-changed` event.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};

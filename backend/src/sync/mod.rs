@@ -1,11 +1,9 @@
-//! Sync: PowerSync row replication plus media transfer.
+//! Row replication through PowerSync, and media transfer beside it.
 //!
-//! [`schema`] names the synced tables once; [`triggers`] installs the local
-//! change log and the PowerSync CRUD queue on every writer connection from
-//! that list. [`connector`] talks to PowerSync Cloud and Supabase PostgREST,
-//! and [`service`] owns the connection lifecycle. [`media`], [`files`] and
-//! [`progress`] move audio, stems and album art, which is a separate concern
-//! from records and runs on its own clock.
+//! [`schema`] names the synced tables once and [`triggers`] installs the change
+//! log and the upload queue from that list. [`connector`] talks to PowerSync
+//! Cloud and Supabase PostgREST; [`service`] owns the connection lifecycle.
+//! [`media`], [`files`] and [`progress`] move bytes on their own clock.
 
 pub mod connector;
 pub mod error;

@@ -1,34 +1,24 @@
-//! The two trigger sets a writer connection carries.
+//! The two trigger sets a writer connection carries: one appending to
+//! `changes`, one enqueuing uploads in `powersync_crud`.
 //!
-//! Every insert, update and delete on a synced table appends one `changes` row
-//! saying what the row was and what it became, and enqueues one entry in
-//! `powersync_crud` for the upload. Both sets are `TEMP`, so they live on the
-//! connection that created them and nowhere else — which is exactly the
-//! distinction sync needs: a write made by this app is logged and uploaded, and
-//! a row written by the sync SDK's own connection is neither, because a
-//! download is not an edit anybody made. The migration connection is in the
-//! same position: a schema change is not a user edit.
+//! Both sets are `TEMP`, so they live on the connection that created them and
+//! nowhere else. That is the distinction sync needs: a write made by this app
+//! is logged and uploaded, while a row the SDK's own connection writes is
+//! neither, because a download is not an edit anybody made. A migration
+//! connection is in the same position.
 //!
-//! Both sets read [`SyncedTable`], so they cannot describe different columns.
+//! A change belongs to whoever made it, not to whoever owns the row — a venue
+//! member editing the owner's clip writes a change of their own, and the server
+//! would refuse one stamped with the owner's id — so the log reads the
+//! principal off the admission gate rather than off `NEW.uid`.
 //!
-//! A change belongs to whoever made it, not to whoever owns the row: a venue
-//! member editing the owner's clip writes a `changes` row of their own, and the
-//! server would refuse one stamped with the owner's id. So the log reads the
-//! signed-in principal off the admission gate rather than off `NEW.uid`.
+//! `uid` travels in every upload entry. An RLS `with check` on an `UPDATE` is
+//! evaluated against the row as it will be, and a PATCH that never mentions
+//! `uid` gives the policy nothing to check against.
 //!
-//! `uid` travels in every entry. Postgres defaults it to `auth.uid()`, so
-//! sending it is redundant for an insert — but an RLS `with check` on an
-//! `UPDATE` is evaluated against the row as it will be, and a PATCH that never
-//! mentions `uid` gives the policy nothing to check against on a row the client
-//! believes it owns.
-//!
-//! An update whose only difference is `updated_at` is not a change. The
-//! `*_updated_at` triggers in the schema perform their own `UPDATE`, which is a
-//! second committed transition of the same row; without the guard below every
-//! edit would log twice and upload twice. The timestamp still travels: the
-//! update payload spells `updated_at` as the value the `*_updated_at` trigger
-//! is about to write, which is the same `strftime(…,'now')` inside the same
-//! statement.
+//! An update whose only difference is `updated_at` is not a change: the
+//! schema's `*_updated_at` triggers perform their own `UPDATE`, so without the
+//! guard below every edit would log twice and upload twice.
 
 use sqlx::SqliteConnection;
 
@@ -37,12 +27,8 @@ use super::schema::{logged_tables, SyncedTable, SYNCED_TABLES, TOUCH_COLUMN};
 /// What a `*_updated_at` trigger writes, spelled the way the schema spells it.
 const TOUCH_VALUE: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
-/// Install both trigger sets on one writer connection.
-///
-/// Call this from the app pool's `after_connect` hook. Also creates
-/// `session_actor`, the one-row TEMP table the change log reads the writer's
-/// name out of. Empty means "nobody said" — a change with no actor is still an
-/// honest change, so the column is nullable rather than defaulted to a fiction.
+/// Install both trigger sets on one writer connection. Call this from the app
+/// pool's `after_connect` hook.
 ///
 /// # Errors
 ///
@@ -69,10 +55,6 @@ pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
 ///
 /// If a trigger cannot be created.
 pub async fn install_change_log(connection: &mut SqliteConnection) -> Result<(), String> {
-    sqlx::query("CREATE TEMP TABLE IF NOT EXISTS session_actor (actor TEXT NOT NULL)")
-        .execute(&mut *connection)
-        .await
-        .map_err(|error| format!("failed to create the session actor table: {error}"))?;
     for table in logged_tables() {
         for statement in change_log(table) {
             run(&mut *connection, &statement, "the change log", table.name).await?;
@@ -94,38 +76,14 @@ async fn run(
         .map_err(|error| format!("failed to install {what} on {table}: {error}"))
 }
 
-/// Name this connection's writer. The label travels into `changes.actor`.
-///
-/// Nothing calls this yet: a pooled connection is not a session, so naming the
-/// writer means naming it per checkout, which is the agent loop's job when it
-/// starts writing through one connection per turn.
-#[allow(dead_code)]
-pub async fn set_session_actor(
-    connection: &mut SqliteConnection,
-    actor: &str,
-) -> Result<(), String> {
-    sqlx::query("DELETE FROM session_actor")
-        .execute(&mut *connection)
-        .await
-        .map_err(|error| error.to_string())?;
-    sqlx::query("INSERT INTO session_actor (actor) VALUES (?)")
-        .bind(actor)
-        .execute(&mut *connection)
-        .await
-        .map_err(|error| format!("failed to set the session actor: {error}"))?;
-    Ok(())
-}
-
 /// `json_object(...)` of the row as an update leaves it: every column as it is,
 /// except `updated_at`, which is the value the schema's touch trigger is about
 /// to write.
 fn updated_object(table: &SyncedTable, row: &str) -> String {
-    table
-        .json_object(row)
-        .replace(
-            &format!("'{TOUCH_COLUMN}', {row}.{TOUCH_COLUMN}"),
-            &format!("'{TOUCH_COLUMN}', {TOUCH_VALUE}"),
-        )
+    table.json_object(row).replace(
+        &format!("'{TOUCH_COLUMN}', {row}.{TOUCH_COLUMN}"),
+        &format!("'{TOUCH_COLUMN}', {TOUCH_VALUE}"),
+    )
 }
 
 /// The `WHEN` guard that fires only when a column other than `updated_at`
@@ -172,14 +130,7 @@ pub fn change_log(table: &SyncedTable) -> [String; 3] {
     ]
 }
 
-fn append(
-    table: &str,
-    op: &str,
-    guard: &str,
-    row_id: &str,
-    before: &str,
-    after: &str,
-) -> String {
+fn append(table: &str, op: &str, guard: &str, row_id: &str, before: &str, after: &str) -> String {
     let event = match op {
         "insert" => "AFTER INSERT",
         "update" => "AFTER UPDATE",
@@ -187,7 +138,7 @@ fn append(
     };
     format!(
         "CREATE TEMP TRIGGER IF NOT EXISTS luma_log_{table}_{op} {event} ON {table} FOR EACH ROW {guard} BEGIN
-    INSERT INTO changes (id, uid, table_name, row_id, op, before_json, after_json, actor)
+    INSERT INTO changes (id, uid, table_name, row_id, op, before_json, after_json)
     VALUES (
         lower(hex(randomblob(16))),
         COALESCE((SELECT active_uid FROM auth_write_admission WHERE singleton = 1), ''),
@@ -195,8 +146,7 @@ fn append(
         {row_id},
         '{op}',
         {before},
-        {after},
-        (SELECT actor FROM temp.session_actor LIMIT 1)
+        {after}
     );
 END"
     )
@@ -357,7 +307,6 @@ mod installed {
         let mut connection = pool.acquire().await.unwrap();
         crud_queue(&mut connection).await;
         install(&mut connection).await.unwrap();
-        set_session_actor(&mut connection, "user").await.unwrap();
 
         for statement in [
             "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Basement')",
@@ -404,16 +353,16 @@ mod installed {
         assert_eq!(
             names,
             vec![
-                ("insert", "alice", "v", Some("user"), None, Some("Basement")),
+                ("insert", "alice", "v", None, None, Some("Basement")),
                 (
                     "update",
                     "alice",
                     "v",
-                    Some("user"),
+                    None,
                     Some("Basement"),
                     Some("Cellar")
                 ),
-                ("delete", "alice", "v", Some("user"), Some("Cellar"), None),
+                ("delete", "alice", "v", None, Some("Cellar"), None),
             ]
         );
 

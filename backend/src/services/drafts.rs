@@ -1,10 +1,10 @@
 //! A subagent works on a draft, never on the live score.
 //!
-//! A draft holds two copies of the score: `base_json`, the live document as it
-//! stood when the child started, and `state_json`, what the child has made of
-//! it. Merging diffs the two per clip and per definition and applies only those
-//! differences to the live rows, so work the parent did meanwhile survives — a
-//! whole-document overwrite would silently undo it.
+//! A draft holds two copies of the score: `base_json`, as it stood when the
+//! child started, and `state_json`, what the child has made of it. Merging
+//! diffs the two per clip and per definition and applies only the differences,
+//! so work the parent did meanwhile survives — a whole-document overwrite
+//! would silently undo it.
 
 use luma_patterns::Score;
 use sqlx::SqliteConnection;
