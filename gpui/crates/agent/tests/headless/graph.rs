@@ -1,7 +1,7 @@
 //! Canvas gestures operate on the canonical score and its persisted history.
 use super::support::{self, Fixture};
 use gpui_agent::{Harness, Mode};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::time::Duration;
 
 fn fixture(name: &'static str) -> Harness {
@@ -147,25 +147,12 @@ fn graph_drag_is_one_score_edit_and_survives_reopening() {
         .build()
         .unwrap()
         .block_on(async {
-            let pool = sqlx::SqlitePool::connect(&format!(
-                "sqlite:{}",
-                directory.join("luma.db").display()
-            ))
-            .await
-            .unwrap();
-            let raw: String = sqlx::query_scalar(
-                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            let score: Value = serde_json::from_str(&raw).unwrap();
+            let score = support::stored_score_json(&directory).await;
             let nodes = &score["definitions"]["canvas"]["body"]["body"]["nodes"];
             assert!(nodes["scale"]["position"][0].as_f64().unwrap() > 360.);
             assert!(nodes["scale"]["position"][1].as_f64().unwrap() > 120.);
             assert_eq!(nodes["wash"]["position"], json!([0, 0]));
             assert_eq!(nodes["output"]["position"], json!([740, 240]));
-            pool.close().await;
         });
 }
 

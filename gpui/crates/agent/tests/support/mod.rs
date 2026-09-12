@@ -1036,6 +1036,37 @@ impl Fixture {
     }
 }
 
+/// The score the fixture seeded, read back from its rows.
+///
+/// A score is `scores`, `clips` and `score_definitions`; there is no document
+/// column to read any more. Tests assert on a `luma_patterns::Score`, which is
+/// what those rows load into — so this is the one place that knows the
+/// difference, rather than eighteen copies of a `SELECT`.
+pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
+        .await
+        .expect("open the fixture library");
+    let id: String = sqlx::query_scalar(
+        "SELECT score_id FROM clips UNION SELECT score_id FROM score_definitions LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the fixture seeded a score with something in it");
+    let mut connection = pool.acquire().await.expect("a connection");
+    let score = luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
+        .await
+        .expect("load the seeded score");
+    drop(connection);
+    pool.close().await;
+    score
+}
+
+/// [`stored_score`] as JSON, for an assertion that reaches into the document
+/// by key rather than by field.
+pub async fn stored_score_json(dir: &Path) -> Value {
+    serde_json::to_value(stored_score(dir).await).expect("a score serializes")
+}
+
 /// How many eight-channel movers fit in one DMX universe.
 const FIXTURES_PER_UNIVERSE: i64 = 512 / 8;
 
