@@ -2,7 +2,8 @@
 """Disposable Postgres, PostgREST and PowerSync for the row model.
 
 Starts the three services the client talks to, applies
-`supabase/migrations/20260912000000_row_model.sql` to an empty database, checks
+`supabase/migrations/` (the row model and everything after it) to an empty
+database, checks
 the row-level security with three minted users, and then runs whichever Rust
 tests were named on the command line against the live stack.
 
@@ -26,7 +27,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent.parent
-MIGRATION = REPO / "supabase/migrations/20260912000000_row_model.sql"
+MIGRATIONS = [
+    REPO / "supabase/migrations/20260912000000_row_model.sql",
+    REPO / "supabase/migrations/20260916000000_stage_child_venue_id.sql",
+]
 SYNC_RULES = REPO / "deploy/sync-rules.yaml"
 
 PREFIX = "luma-rows-"
@@ -197,8 +201,9 @@ def start(containers):
 
     psql("create database powersync_storage;", database="postgres")
     psql(BOOTSTRAP)
-    print("row model migration", flush=True)
-    psql(MIGRATION.read_text())
+    for migration in MIGRATIONS:
+        print(f"migration {migration.name}", flush=True)
+        psql(migration.read_text())
     psql(REPLICATION)
 
     print("postgrest", flush=True)
@@ -321,18 +326,22 @@ def check():
     for path, row in [
         ("/venue_nodes", {"id": node, "venue_id": venue, "kind": "venue"}),
         ("/venue_nodes", {"id": child, "venue_id": venue, "kind": "truss"}),
-        ("/venue_edges", {"id": child, "child_id": child, "parent_id": node,
+        ("/venue_edges", {"id": child, "venue_id": venue, "child_id": child,
+                          "parent_id": node,
                           "my_socket": "base", "their_socket": "top"}),
-        ("/venue_node_params", {"id": child + ":length", "node_id": child,
+        ("/venue_node_params", {"id": child + ":length", "venue_id": venue,
+                                "node_id": child,
                                 "key": "length", "value": 3.0}),
-        ("/venue_constraints", {"id": child + ":base", "node_id": child,
+        ("/venue_constraints", {"id": child + ":base", "venue_id": venue,
+                                "node_id": child,
                                 "my_socket": "base", "target_node": node,
                                 "target_socket": "top"}),
         ("/fixtures", {"id": fixture, "venue_id": venue, "address": 1, "num_channels": 8,
                        "manufacturer": "m", "model": "x", "mode_name": "8ch",
                        "fixture_path": "m/x", "address_pinned": False}),
         ("/fixture_groups", {"id": group, "venue_id": venue, "name": "front_wash"}),
-        ("/fixture_group_members", {"id": group + ":" + fixture, "group_id": group,
+        ("/fixture_group_members", {"id": group + ":" + fixture, "venue_id": venue,
+                                    "group_id": group,
                                     "fixture_id": fixture}),
         ("/cues", {"id": str(uuid.uuid4()), "venue_id": venue, "name": "Blinder",
                    "pattern_id": pattern}),

@@ -67,7 +67,7 @@ pub async fn init_app_db_at(app_dir: &Path) -> Result<Db, String> {
         .max_connections(16)
         .after_connect(|connection, _| {
             Box::pin(async move {
-                crate::sync::triggers::install(connection)
+                crate::sync::triggers::install_change_log(connection)
                     .await
                     .map_err(|error| sqlx::Error::Configuration(error.into()))
             })

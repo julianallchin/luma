@@ -19,6 +19,14 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   uploads only the columns a local write changed (`PATCH`).
 - Deletes are hard deletes on both sides. PowerSync replicates them.
 - Local-only tables never appear in the PowerSync schema or the sync rules.
+- A synced table's foreign keys are `DEFERRABLE INITIALLY DEFERRED`. A
+  download is one transaction holding a consistent snapshot of the server in
+  whatever order the checkpoint delivers it, so a child can land before its
+  parent; an immediate check would reject the whole checkpoint, forever.
+- Sign-in is required to write. Every synced row has an owner, and there is no
+  signed-out owner: `AppServices::require_session` refuses the command and the
+  shell shows the sign-in screen. Reading a library already on this machine
+  needs nothing.
 
 ## Score model
 
@@ -55,6 +63,9 @@ The local-only trigger set on every writer connection appends one row to
 `changes` for every insert, update and delete on a synced table:
 
 `changes(id, uid, table_name, row_id, op, before_json, after_json, actor, at)`
+
+`uid` is who made the change, not who owns the row: a venue member editing the
+owner's clip writes a change of their own.
 
 `changes` syncs to its owner. Session undo in the editors stays in memory.
 Restore to a past point replays `changes` for a score, venue or pattern. No UI
@@ -102,9 +113,10 @@ agent_thread_usage, legacy_scores_backup, the auth session, and the columns
 
 ## Code layout
 
-- `backend/src/sync/mod.rs`: `Service`. Connects PowerSync when a session
+- `backend/src/sync/service.rs`: `Service`. Connects PowerSync when a session
   exists, disconnects on sign-out, exposes status, emits `replica-changed`
-  when synced tables change.
+  when synced tables change. The host starts it from the connection pair
+  `database::local::database::open_app_db_at` returns.
 - `backend/src/sync/schema.rs`: the synced table list with columns. Generates
   the PowerSync `RawTable` put and delete statements.
 - `backend/src/sync/triggers.rs`: generates the TEMP triggers for writer
@@ -113,8 +125,9 @@ agent_thread_usage, legacy_scores_backup, the auth session, and the columns
   Cloud endpoint and the Supabase access token. `upload_data` posts each CRUD
   transaction to Supabase PostgREST (`POST` with `Prefer:
   resolution=merge-duplicates` for PUT, `PATCH` by id, `DELETE` by id).
-- `backend/src/sync/media.rs`, `files.rs`, `progress.rs`: media transfer,
-  unchanged, independent of record sync.
+- `backend/src/sync/media.rs`, `files.rs`, `progress.rs`: media transfer, on
+  its own clock, independent of record sync. Bytes go through Supabase
+  Storage; only the resulting `storage_path` is a row.
 - `backend/crates/sync`: SDK glue only (shared SQLite file between SQLx and the
   SDK pool, blocking actor tasks).
 - `supabase/migrations/20260912000000_row_model.sql`: drops the old schema and

@@ -10,11 +10,7 @@
 #
 # Edition 3 (sync streams) rather than the legacy `bucket_definitions`: legacy
 # parameter and data queries support neither JOINs nor subqueries, and the
-# venue content is three levels deep (venue -> node -> edge/param/constraint,
-# venue -> score -> clip/definition, venue -> group -> member). Expressing that
-# with bucket parameters would mean either denormalising a venue_id onto every
-# child table or one bucket per node and per score, which blows past the
-# per-user bucket limit on any real venue.
+# venue content is two levels deep (venue -> score -> clip/definition).
 #
 # Two rules the service enforces and the error messages do not spell out:
 #   - a named `with:` clause may be referenced from `queries:`, never from
@@ -22,6 +18,17 @@
 #   - subqueries nest one level. "Everything in an accessible venue" is
 #     therefore written as two OR'd subqueries, one for owned venues and one
 #     for membership, rather than one nested pair.
+#
+# And the rule that is not documented anywhere until it fails: a `with:` clause
+# is a parameter query, and one may return at most a thousand rows (PSYNC_S2305
+# — the whole stream fails, nothing syncs). So every clause here counts things
+# there are a handful of: venues a user can reach, their scores, the tracks
+# those scores play. Never their nodes: one real library has 1154, which is
+# what made the stage children carry a `venue_id` of their own
+# (`supabase/migrations/20260916000000_stage_child_venue_id.sql`).
+#
+# `accessible_scores` is the one left with room to grow: a library with a
+# thousand scores would hit the same wall.
 #
 # `SELECT *` is safe because every synced table has a real `id text primary
 # key`; the migration is the source of truth for the columns.
@@ -81,24 +88,16 @@ streams:
         SELECT id FROM venues
         WHERE uid = auth.user_id()
            OR id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
-      accessible_nodes: >-
-        SELECT id FROM venue_nodes
-        WHERE venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
-           OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
-      accessible_groups: >-
-        SELECT id FROM fixture_groups
-        WHERE venue_id IN (SELECT id FROM venues WHERE uid = auth.user_id())
-           OR venue_id IN (SELECT venue_id FROM venue_members WHERE uid = auth.user_id())
     queries:
       - SELECT * FROM venues WHERE id IN accessible_venues
       - SELECT * FROM venue_members WHERE venue_id IN accessible_venues
       - SELECT * FROM fixtures WHERE venue_id IN accessible_venues
       - SELECT * FROM fixture_groups WHERE venue_id IN accessible_venues
-      - SELECT * FROM fixture_group_members WHERE group_id IN accessible_groups
+      - SELECT * FROM fixture_group_members WHERE venue_id IN accessible_venues
       - SELECT * FROM venue_nodes WHERE venue_id IN accessible_venues
-      - SELECT * FROM venue_edges WHERE child_id IN accessible_nodes
-      - SELECT * FROM venue_node_params WHERE node_id IN accessible_nodes
-      - SELECT * FROM venue_constraints WHERE node_id IN accessible_nodes
+      - SELECT * FROM venue_edges WHERE venue_id IN accessible_venues
+      - SELECT * FROM venue_node_params WHERE venue_id IN accessible_venues
+      - SELECT * FROM venue_constraints WHERE venue_id IN accessible_venues
       - SELECT * FROM cues WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_modifiers WHERE venue_id IN accessible_venues
       - SELECT * FROM midi_bindings WHERE venue_id IN accessible_venues

@@ -2380,7 +2380,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 112
+        "line": 116
       },
       "name": "join_venue",
       "prose": {
@@ -2430,7 +2430,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 150
+        "line": 148
       },
       "name": "leave_venue",
       "prose": {
@@ -4650,7 +4650,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 185
+        "line": 170
       },
       "name": "set_venue_environment",
       "prose": {
@@ -4766,7 +4766,7 @@
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 14
+        "line": 16
       },
       "name": "sync_status",
       "prose": {
@@ -5369,7 +5369,7 @@
         "backend/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:135"
+        "gpui/crates/app/src/library.rs:152"
       ],
       "name": "track-import-state",
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
