@@ -1,15 +1,12 @@
 //! Media transfer: audio, stems and album art, on its own clock.
 //!
-//! Records move through PowerSync. Bytes do not — Supabase Storage is a
-//! separate service with its own bucket paths, and a 40 MB stem has nothing to
-//! do with a row checkpoint. So this is a second, slower loop: while a session
-//! exists, upload what has a local file and no `storage_path`, download what
-//! has a `storage_path` and no local file, and say so through [`Progress`].
+//! Bytes go through Supabase Storage rather than the row protocol, so this is a
+//! second, slower loop: while a session exists, upload what has a local file
+//! and no `storage_path`, download what has a `storage_path` and no local file.
 //!
-//! The loop writes `tracks.storage_path` and `track_stems.storage_path`
-//! through the app pool, so those writes are logged and uploaded like any
-//! other edit — which is exactly right: a storage path is a fact about the
-//! row, and the other device needs it to find the bytes.
+//! It writes `storage_path` through the app pool, so those writes are logged
+//! and uploaded like any other edit — which is what tells the other device
+//! where the bytes are.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -123,15 +120,8 @@ impl Media {
             &self.progress,
         )
         .await?;
-        files::download_pending_stems(
-            &self.pool,
-            remote,
-            host,
-            &token,
-            &mut stats,
-            &self.progress,
-        )
-        .await?;
+        files::download_pending_stems(&self.pool, remote, host, &token, &mut stats, &self.progress)
+            .await?;
         files::download_pending_album_art(
             &self.pool,
             remote,

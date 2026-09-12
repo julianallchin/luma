@@ -2,16 +2,13 @@
 //! local definition, and the `scores` row itself.
 //!
 //! A clip key and a definition key are unique inside their score, not across
-//! the library — two scores may each have a `flash`. Sync addresses every row
-//! by one global `id`, so the stored id is `score_id:key` and the key is read
-//! back off it. A score id is a uuid and carries no colon, so the split is
-//! unambiguous however the key is spelled.
+//! the library — two scores may each have a `flash` — so the stored id is
+//! `score_id:key` and the key is read back off it. A score id is a uuid and
+//! carries no colon, so the split is unambiguous however the key is spelled.
 //!
-//! [`load_score`] reads the three tables into the in-memory
-//! [`luma_patterns::Score`]; [`save_score`] diffs a candidate against what is
-//! stored and writes only what differs. There is no revision token — a stale
-//! candidate simply overwrites the rows it touches, one column at a time, so
-//! two people editing different clips of one score do not collide.
+//! [`save_score`] writes only what differs. There is no revision token: a
+//! stale candidate overwrites the rows it touches one column at a time, so two
+//! people editing different clips of one score do not collide.
 
 use luma_patterns::{BlendMode, Clip, Definition, Score, Selection};
 use sqlx::{Row, SqliteConnection};

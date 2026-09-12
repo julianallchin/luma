@@ -1,16 +1,10 @@
 //! The synced tables, named once, and the PowerSync statements they generate.
 //!
-//! Everything that moves between this database and the server is listed here
-//! with the columns that travel. A column a table has but this list omits is
-//! local: a path on this machine, a cache, a counter nobody else can act on.
-//!
-//! The same list drives all three consumers, so they cannot describe different
-//! tables: the change log in [`super::triggers`], the PowerSync upload queue
-//! next to it, and the PowerSync raw tables a download is applied through.
-//!
-//! PowerSync raw tables write the application's own tables directly — there is
-//! no shadow schema and no projection step. A table not listed here is never
-//! uploaded, never downloaded and never cleared.
+//! A column a table has but this list omits is local. One list drives all three
+//! consumers — the change log in [`super::triggers`], the upload queue next to
+//! it, and the raw tables a download is applied through — so they cannot
+//! describe different tables. A table not listed here is never uploaded, never
+//! downloaded and never cleared.
 
 use luma_sync::powersync::sdk::schema::{PendingStatement, PendingStatementValue, RawTable};
 
