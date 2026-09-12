@@ -992,6 +992,13 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
 /// data: a rule that names a column the table does not have, or a subquery the
 /// service refuses, fails the whole stream, and the only symptom is rows that
 /// never arrive.
+///
+/// KNOWN RED, and not because of this test: once one account has joined a
+/// couple of venues, its device stops applying checkpoints — `ps_oplog` keeps
+/// growing, nothing lands in the app tables, and replaying those same rows
+/// through the generated statements succeeds, so it is not a local constraint.
+/// `a_share_code_admits_a_second_user_until_it_is_revoked` fails the same way
+/// on the same stack.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
 async fn every_venue_child_shape_reaches_a_member() {
@@ -1031,7 +1038,7 @@ async fn every_venue_child_shape_reaches_a_member() {
         format!(
             "INSERT INTO venue_nodes (id, uid, venue_id, kind)
              VALUES ('{root}', '{USER}', '{venue}', 'venue'),
-                    ('{child}', '{USER}', '{venue}', 'truss')"
+                    ('{child}', '{USER}', '{venue}', 'run')"
         ),
         format!(
             "INSERT INTO venue_edges (child_id, uid, venue_id, parent_id, my_socket, their_socket)
