@@ -35,7 +35,10 @@ async fn database(name: &str) -> (tempfile::TempDir, SqlitePool) {
         )
         .await
         .expect("open");
-    sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("migrate");
     crate::database::local::auth::arm_write_admission(&pool, Some("user-1"))
         .await
         .expect("arm");
@@ -489,15 +492,13 @@ async fn a_whole_checkpoint_applies_however_it_is_ordered() {
         .expect("begin");
     // The one row the generated statements cannot write for themselves: an
     // edge may not be its own parent, so there has to be a second node.
-    sqlx::query(
-        "INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')",
-    )
-    .bind(PARENT)
-    .bind(ROW)
-    .bind(ROW)
-    .execute(&mut *connection)
-    .await
-    .expect("the second node");
+    sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')")
+        .bind(PARENT)
+        .bind(ROW)
+        .bind(ROW)
+        .execute(&mut *connection)
+        .await
+        .expect("the second node");
     for round in 0..3 {
         for synced in SYNCED_TABLES.iter().rev() {
             let nullable: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
