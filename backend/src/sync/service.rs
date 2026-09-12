@@ -215,35 +215,111 @@ async fn statuses(
                 None => break,
             },
         };
-        let mut observed = observed.lock().expect("poisoned");
-        let was_busy = observed.downloading || observed.uploading;
-        observed.connected = status.is_connected();
-        observed.downloading = status.is_downloading();
-        observed.uploading = status.is_uploading();
-        // The SDK retries forever and reports the failure on one tick. Keeping
-        // the last one is the difference between a user seeing "sync is
-        // rejecting your sign-in" and seeing nothing at all while nothing
-        // syncs; it is cleared when a direction actually succeeds.
-        match status
-            .download_error()
-            .or_else(|| status.upload_error())
-            .map(|error| readable(&error.to_string()))
+        let mut diagnose = false;
         {
-            Some(error) => {
-                log::warn!("[sync] {error}");
-                observed.error = Some(error);
+            let mut observed = observed.lock().expect("poisoned");
+            let was_busy = observed.downloading || observed.uploading;
+            observed.connected = status.is_connected();
+            observed.downloading = status.is_downloading();
+            observed.uploading = status.is_uploading();
+            // The SDK retries forever and reports the failure on one tick. Keeping
+            // the last one is the difference between a user seeing "sync is
+            // rejecting your sign-in" and seeing nothing at all while nothing
+            // syncs; it is cleared when a direction actually succeeds.
+            match status
+                .download_error()
+                .or_else(|| status.upload_error())
+                .map(|error| readable(&error.to_string()))
+            {
+                Some(error) => {
+                    if observed.error.as_deref() != Some(error.as_str()) {
+                        log::warn!("[sync] {error}");
+                        if error.contains("CONSTRAINT") {
+                            diagnose = true;
+                        }
+                    }
+                    observed.error = Some(error);
+                }
+                None if observed.connected && !observed.downloading && !observed.uploading => {
+                    observed.error = None;
+                }
+                None => {}
             }
-            None if observed.connected && !observed.downloading && !observed.uploading => {
-                observed.error = None;
+            // "Last synced" is the moment the two directions went quiet while
+            // connected. The SDK reports it per stream; this is the whole database.
+            if was_busy && observed.connected && !observed.downloading && !observed.uploading {
+                observed.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
             }
-            None => {}
         }
-        // "Last synced" is the moment the two directions went quiet while
-        // connected. The SDK reports it per stream; this is the whole database.
-        if was_busy && observed.connected && !observed.downloading && !observed.uploading {
-            observed.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+        if diagnose {
+            log::warn!("[sync] {}", refused(&database.sql).await);
         }
     }
+}
+
+/// Which downloaded row the local schema refuses, named.
+///
+/// A checkpoint is one transaction: one row the local schema will not take
+/// rolls the whole thing back, so nothing arrives — and the SDK reports only
+/// `CONSTRAINT`, without saying which of thirty tables. This replays the
+/// waiting oplog through the same generated statements, in one transaction it
+/// then throws away, and stops at the first refusal. Only ever run after a
+/// failure, because it is the failure that needs a name.
+async fn refused(pool: &SqlitePool) -> String {
+    let rows: Vec<(String, String)> =
+        match sqlx::query_as("SELECT row_type, data FROM ps_oplog WHERE data IS NOT NULL")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => return format!("the waiting download is unreadable: {error}"),
+        };
+    let mut connection = match pool.acquire().await {
+        Ok(connection) => connection,
+        Err(error) => return format!("could not replay the download: {error}"),
+    };
+    let _ = sqlx::query("SAVEPOINT diagnose")
+        .execute(&mut *connection)
+        .await;
+    let mut verdict = "the waiting download applies; the refusal is elsewhere".to_owned();
+    for (name, data) in rows {
+        let Some(table) = schema::table(&name) else {
+            continue;
+        };
+        let Ok(row) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+        else {
+            continue;
+        };
+        let (put, _) = schema::statements(table);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(put));
+        for column in table.columns {
+            query = query.bind(match row.get(*column) {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(text)) => Some(text.clone()),
+                Some(value) => Some(value.to_string()),
+            });
+        }
+        let id = row
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        for _ in 0..table
+            .local_defaults
+            .iter()
+            .flat_map(|(_, fill)| fill.matches('?'))
+            .count()
+        {
+            query = query.bind(Some(id.to_owned()));
+        }
+        if let Err(error) = query.execute(&mut *connection).await {
+            verdict = format!("{name} {id} cannot be written here: {error}");
+            break;
+        }
+    }
+    let _ = sqlx::query("ROLLBACK TO diagnose; RELEASE diagnose")
+        .execute(&mut *connection)
+        .await;
+    verdict
 }
 
 /// Say what a transport failure means, where the wire says it in codes.

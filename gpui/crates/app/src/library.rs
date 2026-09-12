@@ -58,7 +58,7 @@ use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
-use luma_lib::database::local::database::open_app_db_at;
+use luma_lib::database::local::database::{init_app_db_at, open_app_db_at};
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
@@ -655,6 +655,11 @@ impl Library {
         // Whether this process may talk to the cloud at all — see
         // `Runtime::cloud`. Unasked is a launched app, which may.
         let cloud = luma_ui::runtime::Runtime::with(|runtime| runtime.cloud);
+        // …and whether there is anywhere to sync to. A process that will not
+        // sync opens the database without the SDK entirely: loading its core
+        // extension is not free, and a library nobody is replicating has no
+        // use for an upload queue.
+        let syncing = cloud && !luma_lib::config::powersync_url().is_empty();
         #[cfg(feature = "agent")]
         let source_fixture = Arc::new(Mutex::new(None));
         #[cfg(feature = "agent")]
@@ -668,7 +673,12 @@ impl Library {
             fallback: system_track_sources(),
         });
         let (services, account, lapsed) = runtime.block_on(async {
-            let (db, connections) = open_app_db_at(storage.path()).await?;
+            let (db, connections) = if syncing {
+                let (db, connections) = open_app_db_at(storage.path()).await?;
+                (db, Some(connections))
+            } else {
+                (init_app_db_at(storage.path()).await?, None)
+            };
             let state_db = init_state_db_at(storage.path()).await?;
             // Admission is host bootstrap, not a command: until it is armed
             // every `auth_visible_*` view is empty, so a host that skipped
@@ -725,25 +735,25 @@ impl Library {
             // process may not talk to the cloud (a harness) or when no
             // PowerSync instance is configured — the app is then exactly what
             // it was before sync existed, a local SQLite library.
-            let services = if cloud && !luma_lib::config::powersync_url().is_empty() {
-                match luma_lib::sync::service::Service::open(
-                    connections,
-                    state_pool.clone(),
-                    events.clone(),
-                )
-                .await
-                {
-                    Ok(sync) => services.with_sync(sync),
-                    // Not a launch failure: a library that cannot reach the
-                    // cloud is still a library.
-                    Err(error) => {
-                        eprintln!("[luma] record sync did not start: {error}");
-                        services
+            let services = match connections {
+                Some(connections) => {
+                    match luma_lib::sync::service::Service::open(
+                        connections,
+                        state_pool.clone(),
+                        events.clone(),
+                    )
+                    .await
+                    {
+                        Ok(sync) => services.with_sync(sync),
+                        // Not a launch failure: a library that cannot reach the
+                        // cloud is still a library.
+                        Err(error) => {
+                            eprintln!("[luma] record sync did not start: {error}");
+                            services
+                        }
                     }
                 }
-            } else {
-                drop(connections);
-                services
+                None => services,
             };
             let services = if desktop {
                 services.with_artnet().await?
@@ -816,7 +826,7 @@ impl Library {
         // Bytes move on their own clock: audio, stems and album art go through
         // Supabase Storage, not through the row protocol, and a 40 MB stem has
         // nothing to do with a checkpoint.
-        if cloud {
+        if syncing {
             let host = services.sync_host();
             let media = luma_lib::sync::media::Media::new(
                 services.db().0.clone(),

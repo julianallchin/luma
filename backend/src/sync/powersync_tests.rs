@@ -385,6 +385,155 @@ async fn a_composite_key_row_uploads_its_joined_id() {
     );
 }
 
+/// A column that names another row. Bound to the one id every row in
+/// [`a_whole_checkpoint_applies_however_it_is_ordered`] shares, so the fixture
+/// is referentially whole however it is ordered.
+fn is_reference(column: &str) -> bool {
+    column == "id"
+        || (column.ends_with("_id")
+            && !NULLABLE_REFERENCES.contains(&column)
+            && !NOT_REFERENCES.contains(&column))
+}
+
+/// References that are optional and that this fixture leaves empty: a root
+/// message has no parent, an empty transcript has no head, an unforked thread
+/// has no origin, and `pattern_categories` is local-only so nothing here
+/// creates one to point at.
+const NULLABLE_REFERENCES: &[&str] = &[
+    "parent_message_id",
+    "head_message_id",
+    "forked_from_thread_id",
+    "forked_at_message_id",
+    "parent_thread_id",
+    "forked_from_id",
+    "category_id",
+    "implementation_id",
+    "subject_id",
+];
+
+/// Columns whose name ends in `_id` and that name nothing: a change's subject
+/// is a row in another table, and a track's source id belongs to somebody
+/// else's catalog.
+const NOT_REFERENCES: &[&str] = &["row_id", "source_id"];
+
+/// One value for one column of the fixture row.
+///
+/// `round` is which pass this is. Every pass writes the same ids, so the
+/// second and third are upserts of a row that is already there — which is what
+/// a download of a row this device already has looks like, and what an
+/// `ON CONFLICT DO UPDATE` over every column has to be allowed to do.
+fn value(
+    synced: &super::schema::SyncedTable,
+    column: &str,
+    round: usize,
+    nullable: &[String],
+) -> Option<String> {
+    if matches!(column, "parent_id" | "target_node") {
+        return Some(PARENT.to_owned());
+    }
+    if is_reference(column) {
+        return Some(ROW.to_owned());
+    }
+    if NULLABLE_REFERENCES.contains(&column) {
+        return None;
+    }
+    if let Some(sampled) = sample(column) {
+        return sampled.map(ToOwned::to_owned);
+    }
+    if BOOLEAN_COLUMNS.contains(&column) {
+        return Some(if round == 1 { "false" } else { "true" }.to_owned());
+    }
+    // The last round leaves every column the schema lets go empty, empty.
+    if round == 2 && nullable.iter().any(|name| name == column) && !synced.key().contains(&column) {
+        return None;
+    }
+    // A number where the schema wants one: a fixture's address and channel
+    // count are checked against its universe, and "address-0" is not an
+    // address.
+    Some(match column_expression(column) {
+        "CAST(? AS INTEGER)" => format!("{}", round + 1),
+        "CAST(? AS REAL)" => format!("{}.5", round + 1),
+        _ => format!("{column}-{round}"),
+    })
+}
+
+/// The id every row in the checkpoint fixture is written under.
+const ROW: &str = "row";
+
+/// A second node, because an edge may not be its own parent.
+const PARENT: &str = "parent";
+
+/// The whole schema, downloaded at once, children before parents.
+///
+/// This is what a checkpoint is: one transaction holding a consistent snapshot
+/// of the server, applied in whatever order the protocol delivers it. If any
+/// one statement is refused the whole thing rolls back and *nothing* arrives —
+/// so a single table whose local shape the server's row cannot satisfy takes
+/// the entire library down, silently and forever. Ordering the tables
+/// backwards is deliberate: it puts every child before its parent. The rounds
+/// after the first are upserts over the same ids, which is what a download of
+/// a row this device already has does — and the shape a trigger guarding a
+/// column against UPDATE would refuse.
+#[tokio::test]
+async fn a_whole_checkpoint_applies_however_it_is_ordered() {
+    let (_directory, pool) = database("checkpoint.db").await;
+    let mut connection = pool.acquire().await.expect("acquire");
+    // The SDK writes downloads with foreign keys enforced.
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *connection)
+        .await
+        .expect("foreign keys");
+    sqlx::query("BEGIN")
+        .execute(&mut *connection)
+        .await
+        .expect("begin");
+    // The one row the generated statements cannot write for themselves: an
+    // edge may not be its own parent, so there has to be a second node.
+    sqlx::query(
+        "INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'stage')",
+    )
+    .bind(PARENT)
+    .bind(ROW)
+    .bind(ROW)
+    .execute(&mut *connection)
+    .await
+    .expect("the second node");
+    for round in 0..3 {
+        for synced in SYNCED_TABLES.iter().rev() {
+            let nullable: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT name FROM pragma_table_info('{}') WHERE \"notnull\" = 0",
+                synced.name
+            )))
+            .fetch_all(&mut *connection)
+            .await
+            .expect("nullability");
+            let (put, _) = statements(synced);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(put.clone()));
+            for column in synced.columns {
+                query = query.bind(value(synced, column, round, &nullable));
+            }
+            for _ in 0..synced
+                .local_defaults
+                .iter()
+                .flat_map(|(_, fill)| fill.matches('?'))
+                .count()
+            {
+                query = query.bind(Some(ROW.to_owned()));
+            }
+            if let Err(error) = query.execute(&mut *connection).await {
+                panic!(
+                    "{} refused the server's row on round {round}: {error}\n{put}",
+                    synced.name
+                );
+            }
+        }
+    }
+    sqlx::query("COMMIT")
+        .execute(&mut *connection)
+        .await
+        .expect("a checkpoint that every statement accepted must still commit");
+}
+
 /// Every synced table's triggers must install against the shipped schema.
 #[tokio::test]
 async fn every_table_installs_its_triggers() {

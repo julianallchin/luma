@@ -444,24 +444,12 @@ mod tests {
                 .await
                 .is_err()
         );
-        let trigger_error =
-            sqlx::query("UPDATE fixtures SET label = 'member bypass' WHERE id = 'shared-fixture'")
-                .execute(&pool)
-                .await
-                .unwrap_err();
-        assert!(trigger_error
-            .to_string()
-            .contains("fixture write is not authorized"));
-        let grant_error = sqlx::query(
-            "INSERT INTO venue_members (id, uid, venue_id, role)
-             VALUES ('alice:bob', 'bob', 'alice', 'member')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap_err();
-        assert!(grant_error
-            .to_string()
-            .contains("venue membership grant is not authorized"));
+        // A raw UPDATE that goes round `VenueAccess` used to be refused by a
+        // trigger as well. That second copy of the rule is gone — see
+        // `migrations/20260914000000_local_write_guards.sql`: a download writes
+        // these tables directly, in checkpoint order, and the triggers refused
+        // that too. The lease above is the app's check and Postgres is the
+        // authority.
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await
