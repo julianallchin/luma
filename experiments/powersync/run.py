@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -172,6 +173,18 @@ def wait(label, probe, attempts=300, delay=0.3):
     raise RuntimeError(f"{label} did not become ready")
 
 
+def postgrest_answers():
+    """Ready means PostgREST answers at all: a refusal is still an answer, and
+    the schema cache is what is being waited on."""
+    request = urllib.request.Request(
+        f"{REST_URL}/venues?limit=1",
+        headers={"Authorization": f"Bearer {mint_jwt(TEST_USERS[0])}"})
+    try:
+        return urllib.request.urlopen(request, timeout=5).status < 500
+    except urllib.error.HTTPError as error:
+        return error.code < 500
+
+
 def refuse_existing():
     for name in [PG, REST, PS]:
         if subprocess.run(["docker", "container", "inspect", name], capture_output=True).returncode == 0:
@@ -210,10 +223,7 @@ def start(containers):
            "-e", "PGRST_LOG_LEVEL=error",
            POSTGREST_IMAGE)
     containers.append(REST)
-    wait("postgrest", lambda: urllib.request.urlopen(
-        urllib.request.Request(f"{REST_URL}/venues?limit=1",
-                               headers={"Authorization": f"Bearer {mint_jwt(TEST_USERS[0])}"}),
-        timeout=5).status < 500)
+    wait("postgrest", postgrest_answers)
 
     print("powersync", flush=True)
     docker("run", "-d", "--name", PS, "--network", NETWORK,
