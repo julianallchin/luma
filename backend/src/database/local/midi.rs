@@ -194,7 +194,7 @@ pub async fn create_cue(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().to_owned())
+    .bind(access.principal().map(str::to_owned))
     .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input.pattern_id)
@@ -311,7 +311,7 @@ pub async fn create_modifier(
          VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().to_owned())
+    .bind(access.principal().map(str::to_owned))
     .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input_json)
@@ -422,7 +422,7 @@ pub async fn create_binding(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(access.principal().to_owned())
+    .bind(access.principal().map(str::to_owned))
     .bind(access.venue_id().to_owned())
     .bind(&trigger_json)
     .bind(&required_modifiers_json)

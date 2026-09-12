@@ -55,8 +55,7 @@ macro_rules! admitted_venue {
            AND admission.accepting = 1
            AND admission.maintenance = 0
            AND (
-                (admission.active_uid IS NULL
-                 AND venue.uid IS NULL AND venue.role != 'member')
+                (admission.active_uid IS NULL AND venue.uid IS NULL)
                 OR
                 (admission.active_uid IS NOT NULL AND (
                     venue.uid = admission.active_uid

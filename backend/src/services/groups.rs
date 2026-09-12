@@ -1530,7 +1530,7 @@ pub async fn snapshot_generated_groups(
         sources.overrides.clear();
     }
     let nodes = sources.tree();
-    let uid = access.principal().to_owned();
+    let uid = access.principal().map(str::to_owned);
     if !initialized {
         // Make room for names which were swapped by old overrides. The
         // transaction hides temporary names from readers and sync.

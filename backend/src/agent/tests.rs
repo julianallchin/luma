@@ -54,12 +54,16 @@ impl Fixture {
     }
 }
 
+/// The principal these fixtures write as. Every synced row has an owner.
+const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let storage = StorageRoot::from_path(dir.path().to_path_buf());
     let db: Db = init_app_db_at(storage.path()).await.expect("app db");
     let state_db = init_state_db_at(storage.path()).await.expect("state db");
-    crate::database::local::auth::arm_write_admission(&db.0, None)
+    crate::database::local::auth::install_test_session(&state_db.0, OWNER).await;
+    crate::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
         .await
         .expect("admission");
     let workspaces = Arc::new(PythonWorkspaceService::new(
@@ -77,12 +81,13 @@ async fn fixture() -> Fixture {
 
     // The thread's authored document is projected from real subject rows.
     sqlx::query(
-        "INSERT INTO venues (id, uid, name) VALUES ('venue-1', NULL, 'Venue');
+        "INSERT INTO venues (id, uid, name) VALUES ('venue-1', ?1, 'Venue');
          INSERT INTO tracks (id, uid, track_hash, title, file_path)
-         VALUES ('track-1', NULL, 'hash-1', 'Track', '/tmp/track.wav');
+         VALUES ('track-1', ?1, 'hash-1', 'Track', '/tmp/track.wav');
          INSERT INTO scores (id, uid, track_id, venue_id, name)
-         VALUES ('score-1', NULL, 'track-1', 'venue-1', 'Score');",
+         VALUES ('score-1', ?1, 'track-1', 'venue-1', 'Score');",
     )
+    .bind(OWNER)
     .execute(&services.db().0)
     .await
     .expect("subject rows");
@@ -297,9 +302,10 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
         .await
         .try_into()
         .expect("exactly one child thread");
-    let child = crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, None)
-        .await
-        .expect("child thread");
+    let child =
+        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
+            .await
+            .expect("child thread");
     assert_eq!(child.thread.parent_call_id.as_deref(), Some("call_1"));
     assert_eq!(child.thread.agent_kind, "track_copilot");
     assert_eq!(child.thread.score_id.as_deref(), Some("score-1"));
@@ -337,7 +343,7 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -423,10 +429,13 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
     );
 
     // The refusal is a tool error the model can read, and it created nothing.
-    let grandchild =
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &grandchild_id, None)
-            .await
-            .expect("grandchild");
+    let grandchild = crate::database::local::agent_threads::get_thread(
+        fixture.pool(),
+        &grandchild_id,
+        Some(OWNER),
+    )
+    .await
+    .expect("grandchild");
     let refusal = Transcript::from_rows(&grandchild.messages)
         .expect("grandchild transcript")
         .messages
@@ -453,9 +462,10 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
 
     // The nested child published into the *child's* workspace, not the live
     // document — one merge call, two shapes.
-    let child = crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, None)
-        .await
-        .expect("child thread");
+    let child =
+        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
+            .await
+            .expect("child thread");
     let nested = Transcript::from_rows(&child.messages)
         .expect("child transcript")
         .messages
@@ -517,7 +527,7 @@ async fn a_live_subagent_answers_its_parent() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -542,9 +552,10 @@ async fn a_live_subagent_answers_its_parent() {
 async fn cancelling_the_parent_turn_cancels_its_child() {
     let fixture = fixture().await;
     let child_id = cancelled_child(&fixture).await;
-    let child = crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, None)
-        .await
-        .expect("child thread");
+    let child =
+        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, Some(OWNER))
+            .await
+            .expect("child thread");
     assert!(
         child.messages.iter().all(|row| row.role == "user"),
         "a cancelled child must not persist an assistant row: {:#?}",
@@ -655,7 +666,7 @@ async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -708,7 +719,7 @@ async fn steering_mid_turn_persists_every_assistant_row() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -791,7 +802,7 @@ async fn a_live_turn_runs_a_tool_and_answers_from_its_result() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -825,7 +836,7 @@ async fn dropping_the_stream_stops_the_turn() {
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
         &fixture.thread_id,
-        None,
+        Some(OWNER),
     )
     .await
     .expect("messages");
@@ -1291,10 +1302,13 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
         }),
         "{events:#?}"
     );
-    let snapshot =
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &fixture.thread_id, None)
-            .await
-            .unwrap();
+    let snapshot = crate::database::local::agent_threads::get_thread(
+        fixture.pool(),
+        &fixture.thread_id,
+        Some(OWNER),
+    )
+    .await
+    .unwrap();
     let transcript = Transcript::from_rows(&snapshot.messages).unwrap();
     let calls: Vec<_> = transcript
         .messages

@@ -40,7 +40,7 @@ pub async fn create_pattern_with_graph(
     score_id: Option<&str>,
 ) -> Result<PatternSummary, String> {
     let request_id = request_uuid(request_id)?;
-    let key = principal_key(principal);
+    let key = principal_key(Some(principal));
     let pattern_id = derived_id(&key, "pattern", &request_id, "subject");
     let implementation_id = derived_id(&key, "pattern", &request_id, "implementation");
     if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
@@ -91,7 +91,7 @@ pub async fn fork_pattern(
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, String> {
     let request_id = request_uuid(&input.request_id)?;
-    let key = principal_key(principal);
+    let key = principal_key(Some(principal));
     let pattern_id = derived_id(&key, "pattern_fork", &request_id, "subject");
     let implementation_id = derived_id(&key, "pattern_fork", &request_id, "implementation");
     if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
@@ -199,8 +199,13 @@ async fn insert_score(
 ) -> Result<Score, String> {
     let request_id = request_uuid(request_id)?;
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
-    let owner = access.principal().to_owned();
-    let score_id = derived_id(&principal_key(&owner), "score", &request_id, "subject");
+    let owner = access.principal().map(str::to_owned);
+    let score_id = derived_id(
+        &principal_key(owner.as_deref()),
+        "score",
+        &request_id,
+        "subject",
+    );
     let existing: Option<String> = if reuse_existing {
         sqlx::query_scalar(
             "SELECT id FROM scores WHERE (track_id = ? AND venue_id = ?) OR id = ?
@@ -234,7 +239,7 @@ async fn insert_score(
     }
     sqlx::query("INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)")
         .bind(&score_id)
-        .bind(&owner)
+        .bind(owner.as_deref())
         .bind(track_id)
         .bind(venue_id)
         .bind(name)

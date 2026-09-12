@@ -29,7 +29,7 @@ pub enum VenueResource<'a> {
 pub struct VenueAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     venue_id: String,
-    principal: String,
+    principal: Option<String>,
     _mode: PhantomData<Mode>,
 }
 
@@ -41,7 +41,7 @@ mod sealed {
 /// either a read snapshot or the write transaction already held by a mutation.
 pub trait AuthorizedVenue: sealed::Sealed {
     fn venue_id(&self) -> &str;
-    fn principal(&self) -> &str;
+    fn principal(&self) -> Option<&str>;
     fn connection(&mut self) -> &mut SqliteConnection;
 }
 
@@ -52,8 +52,8 @@ impl<Mode> AuthorizedVenue for VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    fn principal(&self) -> &str {
-        &self.principal
+    fn principal(&self) -> Option<&str> {
+        self.principal.as_deref()
     }
 
     fn connection(&mut self) -> &mut SqliteConnection {
@@ -93,7 +93,7 @@ impl<'a> VenueAccess<'a, Write> {
     pub(crate) async fn enter_maintenance(&mut self) -> Result<(), String> {
         crate::database::local::write_admission::enter_maintenance_writes(
             &mut self.transaction,
-            Some(self.principal.as_str()),
+            self.principal.as_deref(),
         )
         .await
     }
@@ -101,7 +101,7 @@ impl<'a> VenueAccess<'a, Write> {
     pub(crate) async fn leave_maintenance(&mut self) -> Result<(), String> {
         crate::database::local::write_admission::leave_maintenance_writes(
             &mut self.transaction,
-            Some(self.principal.as_str()),
+            self.principal.as_deref(),
         )
         .await
     }
@@ -135,8 +135,8 @@ impl<Mode> VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    pub fn principal(&self) -> &str {
-        &self.principal
+    pub fn principal(&self) -> Option<&str> {
+        self.principal.as_deref()
     }
 
     pub fn require_venue(&self, venue_id: &str) -> Result<(), String> {
@@ -181,13 +181,15 @@ async fn authorize<'a, Mode>(
         return Err(not_found());
     }
 
-    // Signed out there is no principal, and a venue belongs to one: no owner
-    // to match and no membership to hold.
-    let Some(principal) = active_uid else {
-        return Err(not_found());
+    let principal = active_uid;
+    // A venue nobody owns is the guest namespace's, and signed out that is
+    // whose namespace this is.
+    let guest_venue = owner_uid.is_none();
+    let owner = match principal.as_deref() {
+        Some(principal) => owner_uid.as_deref() == Some(principal),
+        None => guest_venue,
     };
-    let owner = owner_uid.as_deref() == Some(principal.as_str());
-    let member = is_member == 1;
+    let member = principal.is_some() && is_member == 1;
     let allowed = if owner_only { owner } else { owner || member };
     if !allowed {
         return Err(not_found());
@@ -381,7 +383,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn members_are_read_only_and_nobody_signed_out_reaches_a_venue_at_all() {
+    async fn members_are_read_only_while_owners_and_guests_can_write_their_aggregate() {
         let (_directory, pool) = test_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
@@ -462,16 +464,13 @@ mod tests {
                 .is_err()
         );
 
-        // Armed with nobody is not a namespace of its own. Every synced row
-        // has an owner, so a venue is reachable only by the principal who owns
-        // it or a member — and signed out there is neither.
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
         assert!(
             VenueAccess::<Write>::write(&pool, VenueResource::Venue("guest"),)
                 .await
-                .is_err()
+                .is_ok()
         );
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
