@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{FutureExt, StreamExt};
-use luma_sync::powersync::{sdk::SyncOptions, Database};
+use luma_sync::powersync::{sdk::SyncOptions, Connections, Database, HttpClient};
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 
@@ -54,6 +54,28 @@ pub struct Service {
 }
 
 impl Service {
+    /// Start PowerSync on the connection pair `open_app_db_at` returned.
+    ///
+    /// The whole seam: a host hands over the connections, the state pool and
+    /// its event bus, and gets back something that connects when somebody
+    /// signs in. Everything about *what* syncs is [`super::schema`], and it is
+    /// read from here so a host never names a table.
+    ///
+    /// # Errors
+    ///
+    /// If the SDK cannot start on those connections.
+    pub async fn open(
+        connections: Connections,
+        state_pool: SqlitePool,
+        events: Events,
+    ) -> Result<Self, String> {
+        let database = connections
+            .start(super::schema::schema(), HttpClient::new())
+            .await
+            .map_err(|error| format!("could not start PowerSync: {error}"))?;
+        Self::start(database, state_pool, events)
+    }
+
     /// Start syncing `database`, reading sessions from `state_pool` and
     /// emitting through `events`.
     ///

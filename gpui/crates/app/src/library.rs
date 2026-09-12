@@ -58,7 +58,7 @@ use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
-use luma_lib::database::local::database::init_app_db_at;
+use luma_lib::database::local::database::open_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
@@ -647,7 +647,7 @@ impl Library {
             fallback: system_track_sources(),
         });
         let (services, account, lapsed) = runtime.block_on(async {
-            let db = init_app_db_at(storage.path()).await?;
+            let (db, connections) = open_app_db_at(storage.path()).await?;
             let state_db = init_state_db_at(storage.path()).await?;
             // Admission is host bootstrap, not a command: until it is armed
             // every `auth_visible_*` view is empty, so a host that skipped
@@ -697,8 +697,33 @@ impl Library {
                 &storage,
                 headless_env::cache_dir()?,
             ));
+            let state_pool = state_db.0.clone();
             let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
                 .with_events(events.clone());
+            // Record replication, on this library's reactor. Off when the
+            // process may not talk to the cloud (a harness) or when no
+            // PowerSync instance is configured — the app is then exactly what
+            // it was before sync existed, a local SQLite library.
+            let services = if cloud && !luma_lib::config::powersync_url().is_empty() {
+                match luma_lib::sync::service::Service::open(
+                    connections,
+                    state_pool.clone(),
+                    events.clone(),
+                )
+                .await
+                {
+                    Ok(sync) => services.with_sync(sync),
+                    // Not a launch failure: a library that cannot reach the
+                    // cloud is still a library.
+                    Err(error) => {
+                        eprintln!("[luma] record sync did not start: {error}");
+                        services
+                    }
+                }
+            } else {
+                drop(connections);
+                services
+            };
             let services = if desktop {
                 services.with_artnet().await?
             } else {
@@ -767,7 +792,18 @@ impl Library {
             });
         }
 
-        // Record replication is reconnected in phase two; nothing to spawn.
+        // Bytes move on their own clock: audio, stems and album art go through
+        // Supabase Storage, not through the row protocol, and a 40 MB stem has
+        // nothing to do with a checkpoint.
+        if cloud {
+            let host = services.sync_host();
+            let media = luma_lib::sync::media::Media::new(
+                services.db().0.clone(),
+                services.state_pool().clone(),
+            );
+            let media_shutdown = shutdown_rx.clone();
+            runtime.spawn(async move { media.run(host, media_shutdown).await });
+        }
         drop(shutdown_rx);
         let (session_writes, mut session_write_rx) =
             tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
