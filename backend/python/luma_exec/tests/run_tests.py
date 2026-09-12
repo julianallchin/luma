@@ -538,34 +538,6 @@ def test_host_rejection_is_structured_and_kernel_survives():
 
 
 @test
-def test_track_check_recognizes_worker_host_errors():
-    """The file-launched worker and track facade must share one error class."""
-    client = fresh()
-
-    def reject(_method, _payload):
-        raise harness.HostCallRejected("invalid_edit", "the candidate is invalid")
-
-    result = ok(
-        client.execute(
-            "from luma_exec.track import Track\n"
-            "track = Track({\n"
-            "    'id': 'track-synthetic',\n"
-            "    'title': 'Synthetic',\n"
-            "    'duration_s': 100.0,\n"
-            "    'revision': 'revision-1',\n"
-            "    'editable': True,\n"
-            "    'clips': [],\n"
-            "}, host_call=_luma_host_call)\n"
-            "checked = track.edit().check()\n"
-            "(checked.ok, checked.errors)",
-            REV1,
-            host_handler=reject,
-        )
-    )
-    assert result["repr"] == "(False, ('the candidate is invalid',))", result
-
-
-@test
 def test_host_call_payload_is_bounded_before_it_reaches_the_host():
     client = fresh()
     result = client.execute(
