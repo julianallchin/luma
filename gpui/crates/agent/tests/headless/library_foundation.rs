@@ -16,6 +16,17 @@ fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Sign the disposable library in, on its own runtime: these tests build the
+/// `Library` themselves rather than through [`support::Fixture`], which does
+/// this for them.
+fn sign_in(config: &std::path::Path) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(super::support::session::signed_in(config));
+}
+
 fn disposable_config_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "luma-gpui-library-foundation-{}",
@@ -67,6 +78,9 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
     let _environment = environment_lock();
     let config = disposable_config_dir();
     std::env::set_var("LUMA_CONFIG_DIR", &config);
+    // Nothing in Luma writes a synced row without a principal, and importing
+    // tracks writes plenty — see `AppServices::require_session`.
+    sign_in(&config);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -78,8 +92,9 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
             .unwrap();
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, title, file_path)
-             VALUES ('track', NULL, 'hash', 'Empty score', '/track.mp3')",
+             VALUES ('track', ?, 'hash', 'Empty score', '/track.mp3')",
         )
+        .bind(super::support::session::PRINCIPAL)
         .execute(&db.0)
         .await
         .unwrap();
@@ -168,6 +183,9 @@ fn both_dj_adapters_normalize_every_browser_read_through_library() {
     let _environment = environment_lock();
     let config = disposable_config_dir();
     std::env::set_var("LUMA_CONFIG_DIR", &config);
+    // Nothing in Luma writes a synced row without a principal, and importing
+    // tracks writes plenty — see `AppServices::require_session`.
+    sign_in(&config);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -214,6 +232,7 @@ fn both_dj_adapters_normalize_every_browser_read_through_library() {
 fn both_dj_sources_import_through_the_same_library_request_contract() {
     let _environment = environment_lock();
     let config = disposable_config_dir();
+    sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     std::env::set_var("LUMA_CONFIG_DIR", &config);
@@ -281,6 +300,7 @@ fn both_dj_sources_import_through_the_same_library_request_contract() {
 fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progress() {
     let _environment = environment_lock();
     let config = disposable_config_dir();
+    sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     std::env::set_var("LUMA_CONFIG_DIR", &config);
@@ -396,6 +416,7 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
 fn dropping_import_future_does_not_cancel_service_owned_analysis() {
     let _environment = environment_lock();
     let config = disposable_config_dir();
+    sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
     std::env::set_var("LUMA_CONFIG_DIR", &config);

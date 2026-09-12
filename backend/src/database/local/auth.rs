@@ -208,19 +208,26 @@ pub(crate) enum SessionReplacementKind {
     IdentityTransition,
 }
 
-/// The durable namespace a row belongs to.
+/// The namespace of a row written before sign-in was required.
 ///
-/// There is no signed-out namespace. Every synced row carries a `uid`, and a
-/// row belonging to nobody is a row the server would refuse and the other
-/// device would never see — so the caller has a principal or it has no
-/// business writing. Kept distinct from the bare id so keys are stable in
-/// logs, hashes and cross-table associations.
+/// Not something a new row is ever given: `AppServices::require_session`
+/// refuses a command that would write one. It stays because the rows it names
+/// are still in the library — a `uid` of SQL `NULL`, from before every synced
+/// table had an owner — and reading them has to be possible.
+pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
+
+/// The durable namespace a row belongs to. Distinct from the bare id so keys
+/// are stable in logs, hashes and cross-table associations.
 #[must_use]
-pub fn principal_key(principal: &str) -> String {
-    format!("signed-in:{principal}")
+pub fn principal_key(principal: Option<&str>) -> String {
+    principal.map_or_else(
+        || SIGNED_OUT_PRINCIPAL_KEY.to_owned(),
+        |id| format!("signed-in:{id}"),
+    )
 }
 
-/// What a write says when nobody is signed in.
+/// What a command says when it would write a synced row and nobody is signed
+/// in. The gate is `AppServices::require_session`; this is its words.
 pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma before changing anything";
 
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
