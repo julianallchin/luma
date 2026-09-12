@@ -96,7 +96,7 @@ pub async fn get_classifier_thresholds(
 /// Delete a track's row and its files. A hard delete, not an archive; the
 /// `sync_delete_tracks` trigger enqueues the committed row deletion for push.
 pub async fn delete_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     track_service::delete_track(
         &services.db.0,
         &services.storage,
@@ -154,7 +154,7 @@ pub async fn import_tracks(
     let import_id = uuid::Uuid::new_v4().to_string();
     let source = "file";
     let total = file_paths.len();
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     let epoch = services.analysis_tasks.current_epoch()?;
     let lease = services.analysis_tasks.lease(epoch)?;
     let guard = lease.guard();

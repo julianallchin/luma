@@ -208,17 +208,20 @@ pub(crate) enum SessionReplacementKind {
     IdentityTransition,
 }
 
-pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
-
-/// Canonical durable namespace shared by authored revision metadata and the sync
-/// queue. It is deliberately distinct from nullable SQL ownership so keys are
-/// stable in logs, hashes, and cross-table associations.
-pub fn principal_key(principal: Option<&str>) -> String {
-    principal.map_or_else(
-        || SIGNED_OUT_PRINCIPAL_KEY.to_owned(),
-        |id| format!("signed-in:{id}"),
-    )
+/// The durable namespace a row belongs to.
+///
+/// There is no signed-out namespace. Every synced row carries a `uid`, and a
+/// row belonging to nobody is a row the server would refuse and the other
+/// device would never see — so the caller has a principal or it has no
+/// business writing. Kept distinct from the bare id so keys are stable in
+/// logs, hashes and cross-table associations.
+#[must_use]
+pub fn principal_key(principal: &str) -> String {
+    format!("signed-in:{principal}")
 }
+
+/// What a write says when nobody is signed in.
+pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma before changing anything";
 
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
 /// commands capture this while holding the global sync lock, close admission,

@@ -29,7 +29,7 @@ pub async fn create_pattern(
     name: String,
     description: Option<String>,
 ) -> Result<PatternSummary, CommandError> {
-    let uid = services.session_user_id().await?;
+    let uid = Some(services.require_session().await?);
     Ok(catalog::create_pattern(
         &services.db.0,
         uid.as_deref(),
@@ -54,14 +54,14 @@ pub async fn fork_pattern(
     services: &AppServices,
     input: ForkPatternInput,
 ) -> Result<ForkPatternResult, CommandError> {
-    let uid = services.session_user_id().await?;
+    let uid = Some(services.require_session().await?);
     Ok(catalog::fork_pattern(&services.db.0, uid.as_deref(), input).await?)
 }
 
 /// A delete is a delete. Ownership is enforced inside [`catalog::delete_pattern`],
 /// which is the layer that owns the invariant.
 pub async fn delete_pattern(services: &AppServices, id: String) -> Result<(), CommandError> {
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     Ok(catalog::delete_pattern(&services.db.0, principal.as_deref(), &id).await?)
 }
 
@@ -188,7 +188,7 @@ pub async fn save_pattern_graph_document(
     base_revision: String,
     graph: Graph,
 ) -> Result<GraphEditResult, CommandError> {
-    let owner_user_id = services.session_user_id().await?;
+    let owner_user_id = Some(services.require_session().await?);
     Ok(crate::services::graph_documents::apply_graph_edit(
         &services.db.0,
         &crate::services::graph_documents::GraphScope {
