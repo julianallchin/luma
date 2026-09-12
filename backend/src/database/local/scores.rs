@@ -98,14 +98,13 @@ pub async fn get_accessible_venue_for_track(
     Ok(row.map(|r| r.0))
 }
 
-/// The provenance columns every score listing carries: who last wrote the
-/// score, when, and what its agent threads have cost.
+/// The provenance columns every score listing carries: when the score was last
+/// written, and what its agent threads have cost.
 ///
-/// Authorship comes from the change log rather than the score row's own
+/// The time comes from the change log rather than the score row's own
 /// `updated_at`, because the row moves for reasons that are not authorship.
 /// `save_score` touches the score row exactly when something changed, so the
-/// newest `changes` entry naming this score *is* the last edit, and its
-/// `actor` is who made it.
+/// newest `changes` entry naming this score *is* the last edit.
 ///
 /// Correlated subqueries rather than joins, because a one-to-many join would
 /// multiply the counts the listing already groups for.
@@ -116,10 +115,7 @@ pub async fn get_accessible_venue_for_track(
 /// take them without an assertion that they are safe to run.
 macro_rules! provenance {
     () => {
-        "(SELECT change.actor FROM changes change
-                 WHERE change.table_name = 'scores' AND change.row_id = score.id
-                 ORDER BY change.at DESC LIMIT 1) AS last_actor,
-                (SELECT change.at FROM changes change
+        "(SELECT change.at FROM changes change
                  WHERE change.table_name = 'scores' AND change.row_id = score.id
                  ORDER BY change.at DESC LIMIT 1) AS last_authored_at,
                 (SELECT SUM(usage.cost_usd)
