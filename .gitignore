@@ -67,6 +67,7 @@ SUPABASE_SCHEMA.sql
 
 # Experiments directory (large datasets/binaries — not tracked in git)
 experiments/*
+!experiments/powersync/
 !experiments/cs525-data
 experiments/cs525-data/*
 !experiments/cs525-data/eval
@@ -100,3 +101,4 @@ target-pixel/
 # measurements beside them are the durable artifact; the frames are re-shot by
 # re-running the capture.
 harness/perf/
+experiments/powersync/run/

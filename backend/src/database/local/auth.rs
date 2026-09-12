@@ -208,17 +208,20 @@ pub(crate) enum SessionReplacementKind {
     IdentityTransition,
 }
 
-pub(crate) const SIGNED_OUT_PRINCIPAL_KEY: &str = "signed-out";
-
-/// Canonical durable namespace shared by authored revision metadata and the sync
-/// queue. It is deliberately distinct from nullable SQL ownership so keys are
-/// stable in logs, hashes, and cross-table associations.
-pub(crate) fn principal_key(principal: Option<&str>) -> String {
-    principal.map_or_else(
-        || SIGNED_OUT_PRINCIPAL_KEY.to_owned(),
-        |id| format!("signed-in:{id}"),
-    )
+/// The durable namespace a row belongs to.
+///
+/// There is no signed-out namespace. Every synced row carries a `uid`, and a
+/// row belonging to nobody is a row the server would refuse and the other
+/// device would never see — so the caller has a principal or it has no
+/// business writing. Kept distinct from the bare id so keys are stable in
+/// logs, hashes and cross-table associations.
+#[must_use]
+pub fn principal_key(principal: &str) -> String {
+    format!("signed-in:{principal}")
 }
+
+/// What a write says when nobody is signed in.
+pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma before changing anything";
 
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
 /// commands capture this while holding the global sync lock, close admission,
@@ -1759,56 +1762,6 @@ fn bounded_response_detail(value: &str) -> String {
     } else {
         format!("{}…", value.chars().take(LIMIT).collect::<String>())
     }
-}
-
-/// Explicit host-only identity setup for Rust tests. It never exists as a
-/// renderer command and deliberately creates the same proof shape production
-/// reads enforce.
-#[cfg(test)]
-pub(crate) async fn install_test_principal(pool: &SqlitePool, user_id: &str) -> Result<(), String> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
-    let expires_at = 4_102_444_800_i64;
-    let payload = serde_json::json!({
-        "sub": user_id,
-        "iss": format!("{}/auth/v1", SUPABASE_URL.trim_end_matches('/')),
-        "aud": AUTHENTICATED_AUDIENCE,
-        "exp": expires_at,
-    });
-    let access_token = format!(
-        "{}.{}.host-test-signature",
-        URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#),
-        URL_SAFE_NO_PAD.encode(payload.to_string())
-    );
-    let session_json = serde_json::json!({
-        "access_token": access_token,
-        "refresh_token": "host-test-refresh",
-        "user": { "id": user_id },
-    })
-    .to_string();
-    let envelope = parse_session(&session_json)?;
-    let claims = parse_and_validate_claims(&envelope.access_token, 0, false)?;
-    let validated = ValidatedSession {
-        session_json: session_json.clone(),
-        proof: PrincipalProof {
-            user_id: user_id.to_string(),
-            session_sha256: sha256(session_json.as_bytes()),
-            access_token_sha256: sha256(envelope.access_token.as_bytes()),
-            jwt_sub: claims.sub,
-            jwt_issuer: claims.iss,
-            jwt_audience_json: serde_json::to_string(&claims.aud)
-                .map_err(|error| format!("Failed to bind test JWT audience: {error}"))?,
-            jwt_expires_at: claims.exp,
-            verified_at: 0,
-            proof_generation: uuid::Uuid::new_v4().to_string(),
-        },
-        envelope,
-    };
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|error| format!("Failed to lock test identity: {error}"))?;
-    replace_session_for_connection(&mut connection, &validated).await
 }
 
 #[cfg(test)]

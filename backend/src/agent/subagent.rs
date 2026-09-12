@@ -18,11 +18,8 @@
 //! awaited *inside* the tool call, which is awaited inside the parent's turn
 //! future; dropping the parent stream drops the whole chain, and each turn
 //! cancels the way it always did. The one thing a drop cannot do is `await`,
-//! so a cancelled child leaves its workspace active — the same case an app
-//! that dies mid-turn leaves, and both are retired by
-//! [`recover_threads`](crate::agent_execution::thread_cleanup::recover_threads),
-//! which reads [`SubagentRegistry::is_running`] to tell a stranded workspace
-//! from a live one.
+//! so a cancelled child leaves its draft open — harmless, because a draft is
+//! a row nobody else reads, and it goes when its thread does.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -34,7 +31,7 @@ use super::tools::ToolContext;
 use super::{transcript, AgentChatPart, Role, Transcript, TurnEvent, TurnOutcome, UserPrompt};
 use crate::database::local::agent_threads as db;
 use crate::models::agent_threads::{AgentThread, CreateAgentThreadInput};
-use crate::models::authored_state::{AuthoredMergeConflict, AuthoredWorkspaceMerge};
+use crate::services::drafts;
 
 /// How many threads may stand between a delegated turn and the conversation a
 /// person started. A child may delegate; a grandchild may not.
@@ -52,11 +49,6 @@ pub const MAX_CONCURRENT: usize = 4;
 
 /// How much of a child's answer the parent model is shown.
 const MAX_RESULT_CHARS: usize = 16_000;
-
-/// How many conflicts travel back to the parent model. Four children merging
-/// one document can each produce a full path list, and the parent's context is
-/// not where a diff belongs — the proposal revision is.
-const MAX_REPORTED_CONFLICTS: usize = 8;
 
 /// What a subagent is doing right now.
 ///
@@ -113,19 +105,10 @@ pub struct SubagentReport {
     rename_all_fields = "camelCase"
 )]
 pub enum SubagentOutcome {
-    Merged {
-        revision_id: String,
-    },
-    /// The child's work could not be applied. Its proposal revision stands and
-    /// its thread is still readable; the conflicts are the handoff.
-    Conflicted {
-        conflicts: Vec<AuthoredMergeConflict>,
-    },
-    /// The child did not publish into its parent. Committed authored revisions
-    /// remain inspectable even if the working directory was retired.
-    Failed {
-        message: String,
-    },
+    /// The child's changes are on the live score.
+    Merged,
+    /// The child did not publish into its parent. Its thread stays readable.
+    Failed { message: String },
 }
 
 /// What one lease occupies while its delegation runs: a slot against its
@@ -269,16 +252,28 @@ pub(super) async fn delegate(
     }
     let mut lease = Arc::clone(&services.subagents).acquire(ctx.thread_id)?;
 
-    let child = services
-        .authored()
-        .create_thread_with_authored_state(
-            &pool,
-            child_thread_input(&parent, ctx.call_id, &delegation.description),
-            principal.as_deref(),
-        )
-        .await
-        .map_err(|error| format!("could not open a thread for this subagent: {error}"))?;
+    let child = db::create_thread(
+        &pool,
+        child_thread_input(&parent, ctx.call_id, &delegation.description),
+        principal.as_deref(),
+    )
+    .await
+    .map_err(|error| format!("could not open a thread for this subagent: {error}"))?;
     lease.attach(&child.id);
+    // A child works on a draft of the score, never on the live rows.
+    if let Some(score_id) = parent.score_id.as_deref() {
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(|error| format!("could not open the subagent's draft: {error}"))?;
+        drafts::create(
+            &mut connection,
+            score_id,
+            &child.id,
+            principal.as_deref().unwrap_or_default(),
+        )
+        .await?;
+    }
 
     let mut snapshot = SubagentSnapshot {
         child_thread_id: child.id.clone(),
@@ -305,8 +300,8 @@ pub(super) async fn delegate(
         }
     };
     snapshot.phase = match &outcome {
-        SubagentOutcome::Merged { .. } => SubagentPhase::Completed,
-        _ => SubagentPhase::Failed,
+        SubagentOutcome::Merged => SubagentPhase::Completed,
+        SubagentOutcome::Failed { .. } => SubagentPhase::Failed,
     };
     snapshot.activity = None;
     ctx.progress.subagent(&snapshot);
@@ -356,55 +351,55 @@ async fn run_child(
     (result, transcript)
 }
 
-/// Merge the child's workspace into whatever head its parent writes.
-async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, text: &str) -> SubagentOutcome {
+/// Apply the child's draft onto the live score, per clip and per definition,
+/// and close it. Work the parent did meanwhile survives; a whole-document
+/// overwrite would silently undo it.
+async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, _text: &str) -> SubagentOutcome {
     let services = ctx.services();
-    let principal = match services.admitted_principal().await {
-        Ok(principal) => principal,
+    let pool = services.db().0.clone();
+    let mut connection = match pool.acquire().await {
+        Ok(connection) => connection,
         Err(error) => {
             return SubagentOutcome::Failed {
                 message: error.to_string(),
             }
         }
     };
-    let merged = services
-        .authored()
-        .merge_subagent(
-            &services.db().0,
-            principal.as_deref(),
-            child_thread_id,
-            revision_subject(text),
-            &format!("subagent-merge-{child_thread_id}"),
-        )
-        .await;
-    match merged {
-        Ok(AuthoredWorkspaceMerge::Merged { revision_id, .. }) => {
-            SubagentOutcome::Merged { revision_id }
+    let draft = match sqlx::query_scalar::<_, String>("SELECT id FROM drafts WHERE thread_id = ?")
+        .bind(child_thread_id)
+        .fetch_optional(&mut *connection)
+        .await
+    {
+        Ok(Some(draft)) => draft,
+        // A child with no score in scope had nothing to draft and nothing to
+        // merge; its answer is the whole of its contribution.
+        Ok(None) => return SubagentOutcome::Merged,
+        Err(error) => {
+            return SubagentOutcome::Failed {
+                message: error.to_string(),
+            }
         }
-        Ok(AuthoredWorkspaceMerge::Conflicted { mut conflicts }) => {
-            conflicts.truncate(MAX_REPORTED_CONFLICTS);
-            SubagentOutcome::Conflicted { conflicts }
-        }
-        Err(error) => SubagentOutcome::Failed {
-            message: error.to_string(),
-        },
+    };
+    match drafts::merge(&mut connection, &draft).await {
+        Ok(_) => SubagentOutcome::Merged,
+        Err(message) => SubagentOutcome::Failed { message },
     }
 }
 
-/// Retire a failed child's workspace. A failure to retire is not worth failing
-/// the parent's turn over — the thread deletion sweep retires it later — but it
-/// must not be silent either.
+/// Close a failed child's draft. A failure to close is not worth failing the
+/// parent's turn over — the draft goes when the thread does — but it must not
+/// be silent either.
 async fn discard(ctx: &ToolContext<'_>, child_thread_id: &str) {
     let services = ctx.services();
-    let Ok(principal) = services.admitted_principal().await else {
+    let Ok(mut connection) = services.db().0.acquire().await else {
         return;
     };
-    if let Err(error) = services
-        .authored()
-        .discard_subagent(&services.db().0, principal.as_deref(), child_thread_id)
+    if let Err(error) = sqlx::query("DELETE FROM drafts WHERE thread_id = ?")
+        .bind(child_thread_id)
+        .execute(&mut *connection)
         .await
     {
-        eprintln!("[subagent] could not retire {child_thread_id}'s workspace: {error}");
+        eprintln!("[subagent] could not close {child_thread_id}'s draft: {error}");
     }
 }
 
@@ -495,60 +490,19 @@ fn final_assistant_text(transcript: &Transcript) -> String {
 
 /// One line naming the revision a child produced, within the 240 bytes a
 /// revision subject allows.
-fn revision_subject(text: &str) -> &str {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Subagent result");
-    let mut end = line.len().min(200);
-    while end > 0 && !line.is_char_boundary(end) {
-        end -= 1;
-    }
-    match &line[..end] {
-        "" => "Subagent result",
-        subject => subject,
-    }
-}
-
 /// Publication state comes first: a child's private "applied" claim is not
-/// evidence that its proposal reached the parent.
+/// evidence that its work reached the parent's score.
 pub(super) fn report_for_model(report: &SubagentReport) -> Result<String, String> {
     let text =
         super::tools::clamp_for_model(&report.text, MAX_RESULT_CHARS, "subagent result", 0.4);
     match &report.outcome {
-        SubagentOutcome::Merged { revision_id } => Ok(format!(
-            "<authored_merge status=\"merged\" revision_id=\"{revision_id}\"/>\n\n{text}"
-        )),
-        SubagentOutcome::Conflicted { conflicts } => Err(format!(
-            "<authored_merge status=\"conflicted\" conflicts=\"{}\"/>\n\
-             The subagent's work is kept as a proposal on thread {} and was not applied. \
-             Conflicting paths: {}. Use subagent action=inspect with this childThreadId to read the proposal and resolve against your current draft.\n\n{text}",
-            conflicts.len(),
-            report.child_thread_id,
-            conflict_paths(conflicts),
-        )),
+        SubagentOutcome::Merged => Ok(format!("<subagent status=\"merged\"/>\n\n{text}")),
         SubagentOutcome::Failed { message } => Err(format!(
             "The subagent failed and nothing was applied: {message}\n\
-             Its thread is {}. Use subagent action=inspect with this childThreadId to recover any committed proposal work.",
+             Its thread is {}. Use subagent action=inspect with this childThreadId to read what it had.",
             report.child_thread_id
         )),
     }
-}
-
-fn conflict_paths(conflicts: &[AuthoredMergeConflict]) -> String {
-    conflicts
-        .iter()
-        .map(|conflict| {
-            conflict
-                .path
-                .iter()
-                .map(|segment| serde_json::to_string(segment).unwrap_or_default())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]
@@ -614,16 +568,5 @@ mod tests {
         assert!(!registry.is_running("child"));
         let running = registry.running.lock().expect("poisoned");
         assert!(running.slots.is_empty() && running.children.is_empty());
-    }
-
-    #[test]
-    fn a_revision_subject_is_one_bounded_line() {
-        assert_eq!(
-            revision_subject("\n\n  Raised the ramp  \nand more"),
-            "Raised the ramp"
-        );
-        assert_eq!(revision_subject("   "), "Subagent result");
-        let long = "é".repeat(300);
-        assert!(revision_subject(&long).len() <= 200);
     }
 }

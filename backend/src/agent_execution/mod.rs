@@ -26,7 +26,6 @@ mod kernel_tests;
 pub mod sandbox;
 #[cfg(all(test, target_os = "macos"))]
 mod sandbox_tests;
-pub mod thread_cleanup;
 pub mod track_host;
 pub mod venue_host;
 pub mod worker_launcher;

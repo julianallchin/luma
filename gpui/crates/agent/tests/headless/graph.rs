@@ -195,58 +195,6 @@ fn graph_ports_selection_and_marquee_keep_parameters_in_the_inspector() {
     assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
 }
 
-#[test]
-fn graph_missing_implementation_reports_an_error_and_preserves_saved_rows() {
-    let name = "graph-missing-source";
-    let mut harness = Fixture::new(
-        name,
-        20,
-        vec![support::Clip::new("missing", "Missing pattern", 2., 6.)],
-    )
-    .with_rig()
-    .window(1600., 1000.)
-    .open(Mode::Headless);
-    let result=harness.exec(&support::script(r#"
-        nav.venue("Test Venue");nav.track("Aurora");nav.expand();nav.stageOff();
-        until("clip",s=>s.find({role:"card",label:"Missing pattern"}));
-        app.click(app.snapshot().find({role:"card",label:"Missing pattern"}),{count:2});
-        until("missing source error",s=>s.nodes.some(n=>n.label.includes("missing or unsupported pattern implementations")));
-        if(app.snapshot().find({role:"card",label:"Graph workspace"}))throw new Error("opened an obsolete editor");
-        ({preserved:true})
-    "#),Duration::from_secs(45));
-    assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
-    let directory = support::config_dir(name);
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let pool = sqlx::SqlitePool::connect(&format!(
-                "sqlite:{}",
-                directory.join("luma.db").display()
-            ))
-            .await
-            .unwrap();
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM track_scores")
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap(),
-                1
-            );
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM scores WHERE graph_document_json IS NOT NULL"
-                )
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-                0
-            );
-            pool.close().await;
-        });
-}
-
 /// A document that places nothing is laid out along its wires: columns run
 /// left to right, each Input sits beside the card that reads it, and a graph
 /// without an Apply node ends at a card of its named outputs.

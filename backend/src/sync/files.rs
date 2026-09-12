@@ -12,7 +12,7 @@ use std::process::Command;
 
 use super::error::SyncError;
 use super::host::SyncHost;
-use super::traits::RemoteClient;
+use crate::database::remote::common::SupabaseClient;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,7 +121,7 @@ struct PendingAudioUpload {
 /// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -217,7 +217,7 @@ struct PendingStemUpload {
 /// Upload stem files that have a local file but no storage_path.
 pub async fn upload_pending_stems(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -310,7 +310,7 @@ struct PendingArtUpload {
 /// Upload album art that has a local file but no album_art_storage_path.
 pub async fn upload_pending_album_art(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     uid: &str,
     token: &str,
     stats: &mut FileSyncStats,
@@ -411,87 +411,6 @@ async fn apply_download_metadata(
     Ok(changed)
 }
 
-/// Make one visible track available locally. Cached audio works offline; a
-/// missing source is fetched only when a caller actually needs the audio.
-/// The engine serializes requests so simultaneous waveform/playback loads share
-/// one download. No database transaction is held during network I/O.
-pub(super) async fn ensure_track_audio(
-    pool: &SqlitePool,
-    state_pool: &SqlitePool,
-    remote: &dyn RemoteClient,
-    storage: &crate::storage::StorageRoot,
-    track_id: &str,
-) -> Result<(), SyncError> {
-    use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-    use crate::database::local::write_admission::{enter_remote_writes, leave_remote_writes};
-
-    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id)
-        .await
-        .map_err(SyncError::Local)?;
-    let principal = access.principal().map(str::to_owned);
-    let (file_path, track_hash, storage_path): (String, String, Option<String>) =
-        sqlx::query_as("SELECT file_path, track_hash, storage_path FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_one(access.connection())
-            .await?;
-    access.finish().await.map_err(SyncError::Local)?;
-    if !file_path.ends_with(".stub") && std::path::Path::new(&file_path).is_file() {
-        return Ok(());
-    }
-    let storage_path = storage_path
-        .ok_or_else(|| SyncError::Local("Track audio is missing and has no cloud copy".into()))?;
-    let auth = crate::database::local::auth::get_current_auth(state_pool)
-        .await?
-        .ok_or(SyncError::AuthRequired)?;
-    if principal.as_deref() != Some(auth.principal.user_id.as_str()) {
-        return Err(SyncError::AuthRequired);
-    }
-    let (bucket, path) = storage_path
-        .split_once('/')
-        .ok_or_else(|| SyncError::Parse("Invalid audio storage path".into()))?;
-    let ext = path.rsplit('.').next().unwrap_or("bin");
-    storage.ensure_track_storage().map_err(SyncError::Local)?;
-    let dest = storage.tracks_dir().join(format!("{track_hash}.{ext}"));
-    if !dest.is_file() {
-        let bytes = remote
-            .download_file(bucket, path, &auth.access_token)
-            .await?;
-        atomic_write(&dest, &bytes)
-            .map_err(|error| SyncError::Local(format!("Failed to cache track audio: {error}")))?;
-    }
-
-    let mut publication = VisibleTrackAccess::<Operate>::operate(pool, track_id)
-        .await
-        .map_err(SyncError::Local)?;
-    if publication.principal() != principal.as_deref() {
-        return Err(SyncError::AuthRequired);
-    }
-    enter_remote_writes(publication.connection())
-        .await
-        .map_err(SyncError::Local)?;
-    let changed = sqlx::query(
-        "UPDATE tracks SET file_path = ?, version = version + 1
-         WHERE id = ? AND track_hash = ? AND storage_path = ? AND file_path = ?",
-    )
-    .bind(dest.to_string_lossy().as_ref())
-    .bind(track_id)
-    .bind(&track_hash)
-    .bind(&storage_path)
-    .bind(&file_path)
-    .execute(publication.connection())
-    .await?
-    .rows_affected();
-    if changed != 1 {
-        return Err(SyncError::Local(
-            "Track audio changed while downloading".into(),
-        ));
-    }
-    leave_remote_writes(publication.connection())
-        .await
-        .map_err(SyncError::Local)?;
-    publication.commit().await.map_err(SyncError::Local)
-}
-
 #[derive(sqlx::FromRow)]
 struct PendingStemDownload {
     track_id: String,
@@ -501,11 +420,10 @@ struct PendingStemDownload {
     storage_path: String,
 }
 
-/// Pull already installed the remote stem catalog. Only download missing files
-/// for tracks whose main audio is local; never rediscover each track remotely.
+/// Only download missing stem files for tracks whose main audio is local.
 pub async fn download_pending_stems(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
@@ -594,7 +512,7 @@ struct PendingArtDownload {
 /// Download album art for tracks that have a storage path but no local file.
 pub async fn download_pending_album_art(
     pool: &SqlitePool,
-    remote: &dyn RemoteClient,
+    remote: &SupabaseClient,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
@@ -654,4 +572,28 @@ pub async fn download_pending_album_art(
     }
 
     Ok(())
+}
+
+/// Is this track's audio on this device?
+///
+/// Phase one is local-only, so this is a check rather than a fetch: there is
+/// no record transport to ask for the bytes yet. Phase two restores the
+/// download here, behind the same call.
+pub async fn ensure_track_audio(pool: &SqlitePool, track_id: &str) -> Result<(), SyncError> {
+    use crate::database::local::track_access::{Read, VisibleTrackAccess};
+
+    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id)
+        .await
+        .map_err(SyncError::Local)?;
+    let file_path: String = sqlx::query_scalar("SELECT file_path FROM tracks WHERE id = ?")
+        .bind(track_id)
+        .fetch_one(access.connection())
+        .await?;
+    access.finish().await.map_err(SyncError::Local)?;
+    if !file_path.ends_with(".stub") && std::path::Path::new(&file_path).is_file() {
+        return Ok(());
+    }
+    Err(SyncError::Local(
+        "This track's audio is not on this device".into(),
+    ))
 }

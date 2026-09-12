@@ -53,12 +53,6 @@ pub async fn run_graph(
     let owner_user_id = if let Some(thread_id) = agent_thread_id.as_deref() {
         let owner_user_id = auth::admitted_principal(pool).await?;
         authorize_publish_target(pool, thread_id, owner_user_id.as_deref()).await?;
-        if let Some(execution_id) = agent_execution_id.as_deref() {
-            services
-                .authored
-                .authorize_workspace(pool, owner_user_id.as_deref(), thread_id, execution_id)
-                .await?;
-        }
         owner_user_id
     } else {
         None
@@ -100,7 +94,6 @@ pub async fn run_graph(
             .graph_runs
             .commit_evaluation(
                 pool,
-                &services.authored,
                 &thread_id,
                 owner_user_id.as_deref(),
                 execution_id,

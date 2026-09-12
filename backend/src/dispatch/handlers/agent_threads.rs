@@ -1,21 +1,17 @@
 use crate::database::local::agent_threads as db;
 use crate::dispatch::{AppServices, CommandError};
+use crate::models::actor::Actor;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
-use crate::services::authored_state::Actor;
 
 pub async fn agent_thread_create(
     services: &AppServices,
     input: CreateAgentThreadInput,
 ) -> Result<AgentThread, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
-    services
-        .authored
-        .create_thread_with_authored_state(&services.db.0, input, owner_user_id.as_deref())
-        .await
-        .map_err(CommandError::from)
+    let owner_user_id = Some(services.require_session().await?);
+    Ok(db::create_thread(&services.db.0, input, owner_user_id.as_deref()).await?)
 }
 
 /// A thread owned by another principal is invisible, not forbidden.
@@ -55,7 +51,7 @@ pub async fn agent_thread_append_messages(
     thread_id: String,
     input: AppendAgentThreadMessagesInput,
 ) -> Result<Vec<AgentThreadMessage>, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     match db::append_messages_at_head(&services.db.0, &thread_id, input, owner_user_id.as_deref())
         .await?
     {
@@ -81,24 +77,14 @@ pub async fn agent_thread_delete(
     services: &AppServices,
     thread_id: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
-    services
-        .authored
-        .delete_thread_with_authored_state(
-            &services.db.0,
-            owner_user_id.as_deref(),
-            &thread_id,
-            |workspace_ids| async {
-                for workspace_id in workspace_ids {
-                    services.workspaces.retire_thread(&workspace_id).await?;
-                    services.graph_runs.forget(&workspace_id);
-                }
-                services.workspaces.retire_thread(&thread_id).await?;
-                services.graph_runs.forget(&thread_id);
-                Ok(())
-            },
-        )
-        .await?;
+    let owner_user_id = Some(services.require_session().await?);
+    let children = db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
+    for child in children {
+        services.workspaces.retire_thread(&child).await?;
+        services.graph_runs.forget(&child);
+    }
+    services.workspaces.retire_thread(&thread_id).await?;
+    services.graph_runs.forget(&thread_id);
     Ok(())
 }
 
@@ -129,8 +115,8 @@ pub async fn agent_thread_set_actor(
     thread_id: String,
     actor: String,
 ) -> Result<(), CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
-    Actor::parse(&actor).map_err(|error| CommandError::Invalid(error.to_string()))?;
+    let owner_user_id = Some(services.require_session().await?);
+    Actor::parse(&actor).map_err(CommandError::Invalid)?;
     db::set_thread_actor(&services.db.0, &thread_id, &actor, owner_user_id.as_deref()).await?;
     Ok(())
 }
@@ -140,7 +126,7 @@ pub async fn agent_thread_rename(
     thread_id: String,
     title: Option<String>,
 ) -> Result<AgentThread, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
+    let owner_user_id = Some(services.require_session().await?);
     Ok(db::rename_thread(
         &services.db.0,
         &thread_id,

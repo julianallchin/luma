@@ -24,9 +24,9 @@
 //!
 //! # Why the score goes through the seam
 //!
-//! Like the graph editor's fixture, and for the same reason: a score is an
-//! authored document with a content-addressed revision, and a `track_scores`
-//! row inserted behind that is a clip the editor can read and never write to.
+//! A score is `scores`, `clips` and `score_definitions` rows, and the editor
+//! only ever writes them as one whole `luma_patterns::Score` — so the fixture
+//! seeds them the same way, through `apply_score_document`.
 
 // Each test binary uses the parts of this it needs, and cargo compiles the
 // whole module into each — the standard shape of a shared test fixture.
@@ -86,6 +86,10 @@ pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
 pub fn seeded_prompt(index: usize) -> String {
     format!("Seeded question about score {index}")
 }
+
+/// The grid [`Fixture::seed_beats`] lays down: 120 bpm, so two beats a second.
+/// A clip is written in seconds and stored in beats.
+const BEATS_PER_SECOND: f64 = 2.0;
 
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
@@ -644,31 +648,15 @@ impl Fixture {
         .await;
 
         let score_id = if self.seed_track {
-            let score = if self.graph_score.is_some() {
-                call(
-                    &services,
-                    "create_score",
-                    json!({
-                        "requestId": request_id(0), "trackId": TRACK,
-                        "venueId": VENUE, "name": "Fixture Score",
-                    }),
-                )
-                .await
-            } else {
-                // Exercise real pre-migration documents without making the
-                // production creation path emit legacy scores for tests.
-                let id = request_id(0);
-                sqlx::query("INSERT INTO scores(id,uid,track_id,venue_id,name) VALUES(?,?,?,?,?)")
-                    .bind(&id)
-                    .bind(session::PRINCIPAL)
-                    .bind(TRACK)
-                    .bind(VENUE)
-                    .bind("Fixture Score")
-                    .execute(&services.db().0)
-                    .await
-                    .expect("seed a pre-migration score");
-                json!({"id": id})
-            };
+            let score = call(
+                &services,
+                "create_score",
+                json!({
+                    "requestId": request_id(0), "trackId": TRACK,
+                    "venueId": VENUE, "name": "Fixture Score",
+                }),
+            )
+            .await;
             Some(
                 score["id"]
                     .as_str()
@@ -706,63 +694,86 @@ impl Fixture {
             }
         }
 
-        // Lit patterns are minted once per `clip.pattern` key, so two clips
-        // that name the same key share one pattern — which is what a test
-        // about same-pattern multi-selection needs to exist at all.
-        let mut lit_patterns: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for (index, clip) in self.clips.iter().enumerate().filter(|_| self.seed_track) {
-            // `create_pattern` mints its own id, so a lit clip's score row
-            // names that one rather than `clip.pattern` — which for a lit clip
-            // is only the request key that keeps re-seeding idempotent.
-            let pattern = if clip.lit {
-                match lit_patterns.get(&clip.pattern) {
-                    Some(id) => id.clone(),
-                    None => {
-                        let created = call(
-                            &services,
-                            "create_pattern",
-                            json!({ "requestId": request_id(800 + index),
-                                    "name": clip.name, "description": null }),
-                        )
-                        .await;
-                        let id = created["id"]
-                            .as_str()
-                            .expect("a created pattern has an id")
-                            .to_string();
-                        self.light(&services, &id, index).await;
-                        lit_patterns.insert(clip.pattern.clone(), id.clone());
-                        id
-                    }
-                }
-            } else {
-                clip.pattern.clone()
-            };
+        let document = match &self.graph_score {
+            Some(document) => Some(document.clone()),
+            None if self.clips.is_empty() => None,
+            None => Some(self.timeline()),
+        };
+        if let Some(document) = document {
+            let score_id = score_id.as_ref().expect("a score fixture has a score");
             call(
                 &services,
-                "create_track_score",
-                json!({ "payload": {
-                    "requestId": request_id(index + 1),
-                    "scoreId": score_id.as_deref().expect("track fixture has a score"),
-                    "trackId": TRACK,
-                    "patternId": pattern,
-                    "startTime": clip.start,
-                    "endTime": clip.end,
-                    "zIndex": clip.z_index,
-                }}),
+                "apply_score_document",
+                json!({ "scoreId": score_id, "score": document }),
             )
             .await;
         }
-        if let Some(document) = &self.graph_score {
-            let score_id = score_id.as_ref().expect("graph fixture has a score");
-            let base = call(
-                &services,
-                "score_dsl_export",
-                json!({"scoreId":score_id,"trackId":TRACK,"venueId":VENUE,"includeClipIds":true}),
-            )
-            .await;
-            call(&services, "apply_score_document", json!({"scoreId":score_id,"score":document,"baseRevision":base["revision"],"operationId":request_id(3000)})).await;
+    }
+
+    /// The score document [`Fixture::clips`] describes.
+    ///
+    /// A clip is a row that names a graph, and the graph is what the editor
+    /// labels it by — so each clip gets one score-local definition named after
+    /// it. The body is the smallest thing that both validates and emits light:
+    /// a wash into the definition's lighting output. It is the same body for
+    /// every clip because a timeline clip is a rectangle, and the rectangle is
+    /// drawn from `start` and `duration` whatever is inside it.
+    ///
+    /// Times are beats, not seconds. [`Fixture::seed_beats`] lays a steady 120
+    /// bpm grid, so a beat is half a second.
+    fn timeline(&self) -> Value {
+        let mut definitions = serde_json::Map::new();
+        let mut clips = serde_json::Map::new();
+        for clip in &self.clips {
+            definitions.insert(
+                clip.pattern.clone(),
+                json!({
+                    "name": clip.name,
+                    "inputs": {},
+                    "outputs": { "lighting": { "value_type": "lighting", "rate": "frame" } },
+                    "body": {
+                        "kind": "graph",
+                        "body": {
+                            "nodes": {
+                                "wash": { "definition": "wash" },
+                                "out": {
+                                    "definition": "output",
+                                    "inputs": {
+                                        "color": {
+                                            "source": "connection",
+                                            "node": "wash",
+                                            "output": "color"
+                                        }
+                                    }
+                                }
+                            },
+                            "outputs": {
+                                "lighting": {
+                                    "source": "connection",
+                                    "node": "out",
+                                    "output": "lighting"
+                                }
+                            }
+                        }
+                    }
+                }),
+            );
+            clips.insert(
+                clip.pattern.clone(),
+                json!({
+                    "graph": clip.pattern,
+                    "start": clip.start * BEATS_PER_SECOND,
+                    "duration": (clip.end - clip.start) * BEATS_PER_SECOND,
+                    "seed": 0,
+                    "z_index": clip.z_index,
+                }),
+            );
         }
+        json!({
+            "version": luma_patterns::Score::VERSION,
+            "definitions": definitions,
+            "clips": clips,
+        })
     }
 
     /// One track-agent conversation about `score`, with a prompt and a reply
@@ -827,9 +838,9 @@ impl Fixture {
     /// (half a cycle per second at the fixture's 120 bpm, so two shots a second
     /// apart cannot agree by luck).
     ///
-    /// Written through the seam rather than as a `patterns` row because a graph
-    /// is an authored document with a content-addressed revision — the same
-    /// reason the score is. See the module docs.
+    /// Written through the seam rather than as a `patterns` row because a
+    /// graph is an authored document with a content-addressed revision, which
+    /// pattern graphs still are. See the module docs.
     async fn light(&self, services: &luma_lib::dispatch::AppServices, pattern: &str, index: usize) {
         let document = call(
             services,

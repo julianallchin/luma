@@ -858,7 +858,7 @@ impl Luma {
     ///
     /// The first edit of a burst records the [`History`] checkpoint; the
     /// flush closes the burst, so a whole picker drag is one undo step and
-    /// one compare-and-swap.
+    /// one write.
     pub(crate) fn arg_live(
         &mut self,
         arg_id: &str,

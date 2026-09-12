@@ -215,6 +215,15 @@ pub struct Frame {
     pub point_lights: Vec<PointLight>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
+    /// Supported fixture and house-light cones the venue can produce, capped
+    /// at [`MAX_FIXTURE_CONES`] and independent of the current cue's output.
+    /// The renderer uses this only to reserve shadow storage; dark emitters do
+    /// not enter [`Self::fixture_cones`] or receive a prewarmed shadow map.
+    pub fixture_shadow_capacity_hint: usize,
+    /// Cue-independent support of every fixture and house cone this venue can
+    /// produce. This is geometry metadata only: dark emitters do not enter
+    /// [`Self::fixture_cones`] and receive no shading or shadow work.
+    pub fixture_lighting_domain: Option<FixtureLightingDomain>,
     /// Whether fixture cones illuminate opaque surfaces as well as haze.
     pub fixture_surface_lighting: bool,
     /// Whether beams draw through per-cone proxy geometry instead of the
@@ -288,6 +297,45 @@ pub struct Camera {
     pub target: Vec3,
     /// Vertical field of view in degrees.
     pub fov_y_deg: f32,
+}
+
+/// Cue-independent support of all beam emitters a venue can produce.
+///
+/// `fog_far` is the exact radial sphere bound `distance(camera, position) +
+/// range`, accumulated per emitter. It is deliberately not derived from an
+/// AABB corner, which would change the fog-grid sampling distance unnecessarily.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FixtureLightingDomain {
+    /// Union of potential emitter range spheres in renderer coordinates.
+    pub bounds: luma_scene::Aabb,
+    /// Maximum camera-to-emitter distance plus that emitter's range.
+    pub fog_far: f32,
+    /// Camera eye used to derive [`Self::fog_far`], in renderer coordinates.
+    pub source_camera_eye: [f32; 3],
+}
+
+fn include_fixture_lighting_extent(
+    domain: &mut Option<FixtureLightingDomain>,
+    camera_eye: Vec3,
+    position: Vec3,
+    range: f32,
+) {
+    let fog_far = camera_eye.distance(position) + range;
+    if !position.is_finite() || !range.is_finite() || range <= 0.0 || !fog_far.is_finite() {
+        return;
+    }
+    let radius = Vec3::splat(range);
+    if let Some(domain) = domain {
+        domain.bounds.expand(position - radius);
+        domain.bounds.expand(position + radius);
+        domain.fog_far = domain.fog_far.max(fog_far);
+    } else {
+        *domain = Some(FixtureLightingDomain {
+            bounds: luma_scene::Aabb::new(position - radius, position + radius),
+            fog_far: fog_far.max(1.0),
+            source_camera_eye: camera_eye.to_array(),
+        });
+    }
 }
 
 /// Deduplicating upload bank: one copy per (asset, primitive) and per (asset,
@@ -688,6 +736,9 @@ pub fn build_with(
     let mut draws = Vec::new();
     let mut point_lights = Vec::new();
     let mut fixture_cones = Vec::new();
+    let mut fixture_shadow_capacity_hint: usize = 0;
+    let mut fixture_lighting_domain = None;
+    let camera_eye = world_from_three(Vec3::from(scene.camera.position));
 
     // --- sky ---------------------------------------------------------------
     // An atmosphere answers three questions a scene would otherwise answer
@@ -769,6 +820,9 @@ pub fn build_with(
             )?);
             let base = base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
             let head_count = def.head_count(&fixture.mode_name).max(1);
+            fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
+                .saturating_add(head_count)
+                .min(MAX_FIXTURE_CONES);
             let pixels = pixel_positions(def, head_count);
             let dims = def.dimensions_m();
 
@@ -807,18 +861,27 @@ pub fn build_with(
             let cone = cone_from_opening(PIXEL);
             let dir = beam_direction(Some(def), fixture.rot, None);
             for head in 0..head_count {
+                let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
+                    .min(pixels.len() - 1);
+                let position = base.transform_point3(pixels[idx]);
+                include_fixture_lighting_extent(
+                    &mut fixture_lighting_domain,
+                    camera_eye,
+                    position,
+                    cone.range,
+                );
+                // Keep enumerating fixed potential geometry after the active
+                // cap, without resolving state or creating a dark light.
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
-                    break;
+                    continue;
                 }
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
                 let intensity = strobe_gate(head_state, time, 10.0);
                 if intensity < 0.01 {
                     continue;
                 }
-                let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
-                    .min(pixels.len() - 1);
                 fixture_cones.push(FixtureCone {
-                    position: base.transform_point3(pixels[idx]),
+                    position,
                     range: cone.range,
                     direction: dir,
                     cos_beam: cone.cos_beam,
@@ -839,6 +902,20 @@ pub fn build_with(
         let Some(kind) = model_kind(def) else {
             continue;
         };
+        let potential_cone = kind
+            .emits_beam()
+            .then(|| cone_from_opening(luminaire_for(def, Some(kind))));
+        if let Some(cone) = potential_cone {
+            fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
+                .saturating_add(1)
+                .min(MAX_FIXTURE_CONES);
+            include_fixture_lighting_extent(
+                &mut fixture_lighting_domain,
+                camera_eye,
+                base.transform_point3(Vec3::ZERO),
+                cone.range,
+            );
+        }
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
         let intensity = strobe_gate(head_state, time, 20.0);
         // The body itself is `housing_draws`' — one implementation for the
@@ -888,7 +965,7 @@ pub fn build_with(
         if !kind.emits_beam() || intensity < 0.01 || fixture_cones.len() >= MAX_FIXTURE_CONES {
             continue;
         }
-        let cone = cone_from_opening(luminaire_for(def, Some(kind)));
+        let cone = potential_cone.expect("beam emitters resolve a potential cone");
         fixture_cones.push(FixtureCone {
             position: base.transform_point3(Vec3::ZERO),
             range: cone.range,
@@ -910,6 +987,24 @@ pub fn build_with(
     // beam that vanished would be a lie about the score.
     let lit_room = scene.render.house.and_then(|environment| {
         let bounds = scene.room_bounds();
+        if matches!(
+            environment,
+            crate::scene_desc::VenueEnvironment::Indoor { .. }
+        ) {
+            let potential =
+                crate::house::lamps(crate::scene_desc::VenueEnvironment::indoor(1.0), bounds);
+            fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
+                .saturating_add(potential.len())
+                .min(MAX_FIXTURE_CONES);
+            for lamp in potential {
+                include_fixture_lighting_extent(
+                    &mut fixture_lighting_domain,
+                    camera_eye,
+                    lamp.position,
+                    lamp.range,
+                );
+            }
+        }
         for lamp in crate::house::lamps(environment, bounds) {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
                 break;
@@ -938,7 +1033,7 @@ pub fn build_with(
     }
 
     let camera = Camera {
-        eye: world_from_three(Vec3::from(scene.camera.position)),
+        eye: camera_eye,
         target: world_from_three(Vec3::from(scene.camera.target)),
         fov_y_deg: scene.render.fov,
     };
@@ -1024,6 +1119,8 @@ pub fn build_with(
         gizmo_pivot,
         point_lights,
         fixture_cones,
+        fixture_shadow_capacity_hint,
+        fixture_lighting_domain,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
         beam_proxy: false,
         fixture_shadows: scene.render.fixture_shadows,
@@ -1128,5 +1225,211 @@ fn layout_of(def: &Definition, head_count: usize) -> (u32, u32) {
         (head_count as u32, 1)
     } else {
         (w, h)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    use super::*;
+    use crate::scene_desc::{CameraPose, Fixture, Mode, RenderSettings, VenueEnvironment};
+
+    fn definition(kind: &str, mode: &str, heads: usize) -> Definition {
+        Definition {
+            kind: kind.into(),
+            modes: vec![Mode {
+                name: mode.into(),
+                heads: vec![serde_json::Value::Null; heads],
+            }],
+            physical: None,
+        }
+    }
+
+    fn fixture(id: &str, path: &str, mode: &str) -> Fixture {
+        Fixture {
+            id: id.into(),
+            fixture_path: path.into(),
+            mode_name: mode.into(),
+            pos: [0.0, 0.0, 3.0],
+            rot: [0.0; 3],
+        }
+    }
+
+    fn scene(fixtures: Vec<Fixture>) -> Scene {
+        let mut render = RenderSettings::dark_stage(50.0, 1.0);
+        render.show_floor = false;
+        render.show_cables = false;
+        render.show_gizmos = false;
+        Scene {
+            id: "shadow-capacity-hint".into(),
+            times: vec![0.0],
+            camera: CameraPose {
+                position: [0.0, 5.0, 8.0],
+                target: [0.0; 3],
+            },
+            editing: false,
+            aim_arrows: false,
+            render,
+            selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
+            fixtures,
+            pieces: Vec::new(),
+            state: BTreeMap::new(),
+        }
+    }
+
+    fn library() -> Library {
+        Library::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"))
+    }
+
+    fn lit() -> PrimitiveState {
+        PrimitiveState {
+            dimmer: 1.0,
+            color: [1.0; 3],
+            strobe: 0.0,
+            position: [0.0; 2],
+            gobo: 0,
+            gobo_rotation: 0.0,
+        }
+    }
+
+    #[test]
+    fn fixture_lighting_extent_uses_sphere_union_and_exact_radial_far() {
+        let eye = Vec3::new(1.0, 2.0, 3.0);
+        let mut domain = None;
+        include_fixture_lighting_extent(&mut domain, eye, Vec3::new(4.0, 6.0, 3.0), 5.0);
+        include_fixture_lighting_extent(&mut domain, eye, Vec3::new(-2.0, 2.0, 3.0), 2.0);
+        let domain = domain.unwrap();
+        assert_eq!(domain.bounds.min, Vec3::new(-4.0, 0.0, -2.0));
+        assert_eq!(domain.bounds.max, Vec3::new(9.0, 11.0, 8.0));
+        assert_eq!(domain.fog_far, 10.0);
+        assert_eq!(domain.source_camera_eye, eye.to_array());
+        assert_ne!(
+            domain.fog_far,
+            domain
+                .bounds
+                .corners()
+                .into_iter()
+                .map(|p| eye.distance(p))
+                .fold(0.0, f32::max),
+            "radial far must not be inferred from the union AABB's loose corner"
+        );
+    }
+
+    #[test]
+    fn shadow_capacity_hint_is_independent_of_output_and_house_level() {
+        let definitions = Definitions::from([
+            ("bar.qxf".into(), definition("LED Bar (Pixels)", "Three", 3)),
+            ("par.qxf".into(), definition("Color Changer", "One", 0)),
+        ]);
+        let mut scene = scene(vec![
+            fixture("bar", "bar.qxf", "Three"),
+            fixture("par", "par.qxf", "One"),
+        ]);
+        let mut library = library();
+
+        let dark = build(&scene, &definitions, 0.0, &mut library).unwrap();
+        assert!(dark.fixture_cones.is_empty());
+        assert_eq!(dark.fixture_shadow_capacity_hint, 4);
+
+        for head in 0..3 {
+            scene.state.insert(format!("bar:{head}"), lit());
+        }
+        scene.state.insert("par:0".into(), lit());
+        let lit = build(&scene, &definitions, 0.0, &mut library).unwrap();
+        assert_eq!(lit.fixture_cones.len(), 4);
+        assert_eq!(
+            lit.fixture_shadow_capacity_hint,
+            dark.fixture_shadow_capacity_hint
+        );
+        assert_eq!(lit.fixture_lighting_domain, dark.fixture_lighting_domain);
+
+        for state in scene.state.values_mut() {
+            state.strobe = 1.0;
+        }
+        let strobed = build(&scene, &definitions, 0.09, &mut library).unwrap();
+        assert!(strobed.fixture_cones.is_empty());
+        assert_eq!(
+            strobed.fixture_shadow_capacity_hint,
+            dark.fixture_shadow_capacity_hint
+        );
+        assert_eq!(
+            strobed.fixture_lighting_domain,
+            dark.fixture_lighting_domain
+        );
+
+        scene.state.clear();
+        scene.render = RenderSettings::room(VenueEnvironment::indoor(0.0), 50.0, 1.0);
+        let house_dark = build(&scene, &definitions, 0.0, &mut library).unwrap();
+        scene.render = RenderSettings::room(VenueEnvironment::indoor(1.0), 50.0, 1.0);
+        let house_lit = build(&scene, &definitions, 0.0, &mut library).unwrap();
+        assert!(house_dark.fixture_cones.is_empty());
+        assert!(!house_lit.fixture_cones.is_empty());
+        assert_eq!(
+            house_dark.fixture_shadow_capacity_hint,
+            house_lit.fixture_shadow_capacity_hint
+        );
+        assert_eq!(
+            house_dark.fixture_lighting_domain, house_lit.fixture_lighting_domain,
+            "house geometry is independent of the house dimmer"
+        );
+    }
+
+    #[test]
+    fn shadow_capacity_hint_excludes_missing_unsupported_and_beamless_fixtures() {
+        let definitions = Definitions::from([
+            (
+                "unsupported.qxf".into(),
+                definition("Laser Projector", "One", 1),
+            ),
+            ("hazer.qxf".into(), definition("Hazer", "One", 1)),
+        ]);
+        let scene = scene(vec![
+            fixture("missing", "missing.qxf", "One"),
+            fixture("unsupported", "unsupported.qxf", "One"),
+            fixture("hazer", "hazer.qxf", "One"),
+        ]);
+        let frame = build(&scene, &definitions, 0.0, &mut library()).unwrap();
+        assert!(frame.fixture_cones.is_empty());
+        assert_eq!(frame.fixture_shadow_capacity_hint, 0);
+    }
+
+    #[test]
+    fn shadow_capacity_hint_tracks_fixture_addition_and_clamps_to_shader_limit() {
+        let definitions = Definitions::from([
+            ("par.qxf".into(), definition("Color Changer", "One", 0)),
+            ("bar.qxf".into(), definition("LED Bar (Pixels)", "Three", 3)),
+            (
+                "huge.qxf".into(),
+                definition("LED Bar (Pixels)", "Huge", MAX_FIXTURE_CONES + 1),
+            ),
+        ]);
+        let mut scene = scene(Vec::new());
+        let mut library = library();
+        assert_eq!(
+            build(&scene, &definitions, 0.0, &mut library)
+                .unwrap()
+                .fixture_shadow_capacity_hint,
+            0
+        );
+        scene.fixtures.push(fixture("par", "par.qxf", "One"));
+        assert_eq!(
+            build(&scene, &definitions, 0.0, &mut library)
+                .unwrap()
+                .fixture_shadow_capacity_hint,
+            1
+        );
+        scene.fixtures.push(fixture("bar", "bar.qxf", "Three"));
+        assert_eq!(
+            build(&scene, &definitions, 0.0, &mut library)
+                .unwrap()
+                .fixture_shadow_capacity_hint,
+            4
+        );
+        scene.fixtures.push(fixture("huge", "huge.qxf", "Huge"));
+        let capped = build(&scene, &definitions, 0.0, &mut library).unwrap();
+        assert!(capped.fixture_cones.is_empty());
+        assert_eq!(capped.fixture_shadow_capacity_hint, MAX_FIXTURE_CONES);
     }
 }

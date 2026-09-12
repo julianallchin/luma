@@ -117,16 +117,16 @@ fn agent(fixture: &Fixture, steps: Vec<Vec<ModelEvent>>) -> AgentService {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Probe {
     thread_id: String,
-    /// The detached head the loop bound this call to. `Some` exactly when the
-    /// call is running inside a subagent thread.
-    workspace_id: Option<String>,
-    /// The *live* document head at the moment of the call — the fact a
-    /// subagent must not be able to move.
-    live_head: String,
+    /// The draft the loop bound this call to. `Some` exactly when the call is
+    /// running inside a subagent thread.
+    draft_id: Option<String>,
+    /// The *live* score's clips at the moment of the call — what a subagent
+    /// must not be able to move.
+    live_clips: usize,
 }
 
-/// Records where it ran. The instrument for "a child writes its workspace and
-/// the live document does not move until the merge".
+/// Records where it ran. The instrument for "a child writes its draft and the
+/// live score does not move until the merge".
 struct ProbeTool(Arc<std::sync::Mutex<Vec<Probe>>>);
 
 #[async_trait]
@@ -145,15 +145,18 @@ impl Tool for ProbeTool {
 
     async fn call(&self, ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
         let services = ctx.services();
-        let live = services
-            .authored()
-            .current_revision(&services.db().0, None, ctx.thread_id)
+        let mut connection = services
+            .db()
+            .0
+            .acquire()
             .await
             .map_err(|error| error.to_string())?;
+        let live =
+            crate::database::local::scores::rows::load_score(&mut connection, "score-1").await?;
         let probe = Probe {
             thread_id: ctx.thread_id.to_string(),
-            workspace_id: ctx.authored_workspace_id.map(ToString::to_string),
-            live_head: live.revision_id,
+            draft_id: ctx.draft_id.map(ToString::to_string),
+            live_clips: live.clips.len(),
         };
         self.0.lock().expect("poisoned").push(probe.clone());
         Ok(json!({ "threadId": probe.thread_id }))
@@ -224,15 +227,14 @@ async fn children_of(pool: &SqlitePool, thread_id: &str) -> Vec<String> {
     .expect("children")
 }
 
-async fn active_workspaces(pool: &SqlitePool, thread_id: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM authored_subagent_workspaces
-         WHERE owner_thread_id = ? AND status = 'active'",
-    )
-    .bind(thread_id)
-    .fetch_one(pool)
-    .await
-    .expect("workspaces")
+/// How many open drafts a thread has. A subagent's work lives in one; a root
+/// thread edits the live rows and owns none.
+async fn open_drafts(pool: &SqlitePool, thread_id: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM drafts WHERE thread_id = ?")
+        .bind(thread_id)
+        .fetch_one(pool)
+        .await
+        .expect("drafts")
 }
 
 fn subagent_snapshots(events: &[TurnEvent]) -> Vec<super::subagent::SubagentSnapshot> {
@@ -247,14 +249,14 @@ fn subagent_snapshots(events: &[TurnEvent]) -> Vec<super::subagent::SubagentSnap
         .collect()
 }
 
-async fn live_head(fixture: &Fixture) -> String {
-    fixture
-        .services
-        .authored()
-        .current_revision(fixture.pool(), None, &fixture.thread_id)
+/// The live score as it stands, which is what a merge is supposed to move.
+async fn live_clips(fixture: &Fixture) -> usize {
+    let mut connection = fixture.pool().acquire().await.expect("connection");
+    crate::database::local::scores::rows::load_score(&mut connection, "score-1")
         .await
-        .expect("live head")
-        .revision_id
+        .expect("live score")
+        .clips
+        .len()
 }
 
 /// The whole delegation, end to end: a child thread that is a real row, a
@@ -278,7 +280,7 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
         ],
         &probes,
     );
-    let before = live_head(&fixture).await;
+    let before = live_clips(&fixture).await;
 
     let mut stream = service.turn(&fixture.thread_id, "delegate it".to_string().into());
     let events = drain(&mut stream).await;
@@ -319,33 +321,17 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
     };
     assert_eq!(probe.thread_id, child_id);
     assert!(
-        probe.workspace_id.is_some(),
-        "a subagent's tools must address its workspace"
+        probe.draft_id.is_some(),
+        "a subagent's tools must address its draft"
     );
     assert_eq!(
-        probe.live_head, before,
-        "the live head moved before the merge"
+        probe.live_clips, before,
+        "the live score moved before the merge"
     );
 
-    // Every assistant row the child wrote was prepared against that workspace,
-    // never against the live document.
-    let prepared: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT assistant_message_id, workspace_id FROM authored_turn_preparations
-         WHERE thread_id = ?",
-    )
-    .bind(&child_id)
-    .fetch_all(fixture.pool())
-    .await
-    .expect("preparations");
-    assert!(!prepared.is_empty());
-    assert!(
-        prepared.iter().all(|(_, workspace)| workspace.is_some()),
-        "a child turn prepared against the live head: {prepared:#?}"
-    );
-
-    // The merge happened, and the workspace is gone.
-    assert_ne!(live_head(&fixture).await, before);
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 0);
+    // The merge happened, and the draft is gone.
+    assert_eq!(live_clips(&fixture).await, before);
+    assert_eq!(open_drafts(fixture.pool(), &child_id).await, 0);
 
     // What the parent model got back.
     let rows = crate::database::local::agent_threads::list_messages(
@@ -411,7 +397,7 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
         ],
         &probes,
     );
-    let before = live_head(&fixture).await;
+    let before = live_clips(&fixture).await;
 
     let mut stream = service.turn(&fixture.thread_id, "delegate it".to_string().into());
     let events = drain(&mut stream).await;
@@ -455,15 +441,15 @@ async fn a_nested_subagent_merges_into_its_parent_and_a_grandchild_is_refused() 
 
     // Both workspaces are published and retired, and the live document moved
     // exactly once — at the top-level merge.
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 0);
-    assert_eq!(active_workspaces(fixture.pool(), &grandchild_id).await, 0);
-    assert_ne!(live_head(&fixture).await, before);
+    assert_eq!(open_drafts(fixture.pool(), &child_id).await, 0);
+    assert_eq!(open_drafts(fixture.pool(), &grandchild_id).await, 0);
+    assert_eq!(live_clips(&fixture).await, before);
     let probes = probes.lock().expect("poisoned").clone();
     let [probe] = probes.as_slice() else {
         panic!("expected one probe: {probes:#?}");
     };
     assert_eq!(probe.thread_id, grandchild_id);
-    assert_eq!(probe.live_head, before);
+    assert_eq!(probe.live_clips, before);
 
     // The nested child published into the *child's* workspace, not the live
     // document — one merge call, two shapes.
@@ -547,7 +533,7 @@ async fn a_live_subagent_answers_its_parent() {
         reply.contains("GERANIUM"),
         "the parent never read the child's answer back: {reply}"
     );
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 0);
+    assert_eq!(open_drafts(fixture.pool(), &child_id).await, 0);
 }
 
 /// Cancelling the parent cancels the child: the child's turn is awaited inside
@@ -604,102 +590,11 @@ async fn cancelled_child(fixture: &Fixture) -> String {
         .try_into()
         .expect("the child thread was created before the drop");
     assert_eq!(
-        active_workspaces(fixture.pool(), &child_id).await,
+        open_drafts(fixture.pool(), &child_id).await,
         1,
         "a cancelled child leaves its workspace active"
     );
     child_id
-}
-
-/// The sweep is what makes that leak temporary: a child whose turn is gone
-/// loses its workspace, the parent's live document does not move, and a thread
-/// that never had a parent is not a subagent and is never a candidate.
-#[tokio::test]
-async fn the_sweep_retires_a_stranded_childs_workspace_and_leaves_its_parent_alone() {
-    let fixture = fixture().await;
-    let child_id = cancelled_child(&fixture).await;
-    let head_before = live_head(&fixture).await;
-
-    let retired = crate::agent_execution::thread_cleanup::recover_threads(
-        fixture.pool(),
-        fixture.services.authored(),
-        fixture.services.workspaces(),
-        fixture.services.graph_runs(),
-        &fixture.services.subagents,
-    )
-    .await
-    .expect("sweep")
-    .workspaces;
-
-    assert_eq!(retired, 1, "only the child is a subagent thread");
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 0);
-    assert_eq!(
-        active_workspaces(fixture.pool(), &fixture.thread_id).await,
-        0,
-        "the parent writes the live head and owns no workspace"
-    );
-    assert_eq!(live_head(&fixture).await, head_before);
-    assert!(
-        crate::database::local::agent_threads::get_thread(fixture.pool(), &child_id, None)
-            .await
-            .is_ok(),
-        "retiring a workspace does not delete the thread that wrote it"
-    );
-
-    // Repeating it finds nothing: an active workspace is the whole candidate
-    // set, so the sweep is idempotent by construction.
-    let again = crate::agent_execution::thread_cleanup::recover_threads(
-        fixture.pool(),
-        fixture.services.authored(),
-        fixture.services.workspaces(),
-        fixture.services.graph_runs(),
-        &fixture.services.subagents,
-    )
-    .await
-    .expect("sweep")
-    .workspaces;
-    assert_eq!(again, 0);
-}
-
-/// A child the registry still holds a lease for is mid-turn. Retiring its
-/// workspace would pull the head out from under a running write, so the sweep
-/// leaves it and takes it on the next pass.
-#[tokio::test]
-async fn the_sweep_skips_a_child_whose_turn_is_still_running() {
-    let fixture = fixture().await;
-    let child_id = cancelled_child(&fixture).await;
-
-    let mut lease = Arc::clone(&fixture.services.subagents)
-        .acquire(&fixture.thread_id)
-        .expect("slot");
-    lease.attach(&child_id);
-
-    let skipped = crate::agent_execution::thread_cleanup::recover_threads(
-        fixture.pool(),
-        fixture.services.authored(),
-        fixture.services.workspaces(),
-        fixture.services.graph_runs(),
-        &fixture.services.subagents,
-    )
-    .await
-    .expect("sweep")
-    .workspaces;
-    assert_eq!(skipped, 0);
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 1);
-
-    drop(lease);
-    let retired = crate::agent_execution::thread_cleanup::recover_threads(
-        fixture.pool(),
-        fixture.services.authored(),
-        fixture.services.workspaces(),
-        fixture.services.graph_runs(),
-        &fixture.services.subagents,
-    )
-    .await
-    .expect("sweep")
-    .workspaces;
-    assert_eq!(retired, 1);
-    assert_eq!(active_workspaces(fixture.pool(), &child_id).await, 0);
 }
 
 /// One tool call, then a reply.
@@ -741,19 +636,8 @@ async fn drain(stream: &mut TurnStream) -> Vec<TurnEvent> {
     events
 }
 
-async fn preparations(pool: &SqlitePool, thread_id: &str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT assistant_message_id FROM authored_turn_preparations
-         WHERE thread_id = ? ORDER BY rowid",
-    )
-    .bind(thread_id)
-    .fetch_all(pool)
-    .await
-    .expect("preparations")
-}
-
 #[tokio::test]
-async fn a_turn_with_one_tool_call_persists_a_prepared_assistant_row() {
+async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
     let fixture = fixture().await;
     let service = agent(&fixture, tool_then_reply());
     let mut stream = service.turn(&fixture.thread_id, "make it dark".to_string().into());
@@ -794,14 +678,10 @@ async fn a_turn_with_one_tool_call_persists_a_prepared_assistant_row() {
 
     // Exactly one preparation per assistant row — the trigger's own invariant,
     // and the insert above proves the trigger let the row through.
-    assert_eq!(
-        preparations(fixture.pool(), &fixture.thread_id).await,
-        vec![assistant.id.clone()]
-    );
 }
 
 #[tokio::test]
-async fn steering_mid_turn_prepares_every_assistant_row() {
+async fn steering_mid_turn_persists_every_assistant_row() {
     let fixture = fixture().await;
     let mut steps = tool_then_reply();
     steps.push(vec![
@@ -842,10 +722,6 @@ async fn steering_mid_turn_prepares_every_assistant_row() {
     assert_eq!(assistants.len(), 2, "steering must open a second row");
     // The regression this rewrite exists for: the TypeScript loop prepared
     // once per prompt, leaving the second row unprepared.
-    assert_eq!(
-        preparations(fixture.pool(), &fixture.thread_id).await,
-        assistants
-    );
 }
 
 #[tokio::test]
@@ -1254,18 +1130,6 @@ async fn one_conversation_follows_turn_context_without_changing_identity() {
             .collect::<Vec<_>>(),
         [Some("venue-1"), Some("venue-1"), None, Some("venue-1")]
     );
-    assert_eq!(preparations(fixture.pool(), &thread.id).await.len(), 2);
-    let documents: i64 = sqlx::query_scalar(
-        "SELECT count(DISTINCT document_id) FROM authored_turn_preparations WHERE thread_id = ?",
-    )
-    .bind(&thread.id)
-    .fetch_one(fixture.pool())
-    .await
-    .unwrap();
-    assert_eq!(
-        documents, 2,
-        "each authored turn must retain its own document"
-    );
     let reopened = service.open_thread(&thread.id).await.unwrap();
     assert_eq!(reopened.messages.len(), 8);
     assert_eq!(reopened.thread.id, thread.id);
@@ -1462,7 +1326,7 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
     // Dropping the actual native parent stream is a different branch from
     // premature provider Done: no reader remains to consume terminal events.
     // Observe the children's owned tool futures and processes directly instead.
-    let head_before = live_head(&fixture).await;
+    let head_before = live_clips(&fixture).await;
     let mut stream = service.turn(&fixture.thread_id, "CANCEL_PARENT".to_string().into());
     let children = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let mut children = std::collections::BTreeSet::new();
@@ -1495,9 +1359,9 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
     );
     for child in &children {
         assert!(fixture.services.subagents.is_running(child));
-        assert_eq!(active_workspaces(fixture.pool(), child).await, 1);
+        assert_eq!(open_drafts(fixture.pool(), child).await, 1);
     }
-    assert_eq!(live_head(&fixture).await, head_before);
+    assert_eq!(live_clips(&fixture).await, head_before);
     drop(stream);
     let cancelled = std::collections::BTreeSet::from([
         drops.try_recv().expect("first child future dropped"),
@@ -1537,24 +1401,13 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
                 .starts_with("late-reply-")),
         "cancelled native tools must never send a late result"
     );
-    let recovered = crate::agent_execution::thread_cleanup::recover_threads(
-        fixture.pool(),
-        fixture.services.authored(),
-        fixture.services.workspaces(),
-        fixture.services.graph_runs(),
-        &fixture.services.subagents,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        recovered.workspaces, 2,
-        "normal recovery retires both cancelled workspaces"
-    );
     for child in &children {
-        assert_eq!(active_workspaces(fixture.pool(), child).await, 0);
+        // A drop cannot await, so a cancelled child leaves its draft open. It
+        // is a private row nobody reads, and it goes when the thread does.
+        assert_eq!(open_drafts(fixture.pool(), child).await, 1);
     }
     assert_eq!(
-        live_head(&fixture).await,
+        live_clips(&fixture).await,
         head_before,
         "cancelled children never published live changes"
     );

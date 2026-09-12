@@ -13,7 +13,9 @@ use ts_rs::TS;
 pub struct AgentThread {
     pub id: String,
     /// The authenticated account that owns this local thread. `None` belongs
-    /// exclusively to the signed-out principal.
+    /// exclusively to rows that predate sign-in. Stored as `uid`, like every
+    /// other synced table's owner column; the wire name stays `ownerUserId`.
+    #[sqlx(rename = "uid")]
     pub owner_user_id: Option<String>,
     /// 'track_copilot' | 'pattern_graph'
     pub agent_kind: String,

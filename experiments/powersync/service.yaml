@@ -1,0 +1,29 @@
+# PowerSync service config for the disposable stack in run.py.
+# PowerSync Cloud is configured through its dashboard; only the sync rules in
+# deploy/sync-rules.yaml are shared between the two.
+replication:
+  connections:
+    - type: postgresql
+      uri: postgresql://powersync_role:row-model-test-only@luma-rows-postgres:5432/luma_rows
+      sslmode: disable
+storage:
+  type: postgresql
+  uri: postgresql://postgres:row-model-test-only@luma-rows-postgres:5432/powersync_storage
+  sslmode: disable
+port: 8080
+sync_rules:
+  path: /config/sync-rules.yaml
+client_auth:
+  audience: [authenticated]
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        kid: luma-row-model-test
+        k: bHVtYS1yb3ctbW9kZWwtdGVzdC1zZWNyZXQtbm90LWZvci1wcm9kdWN0aW9u
+telemetry:
+  disable_telemetry_sharing: true
+system:
+  logging:
+    level: warn
+    format: text

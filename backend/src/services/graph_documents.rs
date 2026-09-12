@@ -256,7 +256,8 @@ impl GraphLayoutFileV1 {
 pub struct GraphScope {
     pub pattern_id: String,
     pub implementation_id: String,
-    /// Trusted current principal. `None` owns only local signed-out patterns.
+    /// Trusted current principal. A write needs one; see
+    /// `AppServices::require_session`.
     pub owner_user_id: Option<String>,
 }
 
@@ -361,16 +362,6 @@ struct ImplementationRow {
     id: String,
     name: Option<String>,
     graph_json: String,
-}
-
-/// The score codec depends on a pattern's public argument interface, not its
-/// executable graph internals. Deserializing this narrow projection lets a
-/// score remain authorable when a legacy implementation contains stale nodes
-/// or edges, while malformed argument definitions still fail closed.
-#[derive(Deserialize)]
-struct PatternInterface {
-    #[serde(default)]
-    args: Vec<PatternArgDef>,
 }
 
 /// Resolve the implementation a caller intends to use, before entering the
@@ -549,24 +540,6 @@ fn canonical_graph_order(graph: &Graph) -> Graph {
             .then(left.from_port.cmp(&right.from_port))
     });
     graph
-}
-
-/// Validate and deterministically order the public argument interface of a
-/// pattern independently from the implementation graph that consumes it.
-pub(crate) fn canonicalize_pattern_args(
-    args: &[PatternArgDef],
-) -> Result<Vec<PatternArgDef>, GraphDocumentError> {
-    let mut issues = Vec::new();
-    validate_pattern_args(args, &mut issues);
-    issues.sort();
-    issues.dedup();
-    if !issues.is_empty() {
-        return Err(GraphDocumentError::Invalid { issues });
-    }
-
-    let mut args = args.to_vec();
-    args.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(args)
 }
 
 /// Revision of the exact authored graph, including layout coordinates.
@@ -1062,14 +1035,6 @@ pub async fn load_graph_document_unscoped(
     load_document(&mut connection, pattern_id, implementation_id).await
 }
 
-pub(crate) async fn load_pattern_interface_for_connection(
-    connection: &mut SqliteConnection,
-    pattern_id: &str,
-    implementation_id: &str,
-) -> Result<Vec<PatternArgDef>, GraphDocumentError> {
-    load_pattern_interface(connection, pattern_id, implementation_id).await
-}
-
 /// Transaction-local exact-implementation read for compound authored
 /// operations such as pattern fork. The caller owns the surrounding SQLite
 /// snapshot, so pattern metadata and graph bytes cannot come from different
@@ -1082,9 +1047,8 @@ pub(crate) async fn load_unscoped_graph_document_for_connection(
     load_document(connection, pattern_id, implementation_id).await
 }
 
-/// Test harness for exercising the in-transaction projector in isolation.
-#[cfg(test)]
-async fn apply_graph_edit(
+/// Apply a graph edit in its own transaction.
+pub async fn apply_graph_edit(
     pool: &SqlitePool,
     scope: &GraphScope,
     plan: GraphEditPlan,
@@ -1216,39 +1180,6 @@ async fn load_document(
         revision,
         graph,
     })
-}
-
-async fn load_pattern_interface(
-    connection: &mut SqliteConnection,
-    pattern_id: &str,
-    implementation_id: &str,
-) -> Result<Vec<PatternArgDef>, GraphDocumentError> {
-    let graph_json = sqlx::query_scalar::<_, String>(
-        "SELECT graph_json FROM implementations WHERE id = ? AND pattern_id = ?",
-    )
-    .bind(implementation_id)
-    .bind(pattern_id)
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(|error| GraphDocumentError::storage(format!("load pattern interface: {error}")))?
-    .ok_or_else(|| GraphDocumentError::Scope {
-        message: format!(
-            "implementation {implementation_id} does not belong to pattern {pattern_id}"
-        ),
-    })?;
-    if graph_json.len() > MAX_GRAPH_JSON_BYTES {
-        return Err(GraphDocumentError::invalid(
-            "graph_json",
-            format!("graph exceeds {MAX_GRAPH_JSON_BYTES} encoded bytes"),
-        ));
-    }
-    let interface: PatternInterface = serde_json::from_str(&graph_json).map_err(|error| {
-        GraphDocumentError::invalid(
-            "graph_json",
-            format!("stored pattern interface is corrupt: {error}"),
-        )
-    })?;
-    canonicalize_pattern_args(&interface.args)
 }
 
 async fn implementation_rows(
@@ -1696,20 +1627,13 @@ mod tests {
     }
 
     #[test]
-    fn historical_file_decode_and_typed_merge_do_not_use_the_live_catalog() {
+    fn a_historical_file_decodes_without_the_live_catalog() {
         let base = file_round_trip(&catalog_unknown_graph(0.0));
-        let ours = file_round_trip(&catalog_unknown_graph(1.0));
-        let theirs = file_round_trip(&catalog_unknown_graph(0.0));
-
         assert!(validate_graph_structure(&base).is_ok());
         assert!(validate_graph(&base).unwrap_err().iter().any(|issue| {
             issue.path == "nodes[0].typeId" && issue.message.contains("unknown node type")
         }));
-        let merged = crate::services::authored_merge::merge_graphs(&base, &ours, &theirs)
-            .into_result()
-            .unwrap();
-        assert_eq!(merged.nodes[0].params["amount"].as_f64(), Some(1.0));
-        assert_eq!(merged.nodes[0].type_id, "retired_node_type");
+        assert_eq!(base.nodes[0].type_id, "retired_node_type");
     }
 
     #[test]

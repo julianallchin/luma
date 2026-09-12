@@ -105,48 +105,46 @@ pub async fn get_or_create_share_code(
     Ok(code)
 }
 
-/// Join a venue by share code. Creates a local venue with `role='member'`.
+/// Join a venue by its share code.
 ///
-/// Fixtures, groups and tracks are not pulled here — the frontend fires
-/// `sync_full` after joining.
+/// The membership is written on the server: an ordinary client may not insert
+/// a row into a venue it cannot yet see, so `public.join_venue` is a `security
+/// definer` function. Nothing is written locally — the membership, the venue
+/// and everything in it arrive by download, which is also what makes a retried
+/// join harmless. This waits for the venue row so the caller has something to
+/// open.
 pub async fn join_venue(services: &AppServices, code: String) -> Result<Venue, CommandError> {
-    let auth = current_auth(services).await?;
-
-    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    let venue_row = client
-        .rpc::<RemoteVenueRow>(
-            "join_venue_by_code",
-            &JoinByCodeParams { code: &code },
-            &auth.access_token,
-        )
+    let venue_id = crate::sync::connector::join_venue(&services.state_db.0, &code)
         .await
-        .map_err(|e| CommandError::Internal(format!("Failed to join venue: {e}")))?;
-
-    let owner_uid = venue_row
-        .uid
-        .as_deref()
-        .ok_or_else(|| CommandError::Internal("Venue has no owner uid".to_string()))?;
-
-    // `uid` is the OWNER's, not the joiner's — `is_owner()` is decided by
-    // `role`, and the cloud UUID becomes the local id directly.
-    Ok(venues_db::insert_joined_venue(
-        &services.db.0,
-        &venue_row.id,
-        owner_uid,
-        &venue_row.name,
-        venue_row.description.as_deref(),
-        None,
-        &auth.principal.user_id,
-    )
-    .await?)
+        .map_err(CommandError::Internal)?;
+    let deadline = std::time::Instant::now() + JOIN_DOWNLOAD_TIMEOUT;
+    loop {
+        if let Ok(mut access) =
+            VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await
+        {
+            if let Ok(venue) = venues_db::get_venue(&mut access).await {
+                return Ok(venue);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(CommandError::Internal(format!(
+                "joined {venue_id}, but it has not arrived on this device yet"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
-/// Leave a venue: remove the membership locally and in the cloud. The venue row
-/// survives if other memberships remain.
+/// How long a join waits for the venue it just joined to download. Generous:
+/// the alternative is telling the user the join failed when it did not.
+const JOIN_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Leave a venue: delete the local membership row. The upload carries the
+/// delete to the server, and the venue's rows leave on the next checkpoint
+/// because they are no longer in this account's bucket.
 ///
 /// Ordering is load-bearing — ownership check, drop the read transaction, then
-/// the network call, so no transaction is held across IO. The cloud delete is
-/// best-effort, so a local-left/cloud-still-member state is tolerated.
+/// the write.
 pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(), CommandError> {
     let pool = &services.db.0;
     let mut read_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
@@ -158,24 +156,8 @@ pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(),
     }
     drop(read_access);
 
-    let auth = current_auth(services).await?;
-    let client = SupabaseClient::new(SUPABASE_URL.to_string(), SUPABASE_ANON_KEY.to_string());
-    if let Err(e) = client
-        .delete_by_filter(
-            "venue_members",
-            &format!(
-                "venue_id=eq.{}&user_id=eq.{}",
-                venue_id, auth.principal.user_id
-            ),
-            &auth.access_token,
-        )
-        .await
-    {
-        eprintln!("[leave_venue] Failed to remove cloud membership: {e}");
-    }
-
-    venues_db::remove_current_venue_membership(pool, &venue_id, &auth.principal.user_id).await?;
-
+    let principal = services.require_session().await?;
+    venues_db::remove_current_venue_membership(pool, &venue_id, &principal).await?;
     Ok(())
 }
 
@@ -223,17 +205,3 @@ fn generate_share_code() -> String {
         .collect()
 }
 
-/// Venue row returned from Supabase RPC
-#[derive(serde::Deserialize)]
-struct RemoteVenueRow {
-    id: String,
-    uid: Option<String>,
-    name: String,
-    description: Option<String>,
-}
-
-/// Params for join_venue_by_code RPC
-#[derive(serde::Serialize)]
-struct JoinByCodeParams<'a> {
-    code: &'a str,
-}

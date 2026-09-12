@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::fixtures::PatchedFixture;
 
@@ -200,7 +200,7 @@ pub async fn update_fixture_label(
 
 pub async fn delete_fixture(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let deleted = sync_delete::delete_synced_where(
+    let deleted = deletes::delete_where(
         access.connection(),
         "fixtures",
         "id = ? AND venue_id = ?",

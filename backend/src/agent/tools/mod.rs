@@ -62,7 +62,7 @@ pub struct ToolContext<'a> {
     pub execution_id: Option<&'a str>,
     /// A detached authored document this call may write. `None` writes the
     /// thread's own.
-    pub authored_workspace_id: Option<&'a str>,
+    pub draft_id: Option<&'a str>,
     /// What the agent is looking at, resolved from the thread — never asserted
     /// by the model.
     pub scope: &'a PythonScopeInput,

@@ -1,7 +1,7 @@
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::database::local::sync_delete;
+use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
@@ -175,7 +175,7 @@ pub async fn update_group(
 /// Delete a collection and its memberships; physical fixtures remain.
 pub async fn delete_group(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let deleted = sync_delete::delete_synced_where(
+    let deleted = deletes::delete_where(
         access.connection(),
         "fixture_groups",
         "id = ? AND venue_id = ?",
@@ -208,7 +208,7 @@ pub async fn add_member_to_group(
     require_fixture_and_group(access, fixture_id, group_id).await?;
     if head_index == WHOLE_FIXTURE {
         // Whole-fixture membership subsumes any per-head rows.
-        sync_delete::delete_synced_where(
+        deletes::delete_where(
             access.connection(),
             "fixture_group_members",
             "fixture_id = ? AND group_id = ? AND head_index != ?",
@@ -247,11 +247,13 @@ pub async fn add_member_to_group(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT OR IGNORE INTO fixture_group_members (id, uid, fixture_id, group_id, head_index, display_order)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO fixture_group_members
+             (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(access.principal().map(str::to_owned))
+    .bind(access.venue_id().to_owned())
     .bind(fixture_id)
     .bind(group_id)
     .bind(head_index)
@@ -275,7 +277,7 @@ pub async fn remove_member_from_group(
     require_fixture_and_group(access, fixture_id, group_id).await?;
     let result = match head_index {
         None => {
-            sync_delete::delete_synced_where(
+            deletes::delete_where(
                 access.connection(),
                 "fixture_group_members",
                 "fixture_id = ? AND group_id = ?",
@@ -284,7 +286,7 @@ pub async fn remove_member_from_group(
             .await
         }
         Some(h) => {
-            sync_delete::delete_synced_where(
+            deletes::delete_where(
                 access.connection(),
                 "fixture_group_members",
                 "fixture_id = ? AND group_id = ? AND head_index = ?",
@@ -323,7 +325,7 @@ pub async fn split_whole_fixture_membership(
         return Ok(false);
     };
 
-    sync_delete::delete_synced_where(
+    deletes::delete_where(
         access.connection(),
         "fixture_group_members",
         "fixture_id = ? AND group_id = ? AND head_index = ?",
@@ -334,11 +336,13 @@ pub async fn split_whole_fixture_membership(
 
     for &h in keep_heads {
         sqlx::query(
-            "INSERT OR IGNORE INTO fixture_group_members (id, uid, fixture_id, group_id, head_index, display_order)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO fixture_group_members
+                 (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(access.principal().map(str::to_owned))
+        .bind(access.venue_id().to_owned())
         .bind(fixture_id)
         .bind(group_id)
         .bind(h)

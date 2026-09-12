@@ -2,7 +2,7 @@
 //! See experiments/haze-lab.md. This tool never reads or writes the library DB.
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
-use luma_render::{assets::Library, build_frame, frame::Camera, Catalogue, Renderer};
+use luma_render::{assets::Library, build_frame, coords::three_from_world, Catalogue, Renderer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -77,26 +77,24 @@ impl ReplayInputs {
             .parent()
             .unwrap_or(Path::new("."))
             .join(&suite.catalogue);
-        let catalogue = Catalogue::load(&catalogue_path)?;
+        let mut catalogue = Catalogue::load(&catalogue_path)?;
         let mut library = library();
         let mut frames = Vec::new();
         for case in &suite.cases {
             let scene = catalogue
                 .scenes
-                .iter()
+                .iter_mut()
                 .find(|scene| scene.id == case.scene)
                 .with_context(|| format!("missing scene {}", case.scene))?;
             anyhow::ensure!(
                 scene.times == [case.time],
                 "score snapshot does not match replay time"
             );
+            scene.camera.position = three_from_world(Vec3::from_array(case.eye)).to_array();
+            scene.camera.target = three_from_world(Vec3::from_array(case.target)).to_array();
+            scene.render.fov = case.fov;
             let started = Instant::now();
             let mut frame = build_frame(scene, &catalogue.definitions, case.time, &mut library)?;
-            frame.camera = Camera {
-                eye: Vec3::from_array(case.eye),
-                target: Vec3::from_array(case.target),
-                fov_y_deg: case.fov,
-            };
             frame.haze_resolution = luma_render::LIVE_HAZE_RESOLUTION;
             frames.push((frame, started.elapsed().as_secs_f64() * 1000.0));
         }
@@ -176,10 +174,12 @@ fn replay(suite_path: &Path, output: &Path) -> Result<()> {
                 "driver":renderer.gpu().adapter_profile().driver_info,
                 "backend":renderer.gpu().adapter_profile().backend},
             "environment":capture_environment(),
+            "fogVisibilityCache":renderer.fog_visibility_cache_stats()?,
             "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
             "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
                 && std::env::var_os("LUMA_PROFILE_REPEAT").is_none()
-                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1"),
+                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1")
+                && !std::env::var_os("LUMA_FOG_VISIBILITY_ASSERT").is_some_and(|v| v == "1"),
             "note":"Offscreen production rendering of successive saved-score states. State evaluation and frame assembly occur before warmup; build_ms is reported separately. Each PNG is the same frame as its timing. PNG encoding occurs after all submissions. GPU timestamps exclude readback and presentation; blocking wall includes CPU submission, GPU completion and readback. This is not sustained presented FPS.",
             "frames":rows
         }),
@@ -205,6 +205,8 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
         "LUMA_FOG_TILE_SIZE",
         "LUMA_FOG_DEPTH_CULL",
         "LUMA_FOG_BLOCKS",
+        "LUMA_FOG_VISIBILITY_CACHE",
+        "LUMA_FOG_VISIBILITY_ASSERT",
         "LUMA_GEOMETRY_SHADOW_SAMPLES",
         "LUMA_SURFACE_T_SOURCE",
         "LUMA_HAZE_QUADSHARE",
@@ -218,12 +220,26 @@ fn capture_environment() -> std::collections::BTreeMap<&'static str, String> {
         "LUMA_HAZE_COMPACT",
         "LUMA_HAZE_RESID_AFTER",
         "LUMA_HAZE_RESID_CAP",
-        "LUMA_HAZE_RESID_SPLIT",
         "LUMA_HAZE_RESID_STAGE",
         "LUMA_HAZE_RESID_LANES",
+        "LUMA_HAZE_RESID_MAX_AGE_MS",
+        "LUMA_HAZE_RESID_TEMPORAL",
+        "LUMA_HAZE_RESID_PER_RESIDENT",
+        "LUMA_HAZE_VENUE_DOMAIN",
+        "LUMA_HAZE_LIGHTING_DOMAIN",
+        "LUMA_HAZE_WHOLE_K_MB",
+        "LUMA_HAZE_DIRECT_ARENA_MB",
         "LUMA_HAZE_SCENE_LATE",
         "LUMA_HAZE_COMPACT_LATE",
         "LUMA_HAZE_LIST_REUSE",
+        "LUMA_HAZE_COMPACT_RESERVE_HINT",
+        "LUMA_INTERVAL_RETAIN_INACTIVE",
+        "LUMA_INTERVAL_CACHE_TABLE_BITS",
+        "LUMA_INTERVAL_CACHE",
+        "LUMA_INTERVAL_CACHE_PAYLOAD",
+        "LUMA_INTERVAL_CACHE_UNIFY",
+        "LUMA_INTERVAL_CACHE_SKIP_RESIDUAL",
+        "LUMA_INTERVAL_CACHE_ALL_OFF",
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
@@ -375,7 +391,7 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         .parent()
         .unwrap_or(Path::new("."))
         .join(&suite.catalogue);
-    let catalogue = Catalogue::load(&catalogue_path)?;
+    let mut catalogue = Catalogue::load(&catalogue_path)?;
     fs::create_dir_all(output)?;
     let mut library = library();
     let mut selected = 0;
@@ -387,15 +403,13 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         selected += 1;
         let scene = catalogue
             .scenes
-            .iter()
+            .iter_mut()
             .find(|s| s.id == case.scene)
             .context("missing scene")?;
+        scene.camera.position = three_from_world(Vec3::from_array(case.eye)).to_array();
+        scene.camera.target = three_from_world(Vec3::from_array(case.target)).to_array();
+        scene.render.fov = case.fov;
         let mut frame = build_frame(scene, &catalogue.definitions, case.time, &mut library)?;
-        frame.camera = Camera {
-            eye: case.eye.into(),
-            target: case.target.into(),
-            fov_y_deg: case.fov,
-        };
         if mode == "no-haze" {
             frame.haze_density = 0.0;
         }
@@ -472,22 +486,38 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 work["probe"] = json!("still-7");
                 work["intervalCache"] = serde_json::to_value(renderer.interval_cache_stats())?;
                 work["compact"] = serde_json::to_value(renderer.compact_stats())?;
+                work["fogVisibilityCache"] =
+                    serde_json::to_value(renderer.fog_visibility_cache_stats()?)?;
                 write_json(&dir.join("work-counts-still.json"), &work)?;
             }
             if let Some(counts) = renderer.fog_grid_counts()? {
                 let names = [
-                    "cells", "visibility_calls", "calls_reference_layer", "cell_proven_lit",
-                    "cell_proven_shadowed", "cell_fallback", "union_proven_lit",
-                    "union_proven_shadowed", "union_unproven", "union_unproven_cell_proven",
-                    "union_proven_cell_unproven", "light_iterations", "block_visible_skips",
-                    "cells_depth_culled", "cells_span_culled", "quad_calls_z0",
+                    "cells",
+                    "visibility_calls",
+                    "calls_reference_layer",
+                    "cell_proven_lit",
+                    "cell_proven_shadowed",
+                    "cell_fallback",
+                    "union_proven_lit",
+                    "union_proven_shadowed",
+                    "union_unproven",
+                    "union_unproven_cell_proven",
+                    "union_proven_cell_unproven",
+                    "light_iterations",
+                    "block_visible_skips",
+                    "cells_depth_culled",
+                    "cells_span_culled",
+                    "quad_calls_z0",
                 ];
                 let mut out = serde_json::Map::new();
                 for (name, value) in names.iter().zip(counts) {
                     out.insert((*name).to_string(), json!(value));
                 }
                 out.insert("probe".into(), json!("still-7"));
-                write_json(&dir.join("fog-grid-counts.json"), &serde_json::Value::Object(out))?;
+                write_json(
+                    &dir.join("fog-grid-counts.json"),
+                    &serde_json::Value::Object(out),
+                )?;
             }
             // Diagnostic copy runs after all timed frames, with their camera.
             if std::env::var_os("LUMA_FOG_BLOCK_STATS").is_some_and(|v| v == "1") {
@@ -550,6 +580,8 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
             work["shadowedFixtures"] = json!(renderer.shadowed_fixture_count());
             work["intervalCache"] = serde_json::to_value(renderer.interval_cache_stats())?;
             work["compact"] = serde_json::to_value(renderer.compact_stats())?;
+            work["fogVisibilityCache"] =
+                serde_json::to_value(renderer.fog_visibility_cache_stats()?)?;
             write_json(&dir.join("work-counts.json"), &work)?;
         }
         // Explicit update probes run after every quality capture and frozen
@@ -598,10 +630,12 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
             &dir.join("capture.json"),
             &json!({"case":case,"mode":mode,"size":[suite.width,suite.height],
             "adapter":{"name":renderer.gpu().adapter_profile().name,"driver":renderer.gpu().adapter_profile().driver_info,"backend":renderer.gpu().adapter_profile().backend},"sourceCatalogue":suite.catalogue,
+            "fogVisibilityCache":renderer.fog_visibility_cache_stats()?,
             "qualityReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none(),
             "performanceReferenceEligible":std::env::var_os("LUMA_PROFILE_OMIT").is_none()
                 && std::env::var_os("LUMA_PROFILE_REPEAT").is_none()
-                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1"),
+                && !std::env::var_os("LUMA_HAZE_WORK_COUNTS").is_some_and(|v| v == "1")
+                && !std::env::var_os("LUMA_FOG_VISIBILITY_ASSERT").is_some_and(|v| v == "1"),
             "settings":{"hazeResolution":frame.haze_resolution,"hazeSteps":frame.haze_steps,"density":frame.haze_density,"appearance":frame.haze_appearance,"geometryShadows":frame.geometry_shadows,"fixtureShadows":frame.fixture_shadows,"referenceSubframes":reference_samples,"liveSubframes":luma_render::LIVE_SUBFRAMES},
             "environment":capture_environment(),
             "note":"Reference converges current transport with full-resolution all-light integration; not an independent physical ground truth. GPU timings use the live path and exclude GPUI/presentation/readback waits. wall_ms includes CPU submission, the complete GPU queue, pixel/query readback and blocking completion; it is not displayed FPS.","frames":timings}),

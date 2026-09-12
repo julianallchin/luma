@@ -73,6 +73,17 @@ impl From<crate::database::local::auth::AuthError> for SyncError {
     }
 }
 
+impl From<crate::database::remote::common::SyncError> for SyncError {
+    fn from(error: crate::database::remote::common::SyncError) -> Self {
+        use crate::database::remote::common::SyncError as Remote;
+        match error {
+            Remote::RequestFailed(message) => SyncError::Network(message),
+            Remote::ApiError { status, message } => SyncError::Api { status, message },
+            Remote::ParseError(message) => SyncError::Parse(message),
+        }
+    }
+}
+
 impl From<SyncError> for String {
     fn from(e: SyncError) -> String {
         e.to_string()

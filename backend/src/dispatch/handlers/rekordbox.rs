@@ -75,7 +75,7 @@ pub async fn rekordbox_import_tracks(
 ) -> Result<TrackImportResult, CommandError> {
     let import_id = uuid::Uuid::new_v4().to_string();
     let source = "rekordbox";
-    let principal = services.session_user_id().await?;
+    let principal = Some(services.require_session().await?);
     let epoch = services.analysis_tasks.current_epoch()?;
     let lease = services.analysis_tasks.lease(epoch)?;
     let guard = lease.guard();

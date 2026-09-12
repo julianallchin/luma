@@ -246,8 +246,6 @@ pub async fn render_composite_deck(
             &services.fixtures_root,
             &score.id,
             None,
-            None,
-            false,
         )
         .await?;
         annotations.extend(scene.annotations);

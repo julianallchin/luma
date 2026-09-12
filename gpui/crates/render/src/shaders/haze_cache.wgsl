@@ -187,9 +187,9 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
     return sum;
 }
 
-// The shared-quad integral for one whole-lit pair. All four quad lanes reach
-// both shuffles: the decision to come here is quad-uniform.
-fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
+// The scalar shared by one 2x2 quad. All four quad lanes must execute the
+// original Gauss-node work and both reductions in this exact order.
+fn quad_shared_scalar(li: u32, ray: SceneRay, span: vec2<f32>) -> f32 {
     var shared_ray = ray;
     var shared_span = span;
     if QUADSHARE == 1u {
@@ -201,7 +201,6 @@ fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
             shared_span = s * 0.25;
             shared_span.y = min(shared_span.y, quad_hit_min);
         } else {
-            // `quad_ray.hit_dist` is hit_min, so this span already ends there.
             shared_span = beam_span(li, quad_ray);
         }
     } else {
@@ -210,14 +209,14 @@ fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
     var sum = lit_interval_node(li, shared_ray, shared_span.x, shared_span.y, quad_j);
     sum += subgroupShuffleXor(sum, 1u);
     sum += subgroupShuffleXor(sum, 8u);
+    return sum;
+}
+
+// Current-frame neighbour gates remain outside K. A cached and a newly
+// computed scalar therefore share exactly the same interpolation arithmetic.
+fn quad_interpolate_scalar(sum_in: f32) -> f32 {
+    var sum = sum_in;
     if QUADSHARE == 1u && QUAD_INTERP != 0u && QUAD_UNIFORM != 0u {
-        // Neighbour quads: lane ^2 is the quad beside this one (to the right
-        // for an even quad column, to the left for an odd one) and lane ^16
-        // the quad above or below (the block's other quad row). Only the
-        // pixel on the side facing that neighbour blends with it, at the
-        // bilinear weight 1/4 (0.5 px from its own centre, 1.5 px from the
-        // neighbour's); the pixel on the far side has no in-block neighbour
-        // on its side and keeps its own quad.
         let x = cache_lane & 7u;
         let y = cache_lane >> 3u;
         let wx = select(0.0, 0.25, ((x >> 1u) & 1u) != (x & 1u));
@@ -238,14 +237,29 @@ fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
         let w_o = (1.0 - wx) * (1.0 - wy);
         sum = (w_o * sum + w_h * sh + w_v * sv + w_d * sd) / (w_o + w_h + w_v + w_d);
     }
+    return sum;
+}
+
+fn quad_scale_shared(li: u32, sum: f32) -> vec3<f32> {
     let rest = light_rest[li];
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-    var result = tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
-    // Own-ray remainder behind the quad's nearest hit: exact at silhouettes.
+    return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
+}
+
+// Current output preserves the original conditional add: a clean lane does
+// not execute an extra `result += vec3(0)` operation.
+fn quad_scatter_from_shared(li: u32, ray: SceneRay, span: vec2<f32>, shared_k: f32) -> vec3<f32> {
+    var result = quad_scale_shared(li, quad_interpolate_scalar(shared_k));
     if QUAD_DIAG != 4u && ray.hit_dist - quad_hit_min > max(QUAD_GATE_M, quad_hit_min * QUAD_GATE_FRAC) && span.y > quad_hit_min {
+        // Full RGB path. The hot module explicitly bakes RESID_SCALAR_K=false.
         result += lit_interval(li, ray, max(span.x, quad_hit_min), span.y);
     }
     return result;
+}
+
+// The ordinary path remains the arithmetic oracle.
+fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
+    return quad_scatter_from_shared(li, ray, span, quad_shared_scalar(li, ray, span));
 }
 
 fn cache_ballot(whole: bool) -> u32 { return subgroupBallot(whole).x; }
@@ -277,14 +291,21 @@ fn cache_entry_live(entry: u32) -> bool {
     return (mode & 0xFFu) != 0u && (mode >> 8u) == cache_table[base];
 }
 
+// A compact residual payload may retain this raw table index while its light
+// is inactive. Another light can reclaim a dead way in the meantime, so a
+// retained descriptor is replayable only while the published claim and body
+// still identify its current block, slot lane and generation.
+fn cache_entry_matches(entry: u32, block: u32, key: u32, gen: u32) -> bool {
+    if (atomicLoad(&cache_claims[entry]) & 0xFFFFFu) != block + 1u { return false; }
+    let base = entry * CACHE_ENTRY_WORDS;
+    return cache_table[base] == gen && (cache_table[base + 1u] & 0xFFFFu) == key;
+}
+
 fn cache_find(block: u32, key: u32, gen: u32) -> u32 {
     let bucket = (cache_hash(block, key) & cache_params.params.y) * CACHE_WAYS;
     for (var way = 0u; way < CACHE_WAYS; way += 1u) {
         let entry = bucket + way;
-        if (atomicLoad(&cache_claims[entry]) & 0xFFFFFu) == block + 1u {
-            let base = entry * CACHE_ENTRY_WORDS;
-            if cache_table[base] == gen && (cache_table[base + 1u] & 0xFFFFu) == key { return entry; }
-        }
+        if cache_entry_matches(entry, block, key, gen) { return entry; }
     }
     return CACHE_NONE;
 }
@@ -486,4 +507,3 @@ fn cache_locate(pixel: vec2<u32>, lane: u32) {
     cache_by = pixel.y / HAZE_GROUP_Y;
     cache_block = cache_by * cache_params.params.x + cache_bx;
 }
-
