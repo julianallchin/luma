@@ -268,6 +268,10 @@ pub struct AppServices {
     /// the desktop app, where identity resolves from the verified state
     /// database and the app-database admission gate instead.
     pub(crate) fixture_principal: Option<String>,
+    /// Record replication, when this host started it. `None` is a local-only
+    /// process — a test, or a build with no PowerSync instance configured —
+    /// and every command still works; only `sync_status` has less to say.
+    pub(crate) sync: Option<crate::sync::service::Service>,
 }
 
 /// An owning handle to services whose [`TurnRegistry`] can reach them again.
@@ -366,7 +370,16 @@ impl AppServices {
             events: Events::discard(),
             host: HostControl::process_exit(),
             fixture_principal: None,
+            sync: None,
         }
+    }
+
+    /// Attach the running record replication. The host starts it, because the
+    /// host owns the reactor the SDK's tasks live on.
+    #[must_use]
+    pub fn with_sync(mut self, sync: crate::sync::service::Service) -> Self {
+        self.sync = Some(sync);
+        self
     }
 
     /// Resume stale or interrupted analysis after the desktop's Python setup.
@@ -508,8 +521,7 @@ impl AppServices {
 
     /// What media transfer reaches outside its own handles. Derived from these
     /// fields rather than stored, so the two cannot drift.
-    #[allow(dead_code)] // Media transfer is reconnected in phase two.
-    pub(crate) fn sync_host(&self) -> SyncHost {
+    pub fn sync_host(&self) -> SyncHost {
         SyncHost {
             storage: self.storage.clone(),
             events: self.events.clone(),
@@ -526,6 +538,25 @@ impl AppServices {
             Some(principal) => Ok(Some(principal.clone())),
             None => Ok(auth::admitted_principal(&self.db.0).await?),
         }
+    }
+
+    /// The owner every synced row is written under.
+    ///
+    /// Sync is not optional and neither is identity: a synced table's `uid` is
+    /// who the row belongs to, and there is no such person while nobody is
+    /// signed in. A command that writes one asks here, and the answer is either
+    /// a principal or a refusal the user can act on — the shell's sign-in
+    /// screen. Reads do not go through this; a signed-out app can still open
+    /// the library it already has.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Unauthorized`] when no session exists, and
+    /// [`CommandError::Internal`] if the gate cannot be read.
+    pub async fn require_session(&self) -> Result<String, CommandError> {
+        self.admitted_principal().await?.ok_or_else(|| {
+            CommandError::Unauthorized("Sign in to Luma before changing anything".to_string())
+        })
     }
 }
 

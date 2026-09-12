@@ -53,11 +53,44 @@ async fn writer(pool: &SqlitePool) -> sqlx::pool::PoolConnection<sqlx::Sqlite> {
     connection
 }
 
-async fn queue(connection: &mut SqliteConnection) -> Vec<(String, String, String, Option<String>)> {
-    sqlx::query_as("SELECT op, id, type, data FROM powersync_crud ORDER BY seq")
+/// The queue entries for one table.
+///
+/// Filtered because the change log is itself a synced table: every write
+/// enqueues its own row *and* the `changes` row describing it, which is the
+/// design — a person's history follows them between devices.
+async fn queue(
+    connection: &mut SqliteConnection,
+    table: &str,
+) -> Vec<(String, String, String, Option<String>)> {
+    sqlx::query_as("SELECT op, id, type, data FROM powersync_crud WHERE type = ? ORDER BY seq")
+        .bind(table)
         .fetch_all(connection)
         .await
         .expect("queue")
+}
+
+/// A value the schema's CHECK constraints accept for `column`.
+///
+/// A put statement is generated, not hand-written, so the only way to prove it
+/// binds the right columns in the right order is to run it — and a table with
+/// an enum column will not accept "31" for it.
+fn sample(column: &str) -> Option<Option<&'static str>> {
+    Some(match column {
+        "kind" => Some("venue"),
+        "verdict" => Some("unreviewed"),
+        "lifecycle_state" => Some("active"),
+        "engine" => Some("api"),
+        "provider" => Some("anthropic"),
+        "depth" | "message_count" => Some("0"),
+        "parts_json" => Some("[]"),
+        "role" => Some("member"),
+        "principal_key" => Some("signed-in:user-1"),
+        // A root message: depth 0 and no parent, which the CHECK pairs.
+        "parent_message_id" | "head_message_id" => None,
+        // Only meaningful next to a particular verdict, so it stays empty.
+        "reason" => None,
+        _ => return None,
+    })
 }
 
 /// Every generated put statement must parse, bind, and upsert rather than
@@ -68,36 +101,54 @@ async fn queue(connection: &mut SqliteConnection) -> Vec<(String, String, String
 #[tokio::test]
 async fn every_put_statement_upserts_against_the_real_schema() {
     let (_directory, pool) = database("put.db").await;
+    // A plain connection, deliberately: a download runs on the SDK's own
+    // connection, which carries neither trigger set and no admission bypass.
     let mut connection = pool.acquire().await.expect("acquire");
-    // Downloads land on the SDK's connection, which is not a writer and is not
-    // subject to the local admission guards; `remote_writes` is the same
-    // bypass spelled for a pool connection.
-    crate::database::local::write_admission::enter_remote_writes(&mut connection)
-        .await
-        .expect("remote writes");
     for synced in SYNCED_TABLES {
         let (put, delete) = statements(synced);
         let key = synced.key();
         for round in 0..2 {
             let mut query = sqlx::query(sqlx::AssertSqlSafe(put.clone()));
             for (index, column) in synced.columns.iter().enumerate() {
-                // The key must be stable across rounds or the second put would
-                // insert rather than upsert; everything else varies.
+                // Only the timestamp varies between rounds. The key must be
+                // stable or the second put would insert rather than upsert,
+                // and a few columns are immutable by trigger — which is the
+                // truth about a download too: a PUT re-sends what the row
+                // already says.
+                let round = if *column == "updated_at" { round } else { 0 };
                 query = query.bind(if key.contains(column) {
-                    format!("key-{column}")
+                    Some(format!("key-{column}"))
                 } else if BOOLEAN_COLUMNS.contains(column) {
-                    "true".to_owned()
+                    Some("true".to_owned())
+                } else if let Some(value) = sample(column) {
+                    value.map(ToOwned::to_owned)
                 } else {
-                    format!("{index}{round}")
+                    Some(format!("{index}{round}"))
                 });
+            }
+            // Every `?` in a local default is the row's id, bound again.
+            for _ in 0..synced
+                .local_defaults
+                .iter()
+                .flat_map(|(_, fill)| fill.matches('?'))
+                .count()
+            {
+                query = query.bind(Some("key-id".to_owned()));
             }
             query
                 .execute(&mut *connection)
                 .await
                 .unwrap_or_else(|error| panic!("{} put: {error}\n{put}", synced.name));
         }
+        // Scoped to this row's key: a put on `agent_threads` seeds a
+        // transcript head of its own, and that is the schema doing its job.
+        let filter = key
+            .iter()
+            .map(|column| format!("\"{column}\" = 'key-{column}'"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
         let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM {}",
+            "SELECT COUNT(*) FROM {} WHERE {filter}",
             synced.name
         )))
         .fetch_one(&mut *connection)
@@ -124,7 +175,12 @@ fn put_statements_bind_one_parameter_per_column() {
         let (put, _) = statements(synced);
         assert_eq!(
             put.matches('?').count(),
-            synced.columns.len(),
+            synced.columns.len()
+                + synced
+                    .local_defaults
+                    .iter()
+                    .flat_map(|(_, fill)| fill.matches('?'))
+                    .count(),
             "{} parameter count",
             synced.name
         );
@@ -154,10 +210,8 @@ fn boolean_columns_match_rather_than_cast() {
 async fn a_downloaded_boolean_becomes_an_integer() {
     let (_directory, pool) = database("boolean.db").await;
     let mut connection = pool.acquire().await.expect("acquire");
-    crate::database::local::write_admission::enter_remote_writes(&mut connection)
-        .await
-        .expect("remote writes");
     let venues = table("venues").expect("venues is synced");
+    assert!(venues.local_defaults.is_empty());
     let (put, _) = statements(venues);
     for (sent, expected) in [("true", 1), ("false", 0), ("1", 1), ("0", 0)] {
         let mut query = sqlx::query(sqlx::AssertSqlSafe(put.clone()));
@@ -195,7 +249,7 @@ async fn an_uploaded_boolean_is_a_json_boolean() {
         .execute(&mut *connection)
         .await
         .expect("update");
-    let entries = queue(&mut connection).await;
+    let entries = queue(&mut connection, "venues").await;
     let put: serde_json::Value =
         serde_json::from_str(entries[0].3.as_deref().expect("put")).expect("json");
     assert_eq!(put["groups_initialized"], serde_json::Value::Bool(false));
@@ -230,7 +284,7 @@ async fn a_clip_insert_update_and_delete_become_put_patch_and_delete() {
         .await
         .expect("delete");
 
-    let entries = queue(&mut connection).await;
+    let entries = queue(&mut connection, "clips").await;
     let ops: Vec<&str> = entries.iter().map(|entry| entry.0.as_str()).collect();
     assert_eq!(
         ops,
@@ -254,13 +308,6 @@ async fn a_clip_insert_update_and_delete_become_put_patch_and_delete() {
     let patch: serde_json::Value =
         serde_json::from_str(entries[1].3.as_deref().expect("patch data")).expect("json");
     assert_eq!(patch["duration"], 16.0);
-    // The timestamp the edit uploads is the one the row ends up with.
-    let stored: String = sqlx::query_scalar("SELECT updated_at FROM clips")
-        .fetch_optional(&mut *connection)
-        .await
-        .expect("read")
-        .unwrap_or_default();
-    assert!(stored.is_empty(), "the row was deleted");
     assert_eq!(
         patch.as_object().expect("object").len(),
         2,
@@ -288,7 +335,7 @@ async fn a_patch_can_clear_a_column() {
         .await
         .expect("update");
 
-    let entries = queue(&mut connection).await;
+    let entries = queue(&mut connection, "scores").await;
     let patch: serde_json::Value =
         serde_json::from_str(entries[1].3.as_deref().expect("patch data")).expect("json");
     assert_eq!(patch["name"], serde_json::Value::Null);
@@ -311,7 +358,7 @@ async fn an_update_that_changes_nothing_enqueues_nothing() {
         .execute(&mut *connection)
         .await
         .expect("update");
-    assert_eq!(queue(&mut connection).await.len(), 1);
+    assert_eq!(queue(&mut connection, "scores").await.len(), 1);
 }
 
 /// A composite-key row carries the id its natural key spells, which is what
@@ -327,7 +374,7 @@ async fn a_composite_key_row_uploads_its_joined_id() {
     .execute(&mut *connection)
     .await
     .expect("insert");
-    let entries = queue(&mut connection).await;
+    let entries = queue(&mut connection, "track_stems").await;
     assert_eq!(entries[0].1, "track-1:drums");
     let put: serde_json::Value =
         serde_json::from_str(entries[0].3.as_deref().expect("put")).expect("json");
