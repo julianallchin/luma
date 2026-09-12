@@ -471,7 +471,7 @@ pub async fn download_pending_stems(
         match apply_download_metadata(
             pool,
             sqlx::query(
-                "UPDATE track_stems SET file_path = ?, version = version + 1
+                "UPDATE track_stems SET file_path = ?
              WHERE track_id = ? AND stem_name = ? AND storage_path = ?",
             )
             .bind(dest.to_string_lossy().as_ref())
@@ -553,7 +553,7 @@ pub async fn download_pending_album_art(
 
         if let Err(e) = apply_download_metadata(
             pool,
-            sqlx::query("UPDATE tracks SET album_art_path = ?, version = version + 1 WHERE id = ?")
+            sqlx::query("UPDATE tracks SET album_art_path = ? WHERE id = ?")
                 .bind(dest.to_string_lossy().as_ref())
                 .bind(&row.id),
         )

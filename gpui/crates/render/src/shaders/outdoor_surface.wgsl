@@ -26,6 +26,12 @@ fn surface_transmittance(direction: vec3<f32>, distance: f32, frag_xy: vec2<f32>
         return exp(-medium_optical_depth(m, origin, direction, distance));
     }
     let span = medium_lighting_span(m, origin, direction, globals.surface_fog.x);
+    // The first grid sample includes all extinction up to the lighting bounds.
+    // It cannot represent a nearer surface, or a ray that misses those bounds
+    // entirely (including an empty fixture list during blackout).
+    if span.y <= span.x || distance <= span.x {
+        return exp(-medium_optical_depth(m, origin, direction, distance));
+    }
     let size = vec3<f32>(textureDimensions(surface_fog_grid));
     let radial = sqrt(clamp((min(distance, span.y) - span.x) / max(span.y - span.x, 1e-5), 0.0, 1.0));
     let z = (radial * (size.z - 1.0) + 0.5) / size.z;
