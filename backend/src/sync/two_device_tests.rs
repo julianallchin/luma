@@ -766,7 +766,7 @@ async fn a_conversation_follows_its_owner() {
     .execute(&a.sql)
     .await
     .expect("thread");
-    let principal = crate::database::local::auth::principal_key(USER);
+    let principal = crate::database::local::auth::principal_key(Some(USER));
     let mut parent: Option<String> = None;
     for (index, role) in ["user", "assistant"].into_iter().enumerate() {
         let id = format!("{thread}-m{index}");
