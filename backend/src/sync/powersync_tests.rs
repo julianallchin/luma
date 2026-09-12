@@ -557,3 +557,44 @@ fn both_trigger_sets_describe_the_same_columns() {
         }
     }
 }
+
+/// Every foreign key left on a synced table points at another synced table.
+///
+/// A checkpoint is applied in one transaction with foreign keys on. A
+/// reference to a local-only table is a parent the server can never ship, so
+/// the deferred check fails at the commit, fails again on every retry, and the
+/// device stops applying checkpoints for good.
+#[tokio::test]
+async fn a_synced_table_only_references_synced_tables() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(":memory:")
+                .foreign_keys(false),
+        )
+        .await
+        .expect("open");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("migrate");
+    for synced in SYNCED_TABLES {
+        let parents: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT \"table\" FROM pragma_foreign_key_list('{}')",
+            synced.name
+        )))
+        .fetch_all(&pool)
+        .await
+        .expect("foreign keys");
+        for parent in parents {
+            assert!(
+                table(&parent).is_some(),
+                "{} references the local-only {parent}",
+                synced.name
+            );
+        }
+    }
+}
