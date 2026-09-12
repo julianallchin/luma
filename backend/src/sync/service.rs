@@ -311,10 +311,31 @@ async fn refused(pool: &SqlitePool) -> String {
             break;
         }
     }
+    // Foreign keys are deferred, so a parent the sync rules do not ship shows
+    // up at the commit the SDK makes and nowhere in the replay above.
+    let violations = violations(&mut connection).await;
+    if !violations.is_empty() {
+        verdict = format!("the waiting download has no parent for {violations}");
+    }
     let _ = sqlx::query("ROLLBACK TO diagnose; RELEASE diagnose")
         .execute(&mut *connection)
         .await;
     verdict
+}
+
+/// The rows in this connection's transaction whose parent is missing, as
+/// `child -> parent` pairs. Empty when every foreign key holds.
+pub(super) async fn violations(connection: &mut sqlx::SqliteConnection) -> String {
+    let rows: Vec<(String, Option<i64>, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check")
+        .fetch_all(&mut *connection)
+        .await
+        .unwrap_or_default();
+    rows.iter()
+        .map(|(child, _, parent, _)| format!("{child} -> {parent}"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Say what a transport failure means, where the wire says it in codes.
