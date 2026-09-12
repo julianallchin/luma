@@ -581,6 +581,12 @@ impl AppServices {
         &self.db
     }
 
+    /// The state database's pool — the session lives there, not in the app
+    /// database, which is why sync and media both have to be handed it.
+    pub fn state_pool(&self) -> &sqlx::SqlitePool {
+        &self.state_db.0
+    }
+
     /// The installed scene, for a host that draws its own frames.
     ///
     /// Not a command: a command is a request whose answer crosses a wire, and
