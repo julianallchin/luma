@@ -3,9 +3,8 @@ pub mod edit;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use ts_rs::TS;
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PortType {
     Seed,
     Beats,
@@ -64,15 +63,14 @@ impl PortType {
 
 /// One choice in a [`ParamType::Enum`]: the string stored in the graph, and the
 /// label a picker shows for it.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ParamOption {
     pub id: String,
     pub label: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParamType {
     Number,
     Text,
@@ -103,7 +101,7 @@ impl ParamType {
     }
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternArgType {
     Seed,
     AudioSource,
@@ -123,29 +121,25 @@ pub enum PatternArgType {
     Gradient,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct PatternArgDef {
     pub id: String,
     pub name: String,
     pub arg_type: PatternArgType,
-    #[ts(type = "Record<string, unknown>")]
     pub default_value: Value,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PortDef {
     pub id: String,
     pub name: String,
     pub port_type: PortType,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ParamDef {
     pub id: String,
     pub name: String,
@@ -160,9 +154,8 @@ pub struct ParamDef {
     pub range: Option<(f32, f32)>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct NodeTypeDef {
     pub id: String,
     pub name: String,
@@ -173,21 +166,18 @@ pub struct NodeTypeDef {
     pub params: Vec<ParamDef>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct NodeInstance {
     pub id: String,
     pub type_id: String,
-    #[ts(type = "Record<string, unknown>")]
     pub params: HashMap<String, Value>,
     pub position_x: Option<f64>,
     pub position_y: Option<f64>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct Edge {
     pub id: String,
     pub from_node: String,
@@ -196,9 +186,8 @@ pub struct Edge {
     pub to_port: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(rename_all = "camelCase")]
 pub struct Graph {
     pub nodes: Vec<NodeInstance>,
     pub edges: Vec<Edge>,
@@ -208,22 +197,19 @@ pub struct Graph {
 
 /// Context provided by the host for graph execution.
 /// The host is responsible for loading audio and computing beat grids.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct GraphContext {
     pub track_id: String,
     pub venue_id: String,
     pub start_time: f32,
     pub end_time: f32,
     pub beat_grid: Option<BeatGrid>,
-    #[ts(type = "Record<string, unknown> | undefined")]
     pub arg_values: Option<HashMap<String, Value>>,
-    #[ts(type = "number | undefined")]
     pub instance_seed: Option<u64>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BeatGrid {
     pub beats: Vec<f32>,
@@ -269,25 +255,23 @@ impl BeatGrid {
     }
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct SeriesSample {
     pub time: f32,
     pub values: Vec<f32>,
     pub label: Option<String>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct Series {
     pub dim: usize,
     pub labels: Option<Vec<String>>,
     pub samples: Vec<SeriesSample>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Signal {
     pub n: usize,       // Spatial dimension (Selection size)
@@ -303,7 +287,7 @@ pub struct Signal {
 ///
 /// Authored as either a `Palette` node (uniform-spaced stops, swatch UI) or a
 /// `Gradient` node (user-positioned stops). The data structure is the same.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Stops {
     /// (t_position, rgba) — `t` in `[0,1]`, the list is sorted ascending by t.
@@ -384,7 +368,7 @@ impl Stops {
     }
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioCrop {
     pub start_seconds: f32,
@@ -393,7 +377,7 @@ pub struct AudioCrop {
 
 pub use luma_patterns::BlendMode;
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PrimitiveTimeSeries {
     pub primitive_id: String,
@@ -405,15 +389,14 @@ pub struct PrimitiveTimeSeries {
     pub speed: Option<Series>,    // dim=1 (0 = frozen, 1 = fast)
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LayerTimeSeries {
     pub primitives: Vec<PrimitiveTimeSeries>,
 }
 
-#[derive(TS, Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct RunResult {
     pub views: HashMap<String, Signal>,
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,

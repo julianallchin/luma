@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
 /// A score is a named collection of pattern placements for a track
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct Score {
     pub id: String,
     pub uid: Option<String>,
@@ -20,9 +18,8 @@ pub struct Score {
     pub updated_at: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ScoreSummary {
     pub id: String,
     pub uid: Option<String>,
@@ -39,10 +36,8 @@ pub struct ScoreSummary {
     /// a uuid. Computed at read time and never stored: it is a *position* in
     /// a list, so deleting the first score renumbers the rest and anything
     /// that had written the old number down would be wrong.
-    #[ts(type = "number")]
     pub ordinal: i64,
     #[sqlx(rename = "annotation_count")]
-    #[ts(type = "number")]
     pub annotation_count: i64,
     /// When that edit landed. The score row's own `updated_at` moves for
     /// reasons that are not authorship, so this is what a surface showing
@@ -58,7 +53,6 @@ pub struct ScoreSummary {
     /// `None`: "no recorded run" and "a run that spent nothing" are the same
     /// number to a reader, and an unspent score simply says nothing.
     #[sqlx(rename = "total_tokens")]
-    #[ts(type = "number")]
     pub total_tokens: i64,
     #[sqlx(rename = "created_at")]
     pub created_at: String,

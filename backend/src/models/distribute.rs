@@ -1,12 +1,11 @@
 //! The `distribute` command across the host boundary.
 //!
 //! [`crate::services::distribute`] owns the command; these are its argument and
-//! its answer in the shapes `serde` and `ts-rs` can carry. A projection, not a
+//! its answer in the shapes `serde` can carry. A projection, not a
 //! second declaration — nothing here computes.
 
 use luma_scene::distribute::Layout;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::models::venue_graph::{warning_line, ResolvedDangling, ResolvedUnplaced};
 use crate::services::distribute::{Occupied, Placed, Refusal, Report};
@@ -16,9 +15,8 @@ use crate::services::distribute::{Occupied, Placed, Refusal, Report};
 /// A tagged union rather than two nullable fields, because "spacing *and* a
 /// span" is not a distribution anybody can mean and should not be a pair
 /// anybody can send. `even` carries nothing: it is the whole face.
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase", tag = "kind")]
-#[ts(rename_all = "camelCase")]
 pub enum DistributeLayout {
     /// Evenly across the whole face, a half-fixture margin at each end.
     Even,
@@ -58,9 +56,8 @@ impl From<Layout> for DistributeLayout {
 }
 
 /// One fixture a distribution created.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct DistributedFixture {
     /// The `fixtures` row id, which is also its venue-graph node id.
     pub id: String,
@@ -91,13 +88,12 @@ impl From<&Placed> for DistributedFixture {
 /// A tagged union rather than a nullable per reason: a distribution is refused
 /// for exactly one cause, and its absence is the whole of "it worked" — there
 /// is no `ok` flag beside it to disagree with.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-#[ts(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DistributeRefusal {
     /// The row is longer than the face.
     TooLong {
@@ -125,9 +121,8 @@ pub enum DistributeRefusal {
 }
 
 /// One stretch of a host face that is already spoken for.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct DistributeOccupied {
     pub label: String,
     pub from_m: f64,
@@ -179,9 +174,8 @@ impl From<&Refusal> for DistributeRefusal {
 }
 
 /// What one distribution did.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct DistributeReport {
     pub host_node_id: String,
     pub host_socket: String,

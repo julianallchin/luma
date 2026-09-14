@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
-use ts_rs::TS;
 
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::models::node_graph::{
@@ -261,26 +260,23 @@ pub struct GraphScope {
     pub owner_user_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct GraphDocument {
     pub implementation_id: String,
     pub revision: String,
     pub graph: Graph,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct GraphEditPlan {
     pub base_revision: String,
     pub candidate: Graph,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct GraphEditResult {
     pub revision: String,
     pub graph: Graph,

@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AnnotationPreview {
     pub annotation_id: String,
     pub width: u32,
@@ -13,9 +11,8 @@ pub struct AnnotationPreview {
     pub dominant_color: [f32; 3],
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PatternSummary {
     /// None for a library Pattern; otherwise owned by this score.
     pub score_id: Option<String>,
@@ -36,9 +33,8 @@ pub struct PatternSummary {
     pub forked_from_id: Option<String>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ForkPatternInput {
     pub source_pattern_id: String,
     pub source_implementation_id: String,
@@ -47,17 +43,15 @@ pub struct ForkPatternInput {
     pub request_id: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ForkPatternResult {
     pub pattern: PatternSummary,
     pub implementation_id: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PatternCategory {
     pub id: String,
     pub uid: Option<String>,

@@ -2,14 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{FromRow, Row};
-use ts_rs::TS;
 
 /// A durable agent conversation. The subject association (track, pattern, ...)
 /// is metadata, not identity — several threads may exist for one subject, and
 /// each owns its own Python workspace.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AgentThread {
     pub id: String,
     /// The authenticated account that owns this local thread. `None` belongs
@@ -60,19 +58,16 @@ pub struct AgentThread {
 /// [`crate::agent::transcript`] — the storage layer still does not interpret
 /// it, but it is no longer opaque: `AgentChatPart` is the contract, and an
 /// unknown part shape round-trips verbatim rather than being dropped.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AgentThreadMessage {
     pub id: String,
     /// The conversation through which this node was read. A shared node can
     /// therefore project into several thread transcripts without duplication.
     pub thread_id: String,
     pub parent_message_id: Option<String>,
-    #[ts(type = "number")]
     pub seq: i64,
     pub role: String,
-    #[ts(type = "unknown[]")]
     pub parts: Value,
     pub created_at: String,
 }
@@ -99,17 +94,15 @@ impl<'r> FromRow<'r, SqliteRow> for AgentThreadMessage {
 }
 
 /// A thread plus its full ordered message history.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AgentThreadDetail {
     pub thread: AgentThread,
     pub messages: Vec<AgentThreadMessage>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CreateAgentThreadInput {
     /// Caller-owned idempotency key. Retries must reuse this UUID.
     pub request_id: String,
@@ -132,21 +125,18 @@ pub struct CreateAgentThreadInput {
 /// A message to write into a transcript tail. `id` is the caller's
 /// `UIMessage.id`; when omitted a uuid is generated. `seq` is always assigned
 /// by the database, never by the caller.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct NewAgentThreadMessage {
     pub id: Option<String>,
     pub role: String,
-    #[ts(type = "unknown[]")]
     pub parts: Value,
 }
 
 /// One replay-safe append to the durable transcript. The message batch and
 /// exact response are committed by one SQLite transaction.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AppendAgentThreadMessagesInput {
     pub operation_id: String,
     /// Exact transcript tip observed when this tail was planned. `None` means
@@ -167,40 +157,30 @@ pub struct AppendAgentThreadMessagesInput {
 /// four do not overlap, so their sum is the whole spend. `cost_usd` is `None`
 /// unless somebody *told* the writer the price: nothing derives it from a rate
 /// card, because a rate card in the tree is a second source of truth.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Default, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AgentThreadUsage {
     pub thread_id: String,
     /// The model that ran, in the writer's own vocabulary: a `ModelId` key
     /// from the in-app loop, the CLI's reported model from a harness.
     pub model: Option<String>,
-    #[ts(type = "number")]
     pub turns: i64,
-    #[ts(type = "number")]
     pub input_tokens: i64,
-    #[ts(type = "number")]
     pub output_tokens: i64,
-    #[ts(type = "number")]
     pub cache_creation_tokens: i64,
-    #[ts(type = "number")]
     pub cache_read_tokens: i64,
     pub cost_usd: Option<f64>,
-    #[ts(type = "number")]
     pub duration_ms: i64,
     /// Children the run fanned out to. Zero is "none", not "unknown".
-    #[ts(type = "number")]
     pub subagents: i64,
 }
 
 /// Current immutable-node tip of one conversation transcript.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AgentThreadTranscriptHead {
     pub thread_id: String,
     pub head_message_id: Option<String>,
-    #[ts(type = "number")]
     pub message_count: i64,
 }
 
@@ -208,13 +188,12 @@ pub struct AgentThreadTranscriptHead {
 /// data, not an overwrite or generic storage failure: the caller must reload,
 /// then explicitly discard, re-plan, or fork from the observed prefix. A
 /// prepared assistant turn must be prepared again if it is moved to a fork.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(
     tag = "status",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[ts(rename_all = "camelCase")]
 pub enum AgentThreadAppendOutcome {
     Appended {
         previous_head_message_id: Option<String>,

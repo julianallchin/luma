@@ -9,4 +9,3 @@ serde = { version = "1", features = ["derive", "rc"] }
 ndarray = { version = "0.17", features = ["serde"] }
 serde_json = "1"
 thiserror = "2"
-ts-rs = { version = "11.1", features = ["serde-compat"] }

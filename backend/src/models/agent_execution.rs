@@ -9,19 +9,16 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ts_rs::TS;
 
 /// One executed cell.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PythonCellResult {
     /// `"ok"` | `"error"` | `"interrupted"` | `"failed"`.
     ///
     /// `error` is a Python-level exception (the kernel is fine); `failed` is an
     /// infrastructure failure — the worker died, timed out past the interrupt
     /// ladder, or never started. The reason is in `notices`.
-    #[ts(type = r#""ok" | "error" | "interrupted" | "failed""#)]
     pub status: String,
     pub stdout: String,
     pub stderr: String,
@@ -32,15 +29,13 @@ pub struct PythonCellResult {
     /// Concise prose the agent must see: kernel restarts, dropped figures,
     /// worker warnings. Never a status dump.
     pub notices: Vec<String>,
-    #[ts(type = "number")]
     pub duration_ms: u64,
 }
 
 /// A plot or headless scene frame the cell produced. `artifact_rel` locates
 /// its workspace file; `base64_png` supplies model delivery and synced history.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PythonCellFigure {
     pub artifact_rel: String,
     pub width: u32,
@@ -55,11 +50,9 @@ pub struct PythonCellFigure {
 /// It is [`PythonCellResult`] minus what only the run knew (`artifact_rel`,
 /// oversized figure bytes). Older rows carry fields this shape no longer has;
 /// serde ignores them, and so must every other decoder.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PythonToolOutput {
-    #[ts(type = r#""ok" | "error" | "interrupted" | "failed""#)]
     pub status: String,
     pub stdout: String,
     pub stderr: String,
@@ -67,20 +60,17 @@ pub struct PythonToolOutput {
     pub traceback: Option<String>,
     pub notices: Vec<String>,
     pub figures: Vec<PythonStoredFigure>,
-    #[ts(type = "number")]
     pub duration_ms: u64,
 }
 
 /// A figure as the transcript keeps it. New captures retain the image bytes;
 /// older append-only transcripts may contain dimensions alone.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PythonStoredFigure {
     pub width: u32,
     pub height: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub base64_png: Option<String>,
 }
 
@@ -89,9 +79,8 @@ pub struct PythonStoredFigure {
 /// Mirrors `agent_execution::bindings::providers::BindingScope` minus
 /// `agent_kind` — that is a property of the *thread*, read from the database, not
 /// something a caller may assert.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PythonScopeInput {
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
@@ -99,10 +88,8 @@ pub struct PythonScopeInput {
     pub pattern_id: Option<String>,
     pub implementation_id: Option<String>,
     /// `[start_s, end_s]` in absolute track seconds.
-    #[ts(type = "[number, number] | null")]
     pub window: Option<(f64, f64)>,
     /// The editor's live (possibly unsaved) graph — the one piece of scope only
     /// the frontend knows.
-    #[ts(type = "unknown | null")]
     pub graph_definition: Option<Value>,
 }

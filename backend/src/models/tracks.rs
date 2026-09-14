@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackSummary {
     pub id: String,
     pub uid: Option<String>,
@@ -12,11 +10,8 @@ pub struct TrackSummary {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
-    #[ts(type = "number | null")]
     pub track_number: Option<i64>,
-    #[ts(type = "number | null")]
     pub disc_number: Option<i64>,
-    #[ts(type = "number | null")]
     pub duration_seconds: Option<f64>,
     pub file_path: String,
     pub storage_path: Option<String>,
@@ -31,26 +26,23 @@ pub struct TrackSummary {
 }
 
 /// Durable phase-one result from any track import source.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackImportResult {
     pub import_id: String,
     pub tracks: Vec<TrackSummary>,
     pub failures: Vec<TrackImportFailure>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackImportFailure {
     pub source_id: String,
     pub message: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
 pub enum TrackImportPhase {
     Importing,
     Analyzing,
@@ -59,9 +51,8 @@ pub enum TrackImportPhase {
 
 /// Host-neutral progress payload. Consumers branch on fields and enum values,
 /// never on human-readable status text.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackImportProgress {
     pub import_id: String,
     pub source: String,
@@ -82,9 +73,8 @@ pub struct TrackImportProgress {
 }
 
 /// Beat analysis data for a track
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackBeats {
     #[sqlx(rename = "track_id")]
     pub track_id: String,
@@ -96,7 +86,6 @@ pub struct TrackBeats {
     pub bpm: Option<f64>,
     #[sqlx(rename = "downbeat_offset")]
     pub downbeat_offset: Option<f64>,
-    #[ts(type = "number | null")]
     #[sqlx(rename = "beats_per_bar")]
     pub beats_per_bar: Option<i64>,
     #[sqlx(rename = "created_at")]
@@ -111,7 +100,7 @@ pub struct TrackBeats {
 /// The stored JSON is `{"start":2.716,"end":4.318,"root":9,"label":"A:(1)"}`.
 /// `root` is a pitch class 0-11 or `null` (no-chord / low confidence); `label`
 /// is the full chord symbol (`"G:maj"`, `"N"` for none) and may be absent in
-/// older rows. Not TS-exported — nothing on the frontend consumes it yet.
+/// older rows.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ChordSection {
     pub start_s: f32,
@@ -121,9 +110,8 @@ pub struct ChordSection {
 }
 
 /// Root/section analysis data for a track
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackRoots {
     #[sqlx(rename = "track_id")]
     pub track_id: String,
@@ -143,9 +131,8 @@ pub struct TrackRoots {
 }
 
 /// Stem audio file for a track
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackStem {
     #[sqlx(rename = "track_id")]
     pub track_id: String,
@@ -164,16 +151,14 @@ pub struct TrackStem {
     pub updated_at: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackBrowserRow {
     pub id: String,
     pub uid: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
-    #[ts(type = "number | null")]
     pub duration_seconds: Option<f64>,
     pub album_art_path: Option<String>,
     pub album_art_mime: Option<String>,
@@ -181,14 +166,11 @@ pub struct TrackBrowserRow {
     pub file_path: String,
     pub created_at: String,
     pub bpm: Option<f64>,
-    #[ts(type = "number")]
     pub annotation_count: i64,
     /// Annotation count for the currently active venue (0 if no venue)
-    #[ts(type = "number")]
     pub venue_annotation_count: i64,
     /// Number of scores for this track in the active venue. This is the
     /// durable venue-membership signal: an empty score still counts.
-    #[ts(type = "number")]
     pub venue_score_count: i64,
     /// Convenience form of `venue_score_count > 0` for hosts that should not
     /// need to reproduce the membership rule.
@@ -197,7 +179,6 @@ pub struct TrackBrowserRow {
     /// merged so overlaps don't double-count). 0 if no venue. Filled in Rust
     /// by `list_tracks_enriched`, not selected from SQL.
     #[sqlx(skip)]
-    #[ts(type = "number")]
     pub venue_annotation_coverage_seconds: f64,
     pub has_storage: bool,
     pub has_beats: bool,
@@ -208,7 +189,7 @@ pub struct TrackBrowserRow {
     pub has_genres: bool,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MelSpec {
     pub width: usize,
@@ -217,7 +198,7 @@ pub struct MelSpec {
     pub beat_grid: Option<crate::models::node_graph::BeatGrid>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(rename_all = "snake_case")]
 pub enum BeatValidationVerdict {
@@ -226,7 +207,7 @@ pub enum BeatValidationVerdict {
     Incorrect,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(rename_all = "snake_case")]
 pub enum BeatValidationReason {
@@ -236,7 +217,7 @@ pub enum BeatValidationReason {
     BarPhase,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BeatValidation {
     pub grid: crate::models::node_graph::BeatGrid,
