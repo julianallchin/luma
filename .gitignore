@@ -80,6 +80,8 @@ experiments/cs525-data/eval/plots/*
 
 # Component screenshot harness output + gpui workspace build artifacts
 harness/shots/
+# `live-goldens` writes fresh captures here for eyeballing; they are not goldens
+harness/goldens/scenes-live/
 gpui/target/
 # Pixel-feature builds get their own tree so feature flips never evict the
 # headless one — see gpui/BUILD.md. Unanchored so it also catches a stray tree
