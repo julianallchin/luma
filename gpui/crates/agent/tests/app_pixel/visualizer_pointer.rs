@@ -5,9 +5,11 @@
 //! - dragging the stage/editor seam **orbited**, because the grip is 5px wide
 //!   over a 1px rule and gpui reports every hitbox under the pointer, so the
 //!   press landed on the seam and on the viewport at once;
-//! - turning the wheel over the renderer lab **dollied**, for the same reason —
-//!   `should_handle_scroll` asks whether the viewport is under the pointer, not
-//!   whether it is the surface the wheel was aimed at.
+//! - turning the wheel over the floating settings card **dollied**, for the
+//!   same reason — `should_handle_scroll` asks whether the viewport is under
+//!   the pointer, not whether it is the surface the wheel was aimed at. (That
+//!   card used to be the renderer lab; the lab is gone and the View settings
+//!   popover floats over the same viewport in the same way.)
 //!
 //! Pixel-only because the stage's pointer handlers exist only where there is a
 //! renderer: headless resolves `stage_gpu` to false and the pane draws a plate
@@ -64,22 +66,34 @@ const SEAM_SCRIPT: &str = r#"
     ({ before, after: { camera: camera(), stage: stage() } })
 "#;
 
-/// Turn the wheel over the renderer lab. Its column scrolls; the camera stays.
-const LAB_SCRIPT: &str = r#"
-    nav.step("render settings", "toggle", "Render settings");
-    app.click(app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" }),
-              { restale: "match" });
+/// Turn the wheel over the floating View settings card. The camera stays.
+///
+/// Then turn the same wheel over bare stage, where it *is* the camera's. That
+/// second half is the control: without it a wheel the harness never delivered
+/// would pass the first assertion as loudly as an occluder that works. The card
+/// itself has nothing to scroll — it is a fixed-height popover — so "the panel
+/// swallowed the wheel" has to be shown by the panel-less case moving.
+const VIEW_SCRIPT: &str = r#"
+    nav.step("view settings", "toggle", "Render settings");
+    const card = until("the view settings card", (s) =>
+        s.find({ role: "card", label: "Render settings" }))
+        .find({ role: "card", label: "Render settings" }).bounds;
+    // The card's own legend row, not one of its controls: a scrub under the
+    // pointer would take the wheel as a value change and prove nothing about
+    // the surface.
+    const legend = { x: card.x + card.width / 2, y: card.y + 12 };
+    const before = camera();
+    app.scroll(legend, { dy: -160, steps: 8, restale: "match" });
     app.frames(4, { waitMs: 60 });
-    // Any control far enough down the lab's column to have somewhere to go.
-    function control() {
-        return app.snapshot().findAll({ role: "slider" })
-            .find((n) => n.label.startsWith("Sun intensity"));
-    }
-    until("the lab's controls", () => control() !== undefined);
-    const before = { camera: camera(), control: control().bounds.y };
-    app.scroll(control(), { dy: -160, steps: 8, restale: "match" });
+    const overCard = camera();
+    // Left of the card, which hangs off the stage's bottom-right corner and
+    // covers its centre.
+    const bounds = stage();
+    const bare = { x: (bounds.x + card.x) / 2, y: bounds.y + bounds.height / 2 };
+    if (bare.x >= card.x) { throw new Error("the card leaves no bare stage to aim at"); }
+    app.scroll(bare, { dy: -160, steps: 8, restale: "match" });
     app.frames(4, { waitMs: 60 });
-    ({ before, after: { camera: camera(), control: control().bounds.y } })
+    ({ before, overCard, overStage: camera() })
 "#;
 
 fn run(name: &'static str, script: &str) -> Value {
@@ -110,15 +124,15 @@ fn a_seam_drag_resizes_the_stage_and_does_not_orbit_it() {
 }
 
 #[test]
-fn a_wheel_over_the_lab_scrolls_it_and_does_not_dolly() {
-    let out = run("visualizer-pointer-lab", LAB_SCRIPT);
-    let (before, after) = (&out["before"], &out["after"]);
-    assert!(
-        after["control"].as_f64().unwrap() < before["control"].as_f64().unwrap(),
-        "the lab's column should have scrolled: {before} → {after}"
-    );
+fn a_wheel_over_the_view_settings_does_not_dolly() {
+    let out = run("visualizer-pointer-view", VIEW_SCRIPT);
     assert_eq!(
-        before["camera"], after["camera"],
-        "a wheel over the lab dollied the camera — the panel is sharing its scroll"
+        out["before"], out["overCard"],
+        "a wheel over the View settings dollied the camera — the panel is sharing its scroll"
+    );
+    assert_ne!(
+        out["before"], out["overStage"],
+        "a wheel over the bare stage did not dolly — the wheel never reached the viewport, \
+         so the panel proved nothing"
     );
 }
