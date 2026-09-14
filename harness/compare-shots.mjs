@@ -1,8 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Compare two golden-capture directories frame by frame.
 //
-//   node harness/compare-shots.mjs harness/goldens harness/goldens-b
-//   node harness/compare-shots.mjs A B --blur 4 --min 0.98
+//   bun harness/compare-shots.mjs harness/goldens/scenes-wgpu harness/goldens-b
+//   bun harness/compare-shots.mjs A B --blur 4 --min 0.98
 //
 // Reports per-frame SSIM and mean absolute luma difference, and exits non-zero
 // if any frame falls below --min (default 0.999, the phase-0b stability gate).
@@ -12,8 +12,8 @@
 // grain while keeping structure — leave it at 0 for a run-to-run stability
 // check, where any grain difference is exactly what you want to catch.
 //
-// Decoding runs inside headless Chromium's canvas, the same trick
-// harness/measure-ink.mjs uses, so this stays dependency-free.
+// Decoding runs inside headless Chromium's canvas, so Playwright is the only
+// dependency.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
