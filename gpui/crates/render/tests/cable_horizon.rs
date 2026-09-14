@@ -6,7 +6,7 @@ use luma_render::{
     assets::Library,
     build_frame_with,
     scene_desc::{
-        CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment,
+        CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment, VenueHaze,
     },
     Renderer,
 };
@@ -15,7 +15,12 @@ const WIDTH: u32 = 480;
 const HEIGHT: u32 = 320;
 
 fn scene() -> Scene {
-    let mut render = RenderSettings::room(VenueEnvironment::outdoor(30.0), 45.0, 1.0);
+    let mut render = RenderSettings::room(
+        VenueEnvironment::outdoor(30.0),
+        VenueHaze::default(),
+        45.0,
+        1.0,
+    );
     render.haze.enabled = false;
     render.show_grid = false;
     render.show_gizmos = false;

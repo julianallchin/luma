@@ -41,7 +41,7 @@ use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
-use luma_render::scene_desc::{SkyParams, VenueEnvironment};
+use luma_render::scene_desc::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
 use luma_render::venue_tiles::TileMap;
 use luma_scene::View;
 
@@ -315,6 +315,44 @@ impl VenueHost {
         Ok(described(wanted))
     }
 
+    /// One verb for both directions, like [`Self::environment`], and for the
+    /// same reason: there is one value. Called with no arguments it reads;
+    /// called with any it writes, and the write is venue truth — it lands on
+    /// the venue record, so every later picture of this room is taken through
+    /// it.
+    ///
+    /// Only the room's *look* is settable here. How many samples the march
+    /// takes and at what resolution are the cost of drawing a frame, not a
+    /// property of the room, so they are not on this verb and not on the
+    /// record; see [`VenueHaze`].
+    async fn haze(&self, request: HazeRequest) -> Result<Value, HostCallError> {
+        // A pure read never opens a write transaction: an agent looking at the
+        // room should not queue behind one that is building in it.
+        if request.is_read() {
+            let mut access = self.read_access().await?;
+            return Ok(described_haze(self.current_haze(&mut access).await?));
+        }
+
+        let mut access =
+            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| {
+                    HostCallError::new(
+                        "invalid_venue",
+                        format!("the venue is not available: {error}"),
+                    )
+                })?;
+        let wanted = request.applied_to(self.current_haze(&mut access).await?);
+        crate::database::local::venues::set_haze(&mut access, wanted)
+            .await
+            .map_err(|error| HostCallError::new("internal", error))?;
+        access
+            .commit()
+            .await
+            .map_err(|error| HostCallError::new("internal", error))?;
+        Ok(described_haze(wanted))
+    }
+
     /// This thread's venue, open for reading.
     async fn read_access(&self) -> Result<VenueAccess<'_, Read>, HostCallError> {
         VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
@@ -341,6 +379,22 @@ impl VenueHost {
                 )
             })?
             .environment)
+    }
+
+    /// The haze on the venue record right now.
+    async fn current_haze(
+        &self,
+        access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    ) -> Result<VenueHaze, HostCallError> {
+        Ok(crate::database::local::venues::get_venue(access)
+            .await
+            .map_err(|error| {
+                HostCallError::new(
+                    "invalid_venue",
+                    format!("the venue could not be read: {error}"),
+                )
+            })?
+            .haze)
     }
 
     // -- the build verbs ------------------------------------------------
@@ -853,6 +907,8 @@ impl VenueHost {
             // A draft is a component being looked at for its shape, not a room.
             // The house at full is the light that shows one.
             environment: luma_render::scene_desc::VenueEnvironment::default(),
+            // Likewise: a shape is read off a clear picture of it.
+            haze: luma_render::scene_desc::VenueHaze::default(),
         };
         self.shoot(
             geometry,
@@ -977,6 +1033,7 @@ impl HostCallHandler for VenueHost {
                     "venue.render" => self.render(decode(payload)?).await,
                     "venue.tiles" => self.tiles(decode(payload)?).await,
                     "venue.environment" => self.environment(decode(payload)?).await,
+                    "venue.haze" => self.haze(decode(payload)?).await,
                     "venue.catalog" => self.catalog(),
                     "venue.fixture_library" => self.fixture_library(decode(payload)?),
                     "venue.describe" => self.describe(decode(payload)?).await,
@@ -1140,6 +1197,40 @@ fn described(environment: VenueEnvironment) -> Value {
     value
 }
 
+/// One haze as the wire carries it. Flat on purpose: the appearance dials are
+/// nested on the record because they are one struct in the renderer, but to an
+/// author they are seven dials on one room, and a nested object would be a
+/// second shape to learn for no gain.
+pub(crate) fn haze_record(haze: VenueHaze) -> Value {
+    let haze = haze.sanitized();
+    json!({
+        "enabled": haze.enabled,
+        "density": haze.density,
+        "cloudiness": haze.appearance.cloudiness,
+        "cloudSize": haze.appearance.cloud_size,
+        "turbulence": haze.appearance.turbulence,
+        "windSpeed": haze.appearance.wind_speed,
+        "windDirection": haze.appearance.wind_direction,
+    })
+}
+
+/// The same record with the sentence a reader actually wants beside it.
+fn described_haze(haze: VenueHaze) -> Value {
+    let haze = haze.sanitized();
+    let mut value = haze_record(haze);
+    value["describe"] = Value::String(if haze.enabled {
+        format!(
+            "haze at {:.0}% density, clouds {:.1} m, drifting {:.2} m/s",
+            haze.density / VenueHaze::MAX_DENSITY * 100.0,
+            haze.appearance.cloud_size,
+            haze.appearance.wind_speed,
+        )
+    } else {
+        "no haze".to_string()
+    });
+    value
+}
+
 /// Create a named collection, or explicitly replace its fixture membership.
 #[derive(Deserialize)]
 struct GroupRequest {
@@ -1159,6 +1250,77 @@ struct EnvironmentRequest {
     house: Option<f64>,
     /// Degrees the sun stands above the horizon. Implies an open-air room.
     sun: Option<f64>,
+}
+
+/// The room's atmosphere. Every field absent is a read; any field present is a
+/// write, and a write is a *patch* — the fields not named keep the value the
+/// room already had.
+///
+/// Patch rather than replace because the five appearance dials and the two
+/// top-level ones are one value on the record but seven separate questions to
+/// an author: "make it thicker" should not silently reset the wind.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HazeRequest {
+    /// Whether the room has haze in it at all.
+    enabled: Option<bool>,
+    /// Mean density, 0 to 0.5. Values outside are clamped, not refused.
+    density: Option<f64>,
+    /// Density contrast, 0 (uniform) to 1 (pronounced clouds).
+    cloudiness: Option<f64>,
+    /// Characteristic cloud size in metres.
+    cloud_size: Option<f64>,
+    /// Strength of evolving deformation and fine wisps, 0 to 1.
+    turbulence: Option<f64>,
+    /// Horizontal drift in metres per second.
+    wind_speed: Option<f64>,
+    /// World heading of that drift, in degrees.
+    wind_direction: Option<f64>,
+}
+
+impl HazeRequest {
+    /// Whether this call names nothing and is therefore a read.
+    fn is_read(&self) -> bool {
+        self.enabled.is_none()
+            && self.density.is_none()
+            && self.cloudiness.is_none()
+            && self.cloud_size.is_none()
+            && self.turbulence.is_none()
+            && self.wind_speed.is_none()
+            && self.wind_direction.is_none()
+    }
+
+    /// This patch over the haze the room already had.
+    ///
+    /// Out-of-range and non-finite values are handled once, by
+    /// [`VenueHaze::sanitized`] at the record boundary, rather than here: an
+    /// author asking for density 9 means "as thick as it goes", and there is
+    /// nothing for them to fix.
+    fn applied_to(&self, current: VenueHaze) -> VenueHaze {
+        let appearance = current.appearance;
+        VenueHaze {
+            enabled: self.enabled.unwrap_or(current.enabled),
+            density: patched(self.density, current.density),
+            appearance: HazeAppearance {
+                cloudiness: patched(self.cloudiness, appearance.cloudiness),
+                cloud_size: patched(self.cloud_size, appearance.cloud_size),
+                turbulence: patched(self.turbulence, appearance.turbulence),
+                wind_speed: patched(self.wind_speed, appearance.wind_speed),
+                wind_direction: patched(self.wind_direction, appearance.wind_direction),
+            },
+        }
+        .sanitized()
+    }
+}
+
+/// One optional dial over the value it is replacing. A non-finite number has no
+/// nearest legal answer and no JSON spelling, so it leaves the dial alone
+/// rather than poisoning the record.
+fn patched(value: Option<f64>, current: f32) -> f32 {
+    match value {
+        Some(value) if (value as f32).is_finite() => value as f32,
+        _ => current,
+    }
 }
 
 /// How many library rows one call will parse and return, whatever it asks for.

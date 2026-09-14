@@ -144,6 +144,10 @@ auth session, and the columns `venues.controller_port`, `venues.mixer_port`,
 `venues.mixer_mapping_json`, `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
 
+`venues.environment` and `venues.haze` are **not** on that list: what kind of
+room a venue is and what atmosphere it has are venue truth, so they follow the
+venue between devices. Only the three hardware-port columns above are local.
+
 ## Code layout
 
 - `backend/src/sync/service.rs`: `Service`. Connects PowerSync when a session

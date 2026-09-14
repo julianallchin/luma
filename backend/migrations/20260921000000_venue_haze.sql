@@ -1,0 +1,21 @@
+-- A venue's haze: whether the room has atmosphere in it, how much, and what it
+-- looks like. Venue truth beside `environment` — every picture of the room,
+-- the editor viewport and an agent's offscreen frame alike, is taken through
+-- it.
+--
+-- The column deliberately carries no `steps` and no `resolution`. Those are the
+-- march's cost, not the room's look, so they stay local to whichever machine is
+-- drawing the frame; see `luma_render::scene_desc::VenueHaze`.
+--
+-- The default is the haze the app has always drawn — enabled, 0.24, default
+-- appearance — so every existing venue looks exactly as it did. It is a column
+-- default rather than a backfill because the auth admission triggers on
+-- `venues` abort row writes in migration context; DDL with a default reaches
+-- every existing venue without one. There is no `synced_at`/`version` dirtying
+-- pass either: the row model dropped both columns.
+--
+-- The JSON spelling is that type's own, so the column, the wire and the agent
+-- verb are one string. Unreadable text reads back as the default (see that
+-- type's `From<String>`), so this column can never fail a venue load.
+ALTER TABLE venues
+  ADD COLUMN haze TEXT NOT NULL DEFAULT '{"enabled":true,"density":0.24,"appearance":{"cloudiness":0.35,"cloudSize":4.0,"turbulence":0.3,"windSpeed":0.15,"windDirection":30.0}}';

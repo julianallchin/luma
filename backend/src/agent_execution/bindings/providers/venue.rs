@@ -19,7 +19,7 @@ use super::{inline, put_f32, unavailable, ProviderCtx, NO_VENUE};
 use crate::agent_execution::artifacts::ArtifactStore;
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, Provenance};
-use crate::agent_execution::venue_host::environment_record;
+use crate::agent_execution::venue_host::{environment_record, haze_record};
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
@@ -121,6 +121,7 @@ pub async fn provide(
             "venue.id",
             "venue.name",
             "venue.environment_snapshot",
+            "venue.haze_snapshot",
             "venue.fixtures",
             "venue.pieces",
             "venue.unplaced_snapshot",
@@ -150,6 +151,7 @@ pub async fn provide(
                 "venue.id",
                 "venue.name",
                 "venue.environment_snapshot",
+                "venue.haze_snapshot",
                 "venue.fixtures",
                 "venue.pieces",
                 "venue.unplaced_snapshot",
@@ -177,10 +179,18 @@ pub async fn provide(
                 "venue.environment_snapshot",
                 environment_record(venue.environment),
             )?;
+            // The atmosphere the room is seen through, off the same row, and
+            // static for the cell for the same reason: `venue.haze()` is the
+            // live read for a program that has just changed it.
+            inline(b, "venue.haze_snapshot", haze_record(venue.haze))?;
         }
         Err(e) => {
             inline(b, "venue.id", venue_id)?;
-            for path in ["venue.name", "venue.environment_snapshot"] {
+            for path in [
+                "venue.name",
+                "venue.environment_snapshot",
+                "venue.haze_snapshot",
+            ] {
                 unavailable(b, path, format!("the venue could not be loaded: {e}"))?;
             }
         }

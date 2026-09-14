@@ -86,7 +86,7 @@ use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::group_derivation::FixtureRole;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
-use luma_render::scene_desc::VenueEnvironment;
+use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 /// Everything the native timeline needs to draw a score: the document itself
 /// and the grid its beat positions are read in.
@@ -1161,6 +1161,24 @@ impl Library {
         self.call(
             "set_venue_environment",
             json!({ "venueId": venue_id, "environment": environment }),
+        )
+    }
+
+    /// Write one venue's atmosphere: whether the room has haze in it, how much,
+    /// and what it looks like.
+    ///
+    /// A sibling of [`Self::set_venue_environment`] in every respect, including
+    /// answering with nothing — the value comes back on the next rig read
+    /// ([`Rig::haze`]). The march's cost (`steps`, `resolution`) is deliberately
+    /// not here: that is local, and [`VenueHaze`] says why.
+    pub fn set_venue_haze(
+        &self,
+        venue_id: &str,
+        haze: VenueHaze,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_venue_haze",
+            json!({ "venueId": venue_id, "haze": haze }),
         )
     }
 
@@ -2293,13 +2311,12 @@ impl Library {
             let venue_graph: ResolvedVenue =
                 command(&services, "get_resolved_venue", &venue).await?;
             let rows: VenueGraphRows = command(&services, "get_venue_graph", &venue).await?;
-            // The room's own lighting, fetched with its geometry: a rig and
-            // the environment it stands in are one picture, and a viewport
-            // that adopted the pieces before the light would draw a frame of
-            // the wrong room.
-            let environment = command::<Venue>(&services, "get_venue", &json!({ "id": venue_id }))
-                .await?
-                .environment;
+            // The room's own lighting and atmosphere, fetched with its
+            // geometry: a rig, the environment it stands in and the haze it
+            // stands in are one picture, and a viewport that adopted the
+            // pieces before the light would draw a frame of the wrong room.
+            // Both off one read — they are two columns of the same row.
+            let room = command::<Venue>(&services, "get_venue", &json!({ "id": venue_id })).await?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2319,7 +2336,8 @@ impl Library {
                 venue: venue_graph,
                 definitions,
                 rows,
-                environment,
+                environment: room.environment,
+                haze: room.haze,
             })
         });
         async move {
@@ -3105,6 +3123,10 @@ pub struct Rig {
     /// What kind of room this is and how far up its one dial is — the venue's
     /// own truth, and the only thing that says how the picture is lit.
     pub environment: VenueEnvironment,
+    /// How hazy this room is and what its haze looks like — venue truth beside
+    /// [`Self::environment`], off the same venue row, and for the same reason:
+    /// the atmosphere is part of the picture, not of whoever is looking at it.
+    pub haze: VenueHaze,
     /// The graph as rows — `(parent, my_socket, their_socket, params)`.
     ///
     /// [`Self::venue`] is the same graph *solved*, and a solve throws the

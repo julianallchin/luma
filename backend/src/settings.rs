@@ -50,6 +50,14 @@ pub struct AppSettings {
     pub artnet_net: u8,
     pub artnet_subnet: u8,
     pub max_dimmer: u8,
+    /// Whether the visualizer draws the floor grid. Device-global, like every
+    /// other view preference: it is how this machine looks at any venue.
+    pub stage_grid: bool,
+    /// Whether the visualizer draws selection and transform gizmos.
+    pub stage_gizmos: bool,
+    /// Viewport render scale as a percentage of native resolution, 25..=100.
+    /// A cost knob, so it belongs to the machine rather than the venue.
+    pub render_scale: u8,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -67,6 +75,9 @@ impl Default for AppSettings {
             artnet_net: 0,
             artnet_subnet: 0,
             max_dimmer: 100,
+            stage_grid: true,
+            stage_gizmos: true,
+            render_scale: 100,
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -120,6 +131,15 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .get("max_dimmer")
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.min(100))
+            .unwrap_or(100),
+        stage_grid: map.get("stage_grid").map(|v| v == "true").unwrap_or(true),
+        stage_gizmos: map.get("stage_gizmos").map(|v| v == "true").unwrap_or(true),
+        // The write path validates nothing, so this read is the only place a
+        // row outside the supported range gets caught.
+        render_scale: map
+            .get("render_scale")
+            .and_then(|v| v.parse::<u8>().ok())
+            .map(|v| v.clamp(25, 100))
             .unwrap_or(100),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(

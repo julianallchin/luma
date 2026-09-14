@@ -25,7 +25,7 @@ pub(crate) fn install(
         .iter()
         .map(|(path, def)| (path.clone(), stage_render::definition(def)))
         .collect();
-    let mut scene = crate::visualizer::scene(rig, &definitions, rig.environment);
+    let mut scene = crate::visualizer::scene(rig, &definitions, rig.environment, rig.haze);
     if let Some(settings) = settings {
         scene.render = settings;
     }

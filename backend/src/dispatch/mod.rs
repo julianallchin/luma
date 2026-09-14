@@ -147,7 +147,7 @@ pub use handlers::scores::prepare_score_clip_preview;
 use handlers::tracks::TrackAudioBase64;
 /// Large native audio payload; retains the dispatcher's visibility checks.
 pub use handlers::waveforms::get_track_waveform_signal;
-use luma_render::scene_desc::VenueEnvironment;
+use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use prodjlink::DiscoveredDevice;
 
 commands! {
@@ -518,6 +518,7 @@ commands! {
     venues::join_venue(code: String) -> Venue;
     venues::leave_venue(venue_id: String) -> ();
     venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
+    venues::set_venue_haze(venue_id: String, haze: VenueHaze) -> ();
 
     midi::midi_list_cues(venue_id: String) -> Vec<Cue>;
     midi::midi_create_cue(input: CreateCueInput) -> Cue;

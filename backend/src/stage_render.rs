@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 use glam::Vec3;
-use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment};
+use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment, VenueHaze};
 use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
@@ -52,8 +52,8 @@ const HAZE_RESOLUTION: f32 = 1.0;
 /// mechanism was a second lighting system: the same picture now comes out of
 /// the *default* environment, indoor with the house at full, which is what
 /// every venue has unless someone turned it down on purpose.
-fn offscreen_render(environment: VenueEnvironment) -> RenderSettings {
-    RenderSettings::room(environment, FOV_Y_DEG, HAZE_RESOLUTION)
+fn offscreen_render(environment: VenueEnvironment, haze: VenueHaze) -> RenderSettings {
+    RenderSettings::room(environment, haze, FOV_Y_DEG, HAZE_RESOLUTION)
 }
 
 /// Largest offscreen frame an agent may ask for, per side. Mirrors the figure
@@ -87,6 +87,12 @@ pub struct VenueGeometry {
     /// under different light overwrites this before calling [`Self::scene`] —
     /// that is a camera setting, not an edit, and it never reaches the record.
     pub environment: VenueEnvironment,
+    /// What this room is seen *through*.
+    ///
+    /// Read off the venue record with the environment, and for the same reason:
+    /// an offscreen frame of a hazy room has to be hazy, or the picture an
+    /// agent reasons about is not the picture the operator is looking at.
+    pub haze: VenueHaze,
 }
 
 impl VenueGeometry {
@@ -114,7 +120,8 @@ impl VenueGeometry {
         access: &mut VenueAccess<'_, Read>,
         fixtures_root: &Path,
     ) -> Result<Self, String> {
-        let environment = local::venues::get_venue(access).await?.environment;
+        let venue_record = local::venues::get_venue(access).await?;
+        let (environment, haze) = (venue_record.environment, venue_record.haze);
         let fixtures = local::fixtures::get_patched_fixtures(access).await?;
         let venue = crate::venue_graph::resolved(access, fixtures_root).await?;
         let mut definitions = HashMap::new();
@@ -137,6 +144,7 @@ impl VenueGeometry {
             venue,
             definitions,
             environment,
+            haze,
         })
     }
 
@@ -156,7 +164,7 @@ impl VenueGeometry {
     /// The room is lit by [`Self::environment`] — see [`offscreen_render`].
     #[must_use]
     pub fn scene(&self) -> (scene_desc::Scene, BTreeMap<String, scene_desc::Definition>) {
-        let render = offscreen_render(self.environment);
+        let render = offscreen_render(self.environment, self.haze);
         let definitions: BTreeMap<String, scene_desc::Definition> = self
             .definitions
             .iter()
@@ -979,6 +987,7 @@ mod tests {
             venue,
             definitions: HashMap::new(),
             environment: VenueEnvironment::default(),
+            haze: VenueHaze::default(),
         }
     }
 

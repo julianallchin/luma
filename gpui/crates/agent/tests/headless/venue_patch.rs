@@ -770,13 +770,15 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
 
 #[test]
 fn missing_group_dialog_repairs_saved_score_selectors() {
-    let mut harness = Fixture::new("venue-missing-group",20,Vec::new()).with_rig()
+    let mut harness = Fixture::new("venue-missing-group", 20, Vec::new())
+        .with_rig()
         .with_graph_score(support::score(
             serde_json::json!({ "lost": support::definition("Chase") }),
             serde_json::json!({"a":{"graph":"lost","start":0.,"duration":4.,"seed":0,
                                     "selection":{"expression":"lost_wash"}}}),
         ))
-        .window(1500.,950.).open(Mode::Headless);
+        .window(1500., 950.)
+        .open(Mode::Headless);
     let out = run(
         &mut harness,
         r#"
@@ -839,4 +841,107 @@ fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
     }
     assert_eq!(out["changed"], out["outdoor"]);
     assert_eq!(out["changed"], out["reopened"]);
+}
+
+/// The three tiers of the View panel, each persisted where it belongs.
+///
+/// Grid, gizmos and the render percent are **local device settings**
+/// (`stage_grid`, `stage_gizmos`, `render_scale`) and the haze is **venue
+/// truth**; all four have to come back after the venue is closed and reopened,
+/// which is the read that can only be served by the database.
+///
+/// The grid is the regression this is really about. It used to be derived from
+/// the room — on whenever there was a sun or a sky — so switching it off on a
+/// lit venue lasted exactly until the next `set_environment`, which is every
+/// light-slider sample, every score change and every rig reload. Hence the
+/// environment switch in the middle.
+///
+/// The panel's "Rendering W × H" caption is deliberately **not** asserted here:
+/// it reports what the prepaint actually asked the renderer for, and a headless
+/// run builds no device and so lays out no stage. `RenderScale::size` carries
+/// that arithmetic in `luma-app`'s own tests instead.
+#[test]
+fn view_settings_persist_per_device_and_per_venue() {
+    let mut harness = harness("venue-view-settings", false);
+    let out = run(
+        &mut harness,
+        r#"
+        function scrub(name) {
+            return app.snapshot().findAll({role:"slider"})
+                .find(n => n.label.startsWith(name + " = "));
+        }
+        function reading(name) {
+            const node = scrub(name);
+            return node === undefined ? null : node.label.split(" = ")[1];
+        }
+        function toggled(name) {
+            const node = app.snapshot().find({role:"toggle",label:name});
+            return node === undefined ? null : node.focused;
+        }
+        function openView() {
+            nav.step("view settings", "toggle", "Render settings");
+            return until("the view panel", s =>
+                s.find({role:"card",label:"Render settings"}) !== undefined
+                && scrub("Render scale (%)") !== undefined ? s : undefined);
+        }
+        function all() {
+            return {grid:toggled("Grid"), gizmos:toggled("Gizmos"),
+                    scale:reading("Render scale (%)"), density:reading("Haze density")};
+        }
+
+        nav.patch("Test Venue");
+        openView();
+        const before = all();
+
+        nav.step("grid off", "toggle", "Grid");
+        nav.step("gizmos off", "toggle", "Gizmos");
+        // Leftwards from the right edge: the mapping is absolute, so the value
+        // follows where the pointer stops rather than how far it travelled.
+        const scale = scrub("Render scale (%)").bounds;
+        app.drag({x:scale.x + scale.width - 2, y:scale.y + scale.height / 2},
+                 {dx:-(scale.width - 4) * 0.6, dy:0}, {steps:8});
+        const density = scrub("Haze density").bounds;
+        app.drag({x:density.x + 2, y:density.y + density.height / 2},
+                 {dx:(density.width - 4) * 0.8, dy:0}, {steps:8});
+        app.frames(4);
+        const changed = all();
+
+        // The room changes under them. This is what used to put the grid back.
+        nav.step("outdoor", "toggle", "Outdoor");
+        app.frames(4);
+        const relit = all();
+
+        app.key("escape");
+        until("settings closed", s => !s.find({role:"card",label:"Render settings"}));
+        nav.closeTab();
+        app.action("luma::NewTab");
+        nav.step("venue again", "button", "Venue");
+        until("loaded room", s => s.find({role:"toggle",label:"Frame stats"}));
+        openView();
+        app.frames(4);
+        ({before, changed, relit, reopened:all()})
+    "#,
+    );
+    let before = &out["before"];
+    let changed = &out["changed"];
+    assert_eq!(before["grid"], true, "{out:#}");
+    assert_eq!(before["gizmos"], true, "{out:#}");
+    assert_eq!(before["scale"], "100", "{out:#}");
+    assert_eq!(changed["grid"], false, "{out:#}");
+    assert_eq!(changed["gizmos"], false, "{out:#}");
+    assert_ne!(
+        changed["scale"], before["scale"],
+        "the percent did not move"
+    );
+    assert_ne!(
+        changed["density"], before["density"],
+        "the density did not move"
+    );
+    // The room is allowed to change the light. It is not allowed to change any
+    // of these four.
+    assert_eq!(out["relit"], *changed, "{out:#}");
+    assert_eq!(
+        out["reopened"], *changed,
+        "a view setting did not survive closing and reopening the venue"
+    );
 }

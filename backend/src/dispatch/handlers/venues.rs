@@ -9,7 +9,7 @@ use crate::database::local::venues as venues_db;
 use crate::database::remote::common::SupabaseClient;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::venues::Venue;
-use luma_render::scene_desc::VenueEnvironment;
+use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 /// Every venue in the local library, owned and joined alike. Read-only and
 /// unscoped — the per-venue authorization gate (`VenueAccess`) guards the
@@ -163,10 +163,11 @@ pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(),
 
 /// What kind of room this venue is, and how far up its one dial is.
 ///
-/// Venue truth at the tier of the name, and local-only, so there is no cloud
-/// round trip: take the write lease, write the column, commit — the shape
-/// `controller_connect` uses for the port. One write for both modes because
-/// the value is one closed enum; see [`venues_db::set_environment`].
+/// Venue truth at the tier of the name, and synced with the venue since the
+/// 20260905 migration: take the write lease, write the column, commit — the
+/// ordinary venue dirtiness trigger carries the edit up. One write for both
+/// modes because the value is one closed enum; see
+/// [`venues_db::set_environment`].
 pub async fn set_venue_environment(
     services: &AppServices,
     venue_id: String,
@@ -175,6 +176,21 @@ pub async fn set_venue_environment(
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     venues_db::set_environment(&mut access, environment).await?;
+    Ok(access.commit().await?)
+}
+
+/// How hazy this venue is, and what its haze looks like.
+///
+/// Venue truth beside the environment, and synced the same way: write lease,
+/// column, commit. One write for the whole look; see [`venues_db::set_haze`].
+pub async fn set_venue_haze(
+    services: &AppServices,
+    venue_id: String,
+    haze: VenueHaze,
+) -> Result<(), CommandError> {
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    venues_db::set_haze(&mut access, haze).await?;
     Ok(access.commit().await?)
 }
 
@@ -204,4 +220,3 @@ fn generate_share_code() -> String {
         .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
         .collect()
 }
-

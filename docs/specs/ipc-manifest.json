@@ -4650,12 +4650,31 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 170
+        "line": 171
       },
       "name": "set_venue_environment",
       "prose": {
         "returns": "()"
       },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "haze",
+          "rust": "VenueHaze"
+        }
+      ],
+      "domain": "venues",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/venues.rs",
+        "line": 186
+      },
+      "name": "set_venue_haze",
       "returns": "()"
     },
     {
@@ -5243,7 +5262,7 @@
       "handlers": "backend/src/dispatch/handlers/tracks.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 10,
       "domain": "venues",
       "handlers": "backend/src/dispatch/handlers/venues.rs"
     },
@@ -5418,7 +5437,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 207,
+    "commandCount": 208,
     "domainCount": 32,
     "eventCount": 18
   },

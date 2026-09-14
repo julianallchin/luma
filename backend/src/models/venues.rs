@@ -1,4 +1,4 @@
-use luma_render::scene_desc::VenueEnvironment;
+use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
@@ -38,6 +38,17 @@ pub struct Venue {
         type = "{ mode: \"indoor\", houseLevel: number } | { mode: \"outdoor\", sunElevationDeg: number }"
     )]
     pub environment: VenueEnvironment,
+    /// How hazy this room is, and what its haze looks like.
+    ///
+    /// Venue truth beside [`Self::environment`], and stored the same way: the
+    /// type's own JSON, decoded totally, synced with the venue. The march's
+    /// cost knobs (`steps`, `resolution`) are deliberately not here — they are
+    /// local to whichever machine draws the frame.
+    #[sqlx(try_from = "String")]
+    #[ts(
+        type = "{ enabled: boolean, density: number, appearance: { cloudiness: number, cloudSize: number, turbulence: number, windSpeed: number, windDirection: number } }"
+    )]
+    pub haze: VenueHaze,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
