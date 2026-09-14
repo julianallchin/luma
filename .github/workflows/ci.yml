@@ -23,9 +23,7 @@ jobs:
           sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libfontconfig1-dev libssl-dev libclang-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            gpui -> target
-            backend -> target
+          workspaces: gpui -> target
       - name: Check native app
         run: cargo check --workspace --all-targets
         working-directory: gpui
