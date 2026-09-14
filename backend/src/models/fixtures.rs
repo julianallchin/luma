@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ChannelType {
     Intensity,
     Colour,
@@ -19,7 +18,7 @@ pub enum ChannelType {
     Unknown,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ChannelColour {
     Red,
     Green,
@@ -33,7 +32,7 @@ pub enum ChannelColour {
     None,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct FixtureDefinition {
     pub manufacturer: String,
@@ -68,7 +67,7 @@ impl FixtureDefinition {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Channel {
     #[serde(rename = "@Name")]
@@ -208,7 +207,7 @@ impl Channel {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Group {
     #[serde(rename = "@Byte")]
@@ -217,7 +216,7 @@ pub struct Group {
     pub value: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Capability {
     #[serde(rename = "@Min")]
@@ -254,7 +253,7 @@ impl Capability {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Mode {
     #[serde(rename = "@Name")]
@@ -265,7 +264,7 @@ pub struct Mode {
     pub heads: Vec<Head>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModeChannel {
     #[serde(rename = "@Number")]
     pub number: u32,
@@ -273,13 +272,13 @@ pub struct ModeChannel {
     pub name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Head {
     #[serde(rename = "Channel")]
     pub channels: Vec<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Physical {
     pub dimensions: Option<Dimensions>,
@@ -290,7 +289,7 @@ pub struct Physical {
     pub technical: Option<Technical>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Bulb {
     #[serde(rename = "@Type")]
@@ -301,7 +300,7 @@ pub struct Bulb {
     pub colour_temperature: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Lens {
     #[serde(rename = "@Name")]
@@ -312,7 +311,7 @@ pub struct Lens {
     pub degrees_max: Option<f32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Focus {
     #[serde(rename = "@Type")]
@@ -323,7 +322,7 @@ pub struct Focus {
     pub tilt_max: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Technical {
     #[serde(rename = "@PowerConsumption")]
@@ -332,7 +331,7 @@ pub struct Technical {
     pub dmx_connector: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Dimensions {
     #[serde(rename = "@Weight")]
@@ -345,7 +344,7 @@ pub struct Dimensions {
     pub depth: f32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct Layout {
     #[serde(rename = "@Width")]
@@ -354,7 +353,7 @@ pub struct Layout {
     pub height: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FixtureEntry {
     pub manufacturer: String,
     pub model: String,
@@ -362,7 +361,7 @@ pub struct FixtureEntry {
 }
 
 /// A fixture that has been patched to a venue
-#[derive(Debug, Serialize, Deserialize, Clone, TS, FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchedFixture {
     pub id: String,
@@ -396,7 +395,7 @@ pub struct PatchedFixture {
 ///
 /// Not a column on [`PatchedFixture`]: that struct is a row, and a derived value
 /// stored beside the thing it is derived from is a value that can be stale.
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureFacing {
     pub id: String,
@@ -407,14 +406,14 @@ pub struct FixtureFacing {
     pub word: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum FixtureNodeType {
     Fixture,
     Head,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureNode {
     pub id: String,

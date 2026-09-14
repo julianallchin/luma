@@ -1,14 +1,12 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
 /// A placeable set-design object (stage floor, truss, speaker, ...).
 ///
 /// Coordinates are Z-up to match fixtures; the renderer swaps Y<->Z when
 /// drawing into three.js (Y-up).
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct StagePiece {
     pub id: String,
     pub uid: Option<String>,

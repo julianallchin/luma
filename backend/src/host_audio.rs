@@ -16,7 +16,6 @@ use std::time::Instant;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleRate, StreamConfig};
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 const PLAYBACK_RATE_MIN: f32 = 0.25;
 const PLAYBACK_RATE_MAX: f32 = 2.0;
@@ -186,7 +185,7 @@ impl HostAudioState {
 }
 
 /// Snapshot of playback state sent to frontend
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HostAudioSnapshot {
     pub session: u64,

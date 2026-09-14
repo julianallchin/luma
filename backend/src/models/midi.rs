@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ts_rs::TS;
 
 use super::node_graph::BlendMode;
 
@@ -8,7 +7,7 @@ use super::node_graph::BlendMode;
 // MIDI Input Types
 // ============================================================================
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum MidiInput {
     /// Pad/button — note on/off on a channel
@@ -23,7 +22,7 @@ pub enum MidiInput {
 // Target
 // ============================================================================
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Target {
     /// All fixtures
@@ -38,7 +37,7 @@ pub enum Target {
 // Cue Execution Mode
 // ============================================================================
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CueExecutionMode {
     /// Compile N bars at track BPM; loop `elapsed % loop_duration`
@@ -60,72 +59,57 @@ impl Default for CueExecutionMode {
 // ============================================================================
 
 /// A named pre-configured pattern instance — the live equivalent of a score annotation.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct Cue {
     pub id: String,
     pub uid: Option<String>,
     pub venue_id: String,
     pub name: String,
     pub pattern_id: String,
-    #[ts(type = "Record<string, unknown>")]
     pub args: Value,
-    #[ts(type = "number")]
     pub z_index: i64,
     pub blend_mode: BlendMode,
     pub default_target: Target,
     pub execution_mode: CueExecutionMode,
-    #[ts(type = "number")]
     pub display_x: i64,
-    #[ts(type = "number")]
     pub display_y: i64,
     pub created_at: String,
     pub updated_at: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CreateCueInput {
     pub venue_id: String,
     pub name: String,
     pub pattern_id: String,
     #[serde(default)]
-    #[ts(type = "Record<string, unknown> | undefined")]
     pub args: Option<Value>,
     #[serde(default)]
-    #[ts(type = "number | undefined")]
     pub z_index: Option<i64>,
     pub blend_mode: Option<BlendMode>,
     pub default_target: Option<Target>,
     pub execution_mode: Option<CueExecutionMode>,
     #[serde(default)]
-    #[ts(type = "number | undefined")]
     pub display_x: Option<i64>,
     #[serde(default)]
-    #[ts(type = "number | undefined")]
     pub display_y: Option<i64>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct UpdateCueInput {
     pub id: String,
     pub name: Option<String>,
     pub pattern_id: Option<String>,
     #[serde(default)]
-    #[ts(type = "Record<string, unknown> | undefined")]
     pub args: Option<Value>,
-    #[ts(type = "number | undefined")]
     pub z_index: Option<i64>,
     pub blend_mode: Option<BlendMode>,
     pub default_target: Option<Target>,
     pub execution_mode: Option<CueExecutionMode>,
-    #[ts(type = "number | undefined")]
     pub display_x: Option<i64>,
-    #[ts(type = "number | undefined")]
     pub display_y: Option<i64>,
 }
 
@@ -134,9 +118,8 @@ pub struct UpdateCueInput {
 // ============================================================================
 
 /// A held input that routes subsequent pad presses to specific groups.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ModifierDef {
     pub id: String,
     pub uid: Option<String>,
@@ -149,9 +132,8 @@ pub struct ModifierDef {
     pub updated_at: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CreateModifierInput {
     pub venue_id: String,
     pub name: String,
@@ -159,9 +141,8 @@ pub struct CreateModifierInput {
     pub groups: Option<Vec<String>>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct UpdateModifierInput {
     pub id: String,
     pub name: Option<String>,
@@ -173,7 +154,7 @@ pub struct UpdateModifierInput {
 // MidiBinding
 // ============================================================================
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TriggerMode {
     Toggle,
@@ -181,7 +162,6 @@ pub enum TriggerMode {
     Flash,
     /// Tap = latch toggle; hold ≥ threshold = flash. Default 300ms.
     TapToggleHoldFlash {
-        #[ts(type = "number")]
         threshold_ms: u64,
     },
 }
@@ -192,7 +172,7 @@ impl Default for TriggerMode {
     }
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum MidiAction {
     FireCue {
@@ -207,9 +187,8 @@ pub enum MidiAction {
     ControllerActive,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct MidiBinding {
     pub id: String,
     pub uid: Option<String>,
@@ -223,15 +202,13 @@ pub struct MidiBinding {
     pub action: MidiAction,
     /// Overrides cue's default_target if set
     pub target_override: Option<Target>,
-    #[ts(type = "number")]
     pub display_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct CreateBindingInput {
     pub venue_id: String,
     pub trigger: MidiInput,
@@ -243,13 +220,11 @@ pub struct CreateBindingInput {
     pub action: MidiAction,
     pub target_override: Option<Target>,
     #[serde(default)]
-    #[ts(type = "number")]
     pub display_order: i64,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct UpdateBindingInput {
     pub id: String,
     pub trigger: Option<MidiInput>,
@@ -258,7 +233,6 @@ pub struct UpdateBindingInput {
     pub mode: Option<TriggerMode>,
     pub action: Option<MidiAction>,
     pub target_override: Option<Option<Target>>,
-    #[ts(type = "number | undefined")]
     pub display_order: Option<i64>,
 }
 
@@ -266,9 +240,8 @@ pub struct UpdateBindingInput {
 // Frontend state events
 // ============================================================================
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ControllerState {
     pub active: bool,
     pub master_intensity: f32,
@@ -282,9 +255,8 @@ pub struct ControllerState {
     pub group_intensities: std::collections::HashMap<String, f32>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ControllerStatus {
     pub connected: bool,
     pub port_name: Option<String>,

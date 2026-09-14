@@ -81,7 +81,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use ts_rs::TS;
 
 use glam::{DMat4, DVec3};
 use luma_scene::coords::data_pose_of_d;
@@ -99,7 +98,7 @@ use crate::models::groups::{normalize_group_name, GroupOrigin, GroupTreeNode};
 ///
 /// Eight values, closed. This is the vocabulary a score speaks; a ninth would
 /// mean every venue's tree grew a branch nothing references.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FixtureRole {
     /// Colour over an area: pars, wash movers, anything with mixing and no gobo.

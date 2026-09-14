@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{FromRow, Row};
-use ts_rs::TS;
 
 /// 3-band envelope data for rekordbox-style waveform rendering.
 ///
@@ -9,9 +8,8 @@ use ts_rs::TS;
 /// band's [`BandGains`] entry, log-compressed and scaled. Every envelope of one
 /// track — the full one, the preview, and any range measured later — is in
 /// these units, so a bucket from one is comparable with a bucket from another.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct BandEnvelopes {
     /// Low frequency envelope (bass) - values 0.0-1.0
     pub low: Vec<f32>,
@@ -39,9 +37,8 @@ pub struct BandGains {
 }
 
 /// Waveform data for timeline visualization
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct TrackWaveform {
     pub track_id: String,
     pub uid: Option<String>,
@@ -60,7 +57,6 @@ pub struct TrackWaveform {
     pub colors: Option<Vec<u8>>,
     /// Legacy: Colors for each bucket in preview_samples (interleaved R, G, B bytes)
     pub preview_colors: Option<Vec<u8>>,
-    #[ts(type = "number")]
     pub sample_rate: u32,
     pub duration_seconds: f64,
 }

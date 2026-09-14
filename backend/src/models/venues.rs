@@ -1,15 +1,13 @@
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
 /// Venue role constants
 pub const ROLE_OWNER: &str = "owner";
 pub const ROLE_MEMBER: &str = "member";
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct Venue {
     pub id: String,
     pub uid: Option<String>,
@@ -34,9 +32,6 @@ pub struct Venue {
     /// decode is total — see that type's `From<String>`), so the column, the
     /// wire and `luma.venue.environment()` are one string, synced with the venue.
     #[sqlx(try_from = "String")]
-    #[ts(
-        type = "{ mode: \"indoor\", houseLevel: number } | { mode: \"outdoor\", sunElevationDeg: number }"
-    )]
     pub environment: VenueEnvironment,
     /// How hazy this room is, and what its haze looks like.
     ///
@@ -45,9 +40,6 @@ pub struct Venue {
     /// cost knobs (`steps`, `resolution`) are deliberately not here — they are
     /// local to whichever machine draws the frame.
     #[sqlx(try_from = "String")]
-    #[ts(
-        type = "{ enabled: boolean, density: number, appearance: { cloudiness: number, cloudSize: number, turbulence: number, windSpeed: number, windDirection: number } }"
-    )]
     pub haze: VenueHaze,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
@@ -66,9 +58,8 @@ impl Venue {
 }
 
 /// Per-venue override of which implementation to use for a pattern
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct VenueImplementationOverride {
     #[sqlx(rename = "venue_id")]
     pub venue_id: String,

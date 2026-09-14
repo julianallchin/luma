@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PrimitiveState {
     pub dimmer: f32,        // 0.0 - 1.0
@@ -12,7 +11,7 @@ pub struct PrimitiveState {
     pub speed: f32,         // 0.0 (frozen) or 1.0 (fast) - binary
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UniverseState {
     // Key: "fixture-uuid" OR "fixture-uuid:head-index"

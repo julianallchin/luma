@@ -1,11 +1,8 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct EngineDjTrack {
-    #[ts(type = "number")]
     pub id: i64,
     pub path: String,
     pub filename: String,
@@ -15,29 +12,22 @@ pub struct EngineDjTrack {
     pub bpm_analyzed: Option<f64>,
     pub length: Option<f64>,
     pub origin_database_uuid: Option<String>,
-    #[ts(type = "number | null")]
     pub origin_track_id: Option<i64>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct EngineDjPlaylist {
-    #[ts(type = "number")]
     pub id: i64,
     pub title: String,
-    #[ts(type = "number | null")]
     pub parent_id: Option<i64>,
-    #[ts(type = "number")]
     pub track_count: i64,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct EngineDjLibraryInfo {
     pub database_uuid: String,
     pub library_path: String,
-    #[ts(type = "number")]
     pub track_count: i64,
 }

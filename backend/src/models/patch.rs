@@ -1,7 +1,7 @@
 //! Addressing across the host boundary.
 //!
 //! [`luma_scene::patch`] owns the rule; these are its answers in the shapes
-//! `ts-rs` and `serde` can carry. A projection, not a second declaration —
+//! `serde` can carry. A projection, not a second declaration —
 //! every field is read off a [`luma_scene::patch::Assignment`],
 //! [`luma_scene::patch::Cell`] or [`luma_scene::patch::Note`], and no number
 //! here is computed.
@@ -9,12 +9,10 @@
 use luma_scene::patch::{Assignment, Cell, Note};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use ts_rs::TS;
 
 /// One fixture's place in the patch.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PatchAssignment {
     /// The `fixtures` row id.
     pub fixture_id: String,
@@ -47,9 +45,8 @@ impl From<&Assignment> for PatchAssignment {
 /// Flattened to a sentence rather than carried as a tagged union: the page
 /// shows these in a list, nothing branches on them, and a variant per note
 /// would be a second copy of an enum that already exists in `luma_scene`.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PatchNote {
     pub message: String,
 }
@@ -82,9 +79,8 @@ impl From<&Note> for PatchNote {
 }
 
 /// What one auto-patch did.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct AutoPatchReport {
     /// How many fixtures ended up somewhere other than where they were.
     pub moved: usize,
@@ -94,9 +90,8 @@ pub struct AutoPatchReport {
 }
 
 /// One DMX channel of one universe, as the footprint strip draws it.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct UniverseCell {
     /// `1..=512`.
     pub address: u16,
@@ -138,9 +133,8 @@ impl UniverseCell {
 /// the two halves of one decision should be described in one place. `port_address`
 /// is the node's **own** announced Net/SubNet/Universe — never derived from a
 /// Luma universe number.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct ArtNetNode {
     pub ip: String,
     pub name: String,
@@ -155,9 +149,8 @@ pub struct ArtNetNode {
 /// The table that replaces `(net << 8) | (subnet << 4) | (universe & 0xF)`.
 /// That arithmetic aliases universe 17 onto universe 1 and cannot name a second
 /// node at all; a binding names one.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, FromRow, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct UniverseOutput {
     pub universe: i64,
     pub node_ip: String,
@@ -169,9 +162,8 @@ pub struct UniverseOutput {
 
 /// A free slot, as [`crate::services::patch::next_addresses`] hands it to a
 /// caller whose fixtures do not exist yet.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
 pub struct PatchAddress {
     pub universe: u16,
     pub address: u16,

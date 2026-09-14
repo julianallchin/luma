@@ -72,7 +72,6 @@ serde_json = "1"
 thiserror = "2"
 indicatif = "0.17"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
-ts-rs = { version = "11.1", features = ["serde-compat"] }
 petgraph = "0.6"
 base64 = "0.21"
 lofty = "0.22.4"

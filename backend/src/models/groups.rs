@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::services::group_derivation::FixtureRole;
 
 /// Movement pyramid configuration for a fixture group.
 /// Defines the base aim direction and angular extents for UV perturbation.
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MovementConfig {
     /// Base direction unit vector (Z-up coordinate system)
@@ -93,7 +92,7 @@ pub fn validate_group_name(name: &str) -> Result<(), String> {
 }
 
 /// A fixture group within a venue
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroup {
     pub id: String,
@@ -127,7 +126,7 @@ pub struct FixtureGroup {
 /// them** rather than with nulls that could be mistaken for "centred". Deriving
 /// them from geometry is the movement layer's job and it is not built; until it
 /// is, consumers must tolerate their absence.
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroupNode {
     pub id: String,
@@ -148,25 +147,21 @@ pub struct FixtureGroupNode {
     pub moves: bool,
     /// Left (-1) to Right (+1). Authored groups only — see the type's docs.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub axis_lr: Option<f64>,
     /// Front (-1) to Back (+1). Authored groups only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub axis_fb: Option<f64>,
     /// Below (-1) to Above (+1). Authored groups only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub axis_ab: Option<f64>,
     /// Authored groups only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub movement_config: Option<MovementConfig>,
     pub fixtures: Vec<GroupedFixtureNode>,
 }
 
 /// A fixture within a group hierarchy
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupedFixtureNode {
     pub id: String,
@@ -183,7 +178,7 @@ pub struct GroupedFixtureNode {
 }
 
 /// A head within a fixture
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HeadNode {
     /// Format: "fixtureId:headIndex"
@@ -195,7 +190,7 @@ pub struct HeadNode {
 }
 
 /// Where a node of the group tree came from.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupOrigin {
     /// The rule produced it and nobody has touched it. It re-derives on every
@@ -214,9 +209,8 @@ pub enum GroupOrigin {
 ///
 /// Flat with a `parent_id` rather than a recursive type, for the same reason
 /// [`crate::models::venue_graph::ResolvedVenue`] is: parents come before
-/// children, so a consumer can build the tree in one pass, and `ts-rs` can
-/// name the type.
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+/// children, so a consumer can build the tree in one pass.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupTreeNode {
     pub id: String,
@@ -233,7 +227,7 @@ pub struct GroupTreeNode {
 }
 
 /// A selector name used by saved scores but absent from their venue.
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MissingGroup {
     pub name: String,
