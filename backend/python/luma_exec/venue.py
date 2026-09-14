@@ -2,8 +2,9 @@
 
 The binding snapshot exposes `fixtures` (this room's patch), `pieces`,
 `positions`, and `uv`. `fixture_library(query)` searches available light models.
-Live `groups()`, `unplaced()`, and `environment()` have explicitly named
-`group_snapshot`, `unplaced_snapshot`, and `environment_snapshot` counterparts.
+Live `groups()`, `unplaced()`, `environment()`, and `haze()` have explicitly
+named `group_snapshot`, `unplaced_snapshot`, `environment_snapshot`, and
+`haze_snapshot` counterparts.
 Aliases such as `v = luma.venue` refresh between cells; extracted records and
 lists such as `fx = v.fixtures` remain snapshots. Use live queries after edits
 in the same cell.
@@ -797,6 +798,53 @@ class Environment:
         return self._line
 
 
+class Haze:
+    """The atmosphere a room is seen through: whether it has haze, and what it looks like.
+
+    Seven dials on one room, flat. `enabled` and `density` are how much there
+    is; `cloudiness`, `cloud_size`, `turbulence`, `wind_speed` and
+    `wind_direction` are what it looks like and how it moves.
+
+    How many samples the haze march takes, and at what resolution, are not here:
+    those are the cost of drawing a frame on one machine, not a property of the
+    room, so they are not venue truth and no agent can set them.
+    """
+
+    __slots__ = (
+        "enabled",
+        "density",
+        "cloudiness",
+        "cloud_size",
+        "turbulence",
+        "wind_speed",
+        "wind_direction",
+        "_line",
+    )
+
+    def __init__(self, response: Mapping[str, Any]) -> None:
+        #: Whether the room has haze in it at all.
+        self.enabled = bool(response["enabled"])
+        #: Mean density, 0 to 0.5.
+        self.density = float(response["density"])
+        #: Density contrast: 0 is uniform, 1 is pronounced clouds.
+        self.cloudiness = float(response["cloudiness"])
+        #: Characteristic cloud size in metres.
+        self.cloud_size = float(response["cloudSize"])
+        #: Strength of evolving deformation and fine wisps, 0 to 1.
+        self.turbulence = float(response["turbulence"])
+        #: Horizontal drift in metres per second.
+        self.wind_speed = float(response["windSpeed"])
+        #: World heading of that drift, in degrees.
+        self.wind_direction = float(response["windDirection"])
+        self._line = str(response.get("describe") or ("haze" if self.enabled else "no haze"))
+
+    def __repr__(self) -> str:
+        return f"<Haze {self._line}>"
+
+    def __str__(self) -> str:
+        return self._line
+
+
 class LibraryMode:
     """One mode of a library fixture — the string `distribute` takes as `mode`."""
 
@@ -1376,6 +1424,52 @@ class Venue:
             },
         )
         return Environment(response)
+
+    def haze(
+        self,
+        *,
+        enabled: bool | None = None,
+        density: float | None = None,
+        cloudiness: float | None = None,
+        cloud_size: float | None = None,
+        turbulence: float | None = None,
+        wind_speed: float | None = None,
+        wind_direction: float | None = None,
+    ) -> Haze:
+        """Read the room's haze, or change it.
+
+        With no arguments this reads. With any argument it writes, and the write
+        is venue truth: it lands on the venue itself, so every picture taken
+        afterwards — here, in another cell, in the editor — is taken through it.
+
+        A write is a patch: the dials you do not name keep the value the room
+        already had, so asking for more `density` does not reset the wind.
+
+        `enabled` is whether the room has haze at all and `density` is how much,
+        0 to 0.5. `cloudiness` (0 to 1) is how uneven it is, `cloud_size` is the
+        size of those clouds in metres, `turbulence` (0 to 1) is how much they
+        churn, and `wind_speed` (m/s) with `wind_direction` (degrees) is the
+        drift. Values outside those ranges are clamped, not refused.
+
+        How many samples the march takes and at what resolution are not
+        settable: they are the cost of drawing a frame on one machine, not a
+        property of the room.
+        """
+        response = self._verb(
+            "venue.haze",
+            {
+                "enabled": None if enabled is None else bool(enabled),
+                "density": None if density is None else float(density),
+                "cloudiness": None if cloudiness is None else float(cloudiness),
+                "cloudSize": None if cloud_size is None else float(cloud_size),
+                "turbulence": None if turbulence is None else float(turbulence),
+                "windSpeed": None if wind_speed is None else float(wind_speed),
+                "windDirection": (
+                    None if wind_direction is None else float(wind_direction)
+                ),
+            },
+        )
+        return Haze(response)
 
     # -- building --------------------------------------------------------
 

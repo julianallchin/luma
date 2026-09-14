@@ -550,6 +550,101 @@ impl From<VenueEnvironment> for String {
     }
 }
 
+/// How hazy a venue is, and what its haze looks like.
+///
+/// **Venue truth**, the same tier as [`VenueEnvironment`]: it sits on the venue
+/// record, it syncs with the venue, and every picture of that room — the editor
+/// viewport, an agent's offscreen frame — is taken through it. A room either
+/// has atmosphere in it or it does not, and that is a property of the room, not
+/// of whoever is looking at it.
+///
+/// Deliberately **without `steps` and `resolution`**. Those two live on
+/// [`HazeSettings`] and they are the march's cost, not the room's look: how
+/// many samples a beam is integrated at, and at what fraction of the output
+/// resolution. They belong to the machine drawing the frame — a laptop on
+/// battery and a workstation should not have to disagree about what the venue
+/// *is* in order to disagree about how expensive it may be — so they stay
+/// local and unsynced. Resist adding them here.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VenueHaze {
+    /// Whether the participating-medium pass is evaluated for this room at all.
+    pub enabled: bool,
+    /// Mean density, independent of hazer fixtures. 0..=0.5.
+    pub density: f32,
+    /// Shared spatial appearance and movement.
+    pub appearance: HazeAppearance,
+}
+
+impl Default for VenueHaze {
+    /// The haze this app has always drawn: on, at 0.24, with the default
+    /// appearance. A venue nobody has touched looks exactly as it did before
+    /// haze became a venue property.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            density: 0.24,
+            appearance: HazeAppearance::DEFAULT,
+        }
+    }
+}
+
+impl VenueHaze {
+    /// Largest mean density a room may hold. Past this the march is fog rather
+    /// than haze and a beam stops reading as a beam.
+    pub const MAX_DENSITY: f32 = 0.5;
+
+    /// Clamp authored or stored controls at the rendering boundary.
+    ///
+    /// Applied on the way out of [`From<String>`], so a row written by an older
+    /// build, an agent or a hand-edited database cannot put the renderer in a
+    /// state it has no answer for.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let default = Self::default();
+        Self {
+            enabled: self.enabled,
+            density: if self.density.is_finite() {
+                self.density.clamp(0.0, Self::MAX_DENSITY)
+            } else {
+                default.density
+            },
+            appearance: self.appearance.sanitized(),
+        }
+    }
+
+    /// The JSON one venue record's `haze` column holds.
+    ///
+    /// The record spelling and the wire spelling are the same string, for the
+    /// same reason as [`VenueEnvironment::to_record`]: the column, the agent
+    /// verb and the editor's controls are all looking at one value, and a
+    /// second encoding would be a second place for them to disagree.
+    #[must_use]
+    pub fn to_record(self) -> String {
+        serde_json::to_string(&self).unwrap_or_else(|_| String::from("{}"))
+    }
+}
+
+/// Read a venue's haze back out of its record.
+///
+/// **Total**, and sanitized. A column that is empty, truncated, written by an
+/// older build or simply wrong reads as the default, because there is no useful
+/// thing for a venue to do with "this room has no atmosphere model" and a
+/// failed read here would take the whole venue down with it.
+impl From<String> for VenueHaze {
+    fn from(record: String) -> Self {
+        serde_json::from_str::<Self>(&record)
+            .unwrap_or_default()
+            .sanitized()
+    }
+}
+
+impl From<VenueHaze> for String {
+    fn from(haze: VenueHaze) -> Self {
+        haze.to_record()
+    }
+}
+
 impl Environment {
     /// A black environment with no ambient contribution.
     pub const DARK: Self = Self {
@@ -766,17 +861,28 @@ impl RenderSettings {
     ///
     /// Indoors, the house downlights provide the direct light, with a small
     /// ambient approximation for room bounce. There is no directional key.
+    ///
+    /// `haze` is the room's own atmosphere, for the same reason `environment`
+    /// is: both are venue truth, and a venue is only ever drawn under this
+    /// preset. `haze_resolution` stays a separate argument because it is the
+    /// caller's cost budget, not the venue's look — see [`VenueHaze`].
     #[must_use]
-    pub fn room(environment: VenueEnvironment, fov: f32, haze_resolution: f32) -> Self {
+    pub fn room(
+        environment: VenueEnvironment,
+        haze: VenueHaze,
+        fov: f32,
+        haze_resolution: f32,
+    ) -> Self {
         let fill = crate::house::fill(environment);
+        let haze = haze.sanitized();
         Self {
             environment: fill.environment,
             haze: HazeSettings {
-                appearance: HazeAppearance::DEFAULT,
-                enabled: true,
+                appearance: haze.appearance,
+                enabled: haze.enabled,
                 steps: 8,
                 resolution: haze_resolution,
-                density: 0.24,
+                density: haze.density,
             },
             sun: fill.sun,
             show_grid: true,
@@ -1422,6 +1528,56 @@ impl Definition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn venue_haze_round_trips_through_its_record() {
+        let haze = VenueHaze {
+            enabled: false,
+            density: 0.42,
+            appearance: HazeAppearance {
+                cloudiness: 0.6,
+                cloud_size: 7.5,
+                turbulence: 0.2,
+                wind_speed: 1.25,
+                wind_direction: 210.0,
+            },
+        };
+        assert_eq!(VenueHaze::from(haze.to_record()), haze);
+    }
+
+    #[test]
+    fn a_malformed_haze_record_reads_as_the_default() {
+        for record in ["", "{", "null", "[]", "not json at all"] {
+            assert_eq!(
+                VenueHaze::from(record.to_string()),
+                VenueHaze::default(),
+                "{record:?} should have decoded to the default"
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_haze_record_is_clamped_on_the_way_in() {
+        let record = r#"{"enabled":true,"density":9.0,"appearance":{"cloudiness":-1.0,"cloudSize":900.0,"turbulence":5.0,"windSpeed":-3.0,"windDirection":400.0}}"#;
+        let haze = VenueHaze::from(record.to_string());
+        assert_eq!(haze.density, VenueHaze::MAX_DENSITY);
+        assert_eq!(haze.appearance, haze.appearance.sanitized());
+    }
+
+    #[test]
+    fn a_room_is_drawn_through_its_venues_haze() {
+        let haze = VenueHaze {
+            enabled: true,
+            density: 0.11,
+            appearance: HazeAppearance::DEFAULT,
+        };
+        let render = RenderSettings::room(VenueEnvironment::default(), haze, 50.0, 0.5);
+        assert_eq!(render.haze.density, 0.11);
+        assert!(render.haze.enabled);
+        // The cost knobs are the caller's, not the venue's.
+        assert_eq!(render.haze.resolution, 0.5);
+        assert_eq!(render.haze.steps, 8);
+    }
 
     /// The catalogue the test rig is patched from: one moving head.
     fn definitions() -> BTreeMap<String, Definition> {

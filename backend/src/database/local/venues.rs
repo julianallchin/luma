@@ -2,13 +2,13 @@ use uuid::Uuid;
 
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venues::Venue;
-use luma_render::scene_desc::VenueEnvironment;
+use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 
 /// `role` is not read off the row: it is derived per reader — see
 /// [`get_venue`] — so a venue the admitted principal does not own reads as a
 /// member's however the column was written.
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, 'owner' AS role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
+    "id, uid, name, description, share_code, 'owner' AS role, controller_port, mixer_port, mixer_mapping_json, environment, haze, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
@@ -21,7 +21,7 @@ pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, Strin
                     ELSE 'member'
                 END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
-                venue.environment, venue.created_at, venue.updated_at
+                venue.environment, venue.haze, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
          WHERE venue.id = ? AND admission.singleton = 1",
@@ -45,7 +45,7 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
                     ELSE 'member'
                 END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
-                venue.environment, venue.created_at, venue.updated_at
+                venue.environment, venue.haze, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
          WHERE admission.singleton = 1
@@ -280,6 +280,27 @@ pub async fn set_environment(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to set venue environment: {e}"))?;
+    Ok(())
+}
+
+/// Set this venue's haze, synced with the venue.
+///
+/// One write for the whole value, like [`set_environment`]: enabled, density
+/// and appearance are one look, and a per-field setter would let a caller write
+/// a density onto a room whose haze is off and wonder why nothing changed.
+///
+/// The march's cost knobs are not here and never will be — see
+/// `luma_render::scene_desc::VenueHaze`.
+///
+/// The ordinary venue dirtiness trigger schedules delivery of this edit.
+pub async fn set_haze(access: &mut VenueAccess<'_, Write>, haze: VenueHaze) -> Result<(), String> {
+    let venue_id = access.venue_id().to_string();
+    sqlx::query("UPDATE venues SET haze = ? WHERE id = ?")
+        .bind(haze.sanitized().to_record())
+        .bind(venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to set venue haze: {e}"))?;
     Ok(())
 }
 

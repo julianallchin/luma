@@ -519,6 +519,23 @@ pub(crate) struct Visualizer {
     environment_saving: bool,
     environment_edited: bool,
     environment_pending: Rc<RefCell<Option<VenueEnvironment>>>,
+    /// The same four, for the room's haze — venue truth on the same row, so it
+    /// needs the same guard. A dragged density emits a value per pointer move,
+    /// and one IPC write per frame is not a thing to do to a database.
+    haze_error: Option<String>,
+    haze_saving: bool,
+    haze_edited: bool,
+    haze_pending: Rc<RefCell<Option<scene_desc::VenueHaze>>>,
+    /// Whichever of the three local device settings last failed to save. One
+    /// field for all three because they are one tier and one message: the lab
+    /// already shows the value, so the only news is that the database does not.
+    view_setting_error: Option<String>,
+    /// And a coalescing pair for the render-scale percent, which is a device
+    /// setting rather than venue data but is scrubbed by the same kind of
+    /// control. `Library::set_setting` keeps ordering, not a bound on how many
+    /// writes are queued behind it.
+    render_scale_saving: bool,
+    render_scale_pending: Rc<RefCell<Option<u8>>>,
     /// Whether the FPS readout is unfolded into the full frame-stats panel.
     fps_expanded: bool,
     /// The builder. `None` until the rig lands, and the one place a position
@@ -549,6 +566,11 @@ struct Stage {
     /// does — a viewport that failed silently is a black rectangle with no
     /// account of itself.
     error: Option<String>,
+    /// The device pixels the last prepaint asked for, after both the pixel
+    /// budget and the operator's percent. Written where that size is first
+    /// known and read by the View panel's caption — a percent on its own cannot
+    /// say what it actually bought.
+    render_size: Option<(u32, u32)>,
     /// End-to-end renderer wall time from the previous completed frame.
     last_draw_ms: Option<f32>,
     /// CPU scene encoding and queue submission time from the previous frame.
@@ -683,14 +705,27 @@ impl RenderScale {
 
     /// The size to render an element of `physical` device pixels at: the
     /// same aspect, whole pixels, never larger than the element.
-    fn size(self, (width, height): (u32, u32)) -> (u32, u32) {
-        let scale = match self {
+    ///
+    /// `percent` is the operator's own `render_scale` setting, and it
+    /// **composes** with whatever this variant already decided — it does not
+    /// replace it. Two things follow, and both are the point:
+    ///
+    /// * At 100 the multiplier is exactly 1.0, so the answer is bit-for-bit the
+    ///   one this function gave before the setting existed, [`Self::Budget`]'s
+    ///   fullscreen protection included.
+    /// * Every notch below 100 removes pixels *from whatever is being rendered
+    ///   now*. Had the percent replaced the budget, then on a large retina
+    ///   window — where the budget already picks ~0.6 — the top of the slider's
+    ///   travel would do nothing at all, which reads as a broken control.
+    fn size(self, percent: u8, (width, height): (u32, u32)) -> (u32, u32) {
+        let env = match self {
             Self::Native => 1.0,
             Self::Fixed(scale) => f64::from(scale),
             Self::Budget => (RENDER_BUDGET_PIXELS / (f64::from(width) * f64::from(height)))
                 .sqrt()
                 .min(1.0),
         };
+        let scale = env * f64::from(clamp_render_scale(i64::from(percent))) / 100.0;
         let fit = |side: u32| ((f64::from(side) * scale).round() as u32).clamp(1, side.max(1));
         (fit(width), fit(height))
     }
@@ -760,13 +795,24 @@ struct RenderLab {
     fixture_shadows: bool,
     geometry_shadows: bool,
     cluster_debug: bool,
-    haze_enabled: bool,
-    haze_density: f32,
-    haze_appearance: scene_desc::HazeAppearance,
+    /// The room's atmosphere — **venue truth**, saved on the venue row and
+    /// synced with it, unlike every other dial here. Adopted from the rig and
+    /// written back by [`Luma::set_visualizer_haze`].
+    haze: scene_desc::VenueHaze,
+    /// The march's cost, not the room's look: local, unsynced, and deliberately
+    /// absent from [`scene_desc::VenueHaze`] — see its doc comment.
     haze_steps: u32,
     haze_resolution: f32,
+    /// Editor chrome, not the room. Local device settings (`stage_grid` /
+    /// `stage_gizmos`), so they follow the operator across venues.
     grid_enabled: bool,
     gizmos_enabled: bool,
+    /// What fraction of the element's pixels the stage renders, as a whole
+    /// percent — the `render_scale` device setting. It rides here rather than in
+    /// [`scene_desc::RenderSettings`] because it is how many pixels the picture
+    /// is sampled at, not what is in it, and because sitting in the lab puts it
+    /// in [`IdleKey`] for free.
+    render_scale_percent: u8,
     debug_view: scene_desc::DebugView,
 }
 
@@ -789,7 +835,8 @@ impl Visualizer {
 impl RenderLab {
     /// One settings snapshot for the main viewport and both picker previews.
     fn settings(&self, fov: f32) -> scene_desc::RenderSettings {
-        let mut render = scene_desc::RenderSettings::room(self.house, fov, self.haze_resolution);
+        let mut render =
+            scene_desc::RenderSettings::room(self.house, self.haze, fov, self.haze_resolution);
         render.fov = fov;
         render.environment = scene_desc::Environment {
             background: if self.environment_enabled {
@@ -820,9 +867,8 @@ impl RenderLab {
         // takes its background, ambient and sun from.
         render.house = Some(self.house);
         render.sky = house::fill(self.house).sky;
-        render.haze.enabled = self.haze_enabled;
-        render.haze.density = self.haze_density;
-        render.haze.appearance = self.haze_appearance;
+        // `room` already carried the venue's own haze in. These two are the
+        // local cost knobs it deliberately does not hold.
         render.haze.steps = self.haze_steps;
         render.haze.resolution = self.haze_resolution;
         render.show_grid = self.grid_enabled;
@@ -867,13 +913,14 @@ impl RenderLab {
             fixture_shadows: true,
             geometry_shadows: true,
             cluster_debug: false,
-            haze_enabled: true,
-            haze_density: 0.24,
-            haze_appearance: scene_desc::HazeAppearance::default(),
+            // The venue's own haze arrives with its rig; until then the haze
+            // this app has always drawn, which is exactly `Default`.
+            haze: scene_desc::VenueHaze::default(),
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             grid_enabled: true,
             gizmos_enabled: true,
+            render_scale_percent: 100,
             debug_view: scene_desc::DebugView::Pbr,
         };
         lab.set_environment(environment);
@@ -888,9 +935,12 @@ impl RenderLab {
     /// haze density because the track changed would be throwing away work
     /// nobody asked it to.
     ///
-    /// The grid goes with the room being visible at all. It is editor chrome
-    /// laid on the floor, and a dark stage is the one picture whose whole
-    /// point is that the floor is not lit.
+    /// The grid in particular is **not** derived from the room. It used to be —
+    /// on whenever the room had a sun or a sky — and that made it user state and
+    /// derived state at once: this method runs on every light-slider sample,
+    /// every score change and every rig reload, so a grid switched off on a lit
+    /// venue popped back on at the next one of those. It is a device setting
+    /// now, and the operator's answer is the only answer.
     fn set_environment(&mut self, environment: VenueEnvironment) {
         let fill = house::fill(environment);
         self.house = environment;
@@ -903,7 +953,6 @@ impl RenderLab {
             .map_or(scene_desc::DirectionalLight::EDITOR.intensity, |sun| {
                 sun.intensity
             });
-        self.grid_enabled = fill.sun.is_some() || fill.sky.is_some();
     }
 
     fn sun_direction(&self) -> [f32; 3] {
@@ -933,30 +982,56 @@ enum LabValue {
     Turbulence,
     WindSpeed,
     WindDirection,
+    /// Not a haze dial: the fraction of the element's pixels the stage renders.
+    RenderScale,
 }
-const MAX_HAZE_DENSITY: f32 = 0.5;
+
+/// The percent slider's travel. The floor is [`RenderScale::Fixed`]'s own floor
+/// — past a quarter of the pixels the upscale is mush — and the ceiling is
+/// native, which is what 100 has always meant.
+const RENDER_SCALE_RANGE: std::ops::RangeInclusive<u8> = 25..=100;
 
 impl RenderLab {
     fn toggle(&mut self, control: LabToggle) {
-        let value = match control {
-            LabToggle::FixtureShadows => &mut self.fixture_shadows,
-            LabToggle::Haze => &mut self.haze_enabled,
-            LabToggle::Grid => &mut self.grid_enabled,
-            LabToggle::Gizmos => &mut self.gizmos_enabled,
-        };
-        *value = !*value;
+        match control {
+            LabToggle::FixtureShadows => self.fixture_shadows = !self.fixture_shadows,
+            LabToggle::Haze => {
+                self.haze.enabled = !self.haze.enabled;
+                self.haze = self.haze.sanitized();
+            }
+            LabToggle::Grid => self.grid_enabled = !self.grid_enabled,
+            LabToggle::Gizmos => self.gizmos_enabled = !self.gizmos_enabled,
+        }
     }
     fn set(&mut self, control: LabValue, value: f32) {
-        match control {
-            LabValue::HazeDensity => self.haze_density = value.clamp(0.0, MAX_HAZE_DENSITY),
-            LabValue::Cloudiness => self.haze_appearance.cloudiness = value,
-            LabValue::CloudSize => self.haze_appearance.cloud_size = value,
-            LabValue::Turbulence => self.haze_appearance.turbulence = value,
-            LabValue::WindSpeed => self.haze_appearance.wind_speed = value,
-            LabValue::WindDirection => self.haze_appearance.wind_direction = value,
+        if matches!(control, LabValue::RenderScale) {
+            self.render_scale_percent = clamp_render_scale(value.round() as i64);
+            return;
         }
-        self.haze_appearance = self.haze_appearance.sanitized();
+        match control {
+            LabValue::HazeDensity => self.haze.density = value,
+            LabValue::Cloudiness => self.haze.appearance.cloudiness = value,
+            LabValue::CloudSize => self.haze.appearance.cloud_size = value,
+            LabValue::Turbulence => self.haze.appearance.turbulence = value,
+            LabValue::WindSpeed => self.haze.appearance.wind_speed = value,
+            LabValue::WindDirection => self.haze.appearance.wind_direction = value,
+            // Handled above; it is not part of the room's atmosphere.
+            LabValue::RenderScale => unreachable!(),
+        }
+        // The whole value, not just the appearance: `sanitized` is what keeps a
+        // swept density inside [`scene_desc::VenueHaze::MAX_DENSITY`], which is
+        // now the single answer to how dense a room may be.
+        self.haze = self.haze.sanitized();
     }
+}
+
+/// A percent from anywhere — a slider, a stored setting, an older build — held
+/// to the one range the renderer has an answer for.
+fn clamp_render_scale(percent: i64) -> u8 {
+    percent.clamp(
+        i64::from(*RENDER_SCALE_RANGE.start()),
+        i64::from(*RENDER_SCALE_RANGE.end()),
+    ) as u8
 }
 
 impl Visualizer {
@@ -974,6 +1049,11 @@ impl Visualizer {
         cx: &mut Context<Luma>,
     ) -> Self {
         let rig = library.venue_rig(venue_id);
+        // The three local, device-global view settings — grid, gizmos and the
+        // render percent. Read here rather than per venue because that is what
+        // device-global means: they are the operator's answer, and the room the
+        // view happens to open on is not asked.
+        let settings = library.settings();
         // The venue's own environment arrives with its rig; until then the
         // default room, which is the picture this app has always opened with.
         let environment = VenueEnvironment::default();
@@ -991,6 +1071,10 @@ impl Visualizer {
                 }
             }
             let loaded = rig.await;
+            // Defaulted rather than surfaced: a settings read that failed still
+            // has to leave a drawable viewport, and `AppSettings::default` is
+            // exactly the chrome this app has always opened with.
+            let settings = settings.await.unwrap_or_default();
             this.update(cx, |this, cx| {
                 // Addressed to the room, not merely to whatever stage is up: a
                 // rig landing after the eye moved to another venue must not
@@ -1000,6 +1084,10 @@ impl Visualizer {
                 };
                 state.composite_landed(installed);
                 state.rig_loaded(loaded);
+                state.render_lab.grid_enabled = settings.stage_grid;
+                state.render_lab.gizmos_enabled = settings.stage_gizmos;
+                state.render_lab.render_scale_percent =
+                    clamp_render_scale(i64::from(settings.render_scale));
                 cx.notify();
             })
             .ok();
@@ -1038,6 +1126,13 @@ impl Visualizer {
             environment_saving: false,
             environment_edited: false,
             environment_pending: Rc::default(),
+            haze_error: None,
+            haze_saving: false,
+            haze_edited: false,
+            haze_pending: Rc::default(),
+            view_setting_error: None,
+            render_scale_saving: false,
+            render_scale_pending: Rc::default(),
             fps_expanded: false,
             build: None,
             stage: Rc::default(),
@@ -1168,8 +1263,14 @@ impl Visualizer {
         if !self.environment_edited {
             self.venue_environment = rig.environment;
         }
+        // Its own guard, not the environment's: a density scrub in flight is a
+        // local edit the rig read knows nothing about, and adopting the stored
+        // row over it would snap the slider back under the hand.
+        if !self.haze_edited {
+            self.render_lab.haze = rig.haze;
+        }
         self.render_lab.set_environment(self.environment());
-        let scene = scene(&rig, &definitions, self.environment());
+        let scene = scene(&rig, &definitions, self.environment(), self.render_lab.haze);
         self.framing = scene.framing(&definitions);
         self.camera = opening_camera(&self.framing, &self.view_finder());
         self.owes_opening_pose = true;
@@ -2034,6 +2135,7 @@ pub(crate) fn scene(
     rig: &Rig,
     definitions: &BTreeMap<String, scene_desc::Definition>,
     environment: VenueEnvironment,
+    haze: scene_desc::VenueHaze,
 ) -> scene_desc::Scene {
     // A fixture node's id *is* its `fixtures` row id, which is what makes the
     // patch and the placement two halves of one fixture without either half
@@ -2055,10 +2157,12 @@ pub(crate) fn scene(
         aim_arrows: false,
         // The one preset a venue is drawn under, with the haze resolution
         // reduced for the live path. The lab overwrites the fill dials each
-        // frame; the house and the sky are re-read from this environment
-        // there too, so the lamps hang from the first frame on.
+        // frame; the house, the sky and the haze are re-read from this
+        // environment and this haze there too, so the lamps hang and the room
+        // has its atmosphere from the first frame on.
         render: scene_desc::RenderSettings::room(
             environment,
+            haze,
             FOV_Y_DEG,
             luma_render::LIVE_HAZE_RESOLUTION,
         ),
@@ -3000,21 +3104,21 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             state,
             app,
             "Haze",
-            lab.haze_enabled,
+            lab.haze.enabled,
             LabToggle::Haze,
         ))
         .child(lab_value(
             app,
             "Haze density",
-            lab.haze_density,
+            lab.haze.density,
             0.,
-            MAX_HAZE_DENSITY,
+            scene_desc::VenueHaze::MAX_DENSITY,
             LabValue::HazeDensity,
         ))
         .child(lab_value(
             app,
             "Cloudiness",
-            lab.haze_appearance.cloudiness,
+            lab.haze.appearance.cloudiness,
             0.,
             1.,
             LabValue::Cloudiness,
@@ -3022,7 +3126,7 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .child(lab_value(
             app,
             "Cloud size (m)",
-            lab.haze_appearance.cloud_size,
+            lab.haze.appearance.cloud_size,
             0.5,
             20.,
             LabValue::CloudSize,
@@ -3030,7 +3134,7 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .child(lab_value(
             app,
             "Turbulence",
-            lab.haze_appearance.turbulence,
+            lab.haze.appearance.turbulence,
             0.,
             1.,
             LabValue::Turbulence,
@@ -3038,7 +3142,7 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .child(lab_value(
             app,
             "Wind speed (m/s)",
-            lab.haze_appearance.wind_speed,
+            lab.haze.appearance.wind_speed,
             0.,
             10.,
             LabValue::WindSpeed,
@@ -3046,7 +3150,7 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .child(lab_value(
             app,
             "Wind direction (°)",
-            lab.haze_appearance.wind_direction,
+            lab.haze.appearance.wind_direction,
             0.,
             360.,
             LabValue::WindDirection,
@@ -3072,6 +3176,35 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             lab.gizmos_enabled,
             LabToggle::Gizmos,
         ))
+        // A cost knob, so it sits with the other cost knobs rather than in the
+        // middle of the haze cluster, and it sits last because its caption
+        // belongs directly under it.
+        .child(lab_value(
+            app,
+            "Render scale (%)",
+            f32::from(lab.render_scale_percent),
+            f32::from(*RENDER_SCALE_RANGE.start()),
+            f32::from(*RENDER_SCALE_RANGE.end()),
+            LabValue::RenderScale,
+        ))
+        .children(render_size_caption(state))
+}
+
+/// The pixels the stage is actually rendering, under the percent that asks for
+/// them.
+///
+/// The percent alone can mislead: [`RENDER_BUDGET_PIXELS`] clamps a large window
+/// below it, so 100% on a fullscreen retina display is not native and a control
+/// that only said "100" would be claiming otherwise. Quiet — [`float::label`],
+/// the same 11px the card's own legends use — because it is a readout, not a
+/// control, and absent until a frame has been laid out, because until then there
+/// is no honest number to print.
+fn render_size_caption(state: &Visualizer) -> Option<impl IntoElement> {
+    let (width, height) = state.stage.borrow().render_size?;
+    Some(
+        luma_ui::float::label(format!("Rendering {width} × {height}"))
+            .agent_node(Role::Text, format!("Rendering {width} × {height}")),
+    )
 }
 
 fn lab_toggle(
@@ -3125,12 +3258,7 @@ fn lab_toggle(
                 ),
         )
         .on_click(move |_, _, cx| {
-            app.update(cx, |this, cx| {
-                if let Some(state) = this.visualizer_mut() {
-                    state.render_lab.toggle(control);
-                }
-                cx.notify();
-            });
+            app.update(cx, |this, cx| this.toggle_view_control(control, cx));
         })
         .agent_node(Role::Toggle, label)
         .agent_focused(checked)
@@ -3146,10 +3274,13 @@ fn lab_value(
     control: LabValue,
 ) -> Div {
     let app = app.clone();
-    let (step, power) = if matches!(control, LabValue::HazeDensity) {
-        (0.001, 2.0)
-    } else {
-        (0.01, 1.0)
+    let (step, power) = match control {
+        LabValue::HazeDensity => (0.001, 2.0),
+        // A whole percent, linearly: the quantity is already a percentage, so a
+        // power curve would only make the number under the hand lie about where
+        // the hand is.
+        LabValue::RenderScale => (1.0, 1.0),
+        _ => (0.01, 1.0),
     };
     div()
         .flex()
@@ -3167,10 +3298,7 @@ fn lab_value(
                 power,
                 move |value, _, cx| {
                     app.update(cx, |this, cx| {
-                        if let Some(state) = this.visualizer_mut() {
-                            state.render_lab.set(control, value as f32);
-                        }
-                        cx.notify();
+                        this.set_view_value(control, value as f32, cx)
                     });
                 },
             )
@@ -3525,7 +3653,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             Err(error) => {
                 return plate(error)
                     .agent_node(Role::Card, "Stage")
-                    .into_any_element()
+                    .into_any_element();
             }
         }
     } else {
@@ -3752,10 +3880,19 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             // The render size, not the element's: past the pixel budget the
             // stage renders smaller and the compositor upscales it. Everything
             // downstream — the idle key, the renderer, the trace — sees this.
-            let (width, height) = RenderScale::from_env().size((
-                (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
-                (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
-            ));
+            // `from_env` caches in a `OnceLock`, so the live percent cannot go
+            // through it and is threaded in instead.
+            let (width, height) = RenderScale::from_env().size(
+                key_lab.render_scale_percent,
+                (
+                    (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
+                    (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
+                ),
+            );
+            // Published for the panel's caption: the budget can clamp below the
+            // operator's percent, so the percent alone would mislead and this
+            // is the only place the effective answer exists.
+            stage.borrow_mut().render_size = Some((width, height));
 
             let image = {
                 let mut stage = stage.borrow_mut();
@@ -3773,11 +3910,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             gizmo_hover,
                             universe: universe.clone(),
                         };
-                        let moving_haze = key_lab.haze_enabled
-                            && key_lab.haze_density > 0.0
-                            && key_lab.haze_appearance.cloudiness > 0.0
-                            && (key_lab.haze_appearance.wind_speed > 0.0
-                                || key_lab.haze_appearance.turbulence > 0.0);
+                        let moving_haze = key_lab.haze.enabled
+                            && key_lab.haze.density > 0.0
+                            && key_lab.haze.appearance.cloudiness > 0.0
+                            && (key_lab.haze.appearance.wind_speed > 0.0
+                                || key_lab.haze.appearance.turbulence > 0.0);
                         let rest = if interacting || moving_haze {
                             stage.idle = None;
                             false
@@ -4276,10 +4413,78 @@ mod render_lab_tests {
         let mut lab = RenderLab::new(VenueEnvironment::default());
         let house = lab.house;
         lab.set(LabValue::HazeDensity, 9.0);
-        assert_eq!(lab.haze_density, 0.5);
+        assert_eq!(lab.haze.density, scene_desc::VenueHaze::MAX_DENSITY);
         lab.toggle(LabToggle::FixtureShadows);
         assert!(!lab.fixture_shadows);
         assert_eq!(lab.house, house);
+    }
+
+    #[test]
+    fn a_fresh_lab_draws_the_default_room_atmosphere() {
+        let lab = RenderLab::new(VenueEnvironment::default());
+        assert_eq!(lab.haze, scene_desc::VenueHaze::default());
+        // The venue's haze, not the default, reaches the renderer — and the two
+        // cost knobs the venue deliberately does not carry still do.
+        let mut lab = lab;
+        lab.haze = scene_desc::VenueHaze {
+            enabled: true,
+            density: 0.4,
+            ..Default::default()
+        };
+        lab.haze_steps = 13;
+        let render = lab.settings(50.0);
+        assert_eq!(render.haze.density, 0.4);
+        assert_eq!(render.haze.steps, 13);
+        assert_eq!(render.haze.resolution, lab.haze_resolution);
+    }
+
+    /// The regression this whole change is about: the grid used to be derived
+    /// here, so a grid switched off came back at the next light sample, score
+    /// change or rig reload — all three run `set_environment`.
+    #[test]
+    fn changing_the_room_leaves_haze_and_chrome_alone() {
+        let mut lab = RenderLab::new(VenueEnvironment::default());
+        lab.toggle(LabToggle::Grid);
+        lab.toggle(LabToggle::Gizmos);
+        lab.set(LabValue::HazeDensity, 0.31);
+        lab.set(LabValue::Cloudiness, 0.7);
+        lab.set(LabValue::RenderScale, 40.0);
+        let before = lab.clone();
+
+        for environment in [
+            VenueEnvironment::outdoor(40.0),
+            VenueEnvironment::indoor(0.0),
+            VenueEnvironment::default(),
+        ] {
+            lab.set_environment(environment);
+            assert!(
+                !lab.grid_enabled,
+                "{environment:?} switched the grid back on"
+            );
+            assert!(
+                !lab.gizmos_enabled,
+                "{environment:?} switched gizmos back on"
+            );
+            assert_eq!(lab.haze, before.haze, "{environment:?} rewrote the haze");
+            assert_eq!(lab.render_scale_percent, before.render_scale_percent);
+        }
+    }
+
+    #[test]
+    fn the_render_percent_is_a_whole_percent_in_range() {
+        let mut lab = RenderLab::new(VenueEnvironment::default());
+        assert_eq!(lab.render_scale_percent, 100);
+        lab.set(LabValue::RenderScale, 62.4);
+        assert_eq!(lab.render_scale_percent, 62);
+        lab.set(LabValue::RenderScale, 1.0);
+        assert_eq!(lab.render_scale_percent, 25);
+        lab.set(LabValue::RenderScale, 400.0);
+        assert_eq!(lab.render_scale_percent, 100);
+        // It is not haze, and touching it must not sanitize haze into range or
+        // out of it.
+        let haze = lab.haze;
+        lab.set(LabValue::RenderScale, 50.0);
+        assert_eq!(lab.haze, haze);
     }
 }
 
@@ -4287,16 +4492,20 @@ mod render_lab_tests {
 mod render_scale_tests {
     use super::RenderScale;
 
+    /// The percent the operator has not touched. Every assertion about the
+    /// behaviour that predates the setting is taken at this value.
+    const FULL: u8 = 100;
+
     #[test]
     fn an_ordinary_window_renders_native() {
-        assert_eq!(RenderScale::Budget.size((1984, 1511)), (1984, 1511));
-        assert_eq!(RenderScale::Budget.size((2227, 1391)), (2227, 1391));
-        assert_eq!(RenderScale::Budget.size((1, 1)), (1, 1));
+        assert_eq!(RenderScale::Budget.size(FULL, (1984, 1511)), (1984, 1511));
+        assert_eq!(RenderScale::Budget.size(FULL, (2227, 1391)), (2227, 1391));
+        assert_eq!(RenderScale::Budget.size(FULL, (1, 1)), (1, 1));
     }
 
     #[test]
     fn fullscreen_scales_to_the_budget_at_its_own_aspect() {
-        let (width, height) = RenderScale::Budget.size((3600, 2260));
+        let (width, height) = RenderScale::Budget.size(FULL, (3600, 2260));
         let scale = f64::from(width) / 3600.0;
         assert!((scale - 0.617).abs() < 0.002, "scale {scale}");
         assert!(
@@ -4332,9 +4541,88 @@ mod render_scale_tests {
             RenderScale::Native
         );
         assert_eq!(RenderScale::parse(None, Some("on")), RenderScale::Budget);
-        assert_eq!(RenderScale::Native.size((3600, 2260)), (3600, 2260));
-        assert_eq!(RenderScale::Fixed(0.5).size((3600, 2260)), (1800, 1130));
-        assert_eq!(RenderScale::Fixed(0.25).size((2, 2)), (1, 1));
+        assert_eq!(RenderScale::Native.size(FULL, (3600, 2260)), (3600, 2260));
+        assert_eq!(
+            RenderScale::Fixed(0.5).size(FULL, (3600, 2260)),
+            (1800, 1130)
+        );
+        assert_eq!(RenderScale::Fixed(0.25).size(FULL, (2, 2)), (1, 1));
+    }
+
+    /// The operator's percent **composes** with the env-var scale; it does not
+    /// replace it. Had it replaced the budget, the top of the slider's travel
+    /// would be a no-op on exactly the window where the control matters most.
+    #[test]
+    fn the_percent_composes_with_the_budget_rather_than_replacing_it() {
+        let fullscreen = (3600, 2260);
+        let budgeted = RenderScale::Budget.size(FULL, fullscreen);
+        // Replacement would render 50% of 3600 = 1800 wide. Composition renders
+        // half of what the budget already picked.
+        let halved = RenderScale::Budget.size(50, fullscreen);
+        // Half of what the budget picked, to within the rounding each side is
+        // fitted to — not half of the element.
+        assert!(
+            halved.0.abs_diff(budgeted.0 / 2) <= 1 && halved.1.abs_diff(budgeted.1 / 2) <= 1,
+            "{halved:?} is not half of {budgeted:?}"
+        );
+        assert_ne!(halved.0, fullscreen.0 / 2);
+
+        // And the protection survives underneath: the full-percent answer is
+        // still capped at the budget, so the percent cannot be used to ask for
+        // the 27 fps fullscreen frame back.
+        let pixels = f64::from(budgeted.0) * f64::from(budgeted.1);
+        assert!(pixels <= super::RENDER_BUDGET_PIXELS * 1.002, "{pixels}");
+
+        // Every notch below 100 removes pixels, which is the whole point of the
+        // control — a monotone walk, not one flat stretch at the top.
+        let mut previous = budgeted;
+        for percent in [99, 90, 75, 60, 45, 30, 25] {
+            let size = RenderScale::Budget.size(percent, fullscreen);
+            assert!(size.0 < previous.0, "{percent}% gave {size:?}");
+            previous = size;
+        }
+    }
+
+    /// 100 is bit-for-bit the answer this function gave before the setting
+    /// existed: the multiplier is exactly 1.0, so no rounding moves.
+    #[test]
+    fn a_hundred_percent_is_identical_to_the_old_behaviour() {
+        for scale in [
+            RenderScale::Budget,
+            RenderScale::Native,
+            RenderScale::Fixed(0.617),
+        ] {
+            for size in [(1984, 1511), (2227, 1391), (3600, 2260), (1, 1), (7, 3)] {
+                let old = {
+                    let env = match scale {
+                        RenderScale::Native => 1.0,
+                        RenderScale::Fixed(fixed) => f64::from(fixed),
+                        RenderScale::Budget => (super::RENDER_BUDGET_PIXELS
+                            / (f64::from(size.0) * f64::from(size.1)))
+                        .sqrt()
+                        .min(1.0),
+                    };
+                    let fit =
+                        |side: u32| ((f64::from(side) * env).round() as u32).clamp(1, side.max(1));
+                    (fit(size.0), fit(size.1))
+                };
+                assert_eq!(scale.size(FULL, size), old, "{scale:?} at {size:?}");
+            }
+        }
+    }
+
+    /// A stored percent from a hand-edited database or an older build cannot put
+    /// the renderer somewhere it has no answer for.
+    #[test]
+    fn an_out_of_range_percent_is_held_to_the_slider_travel() {
+        assert_eq!(
+            RenderScale::Native.size(0, (1000, 1000)),
+            RenderScale::Native.size(25, (1000, 1000))
+        );
+        assert_eq!(
+            RenderScale::Native.size(255, (1000, 1000)),
+            RenderScale::Native.size(100, (1000, 1000))
+        );
     }
 }
 
@@ -4623,6 +4911,13 @@ mod orbit_selection_tests {
             environment_saving: false,
             environment_edited: false,
             environment_pending: Rc::default(),
+            haze_error: None,
+            haze_saving: false,
+            haze_edited: false,
+            haze_pending: Rc::default(),
+            view_setting_error: None,
+            render_scale_saving: false,
+            render_scale_pending: Rc::default(),
             fps_expanded: false,
             build,
             stage: Rc::new(RefCell::new(Stage {
@@ -4875,6 +5170,7 @@ mod orbit_selection_tests {
             venue: Default::default(),
             definitions: HashMap::new(),
             environment: Default::default(),
+            haze: Default::default(),
             rows: VenueGraphRows {
                 nodes: vec![VenueNode {
                     id: "venue".into(),

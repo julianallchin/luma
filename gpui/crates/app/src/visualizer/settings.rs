@@ -91,7 +91,14 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .child(environment_card(state.venue_environment(), app))
         .child(float::divider())
         .child(super::view_controls(state, app));
-    if let Some(error) = &state.environment_error {
+    for error in [
+        &state.environment_error,
+        &state.haze_error,
+        &state.view_setting_error,
+    ]
+    .into_iter()
+    .flatten()
+    {
         content = content.child(float::error_row(error.clone()));
     }
     let camera = div()
@@ -412,6 +419,182 @@ impl Luma {
                 if queue.borrow().is_none() {
                     break;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// A view toggle: applied to the lab now, persisted where it is durable.
+    ///
+    /// The three tiers of this panel meet here. Haze is **venue truth** and goes
+    /// on the venue row; grid and gizmos are **local device settings** and follow
+    /// the operator between rooms; fixture shadows is a session dial and outlives
+    /// nothing.
+    pub(super) fn toggle_view_control(&mut self, control: LabToggle, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.render_lab.toggle(control);
+        let (grid, gizmos) = (
+            state.render_lab.grid_enabled,
+            state.render_lab.gizmos_enabled,
+        );
+        match control {
+            LabToggle::Haze => self.save_venue_haze(cx),
+            // Straight through `set_setting`: it is already FIFO-ordered, and a
+            // toggle cannot emit faster than a hand can click, so the
+            // coalescing the scrubs need would buy nothing here.
+            LabToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
+            LabToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
+            LabToggle::FixtureShadows => {}
+        }
+        cx.notify();
+    }
+
+    /// A view scrub: applied to the lab now, persisted where it is durable.
+    pub(super) fn set_view_value(&mut self, control: LabValue, value: f32, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.render_lab.set(control, value);
+        match control {
+            LabValue::RenderScale => self.save_render_scale(cx),
+            _ => self.save_venue_haze(cx),
+        }
+        cx.notify();
+    }
+
+    /// One local view setting, written once.
+    ///
+    /// Deliberately *not* `Luma::write_setting`: that one re-reads the whole
+    /// settings record afterwards to repaint the Settings screen, which is a
+    /// screen this panel is not. The lab already holds the new value, so the
+    /// only thing left to report is a write that did not land.
+    fn write_view_setting(&mut self, key: &'static str, value: String, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.view_setting_error = None;
+        let pending = self.library.set_setting(key, &value);
+        cx.spawn(async move |this, cx| {
+            let Err(error) = pending.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.view_setting_error = Some(format!("Could not save {key}: {error}"));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Persist the haze the lab now holds.
+    ///
+    /// The lab is the authority — [`RenderLab::toggle`] and [`RenderLab::set`]
+    /// have already sanitized it — so this takes no value. Same guard as
+    /// [`Self::save_visualizer_environment`], for the same reason: a dragged
+    /// density emits a value per pointer move.
+    fn save_venue_haze(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        let haze = state.render_lab.haze;
+        state.haze_edited = true;
+        state.haze_error = None;
+        *state.haze_pending.borrow_mut() = Some(haze);
+        if !state.haze_saving {
+            self.drain_venue_haze(cx);
+        }
+    }
+
+    fn drain_venue_haze(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.haze_saving = true;
+        let venue = state.venue_id.clone();
+        let queue = state.haze_pending.clone();
+        cx.spawn(async move |this, cx| {
+            // Keep draining even if navigation drops this visualizer. Its final
+            // scrub value still belongs in the saved venue.
+            loop {
+                let Some(value) = queue.borrow_mut().take() else {
+                    break;
+                };
+                let Ok(pending) =
+                    this.update(cx, |this, _| this.library.set_venue_haze(&venue, value))
+                else {
+                    break;
+                };
+                let result = pending.await;
+                this.update(cx, |this, cx| {
+                    let Some(state) = this
+                        .visualizer_mut()
+                        .filter(|s| Rc::ptr_eq(&s.haze_pending, &queue))
+                    else {
+                        return;
+                    };
+                    state.haze_saving = queue.borrow().is_some();
+                    if !state.haze_saving {
+                        state.haze_error = result
+                            .err()
+                            .map(|error| format!("Could not save haze: {error}"));
+                    }
+                    cx.notify();
+                })
+                .ok();
+                if queue.borrow().is_none() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Persist the render percent the lab now holds, coalescing the scrub.
+    fn save_render_scale(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.view_setting_error = None;
+        *state.render_scale_pending.borrow_mut() = Some(state.render_lab.render_scale_percent);
+        if state.render_scale_saving {
+            return;
+        }
+        state.render_scale_saving = true;
+        let queue = state.render_scale_pending.clone();
+        cx.spawn(async move |this, cx| loop {
+            let Some(percent) = queue.borrow_mut().take() else {
+                break;
+            };
+            let Ok(pending) = this.update(cx, |this, _| {
+                this.library
+                    .set_setting("render_scale", &percent.to_string())
+            }) else {
+                break;
+            };
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let Some(state) = this
+                    .visualizer_mut()
+                    .filter(|s| Rc::ptr_eq(&s.render_scale_pending, &queue))
+                else {
+                    return;
+                };
+                state.render_scale_saving = queue.borrow().is_some();
+                if !state.render_scale_saving {
+                    state.view_setting_error = result
+                        .err()
+                        .map(|error| format!("Could not save render_scale: {error}"));
+                }
+                cx.notify();
+            })
+            .ok();
+            if queue.borrow().is_none() {
+                break;
             }
         })
         .detach();

@@ -125,6 +125,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at",
             "environment",
+            "haze",
             "groups_initialized"
         ]
     ),

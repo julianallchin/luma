@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use luma_render::assets::Library;
 use luma_render::scene_desc::{
-    CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment,
+    CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment, VenueHaze,
 };
 use luma_scene::{Camera, Framing, View, Viewfinder};
 
@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
         for view in [View::Front, View::QuarterLeft, View::Audience] {
             // Exactly what an agent's `luma.venue.render` asks for, so what
             // this photographs is what the product draws.
-            let render = RenderSettings::room(environment, 45.0, 1.0);
+            let render = RenderSettings::room(environment, VenueHaze::default(), 45.0, 1.0);
 
             let mut scene = Scene {
                 id: format!("environment-{label}"),

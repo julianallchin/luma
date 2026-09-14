@@ -6,7 +6,7 @@ use luma_render::{
     assets::{Library, Material, Vertex},
     build_frame_with,
     frame::{Draw, FixtureCone, MaterialTextures, MeshData},
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
 
@@ -14,7 +14,12 @@ const WIDTH: u32 = 400;
 const HEIGHT: u32 = 300;
 
 fn venue(elevation: f32) -> Frame {
-    let mut render = RenderSettings::room(VenueEnvironment::outdoor(elevation), 45.0, 1.0);
+    let mut render = RenderSettings::room(
+        VenueEnvironment::outdoor(elevation),
+        VenueHaze::default(),
+        45.0,
+        1.0,
+    );
     render.show_floor = false;
     render.show_grid = false;
     render.show_gizmos = false;

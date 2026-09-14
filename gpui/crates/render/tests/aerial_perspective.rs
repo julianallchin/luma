@@ -7,7 +7,7 @@ use luma_render::{
     assets::{Library, Material, Vertex},
     build_frame_with,
     frame::{Draw, Frame, MaterialTextures, MeshData},
-    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment},
+    scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Renderer,
 };
 
@@ -16,7 +16,12 @@ const HEIGHT: u32 = 360;
 const OFFSETS: [f32; 3] = [-0.4, 0.0, 0.4];
 
 fn cards() -> Frame {
-    let mut render = RenderSettings::room(VenueEnvironment::outdoor(30.0), 45.0, 1.0);
+    let mut render = RenderSettings::room(
+        VenueEnvironment::outdoor(30.0),
+        VenueHaze::default(),
+        45.0,
+        1.0,
+    );
     render.haze.enabled = false;
     render.show_floor = false;
     render.show_grid = false;

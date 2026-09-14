@@ -1233,7 +1233,9 @@ mod tests {
     use std::{collections::BTreeMap, path::PathBuf};
 
     use super::*;
-    use crate::scene_desc::{CameraPose, Fixture, Mode, RenderSettings, VenueEnvironment};
+    use crate::scene_desc::{
+        CameraPose, Fixture, Mode, RenderSettings, VenueEnvironment, VenueHaze,
+    };
 
     fn definition(kind: &str, mode: &str, heads: usize) -> Definition {
         Definition {
@@ -1360,9 +1362,19 @@ mod tests {
         );
 
         scene.state.clear();
-        scene.render = RenderSettings::room(VenueEnvironment::indoor(0.0), 50.0, 1.0);
+        scene.render = RenderSettings::room(
+            VenueEnvironment::indoor(0.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
         let house_dark = build(&scene, &definitions, 0.0, &mut library).unwrap();
-        scene.render = RenderSettings::room(VenueEnvironment::indoor(1.0), 50.0, 1.0);
+        scene.render = RenderSettings::room(
+            VenueEnvironment::indoor(1.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
         let house_lit = build(&scene, &definitions, 0.0, &mut library).unwrap();
         assert!(house_dark.fixture_cones.is_empty());
         assert!(!house_lit.fixture_cones.is_empty());
