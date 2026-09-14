@@ -1,9 +1,6 @@
 # Logs
 logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
 bun-debug.log*
 
 # Dependencies
@@ -11,8 +8,6 @@ node_modules/
 
 # Build outputs
 dist/
-dist-ssr/
-.vite/
 
 # Environment files
 .env
@@ -27,7 +22,6 @@ dist-ssr/
 # Rust build artifacts
 target/
 backend/target/
-backend/.cargo/
 
 # Bundled Python runtime (downloaded during build)
 backend/python-runtime/*
@@ -59,24 +53,16 @@ scripts/*
 !/docs/specs/
 # …and design docs — architecture decisions implementation is steered by
 !/docs/design/
+# …and the agent friction log
+!/docs/AGENT_FRICTION.md
 
 # SQLite databases
 *.sqlite
 *.db
-SUPABASE_SCHEMA.sql
 
 # Experiments directory (large datasets/binaries — not tracked in git)
 experiments/*
 !experiments/powersync/
-!experiments/cs525-data
-experiments/cs525-data/*
-!experiments/cs525-data/eval
-experiments/cs525-data/eval/*
-!experiments/cs525-data/eval/drop33_beat_grids.json
-!experiments/cs525-data/eval/plots
-experiments/cs525-data/eval/plots/*
-!experiments/cs525-data/eval/plots/drop33_base.png
-!experiments/cs525-data/eval/plots/drop33_tuned.png
 
 # Component screenshot harness output + gpui workspace build artifacts
 harness/shots/
@@ -89,15 +75,6 @@ gpui/target/
 # running the pixel command from a subdirectory once left 6.8 GB at
 # crates/agent/tests/target-pixel/.
 target-pixel/
-# …and the agent friction log
-!/docs/AGENT_FRICTION.md
-.metadata_never_index
-
-# Leftovers from the native backend migration (d4b7ebdb): the Tauri app and the
-# React frontend were removed from git but not from disk. `target/` above
-# already covers src-tauri/target; these cover the rest of the stale trees.
-/src-tauri/
-/src/
 
 # Perf campaign captures — thousands of retina PNG frames per run, plus the
 # library backup and binaries each run folder keeps. The notes and runner
