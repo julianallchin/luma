@@ -99,8 +99,10 @@ target-pixel/
 /src-tauri/
 /src/
 
-# Perf campaign captures — thousands of retina PNG frames per run. The JSON
-# measurements beside them are the durable artifact; the frames are re-shot by
-# re-running the capture.
-harness/perf/
+# Perf campaign captures — thousands of retina PNG frames per run, plus the
+# library backup and binaries each run folder keeps. The notes and runner
+# scripts beside them are tracked; the frames are re-shot by re-running the
+# capture.
+harness/perf/**/run-*/
+harness/perf/**/*.png
 experiments/powersync/run/
