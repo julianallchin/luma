@@ -70,7 +70,7 @@ pub fn icon_toggle(icon: IconName, active: bool) -> Div {
 /// chip. Active rests at [`glass::WASH_REST`]; hover lifts one step.
 ///
 /// This sets the one `hover` style the element may have.
-pub fn toggle_paint(el: Div, active: bool) -> Div {
+pub fn toggle_paint<E: Styled + InteractiveElement + FluentBuilder>(el: E, active: bool) -> E {
     el.text_color(glass::ink(if active { 0.92 } else { 0.55 }))
         .when(active, |el| el.bg(glass::wash(glass::WASH_REST)))
         .hover(move |el| {
