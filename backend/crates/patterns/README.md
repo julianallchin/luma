@@ -198,17 +198,6 @@ cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- \
   --state /path/to/frame.json --output /path/to/preview.png
 ```
 
-For repeatable execution measurements, save the response's `cells` array:
-
-```
-cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --release \
-  --example frame-budget < cells.json
-```
-
-The measurement separates preparation from per-frame evaluation and includes
-per-cell output construction. It does not measure the compositor, stage renderer,
-or hardware output; those need their own budget during playback integration.
-
 `clip_range` prepares a sampled minimum and maximum over the placed clip, across
 all heads, time samples and channels, retaining the signal's unit. It defaults to
 1,024 evenly spaced musical-time samples (including the endpoints); this is an

@@ -25,17 +25,17 @@ Load the `node-cards` skill for every node's inputs, units and outputs, and `com
 
 ```python
 edit = luma.track.edit()
-graph = edit.graph(node="chase")  # one-node graph exposing Chase's controls
+graph = edit.graph(node="beat_chase")  # one-node graph exposing Beat chase's controls
 edit.add_clip(graph, bars=(1, 5), selection="front_wash",
               inputs={"mapping": "v", "width": .4, "travel": 2, "repeat": 4,
                       "shape": [[0, 0], [.15, 1], [.85, 1], [1, 0]]})
 ```
 
-For a composition, start with `graph = edit.graph()` and add `node = graph.node("chase_mask", width=.3)`. Connect with `node.output("mask")` as another node's input. `graph.expose(node, "width")` makes a per-clip control; `graph.default("width", .4)` changes its shared default. `graph.output(final.output("lighting"))` declares the graph result. Use `graph.get(node_id).bind(...)` to edit a node, passing `None` to disconnect. Combine masks through `multiply_mask`; color a mask by multiplying it with a color through `core/multiply`. Every playable graph ends in one `output` node whose ports (`color`, `pan`, `tilt`, `strobe`, `speed`) are the capabilities it writes. Place only graphs with one fixture-output bundle. Names are optional. Existing local graphs can be called through `graph.node(local_graph_id, ...)`.
+For a composition, start with `graph = edit.graph()` and add `node = graph.node("chase", width=.3)`. Connect with `node.output("mask")` as another node's input. `graph.expose(node, "width")` makes a per-clip control; `graph.default("width", .4)` changes its shared default. `graph.output(final.output("lighting"))` declares the graph result. Use `graph.get(node_id).bind(...)` to edit a node, passing `None` to disconnect. Combine masks through `multiply_mask`; color a mask by multiplying it with a color through `core/multiply`. Every playable graph ends in one `output` node whose ports (`color`, `pan`, `tilt`, `strobe`, `speed`) are the capabilities it writes. Place only graphs with one fixture-output bundle. Names are optional. Existing local graphs can be called through `graph.node(local_graph_id, ...)`.
 
 All graph gestures use Rust's same editor and validator as GPUI. Incomplete drafts may be inspected; check/apply rejects incomplete playable graphs. `edit.source()` exports the exact score.luma JSON; `edit.replace_source(source)` stages a complete replacement. Graph source and node definitions can be inspected independently. The same API works in a detached agent workspace; applying there advances only that workspace until its supervisor merges it.
 
-Inputs retain units. Colors are normalized RGB triples or `#RRGGBB`. Shape is the shared Envelope value (normalized knots). Mapping shorthand accepts `u`, `v`, `z`, `order`, `major_axis`, or `circle`; pass a structured mapping to choose direction, circle origin or grouping. U+ is right, V+ downstage, Z+ up. Travel must be positive and no longer than repeat; the remaining time is dark. Dissolve is per head; optional refresh changes its deterministic order on a beat interval. Preserve the clip seed when editing.
+Inputs retain units. Colors are normalized RGB triples or `#RRGGBB`. Shape is the shared Envelope value (normalized knots). Mapping shorthand accepts `u`, `v`, `z`, `order`, `major_axis`, or `circle`; pass a structured mapping to choose direction, circle origin or grouping. U+ is right, V+ downstage, Z+ up. Travel must be positive and no longer than repeat; the remaining time is dark. Dissolve is per head: each `trigger` fades a random share of heads, with `proportion` as the coverage curve over `duration`. Preserve the clip seed when editing.
 
 A score awaiting manual migration has `luma.patterns` instead of `luma.nodes`. Its legacy `edit.add_clip(pattern_id, ..., args={...})` and existing pattern schemas remain available. Do not confuse those records with score-local node definitions in the new format.
 
