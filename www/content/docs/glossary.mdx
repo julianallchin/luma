@@ -1,109 +1,90 @@
 ---
 title: Glossary
-description: Canonical terminology used throughout the Luma codebase and documentation
+description: Terms used in the Luma code and documentation
 ---
 
-This glossary defines the canonical terms used throughout Luma's codebase and documentation.
+This page defines the terms that the Luma code and documentation use.
 
-## Data Flow
+## Data Overview
 
 ```
-Library (syncs to cloud)              Venues (per-room)
-|-- Patterns                          |-- Patched Fixtures
-|   '-- Implementations (graphs)      |   |-- DMX Universe + Address
-|-- Tracks                            |   '-- 3D Position + Rotation
-|   |-- Beats (BPM, beat grid)        |-- Groups
-|   |-- Stems (drums/bass/vocals)     '-- Scores
-|   |-- Roots (chord analysis)            '-- Annotations (Track Scores)
-|   '-- Waveforms                             |-- Pattern reference
-'-- Categories                                |-- Time range + z-index
-                                              |-- Blend mode
-                                              '-- Argument values
+Library                                  Venue
+|-- Tracks                               |-- Fixtures (universe, address, mode, position)
+|   |-- Beat grid                        |-- Groups
+|   |-- Stems (drums, bass, vocals,      |-- Stage pieces
+|   |   other)                           '-- Members
+|   |-- Roots (chord analysis)
+|   |-- Drum onsets
+|   '-- Bar classifications, genres
+'-- Scores (one track + one venue)
+    |-- Clips (graph, start, duration, z index, blend mode, selection, inputs, seed)
+    '-- Score definitions (score-local graphs)
 ```
 
-## Core Concepts
+## Venue
 
-### Venue
+A physical room. A venue holds its fixtures, their DMX addresses, their positions, its stage pieces and its groups. A venue also records its environment (indoor or outdoor) and its haze.
 
-A project container representing a physical space. Contains fixture patches, groups, and scores. Venues translate abstract patterns into concrete hardware instructions.
+## Fixture
 
-### Patched Fixture
+One light that is patched into a venue. A fixture has a fixture definition, a mode, a DMX universe, a start address, a position and a rotation. Positions use a Z-up, right-handed coordinate system in metres.
 
-A fixture instance assigned to a venue at a specific DMX universe and address, with 3D position and rotation.
+## Head
 
-### Head
+One part of a fixture that Luma controls on its own. A pixel bar with 12 cells has 12 heads. Output state is keyed by `fixture-id` or `fixture-id:head-index`.
 
-An independently-controllable segment of a multi-head fixture. A pixel bar with 12 pixels has 12 heads. A simple par can has 1 head. Head positions are computed from the fixture definition's physical dimensions and the fixture's 3D placement.
+## DMX Universe
 
-- **Addressing:** `fixture_id:head_index` (e.g., `"abc123:0"`, `"abc123:1"`)
+A set of 512 DMX channels. A venue can use more than one universe.
 
-### DMX Universe
+## Group
 
-A group of 512 DMX channels (addresses 1-512). Standard DMX-512 protocol term. A venue can span multiple universes.
+A named set of fixtures in one venue. A score selects fixtures by group name, not by fixture id. Group names are snake_case. They must match `[a-z][a-z0-9_]*` and cannot be `all`. See [Groups](/docs/user-guide/groups-and-tags).
 
-### Group
+## Selection Expression
 
-A logical collection of fixtures organized by role and spatial position, not by DMX address. Groups are the bridge between abstract patterns and physical hardware -- they enable venue portability. Each group has a descriptive snake_case name (e.g., `front_wash`, `floor_ring`, `back_movers`).
+A query over group names. It uses `&` (and), `|` (or), `^` (either side, chosen at random when both match), `~` (not), `>` (fallback) and parentheses. An empty expression or `all` selects every fixture.
 
-- **Spatial Axes:** axis_lr (left/right), axis_fb (front/back), axis_ab (above/below) -- each -1.0 to +1.0
+## Track
 
-### Selection Expression
+An audio file in the library, with its analysis: beat grid, stems, chord roots, drum onsets, bar classifications and genres.
 
-A boolean query over group names used by pattern Selection arguments to target fixtures. Operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback), with parentheses for grouping.
+## Score
 
-Examples: `front_wash & left_truss`, `floor_ring & ~dj_booth`, `strobes > front_wash`.
+The light show for one track in one venue. A score is stored as rows: one `scores` row, one `clips` row per clip, and one `score_definitions` row per score-local graph. A track can have many scores.
 
-### Pattern
+## Clip
 
-A reusable, venue-agnostic light behavior defined as a visual node graph. Contains one or more implementations (graph versions).
+One placement of a graph on a score's timeline. A clip has a start and a duration in beats, a z index, a blend mode, a selection expression, input values and a seed.
 
-### Implementation
+## Graph Definition
 
-A specific node graph version of a pattern. Contains the serialized graph (nodes, edges, pattern arguments).
+A node graph with named inputs and outputs. A definition is either a primitive (a kernel in Rust) or a graph of other definitions. The standard library holds the built-in definitions. A score can also hold its own definitions.
 
-### Graph
+## Standard Library
 
-The node-and-edge data flow graph within an implementation. Nodes are processing units, edges connect output ports to input ports, and pattern arguments expose configurable parameters.
+The built-in definitions from `luma_patterns::standard_library()`. See the [node reference](/docs/node-reference).
 
-### Signal
+## Output (Apply)
 
-A 3D tensor -- the fundamental data type flowing through pattern graphs. Three dimensions:
+The terminal node of a lighting graph. Its catalog id is `output` and its display name is **Apply**. It has optional inputs for color, pan, tilt, strobe and movement speed. An input that is not wired leaves that capability unchanged.
 
-- **N (spatial):** Number of fixtures (or 1 for uniform)
-- **T (temporal):** Time samples across the pattern duration
-- **C (channel):** Data channels per sample (1=scalar, 2=pan/tilt, 3=RGB, 4=RGBA, 12=chroma)
-- **Broadcasting:** Dimensions of size 1 expand to match larger operands (like NumPy)
+## Signal
 
-### Score
+The value that flows on a wire. A signal is a three-dimensional array with a unit and a channel layout. The units are number, beats, proportion (0–1), position, degrees and seconds. The channel layouts are one value, RGB, pan/tilt and a vector of N components.
 
-A named collection of annotations for a track within a venue. Each track can have multiple scores per venue -- for example, different users can create their own light shows for the same track. Scores are listed in a score picker when you select a track to edit.
+## Rate
 
-### Annotation (Track Score)
+Each port is `fixed` or `frame`. A fixed value does not change during the clip. A frame value can change on every frame. A frame-rate wire cannot connect to a fixed input.
 
-A pattern placement on a score's timeline. Defines when a pattern plays, its stacking order, blend mode, and argument values.
+## Blend Mode
 
-### Blend Mode
+How a clip combines with the clips below it. There are nine modes. See the [blend mode table](/docs/architecture/compositor#blend-modes).
 
-How overlapping annotations combine during compositing. Applied per-layer in z-index order (bottom to top):
+## PrimitiveState
 
-| Mode | Description |
-|------|-------------|
-| **Replace** | Top overwrites bottom |
-| **Add** | Sum, clamped to 1.0 |
-| **Multiply** | Product (darkening) |
-| **Screen** | Inverse multiply (lightening) |
-| **Max / Lighten** | Take brightest |
-| **Min** | Take dimmest |
-| **Value** | Top brightness controls mix amount |
+The output of one head at one moment: dimmer (0–1), color (RGB, 0–1), strobe (0–1), position (pan and tilt in degrees) and speed (0 or 1).
 
-### Track
+## UniverseState
 
-An audio file with metadata and analysis data (beat grid, waveforms, separated stems, chord analysis).
-
-### PrimitiveState
-
-Runtime output values for a single fixture/head at a single moment. Contains dimmer (0-1), color (RGB 0-1), strobe (0-1), position (pan/tilt in degrees), and speed (0/1).
-
-### UniverseState
-
-All fixture states at a single point in time. Despite the name, represents fixture output state, not a DMX universe.
+The `PrimitiveState` of every head at one moment. It is not a DMX universe.
