@@ -91,7 +91,7 @@ pub const TEXT_INPUT: &str = "TextInput";
 /// existed, which is exactly how a baseline drifts.
 pub const CONTROL_HEIGHT: f32 = 24.;
 
-pub use button::{button, Enabled};
+pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
 pub use checkbox::luma_checkbox;
 pub use dropdown::luma_dropdown;
 pub use input::luma_input;

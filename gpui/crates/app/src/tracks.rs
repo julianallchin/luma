@@ -933,16 +933,9 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .child(div().flex_1())
         .child({
             let add = app.clone();
-            div()
+            luma_ui::icon_button(luma_ui::icons::IconName::Plus, luma_ui::Enabled::Yes)
                 .id("add-track")
-                .size(px(24.0))
-                .rounded(px(luma_ui::radius::CONTROL))
-                .flex()
-                .items_center()
-                .justify_center()
-                .hover(|button| button.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
                 .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
-                .child(gpui_component::Icon::new(luma_ui::icons::IconName::Plus).size(px(12.0)))
                 .agent_node(Role::Button, "Add track")
         })
         // How many rows the filters admit, kept in the head because the

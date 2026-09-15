@@ -1463,18 +1463,22 @@ fn viewport_controls(state: &Editor, app: &Entity<Luma>) -> Div {
         .flex()
         .gap(px(4.))
         .p(px(4.))
-        .rounded(px(6.))
+        .rounded(px(luma_ui::radius::CARD))
         .bg(ladder::background());
-    for (label, name) in [
-        ("−", "Zoom out"),
-        ("100%", "Actual size"),
-        ("+", "Zoom in"),
-        ("Fit", "Fit graph"),
+    for (icon, label, name) in [
+        (Some(luma_ui::icons::IconName::Minus), "", "Zoom out"),
+        (None, "100%", "Actual size"),
+        (Some(luma_ui::icons::IconName::Plus), "", "Zoom in"),
+        (None, "Fit", "Fit graph"),
     ] {
         let app = app.clone();
         let target = state.target();
+        let control = match icon {
+            Some(icon) => luma_ui::icon_button(icon, luma_ui::Enabled::Yes),
+            None => luma_ui::button(label, luma_ui::Enabled::Yes),
+        };
         row = row.child(
-            luma_ui::button(label, luma_ui::Enabled::Yes)
+            control
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     app.update(cx, |this, cx| {

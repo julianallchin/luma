@@ -1843,7 +1843,6 @@ impl AgentChat {
                         "chat-history",
                         IconName::Undo,
                         "Chat history",
-                        theme,
                         false,
                         move |cx| {
                             rewind.update(cx, |_, cx| cx.emit(ChatEvent::HistoryRequested));
@@ -1853,7 +1852,6 @@ impl AgentChat {
                         "chat-new",
                         IconName::Plus,
                         "New chat",
-                        theme,
                         !self.is_open(),
                         move |cx| {
                             fresh.update(cx, |this, cx| this.new_thread(cx));
@@ -1873,25 +1871,14 @@ fn header_button(
     id: &'static str,
     icon: IconName,
     label: &'static str,
-    theme: &Theme,
     disabled: bool,
     pressed: impl Fn(&mut gpui::App) + 'static,
 ) -> impl IntoElement {
-    div()
+    luma_ui::icon_button(icon, luma_ui::Enabled::from(!disabled))
         .id(id)
-        .size(px(theme::HEADER_BUTTON))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(luma_ui::radius::CONTROL))
         .when(!disabled, |button| {
-            button
-                .cursor_pointer()
-                .hover(|style| style.bg(theme::wash(luma_ui::glass::WASH_SUBTLE)))
-                .on_click(move |_, _, cx| pressed(cx))
+            button.on_click(move |_, _, cx| pressed(cx))
         })
-        .when(disabled, |button| button.opacity(0.4))
-        .child(Icon::new(icon).size(px(14.0)).text_color(theme.text_faint))
         .agent_node(NodeRole::Button, label)
         .agent_disabled(disabled)
 }

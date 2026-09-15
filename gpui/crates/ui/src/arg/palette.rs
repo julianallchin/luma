@@ -135,10 +135,7 @@ pub fn luma_palette_row(
     }
 }
 
-/// Compact icon actions share the same rounded chip as text buttons.
+/// Compact icon actions use the shared icon button.
 fn action_button(icon: crate::icons::IconName) -> Div {
-    crate::float::chip()
-        .w(px(CONTROL_HEIGHT))
-        .px(px(0.))
-        .child(gpui_component::Icon::new(icon).size(px(12.)))
+    crate::icon_button(icon, crate::Enabled::Yes)
 }

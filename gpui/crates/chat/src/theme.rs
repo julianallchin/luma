@@ -35,8 +35,6 @@ pub const SPACE_LG: f32 = 16.0;
 
 /// The panel's own header.
 pub const HEADER_HEIGHT: f32 = 44.0;
-/// An icon button in that header — rewind, new chat.
-pub const HEADER_BUTTON: f32 = 24.0;
 /// Reserved for the working indicator, always — reserving it is what keeps the
 /// composer from shifting the moment a turn starts.
 pub const STATUS_STRIP_HEIGHT: f32 = 24.0;
