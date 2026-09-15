@@ -124,12 +124,7 @@ impl Subagents {
 
 impl Luma {
     /// Open the subagents dialog, optionally straight on one child.
-    pub(crate) fn show_subagents(
-        &mut self,
-        child: Option<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn show_subagents(&mut self, child: Option<SharedString>, cx: &mut Context<Self>) {
         let rows = self
             .chat
             .as_ref()
@@ -138,19 +133,19 @@ impl Luma {
         let agent = self.library.agent();
         let mut state = Subagents::new(rows, cx);
         if let Some(child) = child {
-            open_child(&mut state, child, &agent, window, cx);
+            open_child(&mut state, child, &agent, cx);
         }
         self.overlay.open(Overlay::Subagents(Box::new(state)));
         cx.notify();
     }
 
-    fn open_subagent(&mut self, child: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_subagent(&mut self, child: SharedString, cx: &mut Context<Self>) {
         // Read the agent handle out first: `open_mut` below borrows `self`, and
         // reaching back through `cx.entity()` for it inside that borrow is a
         // read of an entity that is already being updated.
         let agent = self.library.agent();
         if let Some(Overlay::Subagents(state)) = self.overlay.open_mut() {
-            open_child(state, child, &agent, window, cx);
+            open_child(state, child, &agent, cx);
             cx.notify();
         }
     }
@@ -226,7 +221,7 @@ impl Luma {
                 .map(|_| SharedString::from(row.child_thread_id.clone()))
         });
         if let Some(child) = child {
-            self.open_subagent(child, window, cx);
+            self.open_subagent(child, cx);
         }
     }
 
@@ -266,7 +261,6 @@ fn open_child(
     state: &mut Subagents,
     child: SharedString,
     agent: &luma_chat::Agent,
-    window: &mut Window,
     cx: &mut Context<Luma>,
 ) {
     if state
@@ -276,7 +270,7 @@ fn open_child(
     {
         let agent = agent.clone();
         let thread = child.clone();
-        let reader = cx.new(|cx| AgentChat::reader(agent, &thread, window, cx));
+        let reader = cx.new(|cx| AgentChat::reader(agent, &thread, cx));
         state.reader = Some((child.clone(), reader));
     }
     state.morph.request(
@@ -533,9 +527,9 @@ fn self_row(
         .h(px(ROW_HEIGHT))
         .px(px(10.0))
         .gap(px(12.0))
-        .on_click(move |_, window, cx| {
+        .on_click(move |_, _, cx| {
             let picked = picked.clone();
-            opened.update(cx, |this, cx| this.open_subagent(picked, window, cx));
+            opened.update(cx, |this, cx| this.open_subagent(picked, cx));
         });
     if let Some(focus) = focus {
         pressable = pressable.track_focus(focus);

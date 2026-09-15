@@ -76,9 +76,9 @@ fn sending_lifts_the_prompt_and_holds_it_while_the_reply_fills_the_room() {
         )),
         runtime.handle().clone(),
     );
-    let root: gpui_agent::RootFactory = Arc::new(move |window, cx| -> AnyView {
+    let root: gpui_agent::RootFactory = Arc::new(move |_, cx| -> AnyView {
         luma_app::init(cx);
-        cx.new(|cx| luma_chat::AgentChat::new(agent.clone(), Some(scope.clone()), window, cx))
+        cx.new(|cx| luma_chat::AgentChat::new(agent.clone(), Some(scope.clone()), cx))
             .into()
     });
     let mut app = Harness::headless(
