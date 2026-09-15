@@ -1,8 +1,7 @@
 //! Scene math and editor logic for the wgpu renderer — no GPU, no windowing.
 //!
-//! Phase 0a of `docs/specs/wgpu-renderer.md`: the retained scene graph, the
-//! camera, CPU raycasting, and the socket/snap solver ported from
-//! `src/features/stage/lib/{snap,sockets}.ts`.
+//! The retained scene graph, the camera, CPU raycasting, and the socket/snap
+//! solver.
 //!
 //! # Two conventions live here, deliberately
 //!

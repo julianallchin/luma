@@ -103,10 +103,7 @@ pub(crate) const GHOST_NODE: &str = "__ghost__";
 ///
 /// # Why every mode is in here
 ///
-/// Three of these used to be flags beside it — `palette_open`, `tray_open` and
-/// an `Option<Distribute>` on the [`crate::stage::Build`] — and the page grew
-/// one panel per flag, because a boolean cannot say what to *hide*. A state
-/// can: the chrome is a `match` on this, so a mode with no controls draws none
+/// A boolean flag per panel cannot say what to *hide*. A state can: the chrome is a `match` on this, so a mode with no controls draws none
 /// by construction rather than by every call site remembering to.
 ///
 /// The ordering is the flow: you choose a thing, you place it, and placing it

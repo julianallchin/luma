@@ -34,9 +34,8 @@
 //! [`sidebar_toggle`] and [`panel_toggle`] are painted in window space beside
 //! the lights, and the window's two corners are the only place they appear.
 //! A toggle rendered *by* a region rides that region's pane, and a pane whose
-//! width is animating clips its own band — which is why the sidebar's toggle
-//! used to vanish part-way through a close and reappear beside back/forward
-//! once the slide had finished. A fixed point cannot live on a moving thing.
+//! width is animating clips its own band, so the toggle would vanish part-way
+//! through a close. A fixed point cannot live on a moving thing.
 //!
 //! So the rule the whole band reads:
 //!
@@ -427,11 +426,9 @@ fn dim_icon(icon: IconName) -> Div {
 /// **strip** rather than of the band, for the same reason: it extends a row of
 /// tabs, so it is wherever that row is.
 ///
-/// A band that could *borrow* the strip when the panel was away is what this
-/// replaced, and it cost two rules the shell no longer has to keep: which band
-/// owns the strip this frame, and where the `+` goes when ownership changes
-/// hands mid-close. Closing the panel now simply puts its tabs away with it,
-/// and ⌘T opens the panel before it offers anything (see `Luma::render`).
+/// No band borrows the strip when the panel is away. Closing the panel puts
+/// its tabs away with it, and ⌘T opens the panel before it offers anything
+/// (see `Luma::render`).
 ///
 /// With **no** tabs there is no `+`: the panel's own empty state is the offer
 /// then, and two offers for one question is the thing that rule prevents.
@@ -523,8 +520,7 @@ pub(crate) fn tab_strip(
     // The menu hangs off the strip through the house floating layer:
     // `deferred(…).priority(1)` lifts it above everything painted in normal
     // order — the window controls included — and `anchored` owns the
-    // off-screen fitting a hand clamp used to approximate. An overlay up
-    // means the menu yields, as it always has.
+    // off-screen fitting. An overlay up means the menu yields.
     if menu_open && app.overlay.get().is_none() {
         let prerequisites = app.new_tab_prerequisites();
         let dismiss = entity.clone();

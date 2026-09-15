@@ -28,8 +28,8 @@
 //!
 //! # What is not here
 //!
-//! The ports cover the *resting appearance* of each control, which is what
-//! the harness compares against WebKit. `luma_input` renders a value, it does
+//! These functions cover the *resting appearance* of each control.
+//! `luma_input` renders a value, it does
 //! not edit one; a field that a person actually types into is
 //! [`text_input::TextInput`], which is an entity rather than a free function
 //! because an editor is exactly the case the note above reserves — it owns a
@@ -38,9 +38,8 @@
 //! [`float::anchored_below`]); `luma_dropdown` still renders its closed
 //! trigger only.
 //!
-//! [`luma_slider`] used to be on that list and no longer is: it drags, and it
-//! does so without owning state, because gpui's drag payload carries the
-//! identity and the event carries the box — see its module docs.
+//! [`luma_slider`] drags without owning state, because gpui's drag payload
+//! carries the identity and the event carries the box — see its module docs.
 
 pub mod arg;
 pub mod dialog;

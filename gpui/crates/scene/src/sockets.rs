@@ -1,5 +1,4 @@
-//! Socket model for the stage builder — a port of
-//! `src/features/stage/lib/sockets.ts`.
+//! Socket model for the stage builder.
 //!
 //! Each mesh declares a set of named anchor points in its **local asset frame**
 //! (Y-up, as glTF mandates). Sockets carry a type tag and a normal; matching
@@ -24,10 +23,8 @@ use glam::DVec3;
 /// share before they can mate at all.
 ///
 /// The kind answers "same joint?" and [`Polarity`] answers "which half?".
-/// Together they replace the hand-maintained held→host adjacency list this
-/// module used to carry: a thirteen-entry table is a lookup table pretending
-/// to be a rule, and it drifted between its Rust and TypeScript copies, which
-/// is why the golden vectors exist.
+/// Together they are the matching rule, so no hand-kept held→host table is
+/// needed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum SocketKind {
     /// A flat plane something rests on: deck tops, stand tops, the ground, and
@@ -156,8 +153,8 @@ pub enum SocketType {
 }
 
 impl SocketType {
-    /// Every variant, in declaration order. The generated TypeScript binding
-    /// and the polarity-equivalence test both sweep this.
+    /// Every variant, in declaration order. The name round-trip and polarity
+    /// tests sweep this.
     pub const ALL: [SocketType; 14] = {
         use SocketType::*;
         [
@@ -674,15 +671,13 @@ mod tests {
         }
     }
 
-    /// The directed `COMPATIBLE` table this module shipped before polarity,
-    /// held-side → host-side. Kept here as the reference the new rule is
-    /// measured against, and nowhere else.
+    /// The old directed held → host table. The polarity rule must admit every
+    /// pair in it.
     fn legacy_compatible(t: SocketType) -> &'static [SocketType] {
         use SocketType::*;
         match t {
-            // `TrussFace` postdates the table — it is a host, and a host that
-            // never existed to be listed. It joins the receptacles, which is
-            // exactly what the additions sweep below then has to justify.
+            // `TrussFace` is a host with no entry. Its pairs are listed in
+            // `INTENTIONAL_ADDITIONS`.
             Grab | FloorTop | FloorCorner | StandTop | Ground | TrussFace => &[],
             FloorEdge => &[FloorEdge],
             TrussEnd => &[TrussEnd, FloorCorner],
@@ -694,33 +689,22 @@ mod tests {
         }
     }
 
-    /// Every pair the new rule admits that the old table did not, and why.
+    /// Every pair the polarity rule admits that the old table did not, and why.
     ///
-    /// The new rule is a strict *superset*: it adds nothing but the pairs the
-    /// old table's asymmetry excluded by hand. Each one is a joint that
-    /// physically exists — the old table simply never listed it, because a
-    /// hand-maintained adjacency list only holds the cases someone thought of.
+    /// The rule is a strict superset of the table. Each addition is a joint
+    /// that physically exists.
     const INTENTIONAL_ADDITIONS: [(SocketType, SocketType, &str); 8] = {
         use SocketType::*;
         [
-            // "Anything that sits on a flat surface can sit on a stand top."
-            // The old table let only a speaker onto a stand; a deck, a rail or
-            // a CDJ is the same joint.
+            // Anything that sits on a flat surface can sit on a stand top.
             (StandBottom, StandTop, "a stand on a stand top"),
             (EquipmentMount, StandTop, "a CDJ or mixer on a stand top"),
             (BottomMount, StandTop, "a deck or rail on a stand top"),
-            // Butting a deck edge against a rail was allowed rail-first and
-            // refused deck-first. Which piece the user happens to be dragging
-            // is not a property of the joint.
+            // A deck edge butts a rail end from either side. Which piece the
+            // user drags is not a property of the joint.
             (FloorEdge, RailEnd, "a deck edge butted to a rail end"),
-            // `TrussFace` is a host the old table never had: a truss had ends
-            // and nothing else, so nothing could hang off one. It is a
-            // *surface*, and the rule is "same kind, opposed halves" — so every
-            // underside mates it, not just the clamp that motivated it. Naming
-            // the other three rather than special-casing the clamp is the
-            // choice: a deck bolted under a truss is a rig nobody builds, and
-            // excluding it would need exactly the hand-maintained adjacency
-            // list polarity replaced.
+            // `TrussFace` is a surface. The rule is "same kind, opposed
+            // halves", so every underside mates it, not only a clamp.
             (
                 EquipmentMount,
                 TrussFace,

@@ -5,8 +5,7 @@
 //! Stateless: the host owns the `Vec` of colors and the selection, hears a
 //! typed [`PaletteEvent`], and pairs the selection with a color editor of its
 //! choosing (the kit's [`super::color::luma_hsv_picker`], usually). Reorder is
-//! drag-and-drop between swatches; the web reference has no reorder at all —
-//! rows there are fixed — but the brief's strip is horizontal and ordered, so
+//! drag-and-drop between swatches. The strip is horizontal and ordered, so
 //! the drop targets are the swatches themselves.
 
 use gpui::prelude::*;
@@ -23,7 +22,7 @@ use crate::CONTROL_HEIGHT;
 /// host's `Vec`; the row re-renders from whatever the host decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteEvent {
-    /// The `+` slab: append a copy of the last color (the web behavior).
+    /// The `+` slab: append a copy of the last color.
     Add,
     /// The `×` slab: remove this index. Offered only while more than one
     /// color remains — a palette of zero colors paints nothing.

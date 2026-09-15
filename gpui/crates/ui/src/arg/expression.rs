@@ -5,18 +5,14 @@
 //!
 //! Evaluating a selection expression is expensive and a half-typed one is
 //! invalid, so the host hears [`ExpressionEvent::Committed`] and nothing else.
-//! The web version (src/features/universe/components/group-expression-editor
-//! .tsx) draws a transparent `<input>` over a highlighted overlay — two
-//! renderings of one string that must stay pixel-aligned. Here the field's own
-//! shaper colors the tokens ([`TextInput::set_highlight`]), so there is one
-//! rendering and nothing to keep aligned.
+//! The field's own shaper colors the tokens ([`TextInput::set_highlight`]), so
+//! there is one rendering and no overlay to keep aligned.
 //!
 //! # Token colors are the ladder's
 //!
 //! Group names take [`ladder::status_warn`]'s amber and operators
-//! [`ladder::status_bad`]'s rose — the nearest rungs to the web side's
-//! amber-400/rose-400, not new hues — and parens take [`ladder::param_label`],
-//! which *is* the web's gray-400. Nothing here mints a color.
+//! [`ladder::status_bad`]'s rose, and parens take [`ladder::param_label`].
+//! Nothing here mints a color.
 
 use std::ops::Range;
 
@@ -141,7 +137,7 @@ pub fn current_word(text: &str, cursor: usize) -> Range<usize> {
     start..end
 }
 
-/// How many rows the menu shows, as on the web side.
+/// How many rows the menu shows.
 pub const SUGGESTION_CAP: usize = 10;
 
 /// The suggestion match rule the editor's [`Picker`] is built over: a
@@ -350,7 +346,7 @@ impl GroupExpressionEditor {
             |menu, (index, option)| {
                 let this = this.clone();
                 let picked = option.clone();
-                // `RowState` splits the two facts one paint used to blur:
+                // `RowState` keeps two facts apart:
                 // hover marks the pointer, the cursor marks what Enter takes.
                 let row = float::menu_row(
                     RowState::of(false, index == cursor),
@@ -364,8 +360,7 @@ impl GroupExpressionEditor {
                 .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
                     // Mouse-down, not click: a click waits for the
                     // mouse-up, and by then the field has blurred and
-                    // the menu is gone — the web side ducks the same
-                    // race with `onMouseDown`.
+                    // the menu is gone.
                     cx.stop_propagation();
                     this.update(cx, |editor, cx| {
                         editor.apply_suggestion(&picked, cx);

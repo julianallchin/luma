@@ -68,8 +68,7 @@ pub struct Editor {
     /// the canvas knows both its own size and the measured graph's — which is
     /// inside a draw.
     view: Rc<Cell<Viewport>>,
-    /// Frame the whole graph, as the web editor does with `fitView` on mount
-    /// — and keep it framed when the *canvas* changes size (the workspace
+    /// Frame the whole graph on mount, and keep it framed when the *canvas* changes size (the workspace
     /// pane resizing under it), until the user takes the view with a pan or a
     /// zoom. Cleared by those gestures, not by the fit itself, so a rebuild
     /// (a save coming back) or a pane resize does not yank an eye the user
@@ -137,8 +136,7 @@ impl Viewport {
     /// reveals their labels and controls; the fit never clips distant nodes.
     const MIN_ZOOM: f32 = 0.02;
     const MAX_ZOOM: f32 = 4.;
-    /// Slack left around a fitted graph, as a fraction of the canvas — React
-    /// Flow's `fitView` padding default.
+    /// Slack left around a fitted graph, as a fraction of the canvas.
     const FIT_PADDING: f32 = 0.1;
 
     fn to_window(self, origin: Point<Pixels>, at: Point<f32>) -> Point<Pixels> {
@@ -449,9 +447,8 @@ impl Luma {
                         });
                     } else {
                         // A press on the background clears the selection as
-                        // well as starting a pan: the web editor does the
-                        // same, and a selection that survived a click
-                        // elsewhere would be a second way to have one.
+                        // well as starting a pan: a selection that survived a
+                        // click elsewhere would be a second way to have one.
                         editor.selected.clear();
                         editor.fit = false;
                         editor.gesture = Some(Gesture::Pan { last: at });
@@ -684,41 +681,36 @@ impl Luma {
 
 // -- geometry -----------------------------------------------------------------
 //
-// One card shape, in graph space. Every constant here is the value
-// `getComputedStyle` reports on the web card at zoom 1; the Tailwind class it
-// is spelled with is named beside it, because the two disagree often enough
-// (`rounded-lg` under `--radius: 0rem`, `h-7` on a control the app otherwise
-// keeps at `h-6`) that only one of them can be the source.
+// One card shape, in graph space, in pixels at zoom 1.
 
-/// `min-w-[170px]`, as a border-box minimum.
+/// The card's minimum width, as a border-box minimum.
 const CARD_MIN_WIDTH: f32 = 170.;
-/// `border-2 border-gutter`, all four sides. The card's outer box includes it,
+/// The card border, all four sides. The card's outer box includes it,
 /// so the content box starts `CARD_BORDER` in.
 const CARD_BORDER: f32 = 2.;
-/// The `bg-trim` title strip: `px-2 pt-1 pb-1` around a 12px/16px line.
+/// The title strip: 4px above and below a 12px/16px line.
 const HEADER_HEIGHT: f32 = 24.;
-/// `text-xs` — the title, and the port labels under it, are the same
-/// 12px/16px run.
+/// The title, and the port labels under it, are the same 12px/16px run.
 const TEXT_SIZE: f32 = 12.;
 const TEXT_LINE: f32 = 16.;
-/// `tracking-tight` at 12px.
+/// Title letter spacing at 12px.
 const TITLE_TRACKING: f32 = -0.3;
-/// `pt-1` / `pb-1` on the header, `py-1` on the port and param blocks, `mb-1`
-/// under a param label. One 4px step, four uses; `PAD_H` is its `px-2` twin.
+/// Vertical padding on the header, the port and param blocks, and under a param
+/// label. One 4px step, four uses; `PAD_H` is its horizontal twin.
 const PAD: f32 = 4.;
 const PAD_H: f32 = 8.;
-/// `gap-1.5` between port rows within a column.
+/// The gap between port rows within a column.
 const PORT_ROW_GAP: f32 = 6.;
-/// `pl-4` / `pr-4` — the outer padding of a port row, past its ring.
+/// The outer padding of a port row, past its ring.
 const PORT_INSET: f32 = 16.;
-/// `pr-2` / `pl-2` — the inner padding, between a label and the other column.
+/// The inner padding, between a label and the other column.
 const PORT_LABEL_PAD: f32 = 8.;
-/// `gap-2` — the minimum gutter between the two port columns, and between a
+/// The minimum gutter between the two port columns, and between a
 /// selector's label and its chevron.
 const COLUMN_GAP: f32 = 8.;
 /// Distance from the card's *content* edge to a port's centre. Everything a
-/// port draws is centred on this one anchor, exactly as `PORT_ANCHOR` is on
-/// the web — which is what makes a wire land in the dot rather than beside it.
+/// port draws is centred on this one anchor, which is what makes a wire land
+/// in the dot rather than beside it.
 const PORT_ANCHOR: f32 = 6.;
 const PORT_RING: f32 = 9.;
 /// The square a port answers a press from, centred on its anchor. Much larger
@@ -1012,8 +1004,7 @@ impl Scene {
                     id: edge.id.clone().into(),
                     from: (from_card, from_port),
                     to: (to_card, to_port),
-                    // The wire carries the *source*'s hue, as on the web side:
-                    // an edge is one signal, and the port it came out of is
+                    // The wire carries the *source*'s hue: an edge is one signal, and the port it came out of is
                     // what says which kind.
                     color: cards[from_card].outputs[from_port].color,
                 })
@@ -1029,9 +1020,9 @@ impl Scene {
 
     /// Resolve every width and height that depends on shaped text, once.
     ///
-    /// The web card is shrink-to-fit, so its width is `max(170, max-content)`
-    /// over the port columns and the body — see the module docs for why that
-    /// cannot be guessed at.
+    /// A card is shrink-to-fit, so its width is `max(170, max-content)` over
+    /// the port columns and the body. That needs shaped text, so it cannot be
+    /// guessed.
     fn measure(&mut self, window: &Window) {
         for card in &mut self.cards {
             if card.interface_input {
@@ -1865,7 +1856,7 @@ fn listen(app: &Entity<Luma>, target: Target, hitbox: &Hitbox, window: &mut Wind
 /// [`PORT_ANCHOR`] inside the card's edge, so its last few pixels run beneath
 /// the card — which is what makes the visible wire stop cleanly at that edge
 /// instead of ending in a gap short of the ring. The card then paints its own
-/// ghost lead-in over that stretch, exactly as the web port row does.
+/// ghost lead-in over that stretch.
 #[allow(clippy::too_many_arguments)]
 fn paint(
     bounds: Bounds<Pixels>,
@@ -1950,15 +1941,8 @@ fn paint(
 /// One node card: a `--card` plate inside a 2px `--gutter` border, a `--trim`
 /// header, two port columns, and whatever body the node type carries.
 ///
-/// Square, where `base-node.tsx` says `rounded-lg` — because `--radius: 0rem`
-/// makes `--radius-lg` zero, so the rendered web card is square too. The class
-/// is decorative; the corner is not a divergence.
-///
-/// Selection is the one place this screen does *not* copy the web. React Flow
-/// never styled a selected node and the app never overrode it, so on the web
-/// the only way to tell a node is selected is to press Delete. Here the border
-/// takes [`ladder::primary`] — the one hue this screen spends on a surface,
-/// and it spends it on meaning.
+/// Square corners. A selected card's border takes [`ladder::primary`] — the
+/// one hue this screen spends on a surface, and it spends it on meaning.
 fn paint_card(
     box_: Bounds<Pixels>,
     card: &Card,
@@ -2037,7 +2021,7 @@ fn paint_card(
 }
 
 /// The faint hidden segment of a wire, from the card's content edge in to the
-/// port anchor (`base-node.tsx`'s ghost lead-in).
+/// port anchor.
 fn paint_ghost(card: Point<Pixels>, port: &Port, zoom: f32, output: bool, window: &mut Window) {
     let centre = point(card.x + px(port.at.x * zoom), card.y + px(port.at.y * zoom));
     let left = if output {

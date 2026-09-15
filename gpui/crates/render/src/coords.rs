@@ -9,9 +9,9 @@ pub use luma_scene::coords::*;
 
 use glam::Vec3;
 
-/// sRGB transfer to linear, three's `SRGBToLinear`. CSS colour literals in the
-/// three.js scene (`#030303`, `#191919`) arrive through this; `setRGB` values
-/// are already linear and must not.
+/// sRGB transfer to linear (three.js `SRGBToLinear`). Hex colour literals in the
+/// scene description (`#030303`, `#191919`) arrive through this; values that
+/// are already linear must not.
 #[must_use]
 pub fn srgb_to_linear(c: f32) -> f32 {
     if c < 0.04045 {

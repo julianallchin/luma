@@ -79,9 +79,8 @@ impl Aabb {
     }
 }
 
-/// Authoring-space AABB (f64, Y-up). The Rust equivalent of three.js `Box3`
-/// as `sockets.ts` uses it: measured once per mesh, then anchors resolve
-/// against it.
+/// Authoring-space AABB (f64, Y-up), with three.js `Box3` semantics: measured
+/// once per mesh, then socket anchors resolve against it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DAabb {
     pub min: DVec3,

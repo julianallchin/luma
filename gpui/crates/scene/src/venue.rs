@@ -869,9 +869,8 @@ impl NodePose {
     /// patch with its own definition, not from the set-piece list.
     ///
     /// The predicate lives here because every consumer needs the same answer —
-    /// the renderer's piece list, the agent binding's `venue.pieces`, and the
-    /// React store's mesh list — and three copies of it are three chances to
-    /// draw a different room.
+    /// the renderer's piece list and the agent binding's `venue.pieces` — and
+    /// two copies of it are two chances to draw a different room.
     #[must_use]
     pub fn is_set_piece(&self) -> bool {
         self.catalog_ref.is_some()

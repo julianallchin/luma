@@ -478,9 +478,8 @@ fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 
 /// Who this library belongs to, and the one gesture that changes it.
 ///
-/// The web app hangs sign-out off a titlebar dropdown; there is no titlebar
-/// here (see `crate::chrome`), and the gear that opens this screen sits in the
-/// same corner that dropdown did. So this *is* the account menu.
+/// There is no titlebar account dropdown (see `crate::chrome`), so this screen
+/// *is* the account menu.
 fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
     let account = shell.library.account();
     let signed_in = account.is_some();
@@ -556,8 +555,7 @@ fn about() -> Vec<Div> {
 
 // -- the pieces every section is built from -----------------------------------
 
-/// One labelled control with its helper line: the `space-y-2` stack the web
-/// dialog repeats for every setting.
+/// One labelled control with its helper line, repeated for every setting.
 fn field(label: Option<&str>, control: AnyElement, help: Option<&str>) -> Div {
     div()
         .flex()
@@ -646,7 +644,7 @@ fn select(
 }
 
 /// A value this host can show but not yet edit, drawn in the input's box so
-/// the section keeps the web dialog's shape.
+/// the section keeps its shape.
 fn readonly_value(value: &str, placeholder: &str) -> AnyElement {
     let empty = value.is_empty();
     let text = if empty { placeholder } else { value };

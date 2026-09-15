@@ -2,20 +2,19 @@
 //!
 //! `Frame::gizmo_pivot` is the one point the widget is drawn on and the one
 //! point the editor picks against, so it is worth pinning exactly rather than
-//! inferring from pixels. Two rules, both of which used to be somewhere else or
-//! nowhere:
+//! inferring from pixels. The pivot rules:
 //!
 //! * a **fixture** anchors on its own origin — in the renderer's world space,
 //!   which is the data-space triple mirrored in Y (`coords::world_from_data`);
 //! * a **stage piece** anchors on the bottom centre of its mesh's bounds,
 //!   because stage GLBs put their local origin at a corner and a widget on that
-//!   origin floats off the piece entirely.
+//!   origin floats off the piece entirely;
+//! * a **mixed selection** anchors on the mean of its members, and an empty
+//!   selection draws no widget.
 //!
-//! The second is `unified-transform.tsx::stagePieceAnchorWorld`, ported. Its
-//! third case — a parented piece anchoring on the socket that attaches it —
-//! cannot come across yet: a `Piece` arrives with its parent chain already
-//! flattened away and the socket catalogue is still TypeScript-only. See
-//! `docs/design/venue-graph.md`.
+//! The file also checks that painted and picked gizmo axes agree on a tilted
+//! mount, that a mounted piece draws only its normal rotation ring, and that
+//! plane handles face the camera from every octant.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
