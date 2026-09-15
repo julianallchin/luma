@@ -1,97 +1,151 @@
 ---
 title: Node Graph Engine
-description: Canonical score graphs, tensor preparation, immutable events, and clip playback
+description: Scores, graph definitions, typed signals, validation, preparation and musical time
 ---
 
-Canonical scores own their graph definitions and clip instances. The shared
-evaluator in `backend/crates/patterns` computes numerical signals; the backend
-supplies venue geometry and analyzed track data, then composites explicit fixture
-outputs. Native playback and clip previews use the same prepared program.
+The pattern graph engine is the crate `luma-patterns` in
+`backend/crates/patterns`. It has no database, UI or playback-device state. It
+evaluates graphs in musical time over a list of cells. The backend supplies the
+cells, the track data and the times.
 
-## Documents and preparation
+## Scores
 
-A score contains named definitions and clips. A definition is a graph of node
-instances, input bindings and named outputs. Built-in recipes use the same graph
-format; numerical primitives have one Rust signature and kernel registry.
-Each clip supplies timing in beats, a group selection, a seed and input overrides.
-An Input node's stable key connects these overrides to the graph; renaming its
-display label preserves those connections.
+A score is the document that one editor edits. The type is
+`luma_patterns::Score` in `score.rs`. It has three parts:
 
-Preparation validates types, rates, required bindings and graph acyclicity, then
-flattens nested definitions. Only outputs connected to the calling graph remain
-in the program. Unused drum sources, audio analyses and clip-range reductions
-are removed before track preparation. A source offering several drums therefore
-needs only the analyses used by its connected outputs.
+- `version`: the document version.
+- `definitions`: graphs that belong to this score, keyed by id.
+- `clips`: placed graphs on the track timeline, keyed by id.
 
-Fixed computations, including mappings and immutable event lists, are prepared
-once. Clip-range reductions sample their upstream dependencies over the clip;
-they are reused during playback. Rebinding analyzed track data rebuilds these
-prepared values. Playback executes the remaining dependencies in order without
-walking the authored definitions again.
+A `Clip` has these fields:
 
-Key files: `backend/crates/patterns/src/graph.rs`, `prepared.rs`, `score.rs`,
-and `backend/src/services/graph_scores.rs`.
+| Field | Meaning |
+|-------|---------|
+| `graph` | A score-local definition id or a standard library id |
+| `start` | Start position, in beats |
+| `duration` | Length, in beats |
+| `seed` | Seed for random choices |
+| `selection_seed` | Optional separate seed for the selection draw |
+| `selection` | Group expression and subset |
+| `z_index` | Layer order |
+| `blend_mode` | How the clip combines with the layers below it |
+| `inputs` | Values for the graph inputs |
 
-## Signals and controls
+In the database a score is rows in `scores`, `clips` and `score_definitions`.
+See [Database](/docs/architecture/database).
 
-Numerical values are tensors with fixture, time and channel axes. Singleton axes
-broadcast; fixture identities, physical units and channel meanings constrain
-compatible connections. Scalars, colors, spatial fields and movement vectors use
-the same arithmetic operations. A Chase value can drive brightness, be remapped
-into pan/tilt, or become a palette coordinate.
+## Definitions and graphs
 
-Envelopes, gradients, mappings, dropdown choices, audio source descriptions and
-events remain structured values. Nodes consume these directly; the graph does
-not expand curve construction into stage-specific arithmetic nodes.
+A `Definition` (in `graph.rs`) has a name, named inputs, named outputs and a
+body. The body is one of two kinds:
 
-## Events and envelopes
+- **Primitive**: a Rust kernel.
+- **Graph**: nodes, graph inputs and output bindings.
 
-Events are immutable timestamps or periodic schedules. They may broadcast across
-a selection or carry head targeting. Random targeting derives from the seed,
-event identity and head identity, so seeking does not reroll an event.
+Each node names a definition. Each node input has a `Binding`:
 
-Event age is evaluated from the requested time. Broadcasting event ages against
-head coordinates produces independent Chase journeys; Max combines overlapping
-responses. Trigger spacing and journey duration are independent. A completed
-journey contributes zero even when the drawn curve ends above zero.
+- `value`: a constant.
+- `input`: a graph input of the enclosing definition.
+- `connection`: an output of another node.
 
-Envelope is one editable curve represented by anchors and optional Bézier handles.
-Its numerical sampler preserves fixture, time and channel dimensions. Coincident
-anchors express instantaneous steps, with the rightmost anchor winning at the
-boundary. Saved stage controls are converted into ordinary curve data on import.
+Each `Input` has a name, a description, a value type, a rate and an optional
+default. The rate is `fixed` or `frame`. A `frame` input can change on each
+frame. A `fixed` input cannot. An input can also name an authoring control:
+number, choice, toggle, color, curve or gradient.
 
-## Timing and output
+`standard_library()` in `catalog.rs` builds the built-in library. It reads the
+recipe graphs from `recipes.json` and adds the primitives. See the
+[Node Reference](/docs/node-reference) for every node.
 
-The host converts absolute track seconds to musical beats using the analyzed beat
-timeline, including tempo changes. Seconds and beats have distinct units. The
-evaluator accepts arbitrary sample times: playback, out-of-order scrubbing and
-batch rendering use the same calculations without a fixed simulation rate or
-playback history.
+## Signals
 
-Output accepts independent color, dimmer, pan, tilt, strobe and movement-speed
-signals. Leaving a capability unwired differs from writing zero. The host
-compositor layers active clips in their authored order and blend mode, with each
-clip active over its half-open time span.
+Numerical values are `luma_patterns::Signal` values (in `tensor.rs`). A signal
+has four parts:
 
-The native visualizer auditions an isolated clip with real audio, selection and
-overrides. Additional numerical, event and audio outputs can be inspected beside its
-transport. Audio outputs display a mel spectrogram of the connected source and
-filter chain, with a temporary beat overlay. Signal plots retain head and channel identity; event ticks use the
-track's beat timeline. Plots are sampled when the clip changes and cached while
-the transport moves. Inspection preferences and the preview cursor are temporary.
+| Part | Meaning |
+|------|---------|
+| `values` | A 3D `f64` array: fixture × time × channel |
+| `unit` | `number`, `beats`, `proportion`, `position`, `degrees` or `seconds` |
+| `channels` | `value`, `rgb`, `pan_tilt` or `components(n)` |
+| `fixtures` | An ordered list of fixture ids, or none |
 
-## Venue selection and historical documents
+A signal with no fixture list applies to every fixture. A signal with a fixture
+list can only combine with signals over the same fixtures. Equal sizes are not
+enough.
 
-Scores target group names rather than physical fixture IDs. The backend resolves
-the clip's selection expression against the current venue, enumerates its heads
-and supplies their world and UVZ coordinates to the evaluator. The resulting
-domain travels with numerical fields so unrelated selections cannot silently mix.
+A wire type can leave the unit or the channels unset. The engine then infers
+them from the connected values. Two units are compatible when they are equal,
+or when both are dimensionless (`number`, `proportion` or `position`).
 
-Historical graph conversion lives in `backend/src/node_graph/migration` and
-`backend/src/services/graph_scores/migration.rs`. It preserves authored bindings
-and records intentional behavior changes against frozen reference results.
-Saved standalone graphs also cross this import boundary before playback. The
-old category compiler and operation dispatcher have been removed; the host
-adapter only prepares track data, projects canonical output into fixture
-capabilities, and publishes diagnostics. An unfinished graph receives an
-explicit unwritten Output and remains editable.
+Arithmetic checks units:
+
+- Multiply by a `number` or `proportion` keeps the other unit.
+- Divide two equal units gives a `number`.
+- Add, subtract, minimum and maximum need equal units, or one `number`.
+- Square root and power need `number` or `proportion` values.
+
+Other values are structured, not numerical: envelopes, gradients, mappings,
+coordinates, boundaries, audio sources, drums, events, seeds and lighting.
+
+## Validation
+
+`Library::validate` checks a definition before use:
+
+- Every binding type must be accepted by its input type.
+- A `frame` wire cannot connect to a `fixed` input.
+- A required input with no default must be bound.
+- A graph cannot contain a wire cycle or a recursive definition.
+- A primitive's interface must match its Rust kernel.
+
+The limits are:
+
+| Limit | Value |
+|-------|-------|
+| Inputs per definition | 64 |
+| Outputs per definition | 32 |
+| Nodes per graph | 128 |
+| Nesting depth | 24 definitions |
+| Nodes after expansion | 8192 |
+| Execution depth | 192 |
+
+## Preparation
+
+`PreparedGraph` (in `prepared.rs`) flattens a validated graph into a list of
+steps. Fixed outputs, such as mappings, are computed once. The frame loop does
+not walk definitions and does not repeat geometry solves.
+
+## Musical time
+
+Clip positions are in beats. `BeatTimeline` (in `clock.rs`) maps seconds to
+beats and beats to seconds. It uses the detected beats of the track, so it
+follows tempo changes. Outside the detected beats it extrapolates with the edge
+interval.
+
+Evaluation is a pure function of the requested time. Any time can be the first
+time evaluated. Playback, scrubbing and batch rendering use the same code.
+There is no fixed simulation rate.
+
+## Output
+
+The `output` node (display name "Apply") is the only lighting terminal. Its
+inputs are `color`, `pan`, `tilt`, `strobe` and `speed`. All are optional. An
+unwired input leaves that capability unchanged for lower layers. This is
+different from writing zero.
+
+There is no dimmer input. The dimmer is the peak channel of the RGB color. The
+color is normalized by that value (`FixtureOutput::from_rgb` in `output.rs`).
+
+## Host side
+
+- `backend/src/services/graph_scores.rs`: `prepare_scene` compiles a score into
+  a `Scene` for the compositor. It uses the venue geometry, the group
+  selections and the beat grid of one authorized read. It converts each clip
+  span from beats to seconds with `BeatTimeline::seconds_at`.
+- `luma_patterns::migration::upgrade`: brings an older score document to the
+  current version.
+- `backend/src/node_graph/migration`: converts old standalone pattern graphs
+  into current graphs.
+
+See [Compositor](/docs/architecture/compositor) for how clips combine, and
+[Selection System](/docs/architecture/selection-system) for how cells are
+resolved.

@@ -1,83 +1,85 @@
 ---
 title: Fixture Definition System
-description: QLC+ format parsing, channel type detection, head layout computation, and fixture library organization
+description: QLC+ fixture definitions, channel types, head layout and the fixture library
 ---
 
-Luma uses the QLC+ community fixture library, which provides thousands of fixture definitions. The fixture system parses these definitions and computes spatial layouts for multi-head fixtures.
+Luma uses fixture definitions in the QLC+ format. The fixture system reads
+these definitions and computes the position of each head on a fixture.
 
-## QLC+ Format
+## QLC+ format
 
 File: `backend/src/fixtures/parser.rs`
 
-Fixture definitions are stored as `.qxf` XML files in the `resources/fixtures/` directory, organized by manufacturer subdirectories.
+Definitions are `.qxf` XML files. `parse_definition` reads one file with
+`quick-xml`. `build_index` walks the library and lists every
+`Manufacturer/Model.qxf` file. If a file name starts with the manufacturer
+name, the index removes that prefix from the model name.
 
-### Key Elements Parsed
+The parser reads:
 
-**Channels:**
-- Name and preset (IntensityRed, PositionPan, etc.)
-- Group (Colour, Pan, Tilt, Intensity, Speed, Shutter, Gobo, etc.)
-- Capabilities: DMX value ranges with presets, color hex codes, and labels
+- **Channels**: name, preset, group and capabilities (DMX ranges, presets, colors and labels).
+- **Modes**: channel lists and head definitions.
+- **Physical**: dimensions, layout grid and pan/tilt ranges.
 
-**Modes:**
-- Named configurations mapping channel numbers to channel definitions
-- Head definitions that assign channels to individual heads
+## Channel types
 
-**Physical:**
-- Dimensions in millimeters
-- Layout grid (width x height cells)
-- Pan/tilt maximum ranges
-- Focus properties
+`Channel::get_type` in `backend/src/models/fixtures.rs` sets the channel type.
 
-## Channel Type Detection
+1. It checks the preset first. A preset that starts with `Intensity` is
+   Intensity. `Color` or `Colour` is Colour. A preset that contains `Pan`,
+   `Tilt`, `Shutter` or `Strobe` is Pan, Tilt or Shutter.
+2. Then it checks the group: Intensity, Colour, Pan, Tilt, Beam, Shutter,
+   Speed, Gobo, Prism, Effect, Maintenance or Nothing.
+3. With no group, it reads the channel name.
 
-The parser identifies channel types through a combination of the channel's `Group` attribute and its `Preset` values. This classification drives the DMX engine's mapping logic:
+The [DMX pipeline](/docs/architecture/dmx-pipeline) uses these types to map
+lighting states to channels.
 
-- **Intensity** channels: master dimmer, per-color intensity (IntensityRed, IntensityGreen, IntensityBlue)
-- **Position** channels: pan and tilt (PositionPan, PositionTilt), including fine (16-bit LSB) variants
-- **Colour** channels: color wheels with named positions and hex color values
-- **Shutter** channels: strobe with Open/Closed/Strobe capabilities
-- **Speed** channels: motor speed control
-- **Gobo** channels: gobo wheel selection (tracked but not directly controlled by Luma)
-
-## Head Layout Computation
+## Head layout
 
 File: `backend/src/fixtures/layout.rs`
 
-For multi-head fixtures (LED bars, pixel strips), the layout system computes 3D positions for each head:
+`compute_head_offsets` gives each head an offset from the fixture center, in
+millimeters:
 
-1. Read physical dimensions and layout grid from the fixture definition
-2. Compute cell size: `cell_w = width_mm / grid_width`, `cell_h = height_mm / grid_height`
-3. Position each head in local coordinates, centered at the fixture's origin
-4. If fewer heads than grid cells and they divide evenly, assume grouped layout (e.g., 12 cells / 4 heads = 3 cells per head, positioned at group center)
-5. Head positions are returned in millimeters
+1. It finds the active mode. With no mode or no heads, it returns one head at
+   the center.
+2. It reads the physical dimensions and the layout grid. With no dimensions,
+   every head is at the center.
+3. Cell size is `width / grid_width` by `height / grid_height`.
+4. If there are fewer heads than cells, and the cells divide evenly, each head
+   takes a group of cells. The head is at the center of its group.
+5. Heads fill the grid row by row. X is across the housing. Z is up the
+   housing. Y is 0.
 
-The selection system (`backend/src/node_graph/nodes/selection.rs`) converts head positions to meters and applies the fixture's 3D rotation (Euler angles: X roll, Y pitch, Z yaw) to produce global coordinates.
+`head_geometry` converts the offsets to meters. The `fixture-kinematics`
+crate (`rig_position`) combines them with the fixture mount to give world
+positions. World space is Z-up, right-handed, in meters: +X stage right, +Y
+upstage, +Z up.
 
-### Example: 4-Head LED Bar
+### Example: 4-head LED bar
 
-A fixture with physical dimensions 1000mm x 100mm and a layout grid of 12 x 1:
+A fixture is 1000 mm × 100 mm, with a 12 × 1 layout grid and 4 heads:
 
-- Cell size: 83.3mm x 100mm
-- 4 heads in 12 cells = 3 cells per head
-- Head positions (centered): -375mm, -125mm, +125mm, +375mm along the X axis
-- After rotation and fixture placement, these become global 3D coordinates
+- Cell size: 83.3 mm × 100 mm.
+- 4 heads in 12 cells: 3 cells per head.
+- Head X offsets: −375 mm, −125 mm, +125 mm, +375 mm.
 
-## Fixture Library Organization
+## Fixture library
 
-The fixture library path is resolved at startup from the source tree or the host resource directory (`resources/fixtures/2511260420`). The directory structure follows the QLC+ convention:
+The library is in `resources/fixtures/2511260420`. It has one directory per
+manufacturer:
 
 ```
 resources/fixtures/2511260420/
   Chauvet/
     Chauvet-COLORband-PiX-M-USB.qxf
-    Chauvet-Intimidator-Spot-375Z-IRC.qxf
-    ...
   Martin/
     Martin-MAC-Aura.qxf
-    ...
   Generic/
     Generic-Dimmer.qxf
-    ...
 ```
 
-Manufacturers are organized as subdirectories, with fixture models as `.qxf` files within them. Definitions are loaded on demand: when a patched fixture references a definition path, the `ArtNetManager` and selection system parse it via `parser::parse_definition()`.
+`resolve_fixtures_root_from` in `backend/src/services/fixtures.rs` finds this
+directory. A debug build tries the source tree first. A release build tries the
+bundled resource directory first.

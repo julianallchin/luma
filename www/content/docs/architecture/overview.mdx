@@ -3,67 +3,69 @@ title: Architecture Overview
 description: Native desktop stack, shared backend, and repository organization
 ---
 
-Luma is a native Rust desktop app built with GPUI. The UI owns windows, input,
-and editing surfaces; the shared backend owns persistence, audio analysis,
-pattern evaluation, agents, synchronization, and physical lighting output.
-The documentation website in `www/` is a separate Next.js application.
+Luma is a native Rust desktop app. The UI uses GPUI. The shared backend owns
+persistence, audio analysis, pattern evaluation, agents, sync and lighting
+output. The documentation website in `www/` is a separate Next.js application.
 
-## Tech Stack
+## Tech stack
 
-- **Native UI**: GPUI, gpui-component, and Luma's reusable UI components.
+- **Native UI**: GPUI, gpui-component and the shared controls in `gpui/crates/ui`.
 - **Rendering**: wgpu, with a shared scene model and fixture kinematics.
-- **Backend**: Rust, Tokio, SQLite through sqlx, symphonia for decoding, and CPAL for playback.
-- **Analysis**: Python workers for beats, stems, chords, MERT features, classifications, and genres.
-- **Networking**: Supabase synchronization, StageLinQ and Pro DJ Link telemetry, and Art-Net output.
+- **Backend**: Rust, Tokio, SQLite through sqlx, symphonia for decoding and CPAL for playback.
+- **Analysis**: Python workers for beats, stems, chords, MERT features, drum onsets, bar classifications and genres.
+- **Networking**: PowerSync and Supabase for sync, StageLinQ and Pro DJ Link for DJ equipment, and Art-Net for DMX output.
 
-## Data Architecture
+## Data
 
-Patterns and scores describe lighting independently of physical fixtures.
-Selection expressions name groups; each venue maps those groups to its own rig.
+Scores describe lighting without physical fixtures. A selection expression
+names groups. Each venue maps those groups to its own fixtures.
 
-The global library database remains `luma.db` in the platform app config directory:
+The library database is `luma.db` in the platform app config directory:
 
 - macOS: `~/Library/Application Support/com.luma.luma/luma.db`
 - Linux: `~/.config/com.luma.luma/luma.db`
 - Windows: `%APPDATA%\com.luma.luma\luma.db`
 
-Venues are rows in this database, not separate project files. Authored documents
-and immutable revisions share the library with tracks, groups, patterns, and
-scores. Authentication state uses the separate `state.db` beside it.
+Venues, tracks, groups, patterns and scores are rows in this database. There
+is no per-venue project file. The auth session is in a separate `state.db` in
+the same directory. See [Database](/docs/architecture/database).
 
-## Repository Organization
+## Repository organization
 
 ```text
 gpui/
-  crates/app/       Native windows, editing surfaces, and desktop lifecycle
-  crates/ui/        Reusable controls, themes, and embedded Nucleo icons
+  crates/app/       Native windows, editors and desktop lifecycle
+  crates/ui/        Shared controls, themes and embedded icons
   crates/chat/      Agent conversation UI
   crates/md/        Markdown rendering
   crates/scene/     Shared scene model and spatial geometry
   crates/render/    wgpu renderer
   crates/agent/     Native automation and UI test harness
-  crates/harness/   Component catalog
 backend/
-  src/models/      Shared Rust schemas
-  src/database/    SQLite and remote database access
-  src/services/    Domain operations and authored history
-  src/dispatch/    Command table and handlers using AppServices
-  src/eval/        Pattern and score evaluation
+  src/models/       Shared Rust schemas
+  src/database/     Local SQLite and remote database access
+  src/services/     Domain operations
+  src/dispatch/     Command table and handlers
+  src/eval/         Scene compilation and compositing
+  src/sync/         PowerSync row sync and media transfer
   src/preprocessing/  Audio-analysis scheduling
   src/agent_execution/  Python workspaces and tools
-  crates/          Pattern engine, fixture kinematics, DJ protocols, MCP
-  python/          Analysis workers
-  migrations/      Append-only SQLite migrations
-resources/         Fixture definitions, meshes, and bundled skills
-supabase/          Remote database migrations
-harness/           Renderer references and comparison tools
-www/               Documentation website
+  crates/patterns/  Pattern graph engine (luma-patterns)
+  crates/fixture-kinematics/  Fixture cell positions and beam rays
+  crates/stagelinq/, crates/prodjlink/, crates/rekordbox/  DJ integrations
+  crates/sync/      PowerSync SDK glue
+  crates/mcp-stdio/ MCP stdio JSON-RPC types
+  python/           Analysis workers
+  migrations/       Append-only SQLite migrations
+resources/          Fixture definitions, meshes and bundled skills
+supabase/           Remote database migrations
+harness/            Renderer references and comparison tools
+www/                Documentation website
 ```
 
-The desktop and backend tools call the same `luma_lib::dispatch` handlers.
-The native library owns its Tokio runtime; host events carry progress back to
-GPUI. Desktop startup prepares Python in the background and enables physical
-Art-Net output. Headless tests construct services without those side effects.
+The native app calls the backend through `luma_lib::dispatch`. Events carry
+progress back to GPUI. The desktop host enables Art-Net output. Headless test
+hosts do not bind sockets.
 
-The Rust workspaces remain separate so native UI and backend tooling can retain
-their own build profiles. See `gpui/BUILD.md` for build and test conventions.
+The `gpui/` and `backend/` Rust workspaces are separate. See `gpui/BUILD.md`
+for build and test commands.

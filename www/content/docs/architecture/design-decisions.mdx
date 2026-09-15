@@ -1,69 +1,66 @@
 ---
 title: Design Decisions
-description: Key architectural trade-offs and the reasoning behind them
+description: Main architectural choices and the reasons for them
 ---
 
-This page documents the major architectural decisions in Luma and the reasoning behind each choice.
+This page lists the main architectural choices in Luma and the reason for each.
 
-## Why petgraph for Node Execution?
+## Groups instead of fixture references
 
-Petgraph provides efficient topological sort (O(V+E)) and cycle detection. The graph is rebuilt from JSON on each execution -- this is fast enough (typically less than 1ms for real-world graphs) and avoids the complexity of maintaining a live graph structure with cache invalidation.
+A score that names fixture ids works in one venue only. A score names groups
+instead:
 
-The `run_graph_internal` function uses a simple `HashMap<&str, NodeIndex>` mapping that is allocated and dropped per execution. This stateless approach means there is no stale state to worry about between executions, and the graph structure always matches the current JSON definition exactly.
+- A clip selection is a group expression, such as `front_wash & left_truss`.
+- Each venue defines its own groups of its own fixtures.
 
-## Why SQLite + sqlx?
+A score that uses `front_wash` works in every venue that has a `front_wash`
+group. The fallback operator (`>`) lets an expression choose another group when
+the first one matches nothing. See
+[Selection System](/docs/architecture/selection-system).
 
-**SQLite** is ideal for a desktop application:
-- Zero-configuration and file-based
-- All data in one file -- no separate databases per venue
-- No database server to install or manage
+## Graphs from small primitives
 
-**sqlx** provides:
-- Compile-time SQL verification via the `sqlx::query!` macro
-- Async support
-- Type-safe result mapping
-- No ORM overhead
+The standard library has numerical primitives and recipe graphs built from
+them. Effects such as chase, pulse and dissolve are graphs in `recipes.json`,
+not Rust kernels. A person or an agent can open, edit and recombine them.
 
-A **single unified database** keeps all data in one `luma.db` file. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups) are separated logically via foreign keys rather than physically via separate files. This simplifies data access -- a single `SqlitePool` serves all queries.
+## Evaluation is a function of time
 
-## Why Signals Are Flat `Vec<f32>`?
+The evaluator computes a frame from the requested time only. It keeps no
+playback history and has no fixed simulation rate. Because of this:
 
-Cache-friendly memory layout. The 3D tensor could be represented as nested `Vec<Vec<Vec<f32>>>` but a flat buffer with computed indexing is faster for sequential access patterns in the graph engine:
+- Seeking and scrubbing give the same result as playback.
+- The render loop, the visualizer and a batch render use the same code.
+- A random choice comes from the seed, not from earlier frames.
 
-```rust
-data[n_idx * (t * c) + t_idx * c + c_idx]
-```
+## Musical time for clips
 
-Most node operations iterate over the entire buffer linearly, making the flat layout optimal for CPU cache utilization. The broadcasting logic in binary operations computes index offsets with modulo wrapping rather than allocating expanded copies, avoiding unnecessary memory allocation.
+Clip start and duration are in beats. The beat grid of the track converts them
+to seconds. A clip stays on the same beats when the beat grid changes.
 
-## Why Groups Instead of Direct Fixture References?
+## Unwired is not zero
 
-Patterns that reference fixtures by ID are not portable between venues. Groups create an indirection layer:
+An unwired `output` input leaves that capability to lower layers. A clip that
+only sets color does not turn off a movement from a lower clip.
 
-- Patterns reference abstract group names (`front_wash`, `floor_ring`, `back_movers`)
-- Each venue defines its own groups with descriptive snake_case names that map to its specific hardware
+## One SQLite database
 
-This is the core architectural decision enabling venue portability. A pattern designed in one venue with `front_wash` will work in any venue that has a group with the same name, regardless of the specific fixtures installed. When moving between venues with different naming conventions, an LLM can remap group names automatically.
+All library data is in one `luma.db` file:
 
-## Why Multi-Level Compositor Caching?
+- It needs no database server.
+- One pool serves all queries.
+- Venue data and library data link through foreign keys, not through separate
+  files.
 
-Graph execution is expensive (audio loading, FFT, ML inference). The three-level cache (layer, composite, incremental) provides targeted optimization for each editing scenario:
+## Rows as the sync unit
 
-| Scenario | Cache behavior |
-|----------|---------------|
-| Editing one annotation | Only re-executes that pattern's graph. All other annotations' cached layers are reused. |
-| Moving an annotation | Only recomposites the affected time ranges via dirty intervals. |
-| Playing back with no edits | Composite cache returns immediately if all annotation signatures match. |
+PowerSync syncs the app tables directly. There is no separate sync format and
+no write server:
 
-The layer cache uses an `AnnotationSignature` that includes a hash of the graph JSON, argument values, and metadata. The `matches_ignoring_seed` comparison excludes the stochastic `instance_seed` so that random patterns do not unnecessarily invalidate the cache when nothing else has changed.
+- Each domain writes its own tables in ordinary SQLite transactions.
+- Two edits to one row merge per column.
+- Postgres row-level security controls access.
 
-## Why the "What/How" Split?
-
-The conceptual separation between library data (patterns, tracks) and venue data (fixtures, groups, annotations) reflects the real-world workflow of lighting design:
-
-- A lighting designer creates patterns once and reuses them across many venues
-- Each venue has unique hardware that must be configured independently
-- Annotations (when to play which pattern) are venue-specific because they depend on the fixture inventory
-- Tracks and their analysis data (beats, stems, chords) are universal
-
-This split also enables community pattern sharing: patterns can be published to Supabase and used by other designers without exposing venue-specific details. Library data syncs to the cloud; venue-specific data stays local.
+Venues and their fixtures and groups sync like other rows. Venue members can
+read and edit a shared venue. Hardware port settings are local columns and do
+not sync. See [Database](/docs/architecture/database).

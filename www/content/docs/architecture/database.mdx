@@ -1,78 +1,116 @@
 ---
 title: Database
-description: SQLite schema, key tables, migration overview, and cloud sync mechanism
+description: Local SQLite database, migrations, row sync with PowerSync, change log and media transfer
 ---
 
-Luma uses a single SQLite database (`luma.db`) for all application data. Portable creative data (patterns, tracks) and venue-specific hardware configuration (fixtures, groups) all live in the same file, linked by foreign keys. A separate lightweight `state.db` stores transient auth session data.
+Luma keeps all library data in one SQLite database, `luma.db`. Venues,
+fixtures, groups, tracks, scores and patterns are rows in this database. The
+auth session is in a separate `state.db` in the same directory.
 
-## Key Tables
+## Local database
 
-| Table | Purpose |
-|-------|---------|
-| `venues` | Project containers; each venue is a row with name, description, and sync metadata |
-| `fixtures` | Patched fixtures with DMX universe, address, 3D position (pos_x/y/z), rotation (rot_x/y/z), manufacturer, model, mode |
-| `patterns` | Pattern definitions (name, description, category, publication status) |
-| `implementations` | Node graph JSON for each pattern, with UID for cross-device sync |
-| `scores` / `track_scores` | Pattern placements on track timelines (start_time, end_time, z_index, blend_mode, args) |
-| `tracks` | Audio file references with metadata (title, artist, BPM, key, file path, hash) |
-| `track_beats` | Beat positions and downbeats for tracks |
-| `track_roots` | Chord root analysis results |
-| `track_waveforms` | Binary waveform data (preview + full resolution) |
-| `track_stems` | Stem separation file paths |
-| `fixture_groups` / `fixture_group_members` | Spatial fixture grouping with axis assignments; group names are used in selection expressions |
-| `settings` | Key-value app settings |
-| `categories` | Pattern categories |
+File: `backend/src/database/local/database.rs`
+
+- The database uses WAL journal mode and foreign keys.
+- `open_app_db_at` runs the migrations and opens the pool that the app writes
+  through.
+- Every pooled connection gets TEMP triggers. One set writes the PowerSync
+  upload queue. One set writes the `changes` log.
 
 ## Migrations
 
-Location: `backend/migrations/`
+- Local migrations are in `backend/migrations`. `sqlx::migrate!` runs them at
+  startup, in filename order.
+- Migrations are append-only. A changed file breaks the sqlx checksum. To change
+  the schema, add a new file.
+- Remote migrations are in `supabase/migrations`. A schema change to a synced
+  table needs a file in both directories.
 
-11 migrations total, applied in order by timestamp. Each migration is a SQL file that creates or alters tables. sqlx manages migration state and applies pending migrations on app startup.
+## Sync
 
-## Cloud Sync
+Luma syncs rows. PowerSync moves rows between the local SQLite database and
+Supabase Postgres. There is no write server.
 
-Files: `backend/src/sync/`
+- Every synced table has `id`, `uid` (the owner), `created_at` and
+  `updated_at`.
+- Postgres row-level security decides who can read and write a row.
+- Two edits to one row merge per column. The last write wins. An upload sends
+  only the changed columns.
+- Deletes are hard deletes on both sides.
+- Sign-in is required to write. Reading local data does not need a session.
 
-Luma syncs to **Supabase** (PostgreSQL + PostgREST API). The architecture is **local-first** -- SQLite is the source of truth, and the cloud is a secondary copy for backup and sharing. Sync is **automatic and bidirectional** -- changes are pushed in the background and pulled on launch, with no manual sync button needed.
+### Synced tables
 
-### UUID-Based Identity
+The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 
-All entities use UUIDs as their primary key. The same UUID is used both locally and in Supabase -- there is no separate `remote_id`. This eliminates dual-ID bookkeeping and simplifies conflict resolution.
+| Area | Tables |
+|------|--------|
+| Venues | `venues`, `venue_members`, `venue_nodes`, `venue_edges`, `venue_node_params`, `venue_constraints` |
+| Fixtures and groups | `fixtures`, `fixture_groups`, `fixture_group_members` |
+| Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
+| Scores | `scores`, `clips`, `score_definitions`, `drafts` |
+| Patterns and MIDI | `patterns`, `implementations`, `cues`, `midi_modifiers`, `midi_bindings` |
+| Agents | `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` |
+| History | `changes` |
 
-### Sync Engine
+Local-only tables include `settings`, `universe_outputs`,
+`preprocessing_failures`, `track_waveforms`, `track_mert`,
+`fixture_group_overrides`, `pattern_categories` and `stage_pieces`. Some
+columns of synced tables are also local, such as `tracks.file_path` and
+`venues.controller_port`.
 
-The sync system is built on a generic `Syncable` trait. Each syncable table implements this trait, and the engine handles push/pull/delete operations uniformly. Key components:
+### Scores as rows
 
-- **Orchestrator** (`sync/orchestrator.rs`) -- coordinates full sync cycles (pull then push)
-- **Push** (`sync/push.rs`) -- background loop that drains a pending operations queue
-- **Pull** (`sync/pull.rs`) -- delta sync using per-user timestamps (only fetches records changed since last pull)
-- **Pending ops** (`sync/pending.rs`) -- mutations enqueue push operations; a background loop drains them automatically
-- **File sync** (`sync/files.rs`) -- handles album art, waveforms, and other binary assets separately from record sync
+| Table | Columns |
+|-------|---------|
+| `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
+| `clips` | id, uid, score_id, graph, start, duration, seed, selection_seed, selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
+| `score_definitions` | id, uid, score_id, definition_json, created_at, updated_at |
 
-### What Syncs
+A clip id and a definition id are `score_id:key`. Loading a score reads the
+three tables into a `luma_patterns::Score`. Saving a score compares it with the
+rows and writes only the rows that changed (`backend/src/database/local/scores/rows.rs`).
 
-| Data | Syncs | Notes |
-|------|-------|-------|
-| Venues, fixtures, groups | Yes | Full venue setup |
-| Patterns, implementations | Yes | Enables community sharing |
-| Tracks (metadata, beats, roots, preview waveform) | Yes | File paths stay local |
-| Scores, track scores | Yes | Full annotation data |
-| Album art | Yes | Synced via file sync |
-| Audio files, stem files | No | Too large; regenerated locally |
-| Settings, auth state | No | Device-specific |
+`patterns`, `implementations` and `cues` store MIDI cue patterns. The graph is
+the `graph_json` column. A pattern with `is_verified` set is readable by every
+user.
 
-### Per-User Sync State
+## Change log
 
-Each user tracks their own sync cursor timestamps. This means multiple users collaborating on a venue each pull only the changes they haven't seen, without interfering with each other's sync state.
+The TEMP triggers add one row to `changes` for every insert, update and delete
+on a synced table:
 
-### Soft Deletes
+`changes(id, uid, table_name, row_id, op, before_json, after_json, actor, at, created_at, updated_at)`
 
-Delete operations are enqueued as pending ops and synced to the cloud as tombstones. Pulling tombstones removes the corresponding local records. This ensures deletes propagate across devices.
+- `changes` itself is not logged.
+- An update that only changes `updated_at` is not logged.
+- Rows that sync downloads are not logged, because the sync connection has no
+  TEMP triggers.
 
-### Community Pattern Sharing
+## Drafts
 
-Patterns can be shared with the community via the `is_verified` flag. Users can search for community patterns using the remote search feature, and browse patterns in "verified," "mine," and "all" tabs.
+An agent edits a draft, not the live score. A `drafts` row has `base_json` and
+`state_json`. A merge compares the two per clip and per definition, writes the
+differences onto the live rows, then deletes the draft.
 
-### Error Handling
+## Code layout
 
-The pending ops queue retries failed operations. Users can view pending errors via `get_pending_errors` and manually retry individual operations via `retry_pending_op`.
+| File | Role |
+|------|------|
+| `backend/src/sync/service.rs` | Connects PowerSync when a session exists. Sends one `replica-changed` event for downloaded writes. |
+| `backend/src/sync/schema.rs` | Synced tables and columns. Generates the PowerSync raw table statements. |
+| `backend/src/sync/triggers.rs` | Generates the TEMP triggers. |
+| `backend/src/sync/connector.rs` | Gets credentials and uploads changes to Supabase PostgREST. |
+| `backend/src/sync/media.rs`, `files.rs` | Moves audio, stems and album art through Supabase Storage. |
+| `backend/crates/sync` | PowerSync SDK glue. |
+| `deploy/sync-rules.yaml` | PowerSync sync rules. |
+
+## Media
+
+Audio files, stems and album art do not go through row sync. A separate loop
+runs every 60 seconds while a session exists. It uploads files that have a
+local file and no `storage_path`. It downloads files that have a
+`storage_path` and no local file. An upload writes the bytes first and the
+`storage_path` second.
+
+The design document is `docs/design/sync.md` in the repository.
