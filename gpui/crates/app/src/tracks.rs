@@ -903,20 +903,10 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .px(px(PAD_X))
         .py(px(8.))
         .child(
-            div()
+            float::chip()
                 .id("venue")
                 .track_focus(&state.venue_focus)
                 .tab_stop(true)
-                .h(px(24.))
-                .px(px(8.))
-                .rounded(px(luma_ui::radius::CONTROL))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(luma_ui::glass::ink(0.85))
-                .hover(|button| button.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
                 .on_click(move |_, window, cx| {
                     window.focus(&venue_focus, cx);
                     picker.update(cx, |this, cx| this.show_venues(cx));
@@ -971,7 +961,7 @@ fn filters(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         )
 }
 
-/// The search field: a `luma_input` that takes keystrokes.
+/// The search field: a [`float::field`] that takes keystrokes.
 ///
 /// It edits a `String` on the sidebar's state rather than hosting a real text
 /// editor — no caret, no selection, no IME — because the browser needs a
@@ -982,18 +972,9 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
     let typed = app.clone();
-    div()
+    float::field()
         .id("search")
         .w(px(crate::shell::SIDEBAR_WIDTH - 2. * PAD_X))
-        .h(px(26.))
-        .px(px(8.))
-        .flex()
-        .items_center()
-        .rounded(px(luma_ui::radius::CONTROL))
-        .bg(luma_ui::glass::wash(0.04))
-        .border_1()
-        .border_color(luma_ui::glass::hairline(0.08))
-        .text_size(px(12.))
         // Keys the field leaves unbound bubble through here — see
         // `Luma::track_search_escape`.
         .on_key_down(move |event, _, cx| {
@@ -1013,50 +994,28 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
 /// constructed where the venue opens and rendered far below it.
 const PLACEHOLDER: &str = "Search tracks…";
 
-/// A compact sidebar filter pill with a latched selection wash.
-fn filter_pill(id: &'static str, label: &'static str, on: bool) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .h(px(20.))
-        .px(px(8.))
-        .rounded(px(luma_ui::radius::CONTROL))
-        .flex()
-        .items_center()
-        .text_size(px(11.))
-        .when(on, |pill| {
-            pill.bg(luma_ui::glass::wash(luma_ui::glass::WASH_REST))
-                .text_color(luma_ui::glass::ink(0.90))
-        })
-        .when(!on, |pill| {
-            pill.text_color(luma_ui::glass::ink(0.45))
-                .hover(|pill| pill.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
-        })
-        .child(SharedString::from(label))
-}
-
 /// The `mine` / `all` axis: always exactly one pressed.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
-    div()
-        .flex()
-        .gap(px(2.))
-        .children(Ownership::ALL.into_iter().map(|ownership| {
-            let app = app.clone();
-            filter_pill(
-                ownership.label(),
-                ownership.label(),
-                ownership == state.ownership,
-            )
-            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
-            .agent_node(Role::Toggle, ownership.label())
-        }))
+    float::segmented().children(Ownership::ALL.into_iter().map(|ownership| {
+        let app = app.clone();
+        float::segment(
+            ownership.label(),
+            ownership == state.ownership,
+            ownership.label(),
+        )
+        .id(ownership.label())
+        .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
+        .agent_node(Role::Toggle, ownership.label())
+    }))
 }
 
 /// The other axis, and independent of ownership: whether to show only tracks
 /// this venue has annotations on.
 fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     let app = app.clone();
-    div().child(
-        filter_pill("in-venue", "In Venue", state.in_venue)
+    float::segmented().child(
+        float::segment("In venue", state.in_venue, "in-venue")
+            .id("in-venue")
             .on_click(move |_, _, cx| app.update(cx, |this, cx| this.toggle_in_venue(cx)))
             .agent_node(Role::Toggle, "In Venue"),
     )
