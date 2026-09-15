@@ -184,15 +184,9 @@ pub fn luma_gradient_bar(
     let (bounds, probe) = bounds_probe();
 
     // Flat lead-in, one 2-stop segment per adjacent pair, flat tail.
-    let mut segments: Vec<gpui::AnyElement> = Vec::with_capacity(stops.len() + 1);
+    let mut segments: Vec<gpui::Div> = Vec::with_capacity(stops.len() + 1);
     if let Some(first) = stops.first().filter(|first| first.t > 0.) {
-        segments.push(
-            div()
-                .h_full()
-                .w(gpui::relative(first.t))
-                .bg(first.color)
-                .into_any_element(),
-        );
+        segments.push(div().h_full().w(gpui::relative(first.t)).bg(first.color));
     }
     for pair in stops.windows(2) {
         segments.push(
@@ -204,19 +198,20 @@ pub fn luma_gradient_bar(
                     linear_color_stop(pair[0].color, 0.),
                     linear_color_stop(pair[1].color, 1.),
                 )
-                .color_space(gpui::ColorSpace::Oklab))
-                .into_any_element(),
+                .color_space(gpui::ColorSpace::Oklab)),
         );
     }
     if let Some(last) = stops.last().filter(|last| last.t < 1.) {
-        segments.push(
-            div()
-                .h_full()
-                .w(gpui::relative(1. - last.t))
-                .bg(last.color)
-                .into_any_element(),
-        );
+        segments.push(div().h_full().w(gpui::relative(1. - last.t)).bg(last.color));
     }
+    // A content mask is a rectangle, so the bar's rounded corners do not clip
+    // its children. The end segments take the inner corner themselves.
+    let last_segment = segments.len().saturating_sub(1);
+    let segments = segments.into_iter().enumerate().map(move |(at, segment)| {
+        segment
+            .when(at == 0, |s| s.rounded_l(px(crate::radius::CAP)))
+            .when(at == last_segment, |s| s.rounded_r(px(crate::radius::CAP)))
+    });
 
     let moved = id.clone();
     let on_move = on_event.clone();
@@ -244,6 +239,7 @@ pub fn luma_gradient_bar(
                 div()
                     .w(px(4.))
                     .h_full()
+                    .rounded_full()
                     .border_1()
                     .border_color(ladder::control_border())
                     .bg(if is_selected {
@@ -279,8 +275,9 @@ pub fn luma_gradient_bar(
         .flex_shrink_0()
         .w(px(width))
         .h(px(CONTROL_HEIGHT))
+        .rounded(px(crate::radius::CONTROL))
         .border_1()
-        .border_color(ladder::control_border())
+        .border_color(crate::glass::hairline(0.08))
         .bg(gpui::black())
         .overflow_hidden()
         .children(segments)

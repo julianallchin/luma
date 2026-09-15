@@ -181,8 +181,10 @@ impl Render for EnvelopeEditor {
                 div()
                     .w_full()
                     .p(px(9.))
+                    .rounded(px(crate::radius::ROW))
                     .border_1()
-                    .border_color(ladder::foreground().opacity(0.3))
+                    .border_color(crate::glass::hairline(0.08))
+                    .bg(crate::glass::ink(0.03))
                     .child(
                         div()
                             .relative()
@@ -250,14 +252,14 @@ impl Render for EnvelopeEditor {
                                     .ml(px(-4.))
                                     .mt(px(-4.))
                                     .size(px(8.))
+                                    .rounded_full()
                                     .border_1()
-                                    .border_color(ladder::control_border())
+                                    .border_color(crate::glass::hairline(0.24))
                                     .bg(if matches!(handle, Drag::Handle(..)) {
                                         ladder::primary()
                                     } else {
                                         ladder::foreground()
                                     })
-                                    .when(matches!(handle, Drag::Handle(..)), |d| d.rounded_full())
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _, cx| {
