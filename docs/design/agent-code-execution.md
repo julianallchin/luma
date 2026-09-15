@@ -1,46 +1,37 @@
-# Agent Python workspaces and track authoring — final design
+# Agent Python workspaces and score authoring
 
-Status: **final architecture; relational authored-state, durable conversation,
-Python workspace, and track-authoring paths are the settled foundation, with
-production hardening still governed by the acceptance criteria** (2026-08-02)
+Status: built. The Python sandbox exists only on macOS (§17.4–§17.7). Text
+marked **Not built** or **Not met** has no code yet.
 
 Scope:
 
-- the track-editor lighting copilot;
-- the pattern-editor graph agent;
-- the durable agent-thread foundation both agents will share;
-- the binding/artifact data plane that exposes Luma state to Python;
-- the narrowly scoped host capabilities behind track authoring;
-- the local Python runtime, artifacts, interruption, and sandbox boundary.
+- the track copilot, the pattern-graph agent and the venue rig agent;
+- the durable agent threads they share;
+- the binding and artifact data plane that exposes Luma state to Python;
+- the narrow host capabilities behind score and venue authoring;
+- the local Python runtime, artifacts, interruption and sandbox.
 
-This document supersedes the earlier exploratory design. It records what was
-settled, the intended architecture, the agent-facing behavior, current-code
-constraints, and the acceptance criteria. An implementing agent should be able
-to work from this document without needing the conversation that produced it.
+Code: `backend/src/agent_execution/`, `backend/python/luma_exec/`,
+`backend/src/agent/tools/python.rs`. Code cites this document by section
+number, so keep the numbering.
 
 ---
 
 ## 1. Decision in one paragraph
 
 Every durable agent thread owns one persistent Python workspace. The model gets
-one notebook-like `python` tool. Before each cell, Luma atomically refreshes one
-reserved root named `luma`; variables created by the agent remain in the kernel
-namespace across calls. All track, audio, musical-feature, venue, pattern, and
-graph-run data reaches Python through one versioned binding manifest and one
-artifact store. Numerical data preserves its semantic axes, units, identities,
-and provenance instead of crossing the boundary as anonymous arrays. In a track
-thread, `luma.track` is both the complete lossless authored-track snapshot and
-the entry point to one staged edit transaction. The agent changes a full local
-candidate with `add_clip`, `update_clip`, and `remove_clip`, inspects it, then
-asks the authoritative host to check or atomically apply it. Python receives no
-database or general application authority. Graph mutation continues through
-the graph agent's canonical validated interface. Scores and graphs share one
-immutable relational revision DAG, CAS head, typed merge service, and Supabase
-row-sync path; subagents receive only plain directories materialized from a
-recorded base revision. Conversation messages form a separate immutable DAG so
-a rewind can fork a transcript without rewriting it. A production build runs
-Python with no network, only explicit input artifacts readable, and only thread
-scratch space writable.
+one notebook-like `python` tool. Before each cell, Luma refreshes one reserved
+root named `luma`; variables created by the agent stay in the kernel namespace
+across calls. All track, audio, musical-feature, venue, pattern and graph-run
+data reaches Python through one versioned binding manifest and one artifact
+store. Numerical data keeps its semantic axes, units, identities and
+provenance. In a thread with a score, `luma.track` is the complete saved score
+and the entry point to one staged edit: the agent builds graphs and clips in a
+private candidate, checks it, previews it and applies it through the host.
+Python receives no database or general application authority. A score is
+ordinary rows that sync through PowerSync (`docs/design/sync.md`); a subagent
+edits a draft instead of the live rows. On macOS, Python runs with no network,
+only its workspace inputs readable, and only its scratch space writable.
 
 The important shape is:
 
@@ -66,12 +57,6 @@ The north star is:
 > output, so one piece of code can measure what the track is doing, measure what
 > the pattern emits, and correlate the two.
 
-Before this design, the graph probe could inspect only a graph's output, not the
-audio or extracted musical features that output was supposed to follow. The
-track agent received several musical features only as prose in its system
-prompt, including a quantized ASCII drum grid, and had to reason over text
-instead of computing over exact values.
-
 The desired capability is deliberately open-ended:
 
 - use the already-computed beats, drum onsets, bars, chords, spectral features,
@@ -93,53 +78,40 @@ to write the analysis that the task requires.
 
 ### 3.1 Goals
 
-1. One Python execution mechanism shared by both agents.
+1. One Python execution mechanism shared by every agent.
 2. One persistent workspace per durable agent thread.
 3. One generic path for all Luma data entering Python.
 4. Semantic numerical data: axes, coordinates, labels, units, and identities
    remain attached to values.
-5. Exact, composable analysis over audio, features, venue geometry, the authored
-   lighting timeline, graph definition, and graph output.
+5. Exact, composable analysis over audio, features, venue geometry, the score,
+   graph definitions, and graph output.
 6. Notebook-native output: last expression, stdout, stderr, tracebacks, and
    figures.
-7. Immutable Luma snapshots in Python, plus one explicit staged track-edit
-   transaction.
-8. A single coherent track-authoring surface instead of one model tool per clip
+7. Immutable Luma snapshots in Python, plus one explicit staged score edit.
+8. A single coherent authoring surface instead of one model tool per clip
    operation.
-9. Local execution with interruption, bounded output, and production sandboxing.
+9. Local execution with interruption, bounded output, and production
+   sandboxing.
 10. Components that are independently unit- and integration-testable.
-11. Host-derived authorization, authoritative validation, and atomic apply for
-    every track mutation.
-12. One relational, content-addressed revision DAG for score and graph history,
-    with no second authored-state authority.
-13. Full authored history and immutable conversation traces backed up through
-    the existing Supabase row-sync engine.
-14. Plain isolated subagent directories with strict semantic merge, and silent
-    total convergence for cross-device sync.
-15. Forward state restore plus optional transcript-fork rewind; no history or
-    message row is ever rewritten.
+11. Host-derived authorization and authoritative validation for every score
+    mutation.
+12. Authored state is ordinary synced rows. There is no second authored-state
+    store.
 
 ### 3.2 Non-goals
 
 - Python is not a second application backend or a direct database API.
-- Python does not receive SQLite handles, general Tauri callbacks, credentials,
-  or arbitrary host paths. Its host-call protocol exposes only named,
-  scope-bound capabilities installed by the trusted command layer.
-- Python does not mutate graphs or application state through arbitrary APIs.
-  The sole track exception is the explicit `luma.track.edit()` transaction.
+- Python does not receive SQLite handles, credentials, or arbitrary host paths.
+  Its host-call protocol exposes only named, scope-bound capabilities installed
+  by the trusted command layer.
+- Python does not mutate application state through arbitrary APIs. The
+  exceptions are the explicit `luma.track.edit()` candidate and the
+  `luma.venue` verbs.
 - The executor does not invent a separate transport for every domain value.
 - The executor does not promise exact serialization of arbitrary CPython heap
   state across app restarts.
-- A Python program does not become the canonical persisted representation of
-  an authored track.
-- The current Python agent does not mutate `score.luma` directly; it uses the
-  typed `luma.track` transaction. The same lossless DSL is nevertheless the
-  canonical score file stored byte-for-byte in each relational revision, so a
-  future filesystem agent can edit it through the same validation boundary.
-- Subagent scheduling is not part of the Python executor. Its isolated
-  directories, revision creation, and semantic merges are part of the shared
-  authored-state system.
-- Windows execution does not ship without a real native sandbox.
+- A Python program does not become the persisted representation of a score.
+- Subagent scheduling is not part of the Python executor.
 
 ---
 
@@ -158,589 +130,81 @@ ambiguous between model tokens and runtime variables.
 | **Analysis scope** | IDs and time window identifying the current track, venue, score, pattern, and graph run. |
 | **Luma bindings** | Host snapshots exposed under the reserved `luma` object. Bound values are immutable; selected objects may expose explicit host capabilities. |
 | **Binding revision** | One immutable, internally versioned set of Luma bindings used by a cell. |
-| **Track revision** | Semantic revision of the complete authored clip set used for optimistic concurrency. |
-| **Track edit** | Python-local mutable candidate created from one track snapshot and base track revision. |
-| **Authored document** | One score or pattern graph, identified independently of its display name and owned by one principal. |
-| **Authored revision** | Immutable metadata, canonical file bytes, and zero, one, or two ordered parent edges in the relational revision DAG. |
-| **Document head** | The sole mutable pointer to the current authored revision; advanced by generation compare-and-swap locally and by ordered proposal integration remotely. |
-| **Isolated workspace** | Disposable plain directory materialized from a recorded base revision for a subagent; never an authority or source of history. |
-| **Head proposal** | Immutable request to integrate a revision tip into the server-authoritative document head. |
-| **Transcript node** | Immutable parent-linked message containing complete structured message parts; forks share nodes rather than copying or editing them. |
+| **Edit** | Python-local candidate that holds the complete score, created by `luma.track.edit()`. |
+| **Draft** | A subagent's private copy of a score: one `drafts` row. |
 | **Semantic tensor** | Numerical values plus named axes, coordinates/labels, units, and provenance. |
 | **Artifact** | An immutable large input or generated output referenced by opaque ID. |
 | **Cell** | One invocation of the model-facing `python` tool. |
 
 ---
 
-## 5. Prerequisite: a durable agent-thread foundation
+## 5. Durable agent threads and authored state
 
-This is a prerequisite, not incidental executor plumbing. Building a persistent
-kernel on top of target-keyed React maps would create hidden ownership and reset
-bugs.
+### 5.1 Thread contract
 
-### 5.1 Required thread contract
+A thread is an `agent_threads` row (`backend/src/models/agent_threads.rs`). It
+holds the id, the owner `uid`, `agent_kind`, the subject kind and id,
+`implementation_id`, `venue_id`, `score_id`, a title, the fork source
+(`forked_from_thread_id`, `forked_at_message_id`), and for a subagent
+`parent_thread_id` and `parent_call_id`.
 
-Both agents must use the same durable thread abstraction:
+Messages are `agent_thread_messages` rows. Each holds the complete structured
+parts: text, reasoning, tool calls with their inputs, and tool results.
+`agent_thread_transcript_heads` names each thread's last message.
 
-```rust
-struct AgentThread {
-    id: AgentThreadId,              // opaque UUID
-    owner_user_id: Option<UserId>,  // captured by the host; None is signed-out local use
-    agent_kind: AgentKind,          // TrackCopilot | PatternGraph
-    subject_kind: Option<String>,   // track | pattern
-    subject_id: Option<String>,
-    venue_id: Option<String>,       // pinned trusted scope
-    score_id: Option<String>,       // persistence identity, not an agent namespace
-    title: Option<String>,
-    lifecycle_state: LifecycleState, // Active | Deleting; deleting is terminal
-    forked_from_thread_id: Option<AgentThreadId>,
-    forked_at_message_id: Option<MessageId>,
-    created_at: Timestamp,
-    updated_at: Timestamp,
-}
+`AgentKind` is `TrackCopilot`, `PatternGraph` or `VenueRig`. `ThreadScope`
+(`backend/src/agent/mod.rs`) is the kind, the subject, the implementation, the
+venue and the score. The subject is metadata, not identity: several threads may
+share one track.
 
-struct AgentThreadMessage {
-    id: MessageId,
-    owner_user_id: Option<UserId>,
-    principal_key: String,
-    created_in_thread_id: AgentThreadId, // immutable provenance, not ownership
-    parent_message_id: Option<MessageId>,
-    depth: i64,
-    role: String,
-    parts: JsonValue,               // complete UIMessage.parts
-}
+The Python workspace belongs to exactly one thread id. The host takes the owner
+from the signed-in session; the client never supplies it. Changing the
+account, venue or score resolves a different thread. It never retargets an
+existing kernel.
 
-struct AgentThreadTranscriptHead {
-    thread_id: AgentThreadId,
-    head_message_id: Option<MessageId>,
-    message_count: i64,
-}
-```
+### 5.2 Rows and sync
 
-The subject association is metadata; it is not the thread identity. Multiple
-threads may eventually exist for one track or pattern without sharing Python
-state.
+Threads, messages and transcript heads sync to their owner as rows
+(`docs/design/sync.md`). A retried write is an upsert.
 
-The full structured message history must be durable, including:
-
-- user and assistant text;
-- reasoning parts when retained by the product;
-- tool calls and their complete inputs;
-- tool results and errors;
-- references to generated artifacts.
-
-Persisted transcripts are immutable parent-linked DAGs, not mutable arrays.
-A user prompt is durable before its model call begins; a finalized assistant
-message is appended afterward. Neither may be edited, reordered, or deleted.
-Every append supplies the expected transcript head, inserts a contiguous
-message chain plus an immutable append receipt, and advances the local head by
-compare-and-swap in one transaction. Redo appends a new user turn. A
-conversation rewind creates a new thread whose initial head is an existing
-message node; it never rewrites the original thread or any shared message.
-
-The Python workspace is owned one-to-one by `AgentThreadId`, but a thread is
-also pinned to the server-observed account principal at creation. A signed-in
-user may access only rows bearing that user ID; legacy or newly created `NULL`
-rows belong only to the signed-out local principal. The client never supplies
-or overrides this owner. Account changes therefore resolve a different thread
-and can never reopen another principal's transcript, artifacts, or live Python
-namespace.
-
-For a track thread, the pinned venue and persistence score are also part of
-authorization scope. Changing the principal, venue, or score resolves a
-different thread rather than silently retargeting an existing kernel.
-
-### 5.2 Implemented foundation
-
-The durable foundation now consists of:
-
-- SQLite-backed thread lifecycle rows, immutable parent-linked message rows,
-  transcript-head CAS, and append receipts;
-- complete AI SDK message parts, including tool calls/results, persisted without
-  reducing them to assistant/user prose;
-- exact thread reuse by account principal, agent kind, subject, venue, and
-  score scope;
-- transcript forks that share an immutable prefix and then diverge normally;
-- row-sync backup of threads, message nodes, append receipts, transcript-head
-  projections, turn preparations/outcomes, and terminal deletion receipts;
-- the shared chat/session adapter used by both track and graph agents;
-- a Python workspace registry keyed only by durable thread ID;
-- non-destructive New Conversation and exact-scope conversation history;
-- cancellation propagation from the model turn to the active cell.
-
-These are backend invariants, not conventions that rely on frontend cache
-behavior. Every create/read/write/delete/execute command derives the
-current principal from trusted host state and requires an exact owner match.
-Frontend sessions and bridge registrations nevertheless use the same exact
-principal, subject, venue, and score key, so an account change cannot reuse an
-already-hydrated transcript and one mounted editor cannot execute or apply
-against another scope. The frontend principal is only a memory-cache partition;
-the backend remains authoritative. A mounted editor may mirror the committed
-timeline for immediate UI feedback, but it does not own the thread, candidate,
-or Python kernel.
+`agent_thread_runs` is local only. `backend/src/agent/engine/claim.rs` records
+which device runs a thread and clears the row when the turn ends. Nothing
+refuses a second device yet.
 
 ### 5.3 Conversation lifecycle
 
-Starting a new conversation always creates a new durable thread ID and,
-therefore, a new Python workspace. It never deletes, truncates, or repurposes
-the previous thread. Conversation history lists only
-threads in the exact account/agent/subject/venue/score scope. Reopening one
-rehydrates its transcript and workspace association but does not silently
-restore its authored state.
-
-Before changing the active conversation, the client stops and drains the
-current turn, strictly persists its final transcript, and only then activates
-the target. Switches are serialized per exact scope and carry a monotonic
-intent, so a slow initial lookup or older click cannot win after a newer
-selection. Inactive hydrated chats are evicted from frontend memory; their
-immutable transcript nodes, authored revisions, and Python scratch remain.
-
-Navigation, editor unmounting, graph edits, authored-track edits, preview-track
-changes, and binding changes do **not** reset a workspace.
-
-### 5.4 One relational revision system for authored state
-
-Authored scores and pattern graphs use the same immutable relational revision
-DAG in the app SQLite database. There is no embedded Git repository, ref,
-index, checkout metadata, projection ledger, or second filesystem authority.
-SQLite owns the canonical bytes, ancestry, current head, validated live
-projection, operation outcome, and sync enqueue in one transaction.
-
-The core schema is deliberately small:
-
-| Table | Mutability | Purpose |
-|---|---|---|
-| `authored_documents` | identity immutable; `archived_at` may transition once | Principal-bound score/graph identity and terminal lifecycle. |
-| `authored_revisions` | immutable, permanent | Content-addressed revision metadata and declared parent count. |
-| `authored_revision_files` | immutable, permanent | Exact canonical bytes and per-file hash for each path. |
-| `authored_revision_parents` | immutable, permanent | Zero, one, or two ordered parent edges; parent 0 is current/ours and parent 1 is merged/theirs. |
-| `authored_document_heads` | CAS only | The sole local current-state pointer plus a monotonically increasing generation. |
-| `authored_operation_outcomes` | immutable, permanent | Idempotent committed or typed-conflicted result for a host operation. |
-
-The executable SQLite DDL lives in the additive
-`backend/migrations/20260802945000_relational_authored_history.sql` migration.
-Earlier migrations are frozen byte-for-byte so databases created by the
-checkpoint pass SQLx checksum verification; the additive migration removes
-their retired Git-shaped tables after establishing the relational replacement.
-`20260802950000_agent_trace_remote_hydration.sql` adds only the trusted-pull
-admission needed to hydrate immutable traces after terminal lifecycle changes.
-
-One score revision contains exactly `score.luma`. One pattern-graph revision
-contains exactly `graph.json` and `layout.json`. Stable database IDs, never
-display names, identify documents and entities. Audio, stems, derived analysis,
-graph-run output, Python scratch, database timestamps, sync cursors, and
-credentials never enter an authored revision.
-
-Each file row stores the exact bytes and a domain-separated SHA-256. The
-revision content hash is a domain-separated manifest hash over ordered
-`(path, bytes)` pairs. The revision ID is itself a domain-separated hash of the
-document ID, ordered parent IDs, manifest hash, and immutable revision metadata.
-The server independently recomputes all three before allowing a revision to
-participate in a head proposal. Paths are relative, bounded, traversal-free,
-and restricted to the exact file set for the document kind.
-
-Revision ancestry is obtained by walking `authored_revision_parents`.
-Ancestor checks, first-parent history, and merge-base discovery are relational
-queries/helpers over this DAG. Multiple best merge bases are exposed rather
-than guessed for strict agent merges; sync has a total fallback described in
-§5.10.
-
-### 5.5 Canonical file contracts
-
-Every committed score begins with the exact format envelope
-`# luma-score-schema: 1`. It is not an optional comment and is not retained as
-score trivia. Canonical serialization always emits the current version;
-historical decoding rejects missing, malformed, zero, or unknown versions
-before parsing the body. A breaking score grammar or semantic change must bump
-this version and retain an explicit decoder/migration for every older version
-that can exist in the revision log. Human/model ingress remains free to omit
-the envelope: validation resolves that richer draft grammar and writes a
-current canonical file at the revision boundary. Ingress also recognizes and
-removes one valid current envelope from a workspace file before parsing it as
-a draft; the format line never accumulates as an authored comment when that
-file is canonicalized. The `luma-score-schema` comment namespace is reserved,
-so a malformed or unknown envelope fails instead of being treated as trivia.
-
-The two graph files form one versioned canonical document contract. Both carry
-the same required integer `schemaVersion`; `graph.json` contains semantic
-nodes, edges, and public arguments, while `layout.json` contains positions
-keyed by stable node ID. Neither unversioned input nor a mismatched/unknown
-version is accepted. Serialization emits only the current version. Decoding is
-strict at every fixed object boundary: unknown graph, node, edge, argument,
-layout, or layout-entry fields fail with their full document path instead of
-being silently discarded. Node parameter keys and argument values remain
-typed payloads rather than fixed document fields.
-
-```text
-graph.json  = { schemaVersion, nodes[], edges[], args[] }
-layout.json = { schemaVersion, nodes: { <node-id>: { positionX, positionY } } }
-```
-
-Historical decoding has two ordered phases: strict decode of the named schema
-version, then sequential migrations (`N -> N+1`) until the current structural
-model. Any breaking node type, port, or graph-field change must bump the
-document version and add that exact migration step. Structural
-canonicalization checks bounded shape, identities, endpoints, layout, and DAG
-invariants without consulting the installed node catalog, so old revisions and
-typed merge bases remain readable. Current-runtime validation is a separate
-gate against the installed node types, parameters, ports, and port types. It is
-mandatory for workspace ingress and again inside the atomic authored write
-before the document head advances; a structurally readable historical graph is
-not thereby executable on the current runtime.
-
-### 5.6 Atomic local writes
-
-`authored_document_heads` is the only current-state authority. The ordinary
-score/graph tables are validated live projections consumed by the editor and
-compositor; they are neither history nor an independently writable copy.
-Human UI CRUD, DSL import, undo/redo, Python `track.apply()`, graph saves,
-completed turns, restores, and subagent merges all enter through
-`AuthoredDocuments`. Low-level projection functions are internal to that
-service.
-
-One per-document lock avoids wasted local merge work, but correctness comes
-from the database transaction and head CAS. A normal write is:
-
-```text
-decode and validate one complete candidate
-  -> BEGIN IMMEDIATE
-       re-read (head_revision_id, generation)
-       verify operation-id replay or collision
-       insert immutable revision + files + ordered parents
-       update the validated score/graph projection
-       UPDATE authored_document_heads
-         WHERE revision_id = expected_revision
-           AND generation = expected_generation
-       insert immutable operation outcome
-       enqueue immutable revision closure + head proposal for row sync
-     COMMIT
-```
-
-The head update must affect exactly one row and increment generation exactly
-once. Initial document creation inserts the root revision, projection, and head
-in the same transaction. Any failure rolls the whole transaction back; there
-is no interval in which history and the live projection disagree, so there is
-no projection ledger, publish-after-commit step, startup reconciliation, or
-corruption-recovery state machine.
-
-There is one bounded schema-upgrade seed, not an ongoing second-authority
-reconciler. After write admission is armed and before sync may run,
-`AuthoredDocuments` enumerates every live score and graph projection owned by
-the admitted principal that has no `authored_documents` route. It serializes
-that projection through the real score/graph codec, creates a deterministic
-root revision, head, immutable sync closure, and proposal in one transaction,
-then uses route presence as the permanent idempotency marker. The same scan
-runs after pull for legacy catalog materialization and when an identity becomes
-active. Signed-out rows remain signed-out; signed-in rows are imported only
-under their exact owner. A codec/import failure blocks sync for that principal
-and remains retryable—it may never silently omit or partially snapshot a
-document. Once every legacy projection is seeded, steady-state writes use only
-the atomic path above.
-
-Every operation ID is bound to a request fingerprint. An exact retry returns
-its immutable outcome; reuse with different input fails. A successful local
-head advance also creates one immutable `authored_head_proposals` row. Sync may
-later supersede that tip, but it can never erase the revision or its outcome.
-
-The existing row-sync engine uploads document identity, revision metadata, file
-bytes, parent edges, and operation outcomes. It registers and pulls proposal,
-integration, and archive traces too, but their server rows are created only by
-the three RPCs in §5.11. Sync excludes the live authored payloads in
-`track_scores` and `implementations.graph_json`, because those are reconstructed
-from the pulled head revision. Catalog/routing identity may sync normally only
-when it does not become a second payload authority.
-
-### 5.7 Agent-turn transaction
-
-A model turn uses a two-phase boundary because its assistant transcript and
-authored state must survive together:
-
-1. `prepare_turn` creates an immutable one-parent revision containing the exact
-   proposed state and inserts `authored_turn_preparations` before the assistant
-   message is persisted.
-2. The complete structured assistant transcript node is appended durably.
-3. `finalize_turn` typed-merges that exact prepared revision with the current
-   document head, then inserts `authored_turn_outcomes` in the same transaction
-   as any revision, projection, head CAS, and sync enqueue.
-4. `recover_turns` finds preparations whose assistant node exists but whose
-   outcome does not, and finalizes each exactly once after a crash.
-
-Preparation and finalization are keyed by `(thread_id, assistant_message_id)`.
-Retries return the original immutable preparation/outcome without re-capturing
-newer state. If the live head advanced concurrently, score and graph values are
-merged structurally instead of overwriting the newer document. A structured
-merge conflict is a durable terminal outcome for that turn: the prepared
-revision remains available, the live head is untouched, recovery does not apply
-it later, and the conflict is returned as typed data to the orchestrator/agent.
-The conversation may continue with another turn.
-
-### 5.8 History, checkpoints, and restore
-
-Every finalized assistant turn names its exact authored revision. State
-history contains the current first-parent lineage **and every integrated
-proposal tip that was superseded by convergence**. Entries identify whether a
-revision is current, an ancestor, or superseded and include its server proposal
-sequence when known. Page size is bounded, total history is not. Superseded
-tips are visible and restorable; this is an acceptance criterion, not optional
-diagnostic data.
-
-Restore never moves a pointer backward or mutates an old revision. It validates
-the selected canonical bytes, creates a new one-parent revision whose parent is
-the current head and whose bytes equal the selected state, projects it, and
-advances the head by CAS. The restore itself is therefore a new forward event.
-
-The restore dialog has exactly two modes:
-
-- **Restore state only:** perform the forward restore above and leave the
-  conversation untouched.
-- **Restore state and rewind conversation:** perform the same forward state
-  restore and atomically create a new thread whose transcript head points to
-  the assistant message recorded by that revision's checkpoint. The new thread
-  shares the immutable prefix and diverges from there. The original thread
-  remains intact and complete; no message row is edited or deleted.
-
-The state-and-conversation option is available only when the selected revision
-records a checkpoint for the active thread. The operation is idempotent: its
-operation ID deterministically identifies the fork thread and replay returns
-the same state revision and fork ID.
-
-### 5.9 Plain isolated subagent workspaces
-
-The authored-state service can materialize the canonical files from an explicit
-base revision into a disposable plain directory:
-
-```text
-<app-config>/authored-workspaces/<document-id>/<workspace-id>/
-  score.luma
-  # or graph.json + layout.json
-```
-
-`authored_subagent_workspaces` records the workspace ID, owning orchestrator
-thread, immutable base revision, current private head revision, generation, and
-active/retired status. The directory is only an editing surface. It contains no
-repository metadata and is never read as history or authority.
-
-The host exposes one composable contract:
-
-1. **create** — bind an idempotent request to an explicit base revision,
-   materialize its bounded canonical file set, and return the directory;
-2. **check** — snapshot exactly those files, reject traversal/symlinks/extra
-   paths and size violations, decode and validate the complete candidate, and
-   return a stable snapshot hash;
-3. **commit** — require the expected workspace head and checked snapshot hash,
-   canonicalize once, create a one-parent relational revision, CAS the private
-   workspace head, and atomically replace the directory with those canonical
-   bytes;
-4. **merge** — require a clean directory and the expected private tip, merge
-   `(recorded base, current live head, private tip)` with `authored_merge`, and
-   either advance the live document automatically or store/return typed
-   conflicts;
-5. **retire** — mark the workspace terminal and remove only the disposable
-   directory. Its revisions remain permanent.
-
-A clean subagent result lands on the live document automatically. The
-orchestrator is involved only when the semantic merge returns conflicts. Score
-clips merge by stable clip ID, graph nodes by stable node ID, edges by target
-input slot, and public arguments by stable argument ID. Score trivia/comments
-merge through the lossless codec; graph layout never blocks semantic graph
-integration. Add/add-different, delete/modify, and divergent scalar changes
-produce `AuthoredMergeConflict` values. Text conflict markers are never written
-to canonical files or live state. A merge result must pass the authoritative
-validator before the service can create its two-parent revision and CAS the
-live head.
-
-Multiple children never share a mutable Python namespace or directory. The
-supervisor must own child launch, sandbox policy, an immutable process-tree
-lease, final snapshot, and full process-tree exit. Check/commit/merge are
-independently unit-testable, but production must not hand an untrusted child a
-directory until that composed supervisor boundary exists.
-
-### 5.10 Cross-device head convergence
-
-Immutable revisions and their ancestry sync as ordinary append-only rows. A
-mutable head does not. Every local head advance submits an immutable proposal
-containing `(proposal_id, document_id, device_id, operation_id,
-base_revision_id, proposed_revision_id)`. The server assigns a commit-ordered
-`server_proposal_seq`; devices never order proposals with client timestamps.
-
-Any online client authenticated as the owner may integrate the earliest pending
-proposal, regardless of which device created it. Pulling a pending proposal
-enqueues integration locally. Therefore a proposal from a device that goes
-offline forever cannot wedge the document. This behavior must be tested with
-one device submitting, disappearing, and a different owner device completing
-the integration.
-
-For each proposal, an integrator locks/re-reads the current server head and:
-
-1. fast-forwards when the current head is an ancestor of the proposal tip;
-2. records `already_ancestor` without moving the head when the proposal tip is
-   already contained in current history;
-3. otherwise walks the relational DAG for a merge base, combines independent
-   changes structurally, and treats the server-ordered proposal as the later
-   writer for overlapping fields;
-4. validates the whole candidate and uploads any two-parent merge revision;
-5. calls the integration RPC with the exact head it computed against. `stale`
-   means recompute immediately; `not_earliest` means process the earlier item
-   first. Neither is terminal and neither overwrites a head blindly.
-
-The deterministic merge boundary is semantic, not recursive arbitrary JSON:
-
-- scores merge clips by ID, ordinary clip fields independently, and `args` by
-  stable argument key; each typed argument payload remains atomic;
-- graphs merge nodes by ID and node `params` by stable key, public arguments by
-  ID, and each edge atomically by destination node/input slot;
-- concurrent presence changes and overlapping scalar values choose the later
-  server-ordered proposal.
-
-Sync integration is **total**. After structural composition, the full document
-is validated. If composition is invalid—including a graph cycle assembled from
-two individually valid branches—the complete later proposal is the terminal
-fallback. If the proposal bytes are unreadable or the whole proposal is itself
-invalid under authoritative validation, retain the current head pointer and
-record `quarantined_noop`. This remains terminal even if the current bytes
-cannot be decoded. If merge-base discovery is absent or ambiguous, skip
-structural composition and use the same whole-proposal/current fallback. Every
-path records an immutable integration result; no proposal remains pending
-because semantic resolution was difficult. Authentication, network, and server
-availability may retry transport, but no content state can wedge integration.
-
-This is intentionally distinct from agent merging:
-
-| Source of concurrency | Policy | User experience |
-|---|---|---|
-| Agent turn or subagent workspace | Strict semantic three-way merge | Clean result applies; typed conflicts are stored and returned to the agent/orchestrator. |
-| Device synchronization | Server-ordered structural merge plus total deterministic fallback | Always converges silently; no modal, conflict UI, or user question. |
-
-Silent convergence does not delete the losing work. Every proposal tip and
-integration row remains permanent. State history includes superseded proposal
-tips even when they are not ancestors of the current head, labels them as
-superseded, and allows them to be restored through the ordinary forward
-restore operation.
-
-### 5.11 Supabase schema, RLS, cursors, and exactly three RPCs
-
-The Postgres surface ships with this design in
-`supabase/migrations/20260802000000_authored_revision_sync.sql`; it is not a
-future transport. It mirrors these durable rows:
-
-- authored documents, revisions, files, parent edges, operation outcomes;
-- server-only document heads, ordered head proposals, integration receipts,
-  and terminal archive receipts;
-- agent-thread lifecycle rows, immutable transcript nodes, append receipts,
-  server-only transcript heads, turn preparations/outcomes, and deletion
-  receipts.
-
-Postgres triggers reject deletion of every immutable trace and reject any
-update that is not byte-for-byte replay of the same row. They independently
-verify principal ownership, revision/file/manifest hashes, exact file shape,
-parent closure/order, acyclic ancestry, bounds, and revision identity. Document
-identity is immutable and `archived_at` can transition only inside the archive
-RPC. Transcript messages validate principal, parent, depth, and assistant-turn
-preparation; append receipts validate a contiguous parent-linked range. The
-server transcript head is a projection advanced by append receipts in server
-commit order; clients never upload a blind transcript-head snapshot. A fork
-thread may sync before its prefix node: its head remains empty until that
-immutable node arrives, then a trigger installs the shared prefix
-deterministically. Concurrent valid appends are both retained; the later
-server-committed receipt selects the projected head while the sibling remains
-an immutable trace.
-
-RLS permits an authenticated principal to select its own rows and insert or
-exact-replay its immutable inputs. The following server projections/outcomes
-are select-only to clients: `authored_document_heads`,
-`authored_head_proposals`, `authored_head_integrations`,
-`authored_document_archives`, and `agent_thread_transcript_heads`. Private hash,
-clock, ancestry, closure, and trigger functions stay in the non-exposed
-`private` schema. There are exactly three new public RPCs:
-
-Signed-out `principal_key = 'signed-out'` rows remain local; they are not
-uploaded or silently rebound to a later account. Signed-in ownership is always
-derived from `auth.uid()`/trusted host state, never from a caller-selected key.
-
-1. `submit_authored_head_proposal(proposal_id, document_id, device_id,
-   operation_id, base_revision_id, proposed_revision_id, created_at)` verifies
-   the complete immutable revision closure, assigns proposal order, and returns
-   an idempotent receipt. A proposal arriving after archive is immediately
-   terminal as `cancelled_archived`.
-2. `integrate_authored_head_proposal(proposal_id,
-   expected_head_revision_id, resolution, result_revision_id)` locks the
-   document, accepts only the earliest pending proposal, checks the expected
-   head and the claimed ancestry/two-parent shape, advances the head, and writes
-   one immutable terminal integration receipt. It returns `stale` or
-   `not_earliest` without mutation so any online client can recompute.
-3. `archive_authored_document(archive_id, document_id, device_id,
-   operation_id, requested_revision_id, archived_at)` locks the document,
-   performs the one-way archive transition, captures the final head, and
-   terminally cancels every pending proposal in server order. Racing archive
-   requests each retain an immutable receipt.
-
-No fourth head, merge, transcript, or archive RPC is permitted. Immutable data
-uses the existing row-sync engine; mutable authored and transcript heads are
-server projections driven by the protocols above.
-
-Every syncable table uses a server-assigned `sync_seq`. Allocation is protected
-by one transactional row lock, so sequence N commits before N+1 can be
-allocated. Pull is `sync_seq > cursor ORDER BY sync_seq`; the cursor advances
-only after local application. Client clocks and `updated_at` are never pull
-cursors, eliminating the late-commit hole in the prior timestamp design.
-
-### 5.12 Terminal archive and deletion
-
-Archive is permanent. Once `authored_documents.archived_at` is set, neither
-local nor remote sync may clear it, recreate a live head, reinsert a deleted
-score/pattern projection, or accept another normal mutation. Pending proposals
-become terminal `cancelled_archived`. Revisions, files, parent edges, proposals,
-integrations, operation outcomes, and archive receipts remain readable as
-history; only live catalog/projection rows may be removed.
-
-Thread deletion is likewise terminal but does not erase trace data. A durable
-deletion receipt closes the lifecycle and prevents later row sync from
-resurrecting the thread or its mutable transcript-head projection. Immutable
-message nodes, append receipts, turn preparations/outcomes, and shared fork
-prefixes survive. Local Python scratch and active isolated directories may be
-garbage-collected after the terminal receipt is durable.
-
-### 5.13 Retired prototype and migration boundary
-
-The embedded Git design was checkpointed in repository commit `2edab24` before
-replacement. That prototype exists only on `agent-code-execution`, is not an
-ancestor of `origin/main`, and was never a released storage format. Historical
-SQLite migrations nevertheless remain byte-for-byte unchanged: SQLx can open a
-database created by the checkpoint, and the additive relational migration
-preserves its live score/graph projections plus thread/transcript data before
-dropping the retired ledgers. The host then serializes every unopened live
-projection through the authoritative codecs into a deterministic relational
-root before sync starts. No migrated document depends on being opened by the
-user first.
-
-The prototype's bare Git object database is deliberately not a product input.
-The app ships no dual reader, libgit2 importer, or permanent compatibility
-layer; pre-replacement Git-only intermediate commits do not become relational
-revisions. The live canonical state is preserved as the new root, conversation
-traces are preserved, and commit `2edab24` is the archaeology path for the
-unreleased prototype history. Relational history is lossless and syncable from
-that root forward.
-
-The replacement removes, rather than ports:
-
-- the `git2`/libgit2 dependency and Git object/ref wrapper;
-- bare-repository and linked-checkout storage paths;
-- repository, branch, ref-CAS, and checkout identifiers from public models;
-- projection-ledger and startup reconcile machinery;
-- Git thread branches, turn trailers, and Git-specific operation recovery;
-- the old `authored_state_projections`, thread-branch, turn-commit,
-  operation-ledger, and checkout-routing tables;
-- Git-specific commands, harness paths, and tests.
-
-They are replaced by the revision DAG, operation/turn outcomes, plain isolated
-workspace rows, and row-sync protocol in this section. Do not retain aliases,
-dead modules, compatibility shims, or stale checkout vocabulary.
-
-The remaining risks are explicit and narrow: production subagents still need a
-composed sandbox/supervisor lease; total sync integration depends on at least
-one owner client being online and able to validate the document kind; and
-immutable trace growth needs retention/quotas for non-product artifacts, not
-history deletion. None justifies a second authored-state authority.
+A new conversation creates a new thread and so a new Python workspace. It never
+deletes or reuses the previous thread. Navigation, closing an editor, score
+edits and binding changes do not reset a workspace.
+
+### 5.4 Authored state is rows
+
+A score is `scores`, `clips` and `score_definitions` rows.
+`luma_patterns::Score` is the in-memory type. There is no revision history, no
+document head, no compare-and-swap and no server RPC.
+
+- Saving compares the candidate with the current rows and writes only the rows
+  that changed.
+- There is no revision token. A stale candidate overwrites the rows it touches.
+- Concurrent edits to one row on two devices merge per column. The last write
+  wins.
+- Postgres row-level security decides who may write. The server does not run
+  domain validation. The app validates before it writes.
+
+### 5.5 History
+
+A TEMP trigger set on every writer connection adds one `changes` row for every
+insert, update and delete on a synced table, with the row before and after.
+`changes` syncs to its owner. The only reader is score provenance. Nothing
+replays the log. Undo in the editors stays in memory.
+
+### 5.6 Agent edits
+
+- In a root thread, `track.score_apply` writes the live score rows
+  (`agent_execution/track_host/score.rs`).
+- In a subagent thread, `track.score_apply` writes the draft's `state_json`.
+  When the child succeeds, `services/drafts.rs` merges the draft onto the live
+  rows per clip and per definition. See `docs/design/subagents.md`.
 
 ---
 
@@ -767,11 +231,11 @@ These are architectural requirements.
 15. Missing or failed data is distinguishable from genuinely empty data.
 16. Bound application values are immutable. Mutation is possible only through
     an explicit, scope-bound host capability.
-17. Every score and graph mutation passes through the canonical relational
-    authored-document service; typed score/graph projection functions are
-    internal implementation details, never parallel runtime authorities.
+17. Every score mutation from Python passes through the scoped track host;
+    Python never writes rows directly.
 18. Worker death or forced termination never masquerades as preserved state.
 19. Production execution hard-stops if the sandbox cannot be established.
+    This holds on macOS only (§17.7).
 
 ---
 
@@ -779,7 +243,7 @@ These are architectural requirements.
 
 ### 7.1 The tool
 
-Both agents receive the same model-facing tool:
+Every agent receives the same model-facing tool:
 
 ```ts
 python({
@@ -788,15 +252,15 @@ python({
 })
 ```
 
-`purpose` is a short noun phrase used only to label the running cell in the UI
-(for example, `"section energy analysis"`). It does not select
-scope, authority, execution policy, or a different operation. `code` is the
-ordinary cell-shaped Python source.
+`purpose` is a short noun phrase that labels the running cell in the UI (for
+example, `"section energy analysis"`). It does not select scope, authority,
+execution policy, or a different operation. `code` is ordinary cell-shaped
+Python source. The tool description is
+`backend/src/agent/prompts/python-tool.md`.
 
-For the track copilot this is the only model-facing tool. Track discovery,
-analysis, visualization, and authoring all happen through Python over the same
-bound values. The graph agent may retain its existing validated graph-mutation
-interface; it must not grow a second analysis executor.
+Python is the one analysis and authoring surface. The agent registry also holds
+`skill` and, in a thread with a score, `subagent`
+(`backend/src/agent/tools/mod.rs`).
 
 The model does not choose:
 
@@ -807,21 +271,9 @@ The model does not choose:
 - artifact paths;
 - timeout or sandbox policy.
 
-The agent adapter resolves all of those from the current durable thread and live
-editor bridge.
+The host resolves all of those from the durable thread.
 
-Suggested tool description:
-
-> Execute Python in a namespace persistent for this agent thread. Current
-> Luma bindings are available under `luma` and are refreshed before every call.
-> Variables, functions, and imports you create persist. The last expression,
-> stdout, stderr, exceptions, and figures are returned. Use normal
-> Python/NumPy/SciPy/librosa/matplotlib code. In an editable track thread,
-> create one staged candidate with `luma.track.edit()`, inspect it, and call
-> `apply()` only when it is ready.
-
-The code is normal cell-shaped Python. It does not require a wrapper function or
-an explicit `return`.
+The code does not require a wrapper function or an explicit `return`.
 
 ### 7.2 Notebook semantics
 
@@ -870,20 +322,21 @@ luma.patterns
 luma.graph
 ```
 
-For a track thread, `luma.track` is a small domain object backed by the ordinary
-binding tree. It exposes track metadata plus:
+In a thread with a score, `luma.track` is a domain object backed by the binding
+tree (`GraphTrack` in `luma_exec/score.py`). It exposes track metadata plus:
 
 ```python
-luma.track.revision          # semantic revision of all authored clips
-luma.track.editable          # descriptive; the host rechecks authorization
-luma.track.clips             # immutable, complete, lossless clip snapshot
-luma.track.edit()            # start a staged full-candidate transaction
+luma.track.document          # read-only score mapping; clips and definitions by ID
+luma.track.clips             # every saved Clip, ordered by start beat, z, then ID
+luma.track.editable          # descriptive; the host rechecks authority
+luma.track.nodes(search)     # node IDs and names
+luma.track.definition(id)    # one built-in or score-local definition
+luma.track.edit()            # start a private edit of the complete score
+luma.track.window(beats=...) # an immutable view of the saved score
 ```
 
-Each clip contains its stable ID, stable pattern ID, optional pattern display
-name, exact start and end seconds, explicit `z`, blend mode, and the complete
-JSON argument value. Display ordering is time-major for readability; `z`, not
-file/list order, defines stack semantics.
+A clip holds its ID, graph, start and duration in beats, selection, seed, `z`,
+blend mode and input overrides. `z`, not list order, defines stacking.
 
 Branches not applicable to a given agent or unavailable for the current scope
 remain discoverable but report why they are unavailable.
@@ -1003,46 +456,36 @@ not.
 
 ### 7.7 Mutation boundary
 
-Python sees immutable snapshots of the current graph, graph output, venue,
-track, clips, audio, and analysis products. It receives no database handle and
-no generic mutation callback.
+Python sees immutable snapshots of the track, the score, audio, analysis
+products, the venue and graph output. It receives no database handle and no
+generic mutation callback.
 
-Track authoring is the single deliberate exception. `luma.track.edit()` creates
-a Python-local mutable object containing the **entire** clip candidate and its
-optimistic base revision. Only that object has the three domain mutations:
+Two host capabilities can change state:
 
-```python
-edit.add_clip(...)
-edit.update_clip(...)
-edit.remove_clip(...)
-```
+- `luma.track.edit()` returns a Python-local `Edit` that holds the complete
+  score candidate. `edit.graph(...)`, `add_clip`, `update_clip`, `remove_clip`
+  and `make_independent` change only that candidate. `edit.diff()` is local.
+  `edit.check()`, preview through `luma.venue.render(edit=edit)`, and
+  `edit.apply()` cross the sandbox through named host calls
+  (`track.score_check`, `track.score_render`, `track.score_apply`).
+- `luma.venue` verbs place, attach, aim and remove venue pieces through
+  `venue.*` host calls (`agent_execution/venue_host.rs`).
 
-Those methods do not touch live state. `edit.diff()` and local checks are also
-non-mutating. `edit.check()`, candidate rendering, and `edit.apply()` cross the
-sandbox through a narrow named host-call protocol. A coherent, exact
-score/track/venue scope is enough to inspect the committed timeline and render
-its compositor heatmap; creating an edit, checking it, or applying it also
-requires authenticated score-owner authority. The trusted host owns scope,
-authorization, pattern compilation, compositing, validation, ID assignment,
-and the database transaction. The protocol is an internal implementation
-detail, not another model tool.
+The trusted host owns scope, authorization, compilation, compositing,
+validation, ID assignment and the database write. The host-call protocol is an
+internal detail, not another model tool.
 
-Graph mutations remain behind the graph agent's canonical validated interface.
-They are intentionally independent of the track transaction described here.
+After a successful apply, the next cell receives a refreshed `luma` binding
+while agent-created variables remain. `apply()` closes the edit; further
+changes start from a new edit.
 
-After a successful track apply or graph mutation, the next Python cell receives
-a refreshed `luma` binding while agent-created variables remain. A successful
-`edit.apply()` closes that edit; further changes begin from a freshly bound
-track and revision.
-
-The track loop is:
+The score loop is:
 
 ```text
 inspect and compute with Python
     -> stage one complete candidate
-    -> inspect timeline and composited output
-    -> diff and check
-    -> atomically apply
+    -> check it and preview it through the compositor
+    -> apply
     -> inspect the refreshed track with Python
 ```
 
@@ -1245,7 +688,7 @@ agent_bindings/
 
 Providers understand their domain sources but know nothing about Python.
 The Python loader understands the manifest but knows nothing about SQLite,
-Tauri, graph compilation, or venue databases.
+graph compilation, or venue databases.
 
 This is one system even though several domain providers contribute to it.
 
@@ -1375,17 +818,9 @@ luma.track
   duration_s
   bpm
   key
-  revision                  semantic hash of the complete authored clip set
-  editable                  authenticated owner may create/check/apply an edit
-  clips                     immutable complete clip snapshot
-    id                      stable persisted ID
-    pattern_id              stable identity; display names are never authoritative
-    pattern_name            optional display convenience
-    start_s                 exact absolute track seconds
-    end_s                   exact absolute track seconds
-    z                       explicit stack order, including negative/sparse values
-    blend                   blend mode
-    args                    complete lossless JSON value
+  beat_origin_s             absolute seconds of musical beat 0
+  editable                  the owner may edit, check and apply
+  document                  the complete saved score: clips and definitions by ID
 
 luma.audio
   mix                       lazy AudioTensor
@@ -1439,18 +874,13 @@ luma.patterns
   argument_schemas
 ```
 
-The authored lighting timeline does not live in a parallel namespace branch.
-It lives directly on `luma.track` because it is the thing being understood and
-edited.
-“Score” remains useful persistence vocabulary (`score_id`, `track_scores`) at
-the Rust/SQLite boundary, but it is not an additional agent concept.
+The score does not live in a parallel namespace branch. It lives on
+`luma.track`, because it is the thing being understood and edited. The Python
+loader materializes the bound track record as the `GraphTrack` facade in
+`luma_exec/score.py`. It does not create a second data source.
 
-The Python loader materializes the bound track record as the `Track` facade.
-That facade preserves ordinary metadata access and adds `edit()` and `window()`;
-it does not create a second data source.
-
-The graph branch is unavailable unless a graph run is deliberately placed in
-the track thread's scope.
+The graph branch is unavailable unless a graph run is placed in the thread's
+scope.
 
 ### 10.3 Graph agent
 
@@ -1491,61 +921,16 @@ The model does not choose the loading strategy.
 
 ## 11. Graph-run integration
 
-### 11.1 Current problem
+### 11.1 What a run publishes
 
-`run_graph` currently:
+`crate::eval::graph_run::GraphEvaluation` is the complete result of a graph
+run. The editor draws only part of it.
 
-- builds a `ResidentContext`;
-- compiles the graph;
-- evaluates exact preview times;
-- owns the ordered primitive IDs;
-- returns `Signal {n,t,c,data}` views;
-- returns mel specs only for graph `mel_spec_viewer` nodes;
-- moves the compiled plan into the live scene.
+### 11.2 The run store
 
-The returned `RunResult` omits:
-
-- exact time coordinates;
-- primitive IDs for signal rows;
-- channel semantics;
-- graph/argument/scope fingerprints.
-
-The agent keeps the last result only in a frontend ref. There is also no
-structural guarantee that a cached result still matches a subsequently edited
-graph.
-
-### 11.2 Required refactor
-
-Extract graph evaluation into an internal result:
-
-```rust
-struct GraphEvaluation {
-    views: HashMap<String, SemanticSignal>,
-    mel_views: HashMap<String, SemanticMel>,
-    times_s: Vec<f32>,
-    primitive_ids: Vec<String>,
-    positions: Vec<[f32; 3]>,
-    span: (f32, f32),
-    graph_hash: String,
-    arg_hash: String,
-    selection_hash: String,
-    track_id: String,
-    venue_id: String,
-}
-```
-
-Two consumers derive from it:
-
-1. the existing UI-facing `RunResult`;
-2. the generic graph-run binding provider.
-
-When the run is associated with an agent thread, the provider publishes it
-under `luma.graph.run` through the normal binding/artifact system before Rust
-drops or moves the evaluation buffers.
-
-The association may be passed to the command as a separate optional
-`AgentThreadId`/publish target. It does not belong inside the semantic
-`GraphContext` model.
+`agent_execution/graph_runs.rs` keeps the latest evaluation for each execution.
+The next cell's binding assembly publishes it under `luma.graph.run` through the
+normal binding and artifact system.
 
 ### 11.3 Compatibility
 
@@ -1569,55 +954,15 @@ tensor.
 ### 12.1 Do not teach the executor cache paths
 
 The executor must not reconstruct domain file paths. Domain services resolve
-beats, stems, audio, roots, MERT, waveforms, venue data, and scores.
+beats, stems, audio, roots, MERT, waveforms, venue data and scores, and the
+binding providers call those services.
 
-In particular, `eval/context.rs` currently reconstructs audio/stem cache paths
-using `HOME` and macOS-specific `Library/Application Support` paths. Those
-resolvers should be centralized through `AppHandle`/existing storage helpers
-before being reused by the binding providers.
+### 12.2 Share loaders with the evaluator, not its loading conditions
 
-### 12.2 Reuse, but do not directly reuse, `ResidentContext`
-
-`ResidentContext` already contains much of the graph-side data:
-
-- positions;
-- beat grid;
-- audio;
-- stems;
-- attributes;
-- drum onsets;
-- chords;
-- span.
-
-However, `build_resident_context` intentionally loads only data consumed by the
-current graph. The open-ended agent bindings must expose available data even
-when the graph does not currently reference it.
-
-Extract shared domain-loading helpers or repositories and let both:
-
-- evaluator context construction; and
-- agent binding providers
-
-consume those helpers.
-
-Do not make the executor depend on evaluator-only loading conditions.
-
-### 12.3 Known source caveats
-
-- `MelSpec` currently has width, height, data, and an optional beat grid but no
-  explicit frequency/time coordinates. The provider must add them.
-- Waveform bands have values but no explicit bucket time axis. Derive it from
-  decoded duration and bucket count.
-- `ResidentContext.attributes` is declared but is not currently populated in
-  `build_resident_context`; do not advertise a broad attribute tensor until the
-  data is real.
-- Unsaved graph definition state is frontend-owned. The trusted bridge may
-  contribute small inline graph-definition bindings, while graph-run arrays are
-  published in Rust.
-- Pattern summaries and argument schemas may likewise be contributed by a
-  trusted app adapter when their canonical current copy is frontend-owned.
-
-All contributions still use the same manifest type.
+The evaluator's context loads only the data the current graph consumes. The
+agent bindings must expose all available data, even when no graph references
+it. Both must use shared domain-loading helpers. The executor must not depend
+on evaluator-only loading conditions.
 
 ---
 
@@ -1633,7 +978,7 @@ struct PythonWorkspaceService {
 }
 ```
 
-A workspace is created lazily. It is not tied to a mounted React component.
+A workspace is created lazily. It is not tied to an open editor.
 
 ### 13.2 Live persistence
 
@@ -1693,21 +1038,17 @@ process/VM checkpointing and is outside this design.
 
 ### 13.5 New conversation and deletion
 
-- New conversation: create a new thread and Python workspace association.
-  Never clear or reuse the old identity. An authored subagent workspace is
-  created only for an isolated child job, not for an ordinary conversation.
+- New conversation: create a new thread and Python workspace. Never clear or
+  reuse the old identity.
 - Explicit Python reset: replace the process, not merely `globals().clear()`.
 - Thread deletion: terminate the kernel and remove thread-owned scratch and
-  unreferenced artifacts, retire every child authored workspace, record the
-  terminal deletion receipt, and remove the lifecycle/head routing rows.
-  Immutable transcript nodes and authored revisions remain, so deletion cannot
-  erase trace history or a prefix shared by another thread.
+  unreferenced artifacts. Deletes are hard deletes and sync to other devices.
 - Thread archive/navigation: may stop the live kernel later if a trustworthy
   restoration policy exists; no idle eviction is required initially.
 
-Replacing the process on an explicit Python reset is important because code can mutate
-module globals, matplotlib configuration, native-library state, and background
-threads outside the user globals dict.
+Replacing the process on an explicit Python reset is important because code can
+mutate module globals, matplotlib configuration, native-library state, and
+background threads outside the user globals dict.
 
 ---
 
@@ -1746,7 +1087,7 @@ requires a worker protocol and lifecycle layer.
 - the generic synchronous host-call transport;
 - one request loop.
 
-It knows nothing about tracks, patterns, scores, venues, Tauri, or SQLite.
+It knows nothing about tracks, patterns, scores, venues, or SQLite.
 
 ### 14.3 Host process responsibilities
 
@@ -1804,8 +1145,8 @@ During an execution, a bound domain facade may make a synchronous internal host
 call:
 
 ```json
-{"id":"cell-17","type":"host_call","call_id":"h-1","method":"track.check","payload":{"baseRevision":"…","candidate":[]}}
-{"id":"cell-17","op":"host_response","call_id":"h-1","ok":true,"value":{"baseRevision":"…","candidate":[]}}
+{"id":"cell-17","type":"host_call","call_id":"h-1","method":"track.score_check","payload":{"candidate":{…}}}
+{"id":"cell-17","op":"host_response","call_id":"h-1","ok":true,"value":{…}}
 ```
 
 Calls are correlated to the active cell, bounded in count, and allowed only from
@@ -1872,10 +1213,9 @@ After a cell:
 5. return workspace-relative figure references to the host;
 6. read bounded PNG bytes into the model-facing image parts.
 
-Today the frontend transcript retains bounded base64 rather than the registered
-artifact ID, as described in §7.6. The intended follow-up is to persist artifact
-references and create base64 only transiently when the AI SDK/provider needs an
-image block.
+The stored transcript keeps bounded base64 PNGs, not the registered artifact ID
+(§7.6). **Not built:** storing artifact references and creating base64 only
+when a provider request needs an image block.
 
 ### 14.8 Output limits
 
@@ -1962,7 +1302,7 @@ deadline and cancellation token. Read-only calls and track validation remain
 cancellable; dropping one of those futures drops its open transaction, so
 uncommitted work rolls back.
 
-`track.apply` has one explicit commit barrier. After the cancellable compile
+`track.score_apply` has one explicit commit barrier. After the cancellable compile
 and validation pass, the host atomically chooses whether cancellation or the
 write begins first. If cancellation wins, no write starts. If the write wins,
 Rust awaits the transaction through commit and flushes its correlated,
@@ -2068,9 +1408,9 @@ Allow:
 - write only the current workspace's `scratch/` and controlled output area;
 - return bounded text and registered artifacts to the host.
 - invoke only the narrow named host methods installed for the current trusted
-  thread scope. An exact score/track/venue scope permits `track.render`;
-  `track.check` and `track.apply` additionally require authenticated owner
-  authority.
+  thread scope. An exact score/track/venue scope permits `track.score_render`;
+  `track.score_check` and `track.score_apply` additionally require
+  authenticated owner authority.
 
 Deny:
 
@@ -2087,7 +1427,7 @@ policy.
 
 ### 17.3 Application mutation boundary
 
-Python receives copies or read-only mappings, never live mutable Rust/JS
+Python receives copies or read-only mappings, never live mutable Rust
 objects. Even if agent code mutates its local Python object, the host reinstalls
 the canonical `luma` binding on the next cell. Ordinary Python assignments do
 not change application state.
@@ -2116,7 +1456,8 @@ handler is present.
 
 ### 17.4 macOS
 
-Use a subprocess Seatbelt profile via `sandbox-exec`:
+`agent_execution/sandbox/macos.rs` runs the worker under a Seatbelt profile via
+`sandbox-exec`:
 
 - no network;
 - explicit read/execute roots;
@@ -2125,442 +1466,154 @@ Use a subprocess Seatbelt profile via `sandbox-exec`:
 - process restrictions.
 
 `sandbox-exec` is deprecated but has no published removal timeline or supported
-replacement for this desktop use case. Keep profile generation behind a
-swappable launcher module.
+replacement for this desktop use case. Profile generation stays behind the
+swappable `WorkerLauncher`.
 
 Packaging considerations:
 
 - the bundled Python executable and native extensions must work under hardened
   runtime/notarization;
 - library-validation entitlements apply to the child executable, not merely the
-  Tauri parent;
-- do not convert the whole Tauri app to App Sandbox as a shortcut;
+  parent app;
+- do not convert the whole app to App Sandbox as a shortcut;
 - use the non-GUI Matplotlib backend.
 
 ### 17.5 Linux
 
-Use Landlock for filesystem restrictions and seccomp for syscall/network
-restrictions, launched directly from Rust.
+**Not built.** The design is Landlock for filesystem restrictions and seccomp
+for syscall and network restrictions, launched directly from Rust, with no
+bubblewrap, Docker, root setup or AppArmor configuration.
 
-Do not require bubblewrap, Docker, root setup, or distro-specific AppArmor
-configuration in a consumer desktop app.
+Today `sandbox::default_launcher` returns the passthrough launcher on Linux.
+Agent Python runs with the app's full authority.
 
 ### 17.6 Windows
 
-Do not ship this capability on native Windows until an AppContainer/job-object
-or equivalent sandbox meets the same policy without an elevated developer
-setup. WSL is not an acceptable consumer-app dependency.
+**Not built.** The design is an AppContainer/job-object sandbox that meets the
+same policy without an elevated developer setup. WSL is not acceptable. Today
+Windows also gets the passthrough launcher.
 
 ### 17.7 Failure behavior
 
-In a production build, sandbox initialization failure is a hard stop for the
-Python tool. Do not warn and continue unsandboxed.
+On macOS, sandbox initialization failure is a hard stop for the Python tool. It
+never warns and continues unsandboxed. The passthrough runs on macOS only in a
+debug build with `LUMA_UNSANDBOXED_PYTHON=1`.
 
-An unsandboxed launcher may exist only behind an explicit developer-only build
-or feature flag for local experiments.
-
-### 17.8 Existing JS probe
-
-The current Web Worker is not network-isolated by construction; workers can use
-`fetch` and `importScripts`. While it remains during migration, restrict its
-network access through the app's CSP. Delete it after the Python graph path is
-proven rather than retaining two executor systems.
+On Linux and Windows this rule does not hold yet (§17.5, §17.6).
 
 ---
 
-## 18. Track authoring in Python
+## 18. Score authoring in Python
 
-The agent does not read or edit a source file. The complete authored lighting
-timeline is part of the ordinary `luma.track` binding, and the only track
-authoring surface is a staged Python candidate:
+The agent does not read or edit a score file. The complete saved score is part
+of the `luma.track` binding, and the only authoring surface is a staged Python
+candidate (`backend/python/luma_exec/score.py`):
 
 ```python
 edit = luma.track.edit()
-edit.add_clip(...)
-edit.update_clip(...)
-edit.remove_clip(...)
-
-view = edit.window(bars=(49, 65))  # half-open: bars 49 through 64
-view.timeline()
-view.output.heatmap()
+chase = edit.graph(node="chase")
+clip = edit.add_clip(chase, bars=(49, 57), selection="front_wash",
+                     inputs={"width": 0.4})
+edit.update_clip(clip, bars=(49, 65))
 
 edit.diff()
 edit.check()
+luma.venue.render(t=120.0, edit=edit)
 edit.apply()
 ```
 
-This is one system, not a Python representation plus a separate agent file
-format. The same `luma` tree supplies audio, musical features, venue data,
-patterns, arguments, the current clip document, and rendered candidate output.
-The model uses ordinary Python to combine them creatively.
+### 18.1 Complete snapshot
 
-### 18.1 Complete lossless snapshot
+`luma.track.document` holds every clip and every score-local definition, keyed
+by stable ID. Timestamps, ownership and sync columns are not part of it.
 
-`luma.track.clips` contains every clip in the selected authored track, not only
-the current viewport or recently touched section. The snapshot preserves every
-authored semantic value:
+### 18.2 Staged candidate
 
-- stable clip identity;
-- stable pattern identity, independent of a duplicate or renamed display name;
-- exact start and end seconds;
-- exact, sparse, and negative `z` values;
-- blend mode;
-- every argument value, including palettes, gradients, non-global selections,
-  unknown/legacy arguments, and JSON values absent from the current pattern
-  schema.
+`luma.track.edit()` works only when `luma.track.editable` is true: the host
+resolved owner authority for the exact score, track and venue. The edit copies
+the complete saved score. All changes stay local until `apply()`.
 
-Database timestamps, ownership/sync bookkeeping, caches, and editor selection
-are not authored semantics and do not enter the candidate. A semantic hash of
-the authored values becomes `luma.track.revision`; row order and JSON object-key
-order do not affect it.
+- Exactly one of `beats=(start, end)`, `bars=(start, end)` or
+  `seconds=(start, end)` gives a range. Ranges are half-open. Beats start at 0.
+  Bars start at 1 and follow the detected downbeats.
+- `add_clip(graph, ...)` takes a graph or a definition ID, plus `selection`,
+  `subset`, `z`, `blend`, `seed` and `inputs`.
+- `update_clip` changes only the fields it is given. `remove_clip` removes one
+  clip.
+- `edit.graph(...)` builds or opens a score-local graph.
+  `make_independent(clip)` copies a clip's local subgraphs, so later edits do
+  not change other clips.
+- A score saved with an older document version is upgraded in the candidate
+  (`track.score_upgrade`). The upgrade is saved with the next apply.
 
-Pattern and argument display names are conveniences. A unique display name may
-be resolved for ergonomic authoring, but duplicate names are an error and the
-candidate wire format always carries stable IDs. Existing unknown argument IDs
-and legacy JSON values are preserved rather than normalized away.
+### 18.3 Views and preview
 
-### 18.2 Staged full-candidate API
+`edit.window(...)` and `luma.track.window(...)` take the same explicit range and
+return an immutable view. `luma.venue.render(edit=edit)` renders the
+uncommitted candidate through the real compositor.
 
-Calling `luma.track.edit()` succeeds only when `luma.track.editable` is true,
-which means the trusted host resolved authenticated owner authority for the
-exact score/track/venue scope. It captures both the complete base snapshot and
-its revision. All mutations are local until `apply()`:
+Candidate output is sampled at 16 samples per beat, capped at 2,048 samples
+(`agent_execution/track_host.rs`).
 
-```python
-edit = luma.track.edit()
+### 18.4 Check and apply
 
-clip = edit.add_clip(
-    "Verse wash",                 # stable ID or unique display name
-    bars=(49, 57),                # or seconds=(start_s, end_s)
-    z=0,
-    blend="replace",
-    args={"Intensity": 0.7},     # argument ID or unique display name
-    selection="front_wash",      # shorthand when exactly one Selection arg exists
-)
+`edit.check()` sends the complete candidate to the host (`track.score_check`).
+The host re-resolves scope from the durable thread, validates the score and
+prepares its graphs. It changes nothing.
 
-edit.update_clip(
-    clip.id,
-    bars=(49, 65),
-    z=2,
-    args={"Intensity": 0.85},
-    unset_args=("Old override",),
-)
+`edit.apply()` (`track.score_apply`) repeats the checks and writes the
+candidate. A root thread writes the live score rows; a subagent writes its
+draft (§5.6). Only changed rows are written. There is no base revision, so an
+apply overwrites concurrent changes to the rows it touches. `apply()` closes the
+edit. The next cell sees the refreshed `luma.track` and keeps the agent's
+variables.
 
-edit.remove_clip("persisted-clip-id")
-```
+### 18.5 The score document
 
-Exactly one of `bars=(start, end)` or `seconds=(start, end)` specifies a range.
-Bar numbers are 1-indexed musical boundaries derived from downbeats and ranges
-are half-open. `args` on update merges into existing arguments; `unset_args`
-removes named overrides deliberately. Changing a clip to another pattern does
-not carry old pattern arguments into the new schema.
-
-Clips on the same `z` use half-open overlap semantics. A draft cannot introduce
-a new same-layer overlap, but a lossless edit may preserve an overlap already
-present in legacy data.
-
-An `Edit` always contains the **whole candidate track**, including unchanged
-clips. New clips receive recognizable temporary `new:*` IDs so they can be
-updated, removed, plotted, and rendered before apply. Rust replaces those with
-canonical UUIDs and returns the temporary-to-persisted ID map on success.
-
-### 18.3 Explicit immutable candidate views
-
-A visualization always begins with an explicit half-open range:
-
-```python
-view = edit.window(bars=(49, 65))
-# or
-view = edit.window(seconds=(120.0, 150.0))
-```
-
-Use `luma.track.window(...)` with the same explicit range to inspect the current
-committed snapshot without first creating an edit. This path remains available
-for a coherent read-only score/track/venue scope: it can produce both
-`timeline()` and the real compositor `output.heatmap()` without mutation
-authority. `edit()`, `check()`, and `apply()` remain unavailable without the
-separate owner capability.
-
-The view snapshots the full candidate at that moment. Subsequent draft changes
-require a new view, so a timeline and heatmap cannot silently describe
-different candidates. Clips outside the window remain in the candidate; clips
-intersecting the window appear even when they were unchanged or begin outside
-it.
-
-`view.timeline()` renders the **authored structure** as an image with time on
-the x-axis and explicit `z` on the y-axis. It answers which patterns overlap and
-how they stack; it is not a text serialization and not a composited result.
-
-`view.output` lazily asks the authoritative host to render that exact candidate
-and interval through the real Luma compositor. Its tensor is:
-
-```text
-[light, time, RGB]
-```
-
-The axes carry stable venue light IDs, exact sampled absolute seconds, and
-`r/g/b` channel labels. Values are normalized linear color multiplied by
-dimmer, matching Luma's single composited light concept; dimmer is not exposed
-as a parallel output plane. Clips retain their original full span when the
-window begins mid-clip so span-relative pattern phase remains correct.
-
-The current sampling policy is finite and explicit: 16 samples per beat when a
-valid BPM exists, otherwise 32 samples per second, with the sample count clamped
-to `[2, 2048]`. Sampling is half-open, so the first requested time is included
-and the window end is not. The tensor publishes the exact `f32` times passed to
-the evaluator. Windows long enough to hit the 2,048-sample cap have lower
-temporal density; agents should inspect smaller windows when onset-level detail
-matters.
-
-`view.output.heatmap()` renders that tensor with time on x, light on y, and the
-pixel color equal to the final composited RGB. This intentionally avoids camera
-placement and scene-renderer ambiguity while preserving the two dimensions an
-agent must understand. Candidate tensors and figures use the same artifact
-store as every other Python input/output.
-
-### 18.4 Diff, authoritative check, and atomic apply
-
-`edit.diff()` is a semantic local diff with added, updated, and removed clips.
-`edit.check()` performs cheap local validation, then sends the complete
-candidate and base revision to the host. The host:
-
-1. re-resolves and verifies the durable thread's score/track/venue/user scope;
-2. rejects a stale base revision;
-3. validates IDs, patterns, time ranges, arguments, and overlap invariants;
-4. strictly compiles every pattern in the complete candidate;
-5. returns a structured non-mutating result.
-
-Candidate rendering repeats authoritative scope, revision, and semantic checks,
-then strictly compiles and composites the clips intersecting the requested
-window. Strict candidate compilation always rebuilds from authoritative pattern,
-beat-grid, group, and venue inputs; it neither reads nor populates the live
-renderer's incremental plan cache. Compile failures are errors, and preview
-must not inherit the live compositor's tolerance for broken legacy clips.
-
-That strict compile is an authoritative **snapshot**, not a lock over all of
-those dependencies. For apply, it runs immediately before the score
-transaction. The score CAS below atomically protects the authored clip document
-only; it does not lock or fingerprint pattern graphs, venue patching, groups, or
-beat-grid data between compile and commit. Those inputs can change in that
-interval, and pattern graphs may also change normally after the score commits
-because clips intentionally reference durable pattern IDs. If Luma later needs
-an immutable, reproducible show package, dependency fingerprints and a broader
-snapshot/version contract are separate work.
-
-Every `edit.apply()`, including a candidate with no semantic diff, sends the
-same complete candidate and base revision to the host. The trusted command
-layer derives scope from the durable thread and derives the current user from
-authenticated application state; caller-supplied IDs can be omitted but cannot
-retarget the operation. The edit service rechecks exact ownership and scope,
-acquires `BEGIN IMMEDIATE`, compares both the authored head and the semantic
-**score revision** inside that write transaction,
-repeats score validation, assigns IDs/timestamps/ownership for new rows, writes
-only the semantic projection diff, serializes the complete canonical
-`score.luma`, and advances the relational head by CAS. The immutable revision,
-projection changes, operation outcome, and sync proposal commit together. A
-zero-diff result therefore still asserts the authoritative current revision and
-returns the complete canonical document, with zero change counts and
-`applied=False`. A failure changes neither projection nor history. A concurrent
-human or agent score edit produces a conflict instead of a blind overwrite.
-
-Unchanged rows retain their persistence metadata. A successful result contains
-the new revision, complete canonical clips, ID map, and change counts; the next
-cell receives that document through the normal refreshed `luma.track` binding.
-
-### 18.5 `score.luma` is the canonical revision file
-
-`score.luma` is the human-readable, lossless score file stored as exact bytes
-in every score revision. Import/export uses the same codec. The current Python
-agent does not edit the file directly; its typed transaction is serialized
-through this codec at the revision boundary. A filesystem subagent may edit a
-materialized copy in its isolated directory, then invoke check, commit, and
-merge through the authored-state service. Its compiler contract is:
-
-```text
-compile(export(authored_track)) == authored_track
-```
-
-The first line is the required canonical envelope
-`# luma-score-schema: 1`. This is file-format metadata, not an authored score
-comment. Unversioned and unknown-version revision files fail closed; serializers
-never guess a historical grammar from content. Future format changes add an
-explicit version decoder and ordered migration instead of reinterpreting old
-revisions with the newest parser.
-
-The committed form is deliberately stricter than the human/model authoring
-grammar. Every canonical clip declares its stable clip ID, stable pattern ID,
-exact `z`, exact `f64` start/end seconds, blend mode, and every argument as raw
-JSON under its stable argument key. The pattern name beside its ID and attached
-comments are presentation only. Canonical source never contains bar timing,
-the parenthesized Selection shorthand, color/identifier shorthand, inferred
-layers, missing identities, or duplicate clip IDs/argument assignments.
-
-Musical timing, Selection expressions, typed value shorthand, argument names,
-and omitted clip IDs remain useful at human/model ingress and in exemplars.
-They are resolved exactly once against the current beat grid and pattern
-interface before commit; the resulting `score.luma` contains only the
-self-contained canonical form. The compiler must never skip a pattern,
-normalize `z`, clamp a range, fill an absent override, discard an unknown
-argument, round a large JSON integer, or choose the first duplicate name.
-
-One Rust codec is authoritative for isolated-workspace ingest, relational
-semantic merge, restore, import/export, and UI validation. The TypeScript UI is
-a client of that codec, not a second parser. The codec preserves attached source comments when
-rewriting a parsed document; canonical serialization from an existing database
-snapshot has no comments to invent. Canonical file bytes never encode a
-database head generation or CAS token.
-
-Historical decoding is context-free. Reading a committed `score.luma` receives
-no database handle, beat grid, pattern registry, or current implementation
-interface. Restore decodes the selected tree directly. A typed three-way merge
-decodes base, ours, and theirs directly, merges clips by stable identity, and
-carries presentation names/comments from those source trees. Reprocessing a
-track, renaming a pattern, changing or deleting its arguments, or temporarily
-breaking its current graph therefore cannot reinterpret or make an old score
-revision unreadable.
-
-Import compiles the whole DSL before writing, materializes one
-complete replacement document, preserves a supplied clip ID only when it
-belongs to the current score, rejects foreign or duplicate IDs, and assigns a
-client-only correlation ID to a clip whose DSL omits identity. It then submits
-both the exact base snapshot it compiled from and the complete candidate to the
-same relational full-document service.
-
-Paste import, generated DSL, undo, and redo are adapters over the same canonical
-authored-document transaction as Python and ordinary clip CRUD. The host derives
-the base semantic revision from the supplied snapshot, rejects it when the head
-changed, rewrites every genuinely new client ID to a draft ID, and delegates to
-`AuthoredDocuments` for scope/owner checks, validation, host UUID/timestamp
-allocation, lossless `score.luma` serialization, immutable revision creation,
-SQLite projection, and head CAS. The returned ID map rebases UI history and
-selection; the editor hydrates only the current authoritative projection after
-success. A conflict leaves live UI state and undo history untouched. There is
-one write foundation, not a permissive projection writer beside revision
-history.
-
-The user message that begins a model turn is persisted before the remote model
-is called. Python `track.apply()` derives its durable operation identity from
-that user-message ID plus the canonical host-resolved score scope and complete
-edit plan. The immutable operation-outcome table is queried before stale-base
-validation and is written atomically with the relational revision and
-projection. An exact apply therefore replays after IPC loss, process restart,
-or a regenerated provider tool-call ID; a different plan is a different
-operation. Provider tool-call IDs, Python source text, and worker call ordinals
-are deliberately not mutation identity.
-
-This does not change the current model contract: the Python agent's one route
-for both understanding and authoring remains `luma.track`.
+`luma.track.source()` returns the saved score as canonical JSON text. It is a
+view of the rows, not a stored file.
 
 ---
 
 ## 19. Subagents
 
-Subagent orchestration consumes the relational authored-state foundation; it
-does not invent another proposal or checkpoint store.
-
-This section specifies the enablement boundary, not a currently exposed app
-feature. The isolated-workspace primitives are host-internal and independently
-testable. Production exposure begins only when the same host component
-owns child launch, sandbox policy, immutable process-tree lease, final snapshot,
-and process-tree exit; exposing raw directory calls piecemeal is forbidden.
-
-- an orchestrator thread allocates each child job a dedicated plain directory
-  from an explicit base revision and records that base in SQLite;
-- a child may also have its own durable thread/Python workspace, but transcript
-  and kernel ownership are independent of the filesystem isolation primitive;
-- child jobs never share a mutable Python namespace or authored directory;
-- each child process tree holds a host-owned lease; check/commit/retire begins
-  only after that lease is released and the whole process tree has exited;
-- the sandbox exposes only canonical authored files plus bounded scratch/output,
-  never SQLite, credentials, app configuration, or arbitrary host paths;
-- workspace creation and commit are idempotent under caller operation IDs, and
-  old retries cannot move a newer private workspace head backward;
-- the host uses relational ancestor walking plus Luma's typed three-way merge;
-- score clips merge by stable clip ID, graph nodes by node ID, edges by target
-  input slot, and pattern arguments by stable argument ID;
-- score comments/trivia merge by their stable annotation/layer/document
-  attachment instead of being discarded by semantic serialization;
-- divergent scalar edits, add/add-different, and delete/modify produce
-  structured conflicts; layout conflicts never block a semantic merge;
-- the authoritative score/graph validator runs before a two-parent revision
-  can advance the live document head and projection;
-- cancellation, cost limits, and UI streaming remain orchestration concerns.
-
-Possible future uses include per-section track authoring, generate-and-judge
-panels, adversarial verification, and per-venue robustness checks. None is
-required to validate the core executor.
+A subagent is a turn on a child thread that edits a draft of the score. See
+`docs/design/subagents.md`. Children never share a Python namespace, because
+each child thread owns its own workspace.
 
 ---
 
 ## 20. Component boundaries
-
-Suggested module shape:
 
 ```text
 backend/src/agent_execution/
   mod.rs
   workspace.rs             thread -> workspace registry
   worker_process.rs        protocol, process, interrupt
-  worker_launcher.rs       sandbox-independent launcher trait
-  track_host.rs            scoped check/render/apply host capability
-  bindings/
-    mod.rs
-    manifest.rs            BindingValue, TensorRef, AxisSpec
-    assembler.rs           provider composition and validation
-    providers/
-      track.rs
-      audio.rs
-      features.rs
-      venue.rs
-      patterns.rs
-      graph.rs
-  artifacts/
-    mod.rs
-    store.rs
-    codecs.rs
-  sandbox/
-    mod.rs
-    macos.rs
-    linux.rs
+  worker_launcher.rs       launcher trait and passthrough launcher
+  cell_host.rs             host-call routing for one cell
+  track_host.rs            scoped score check, render and apply
+  track_host/score.rs
+  venue_host.rs            scoped venue queries and edits
+  graph_runs.rs            latest graph evaluation per execution
+  headless_env.rs          worker environment for headless hosts
+  bindings/                manifest, assembler, domain providers
+  artifacts/               store and codecs
+  sandbox/                 platform launcher selection; macos.rs
 
-backend/python/
-  luma_exec/
-    worker.py               persistent cell loop and generic host-call bridge
-    bindings.py             manifest -> Python namespace
-    track.py                Track/Edit/Window/Output facade
+backend/python/luma_exec/
+  worker.py                persistent cell loop and generic host-call bridge
+  bindings.py              manifest -> Python namespace
+  track.py                 track metadata, clips and output views
+  score.py                 score facade: GraphTrack, Edit, graphs
+  venue.py                 venue facade
+  figures.py, display.py   figure capture and notebook display
 
-backend/src/services/
-  track_edits.rs            typed score validation and SQLite projection
-  score_dsl/                one lossless score parser/serializer/compiler
-  authored_state/           relational revision DAG/hash/CAS primitives
-  authored_documents.rs     sole revision/projection/lifecycle authority
-  authored_documents/
-    operations.rs           atomic outcomes and sync enqueue
-    turns.rs                prepare/finalize/recovery/history/restore
-    workspaces.rs           plain isolated subagent directories
-  authored_merge.rs         typed score/graph three-way merge
-  authored_sync_merge.rs    total deterministic device convergence
-  graph_documents.rs        graph revision, validation, atomic projection
-  score_mutations.rs        shared command-shaped score adapters
-
-backend/src/sync/
-  authored_remote.rs        typed boundary for exactly three head/archive RPCs
-  registry.rs               immutable authored + transcript row mappings
-
-src/shared/lib/agent/
-  threads.ts                durable thread client and scoped resolution
-  python-tool.ts            shared Python tool adapter
-
-src/shared/components/agent-chat/
-  create-agent-chat.ts      shared chat/session lifecycle
-
-src/features/track-editor/agent/
-  track-agent.ts            Python-only track tool vocabulary and UI refresh
-  build-context.ts          concise Python-first system prompt
+backend/src/agent/tools/python.rs   the model-facing tool
+backend/src/services/drafts.rs      subagent drafts
 ```
 
-The exact filenames may follow repository conventions, but the dependency
-direction should remain:
+The dependency direction is:
 
 ```text
 domain providers -> binding manifest -> worker
@@ -2568,17 +1621,15 @@ artifact store -----------------------^
 
 workspace registry -> worker process -> launcher/sandbox
 
-Track/Edit facade -> generic host call -> scoped track host
-                                              |
-                                              v
-                                      authored documents
-                                        |          |
-                                  typed codecs   compositor
+score / venue facades -> generic host call -> scoped track / venue host
+                                                   |
+                                                   v
+                                     score rows or draft, compositor
 
-agent adapters -> workspace service
+agent tool -> workspace service
 ```
 
-No Tauri dependency is needed inside:
+No UI dependency is needed inside:
 
 - manifest validation;
 - artifact codecs;
@@ -2586,83 +1637,59 @@ No Tauri dependency is needed inside:
 - worker process state machine;
 - sandbox profile generation.
 
-The Python `Track` facade is independently testable with ordinary binding
-values and a fake synchronous host callback. Revision-DAG primitives, strict
-typed merges, total sync merges, workspace lifecycle, score/graph projection,
-and orchestration are independently testable.
-The generic worker protocol knows nothing about tracks, and the track host
-knows nothing about model messages.
-
-Tauri commands are thin adapters.
+The Python facades are testable with ordinary binding values and a fake
+synchronous host callback. The generic worker protocol knows nothing about
+tracks, and the track host knows nothing about model messages. Dispatch
+handlers and the agent tool are thin adapters.
 
 ### 20.1 Headless hosts
 
 Two binaries serve this data plane to a process that is not the desktop app.
-Both are thin adapters over `luma_lib::dispatch` — the seam the
-`#[tauri::command]` wrappers sit on — so neither owns scope resolution, the
-binding manifest, the write-admission gate, or the interrupt ladder. Both boot
-through `luma_lib::headless_host`: same flags (`--config-dir`,
-`--fixtures-root`, `--cache-dir`, `--fixture-principal`), same migrations, same
-managed-venv workspace service, same startup recovery of half-deleted threads.
-Events go to stderr, because both put their protocol on stdout.
+Both are thin adapters over `luma_lib::dispatch`. Both boot through
+`luma_lib::headless_host` with the same flags (`--config-dir`,
+`--fixtures-root`, `--cache-dir`, `--fixture-principal`) and the same
+migrations. Events go to stderr, because both put their protocol on stdout.
 
 | | |
 |---|---|
-| `backend/src/bin/agent_harness.rs` | one JSON request per line; the shim in `scripts/headless/shim.ts` puts `window.__TAURI_INTERNALS__.invoke` on top of it so unmodified frontend agent code runs under Bun |
+| `backend/src/bin/agent_harness.rs` | one JSON dispatch request per line |
 | `backend/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
 
-`luma-mcp` exposes four tools:
+`luma-mcp` tools:
 
 ```text
-open   {track_id | track_query, venue_id?}  the bound namespace's catalog
-python {code}                               stdout/repr/traceback + figures
-reset  {}                                   a fresh workspace and kernel
-cancel {}                                   interrupt the cell in flight
+find   {track?, venue?}                   matching tracks and venues
+open   {track_query|track_id, venue_id?}  the bound namespace's catalog
+open   {venue_id}                         the same, for a room with no track
+python {code}                             stdout/repr/traceback + figures
+reset  {}                                 a fresh workspace and kernel
+cancel {}                                 interrupt the cell in flight
+skill  {name}                             one lighting-craft playbook
 ```
 
-`open` with no arguments lists the library instead of binding it. The
-difference from the in-app tool is the *session*: an MCP client has no editor
-to read a track from, so `open` resolves the track (and the venue and score
-that make `luma.venue` and `luma.track` real — a venue scope is only legible
-together with a score, §10.2), creates one durable `track_copilot` thread
-pinned to it, appends one user message for cells to be attributed to, and
-returns `luma.catalog()`. Every later call addresses that thread, so `python`
-takes only code, exactly as §7.1 requires. `reset` deletes the thread — which
-is what takes the workspace and kernel with it — and opens the same scope
-again.
+An MCP client has no editor to read a track from, so `open` pins one durable
+agent thread to the resolved scope, and every later call addresses that thread.
+`python` takes only code.
 
-`python`'s description is `PYTHON_TOOL_DESCRIPTION`, and its result is
-`agent::tools::python::cell_content_blocks` — the same text and the same
-projection the in-app tool gives its model, clamping and figure budget
-included. A second wording or a second projection would be a second tool.
+`python`'s description is `PYTHON_TOOL_DESCRIPTION`, and its result uses the
+same projection as the in-app tool, clamping and figure budget included.
 
-The loop is concurrent, one task per request, for the reason the JSON-RPC
-harness's is: `cancel` exists precisely to interrupt a `python` that is still
-in flight. The framing, `initialize`, `ping` and `tools/list` live in
-`backend/crates/mcp-stdio`, shared with the GPUI harness's server; the loop
-does not, because that harness is deliberately serial.
+The loop is concurrent, one task per request, because `cancel` must reach a
+`python` that is still in flight. Framing, `initialize`, `ping`, `tools/list`
+and `prompts/*` live in `backend/crates/mcp-stdio`.
 
 The sandbox is not a flag on these hosts. They resolve the worker environment
-through `agent_execution::headless_env`, so `sandbox::default_launcher` decides,
-and §17.7 still holds: a release build cannot reach the passthrough at all, and
-a debug build only with `LUMA_UNSANDBOXED_PYTHON=1`.
+through `agent_execution::headless_env`, so `sandbox::default_launcher` decides
+(§17.7).
 
-Register the server with a `.mcp.json` at the repository root (not committed):
+Register the server in a local `.mcp.json`:
 
 ```json
-{
-  "mcpServers": {
-    "luma": {
-      "command": "./backend/target/debug/luma-mcp",
-      "args": []
-    }
-  }
-}
+{ "mcpServers": { "luma": { "command": "./backend/target/debug/luma-mcp", "args": [] } } }
 ```
 
 Add `["--config-dir", "/path/to/scratch"]` to work against a disposable copy of
-the library rather than the real one. `scripts/headless/mcp_smoke.ts` drives the
-whole protocol against such a copy.
+the library. `scripts/headless/README.md` lists the scripts that drive it.
 
 ---
 
@@ -2672,64 +1699,20 @@ whole protocol against such a copy.
 
 - two threads for one track have different IDs and workspaces;
 - full tool history survives round-trip persistence;
-- New Conversation preserves the old transcript and authored revisions while
-  allocating a distinct thread/Python workspace;
-- transcript append requires the expected local head, rejects a stale sibling,
-  and exact operation replay returns the original immutable message range;
-- state-and-conversation restore creates a new thread at the selected message,
-  shares the prefix without copying or editing nodes, and leaves the original
-  thread complete;
-- threads, messages, append receipts, server transcript heads, preparations,
-  outcomes, forks, and deletion receipts round-trip through Supabase;
-- terminal thread deletion cannot be undone by a later pulled lifecycle/head
-  row, while immutable trace nodes remain readable;
-- an out-of-order conversation lookup cannot activate after a newer selection;
-- the first cell after an app restart reports that the prior kernel namespace
-  was lost;
+- New Conversation keeps the old transcript and allocates a distinct thread
+  and Python workspace;
+- the first cell after a kernel death reports that the prior namespace was
+  lost;
 - thread deletion cleans up its workspace.
 
-### 21.2 Relational authored state and sync
+### 21.2 Authored state
 
-- revision IDs, manifest hashes, file hashes, exact file sets, ordered parent
-  closure, and acyclic ancestry are independently verified in SQLite and
-  Postgres;
-- revision/files/parents/outcomes are immutable and permanent; exact row replay
-  succeeds while identity collision, update, or deletion fails;
-- every runtime score and graph writer creates relational history through the
-  same authority; direct projection writers are unreachable from adapters;
-- revision, validated projection, operation outcome, head CAS, and sync enqueue
-  are one SQLite transaction, with crash tests at every statement boundary;
-- prepare followed by durable assistant persistence recovers exactly once;
-- response-loss retries return the original outcome and never rewind a newer
-  head or private workspace tip;
-- a concurrent live-head advance during turn/workspace finalization is
-  strict-merged; typed conflict is durable, never projected, and does not block
-  the next turn;
-- both restore modes create a forward revision, and old/superseded history
-  remains selectable beyond the UI's pagination limit;
-- isolated directories reject traversal, symlinks, extra paths, size overflow,
-  stale workspace heads, and changed snapshot hashes; commit canonicalizes the
-  exact bounded file set and retire deletes only the disposable directory;
-- score and graph merges cover add/add, delete/modify, concurrent scalar edits,
-  stable identities, graph input slots, dangling dependencies, comments/trivia,
-  and non-blocking graph layout;
-- Supabase exposes exactly the three named RPCs, RLS prevents cross-principal
-  access, clients cannot write server head/outcome projections, and immutable
-  triggers reject mutation/deletion;
-- one device can submit and disappear permanently while another authenticated
-  owner client pulls and terminally integrates its proposal;
-- concurrent proposals converge in `server_proposal_seq` order on every device;
-  stale integration recomputes and no client timestamp participates;
-- structural sync merges preserve independent clip/arg/node/param edits and
-  choose the later proposal for overlapping semantic fields;
-- a composition-created graph cycle falls back to the whole valid proposal; an
-  invalid/unreadable proposal becomes `quarantined_noop`; missing or ambiguous
-  merge base takes the same terminal fallback, so integration never blocks;
-- archived documents cancel every pending proposal and cannot be resurrected by
-  a pulled document, head, catalog, or projection row;
-- superseded proposal tips appear in state history and can be restored;
-- `sync_seq` pull tests include a late long-running transaction and prove the
-  cursor cannot skip a row that commits after a higher client-observed time.
+- `track.score_check` changes no row;
+- `track.score_apply` writes only changed rows;
+- a failed apply leaves every row unchanged;
+- a subagent's apply writes its draft, not the live rows.
+
+Sync behaviour belongs to `docs/design/sync.md`.
 
 ### 21.3 Binding manifest
 
@@ -2815,141 +1798,64 @@ Platform acceptance tests must prove:
 - disallowed subprocesses fail;
 - denial errors identify the rejected capability.
 
-### 21.9 Track candidate and transaction
+### 21.9 Score candidate and apply
 
-- the bound clip snapshot round-trips exact IDs, times, sparse/negative `z`,
-  blend mode, and arbitrary legacy JSON arguments;
-- `add_clip`, `update_clip`, and `remove_clip` mutate only the local full
-  candidate;
-- pattern and argument display names resolve only when unique;
-- a new clip's temporary ID can be updated, removed, rendered, and mapped to a
-  host UUID on apply;
-- bar and second ranges are half-open and require exactly one coordinate form;
-- a window remains immutable after later draft mutations and includes unchanged
-  clips that intersect it;
-- the timeline image maps authored time to `z` without pretending to be output;
-- candidate rendering uses the real strict compositor, stable light IDs, exact
-  sampled times, and `[light,time,RGB]` values equal to color multiplied by
-  dimmer;
-- render sampling is half-open, follows the 16-samples-per-beat/32-Hz-fallback
-  policy, and lowers density rather than exceeding 2,048 samples;
-- `check()` is non-mutating and reports strict compile failures;
-- an exact read-only track scope can render committed timeline and compositor
-  heatmaps but cannot create an edit or call `check()`/`apply()` successfully;
+- the bound score round-trips exact clip IDs, graphs, beat ranges, `z`, blend
+  mode, seeds and input values;
+- `add_clip`, `update_clip`, `remove_clip`, `edit.graph` and
+  `make_independent` change only the local candidate;
+- beat, bar and second ranges are half-open and require exactly one form;
+- a window stays immutable after later candidate changes;
+- `check()` changes nothing and reports preparation failures;
+- a read-only scope can render but cannot create an edit or apply;
 - caller-supplied scope cannot retarget the durable thread;
-- stale base revisions conflict under concurrent edits;
-- invalid apply leaves every row unchanged;
-- successful apply is atomic, maps temporary IDs, and preserves unchanged-row
-  persistence metadata;
-- a no-diff apply still performs host authorization and revision CAS, returns
-  the authoritative document, and reports zero counts with `applied=False`;
-- human DSL import preserves valid existing IDs, rejects foreign/duplicate IDs,
-  materializes new identities, and replaces the score with one atomic
-  diff-based database operation;
-- a real worker-to-host-to-SQLite integration test applies a candidate and the
-  next cell sees the refreshed track while retaining prior Python variables.
+- a real worker-to-host-to-SQLite test applies a candidate, and the next cell
+  sees the refreshed track while prior Python variables remain.
 
 ---
 
 ## 22. Acceptance criteria
 
-The design is implemented when all of the following are true:
-
-1. Both agents operate on durable thread IDs and structured tool history.
-2. Both agents expose the same `python` tool contract.
+1. Every agent operates on durable thread IDs and structured tool history.
+2. Every agent exposes the same `python` tool contract.
 3. A variable defined in one cell is usable in a later turn of the same thread.
 4. A different thread cannot access that variable.
-5. `luma` refreshes after authored-track, graph, selection, or analysis changes
-   without clearing agent variables.
-6. The track agent can compute directly over precomputed drum onsets.
-7. The track agent can independently compute over the audio mix or any stem.
-8. The graph agent can compare graph-view peaks against drum onsets in one cell.
-9. Graph tensors include exact time and channel axes; primitive-indexed views
-   carry exact ordered IDs, while broadcast/mismatched taps are explicitly
+5. `luma` refreshes after score, graph, selection or analysis changes without
+   clearing agent variables.
+6. The agent can compute directly over precomputed drum onsets.
+7. The agent can compute over the audio mix or any stem.
+8. Graph tensors include exact time and channel axes. Primitive-indexed views
+   carry exact ordered IDs; broadcast or mismatched taps are explicitly
    unlabeled.
-10. Venue positions align only with labeled primitive identity, not merely row
-    count.
-11. The agent can produce and see a Matplotlib figure.
-12. The model-facing result is notebook-native rather than a bookkeeping JSON
+9. Venue positions align only with labeled primitive identity, not merely row
+   count.
+10. The agent can produce and see a Matplotlib figure.
+11. The model-facing result is notebook-native rather than a bookkeeping JSON
     object.
-13. No large numerical array crosses through JSON lists or permanent base64.
-14. Graph, audio, and feature inputs use one binding/artifact mechanism.
-15. The track agent has one model-facing tool, persistent Python; it does not
-    expose per-operation clip tools or an agent-editable `score.luma` file.
-16. `luma.track` contains the complete lossless clip snapshot, semantic
-    revision, and editability bit; there is no parallel timeline branch.
-17. `luma.track.edit()` exposes exactly the coherent staged operations needed
-    to add, update, and remove clips over a full candidate.
-18. Candidate visualization requires an explicit immutable half-open window;
-    the authored timeline maps time × `z`, and the output heatmap maps time ×
-    light from the actual compositor. Both remain available to an exact
-    read-only score/track/venue scope.
-19. Candidate output is an artifact-backed semantic tensor with shape
-    `[light,time,RGB]`, stable light identities, exact times, and RGB already
-    multiplied by dimmer.
-20. Diff and check are non-mutating; check uses authoritative current scope and
-    strict graph compilation.
-21. Every apply sends the complete candidate plus base revision through the
-    sole relational revision/projection authority; a no-diff apply still
-    asserts the revision and returns `applied=False` with the authoritative
-    document.
-22. Track mutation scope and current-user ownership come from the durable thread
-    and trusted host, never from model-selected IDs; `check` and `apply` require
-    that owner capability even though timeline and compositor reads do not.
-23. Python has no generic application mutation, database, filesystem, or Tauri
+12. No large numerical array crosses through JSON lists or permanent base64.
+13. Graph, audio and feature inputs use one binding/artifact mechanism.
+14. `luma.track` holds the complete saved score and the editability bit. There
+    is no parallel timeline branch.
+15. Check is non-mutating and uses the authoritative current scope.
+16. Score mutation scope and ownership come from the durable thread and the
+    trusted host, never from model-selected IDs.
+17. Python has no generic application mutation, database or filesystem
     authority beyond explicitly installed host capabilities.
-24. A new conversation/thread cannot inherit the prior thread's Python
-    namespace.
-25. Cancellation covers binding assembly, cold startup, dispatch, host calls,
+18. A new conversation cannot inherit the prior thread's Python namespace.
+19. Cancellation covers binding assembly, cold startup, dispatch, host calls
     and running user code. Pre-execution cancellation runs no user code and
-    preserves the namespace; cancellation-driven `SIGINT` is sent only after
-    the matching `started` acknowledgement; forced process death reports state
-    loss.
-26. Production execution cannot read home/app secrets, write outside scratch,
-    or access the network.
-27. Sandbox failure disables the tool rather than running with broader access.
-28. The existing JS graph probe is deleted after Python parity is established.
-29. Figure transcripts retain durable artifact references instead of persisted
-    base64, and those references replay after app restart.
-30. Artifact metadata is restored or reconciled after app restart, and the
-    first new kernel reports loss of the prior live namespace.
-31. Human DSL import preserves valid existing clip identities and replaces the
-    complete score through one atomic relational revision transaction; it is a
-    trusted UI operation, not the agent's base-revision protocol.
-32. Every completed assistant message has a durable prepared, committed, or
-    conflicted authored outcome; crash recovery never guesses from current UI
-    state.
-33. Restore and clean subagent merge create ordinary forward relational
-    revisions using the same typed validation, head CAS, and projection path as
-    direct edits; subagent conflicts are stored and returned as typed data.
-34. Authored scores, graphs, their complete immutable revision DAGs, operation
-    outcomes, and superseded proposal tips synchronize through the existing
-    row-sync engine; `track_scores` and graph payload projections do not form a
-    second sync authority.
-35. The Postgres migration ships DDL, owner RLS, server-side immutability and
-    closure checks, and exactly the three public RPCs named in §5.11.
-36. Any online authenticated owner client can integrate any pending proposal;
-    a permanently offline origin device cannot wedge the document.
-37. Device integration is silent and deterministic: server order chooses the
-    later writer, structural composition preserves independent edits, and no
-    sync conflict modal or agent conflict record is produced.
-38. Integration is total: an invalid structural result, including a graph
-    cycle, selects the whole valid proposal; an invalid/unreadable proposal
-    terminally keeps current as `quarantined_noop`; no semantic failure leaves
-    a proposal pending.
-39. Superseded proposal tips are visible, labeled, paginated, and restorable in
-    state history.
-40. State-only restore leaves the conversation unchanged. State-and-conversation
-    restore creates a new thread sharing the selected immutable transcript
-    prefix; the original thread and every message remain intact.
-41. Threads, transcript nodes, append receipts, server transcript heads, turn
-    preparations/outcomes, forks, and deletion receipts back up to Supabase;
-    terminal deletion cannot be undone by a later pull.
-42. Pull cursors use commit-ordered server `sync_seq`, never a client timestamp
-    or `updated_at`, and cannot miss a transaction that commits late.
-43. Archived authored documents are terminal across SQLite, Postgres, and pull:
-    sync cannot recreate their head or live projection, while all immutable
-    history remains readable.
+    preserves the namespace. `SIGINT` is sent only after the matching `started`
+    acknowledgement. Forced process death reports state loss.
+20. Execution cannot read home or app secrets, write outside scratch, or reach
+    the network. **Met on macOS only** (§17.5, §17.6).
+21. Sandbox failure disables the tool rather than running with broader access.
+    **Met on macOS only** (§17.7).
+22. **Not met:** figure transcripts keep durable artifact references instead of
+    stored base64, and those references replay after app restart (§7.6,
+    §14.7).
+23. **Not met:** artifact metadata is restored after app restart, and the first
+    new kernel after a restart reports loss of the prior namespace (§13.3,
+    §13.4).
 
 ---
 
@@ -3041,18 +1947,6 @@ small/medium arrays; the loader may choose full read versus mapping.
 - was delayed by about two seconds during one long native matrix multiply.
 
 This supports the SIGINT-then-kill policy.
-
-### 23.7 Model configuration already changed
-
-Orthogonal to this executor design:
-
-- track copilot model: `anthropic/claude-opus-5`;
-- graph agent model: `x-ai/grok-4.5`;
-- graph reasoning effort: `high`;
-- track reasoning effort currently remains `medium`;
-- venue expert remains `moonshotai/kimi-k2.6:nitro`.
-
-These choices do not affect the executor interfaces.
 
 ---
 
