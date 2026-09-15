@@ -154,11 +154,6 @@ pub struct CachedCode {
 }
 
 impl RenderCache {
-    /// Drop every cached entry for `row`.
-    pub fn invalidate_row(&mut self, row: &str) {
-        self.flats.retain(|(r, _, _), _| r.as_ref() != row);
-        self.code.retain(|(r, _, _), _| r.as_ref() != row);
-    }
 
     /// Drop `row`'s entries at or after top-level block `from`.
     ///
@@ -397,12 +392,11 @@ fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
 /// A GFM table — a port of mugen-markdown's `TableBlock` under zeron's md
 /// theme (see the `TABLE_*` constants).
 ///
-/// Column widths resolve exactly the way the source's CSS does: each cell is
-/// `flex: <max-content> <max-content> 0; min-width: min(max-content, 96px)`,
-/// so widths are content-proportional with a readable per-column floor.
-/// Naturals come from shaping each cell's runs unwrapped (gpui's line-layout
-/// cache makes repeat frames cheap); the flex resolution itself is Taffy's —
-/// the same algorithm as the web's. When even the floors no longer fit, the
+/// Each cell flexes by its max-content width, with a minimum of
+/// `min(max-content, 96px)`, so widths are content-proportional with a
+/// readable per-column floor. Naturals come from shaping each cell's runs
+/// unwrapped (gpui's line-layout cache makes repeat frames cheap); Taffy
+/// resolves the flex. When even the floors no longer fit, the
 /// rows overflow the viewport and the table scrolls horizontally instead of
 /// crushing every column into per-character wrapping.
 #[allow(clippy::too_many_arguments)]
@@ -534,9 +528,8 @@ pub struct FlatText {
     pub code_ranges: Vec<Range<usize>>,
 }
 
-/// Inline-code tint (round 9): the original is neutral (chat-view.tsx mdTheme
-/// `inlineCode: #f0f0f0 on white/8%`), but the user asked for "a nice purple"
-/// — violet-300 text over a violet-400 wash, readable on the #060606 panel.
+/// Inline-code tint: violet text over a violet wash, readable on the dark
+/// panel.
 pub fn inline_code_text(theme: &Theme) -> Hsla {
     theme.code_text // violet-300
 }

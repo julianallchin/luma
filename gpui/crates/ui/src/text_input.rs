@@ -529,8 +529,7 @@ impl TextInput {
     /// shaping time: the shaped lines are what the caret, the selection wash
     /// and mouse mapping all read, and a host that painted its own colored
     /// overlay would be maintaining a second layout that can disagree with the
-    /// first (which is exactly the web implementation's transparent-input
-    /// hack). The host stays the authority on *meaning*: it is asked for
+    /// first. The host stays the authority on *meaning*: it is asked for
     /// `(byte range, color)` spans against the current text on every layout.
     /// Uncovered bytes keep the style's own color; spans are clamped and, out
     /// of caution, ignored while an IME composition is marked — the underline
@@ -596,15 +595,6 @@ impl TextInput {
     #[must_use]
     pub fn layout_epoch(&self) -> u64 {
         self.layout_epoch
-    }
-
-    pub fn set_placeholder(
-        &mut self,
-        placeholder: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        self.placeholder = placeholder.into();
-        cx.notify();
     }
 
     /// Replace the whole document. Undo does not reach back past it: a draft

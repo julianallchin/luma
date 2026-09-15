@@ -560,10 +560,6 @@ pub struct IncrementalParser {
     display_tail: Option<Vec<TopBlock>>,
     /// Link-reference definitions act at a distance — full reparses only.
     full_only: bool,
-    /// Bytes fed through `parse_full` by the most recent `set_text`/`append`/
-    /// `reset` — instrumentation proving per-append work is O(tail), not
-    /// O(total). 0 for a no-op set_text.
-    last_parse_bytes: usize,
     /// Number of leading top-level blocks guaranteed untouched by the most
     /// recent update (render caches for these blocks stay valid).
     stable_prefix_blocks: usize,
@@ -598,11 +594,6 @@ impl IncrementalParser {
         BlockTree { blocks }
     }
 
-    /// Bytes actually reparsed by the last update (see field docs).
-    pub fn last_parse_bytes(&self) -> usize {
-        self.last_parse_bytes
-    }
-
     /// Leading top-level blocks left untouched by the last update.
     pub fn stable_prefix_blocks(&self) -> usize {
         self.stable_prefix_blocks
@@ -613,7 +604,6 @@ impl IncrementalParser {
         if text.len() >= self.source.len() && text.starts_with(self.source.as_str()) {
             let delta = text[self.source.len()..].to_string();
             if delta.is_empty() {
-                self.last_parse_bytes = 0;
                 self.stable_prefix_blocks = self.tree.blocks.len();
                 return;
             }
@@ -627,7 +617,6 @@ impl IncrementalParser {
         self.source = text.to_string();
         self.full_only = has_link_defs(text);
         self.tree = parse_full(text);
-        self.last_parse_bytes = text.len();
         self.stable_prefix_blocks = 0;
         self.remend();
     }
@@ -635,7 +624,6 @@ impl IncrementalParser {
     /// Append streamed text, reparsing from the last stable boundary.
     pub fn append(&mut self, delta: &str) {
         if delta.is_empty() {
-            self.last_parse_bytes = 0;
             self.stable_prefix_blocks = self.tree.blocks.len();
             return;
         }
@@ -648,7 +636,6 @@ impl IncrementalParser {
         }
         if self.full_only {
             self.tree = parse_full(&self.source);
-            self.last_parse_bytes = self.source.len();
             self.stable_prefix_blocks = 0;
             self.remend();
             return;
@@ -672,7 +659,6 @@ impl IncrementalParser {
             .unwrap_or(0);
 
         let tail = parse_full(&self.source[boundary..]);
-        self.last_parse_bytes = self.source.len() - boundary;
         self.tree.blocks.retain(|b| b.range.start < boundary);
         self.stable_prefix_blocks = self.tree.blocks.len();
         for mut top in tail.blocks {
@@ -706,9 +692,6 @@ impl IncrementalParser {
         let Some(mended) = super::mend::close_hanging(&self.source[start..]) else {
             return;
         };
-        // Count toward the O(tail) instrumentation — this is real parse work,
-        // in the same bound as the reparse that produced the block.
-        self.last_parse_bytes += mended.len();
         let mut tail = parse_full(&mended).blocks;
         for top in &mut tail {
             // Display ranges point back into the unmended source; synthetic

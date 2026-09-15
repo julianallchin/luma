@@ -159,8 +159,6 @@ pub const PILL_BLUR: f32 = 16.0;
 /// Send and stop are one circular button that changes what it holds — never
 /// two buttons, so the pair can never disagree about whether a turn is running.
 pub const SEND_DIAMETER: f32 = 28.0;
-/// A chip in the actions row (the model name), and the empty state's prompts.
-pub const CHIP_SMALL_HEIGHT: f32 = 24.0;
 
 // -- the empty state ---------------------------------------------------------
 

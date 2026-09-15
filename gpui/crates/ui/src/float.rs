@@ -865,40 +865,6 @@ fn format_step(value: f64, step: f64) -> String {
 const SCRUB_FILL: f32 = 0.07;
 
 // ---------------------------------------------------------------------------
-// Badges
-// ---------------------------------------------------------------------------
-
-/// A count riding on a control — the "there are four of these" mark on a
-/// toolbar button.
-///
-/// Deliberately not a colour: a badge says *how many*, and what to think about
-/// the number is the caller's to say by handing it a tint. A capsule rather
-/// than a step off [`radius`]'s ladder — the ladder is a vocabulary of
-/// *corners*, and a shape whose radius is defined as half its own height is
-/// not choosing one, the same way an avatar or a status dot is not.
-pub fn badge(count: usize, tint: gpui::Hsla) -> Div {
-    div()
-        .flex_none()
-        .h(px(BADGE_HEIGHT))
-        .min_w(px(BADGE_HEIGHT))
-        .px(px(4.0))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(tint)
-        .text_size(px(9.5))
-        .font_weight(FontWeight::MEDIUM)
-        .font_family(crate::fonts::MONO)
-        .text_color(ladder::background())
-        .child(count.to_string())
-}
-
-/// A badge's height. Small enough to ride *on* a control rather than beside
-/// it, and what makes the capsule a circle at one digit.
-const BADGE_HEIGHT: f32 = 14.0;
-
-// ---------------------------------------------------------------------------
 // Anchored menus
 // ---------------------------------------------------------------------------
 

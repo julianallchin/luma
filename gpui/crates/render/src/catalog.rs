@@ -521,18 +521,6 @@ pub fn face_set_from_bits(bits: f64) -> FaceSet {
     )
 }
 
-/// The inverse of [`face_set_from_bits`] — what `set_params` writes.
-#[must_use]
-pub fn face_set_bits(faces: FaceSet) -> f64 {
-    f64::from(
-        Face::ALL
-            .into_iter()
-            .enumerate()
-            .filter(|(_, f)| faces.contains(*f))
-            .fold(0_u32, |bits, (i, _)| bits | (1 << i)),
-    )
-}
-
 /// Sockets for a venue-graph node: authored against a GLB's bbox, or read off
 /// the generator's end frames **at the node's own parameters**.
 ///

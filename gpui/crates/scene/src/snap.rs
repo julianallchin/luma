@@ -1,4 +1,4 @@
-//! Socket-based snap solver — a port of `src/features/stage/lib/snap.ts`.
+//! Socket-based snap solver.
 //!
 //! The held piece (the one following the cursor) has a `Grab` socket that the
 //! cursor pulls toward a target world point. The solver iterates every
@@ -229,7 +229,7 @@ pub struct SnapResult {
 }
 
 // ---------------------------------------------------------------------------
-// three.js semantics
+// three.js vector semantics, which the golden capture was recorded with
 // ---------------------------------------------------------------------------
 
 /// three.js `Vector3.normalize()`: zero-length stays zero rather than NaN.
@@ -615,18 +615,6 @@ pub fn solve_snap<L: SocketLookup + ?Sized>(input: &SnapInput<'_, L>) -> SnapRes
     free_placement(input.current_quaternion, input.cursor_world, held_grab)
 }
 
-/// Convert a world transform on the held piece into a parent-local pose, for
-/// persistence. `parent_world = None` returns the world pose unchanged (a
-/// detached piece).
-pub fn world_to_parent_local(world_matrix: &DMat4, parent_world: Option<&DMat4>) -> (DVec3, DQuat) {
-    let m = match parent_world {
-        None => *world_matrix,
-        Some(p) => p.inverse() * *world_matrix,
-    };
-    let (position, quaternion, _) = decompose(&m);
-    (position, quaternion)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,15 +726,5 @@ mod tests {
         .map(|m| m.host_socket);
         // +z is nearest the eye (depth 10 - 1), so it is the one aimed at.
         assert_eq!(matched.as_deref(), Some("face_+z"));
-    }
-
-    #[test]
-    fn world_to_parent_local_undoes_the_parent() {
-        let parent =
-            DMat4::from_rotation_y(0.7) * DMat4::from_translation(DVec3::new(1.0, 2.0, 3.0));
-        let local = DMat4::from_translation(DVec3::new(0.0, 0.5, 0.0));
-        let (p, q) = world_to_parent_local(&(parent * local), Some(&parent));
-        assert!(p.abs_diff_eq(DVec3::new(0.0, 0.5, 0.0), 1e-12));
-        assert!(q.abs_diff_eq(DQuat::IDENTITY, 1e-12));
     }
 }

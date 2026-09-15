@@ -247,6 +247,7 @@ impl TriMesh {
         self.bvh.bounds()
     }
 
+    #[cfg(test)]
     pub fn triangle_count(&self) -> usize {
         self.triangles.len()
     }
