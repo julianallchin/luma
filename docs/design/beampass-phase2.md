@@ -6,8 +6,8 @@ structural win independent of the proxy. Steps 2–9 are shelved on measurement,
 suspicion. §1–§5 remain the design of record should §0.5's ceiling ever move.
 
 Scope: `gpui/crates/render/` — the volumetric beam pass only.
-Implements Phase 2 of [`volumetrics-v2.md`](volumetrics-v2.md) §3.1 / §4, with the corrections
-that [`volumetrics-v2-review.md`](volumetrics-v2-review.md) findings 2, 5, 10 and 13 force.
+Implements Phase 2 of [`volumetrics-v2.md`](volumetrics-v2.md) §3.1 / §4, with the
+corrections in §0 below.
 
 Reference hardware: Apple M2/M3-class, wgpu 30.0.1 / Metal.
 Gating workload: `beams-at-camera-128` (`bin/profile-volumetrics.rs`, `--case=<id>`).
