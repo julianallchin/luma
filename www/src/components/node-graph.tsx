@@ -10,8 +10,15 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useMemo } from "react";
 
-// Category → color mapping matching the app's node palette
+// Category → color. The first keys are the node reference categories that
+// backend/crates/patterns/examples/node_reference.rs writes into recipes.mdx.
 const categoryColors: Record<string, string> = {
+	io: "#a3a3a3", // neutral
+	"time-and-events": "#6366f1", // indigo
+	space: "#10b981", // emerald
+	masks: "#f59e0b", // amber
+	effects: "#f97316", // orange
+	math: "#64748b", // slate
 	input: "#6366f1", // indigo
 	audio: "#8b5cf6", // violet
 	generator: "#f59e0b", // amber
