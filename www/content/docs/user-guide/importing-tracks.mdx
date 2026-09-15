@@ -1,80 +1,65 @@
 ---
 title: Import Tracks
-description: How to import tracks into Luma from Engine DJ and understand the audio analysis pipeline that powers music-reactive lighting.
+description: How to import tracks into Luma and what the audio analysis produces.
 ---
 
-# Step 3: Import Tracks
+# Import Tracks
 
-Luma needs to know about your music before you can annotate it with lighting. There are two ways to get tracks in.
+Luma must analyze a track before a graph can react to it. You must be signed in to import tracks.
 
-## From Rekordbox or Engine DJ
+## Sources
 
-Luma integrates directly with **Rekordbox** and **Engine DJ** music libraries. When you connect to your library:
+The **Import tracks** dialog has three sources:
 
-- Browse your existing collection
-- Select tracks to import
-- Luma references the audio file in place (no copying) and runs its analysis pipeline
+- **Files.** Audio files from disk.
+- **Engine DJ.** Tracks and playlists from an Engine DJ library.
+- **Rekordbox.** Tracks and playlists from the Rekordbox database.
 
-The Engine DJ workflow is recommended if you use Denon DJ gear, since Luma's live performance mode also connects to Denon hardware via StageLinQ.
+Import adds the tracks to the library first. Analysis runs after that, in the background.
 
-## Audio Analysis Pipeline
+## Analysis
 
-When a track is imported, Luma runs several analysis passes to extract musical information that [patterns](/docs/user-guide/patterns) can use to make your lights react to the music.
+Analysis is a set of preprocessors. Each preprocessor reads some inputs and writes one result. Luma runs a preprocessor when its inputs are ready.
 
-### 1. Beat Detection
+| Preprocessor | Reads | Writes | Model |
+|--------------|-------|--------|-------|
+| `beat_grid` | Audio | Beat grid: beats, downbeats, BPM | beat_this |
+| `stems` | Audio | Four stems: drums, bass, vocals, other | Demucs `htdemucs` |
+| `mert` | Full mix and drum stem | Cached MERT features | MERT-v1-95M |
+| `roots` | Bass and other stems | Chord roots | consonance-ACE |
+| `n2n` | MERT features | Drum onsets: kick, snare, hi-hat, cymbal | n2n |
+| `classifier` | Beat grid and MERT features | Per-bar tags and intensity | Bar window classifier |
+| `genre` | Audio and beat grid | Per-bar genre styles | Discogs-EffNet |
 
-The **beat_this** neural network finds individual beat positions, calculates BPM, and identifies downbeats (the first beat of each bar). This powers beat-synced effects like pulses, chases, and strobes. The beat grid is exposed to patterns through the **Beat Clock** node.
+Luma does not ship the Discogs-EffNet weights. The `genre` preprocessor downloads them on first use.
 
-### 2. Stem Separation
+Luma also makes waveform data for the timeline.
 
-The **Demucs htdemucs** model splits the full track into four separate audio stems:
+### Order
 
-| Stem | Contents |
-|------|----------|
-| **Drums** | Kick, snare, hi-hats, percussion |
-| **Bass** | Bass guitar, sub-bass, bass synths |
-| **Vocals** | Singing, rapping, spoken word |
-| **Other** | Synths, guitars, pads, strings, everything else |
+`beat_grid` and `stems` read only the audio, so they run at the same time. `roots` waits for the stems. `n2n` waits for the MERT features. `classifier` waits for the beat grid and the MERT features. If a preprocessor fails, Luma skips the preprocessors that need its result. It tries the failed track again later, with a longer wait each time, up to 24 hours.
 
-This lets patterns react to specific instruments. Your lights can pulse to the kick drum while ignoring the vocals, or change color based on the bass line. Stems are accessed in patterns through the **Stem Splitter** node.
+A preprocessor has a version. When the version increases, Luma runs it again on every track.
 
-### 3. Harmonic Analysis
+## What Graphs Can Read
 
-The **consonance-ACE** model detects chord progressions and key changes throughout the track. The analysis runs on the bass + other stems (excluding drums and vocals for cleaner results) and produces frame-by-frame probabilities for each of the 12 musical pitch classes (C, C#, D, D#, E, F, F#, G, G#, A, A#, B).
+| Analysis | Nodes that read it |
+|----------|--------------------|
+| Beat grid | Beat grid events, Track time, Recent events |
+| Stems | Any node with an **Audio source** input: `mix`, `bass`, `drums`, `vocals` or `other` |
+| Chord roots | Harmony (outputs `pitch_class` and `present`) |
+| Drum onsets | Drum trigger, Drum event time |
 
-This enables harmony-reactive effects where colors shift with the chords. The chroma data is accessed in patterns through the **Harmony Analysis** node and can be mapped to colors using the **Harmonic Palette** or **Spectral Shift** nodes.
-
-### 4. Waveform Generation
-
-Creates visual waveform data for the timeline editor so you can see the audio shape while placing patterns on the track in the [Track Editor](/docs/user-guide/annotations).
+See the [node reference](/docs/node-reference) for the ports of each node.
 
 ## Analysis Environment
 
-The audio analysis pipeline runs on a Python environment that Luma manages automatically. On first launch, Luma sets up a Python 3.12 virtual environment in the background -- you will see toast notifications showing the progress. This happens without blocking the app, so you can start setting up your venue while it installs.
+The preprocessors run Python workers. Luma sets up a Python 3.12 environment in the background.
 
-If your system has an NVIDIA GPU, Luma automatically detects the CUDA version and installs GPU-accelerated PyTorch for faster analysis. ffmpeg is bundled with the app, so no system installation is needed.
+On a computer with an NVIDIA GPU, Luma reads the driver's CUDA version and the GPU's compute capability from `nvidia-smi`. It then installs a matching PyTorch CUDA build: `cu128`, `cu126`, `cu124` or `cu118`. If no build matches, or the CUDA install fails, Luma installs the CPU build.
 
-## Pipeline Order
-
-These analyses run in parallel where possible. Beat detection and stem separation happen simultaneously, while harmonic analysis waits for stems to finish (since it uses the separated stems for cleaner results).
-
-<NodeGraph
-  height={300}
-  nodes={[
-    { id: "import", label: "Import", category: "input", x: 0, y: 80, outputs: ["Track"] },
-    { id: "beats", label: "Beat Detection", category: "audio", x: 260, y: 0, inputs: ["Track"] },
-    { id: "stems", label: "Stem Separation", category: "audio", x: 260, y: 90, inputs: ["Track"], outputs: ["Stems"] },
-    { id: "wave", label: "Waveform Generation", category: "generator", x: 260, y: 200, inputs: ["Track"] },
-    { id: "harmony", label: "Harmonic Analysis", category: "analysis", x: 540, y: 90, inputs: ["Stems"] },
-  ]}
-  edges={[
-    { from: "import", fromHandle: "Track", to: "beats", toHandle: "Track" },
-    { from: "import", fromHandle: "Track", to: "stems", toHandle: "Track" },
-    { from: "import", fromHandle: "Track", to: "wave", toHandle: "Track" },
-    { from: "stems", fromHandle: "Stems", to: "harmony", toHandle: "Stems" },
-  ]}
-/>
+Luma looks for a bundled ffmpeg first. If it does not find one, it uses the ffmpeg on the system `PATH`.
 
 ## Next Steps
 
-With tracks imported and analyzed, you are ready to [define patterns](/docs/user-guide/patterns) -- reusable light behaviors that use this musical data to drive your fixtures.
+[Define patterns](/docs/user-guide/patterns).

@@ -1,74 +1,74 @@
 ---
 title: Define Your Venue
-description: How to set up a venue in Luma by patching fixtures, setting positions, and configuring DMX.
+description: How to set up a venue in Luma by patching fixtures, building the stage and viewing the rig.
 ---
 
-# Step 1: Define Your Venue
+# Define Your Venue
 
-A venue is a project container representing a physical space. It holds all the information Luma needs to know about the room: what lights are installed, where they are, and what they can do.
+A venue is one physical room. It holds the fixtures in the room, their DMX addresses, their positions, the stage pieces and the groups.
 
-## Patching Fixtures
+## Tabs
 
-Patching is the process of telling Luma what lights exist in the room and how they are connected to the DMX system. For each fixture you add:
+The workspace has two kinds of tab scope:
 
-### 1. Browse the Fixture Library
+- **Venue.** One venue. The venue tab holds the patch, the stage and the groups.
+- **Track.** One track in one venue. It holds the track editor and graph tabs.
 
-Luma includes a built-in fixture library containing thousands of fixture definitions sourced from the QLC+ community database. Search by manufacturer and model name. Each definition describes the fixture's capabilities: which channels control color, which control movement, which control the strobe, and so on.
+## Patch Fixtures
 
-### 2. Set the DMX Address
+The patch table lists each fixture with its **Mode**, **Universe** and **Address**.
 
-Every fixture in a DMX system has a starting address (1 through 512) within a universe. A **universe** is a group of 512 channels -- the standard DMX-512 protocol. If your fixture uses 16 channels and starts at address 33, it occupies channels 33 through 48. If your venue has more than 512 channels of fixtures, you use multiple universes (universe 1, universe 2, etc.).
+1. Click **Add fixtures**. Search the fixture library. Luma ships a library of QLC+ fixture definitions.
+2. Choose the **Mode**. The mode sets how many DMX channels the fixture uses and what each channel does. Choose the mode that is set on the real fixture.
+3. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you.
 
-### 3. Select the Mode
+The backend assigns every address. The patch page shows an error when the backend refuses an address.
 
-Most professional fixtures have multiple operating modes. A moving head might offer a "16-channel" mode with fine pan/tilt control and separate color mixing, or a compact "8-channel" mode with fewer features. The mode determines how many DMX channels the fixture uses and what each channel does. Pick the mode that matches how the fixture is actually configured on site.
+A universe has 512 channels. A fixture that uses 16 channels and starts at address 33 uses channels 33 to 48.
 
-### 4. Set the 3D Position
+## Build the Stage
 
-This is where Luma diverges from traditional consoles. You specify where the light physically is in the room using X, Y, Z coordinates in meters:
+The stage page is the only place where you set positions.
 
-- **X** -- Left/right (negative is stage-left, positive is stage-right)
-- **Y** -- Up/down (0 is floor level, positive is up toward the ceiling)
-- **Z** -- Front/back (where the audience is vs. where the DJ booth is)
+- Choose a piece from the palette, such as a truss, and place it.
+- Drag a fixture from the tray onto the stage.
+- A piece snaps to a socket first, then to the surface under the cursor, then to the ground grid.
 
-### 5. Set the 3D Rotation
+Positions use a Z-up, right-handed coordinate system in metres.
 
-How the fixture is oriented in space, specified as roll, pitch, and yaw angles. This matters for ceiling-mounted fixtures (which are upside-down compared to floor fixtures) and for pixel bars that might be mounted vertically instead of horizontally.
+### Why Positions Matter
 
-## Why Positions Matter
-
-Unlike traditional consoles where you just assign DMX addresses and manually program everything, Luma needs to know WHERE your lights are in physical space. This is what makes spatial effects possible:
-
-- **Linear chases** -- A wave of light that sweeps left-to-right across the room. Luma calculates which fixture is leftmost, which is rightmost, and animates them in spatial order. You do not need to know the fixture numbers -- just their positions.
-- **Circular patterns** -- If lights are arranged in a ring (on a circular truss, for example), Luma detects this geometry and can animate them in rotational order.
-- **Position-aware effects** -- Closer lights can react differently than far ones. Front-of-house wash lights can behave differently from rear truss spots, and the system knows the difference because it knows where everything is.
+Graphs can use head positions. A chase can travel from one side of a group to the other. A graph can fit a circle to a ring of fixtures. Because these nodes read positions, the same graph works with 8 fixtures or 80.
 
 ## Multi-Head Fixtures
 
-Some fixtures contain multiple independently-controllable segments. An LED pixel bar, for example, might be a single physical unit with 12 individually-addressable RGB pixels. In DMX terms, each pixel has its own set of channels (red, green, blue), but they all share a single DMX starting address because they are one fixture.
+Some fixtures have many parts that Luma controls one by one, such as the cells of a pixel bar. Luma calls each part a **head**. Output state is keyed by `fixture-id:head-index`. Graphs run per head, so spatial effects work at the level of each cell.
 
-Luma calls these segments **heads**. When you patch a multi-head fixture, Luma automatically reads the head layout from the fixture definition and computes the 3D position of each head. If you place a 1-meter pixel bar at position (2, 3, 0) and rotate it 90 degrees, Luma calculates where each individual pixel sits in space. This means spatial effects work at the pixel level, not just the fixture level.
+## View the Rig
 
-## Sharing Venues
+The visualizer shows the venue in 3D. The camera button opens **View settings**:
 
-Venues can be shared with other users for collaborative light show creation. When you share a venue, other users can **join** it and see all the fixtures and groups you have set up.
+| Setting | Meaning |
+|---------|---------|
+| **Environment** | Indoor or outdoor |
+| **Haze** | Turns volumetric haze on or off |
+| **Haze density** | How thick the haze is |
+| **Cloudiness** | How uneven the haze is (0–1) |
+| **Cloud size (m)** | Size of the haze clouds |
+| **Turbulence** | How much the haze moves (0–1) |
+| **Wind speed (m/s)** | Speed of the haze drift |
+| **Wind direction (°)** | Direction of the haze drift |
+| **Fixture shadows** | Fixtures cast shadows |
+| **Grid** | Shows the ground grid |
+| **Gizmos** | Shows gizmos |
+| **Render scale (%)** | Render resolution |
 
-### Owner vs. Member
+The environment and the haze belong to the venue. They sync with the venue to your other devices. The grid, gizmos and render scale belong to this device.
 
-| | Owner | Member |
-|---|---|---|
-| **Edit fixtures** | Yes | No (read-only) |
-| **Edit groups** | Yes | No (read-only) |
-| **Create scores** | Yes | Yes |
-| **View scores** | Yes | Yes |
-| **Venue settings** | Yes (rename, delete) | No |
+## Venue Members
 
-Venue members see the universe designer in **read-only mode** -- they can view the fixture layout and groups but cannot modify them. This ensures the venue owner controls the physical setup while collaborators focus on creating their own light shows (scores) for the shared fixture layout.
-
-### Ungrouped Fixtures
-
-Before a venue is ready for collaboration, all fixtures must be assigned to at least one group. If any fixtures are ungrouped, Luma shows a warning banner and blocks navigation away from the universe tab until all fixtures are grouped. This ensures patterns always have meaningful group names to target.
+A venue has an owner and can have members. Venue content syncs to the owner and to each member. An owner cannot leave their own venue.
 
 ## Next Steps
 
-Once your fixtures are patched and positioned, the next step is to [create groups](/docs/user-guide/groups-and-tags) -- this is what makes your shows portable.
+[Create groups](/docs/user-guide/groups-and-tags).

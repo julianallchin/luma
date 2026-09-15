@@ -1,174 +1,106 @@
 ---
 title: Define Patterns
-description: How to build reusable, venue-portable light behaviors using Luma's visual node graph editor.
+description: How to build light behavior from nodes in Luma's graph editor.
 ---
 
-# Step 4: Define Patterns
+# Define Patterns
 
-Patterns are the heart of Luma. They are reusable, venue-portable light behaviors defined as visual node graphs. If you have used Unreal Engine Blueprints, Blender shader nodes, or TouchDesigner, the concept is similar: you connect processing nodes with wires to build data flow pipelines that transform inputs (beats, audio, spatial position) into outputs (colors, movement, strobes).
+A pattern is a graph of nodes. Each node reads values on its input ports and writes values on its output ports. Wires connect an output to an input. A lighting graph ends in the **Apply** node, which writes color, pan, tilt, strobe and movement speed to the selected heads.
 
-## The Signal: Luma's Core Data Type
+## Open a Graph
 
-Before diving into node types, you need to understand the **Signal** -- the fundamental data type that flows through the graph.
+Double-click a clip in the track editor. Its graph opens in a graph tab. The graph tab evaluates the graph against that track and that venue, so you can preview it. Use **Refresh preview** to run the preview again.
 
-A Signal is a 3D tensor with three dimensions:
+Built-in definitions from the standard library are read-only. The graph tab marks them **BUILT-IN · READ ONLY**.
 
-| Dimension | Name | Meaning |
-|-----------|------|---------|
-| **N** | Spatial | One value per fixture in the selection. If you have selected 10 fixtures, N = 10. If your pattern does not care about individual fixtures (e.g., a single color for everyone), N = 1. |
-| **T** | Temporal | Time samples across the pattern's duration. For animated effects, T might be 256 or more steps. For static values, T = 1. |
-| **C** | Channel | Data channels per sample. For a scalar signal, C = 1 (a single value). For a color signal, C = 4 (red, green, blue, alpha). |
+## Add Nodes
 
-Think of it as a spreadsheet: rows are fixtures, columns are time steps, and each cell can hold multiple values.
+The node catalog is a searchable list of the standard library. It also has an **Input** entry. The catalog lists `core/` nodes after the other nodes. It does not list complete clip graphs, except for Apply.
 
-### Broadcasting
+## Ports
 
-Broadcasting is key to how Signals work together. When you combine two signals of different sizes, the smaller one automatically expands to match:
+Each port has a value type and a rate.
 
-- A color signal with N=1 (one color for all fixtures) combined with a scalar signal with N=10 (per-fixture values) will apply that same color to all 10 fixtures, each scaled individually.
-- A signal with T=1 (constant over time) combined with a signal with T=256 (animated) will repeat the constant value at every time step.
+- **Value type.** A signal has a unit and a channel layout. The units are number, beats, proportion (0–1), position, degrees and seconds. The layouts are one value, RGB, pan/tilt and N components. Number, proportion and position can connect to each other. Other types, such as Events, Envelope, Gradient and Audio source, connect only to the same type.
+- **Rate.** A `fixed` value does not change during the clip. A `frame` value can change on every frame. A frame wire cannot connect to a fixed input.
 
-This is the same broadcasting concept used in NumPy and PyTorch, if you are familiar with those.
+An input that is not wired uses its default value.
 
-## The Pattern Editor
+The Apply node's inputs are optional. An Apply input that is not wired leaves that capability unchanged.
 
-The pattern editor presents a visual canvas where you place nodes and connect their ports with wires. Each node has:
+## Walkthrough: Beat Pulse
 
-- **Input ports** (left side) -- Data flowing in
-- **Output ports** (right side) -- Data flowing out
-- **Parameters** (on the node body) -- Configuration knobs and settings
+**Goal:** the selected heads flash a color at a steady beat interval and fade out.
 
-Data flows left to right. You wire an output port of one node to an input port of another to pass data between them.
+This graph is the same as the built-in `beat_pulse` graph.
 
-## Building a Pattern: Walkthrough
+### 1. Add a Beat trigger
 
-Here is a complete example of building a simple beat-synced flash from scratch.
+Add **Beat trigger** (`beat_trigger`). It writes an event stream on its `trigger` output.
 
-**Goal:** All fixtures flash white on every beat with a sharp attack and linear decay -- a classic "4 on the floor" pulse.
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `repeat` | 4 beats | Time between events |
+| `delay` | 0 beats | Moves each event later |
+| `grid_aligned` | false | If true, events count from beat 0 of the track. If false, they count from the clip start. |
 
-Every pattern starts with a **Beat Clock** and **Audio Input** node already on the canvas. You do not need to add these.
+### 2. Add a Pulse
 
-### 1. Add a Beat Envelope node
+Add **Pulse** (`pulse`). Connect Beat trigger `trigger` to Pulse `trigger`. Each event starts a separate pulse.
 
-Connect Beat Clock's "Beat Grid" output to Beat Envelope's "Beat Grid" input. Set the envelope parameters:
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `duration` | 2 beats | How long each pulse lasts |
+| `shape` | 1 → 0 | Brightness over each pulse. Edit the curve in the inspector. |
 
-| Parameter | Value | Effect |
-|-----------|-------|--------|
-| Subdivision | 1 | Trigger on every beat |
-| Attack | 0 | Instant rise to peak |
-| Decay | 1 | Linear fade over the full beat |
-| Sustain | 0 | No hold |
-| Release | 0 | No tail |
+Pulse writes a 0–1 value on its `mask` output.
 
-This produces a sawtooth shape: the signal jumps to 1.0 on each beat and ramps linearly down to 0.0 by the next beat.
+### 3. Add an Input and a Multiply
 
-### 2. Add a Gradient node
+Add an **Input** and name it `Color`. Add **Multiply** (`core/multiply`). Connect the Input to Multiply `a`. Connect Pulse `mask` to Multiply `b`. The `value` output is the color, scaled by the pulse.
 
-Connect the Beat Envelope output to the Gradient's "Signal" input. The default gradient maps 0 to black and 1 to white, which is exactly what we want: full white on the beat, fading to black.
+### 4. Add Apply
 
-### 3. Add an Apply Color node
-
-Connect the Gradient output to Apply Color's "Signal" input. Apply Color receives the fixture selection automatically from the pattern's **Selection argument** (see Pattern Arguments below) -- you do not need to add a selection node to the graph.
-
-That is the complete graph. Three nodes (plus the two auto-added inputs), two wires. The result: every fixture targeted by the pattern's selection argument flashes to full brightness on each beat and fades to black by the next beat. Apply Color automatically derives brightness from the color -- white means full on, black means off.
+Add **Apply** (`output`). Connect Multiply `value` to Apply `color`. Leave the other Apply inputs unwired.
 
 <NodeGraph
-  height={400}
+  height={380}
   nodes={[
-    { id: "clock", label: "Beat Clock", category: "input", x: 0, y: 0, outputs: ["Beat Grid"] },
-    { id: "audio", label: "Audio Input", category: "input", x: 0, y: 120, outputs: ["Audio"] },
-    { id: "env", label: "Beat Envelope", category: "generator", x: 240, y: 0, inputs: ["Beat Grid"], params: { attack: "0", decay: "1", sustain: "0", release: "0" }, outputs: ["Signal"] },
-    { id: "grad", label: "Gradient", category: "color", x: 240, y: 130, inputs: ["Signal"], outputs: ["Color"] },
-    { id: "apply", label: "Apply Color", category: "output", x: 500, y: 80, inputs: ["Signal"] },
+    { id: "trigger", label: "Beat trigger", category: "input", x: 0, y: 0, inputs: ["repeat", "delay", "grid_aligned"], outputs: ["trigger"] },
+    { id: "pulse", label: "Pulse", category: "generator", x: 240, y: 0, inputs: ["trigger", "duration", "shape"], outputs: ["mask"] },
+    { id: "color", label: "Input: Color", category: "input", x: 240, y: 200, outputs: ["Color"] },
+    { id: "multiply", label: "Multiply", category: "transform", x: 480, y: 80, inputs: ["a", "b"], outputs: ["value"] },
+    { id: "apply", label: "Apply", category: "output", x: 700, y: 60, inputs: ["color", "pan", "tilt", "strobe", "speed"], outputs: ["lighting"] },
   ]}
   edges={[
-    { from: "clock", fromHandle: "Beat Grid", to: "env", toHandle: "Beat Grid" },
-    { from: "env", fromHandle: "Signal", to: "grad", toHandle: "Signal" },
-    { from: "grad", fromHandle: "Color", to: "apply", toHandle: "Signal" },
+    { from: "trigger", fromHandle: "trigger", to: "pulse", toHandle: "trigger" },
+    { from: "color", fromHandle: "Color", to: "multiply", toHandle: "a" },
+    { from: "pulse", fromHandle: "mask", to: "multiply", toHandle: "b" },
+    { from: "multiply", fromHandle: "value", to: "apply", toHandle: "color" },
   ]}
 />
 
-## Advanced Technique: Spatial Chases
+## Graph Inputs Become Clip Inputs
 
-A spatial chase is when lights activate in sequence across physical space -- like a wave of light sweeping from left to right across the room.
+The inputs of a graph show in the clip inspector when the graph is placed as a clip. In the walkthrough, `Color` shows as a color control. Each clip also has a **Selection** input. It holds the [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) that picks the heads.
 
-The key insight is combining a **time signal** with a **spatial position signal** so that each fixture hits its peak at a different moment:
+The graph never names fixtures. The selection decides which heads the graph runs on.
 
-1. **Get Attribute** (attribute: `rel_x`) reads the pattern's fixture selection and outputs a per-fixture signal where each fixture gets a value from 0.0 (leftmost) to 1.0 (rightmost) based on its physical X position.
-2. **Time Ramp** connected to **Beat Clock** creates a signal that counts up by 1 for each beat.
-3. **Math (subtract)** -- Subtract the spatial position (from Get Attribute) from the time ramp. Each fixture now has a time-shifted version of the ramp. The leftmost fixture (position 0.0) sees the ramp unchanged. The rightmost fixture (position 1.0) sees the ramp delayed by one unit.
-4. **Modulo** (divisor: 1.0) -- Wraps the subtracted value to 0-1, creating a repeating sawtooth wave per fixture.
-5. **Falloff** (width: 0.3) -- Turns the broad sawtooth into a narrow pulse. Each fixture now has a sharp pulse that hits at a different time.
-6. **Gradient** -- Maps the narrow pulse to a color (black at 0, white at 1).
-7. **Apply Color** -- Connect the Gradient output.
+## Other Built-in Graphs
 
-**Result:** A wave of light that sweeps across your fixtures in spatial order, repeating every beat. Because it uses `rel_x` (relative X position), it automatically adapts to any venue layout. Eight fixtures or eighty -- the chase just works. Apply Color derives brightness from the color automatically -- white is full on, black is off.
+The standard library has complete graphs that you can place as clips or open and study. Some examples:
 
-### Variations
+| Id | Name | What it does |
+|----|------|--------------|
+| `beat_chase` | Beat chase | A stroke travels across the mapped heads on each event |
+| `beat_pulse` | Beat pulse | The walkthrough above |
+| `band_pulse` | Frequency pulse | Brightness follows the energy in a frequency band of an audio source |
+| `drum_pulse` | Drum pulse | A fade starts on each hit of one drum |
+| `harmony_color` | Harmony color | Color follows the chord root, from a gradient of 12 pitch colors |
+| `strobe` | Strobe | A color with a strobe rate |
 
-- For **circular chases**, use `angular_position` or `angular_index` instead of `rel_x`.
-- For **vertical chases**, use `rel_y`.
-- Adjust the **Falloff width** to control how wide the pulse is -- a narrow width creates a sharp spotlight effect, a wide width creates a broad wave.
-
-## Advanced Technique: Music-Reactive Colors
-
-### Chord-Driven Color
-
-1. **Audio Input** feeds into **Harmony Analysis**, which outputs a 12-channel chroma signal.
-2. **Harmonic Palette** maps the chroma probabilities to colors. When the music plays a C major chord, the output shifts toward red. A D chord shifts toward orange. The transitions are smooth because the chroma values are probabilistic, not hard switches.
-3. **Apply Color** sends the result to your fixtures.
-
-### Kick-Drum Reactive Strobes
-
-1. **Audio Input** feeds into **Stem Splitter** to separate the drums.
-2. The **Drums** output feeds into **Frequency Amplitude** set to the kick drum range (20-100 Hz).
-3. The amplitude signal drives a **Gradient** (black to white) into **Apply Color** for kick-synced flashes (white = full on, black = off), or directly into **Apply Strobe** for kick-synced strobe.
-
-### Harmonic Tension as Energy
-
-1. **Harmony Analysis** feeds into **Harmonic Tension**, which outputs a 0-1 "tension" value.
-2. High tension (complex chords, key changes) drives color intensity (brighter colors), strobe rate, or movement speed.
-3. Low tension (clear major/minor chords) creates calm, gentle lighting.
-
-## Advanced Technique: Moving Head Choreography
-
-### Tracking a Point Orbiting the Room
-
-1. **Orbit** generates circular X, Y, Z coordinates (set center, radius, speed).
-2. **Look At Position** computes per-fixture pan and tilt angles so every moving head aims at the orbiting point (using the pattern's selection argument to know which fixtures to target).
-3. **Smooth Movement** limits the pan/tilt speed so heads move gracefully instead of snapping.
-4. **Apply Position** sends the smoothed pan/tilt to the fixtures.
-
-### Random Position Jumps on Each Beat
-
-1. **Beat Envelope** triggers on each beat.
-2. **Random Position** generates a new X, Y, Z target each time the beat envelope value changes.
-3. **Look At Position** computes pan/tilt for the new target.
-4. **Apply Position** sends the result.
-5. **Apply Speed** can freeze the heads between beats (connect a binary signal: 0 during sustain, 1 on beat hit).
-
-## Pattern Arguments
-
-Patterns expose configurable arguments -- parameters that appear when you place the pattern on a track's timeline. This makes a single pattern infinitely reusable.
-
-| Argument Type | What Appears | Use Case |
-|---------------|-------------|----------|
-| **Selection** | A group expression field | Choose which fixtures to target each time the pattern is placed. This is the primary way fixtures are selected -- there is no "select" node in the graph. |
-| **Color** | A color picker | The same "Beat Pulse" pattern can be red, blue, green, or any color |
-| **Scalar** | A number slider | Control speed, intensity, width, or any numeric parameter |
-
-Every pattern has a **Selection** argument by default. This is how you target fixtures: when you place the pattern on a timeline, you write a [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) like `front_wash`, `floor_ring & ~dj_booth`, or `all`. The pattern's Apply nodes automatically receive the resolved fixture selection.
-
-To add additional arguments, use a **Pattern Args** node in your graph. Define the arguments you want to expose (name, type, default value). The Pattern Args node's outputs become signals you can wire into the rest of your graph -- for example, wire a Color argument output into a Gradient node's color input.
-
-When you later [annotate a track](/docs/user-guide/annotations), each annotation provides specific values for these arguments: a particular group expression, a particular color, a particular intensity.
-
-## Pattern Preview
-
-When browsing patterns in the Track Editor's pattern registry, you can **hover over any pattern** to see a live 3D preview. Luma pre-renders the pattern into a sequence of frames using your venue's current fixture layout and displays them in a miniature visualizer. This lets you see exactly what a pattern looks like before placing it on the timeline.
-
-For a complete list of every node type, see the [Node Reference](/docs/node-reference).
+The [recipes](/docs/node-reference/recipes) page shows how these graphs are built. The [node reference](/docs/node-reference) lists every node.
 
 ## Next Steps
 
-With patterns defined, you are ready to [annotate your tracks](/docs/user-guide/annotations) -- placing patterns on a timeline, layering them, and setting blend modes to choreograph your light show.
+[Place clips](/docs/user-guide/annotations) on a track.

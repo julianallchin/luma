@@ -1,119 +1,59 @@
 ---
-title: Annotate Your Tracks
-description: How to place patterns on a timeline, layer them with blend modes, and choreograph your light show in the Track Editor.
+title: Place Clips
+description: How to put patterns on a track's timeline as clips, and how overlapping clips combine.
 ---
 
-# Step 5: Annotate Your Tracks
+# Place Clips
 
-The Track Editor is a timeline view where you place patterns onto your tracks. This is where you choreograph your light show.
+The track editor shows one track on a timeline. You place patterns on the timeline as **clips**. The clips of one track in one venue make a **score**.
 
 ## Scores
 
-Each track can have **multiple scores** per venue. A score is a named collection of annotations -- think of it as one person's light show for that track. When you click a track in the browser, a **score picker** appears listing all scores for that track. You can:
+A score belongs to one track and one venue. A track can have many scores. The score list shows each score with its venue, its author, its clip count and its age. Use **New score** to start a new score.
 
-- **Open an existing score** to edit or view it
-- **Create a new score** to start a fresh light show for the same track
+A score that another user wrote opens in read-only mode. You can view it, but you cannot change it.
 
-When collaborating on a shared venue, you will see scores created by other users. You can view their scores in **read-only mode** to see how they annotated the track, or create your own score independently.
+## Add a Clip
 
-## Annotations
+1. Click **Add pattern**. A searchable pattern picker opens.
+2. The picker shows a looping preview of the pattern on the current venue.
+3. Choose a pattern. Luma adds it to the timeline as a clip.
 
-An annotation is a pattern placement on the timeline within a score. Each annotation has:
+Double-click a clip to open its graph in a graph tab. See [Define Patterns](/docs/user-guide/patterns).
+
+## Clip Properties
 
 | Property | Description |
 |----------|-------------|
-| **Start/End Time** | When the pattern activates and deactivates, specified in seconds along the track's timeline. |
-| **Pattern** | Which [pattern](/docs/user-guide/patterns) to run during this time window. |
-| **Z-Index** | Stacking order for compositing. Higher z-index means the annotation is "on top" of lower ones. When two annotations overlap in time, the one with the higher z-index is composited on top. |
-| **Blend Mode** | How this annotation's output combines with the layers below it (see Compositing below). |
-| **Arguments** | Values for the pattern's exposed arguments. The Selection argument sets which fixtures to target (a [selection expression](/docs/user-guide/groups-and-tags#selection-expressions) like `front_wash` or `all`). Color and Scalar arguments set specific values for the pattern's other parameters. |
+| **Graph** | The graph definition that the clip plays. It is a built-in definition or a definition stored in the score. |
+| **Start** | Where the clip begins, in beats. |
+| **Duration** | How long the clip lasts, in beats. |
+| **Z index** | The stacking order. A clip with a higher z index is placed above a clip with a lower z index. |
+| **Blend mode** | How the clip combines with the clips below it. The default is `replace`. |
+| **Selection** | A [selection expression](/docs/user-guide/groups-and-tags#selection-expressions). The default is `all`. |
+| **Inputs** | Values for the graph's inputs, such as color, width or repeat. |
+| **Seed** | The seed for random choices in the graph. |
 
-You can place as many annotations as you want on a track. They can overlap, stack, and interact through the compositing system.
+The clip inspector shows the blend mode and the graph's inputs. It sorts known inputs under the headings **Shape**, **Space**, **Timing** and **Appearance**.
 
-## Compositing and Blend Modes
+**Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to write a union such as `front_wash | back_movers`. The dialog cannot write `&`, `~` or `^`. If the current expression uses them, the dialog shows it as read-only text.
 
-When multiple annotations overlap in time, Luma resolves the result using a compositing system inspired by Photoshop's layer blending. Layers are processed bottom-to-top by z-index, and each layer's blend mode determines how it combines with the accumulated result below it.
+## How Clips Combine
 
-### Replace
+Luma evaluates the score for each frame. It takes the clips that are active at that time and folds them from the lowest z index to the highest.
 
-The top layer completely overwrites the bottom. What you see is what you get. Use this when you want a pattern to take full control during its time window.
+For each head:
 
-### Add
+- **The first clip** that lights a head sets its values directly.
+- **Each later clip** blends onto the result with its blend mode.
+- **Only the capabilities that a clip drives** take part. A clip that drives only color does not change dimmer, strobe, position or speed.
+- **Color** blends with the top clip's dimmer as its opacity. A dark clip changes the color less than a bright clip.
+- **Dimmer and strobe** blend with the blend mode.
+- **Position** is taken from the top clip.
+- **Speed** is taken from the top clip and is 0 or 1.
 
-Values are summed per channel, clamped to 1.0 maximum. Lights get brighter. If the base layer outputs a dark red and the top layer adds a medium blue, the result is a brighter purple.
-
-Use this to layer multiple effects that accumulate -- a subtle background wash plus a beat pulse plus accent hits.
-
-### Multiply
-
-Values are multiplied together. This always darkens (since multiplying by anything less than 1.0 reduces the value).
-
-Use this for "ducking" effects -- create a pattern that outputs low values on the kick drum to darken everything else in sync with the beat.
-
-### Screen
-
-The inverse of Multiply. Values are combined using the formula `1 - (1-base) * (1-top)`. This always lightens.
-
-Useful for adding glow or bloom effects without washing out the base layer.
-
-### Max
-
-Takes the brightest value at each point. If the base layer has red at 0.8 and the top layer has red at 0.3, the result is 0.8.
-
-Use this when you want multiple patterns to "compete" and the strongest signal wins.
-
-### Min
-
-Takes the dimmest value at each point.
-
-Use this for masking -- a pattern that sets fixtures to 0.0 will cut through anything below it.
-
-### Value
-
-The top layer's luminance (brightness) controls how much it overrides the base. Bright areas of the top layer dominate; dark areas let the base show through. This creates a natural "intensity-as-opacity" effect.
-
-## Blend Mode Summary
-
-| Mode | Formula | Effect | Use Case |
-|------|---------|--------|----------|
-| **Replace** | `top` | Full override | Base layers, solo effects |
-| **Add** | `min(base + top, 1.0)` | Always brightens | Layering accents, strobes, pulses |
-| **Multiply** | `base * top` | Always darkens | Rhythmic ducking, masking |
-| **Screen** | `1 - (1-base) * (1-top)` | Always lightens | Glow, bloom, soft overlays |
-| **Max** | `max(base, top)` | Brightest wins | Competing patterns |
-| **Min** | `min(base, top)` | Dimmest wins | Hard masking, cutouts |
-| **Value** | Luminance-weighted blend | Intensity as opacity | Natural intensity layering |
-
-## Color Compositing Details
-
-For color (RGBA) blending, Luma applies the blend mode to the RGB channels and then does alpha compositing on top. This means:
-
-- A pattern outputting a color with **alpha = 0.5** will blend at 50% opacity with the layer below, regardless of blend mode.
-- A pattern outputting **alpha = 1.0** at full opacity will apply the blend mode at full strength.
-- A pattern outputting **alpha = 0.0** will be completely transparent (invisible).
-
-This gives you fine-grained control: use alpha to control how strongly a layer participates in the composite, and use blend modes to control **how** it participates.
-
-## Pre-Positioning During Gaps
-
-During gaps between annotations -- moments where no pattern is active for a set of fixtures -- Luma automatically handles the transition. Moving head fixtures in particular benefit from this: Luma can move them to their starting position for the next pattern during the gap, so they are ready when the next pattern starts. This prevents the jarring "snap" of a moving head jumping to a new position at the instant a pattern begins.
-
-## Practical Compositing Examples
-
-### Example 1: Layered Club Look
-
-Layer a slow color wash at z-index 0 (**Replace**) as your base look. Add a beat-synced pattern at z-index 1 (**Multiply**) that pulses between white and dark gray to create rhythmic breathing. Add a strobe hit at z-index 2 (**Add**) for impact moments.
-
-The wash provides the color palette. The multiply creates rhythm by darkening on beats. The additive strobe punches through everything at key moments.
-
-### Example 2: Competing Chases
-
-Place two spatial chase patterns targeting different fixture groups, both using **Max** blend mode. Each chase runs independently, and at any given moment the brightest signal wins. This creates a natural-looking interplay where patterns overlap without muddy blending.
-
-### Example 3: Tension-Driven Masking
-
-Place a bright color base layer at z-index 0 (**Replace**). Add a harmonic-tension-driven pattern at z-index 1 (**Multiply**) that outputs bright white during tense musical moments (letting the base through) and a dark gray during calm sections (darkening the base). The room breathes with the harmonic complexity of the music.
+The nine blend modes and their formulas are in the [blend mode table](/docs/architecture/compositor#blend-modes).
 
 ## Next Steps
 
-With your tracks annotated, you are ready to [perform live](/docs/user-guide/performing) -- connecting your Denon DJ deck and broadcasting DMX to your venue's fixtures.
+The perform backend exists, but the native app has no Perform view yet. See [Perform](/docs/user-guide/performing).
