@@ -2,14 +2,12 @@
 //!
 //! # Which tier this is
 //!
-//! The thread is a **chrome** surface (`docs/specs/comet-shell.md` §9): comet's
-//! language — translucency, sliding motion, polished streaming markdown —
-//! against the instrument tier's square, unanimated `luma_ui::ladder`. That
-//! used to be a crate boundary, because the chat was the only comet-language
-//! surface in the app; the shell itself is chrome now, so the tier is named
-//! (`luma_ui::glass`) and shared, and [`crate::theme`] is the *roles* over it
-//! rather than a palette of its own. Both tiers read one grey ladder, so the
-//! thread column and the timeline beside it cannot drift apart.
+//! The thread is a **chrome** surface (`docs/specs/comet-shell.md` §9):
+//! translucency, sliding motion and streaming markdown. The chrome tier is
+//! `luma_ui::glass`, shared with the shell, and [`crate::theme`] names the
+//! *roles* over it rather than a palette of its own. Glass and
+//! `luma_ui::ladder` read one grey ladder, so the thread column and the
+//! timeline beside it cannot drift apart.
 //!
 //! # Shape
 //!
@@ -22,7 +20,7 @@
 //!  ├ list       ListState    the virtualized transcript
 //!  ├ composer   TextareaState
 //!  ├ expanded  HashSet      which tool chips the reader has opened
-//!  └ turn       TurnState    Idle | Streaming { task, since, steer }
+//!  └ turn       TurnState    Idle | Streaming { _task, since, steer }
 //! ```
 //!
 //! The open thread is independent of the editor tabs. The host supplies a
@@ -304,8 +302,7 @@ enum TurnState {
     /// end with the turn; separate optional fields would be three things that
     /// could outlive the one they describe.
     Streaming {
-        #[allow(dead_code)]
-        task: Task<()>,
+        _task: Task<()>,
         since: std::time::Instant,
         steer: luma_lib::agent::TurnSteer,
     },
@@ -1290,7 +1287,7 @@ impl AgentChat {
             this.update(cx, |this, cx| this.cancel(cx)).ok();
         });
         self.turn = TurnState::Streaming {
-            task,
+            _task: task,
             since: std::time::Instant::now(),
             steer,
         };
@@ -1890,7 +1887,7 @@ fn header_button(
         .when(!disabled, |button| {
             button
                 .cursor_pointer()
-                .hover(|style| style.bg(theme::wash(0.06)))
+                .hover(|style| style.bg(theme::wash(luma_ui::glass::WASH_SUBTLE)))
                 .on_click(move |_, _, cx| pressed(cx))
         })
         .when(disabled, |button| button.opacity(0.4))
@@ -1910,13 +1907,11 @@ fn header_button(
 /// The stop is [`theme::panel_opaque`] — the ground's colour at **full**
 /// coverage, not [`theme::panel`].
 ///
-/// The difference is the whole bug this had: `panel()` carries the coverage the
-/// *plane* spends on the blur behind the window, but a band is painted on top
-/// of that plane, not instead of it. Fading to `panel()` therefore laid a
-/// second half-coverage of the ground's tone over a surface that already had
-/// one — darker than the ground it was meant to disappear into, and still only
-/// half-covering the text it was meant to dissolve. It read as a grey haze with
-/// the prose showing through.
+/// `panel()` carries the coverage the *plane* spends on the blur behind the
+/// window, but a band is painted on top of that plane, not instead of it. A
+/// fade to `panel()` would lay a second half-coverage of the ground's tone over
+/// a surface that already has one. The band would be darker than the ground and
+/// would only half-cover the text, so it would read as a grey haze.
 ///
 /// The top band is inset by the header's height so text dissolves *before* it
 /// can reach the header's own label, rather than crossing under it.

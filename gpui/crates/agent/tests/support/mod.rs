@@ -260,7 +260,6 @@ impl Fixture {
     /// which is the only thing that decides identity there. What they give a
     /// test is the *shape* the rail exists for: more than one score to choose
     /// between, in ordinal order.
-    #[allow(dead_code)]
     pub fn with_extra_scores(mut self, count: usize) -> Self {
         self.extra_scores = count;
         self
@@ -272,7 +271,6 @@ impl Fixture {
     /// What it buys a test is a thread whose *arrival* is observable: an empty
     /// conversation looks the same before and after its read lands, so nothing
     /// about loading can be asserted over one.
-    #[allow(dead_code)]
     pub fn with_seeded_threads(mut self) -> Self {
         self.seeded_threads = true;
         self
@@ -284,7 +282,6 @@ impl Fixture {
     /// canvas: the shell's sidebar takes `shell::SIDEBAR_WIDTH` of the row, so
     /// growing the window by exactly that much puts the tab body back at the
     /// width every pixel-arithmetic comment in those files was written for.
-    #[allow(dead_code)]
     pub fn window(mut self, width: f32, height: f32) -> Self {
         self.window = Some(gpui::size(gpui::px(width), gpui::px(height)));
         self
@@ -397,7 +394,6 @@ impl Fixture {
     ///
     /// Per-fixture rather than per-process, which is what lets one suite hold
     /// a test that wants 10x next to one that wants 3x.
-    #[allow(dead_code)]
     pub fn with_motion_scale(mut self, scale: f32) -> Self {
         self.motion_scale = Some(scale);
         self
@@ -1289,5 +1285,4 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-#[allow(dead_code)]
 pub mod graph_interactions;

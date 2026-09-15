@@ -10,7 +10,7 @@
 //! Every layout constant in this crate is a plain number and none of them
 //! depend on which color is painted.
 
-use gpui::{hsla, Hsla, SharedString};
+use gpui::{Hsla, SharedString};
 use luma_ui::ladder;
 
 pub use luma_ui::glass::{
@@ -169,15 +169,15 @@ impl Theme {
             surface: glass(),
             surface_raised: neutral(0.235),
             surface_overlay: overlay(),
-            element_hover: hsla(0.0, 0.0, 0.92, 0.11),
-            element_active: hsla(0.0, 0.0, 0.92, 0.16),
-            border: hsla(0.0, 0.0, 1.0, 0.08),
-            border_strong: hsla(0.0, 0.0, 1.0, 0.14),
+            element_hover: wash(0.11),
+            element_active: wash(0.16),
+            border: hairline(0.08),
+            border_strong: hairline(0.14),
             text: ladder::foreground().into(),
             text_muted: neutral(0.708),
             text_faint: neutral(0.556),
             knockout: ladder::background().into(),
-            input_bg: hsla(0.0, 0.0, 1.0, 0.03),
+            input_bg: ink(0.03),
             accent: oklch(0.673, 0.182, 276.935),
             accent_strong: oklch(0.585, 0.233, 277.117),
             danger: oklch(0.704, 0.191, 22.216),
@@ -187,7 +187,7 @@ impl Theme {
             code_text: oklch(0.811, 0.111, 293.571),
             code_wash: oklch(0.702, 0.183, 293.541).opacity(0.12),
             syntax: SyntaxPalette::dark(),
-            font_sans: luma_font_sans(),
+            font_sans: luma_ui::fonts::FAMILY.into(),
             font_mono: system_mono().into(),
         }
     }
@@ -197,13 +197,6 @@ impl Default for Theme {
     fn default() -> Self {
         Self::dark()
     }
-}
-
-/// Luma's UI face. Named here rather than taken from `luma-ui` because this
-/// crate deliberately does not depend on the brutalist surface — see the
-/// module docs.
-fn luma_font_sans() -> SharedString {
-    "Inter".into()
 }
 
 fn system_mono() -> &'static str {
