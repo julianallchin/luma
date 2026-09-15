@@ -1,23 +1,21 @@
-//! The golden-scene catalogue, as the three.js capture defined it.
+//! The golden-scene catalogue in `goldens/scenes.json`.
 //!
-//! `src/harness/golden-scenes.ts` is the single description of what the eight
-//! golden frames contain. `tools/dump-golden-scenes.ts` serialises that module
-//! to `goldens/scenes.json`; this is its deserialiser. Nothing here is
-//! transcribed by hand — when a scene changes, regenerate and both renderers
-//! move together.
+//! The catalogue is frozen data. It describes what each golden frame contains,
+//! and this module is its deserialiser. Edit the JSON directly when a scene
+//! must change, then recapture the goldens with `render-goldens`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
-/// The whole golden-scene catalogue, as `dump-golden-scenes.ts` writes it.
+/// The whole golden-scene catalogue, as `goldens/scenes.json` stores it.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Catalogue {
-    /// Jitter subframes the capture settled through before shooting. The
-    /// three.js side ran a temporal EMA; we average this many subframes
-    /// instead (spec §6) — same jitter primitive, deterministic.
+    /// Jitter subframes the original capture settled through before shooting.
+    /// The renderer averages a fixed number of subframes instead (spec §6), so
+    /// the output is deterministic.
     pub warmup_frames: u32,
     /// Canvas size the goldens were captured at.
     pub viewport: Viewport,
@@ -188,7 +186,7 @@ pub enum SocketMarkState {
     Latched,
 }
 
-/// Three.js Y-up, because that is the space `useCameraStore` holds.
+/// Y-up camera space, the space the catalogue stores camera poses in.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CameraPose {
     /// Eye position.
@@ -197,9 +195,8 @@ pub struct CameraPose {
     pub target: [f32; 3],
 }
 
-/// The subset of `use-render-settings-store.ts` the renderer reads. `bloom` and
-/// `maxDpr` are deliberately absent: bloom is dropped (spec §2.5) and DPR is the
-/// capture's business, not the renderer's.
+/// The render settings the renderer reads. There is no bloom (spec §2.5), and
+/// the device pixel ratio belongs to the capture, not to the renderer.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderSettings {
@@ -254,17 +251,17 @@ pub struct RenderSettings {
     pub fixture_surface_lighting: bool,
     /// Whether opaque venue geometry casts shadows into fixture light and haze.
     pub fixture_shadows: bool,
-    /// Retained shadow maps for all fixtures instead of the legacy limited set.
+    /// Retained shadow maps for all fixtures instead of the 16-map budget.
     pub geometry_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
     /// Vertical field of view, degrees.
     pub fov: f32,
-    /// Original positional anchor from the legacy directional-light capture.
-    /// Skipped by the new contract; only the golden adapter populates it so
-    /// its orthographic shadow projection remains byte-exact.
+    /// Positional shadow anchor of the golden catalogue's directional light.
+    /// Not serialized; only the golden catalogue adapter sets it, so the
+    /// orthographic shadow projection of those captures stays byte-exact.
     #[serde(skip)]
-    pub(crate) legacy_shadow_eye: Option<[f32; 3]>,
+    pub(crate) golden_shadow_eye: Option<[f32; 3]>,
 }
 
 /// Runtime-selectable renderer diagnostic output.
@@ -767,7 +764,7 @@ const fn default_shadow_softness() -> f32 {
 }
 
 impl DirectionalLight {
-    /// The neutral editor key light used by the legacy lit-stage preset.
+    /// The neutral editor key light of the lit-stage preset.
     ///
     /// Bright, because it is doing the whole job. A stage is built out of black
     /// steel and black ply, and a key at show level leaves them **darker than
@@ -813,7 +810,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
-            legacy_shadow_eye: None,
+            golden_shadow_eye: None,
         }
     }
 
@@ -847,7 +844,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
-            legacy_shadow_eye: None,
+            golden_shadow_eye: None,
         }
     }
 
@@ -897,7 +894,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
-            legacy_shadow_eye: None,
+            golden_shadow_eye: None,
         }
     }
 }
@@ -978,14 +975,14 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 sky: wire.sky,
                 debug_view: wire.debug_view,
                 // Absent means the constructors' default, which is on — only
-                // the legacy branch below pins it off, and that pin has its
-                // own justification.
+                // the golden catalogue branch below pins it off, and that pin
+                // has its own justification.
                 fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(true),
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
                 fov: wire.fov,
-                legacy_shadow_eye: None,
+                golden_shadow_eye: None,
             });
         }
 
@@ -1001,9 +998,9 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.haze.steps = wire.haze_steps.unwrap_or(8);
         settings.haze.density = wire.haze_density.unwrap_or(0.0);
         settings.debug_view = wire.debug_view;
-        // The legacy catalogue predates surface fixture lighting. Keeping it
-        // off at this compatibility boundary preserves those captured inputs;
-        // every new interactive preset enables the path.
+        // The golden catalogue predates surface fixture lighting. Keeping it
+        // off here preserves those captured inputs; every interactive preset
+        // enables the path.
         settings.show_cables = wire.show_cables.unwrap_or(false);
         settings.show_gizmos = wire.show_gizmos.unwrap_or(false);
         settings.sky = wire.sky;
@@ -1011,7 +1008,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
         settings.geometry_shadows = wire.geometry_shadows;
         settings.cluster_debug = wire.cluster_debug;
-        settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
+        settings.golden_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
         Ok(settings)
     }
 }
@@ -1353,8 +1350,7 @@ pub struct GoldenFrameDescriptor<'a> {
 
 impl Catalogue {
     /// # Errors
-    /// Fails if the file is missing or is not the shape `dump-golden-scenes.ts`
-    /// writes.
+    /// Fails if the file is missing or is not the catalogue shape.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let bytes = std::fs::read(path)?;
         Ok(serde_json::from_slice(&bytes)?)

@@ -3,14 +3,12 @@
 //!     cargo run -p luma-render --release --bin render-goldens
 //!     cargo run -p luma-render --release --bin render-goldens -- single-mover
 //!     cargo run -p luma-render --release --bin render-goldens -- --check
-//!     cargo run -p luma-render --bin render-goldens -- --describe-reference
 //!
-//! Output lands in `harness/goldens/scenes-wgpu/<scene>-<t>.png`, the same
-//! names `harness/shot-visualizer.mjs` writes into `harness/goldens/scenes/`,
-//! so the two directories compare frame for frame. Every PNG is accompanied by
-//! a versioned JSON descriptor containing the complete deterministic input.
+//! Output lands in `harness/goldens/scenes-wgpu/<scene>-<t>.png`. Every PNG is
+//! accompanied by a versioned JSON descriptor containing the complete
+//! deterministic input.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use luma_render::{build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 
@@ -18,44 +16,31 @@ use luma_render::{build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 enum Mode {
     /// Render and overwrite the tracked PNG and descriptor.
     Capture,
-    /// Render nothing; refresh the descriptors that accompany the three.js
-    /// reference capture.
-    DescribeReference,
     /// Render and diff against the tracked PNG, writing nothing. Drift is a
     /// non-zero exit, so CI and a pre-commit sanity check can both use it.
     Check,
 }
 
 fn main() -> anyhow::Result<()> {
-    let repo = repo_root();
+    let repo = luma_render::repo_root();
     let catalogue = Catalogue::load(&repo.join("gpui/crates/render/goldens/scenes.json"))?;
     let mut mode = Mode::Capture;
     let mut requested: Vec<String> = Vec::new();
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
-            "--describe-reference" => mode = Mode::DescribeReference,
             "--check" => mode = Mode::Check,
             unknown if unknown.starts_with("--") => anyhow::bail!("unknown flag: {unknown}"),
             scene => requested.push(scene.to_owned()),
         }
     }
-    let out_dir = repo.join(match mode {
-        Mode::DescribeReference => "harness/goldens/scenes",
-        Mode::Capture | Mode::Check => "harness/goldens/scenes-wgpu",
-    });
-    if matches!(mode, Mode::Capture | Mode::DescribeReference) {
+    let out_dir = repo.join("harness/goldens/scenes-wgpu");
+    if matches!(mode, Mode::Capture) {
         std::fs::create_dir_all(&out_dir)?;
     }
 
     let (width, height) = catalogue.frame_size();
-    let mut renderer = (!matches!(mode, Mode::DescribeReference))
-        .then(Renderer::new)
-        .transpose()?;
+    let mut renderer = Renderer::new()?;
     let mut library = luma_render::assets::Library::new(repo.join("resources/meshes"));
-    let descriptor_subframes = match mode {
-        Mode::DescribeReference => catalogue.warmup_frames,
-        Mode::Capture | Mode::Check => DEFAULT_SUBFRAMES,
-    };
 
     let mut drifted = 0usize;
     for scene in &catalogue.scenes {
@@ -64,39 +49,28 @@ fn main() -> anyhow::Result<()> {
         }
         for &t in &scene.times {
             let path = out_dir.join(scene.frame_name(t));
-            let stats = if let Some(renderer) = &mut renderer {
-                let frame = build_frame(scene, &catalogue.definitions, t, &mut library)?;
-                let pixels = renderer.render(&frame, width, height, DEFAULT_SUBFRAMES)?;
-                let geometry = format!(
-                    "{} draws, {} cones",
-                    frame.draws.len(),
-                    frame.fixture_cones.len()
-                );
-                match mode {
-                    Mode::Check => {
-                        let verdict = compare_png(&path, &pixels)?;
-                        if verdict.drifted() {
-                            drifted += 1;
-                        }
-                        format!("{verdict}  ({geometry})")
+            let frame = build_frame(scene, &catalogue.definitions, t, &mut library)?;
+            let pixels = renderer.render(&frame, width, height, DEFAULT_SUBFRAMES)?;
+            let geometry = format!(
+                "{} draws, {} cones",
+                frame.draws.len(),
+                frame.fixture_cones.len()
+            );
+            let stats = match mode {
+                Mode::Check => {
+                    let verdict = compare_png(&path, &pixels)?;
+                    if verdict.drifted() {
+                        drifted += 1;
                     }
-                    _ => {
-                        write_png(&path, &pixels, width, height)?;
-                        geometry
-                    }
+                    format!("{verdict}  ({geometry})")
                 }
-            } else {
-                anyhow::ensure!(
-                    path.is_file(),
-                    "refusing to write a descriptor without its reference image: {}",
-                    path.display()
-                );
-                "reference inputs".into()
+                Mode::Capture => {
+                    luma_render::image_out::write(&path, &pixels, width, height)?;
+                    let descriptor = catalogue.frame_descriptor(scene, t, DEFAULT_SUBFRAMES)?;
+                    write_json(&out_dir.join(scene.descriptor_name(t)), &descriptor)?;
+                    geometry
+                }
             };
-            if !matches!(mode, Mode::Check) {
-                let descriptor = catalogue.frame_descriptor(scene, t, descriptor_subframes)?;
-                write_json(&out_dir.join(scene.descriptor_name(t)), &descriptor)?;
-            }
             println!("{}  {stats}", path.display());
         }
     }
@@ -179,24 +153,6 @@ fn compare_png(path: &Path, rgba: &[u8]) -> anyhow::Result<Verdict> {
     } else {
         Verdict::Changed { pixels, max_delta }
     })
-}
-
-/// The crate sits at `<repo>/gpui/crates/render`.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("crate is three levels below the repo root")
-        .to_path_buf()
-}
-
-fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
-    let file = std::fs::File::create(path)?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(rgba)?;
-    Ok(())
 }
 
 fn write_json(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
