@@ -7,15 +7,13 @@
 //!
 //! - [`crate::ladder`] — **planes and instrument surfaces.** The shell's three
 //!   structural planes, tab contents, controls, tables, the graph canvas, the
-//!   timeline. Square, no motion, the ladder's greys.
+//!   timeline. The ladder's greys.
 //! - [`glass`] — **what floats.** Menus, popovers, overlay grounds, the washes
 //!   and inks interactive states take on a translucent surface.
 //!   [`crate::motion`]'s curves, comet's radii.
 //!
-//! It lived behind the `luma-md` / `luma-chat` crate boundary while the chat
-//! was the only comet-language surface in the app. The shell itself is chrome
-//! now, so the boundary is a named tier rather than a dependency edge — see
-//! `docs/specs/comet-shell.md` §5.
+//! The chat and the shell share this tier. It is a named tier, not a crate
+//! boundary — see `docs/specs/comet-shell.md` §5.
 //!
 //! # One ladder, two coverages
 //!
