@@ -709,6 +709,44 @@ pub fn segment(
     row_state_paint(cell, state, fade_key)
 }
 
+/// An on/off switch: a rounded track with a knob. `on` runs from 0 (off) to
+/// 1 (on), so a caller can pass a value that animates between the two.
+///
+/// The caller wraps it in the row that takes the click and the label.
+pub fn switch(on: f32) -> Div {
+    let on = on.clamp(0.0, 1.0);
+    div()
+        .relative()
+        .flex_none()
+        .w(px(SWITCH_WIDTH))
+        .h(px(SWITCH_HEIGHT))
+        .rounded_full()
+        .bg(motion::mix(
+            glass::wash(0.15),
+            ladder::foreground().into(),
+            on,
+        ))
+        .child(
+            div()
+                .absolute()
+                .top(px(SWITCH_INSET))
+                .left(px(SWITCH_INSET + SWITCH_TRAVEL * on))
+                .size(px(SWITCH_KNOB))
+                .rounded_full()
+                .bg(motion::mix(
+                    ladder::foreground_alpha(0.7),
+                    ladder::background().into(),
+                    on,
+                )),
+        )
+}
+
+const SWITCH_WIDTH: f32 = 32.0;
+const SWITCH_HEIGHT: f32 = 18.0;
+const SWITCH_INSET: f32 = 2.0;
+const SWITCH_KNOB: f32 = SWITCH_HEIGHT - 2.0 * SWITCH_INSET;
+const SWITCH_TRAVEL: f32 = SWITCH_WIDTH - SWITCH_KNOB - 2.0 * SWITCH_INSET;
+
 /// The track's inset, and so also the air between two cells — one number,
 /// because a cell's plate must clear the track's edge by exactly what it
 /// clears its neighbour by or the row reads as ragged.

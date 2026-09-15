@@ -1256,7 +1256,12 @@ impl Visualizer {
             self.render_controls.haze = rig.haze;
         }
         self.render_controls.set_environment(self.environment());
-        let scene = scene(&rig, &definitions, self.environment(), self.render_controls.haze);
+        let scene = scene(
+            &rig,
+            &definitions,
+            self.environment(),
+            self.render_controls.haze,
+        );
         self.framing = scene.framing(&definitions);
         self.camera = opening_camera(&self.framing, &self.view_finder());
         self.owes_opening_pose = true;
@@ -3218,31 +3223,7 @@ fn view_toggle(
         .h(px(28.))
         .cursor_pointer()
         .child(div().text_size(px(12.)).child(label))
-        .child(
-            div()
-                .relative()
-                .w(px(32.))
-                .h(px(18.))
-                .rounded_full()
-                .bg(luma_ui::motion::mix(
-                    luma_ui::glass::wash(0.15),
-                    ladder::foreground().into(),
-                    t,
-                ))
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(2.))
-                        .left(px(2. + 14. * t))
-                        .size(px(14.))
-                        .rounded_full()
-                        .bg(luma_ui::motion::mix(
-                            ladder::foreground_alpha(0.7),
-                            ladder::background().into(),
-                            t,
-                        )),
-                ),
-        )
+        .child(luma_ui::float::switch(t))
         .on_click(move |_, _, cx| {
             app.update(cx, |this, cx| this.toggle_view_control(control, cx));
         })
@@ -4450,7 +4431,10 @@ mod view_tests {
                 !controls.gizmos_enabled,
                 "{environment:?} switched gizmos back on"
             );
-            assert_eq!(controls.haze, before.haze, "{environment:?} rewrote the haze");
+            assert_eq!(
+                controls.haze, before.haze,
+                "{environment:?} rewrote the haze"
+            );
             assert_eq!(controls.render_scale_percent, before.render_scale_percent);
         }
     }
