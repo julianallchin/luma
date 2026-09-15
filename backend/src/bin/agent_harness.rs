@@ -50,9 +50,6 @@ async fn run() -> Result<(), String> {
     // `cancel_python_cell` exists precisely to interrupt a `run_python_cell`
     // that is still in flight, and a strictly serial loop could never deliver
     // it. Responses are matched by `id`, so completion order is free.
-    // `into_shared`, not a bare `Arc::new`: the turn loop outlives the command
-    // that starts it, so it needs the back-reference that attaches here. A
-    // plain Arc leaves `agent_turn_start` failing on every call.
     let services = services.into_shared();
     let stdout = std::sync::Arc::new(tokio::sync::Mutex::new(std::io::stdout()));
 

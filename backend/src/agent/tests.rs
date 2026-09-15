@@ -103,15 +103,6 @@ async fn fixture() -> Fixture {
     }
 }
 
-/// The turn registry's back-reference is installed by `into_shared`, which is
-/// the only constructor of `SharedServices` — so the host that forgets it no
-/// longer compiles, and this asserts the wiring the type now guarantees.
-#[tokio::test]
-async fn into_shared_attaches_the_turn_registry() {
-    let fixture = fixture().await;
-    assert!(fixture.services.agent_turns().is_attached());
-}
-
 fn agent(fixture: &Fixture, steps: Vec<Vec<ModelEvent>>) -> AgentService {
     AgentService::new(fixture.services.clone())
         .with_model(Arc::new(ScriptedModel::new(steps)))
