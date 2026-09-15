@@ -6,8 +6,11 @@ per-fixture shadow path only (`gpu.rs`'s `fixture_shadow_*`, `scene.wgsl`'s
 The three sun cascades are out of scope and stay on depth + PCF — see §3.6 for
 why that divergence is deliberate rather than debt.
 
-No code changes here. Line references are against the tree as of
-2026-08-25 (post-`LightIndex`, `clusters.rs` deleted).
+Status: future work. Tiers, the refresh budget, moment maps and per-mesh
+caster submission are not built. `MAX_FIXTURE_SHADOWS = 16` (`shadow.rs`) is
+now the legacy comparison budget and the minimum allocation. The default
+all-fixture mode retains a map for every active emitter, up to 512 layers.
+Line references are against the tree as of 2026-08-25 and are stale.
 
 ---
 

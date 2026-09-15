@@ -1,8 +1,8 @@
 # Native haze: lit-interval cache
 
-Status: design, 2026-09-10. Not built. Written after the Gasworks 75 FPS
-campaign (harness/perf/mac-gasworks-2026-09-09/README.md, "Where the frame
-is") exhausted every per-loop optimisation of the native haze pass.
+Status: built. `gpui/crates/render/src/interval_cache.rs` holds the CPU
+side. The native compute haze kernel uses it when the device supports
+subgroups. `LUMA_INTERVAL_CACHE=0` turns it off for A/B runs.
 
 ## What is cached
 

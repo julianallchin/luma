@@ -1,7 +1,20 @@
 # Volumetrics v2 — renderer architecture
 
-Status: design, not implemented. Scope: `gpui/crates/render/` — volumetric beams, light
-culling, fixture shadows, frame structure.
+Status: partly implemented. The table gives the state of each phase. §1–§4 are the
+design; the addenda after §5 are dated research notes, not a description of the
+current code. Scope: `gpui/crates/render/` — volumetric beams, light culling, fixture
+shadows, frame structure.
+
+| Phase | Status | Where |
+|---|---|---|
+| 1 — bounds and full-screen fallback | Landed. `light_index.rs` has since replaced the code. | §4 Phase 1 |
+| 2 — BeamPass cone proxy | Not built. Shelved on measurement. Only the shared integrand `shaders/beam_transport.wgsl` landed. | [`beampass-phase2.md`](beampass-phase2.md) |
+| Haze density field | Built. `haze_field.rs`. | [`haze-noise-field.md`](haze-noise-field.md) |
+| 3 — shadow tiers, refresh budget, moment maps | Future work. Caster culling and slot assignment landed. `MAX_FIXTURE_SHADOWS = 16` is the legacy comparison budget; the default mode retains a map for every active emitter, up to 512. | [`shadows-phase3.md`](shadows-phase3.md) |
+| 4 — LightIndex, tiles and Z-bins in compute | Built. `light_index.rs`. | [`light-index-unification.md`](light-index-unification.md) |
+| 5 — froxel HazeVolume | Not built as designed. `fog_grid.rs` is a camera-relative broad-wash grid instead. | [`stage-rendering-quality.md`](stage-rendering-quality.md) |
+| Lit-interval cache | Built. `interval_cache.rs`. | [`haze-lit-interval-cache.md`](haze-lit-interval-cache.md) |
+| Presentation seam | Built. `share.rs`, `viewport.rs`. | [`presentation-seam.md`](presentation-seam.md) |
 
 Reference hardware: Apple M3 Max, 1920×1080, wgpu 26.0.1 / Metal.
 Workload: up to 512 moving-head cones, constantly panning/tilting, interactive orbit camera.
@@ -1979,8 +1992,8 @@ cluster rebuild, camera radius, viewport size, lit cone count — one fixed-size
 struct copy per frame, no allocation. When a frame reaches the screen more than
 `HITCH_MS` (50 ms) after the one before it, the run-up is written through the
 existing `append_render_telemetry` command, at most once per `HITCH_COOLDOWN`.
-It reuses the log the old React visualizer already wrote, rotation and cap
-included, rather than opening a second one.
+It reuses the existing render telemetry log, rotation and cap included, rather
+than opening a second one.
 
 Always on, because the alternative is asking the operator to notice the bug
 twice.

@@ -6,7 +6,7 @@ Status: implementation direction, 2026-09-05. The user sets the target at Depenc
 
 The user clarified that this pass should have minimal performance impact on the current non-Mac machine; a substantial Mac performance/approximation pass comes later. Hardware, output resolution, fixture count, and frame-rate target must be stated together for that pass. The available development GPU is an RTX 5090 running Vulkan; timings here cannot establish Apple Silicon performance. Treat 1080p, 60 Hz, and 512 moving fixtures as a provisional workload, not an agreed specification.
 
-Review a complete venue with materials and geometry, not just cones against black. Pin camera, light output, exposure, medium density and source state. Explicitly enable surface lighting and fixture shadows: the historical React-compatible scene loader defaults surface lighting off. Preserve historical comparison fixtures, but do not use them to assess the native app's lighting quality.
+Review a complete venue with materials and geometry, not just cones against black. Pin camera, light output, exposure, medium density and source state. Explicitly enable surface lighting and fixture shadows. Do not use old comparison fixtures to assess the app's lighting quality.
 
 The acceptance suite needs:
 
@@ -23,7 +23,7 @@ Measure GPU stages separately, CPU submission, memory, and end-to-end presentati
 
 - The emitter-summed ambient fill has been removed after venue review: it lit surfaces even when beams hit nothing. There is currently no fixture-driven indirect lighting. Geometry-aware GI remains unimplemented.
 - `luminaire.rs` uses relative per-kind lumen budgets and a shared beam gain. Fixture calibration is incomplete. Quoted zoom ranges are represented by a midpoint rather than live optics.
-- `shadow.rs` has 16 resident 256-square fixture shadow maps. Other fixtures still light surfaces but do not cast fixture shadows. The profiler previously reported 120 shadowed fixtures by assumption; it must use actual residency.
+- Fixture shadow maps are 256-square. The default mode retains a map for every active emitter, up to 512 layers (see "Gasworks retained shadows" below). `MAX_FIXTURE_SHADOWS = 16` in `shadow.rs` is only the legacy comparison budget. The profiler must report actual residency.
 - Haze uses per-pixel, per-candidate-light integration with analytic cone intersections and equiangular/uniform sampling. Preserve this useful estimator while reducing repeated work.
 - Venue review demonstrated that preserving the old 3–18 m integration bounds preserved the visible cutoff. Bounds are now 24–60 m depending on concentration, with the same quartic support taper used for surface lights. This is still an approximation, not calibrated physical throw. It increases candidate coverage; the older unchanged-range performance results below do not describe this revision.
 - The density field has two independent baked-texture lookups per sample and live time independent of playback. Source-to-sample extinction now supplements camera-path extinction. Its transport still uses a mean extinction and finite support taper; that is not yet a calibrated participating medium.
@@ -74,7 +74,7 @@ Validation: 117 renderer unit tests and 7 transport integration tests pass. Dete
 
 ## Experimental shared geometry visibility
 
-The native Renderer Lab now has **Experimental geometry shadows**, disabled by default. Launching the app with `LUMA_GEOMETRY_SHADOWS=1` initializes that toggle on; the user can turn it off in the Lab. Fixture shadows must also be enabled. This is a software visibility prototype, not MegaLights, hardware ray tracing, or GI.
+`RenderSettings::geometry_shadows` (default off) enables **experimental geometry shadows**. The app has no control for it. `profile-volumetrics` turns it on with `LUMA_GEOMETRY_SHADOWS=1`. Fixture shadows must also be enabled. This is a software visibility prototype, not MegaLights, hardware ray tracing, or GI.
 
 `visibility.rs` builds a median-split, stackless triangle BVH over opaque stage geometry. It is retained across light/camera changes and rebuilt when stage mesh identities or transforms change. Fixture housings are excluded, matching the existing fixture shadow caster policy; transparent objects do not cast. The surface and haze shaders share the same buffer and ray/triangle traversal. Existing atlas residents keep their shadow maps; other lights query the BVH instead of being assumed unoccluded. Shadow mode changes invalidate temporal history.
 
@@ -123,11 +123,11 @@ LUMA_GEOMETRY_SHADOWS=1 cargo +1.97.1 run --release --manifest-path gpui/Cargo.t
 Add `--surface-only` or `--haze-only` for isolation; `--image=/tmp/capture.png` captures the measured setup after the timing loop. Synthetic modes also accept `--cones=450`, so shadow workloads are no longer accidentally fixed at 120 emitters. Raw JSON, the saved catalogue, and inspected images are under `/tmp/luma-harness-visibility/`. Compact durable results: `gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json`.
 
 
-## Gasworks retained shadows and sampled fog (previous GPUI default)
+## Gasworks retained shadows and sampled fog
 
 The rejected per-sample software BVH is now a reference path, enabled only with
-`LUMA_VISIBILITY_REFERENCE=1` and geometry shadows. GPUI defaults to **All fixture
-shadows**. Production retains a 256-square depth map for every active emitter,
+`LUMA_VISIBILITY_REFERENCE=1` and geometry shadows. Fixture shadows are on by
+default (`fixture_shadows: true`). Production retains a 256-square depth map for every active emitter,
 growing in powers of two to 512 layers across two 256-layer texture arrays.
 Cache identity is projection plus opaque geometry; colour, intensity, blackout,
 and light-list reordering do not redraw maps. A stage edit invalidates affected
