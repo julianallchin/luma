@@ -1,8 +1,8 @@
 # Gasworks / Get Lucky quality contract
 
 This file is the durable acceptance contract for the renderer work at commit
-`e7287e9acc8916d5f076c780f4bc2b3736ed888e`. The large `README.md` is the
-experiment log; its 2026-09-11 approval describes the binary captured then and
+`e7287e9acc8916d5f076c780f4bc2b3736ed888e`. The experiment log `README.md` is
+not in the repository; its 2026-09-11 approval describes the binary captured then and
 does not approve a later build by itself.
 
 ## Current evidence (2026-09-12)
@@ -440,7 +440,7 @@ waveform, and readback stalls rather than trimming them from the run.
    against both the tile-8 original and `final-3s`.
 2. Capture the identified release executable with the complete 12-probe close
    suite and 60-probe wide/truss suite, including cold `first`, pan, blackout,
-   relight, and seven stills. Run `audit_pixels.py` against
+   relight, and seven stills. Run `audit_pixels.py` (not in the repository) against
    `native-before-shadow/` and `baseline/`, and retain the required crops/maps.
 3. Re-run both 24-frame moving suites (3 s and 4.9 s) after cooldown. The 4.9 s
    replay is required because the current candidate covers only the 3 s phase.

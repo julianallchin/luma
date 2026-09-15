@@ -16,7 +16,8 @@ Use a SQLite backup of the library for reproducible runs, an explicit score ID,
 and a new output path. The current Gasworks Get Lucky example score is
 `7de2624c-6095-8ae1-a7bf-c9496baae2d8`; the older similarly named score has a
 different workload. The default camera is the 2227x1391 close stress camera in
-`native-suite.json`. `--camera`, `--camera-case`, `--width`, and `--height`
+`native-suite.json` in this directory. That file is not in the repository, so
+supply it or pass a camera explicitly. `--camera`, `--camera-case`, `--width`, and `--height`
 allow explicit alternatives. Do not compare different cameras or sizes as an
 optimization.
 
