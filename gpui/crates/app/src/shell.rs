@@ -1,11 +1,9 @@
 //! The persistent shell: three regions, one overlay slot, and the workspace's
-//! tabs — the layer that replaced the `Screen` router.
+//! tabs.
 //!
 //! # Nothing is destroyed to show something else
 //!
-//! The old router held one screen and a provenance chain (`from`, `previous`,
-//! `browser`) so Back could restore what opening something had thrown away.
-//! Here nothing is thrown away, so there is nothing to restore and no Back:
+//! Nothing is thrown away, so there is nothing to restore and no Back:
 //! the sidebar's browser persists beside the editor it opened, a tab keeps its
 //! state while another is showing, and an overlay covers the regions without
 //! displacing them. `docs/specs/comet-shell.md` is the contract.
@@ -62,7 +60,7 @@ const EMPTY_PANEL_REASON_GAP: f32 = 4.0;
 /// One plane over the whole shell. The regions persist beneath it — closing
 /// an overlay reveals them exactly as they were.
 pub(crate) enum Overlay {
-    /// The venue picker: the old welcome grid, re-homed. Auto-opens while no
+    /// The venue picker. Auto-opens while no
     /// venue is selected, because a shell with no subject list has nothing
     /// else to offer.
     /// Boxed for the same reason [`Self::AddTracks`] is: a picker carries its
@@ -138,8 +136,7 @@ impl Body {
 
 /// What should hold the keyboard this frame. Compared across frames so a
 /// change of subject re-takes focus while a field the user clicked into keeps
-/// it — the same contract the old per-screen `take_focus` kept, restated over
-/// regions.
+/// it.
 #[derive(PartialEq, Eq, Clone)]
 pub(crate) enum FocusSlot {
     Overlay(&'static str),
@@ -167,10 +164,9 @@ impl Luma {
         // frame renders, and every action dispatched from there — including the
         // one that would bring the panel back — dead-ends silently.
         //
-        // Being put away is now the panel's only way off screen: a window too
+        // Being put away is the panel's only way off screen: a window too
         // narrow to seat it beside the thread gives it the room instead of
-        // dropping it (see [`regions`]). While that was not so, a 420px window
-        // held a live tab, an unrendered focus handle and a dead ⌘P.
+        // dropping it (see [`regions`]).
         if let Some(target) = self.workspace.active() {
             if !self.workspace_hidden {
                 return FocusSlot::Tab(target.clone());
@@ -524,10 +520,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         !app.workspace_hidden && (app.expanded || squeezed) && f32::from(workspace_w) >= room - 0.5;
     let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
     let show_thread = !takeover;
-    // The panel is up exactly when it has not been put away. Emptiness used to
-    // be a second, silent reason to hide it — which made "no tabs" a state with
-    // no way out: the panel that offers the first tab was the thing withheld
-    // until a tab existed. It now opens onto [`empty_panel`].
+    // The panel is up exactly when it has not been put away. Emptiness is not
+    // a reason to hide it: the panel offers the first tab, so with no tabs it
+    // opens onto [`empty_panel`].
     let show_workspace = takeover || workspace_w > px(0.0);
     let workspace_panel_width = if takeover {
         viewport - f32::from(sidebar_w) - if show_sidebar { SEAM_WIDTH } else { 0.0 }
@@ -643,8 +638,8 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             viewport,
         };
         // Back/forward, then empty band. The thread carries no tabs — they are
-        // the panel's — and nothing else: the account, which is what used to
-        // end this band, lives at the foot of the sidebar now.
+        // the panel's — and nothing else: the account lives at the foot of the
+        // sidebar.
         let head = chrome::band(span)
             .child(chrome::history_pair())
             .child(div().flex_1());
@@ -655,10 +650,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // about, and the content plane is the darkest one there is.
                 //
                 // **Opaque**, like the workspace ground below — a structural
-                // plane has no coverage (see `glass`'s module docs). It used to
-                // spend part of its alpha on the blur behind the window, and
-                // that is what made the transcript's fade bands unpaintable: a
-                // plane composited over an unknown backdrop has no colour any
+                // plane has no coverage (see `glass`'s module docs). A
+                // translucent plane would make the transcript's fade bands
+                // unpaintable: a plane composited over an unknown backdrop has no colour any
                 // overlay can match, so the band read as a dark strip however
                 // it was tinted. Opaque, `panel_opaque()` *is* the plane, and
                 // the band that fades to it disappears into it by construction.
@@ -1217,7 +1211,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
-        Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
+        Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
     };
     div()
         .flex_1()
@@ -1229,14 +1223,10 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         .into_any_element()
 }
 
-/// The overlay plane: a full-area surface over the regions. It reuses each
-/// old screen's render function whole, so an overlay looks exactly like the
-/// screen it used to be — only what is *underneath* it changed.
+/// The overlay plane: a full-area surface over the regions.
 /// `cx` is here for the pickers' loading state: a skeleton pulses off the one
 /// shared clock ([`luma_ui::motion::pulse_delta`]), which needs an `App` to
-/// take its lease from. Without it each picker hand-rolled a static ramp, and
-/// three still ladders is what "one pulse, phase-locked across the window"
-/// was supposed to prevent.
+/// take its lease from. That keeps every skeleton in the window phase-locked.
 fn overlay_layer(
     app: &Luma,
     overlay: &Overlay,
@@ -1246,7 +1236,7 @@ fn overlay_layer(
 ) -> AnyElement {
     // Every arm hands back a finished card. There is one card mechanism —
     // `morph::card` — and a dialog that never morphs simply has one route
-    // (`morph::fixed_card`); the shell no longer describes a dialog's box.
+    // (`morph::fixed_card`); the shell does not describe a dialog's box.
     let (card, label) = match overlay {
         Overlay::Venues(state) => (welcome::render(state, entity, window, cx), "Venue dialog"),
         Overlay::Patterns(state) => {
@@ -1298,11 +1288,11 @@ fn overlay_layer(
             "Insert pattern dialog",
         ),
         Overlay::FixturePicker(state) => (
-            fixture_picker::render(state, entity, window, cx),
+            fixture_picker::render(state, entity, window),
             "Fixture picker dialog",
         ),
         Overlay::AddFixtures(state) => (
-            patch::add_fixtures_dialog(state, entity, window, cx),
+            patch::add_fixtures_dialog(state, entity, window),
             "Add fixtures dialog",
         ),
         Overlay::GroupRepair(state) => (

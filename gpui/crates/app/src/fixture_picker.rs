@@ -439,12 +439,7 @@ pub(crate) fn tick(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) 
     window.focus(&wanted, cx);
 }
 
-pub(crate) fn render(
-    state: &FixturePicker,
-    app: &Entity<Luma>,
-    window: &Window,
-    _cx: &mut gpui::App,
-) -> AnyElement {
+pub(crate) fn render(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElement {
     morph::fixed_card("Fixture picker dialog", CARD_SIZE, body(state, app, window))
 }
 

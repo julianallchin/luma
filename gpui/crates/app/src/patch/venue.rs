@@ -2,7 +2,7 @@
 use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Entity, Window};
+use gpui::{div, px, AnyElement, Entity};
 use luma_ui::node::{Instrument as _, Role};
 use luma_ui::{float, ladder};
 
@@ -41,7 +41,7 @@ impl Luma {
     }
 }
 
-pub(super) fn render(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
+pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let add = app.clone();
     let venue = state.venue_id.clone();
     let details = app.clone();
@@ -67,7 +67,7 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyE
                         .agent_node(Role::Button, "Close patch details"),
                 ),
             )
-            .child(super::details(state, app, window))
+            .child(super::details(state, app))
             .agent_node(Role::Card, "Patch details sheet")
             .into_any_element();
     }
@@ -96,10 +96,8 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyE
                 .child(
                     float::btn("Add", "venue-add-fixtures")
                         .id("venue-add-fixtures")
-                        .on_click(move |_, window, cx| {
-                            add.update(cx, |this, cx| {
-                                this.open_add_fixtures(venue.clone(), window, cx)
-                            })
+                        .on_click(move |_, _, cx| {
+                            add.update(cx, |this, cx| this.open_add_fixtures(venue.clone(), cx))
                         })
                         .agent_node(Role::Button, "Add fixtures"),
                 )
@@ -112,7 +110,7 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyE
                         .agent_node(Role::Button, "Patch details"),
                 ),
         );
-    let lights = lights.child(super::table::compact(state, app, window));
+    let lights = lights.child(super::table::compact(state, app));
     body.child(
         div()
             .size_full()

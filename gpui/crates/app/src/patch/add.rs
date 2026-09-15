@@ -112,12 +112,7 @@ impl AddFixtures {
 }
 
 impl Luma {
-    pub(crate) fn open_add_fixtures(
-        &mut self,
-        venue_id: String,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn open_add_fixtures(&mut self, venue_id: String, cx: &mut Context<Self>) {
         let venue = venue_id.clone();
         let library = FixtureLibrary::new("Search fixtures…", cx, move |luma, query, cx| {
             luma.add_fixtures_query(query, cx);
@@ -356,12 +351,7 @@ const COUNT_FIELD_WIDTH: f32 = 72.0;
 // Rendering
 // ---------------------------------------------------------------------------
 
-pub(crate) fn render(
-    state: &AddFixtures,
-    app: &Entity<Luma>,
-    window: &Window,
-    _cx: &mut gpui::App,
-) -> AnyElement {
+pub(crate) fn render(state: &AddFixtures, app: &Entity<Luma>, window: &Window) -> AnyElement {
     let sample = state.morph.sample(std::time::Instant::now());
     let app = app.clone();
     morph::card(&sample, "Add fixtures dialog", move |route, mode| {

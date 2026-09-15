@@ -1,11 +1,9 @@
 //! The track browser: one venue's library, as the shell's sidebar.
 //!
-//! The web's table (`src/features/tracks/components/track-browser.tsx`) became
-//! a row list at sidebar width when the shell landed — comet's session-row
-//! anatomy: a status lead, the title, `artist · bpm` muted under it. The three
-//! filters and the search are the web browser's, unchanged, over one query's
-//! worth of rows. The added-by and preprocessing columns died with the table;
-//! they return with a wider tracks surface if one is ever wanted.
+//! A row list at sidebar width, in comet's session-row anatomy: a status lead,
+//! the title, and `artist · bpm` muted under it. Three filters and a search
+//! work over one query's worth of rows. There are no added-by or preprocessing
+//! columns; a wider tracks surface can add them if one is ever wanted.
 //!
 //! # Filtering is the view's job, not the query's
 //!
@@ -82,7 +80,7 @@ pub(crate) struct Push {
 }
 
 /// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
-/// the default the web browser opens with.
+/// the default.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Ownership {
     Mine,
@@ -100,8 +98,7 @@ impl Ownership {
     }
 
     /// A track with no `uid` is in the guest namespace, which every host reads
-    /// as its own — the same `!t.uid || t.uid === currentUserId` the web side
-    /// filters on.
+    /// as its own.
     fn admits(self, track: &TrackBrowserRow, user: Option<&str>) -> bool {
         match self {
             Ownership::All => true,
@@ -530,10 +527,9 @@ impl Luma {
         });
     }
 
-    /// Mirror an edit of the sidebar filter. Filtering is immediate — the web
-    /// side debounces because every keystroke there re-renders a React tree
-    /// over the same already-loaded rows; here the work is one pass over a
-    /// `Vec` and a `uniform_list` that redraws a screenful either way.
+    /// Mirror an edit of the sidebar filter. Filtering is immediate, with no
+    /// debounce: the work is one pass over a `Vec` and a `uniform_list` that
+    /// redraws a screenful either way.
     fn track_search_changed(&mut self, query: String, cx: &mut Context<Self>) {
         self.with_tracks(cx, |state| {
             state.query = query;
@@ -601,7 +597,7 @@ impl Luma {
 const ROW_HEIGHT: f32 = 44.;
 const GAP: f32 = 8.;
 const PAD_X: f32 = 12.;
-/// The coverage dot's box, matching the web side's `w-1.5 h-1.5`.
+/// The coverage dot's box.
 const DOT: f32 = 6.;
 /// The trailing slot a track row reserves for its chevron.
 const CHEVRON_SLOT: f32 = 20.;
@@ -920,7 +916,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(luma_ui::glass::ink(0.85))
-                .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
+                .hover(|button| button.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
                 .on_click(move |_, window, cx| {
                     window.focus(&venue_focus, cx);
                     picker.update(cx, |this, cx| this.show_venues(cx));
@@ -944,13 +940,13 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
+                .hover(|button| button.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
                 .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
                 .child(gpui_component::Icon::new(luma_ui::icons::IconName::Plus).size(px(12.0)))
                 .agent_node(Role::Button, "Add track")
         })
-        // How many rows the filters admit — the web browser's footer, kept in
-        // the head because the sidebar has no second bar to spare.
+        // How many rows the filters admit, kept in the head because the
+        // sidebar has no second bar to spare.
         .child({
             let count = format!("{} TRACKS", state.shown.len());
             div()
@@ -1035,12 +1031,12 @@ fn filter_pill(id: &'static str, label: &'static str, on: bool) -> gpui::Statefu
         .items_center()
         .text_size(px(11.))
         .when(on, |pill| {
-            pill.bg(luma_ui::glass::wash(0.10))
+            pill.bg(luma_ui::glass::wash(luma_ui::glass::WASH_REST))
                 .text_color(luma_ui::glass::ink(0.90))
         })
         .when(!on, |pill| {
             pill.text_color(luma_ui::glass::ink(0.45))
-                .hover(|pill| pill.bg(luma_ui::glass::wash(0.06)))
+                .hover(|pill| pill.bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE)))
         })
         .child(SharedString::from(label))
 }
@@ -1074,8 +1070,7 @@ fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
 }
 
 /// The scrolling rows. `uniform_list` virtualizes them, so a library of
-/// thousands costs one screenful of elements — the same reason the web side
-/// runs a virtualizer. Everything the closure needs is refcounted, so a redraw
+/// thousands costs one screenful of elements. Everything the closure needs is refcounted, so a redraw
 /// copies two pointers rather than the library.
 ///
 /// The viewport's box is probed rather than derived from the chrome above it:
@@ -1267,8 +1262,7 @@ fn track_row(
 /// resolves, and a decode still in flight all show the same square, and none
 /// of them can reflow the row. `img` reads the file through gpui's global
 /// image cache, so a row scrolled back into view costs a cache hit rather than
-/// a decode — the reason the web side has to preload art by hand
-/// (`track-browser.tsx`) and this one does not.
+/// a decode, so art needs no preloading.
 pub(crate) fn album_art(path: Option<&str>, size: f32) -> Div {
     div()
         .flex_shrink_0()
@@ -1277,15 +1271,14 @@ pub(crate) fn album_art(path: Option<&str>, size: f32) -> Div {
         // rounded row wants the smaller corner, or the two radii fight.
         .rounded(px(luma_ui::radius::CHIP))
         .overflow_hidden()
-        .bg(luma_ui::glass::wash(0.06))
+        .bg(luma_ui::glass::wash(luma_ui::glass::WASH_SUBTLE))
         .children(
             path.filter(|path| !path.is_empty())
                 .map(|path| img(PathBuf::from(path)).size(px(size))),
         )
 }
 
-/// The web side falls back through title → filename; `file_path`'s basename is
-/// the same last resort.
+/// The title, or `file_path`'s basename as the last resort.
 fn track_name(track: &TrackBrowserRow) -> String {
     if let Some(title) = track.title.as_ref().filter(|t| !t.is_empty()) {
         return title.clone();
@@ -1296,15 +1289,10 @@ fn track_name(track: &TrackBrowserRow) -> String {
         .unwrap_or_else(|| track.file_path.clone())
 }
 
-/// How much of this track the venue's annotations cover, as the one dot the
-/// web browser draws before the title: red for none, amber for partial, green
+/// How much of this track the venue's annotations cover, as the one dot drawn
+/// before the title: red for none, amber for partial, green
 /// from 70% up. A track with no duration has nothing to be a fraction of, so
 /// it gets no dot at all.
-///
-/// The web side has a fourth, blue state for "auto-lit, needs review". That
-/// flag lives only in a frontend store, never in the library, so this host
-/// cannot know it — and a dot that silently said "uncovered" for it would be
-/// worse than one state fewer.
 /// How many scores this venue holds for the track, when it holds any.
 ///
 /// Zero draws nothing rather than a `0`: the row's lead is a status column,

@@ -1236,17 +1236,17 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // ---------------------------------------------------------------------------
 
 /// Render the active task in the narrow venue panel.
-pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
-    venue::render(state, app, window)
+pub(crate) fn patch(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    venue::render(state, app)
 }
 
-pub(super) fn details(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
+pub(super) fn details(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     div()
         .size_full()
         .flex()
         .flex_col()
         .child(band(state, app))
-        .child(table::table(state, app, window))
+        .child(table::table(state, app))
         .children(
             state
                 .menu
@@ -1312,9 +1312,9 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
         .child(
             luma_ui::float::btn_primary("Add fixtures")
                 .id("patch-add")
-                .on_click(move |_, window, cx| {
+                .on_click(move |_, _, cx| {
                     let venue = for_add.clone();
-                    add.update(cx, |this, cx| this.open_add_fixtures(venue, window, cx));
+                    add.update(cx, |this, cx| this.open_add_fixtures(venue, cx));
                 })
                 .agent_node(Role::Button, "Add fixtures"),
         )

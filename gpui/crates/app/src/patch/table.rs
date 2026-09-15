@@ -78,7 +78,7 @@ fn compact_line() -> Div {
 
 /// The everyday patch: aligned rows, with advanced routing and occupancy in
 /// Patch details. Reuse its editors and allocator so both views write alike.
-pub(super) fn compact(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
+pub(super) fn compact(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let header = compact_line()
         .h(px(30.0))
         .flex_none()
@@ -103,12 +103,7 @@ pub(super) fn compact(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) 
     } else if state.rows().is_empty() {
         rows = rows.child(float::empty_row("No fixtures yet."));
     } else {
-        rows = rows.children(
-            state
-                .rows()
-                .iter()
-                .map(|row| compact_row(state, row, app, window)),
-        );
+        rows = rows.children(state.rows().iter().map(|row| compact_row(state, row, app)));
     }
     div()
         .id("venue-fixture-table")
@@ -124,12 +119,7 @@ pub(super) fn compact(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) 
         .into_any_element()
 }
 
-fn compact_row(
-    state: &Patch,
-    row: &PatchedFixture,
-    app: &Entity<Luma>,
-    window: &gpui::Window,
-) -> AnyElement {
+fn compact_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyElement {
     let name: SharedString = row
         .label
         .clone()
@@ -212,7 +202,7 @@ fn compact_row(
             .child(reading(COMPACT_NUMBER, row.address.to_string()));
     } else {
         let label = if selected || editing.is_some() {
-            label_cell(state, row, &name, editing, app, window)
+            label_cell(state, row, &name, editing, app)
         } else {
             cell_flex()
                 .text_size(px(13.0))
@@ -240,7 +230,6 @@ fn compact_row(
                 COMPACT_NUMBER,
                 editing,
                 app,
-                window,
             )))
             .child(cell(COMPACT_NUMBER).child(number_cell(
                 state,
@@ -251,7 +240,6 @@ fn compact_row(
                 COMPACT_NUMBER,
                 editing,
                 app,
-                window,
             )));
     }
     let line = if editing_members {
@@ -279,7 +267,7 @@ fn compact_row(
         .into_any_element()
 }
 
-pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
+pub(super) fn table(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let body: AnyElement = match (&state.error, state.data.as_ref()) {
         (Some(error), _) => luma_ui::plate(
             format!("Failed to load the patch: {error}"),
@@ -295,7 +283,7 @@ pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) ->
             ladder::muted_foreground(),
         )
         .into_any_element(),
-        (None, Some(_)) => rows(state, app, window),
+        (None, Some(_)) => rows(state, app),
     };
     div()
         .id("patch-table")
@@ -346,27 +334,17 @@ fn cell_flex() -> Div {
 /// drawn with two weights reads as two tables.
 const HAIRLINE: f32 = 0.10;
 
-fn rows(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
+fn rows(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     div()
         .id("patch-rows")
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .children(
-            state
-                .rows()
-                .iter()
-                .map(|row| fixture_row(state, row, app, window)),
-        )
+        .children(state.rows().iter().map(|row| fixture_row(state, row, app)))
         .into_any_element()
 }
 
-fn fixture_row(
-    state: &Patch,
-    row: &PatchedFixture,
-    app: &Entity<Luma>,
-    window: &gpui::Window,
-) -> AnyElement {
+fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyElement {
     let name: SharedString = row
         .label
         .clone()
@@ -427,7 +405,7 @@ fn fixture_row(
         .on_hover(motion::hover_listener(fade_key));
 
     line = line
-        .child(label_cell(state, row, &name, editing, app, window))
+        .child(label_cell(state, row, &name, editing, app))
         .child(
             cell(W_MODEL)
                 .text_size(px(12.0))
@@ -445,7 +423,6 @@ fn fixture_row(
             W_UNIVERSE,
             editing,
             app,
-            window,
         ))
         .child(number_cell(
             state,
@@ -456,7 +433,6 @@ fn fixture_row(
             W_ADDRESS,
             editing,
             app,
-            window,
         ))
         .child(
             reading(W_RANGE, format!("{}–{last}", row.address))
@@ -530,7 +506,6 @@ fn label_cell(
     name: &SharedString,
     editing: Option<&super::Editing>,
     app: &Entity<Luma>,
-    _window: &gpui::Window,
 ) -> AnyElement {
     if let Some(field) = editing
         .filter(|edit| edit.column == Column::Label)
@@ -589,7 +564,6 @@ fn number_cell(
     width: f32,
     editing: Option<&super::Editing>,
     app: &Entity<Luma>,
-    _window: &gpui::Window,
 ) -> AnyElement {
     if let Some(field) = editing
         .filter(|edit| edit.column == column)
