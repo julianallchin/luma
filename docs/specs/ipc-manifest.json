@@ -4,59 +4,6 @@
     {
       "args": [
         {
-          "name": "fixtureId",
-          "rust": "String"
-        },
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "headIndex",
-          "rust": "Option<i64>"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 102
-      },
-      "name": "add_fixture_to_group",
-      "prose": {
-        "notes": "head_index = None means whole-fixture membership and is stored as the sentinel groups_db::WHOLE_FIXTURE, not NULL — a port must keep that sentinel, since remove_fixture_from_group's split logic depends on it. Adding a head to a fixture that already has whole-fixture membership is subsumed server-side, so the store only does an optimistic update for whole-fixture adds and refetches the hierarchy for head adds (and refetches on error too).",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Group(group_id) ONLY — the fixture is not separately authorized",
-          "Inserts a membership row; invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        },
-        {
-          "name": "message",
-          "rust": "String"
-        }
-      ],
-      "domain": "agent",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent.rs",
-        "line": 35
-      },
-      "name": "agent_steer",
-      "prose": {
-        "returns": "()"
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "threadId",
           "rust": "String"
         },
@@ -68,7 +15,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 49
+        "line": 40
       },
       "name": "agent_thread_append_messages",
       "prose": {
@@ -117,7 +64,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 76
+        "line": 67
       },
       "name": "agent_thread_delete",
       "prose": {
@@ -131,29 +78,6 @@
         ]
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        }
-      ],
-      "domain": "agent_threads",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 18
-      },
-      "name": "agent_thread_get",
-      "prose": {
-        "callerUsage": "loadThreadMessages() maps rows to AI-SDK UIMessages, substituting `[{type:'text',text:''}]` for an empty parts array, validates every message with isAgentChatMessage and throws (fail-closed, no partial history) if any row fails; builds the append baseline with partsJson computed from the CLIENT message, not the echoed row.",
-        "notes": "Messages come back ordered by `seq` ascending; `seq` is i64 exported as TS number and is DB-assigned. `parts` is the AI SDK UIMessage.parts array verbatim — opaque JSON the backend never interprets; it round-trips through serde_json and MAY have object keys reordered, so never byte-compare the echoed parts. A thread owned by another principal is not visible (scoped by ownerUserId).",
-        "returns": "AgentThreadDetail { thread: AgentThread, messages: AgentThreadMessage[] }",
-        "sideEffects": [
-          "read-only SQLite query scoped to the admitted principal"
-        ]
-      },
-      "returns": "AgentThreadDetail"
     },
     {
       "args": [
@@ -173,7 +97,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 29
+        "line": 20
       },
       "name": "agent_thread_list",
       "prose": {
@@ -196,7 +120,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 99
+        "line": 90
       },
       "name": "agent_thread_record_usage",
       "prose": {
@@ -218,7 +142,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 124
+        "line": 115
       },
       "name": "agent_thread_rename",
       "prose": {
@@ -245,7 +169,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 113
+        "line": 104
       },
       "name": "agent_thread_set_actor",
       "prose": {
@@ -267,50 +191,10 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 139
+        "line": 130
       },
       "name": "agent_thread_set_model",
       "returns": "AgentThread"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        }
-      ],
-      "domain": "agent",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent.rs",
-        "line": 27
-      },
-      "name": "agent_turn_cancel",
-      "prose": {
-        "returns": "bool"
-      },
-      "returns": "bool"
-    },
-    {
-      "args": [
-        {
-          "name": "threadId",
-          "rust": "String"
-        },
-        {
-          "name": "prompt",
-          "rust": "String"
-        }
-      ],
-      "domain": "agent",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/agent.rs",
-        "line": 15
-      },
-      "name": "agent_turn_start",
-      "prose": {
-        "returns": "String"
-      },
-      "returns": "String"
     },
     {
       "args": [
@@ -400,7 +284,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 137
+        "line": 92
       },
       "name": "attach",
       "prose": {
@@ -540,7 +424,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 253
+        "line": 208
       },
       "name": "constrain",
       "prose": {
@@ -739,94 +623,6 @@
     {
       "args": [
         {
-          "name": "patternId",
-          "rust": "String"
-        },
-        {
-          "name": "requestId",
-          "rust": "String"
-        }
-      ],
-      "domain": "composable_patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
-        "line": 52
-      },
-      "name": "copy_pattern_to_library",
-      "prose": {
-        "returns": "PatternSummary"
-      },
-      "returns": "PatternSummary"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "axisLr",
-          "rust": "Option<f64>"
-        },
-        {
-          "name": "axisFb",
-          "rust": "Option<f64>"
-        },
-        {
-          "name": "axisAb",
-          "rust": "Option<f64>"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 22
-      },
-      "name": "create_group",
-      "prose": {
-        "notes": "Names are normalized (lowercase, spaces/hyphens -> underscore, non-alnum stripped, collapsed) for uniqueness but the raw name is stored; the error message quotes the *normalized* form. Empty-normalized names skip the check entirely, so multiple such groups are allowed. Axes are LR/FB/AB in -1..+1. movementConfig can't be set at create — it goes through update_movement_config. Caller optimistically appends a synthetic FixtureGroupNode with fixtureType 'unknown' and empty fixtures.",
-        "returns": "FixtureGroup { id, uid, venueId, name: string|null, axisLr/axisFb/axisAb: number|null, movementConfig: MovementConfig|null, displayOrder: bigint, createdAt, updatedAt }",
-        "sideEffects": [
-          "VenueAccess::<Write> on the venue",
-          "Pre-check: lists all groups and rejects with \"A group with name 'x' already exists\" if normalize_group_name collides (in-transaction, not a DB unique constraint)",
-          "invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "FixtureGroup"
-    },
-    {
-      "args": [
-        {
-          "name": "effect",
-          "rust": "String"
-        },
-        {
-          "name": "scoreId",
-          "rust": "String"
-        },
-        {
-          "name": "requestId",
-          "rust": "String"
-        }
-      ],
-      "domain": "composable_patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
-        "line": 27
-      },
-      "name": "create_lighting_pattern",
-      "prose": {
-        "returns": "PatternSummary"
-      },
-      "returns": "PatternSummary"
-    },
-    {
-      "args": [
-        {
           "name": "requestId",
           "rust": "String"
         },
@@ -842,7 +638,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 26
+        "line": 16
       },
       "name": "create_pattern",
       "prose": {
@@ -905,7 +701,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 30
+        "line": 25
       },
       "name": "create_venue",
       "prose": {
@@ -940,7 +736,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 89
+        "line": 31
       },
       "name": "delete_group",
       "prose": {
@@ -949,29 +745,6 @@
         "sideEffects": [
           "VenueAccess::<Write> on the group; require_changed -> 'Venue resource not found' if not exactly 1 row",
           "Membership rows go away with the group (FK cascade); invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 56
-      },
-      "name": "delete_pattern",
-      "prose": {
-        "notes": "Archive, not hard delete — consistent with the project's no-cascade-deletes rule. Principal comes from StateDb auth server-side; ownership enforcement lives inside archive_pattern, not in the command. Store calls refresh() (list_patterns) afterwards rather than removing optimistically.",
-        "returns": "void",
-        "sideEffects": [
-          "archives (soft-deletes) the authored pattern document",
-          "engine.push_notify.notify_one()"
         ]
       },
       "returns": "()"
@@ -1014,78 +787,13 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 337
+        "line": 292
       },
       "name": "delete_subtree",
       "prose": {
         "returns": "ResolvedVenue"
       },
       "returns": "ResolvedVenue"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 98
-      },
-      "name": "delete_track",
-      "prose": {
-        "notes": "One track per call — bulk delete in the UI is Promise.all over N invocations, so a mid-batch failure leaves a partial delete (and the single catch logs only the first rejection). Errors with \"Track {id} not found\" on an unknown id or when the owner check rejects. Principal comes from StateDb server-side. The frontend deletes optimistically from the store BEFORE invoking and never rolls back on failure — a failed delete leaves the UI lying until the following refresh()/refreshBrowser() pair repairs it. This is a real hard delete of the track row + files (unlike delete_pattern, which archives) — the no-cascade-deletes rule is about sync, not this.",
-        "returns": "void",
-        "sideEffects": [
-          "recovers any previously interrupted deletions first (recover_track_deletions)",
-          "BEGIN IMMEDIATE transaction: prepares the deletion plan, stages the track's files (audio, art, artifacts) for deletion on disk, deletes the row, commits — with filesystem rollback on any DB failure",
-          "the sync_delete_tracks SQLite trigger enqueues the committed row deletion for push"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        }
-      ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 52
-      },
-      "name": "delete_venue",
-      "prose": {
-        "notes": "Owner-side delete. No cloud call here (contrast leave_venue, which does hit Supabase directly). Caller clears selectedVenueId when the deleted id was selected — note the caller compares `String(get().selectedVenueId) === id`, a stringify guard that hints selectedVenueId was once numeric.",
-        "returns": "void",
-        "sideEffects": [
-          "BEGIN IMMEDIATE transaction + commit",
-          "local venue row removed / tombstoned; sync push propagates"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 90
-      },
-      "name": "describe_venue",
-      "prose": {
-        "returns": "String"
-      },
-      "returns": "String"
     },
     {
       "args": [
@@ -1101,7 +809,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 234
+        "line": 189
       },
       "name": "detach",
       "prose": {
@@ -1181,7 +889,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 314
+        "line": 269
       },
       "name": "duplicate",
       "prose": {
@@ -1396,7 +1104,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 293
+        "line": 248
       },
       "name": "extend",
       "prose": {
@@ -1422,7 +1130,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 119
+        "line": 74
       },
       "name": "extend_reach",
       "prose": {
@@ -1453,47 +1161,6 @@
       "returns": "FixtureRole"
     },
     {
-      "args": [],
-      "domain": "sync",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 7
-      },
-      "name": "force_quit",
-      "prose": {
-        "notes": "Lives in sync.rs only because it's the escape hatch for the upload-in-progress close guard; it is not a sync command. App.tsx listens for the backend `close-requested` event, checks useUploadProgressStore for in-flight uploads, and either shows a confirm dialog (whose 'Quit anyway' calls force_quit at :533) or calls force_quit straight away (:457). In-flight uploads are abandoned, not flushed — they resume on next launch.",
-        "returns": "void (sync fn, no Result — cannot fail)",
-        "sideEffects": [
-          "terminates the process immediately with code 0"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "ForkPatternInput"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 46
-      },
-      "name": "fork_pattern",
-      "prose": {
-        "notes": "requestId is a CALLER-OWNED IDEMPOTENCY KEY: replaying the same requestId returns the same target pattern/implementation/revision rather than forking twice. A port must generate it client-side and reuse it on retry, never regenerate per attempt. Payload is nested under a single `input` key (invoke('fork_pattern', { input })), unlike every other command here which spreads its args. The caller uses only result.pattern and drops implementationId/documentId/revisionId/appliedToCurrentProjection.",
-        "returns": "ForkPatternResult { pattern: PatternSummary, implementationId, documentId, revisionId, appliedToCurrentProjection }",
-        "sideEffects": [
-          "creates a new pattern + implementation + authored-document revision in the Git-backed authored store and its sqlite projection",
-          "engine.push_notify.notify_one()",
-          "uid may be None (unauthenticated fork is allowed — passed as Option to the service)"
-        ]
-      },
-      "returns": "ForkPatternResult"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -1503,28 +1170,13 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 862
+        "line": 706
       },
       "name": "generate_venue_groups",
       "prose": {
         "returns": "()"
       },
       "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 90
-      },
-      "name": "get_classifier_thresholds",
-      "prose": {
-        "notes": "Synchronous (non-async) command, no DB state — reads thresholds bundled with the classifier weights. Zero args; the smoke harness still passes `{}`. Frontend uses these in place of a flat 0.5 cutoff (e.g. `vocal_chop` ≈ 0.165). Failure path in the hook degrades to `{}`, which silently reverts callers to whatever default they apply.",
-        "returns": "Record<string, number> — tag name → F1-optimal threshold",
-        "sideEffects": []
-      },
-      "returns": "HashMap<String, f64>"
     },
     {
       "args": [],
@@ -1584,28 +1236,6 @@
       "returns": "Vec<FixtureFacing>"
     },
     {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 155
-      },
-      "name": "get_grouped_hierarchy",
-      "prose": {
-        "notes": "camelCase JSON (serde rename_all). Service needs the AppHandle to reach the bundled fixture-definition resource root, so a port must supply a resource path, not just a pool. groupName is nullable — pattern-editor filters nulls before building its group-name list. `heads.length < headCount` means partial-fixture membership.",
-        "returns": "FixtureGroupNode[] — { groupId, groupName: string|null, fixtureType, axisLr|axisFb|axisAb: number|null, movementConfig: MovementConfig|null, fixtures: GroupedFixtureNode[] } where GroupedFixtureNode = { id, label, fixtureType, heads: HeadNode[], headCount }",
-        "sideEffects": [
-          "read-only; VenueAccess::<Read> on VenueResource::Venue(venueId)"
-        ]
-      },
-      "returns": "Vec<FixtureGroupNode>"
-    },
-    {
       "args": [],
       "domain": "node_graph",
       "handler": {
@@ -1619,31 +1249,6 @@
         "sideEffects": []
       },
       "returns": "Vec<NodeTypeDef>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 63
-      },
-      "name": "get_or_create_share_code",
-      "prose": {
-        "notes": "Idempotent: returns the existing code if one is already set (no cloud write in that path). The cloud write is best-effort — a local code can exist that the cloud never learned about, so join_venue would fail for it; that is a real drift hazard for a port. Caller auto-invokes on first dialog open and only console.errors on failure.",
-        "returns": "String — 8-char base62 share code",
-        "sideEffects": [
-          "requires an authenticated session (errors 'Not authenticated')",
-          "owner-only: errors if venue.uid != current user id",
-          "generates + persists share_code locally (VenueAccess::<Write>, committed)",
-          "PATCHes venues.share_code to Supabase with the user's access token; a cloud failure is only eprintln'd, not returned"
-        ]
-      },
-      "returns": "String"
     },
     {
       "args": [
@@ -1673,26 +1278,6 @@
         {
           "name": "id",
           "rust": "String"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 17
-      },
-      "name": "get_pattern",
-      "prose": {
-        "notes": "Errors (not null) when the id is unknown. Used as a re-read after set_pattern_category and after verify_pattern, because neither returns the refreshed summary — a read-after-write round trip the port should expect.",
-        "returns": "PatternSummary { id, uid?, name, description?, categoryName?, createdAt, updatedAt, isVerified, authorName?, forkedFromId? }",
-        "sideEffects": []
-      },
-      "returns": "PatternSummary"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
         },
         {
           "name": "venueId",
@@ -1706,7 +1291,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 160
+        "line": 84
       },
       "name": "get_pattern_args",
       "prose": {
@@ -1730,7 +1315,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 76
+        "line": 28
       },
       "name": "get_pattern_graph_document",
       "prose": {
@@ -1767,7 +1352,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 88
+        "line": 40
       },
       "name": "get_pattern_score_template",
       "returns": "luma_patterns::Score"
@@ -1782,7 +1367,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 47
+        "line": 45
       },
       "name": "get_resolved_venue",
       "prose": {
@@ -1851,24 +1436,6 @@
     {
       "args": [
         {
-          "name": "name",
-          "rust": "String"
-        }
-      ],
-      "domain": "skills",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/skills.rs",
-        "line": 22
-      },
-      "name": "get_skill",
-      "prose": {
-        "returns": "String"
-      },
-      "returns": "String"
-    },
-    {
-      "args": [
-        {
           "name": "trackId",
           "rust": "String"
         }
@@ -1876,49 +1443,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 124
-      },
-      "name": "get_track_audio_base64",
-      "prose": {
-        "notes": "Whole-file STANDARD base64 — a 10 MB mp3 crosses IPC as ~13 MB of string. Only justified because the bytes are fed to an LLM FilePart. mimeType is inferred from the file extension only (mp3→audio/mpeg, wav, flac, m4a|aac→audio/mp4, ogg; anything else → application/octet-stream), never sniffed. Contrast with album art, which deliberately does NOT inline base64 (CLAUDE.md). A port must not reuse this for playback.",
-        "returns": "{ data: string; mimeType: string } — TrackAudioBase64, camelCase",
-        "sideEffects": [
-          "reads the whole audio file off disk into memory"
-        ]
-      },
-      "returns": "TrackAudioBase64"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 69
-      },
-      "name": "get_track_bar_classifications",
-      "prose": {
-        "notes": "Untyped payload: the backend stores two JSON blobs and only validates that they parse. camelCase rename means the wire key is `tagOrder`. Returns null when classification hasn't run; the hook maps null → null state. A port must keep the JSON passthrough — there is no Rust-side schema for the classification shape.",
-        "returns": "{ classifications: unknown; tagOrder: unknown } | null — both fields are opaque serde_json::Value re-parsed from TEXT columns",
-        "sideEffects": []
-      },
-      "returns": "Option<TrackBarClassifications>"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 43
+        "line": 27
       },
       "name": "get_track_beat_validation",
       "returns": "Option<BeatValidation>"
@@ -1933,7 +1458,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 33
+        "line": 17
       },
       "name": "get_track_beats",
       "prose": {
@@ -1942,26 +1467,6 @@
         "sideEffects": []
       },
       "returns": "Option<BeatGrid>"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 79
-      },
-      "name": "get_track_drum_onsets",
-      "prose": {
-        "notes": "Null when drum transcription hasn't run. Keys are not guaranteed present individually — the e2e caller guards with `onsets?.kick`. This is the only command in this group that goes straight to the db module instead of services::tracks (minor layering inconsistency).",
-        "returns": "Record<string, number[]> | null — keys are the n2n class names `kick`, `snare`, `hat`, `cymbal`; values are onset timestamps in seconds",
-        "sideEffects": []
-      },
-      "returns": "Option<HashMap<String, Vec<f32>>>"
     },
     {
       "args": [
@@ -1991,28 +1496,6 @@
     {
       "args": [
         {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 216
-      },
-      "name": "get_ungrouped_fixtures",
-      "prose": {
-        "notes": "Fixtures in the venue with no group membership row at all (whole-fixture or per-head). Filed under 'Migration / Maintenance' in the Rust file — it exists to surface fixtures left behind by the group migration.",
-        "returns": "PatchedFixture[]",
-        "sideEffects": [
-          "read-only; VenueAccess::<Read> on the venue"
-        ]
-      },
-      "returns": "Vec<PatchedFixture>"
-    },
-    {
-      "args": [
-        {
           "name": "id",
           "rust": "String"
         }
@@ -2020,7 +1503,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 23
+        "line": 18
       },
       "name": "get_venue",
       "prose": {
@@ -2039,32 +1522,10 @@
           "rust": "String"
         }
       ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 23
-      },
-      "name": "get_venue_annotation_counts",
-      "prose": {
-        "notes": "Sparse map: tracks with zero annotations in this venue are ABSENT, so callers must default to 0 (the store does `counts[t.id] ?? 0`). Overlaps list_tracks_enriched's venueAnnotationCount — the same number by two code paths, one of them raw SQL embedded in the command file instead of database/local/tracks.rs. That is the smell: it exists purely as a cheap refresh of one column after a venue switch.",
-        "returns": "Record<string, number> — trackId -> clip count (i64)",
-        "sideEffects": [
-          "VenueAccess::<Read> on the venue"
-        ]
-      },
-      "returns": "HashMap<String, i64>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 36
+        "line": 34
       },
       "name": "get_venue_graph",
       "prose": {
@@ -2086,7 +1547,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 197
+        "line": 77
       },
       "name": "highlight_selection",
       "prose": {
@@ -2344,7 +1805,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 150
+        "line": 65
       },
       "name": "import_tracks",
       "prose": {
@@ -2369,30 +1830,6 @@
         ]
       },
       "returns": "usize"
-    },
-    {
-      "args": [
-        {
-          "name": "code",
-          "rust": "String"
-        }
-      ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 116
-      },
-      "name": "join_venue",
-      "prose": {
-        "notes": "The uid-is-owner convention is load-bearing: is_owner() is decided by `role`, not by uid. Fixtures/groups/tracks are NOT pulled here — the frontend must fire sync_full after joining (join-venue-dialog.tsx:48 does exactly that, fire-and-forget). Errors from the RPC are wrapped as 'Failed to join venue: …'.",
-        "returns": "Venue (local row, role='member')",
-        "sideEffects": [
-          "requires auth",
-          "remote RPC join_venue_by_code creates the cloud membership row",
-          "inserts a local venue row whose id IS the cloud UUID and whose uid is the OWNER's uid, not the joiner's"
-        ]
-      },
-      "returns": "Venue"
     },
     {
       "args": [
@@ -2427,35 +1864,10 @@
           "rust": "String"
         }
       ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 148
-      },
-      "name": "leave_venue",
-      "prose": {
-        "notes": "Ordering matters: ownership check → drop read txn → cloud delete → local delete. The cloud delete is best-effort, so a port must tolerate a local-left/cloud-still-member state (next pull could re-add). Venue row itself survives if other memberships remain.",
-        "returns": "void",
-        "sideEffects": [
-          "read access opened then explicitly dropped before the network call (holds no transaction across IO)",
-          "errors 'Cannot leave a venue you own' when venue.is_owner()",
-          "requires auth; DELETEs venue_members where venue_id=eq.X&user_id=eq.Y in Supabase (failure only eprintln'd)",
-          "removes the local membership row"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 252
+        "line": 106
       },
       "name": "list_group_tree",
       "prose": {
@@ -2473,7 +1885,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 48
+        "line": 22
       },
       "name": "list_groups",
       "prose": {
@@ -2500,25 +1912,10 @@
     },
     {
       "args": [],
-      "domain": "categories",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/categories.rs",
-        "line": 8
-      },
-      "name": "list_pattern_categories",
-      "prose": {
-        "notes": "Unscoped by user despite the uid column. Both call sites load into ad-hoc local component state (no shared store) and swallow errors to console — duplicated fetch logic worth hoisting into one store in a port.",
-        "returns": "PatternCategory[] { id, uid?, name, createdAt, updatedAt }",
-        "sideEffects": []
-      },
-      "returns": "Vec<PatternCategory>"
-    },
-    {
-      "args": [],
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 11
+        "line": 10
       },
       "name": "list_patterns",
       "prose": {
@@ -2576,7 +1973,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 17
+        "line": 12
       },
       "name": "list_tracks",
       "prose": {
@@ -2596,7 +1993,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 141
+        "line": 56
       },
       "name": "list_tracks_enriched",
       "prose": {
@@ -2613,7 +2010,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 17
+        "line": 12
       },
       "name": "list_venues",
       "prose": {
@@ -3378,7 +2775,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 197
+        "line": 152
       },
       "name": "place_free",
       "prose": {
@@ -3403,48 +2800,6 @@
         "returns": "Value"
       },
       "returns": "Value"
-    },
-    {
-      "args": [
-        {
-          "name": "graph",
-          "rust": "Graph"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "startTime",
-          "rust": "f32"
-        },
-        {
-          "name": "endTime",
-          "rust": "f32"
-        },
-        {
-          "name": "beatGrid",
-          "rust": "Option<BeatGrid>"
-        }
-      ],
-      "domain": "annotation_preview",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 38
-      },
-      "name": "preview_graph_image",
-      "prose": {
-        "notes": "Same as preview_pattern_image but for an UNSAVED graph — this is the graph-editor agent's 'look at my edit' tool. Same end_time > start_time guard and same Selection-forced-to-all default args, so the pattern-editor call site pre-rewrites graph.args via overrideSelectionArgs(...) to inject the editor's preview selection before sending. Requires a selected track context (venueId falls back to the current venue id, else empty string — an empty venueId will fail VenueAccess).",
-        "returns": "AnnotationPreview with annotationId = `preview_graph` (constant)",
-        "sideEffects": [
-          "read-only; VenueAccess::<Read> on the venue"
-        ]
-      },
-      "returns": "AnnotationPreview"
     },
     {
       "args": [
@@ -3496,48 +2851,6 @@
     {
       "args": [
         {
-          "name": "patternId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "startTime",
-          "rust": "f32"
-        },
-        {
-          "name": "endTime",
-          "rust": "f32"
-        },
-        {
-          "name": "beatGrid",
-          "rust": "Option<BeatGrid>"
-        }
-      ],
-      "domain": "annotation_preview",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
-        "line": 13
-      },
-      "name": "preview_pattern_image",
-      "prose": {
-        "notes": "Errors with 'end_time must be greater than start_time' if the span is non-positive — validate before calling. Args are the PATTERN DEFAULTS with every Selection-typed arg forced to `{\"expression\":\"all\"}` (preview_arg_values), so this is not what the timeline clip would render. Without beatGrid the column count falls back to the non-beat-aligned width rule. The `_at` variant takes (pool, StorageRoot, resource_root) directly — the AppHandle only ever supplied those two roots, so a port needs no Tauri handle.",
-        "returns": "AnnotationPreview with annotationId = `preview_{patternId}`",
-        "sideEffects": [
-          "read-only; VenueAccess::<Read> on the venue"
-        ]
-      },
-      "returns": "AnnotationPreview"
-    },
-    {
-      "args": [
-        {
           "name": "scoreId",
           "rust": "String"
         },
@@ -3579,7 +2892,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 167
+        "line": 47
       },
       "name": "preview_selection_query",
       "prose": {
@@ -3680,7 +2993,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 168
+        "line": 123
       },
       "name": "reattach",
       "prose": {
@@ -3840,39 +3153,6 @@
     {
       "args": [
         {
-          "name": "fixtureId",
-          "rust": "String"
-        },
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "headIndex",
-          "rust": "Option<i64>"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 120
-      },
-      "name": "remove_fixture_from_group",
-      "prose": {
-        "notes": "TS sends headIndex as `headIndex ?? null` — null is meaningful (whole fixture), not 'omitted'. The store does an optimistic local removal, and refetches the whole hierarchy after a per-head removal (because the split changes structure) and on any error. Group-scoped auth: the group id, not the venue id, is the resource.",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Group(groupId) — authorization + tx; access.commit()",
-          "invalidate_venue_fixture_cache() (process-global fixture cache)",
-          "headIndex=null drops the whole membership incl. per-head rows; headIndex=N on a whole-fixture membership SPLITS it into per-head rows for the remaining heads (writes N-1 rows)",
-          "resolves fixtures resource root from AppHandle in the per-head branch only"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         },
@@ -3907,7 +3187,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 354
+        "line": 353
       },
       "name": "remove_session_item",
       "prose": {
@@ -4129,36 +3409,13 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 265
+        "line": 180
       },
       "name": "reprocess_track",
       "prose": {
         "returns": "()"
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        }
-      ],
-      "domain": "waveforms",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/waveforms.rs",
-        "line": 38
-      },
-      "name": "reprocess_waveform",
-      "prose": {
-        "notes": "Identical to get_track_waveform minus the cache lookup — both funnel into ensure_track_waveform. Caller pushes the result straight into useTrackEditorStore ({ waveform, durationSeconds }) only if the track is still the active one; a port must keep that staleness check or the editor shows another track's waveform.",
-        "returns": "TrackWaveform (same shape as get_track_waveform)",
-        "sideEffects": [
-          "Unconditionally recomputes from audio (skips the cache check) and upserts the waveform blobs",
-          "Same AnalysisTaskGroup lease + principal/hash guards as get_track_waveform"
-        ]
-      },
-      "returns": "TrackWaveform"
     },
     {
       "args": [
@@ -4204,7 +3461,7 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 60
+        "line": 58
       },
       "name": "restore_graph",
       "prose": {
@@ -4317,7 +3574,7 @@
       "domain": "patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 177
+        "line": 101
       },
       "name": "save_pattern_graph_document",
       "prose": {
@@ -4356,7 +3613,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 836
+        "line": 680
       },
       "name": "save_venue_group",
       "prose": {
@@ -4520,39 +3777,13 @@
       "domain": "stage",
       "handler": {
         "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 273
+        "line": 228
       },
       "name": "set_params",
       "prose": {
         "returns": "PlacementReport"
       },
       "returns": "PlacementReport"
-    },
-    {
-      "args": [
-        {
-          "name": "patternId",
-          "rust": "String"
-        },
-        {
-          "name": "categoryName",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 63
-      },
-      "name": "set_pattern_category",
-      "prose": {
-        "notes": "Argument name is `patternId` here but `id` on every other pattern command — a drifted parameter naming convention worth unifying in a port. Does NOT notify the sync engine (unlike create/update/delete), so a category change is not pushed until some other write wakes the loop. Returns nothing, so callers must re-invoke get_pattern to refresh.",
-        "returns": "void",
-        "sideEffects": [
-          "writes the pattern's category column"
-        ]
-      },
-      "returns": "()"
     },
     {
       "args": [
@@ -4631,7 +3862,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 50
+        "line": 34
       },
       "name": "set_track_beat_validation",
       "returns": "()"
@@ -4650,7 +3881,7 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 171
+        "line": 40
       },
       "name": "set_venue_environment",
       "prose": {
@@ -4672,36 +3903,10 @@
       "domain": "venues",
       "handler": {
         "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 186
+        "line": 55
       },
       "name": "set_venue_haze",
       "returns": "()"
-    },
-    {
-      "args": [],
-      "domain": "skills",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/skills.rs",
-        "line": 17
-      },
-      "name": "skills_listing",
-      "prose": {
-        "returns": "String"
-      },
-      "returns": "String"
-    },
-    {
-      "args": [],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 105
-      },
-      "name": "stage_catalog",
-      "prose": {
-        "returns": "StageCatalog"
-      },
-      "returns": "StageCatalog"
     },
     {
       "args": [],
@@ -4785,7 +3990,7 @@
       "domain": "sync",
       "handler": {
         "file": "backend/src/dispatch/handlers/sync.rs",
-        "line": 16
+        "line": 10
       },
       "name": "sync_status",
       "prose": {
@@ -4854,191 +4059,6 @@
     {
       "args": [
         {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "axisLr",
-          "rust": "Option<f64>"
-        },
-        {
-          "name": "axisFb",
-          "rust": "Option<f64>"
-        },
-        {
-          "name": "axisAb",
-          "rust": "Option<f64>"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 57
-      },
-      "name": "update_group",
-      "prose": {
-        "notes": "Ambiguous None semantics: it is unclear from the command whether None means 'leave unchanged' or 'set null' — the caller always sends all four fields explicitly (`?? null`), so the frontend behaves as if it's a full replace. Its optimistic update disagrees with that: it applies `axisLr ?? g.axisLr` locally (keep-old) while sending null. Ordering/movementConfig are not updatable here. No venue_id arg — scope comes from the group.",
-        "returns": "FixtureGroup (updated row)",
-        "sideEffects": [
-          "VenueAccess::<Write> on the group",
-          "Same normalized-name collision pre-check as create_group, excluding self",
-          "invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "FixtureGroup"
-    },
-    {
-      "args": [
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "config",
-          "rust": "Option<MovementConfig>"
-        }
-      ],
-      "domain": "groups",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 231
-      },
-      "name": "update_movement_config",
-      "prose": {
-        "notes": "config: null CLEARS the movement config (sets the column NULL) — it is not 'leave unchanged'. Defaults if a port needs them: baseDir (0,0,-1) straight down, extentU/V 30°, uvRotation 0; Z-up coordinate system, extents are half-widths in degrees. Store updates optimistically and refetches the hierarchy on error; the returned FixtureGroup is discarded by the caller.",
-        "returns": "FixtureGroup (the updated row)",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Group(groupId); commit",
-          "invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "FixtureGroup"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "String"
-        },
-        {
-          "name": "description",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 37
-      },
-      "name": "update_pattern",
-      "prose": {
-        "notes": "Full replace, not a patch — both fields are always written. Renaming sends `description: pattern?.description ?? null` and editing the description sends `name: pattern?.name ?? \"\"`, so a stale/absent local pattern can blank the other field (rename-with-unloaded-pattern would write an empty name). Unlike create/delete this bypasses AuthoredDocuments and writes the SQLite projection directly — metadata is not part of the authored Git document.",
-        "returns": "PatternSummary (updated)",
-        "sideEffects": [
-          "engine.push_notify.notify_one()"
-        ]
-      },
-      "returns": "PatternSummary"
-    },
-    {
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "title",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "artist",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "album",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "tracks",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 445
-      },
-      "name": "update_track_metadata",
-      "prose": {
-        "notes": "All three metadata fields are Option and are sent on every call — the caller passes `title.trim() || null`, so an empty input clears the field rather than leaving it unchanged. There is no partial-update semantic. Does NOT write tags back to the audio file, only the DB. Emit failure is propagated as an error even though the write already committed.",
-        "returns": "void",
-        "sideEffects": [
-          "updates the tracks row in the local DB",
-          "emits `library-changed` (payload: unit) on the app handle after a successful write"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "String"
-        },
-        {
-          "name": "description",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "venues",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/venues.rs",
-        "line": 39
-      },
-      "name": "update_venue",
-      "prose": {
-        "notes": "name is required (full replace, not a patch — there is no partial-update path; passing an empty name would blank it). description null-coerced by the caller. Write access enforces venue permissions before the update; failure surfaces as a plain error String.",
-        "returns": "Venue",
-        "sideEffects": [
-          "BEGIN IMMEDIATE transaction on the local sqlite pool, committed explicitly via access.commit()",
-          "bumps updated_at → row becomes dirty → picked up by the sync pusher"
-        ]
-      },
-      "returns": "Venue"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "cellM",
-          "rust": "Option<f64>"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/stage.rs",
-        "line": 74
-      },
-      "name": "venue_tiles",
-      "prose": {
-        "returns": "String"
-      },
-      "returns": "String"
-    },
-    {
-      "args": [
-        {
           "name": "email",
           "rust": "String"
         },
@@ -5059,40 +4079,11 @@
       "returns": "String"
     },
     {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "verify",
-          "rust": "bool"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 132
-      },
-      "name": "verify_pattern",
-      "prose": {
-        "notes": "Strict 5-step ordering: auth+ownership → profile fetch → local writes → blocking push → re-read and return. The blocking push makes this the slowest pattern command and it fails the whole call if the network is down, even though the local writes already landed (partial-apply hazard). Side effect worth flagging: verifying also rewrites author_name — a caller can't verify without stamping the name. The TS caller discards the returned PatternSummary entirely and re-invokes refresh().",
-        "returns": "PatternSummary { id, uid, name, description, categoryName, createdAt, updatedAt, isVerified, authorName, forkedFromId } (camelCase)",
-        "sideEffects": [
-          "requires auth; errors 'You can only verify your own patterns' when pattern.uid != current uid",
-          "fetches the user's display_name from Supabase profiles (falls back to the raw uid when absent)",
-          "writes author_name AND verified locally, bumping updated_at → dirty",
-          "awaits a SYNCHRONOUS push (engine.run_push(&uid)) — not the usual notify_one nudge"
-        ]
-      },
-      "returns": "PatternSummary"
-    },
-    {
       "args": [],
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 441
+        "line": 440
       },
       "name": "wipe_database",
       "prose": {
@@ -5112,24 +4103,14 @@
   ],
   "domains": [
     {
-      "commandCount": 3,
-      "domain": "agent",
-      "handlers": "backend/src/dispatch/handlers/agent.rs"
-    },
-    {
       "commandCount": 2,
       "domain": "agent_execution",
       "handlers": "backend/src/dispatch/handlers/agent_execution.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 8,
       "domain": "agent_threads",
       "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
-    },
-    {
-      "commandCount": 2,
-      "domain": "annotation_preview",
-      "handlers": "backend/src/dispatch/handlers/annotation_preview.rs"
     },
     {
       "commandCount": 6,
@@ -5142,12 +4123,7 @@
       "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 1,
-      "domain": "categories",
-      "handlers": "backend/src/dispatch/handlers/categories.rs"
-    },
-    {
-      "commandCount": 4,
+      "commandCount": 2,
       "domain": "composable_patterns",
       "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
     },
@@ -5182,7 +4158,7 @@
       "handlers": "backend/src/dispatch/handlers/group_references.rs"
     },
     {
-      "commandCount": 14,
+      "commandCount": 7,
       "domain": "groups",
       "handlers": "backend/src/dispatch/handlers/groups.rs"
     },
@@ -5207,7 +4183,7 @@
       "handlers": "backend/src/dispatch/handlers/node_graph.rs"
     },
     {
-      "commandCount": 12,
+      "commandCount": 6,
       "domain": "patterns",
       "handlers": "backend/src/dispatch/handlers/patterns.rs"
     },
@@ -5237,17 +4213,12 @@
       "handlers": "backend/src/dispatch/handlers/settings.rs"
     },
     {
-      "commandCount": 2,
-      "domain": "skills",
-      "handlers": "backend/src/dispatch/handlers/skills.rs"
-    },
-    {
-      "commandCount": 16,
+      "commandCount": 13,
       "domain": "stage",
       "handlers": "backend/src/dispatch/handlers/stage.rs"
     },
     {
-      "commandCount": 2,
+      "commandCount": 1,
       "domain": "sync",
       "handlers": "backend/src/dispatch/handlers/sync.rs"
     },
@@ -5257,29 +4228,22 @@
       "handlers": "backend/src/dispatch/handlers/telemetry.rs"
     },
     {
-      "commandCount": 14,
+      "commandCount": 7,
       "domain": "tracks",
       "handlers": "backend/src/dispatch/handlers/tracks.rs"
     },
     {
-      "commandCount": 10,
+      "commandCount": 5,
       "domain": "venues",
       "handlers": "backend/src/dispatch/handlers/venues.rs"
     },
     {
-      "commandCount": 2,
+      "commandCount": 1,
       "domain": "waveforms",
       "handlers": "backend/src/dispatch/handlers/waveforms.rs"
     }
   ],
   "events": [
-    {
-      "emitters": [],
-      "listeners": [],
-      "name": "close-requested",
-      "note": "emitted by Tauri's own window lifecycle, not by our code",
-      "orphan": true
-    },
     {
       "emitters": [
         "backend/src/controller_manager.rs:311"
@@ -5300,23 +4264,9 @@
       "orphan": true
     },
     {
-      "emitters": [],
-      "listeners": [],
-      "name": "dmx://update",
-      "note": "dead listener — the visualizer reads `universe-state-update` instead",
-      "orphan": true
-    },
-    {
-      "emitters": [],
-      "listeners": [],
-      "name": "host-audio://state",
-      "orphan": true
-    },
-    {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:357",
-        "backend/src/dispatch/handlers/tracks.rs:395",
-        "backend/src/dispatch/handlers/tracks.rs:460",
+        "backend/src/dispatch/handlers/tracks.rs:272",
+        "backend/src/dispatch/handlers/tracks.rs:310",
         "backend/src/sync/media.rs:135"
       ],
       "listeners": [],
@@ -5350,12 +4300,6 @@
       "orphan": true
     },
     {
-      "emitters": [],
-      "listeners": [],
-      "name": "open-settings",
-      "orphan": true
-    },
-    {
       "emitters": [
         "backend/src/prodjlink_manager.rs:42",
         "backend/src/stagelinq_manager.rs:42"
@@ -5378,9 +4322,9 @@
     },
     {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:311",
-        "backend/src/dispatch/handlers/tracks.rs:482",
-        "backend/src/dispatch/handlers/tracks.rs:560",
+        "backend/src/dispatch/handlers/tracks.rs:226",
+        "backend/src/dispatch/handlers/tracks.rs:376",
+        "backend/src/dispatch/handlers/tracks.rs:454",
         "backend/src/preprocessing/scheduler.rs:351",
         "backend/src/preprocessing/scheduler.rs:399",
         "backend/src/preprocessing/scheduler.rs:463",
@@ -5400,13 +4344,6 @@
       ],
       "listeners": [],
       "name": "track-status-changed",
-      "orphan": true
-    },
-    {
-      "emitters": [],
-      "listeners": [],
-      "name": "universe-buffer",
-      "note": "dead listener — the visualizer reads `universe-state-update` instead",
       "orphan": true
     },
     {
@@ -5437,9 +4374,9 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 208,
-    "domainCount": 32,
-    "eventCount": 18
+    "commandCount": 167,
+    "domainCount": 28,
+    "eventCount": 13
   },
   "version": 2
 }

@@ -5,60 +5,47 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` and it rewrites itself.
 The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command
 prose and the event names in it are the only hand-written parts and are carried across by
-name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
-commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
+name.
 
-**208 commands** across **32 domains** · **18 events**
+**167 commands** across **28 domains** · **13 events**
 
 ## Domains
 
 | Domain | Commands | Handlers |
 | --- | ---: | --- |
-| `agent` | 3 | `backend/src/dispatch/handlers/agent.rs` |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
-| `agent_threads` | 9 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `annotation_preview` | 2 | `backend/src/dispatch/handlers/annotation_preview.rs` |
+| `agent_threads` | 8 | `backend/src/dispatch/handlers/agent_threads.rs` |
 | `artnet` | 6 | `backend/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
-| `categories` | 1 | `backend/src/dispatch/handlers/categories.rs` |
-| `composable_patterns` | 4 | `backend/src/dispatch/handlers/composable_patterns.rs` |
+| `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 16 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
-| `groups` | 14 | `backend/src/dispatch/handlers/groups.rs` |
+| `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
 | `node_graph` | 3 | `backend/src/dispatch/handlers/node_graph.rs` |
-| `patterns` | 12 | `backend/src/dispatch/handlers/patterns.rs` |
+| `patterns` | 6 | `backend/src/dispatch/handlers/patterns.rs` |
 | `perform` | 9 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
 | `scores` | 8 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
-| `skills` | 2 | `backend/src/dispatch/handlers/skills.rs` |
-| `stage` | 16 | `backend/src/dispatch/handlers/stage.rs` |
-| `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
+| `stage` | 13 | `backend/src/dispatch/handlers/stage.rs` |
+| `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 14 | `backend/src/dispatch/handlers/tracks.rs` |
-| `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
-| `waveforms` | 2 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **208** | |
+| `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
+| `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
+| `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
+| **total** | **167** | |
 
 ## Commands
 
 Arguments are shown in their wire spelling; types are the Rust types the table declares.
-
-### `agent`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `agent_turn_start` | `threadId: String`<br>`prompt: String` | `String` |
-| `agent_turn_cancel` | `threadId: String` | `bool` |
-| `agent_steer` | `threadId: String`<br>`message: String` | `()` |
 
 ### `agent_execution`
 
@@ -71,7 +58,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `agent_thread_get` | `threadId: String` | `AgentThreadDetail` |
 | `agent_thread_list` | `agentKind: Option<String>`<br>`subjectKind: Option<String>`<br>`subjectId: Option<String>` | `Vec<AgentThread>` |
 | `agent_thread_create` | `input: CreateAgentThreadInput` | `AgentThread` |
 | `agent_thread_append_messages` | `threadId: String`<br>`input: AppendAgentThreadMessagesInput` | `Vec<AgentThreadMessage>` |
@@ -80,13 +66,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `agent_thread_set_actor` | `threadId: String`<br>`actor: String` | `()` |
 | `agent_thread_record_usage` | `usage: AgentThreadUsage` | `()` |
 | `agent_thread_delete` | `threadId: String` | `()` |
-
-### `annotation_preview`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `preview_pattern_image` | `patternId: String`<br>`trackId: String`<br>`venueId: String`<br>`startTime: f32`<br>`endTime: f32`<br>`beatGrid: Option<BeatGrid>` | `AnnotationPreview` |
-| `preview_graph_image` | `graph: Graph`<br>`trackId: String`<br>`venueId: String`<br>`startTime: f32`<br>`endTime: f32`<br>`beatGrid: Option<BeatGrid>` | `AnnotationPreview` |
 
 ### `artnet`
 
@@ -111,18 +90,10 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `remove_session_item` | `key: String` | `()` |
 | `wipe_database` | — | `()` |
 
-### `categories`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `list_pattern_categories` | — | `Vec<PatternCategory>` |
-
 ### `composable_patterns`
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `copy_pattern_to_library` | `patternId: String`<br>`requestId: String` | `PatternSummary` |
-| `create_lighting_pattern` | `effect: String`<br>`scoreId: String`<br>`requestId: String` | `PatternSummary` |
 | `get_pattern_node_library` | — | `Value` |
 | `preview_composable_pattern` | `request: Value` | `Value` |
 
@@ -200,15 +171,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `generate_venue_groups` | `venueId: String` | `()` |
 | `save_venue_group` | `venueId: String`<br>`groupId: Option<String>`<br>`label: String`<br>`added: Vec<String>`<br>`removed: Vec<String>` | `()` |
 | `list_groups` | `venueId: String` | `Vec<FixtureGroup>` |
-| `create_group` | `venueId: String`<br>`name: Option<String>`<br>`axisLr: Option<f64>`<br>`axisFb: Option<f64>`<br>`axisAb: Option<f64>` | `FixtureGroup` |
-| `update_group` | `id: String`<br>`name: Option<String>`<br>`axisLr: Option<f64>`<br>`axisFb: Option<f64>`<br>`axisAb: Option<f64>` | `FixtureGroup` |
 | `delete_group` | `id: String` | `()` |
-| `add_fixture_to_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
-| `remove_fixture_from_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
-| `get_grouped_hierarchy` | `venueId: String` | `Vec<FixtureGroupNode>` |
 | `list_group_tree` | `venueId: String` | `Vec<GroupTreeNode>` |
-| `get_ungrouped_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
-| `update_movement_config` | `groupId: String`<br>`config: Option<MovementConfig>` | `FixtureGroup` |
 | `preview_selection_query` | `venueId: String`<br>`query: String`<br>`seed: Option<u64>` | `Vec<PatchedFixture>` |
 | `highlight_selection` | `venueId: String`<br>`selection: Selection` | `UniverseState` |
 
@@ -272,13 +236,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `list_patterns` | — | `Vec<PatternSummary>` |
-| `get_pattern` | `id: String` | `PatternSummary` |
 | `create_pattern` | `requestId: String`<br>`name: String`<br>`description: Option<String>` | `PatternSummary` |
-| `update_pattern` | `id: String`<br>`name: String`<br>`description: Option<String>` | `PatternSummary` |
-| `fork_pattern` | `input: ForkPatternInput` | `ForkPatternResult` |
-| `delete_pattern` | `id: String` | `()` |
-| `set_pattern_category` | `patternId: String`<br>`categoryName: Option<String>` | `()` |
-| `verify_pattern` | `id: String`<br>`verify: bool` | `PatternSummary` |
 | `get_pattern_graph_document` | `id: String`<br>`implementationId: Option<String>` | `GraphDocument` |
 | `get_pattern_score_template` | `id: String`<br>`venueId: String` | `luma_patterns::Score` |
 | `get_pattern_args` | `id: String`<br>`venueId: Option<String>`<br>`implementationId: Option<String>` | `Vec<PatternArgDef>` |
@@ -338,13 +296,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_settings` | — | `AppSettings` |
 | `set_setting` | `key: String`<br>`value: String` | `()` |
 
-### `skills`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `skills_listing` | — | `String` |
-| `get_skill` | `name: String` | `String` |
-
 ### `stage`
 
 | Command | Arguments | Returns |
@@ -352,7 +303,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_venue_graph` | `venueId: String` | `VenueGraphRows` |
 | `restore_graph` | `venueId: String`<br>`rows: VenueGraphRows` | `ResolvedVenue` |
 | `get_resolved_venue` | `venueId: String` | `ResolvedVenue` |
-| `venue_tiles` | `venueId: String`<br>`cellM: Option<f64>` | `String` |
 | `attach` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`parentId: String`<br>`mySocket: Option<String>`<br>`theirSocket: String`<br>`yaw: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |
 | `reattach` | `venueId: String`<br>`nodeId: String`<br>`parentId: String`<br>`mySocket: String`<br>`theirSocket: String`<br>`yaw: Option<f64>` | `PlacementReport` |
 | `constrain` | `venueId: String`<br>`nodeId: String`<br>`mySocket: String`<br>`targetNode: String`<br>`targetSocket: String` | `PlacementReport` |
@@ -360,8 +310,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `extend` | `venueId: String`<br>`nodeId: String`<br>`socket: String`<br>`lengthM: Option<f64>` | `PlacementReport` |
 | `extend_reach` | `venueId: String`<br>`nodeId: String`<br>`socket: String` | `Option<Reach>` |
 | `duplicate` | `venueId: String`<br>`nodeId: String`<br>`parentId: String`<br>`theirSocket: String`<br>`flip: Option<bool>` | `PlacementReport` |
-| `describe_venue` | `venueId: String` | `String` |
-| `stage_catalog` | — | `StageCatalog` |
 | `detach` | `venueId: String`<br>`nodeId: String` | `PlacementReport` |
 | `set_params` | `venueId: String`<br>`nodeId: String`<br>`params: BTreeMap<String, f64>`<br>`label: Option<String>` | `PlacementReport` |
 | `delete_subtree` | `venueId: String`<br>`nodeId: String` | `ResolvedVenue` |
@@ -370,7 +318,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `force_quit` | — | `()` |
 | `sync_status` | — | `SyncStatus` |
 
 ### `telemetry`
@@ -385,16 +332,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `list_tracks` | — | `Vec<TrackSummary>` |
 | `list_tracks_enriched` | `venueId: Option<String>` | `Vec<TrackBrowserRow>` |
-| `update_track_metadata` | `trackId: String`<br>`title: Option<String>`<br>`artist: Option<String>`<br>`album: Option<String>` | `()` |
-| `delete_track` | `trackId: String` | `()` |
 | `get_track_beats` | `trackId: String` | `Option<BeatGrid>` |
 | `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
 | `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
-| `get_track_bar_classifications` | `trackId: String` | `Option<TrackBarClassifications>` |
-| `get_track_drum_onsets` | `trackId: String` | `Option<HashMap<String, Vec<f32>>>` |
-| `get_classifier_thresholds` | — | `HashMap<String, f64>` |
-| `get_track_audio_base64` | `trackId: String` | `TrackAudioBase64` |
-| `get_venue_annotation_counts` | `venueId: String` | `HashMap<String, i64>` |
 | `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |
 | `reprocess_track` | `trackId: String` | `()` |
 
@@ -405,11 +345,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `list_venues` | — | `Vec<Venue>` |
 | `get_venue` | `id: String` | `Venue` |
 | `create_venue` | `name: String`<br>`description: Option<String>` | `Venue` |
-| `update_venue` | `id: String`<br>`name: String`<br>`description: Option<String>` | `Venue` |
-| `delete_venue` | `id: String` | `()` |
-| `get_or_create_share_code` | `venueId: String` | `String` |
-| `join_venue` | `code: String` | `Venue` |
-| `leave_venue` | `venueId: String` | `()` |
 | `set_venue_environment` | `venueId: String`<br>`environment: VenueEnvironment` | `()` |
 | `set_venue_haze` | `venueId: String`<br>`haze: VenueHaze` | `()` |
 
@@ -418,7 +353,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_track_waveform` | `trackId: String` | `TrackWaveform` |
-| `reprocess_waveform` | `trackId: String` | `TrackWaveform` |
 
 ## Events
 
@@ -429,21 +363,16 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 
 | Event | Emitters | Listeners | Note |
 | --- | ---: | ---: | --- |
-| `close-requested` | 0 | 0 | **orphan** — emitted by Tauri's own window lifecycle, not by our code |
 | `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
 | `controller_state` | 3 | 0 | **orphan** |
-| `dmx://update` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
-| `host-audio://state` | 0 | 0 | **orphan** |
-| `library-changed` | 4 | 0 | **orphan** |
+| `library-changed` | 3 | 0 | **orphan** |
 | `midi_learn_captured` | 2 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
 | `mixer_state` | 2 | 0 | **orphan** |
-| `open-settings` | 0 | 0 | **orphan** |
 | `perform_event` | 2 | 0 | **orphan** |
 | `python-env-progress` | 5 | 0 | **orphan** |
 | `track-import-state` | 8 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 0 | **orphan** |
-| `universe-buffer` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `universe-state-update` | 2 | 0 | **orphan** |
 | `upload-progress-start` | 1 | 0 | **orphan** |
 | `upload-progress-tick` | 1 | 0 | **orphan** |
