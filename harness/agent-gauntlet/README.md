@@ -2,10 +2,8 @@
 
 The Gauntlet Loop is documented in `docs/specs/venue-builder-gauntlet.md` §1:
 an owner produces fresh evidence, a separate critic returns SHIP IT or FAIL,
-and failures return to the owner for a new round. The current user requirement
-supersedes the older spec's coordinate-free facade and tile-map-first design:
-headless 3D previews, isolated groups and full-draft compositing are acceptance
-requirements here.
+and failures return to the owner for a new round. Headless 3D previews,
+isolated groups and full-draft compositing are acceptance requirements here.
 
 This driver uses the installed Claude CLI as an external agent with only
 Luma's **actual stdio MCP tools**. A transparent recording proxy captures the
