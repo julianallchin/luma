@@ -1,9 +1,6 @@
 //! The `openai-completions` transport, as OpenRouter serves it.
 //!
-//! This is where Kimi, Grok and anything else non-Anthropic is reached. The
-//! WKWebView CORS workaround the TypeScript stack carried (`gateway-fetch`)
-//! has no analogue here and is deliberately not ported: an HTTP client makes
-//! no preflight request.
+//! This is where Kimi, Grok and anything else non-Anthropic is reached.
 
 use futures_util::stream::BoxStream;
 use serde_json::{json, Value};

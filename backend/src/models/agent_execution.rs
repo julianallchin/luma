@@ -1,4 +1,4 @@
-//! The wire shape of one Python cell: what the frontend sends and what it gets
+//! The wire shape of one Python cell: what the host sends and what it gets
 //! back (design §15, contract C4).
 //!
 //! Deliberately notebook-native. The result carries what a notebook cell shows —
@@ -74,7 +74,7 @@ pub struct PythonStoredFigure {
     pub base64_png: Option<String>,
 }
 
-/// What the agent is looking at, as the frontend can describe it.
+/// What the agent is looking at, as the host can describe it.
 ///
 /// Mirrors `agent_execution::bindings::providers::BindingScope` minus
 /// `agent_kind` — that is a property of the *thread*, read from the database, not
@@ -90,6 +90,6 @@ pub struct PythonScopeInput {
     /// `[start_s, end_s]` in absolute track seconds.
     pub window: Option<(f64, f64)>,
     /// The editor's live (possibly unsaved) graph — the one piece of scope only
-    /// the frontend knows.
+    /// the host knows.
     pub graph_definition: Option<Value>,
 }

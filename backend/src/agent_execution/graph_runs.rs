@@ -1,10 +1,9 @@
 //! The latest graph evaluation per agent thread (design §11.2).
 //!
 //! `run_graph` produces far more than the editor draws; the agent's `luma.graph.run`
-//! branch wants exactly that surplus. Rather than push the evaluation through the
-//! frontend and back (dense float buffers the UI has no business shipping), the
-//! command parks it here under the thread id the caller named, and the next cell's
-//! binding assembly picks it up.
+//! branch wants exactly that surplus. Rather than return those dense float
+//! buffers to the caller, the command parks the evaluation here under the thread
+//! id the caller named, and the next cell's binding assembly picks it up.
 //!
 //! One slot per execution: a parent uses its thread id while each detached child
 //! uses its workspace id. Each execution only ever looks at its most recent run, and the

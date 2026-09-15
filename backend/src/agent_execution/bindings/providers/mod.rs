@@ -46,9 +46,8 @@ pub const NO_VENUE: &str = "no venue is open";
 
 /// What the agent is looking at, resolved by the command/adapter layer.
 ///
-/// Deliberately free of UI types and of anything the frontend cannot supply:
-/// `graph_definition` is the editor's *unsaved* buffer, the one piece of scope
-/// that only the frontend knows.
+/// Deliberately free of UI types: `graph_definition` is the editor's *unsaved*
+/// buffer, the one piece of scope that only the host knows.
 #[derive(Debug, Clone, Default)]
 pub struct BindingScope {
     /// `"track_copilot"` | `"pattern_graph"` | `"venue_rig"`.
@@ -67,7 +66,7 @@ pub struct BindingScope {
     pub implementation_id: Option<String>,
     /// Window of interest in absolute track seconds.
     pub window: Option<(f64, f64)>,
-    /// The frontend-owned graph currently in the editor (Graph-shaped JSON).
+    /// The host's graph currently in the editor (Graph-shaped JSON).
     pub graph_definition: Option<Value>,
 }
 

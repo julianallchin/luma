@@ -78,13 +78,13 @@ async fn run() -> Result<(), String> {
         }
         let services = services.clone();
         let stdout = std::sync::Arc::clone(&stdout);
-        // A malformed frame must never take the process down — the shim keeps
-        // one long-lived child and would lose every in-flight call.
+        // A malformed frame must never take the process down: a client keeps
+        // one long-lived process and would lose every in-flight call.
         tokio::spawn(async move {
             let response = match serde_json::from_str::<Value>(&line) {
                 Err(e) => {
                     // A null id is unattributable by construction, so say what
-                    // arrived: the only lead the shim can hand a human is the
+                    // arrived: the only lead a client can hand a human is the
                     // bytes that were actually read off the pipe.
                     let sample: String = line.chars().take(200).collect();
                     json!({

@@ -6,13 +6,10 @@
 //! world positions, the span, the mel spectrograms, and stable fingerprints of
 //! the graph / args / selection.
 //!
-//! Historically this all lived inline in `run_graph`, which then dropped most of
-//! it: the `times` grid was computed and thrown away (the frontend re-derived it
-//! from the span), and `primitive_ids` / `positions` were moved into the `Scene`
-//! with the `Plan` and became unreachable. Both are load-bearing for anything that
-//! wants to *reason* about a run rather than draw it — the agent's code executor
-//! above all — so the evaluation now owns an `Arc<Plan>` and the command projects
-//! from it instead of consuming it.
+//! The time grid, the primitive ids and their positions are load-bearing for
+//! anything that wants to *reason* about a run rather than draw it — the agent's
+//! code executor above all — so the evaluation owns an `Arc<Plan>` and the
+//! command projects from it instead of consuming it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -218,8 +215,7 @@ pub async fn evaluate_graph(
 
 impl GraphEvaluation {
     /// Project onto the graph editor's wire type. Lossy by design — `RunResult`
-    /// predates this struct and carries neither the time axis nor the channel
-    /// names; changing it would ripple through the frontend.
+    /// carries neither the time axis nor the channel names.
     pub fn into_run_result(self) -> RunResult {
         RunResult {
             views: self.views.into_iter().map(|(k, v)| (k, v.signal)).collect(),

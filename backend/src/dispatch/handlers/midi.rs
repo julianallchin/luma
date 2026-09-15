@@ -255,7 +255,7 @@ pub async fn midi_release_cue(services: &AppServices, cue_id: String) -> Result<
 }
 
 /// A venue-scoped write that matched no row is a missing resource, not a
-/// silent no-op — the frontend relies on delete failing loudly.
+/// silent no-op: a delete fails loudly.
 fn require_changed(rows_affected: u64) -> Result<(), CommandError> {
     if rows_affected == 1 {
         Ok(())

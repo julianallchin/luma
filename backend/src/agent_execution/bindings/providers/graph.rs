@@ -1,10 +1,10 @@
 //! `luma.graph` — the pattern graph the agent is editing, and its latest run.
 //!
 //! Two halves with two different owners. The **definition** is whatever is in
-//! the editor right now, including unsaved edits, so it can only come from the
-//! frontend; it is inlined verbatim-ish (nodes, edges, args). The **run** is
-//! dense numeric output the frontend has no business shipping, so it is
-//! published in Rust from a [`GraphEvaluation`].
+//! the editor right now, including unsaved edits, so it comes from the host
+//! with the scope; it is inlined verbatim-ish (nodes, edges, args). The **run**
+//! is dense numeric output, so it is published in Rust from a
+//! [`GraphEvaluation`].
 //!
 //! The run is only published when it still describes the current scope (design
 //! §11.3). A stale run paired with a fresh track is worse than no run at all:

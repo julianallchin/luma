@@ -184,7 +184,7 @@ impl HostAudioState {
     }
 }
 
-/// Snapshot of playback state sent to frontend
+/// Snapshot of playback state for the host
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HostAudioSnapshot {

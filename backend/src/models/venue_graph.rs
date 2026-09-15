@@ -181,8 +181,8 @@ pub struct ResolvedNode {
     pub array_index: Option<u32>,
     /// Whether this pose stands for one physical object the set-piece layer
     /// draws — [`NodePose::is_set_piece`]. Carried rather than re-derived, so
-    /// the renderer, the agent binding and the React store cannot disagree
-    /// about what is in the room.
+    /// the renderer and the agent binding cannot disagree about what is in the
+    /// room.
     pub set_piece: bool,
     pub params: BTreeMap<String, f64>,
 }

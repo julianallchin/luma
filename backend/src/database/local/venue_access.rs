@@ -438,12 +438,9 @@ mod tests {
                 .await
                 .is_err()
         );
-        // A raw UPDATE that goes round `VenueAccess` used to be refused by a
-        // trigger as well. That second copy of the rule is gone — see
-        // `migrations/20260914000000_local_write_guards.sql`: a download writes
-        // these tables directly, in checkpoint order, and the triggers refused
-        // that too. The lease above is the app's check and Postgres is the
-        // authority.
+        // No trigger refuses a raw UPDATE that goes round `VenueAccess`: a
+        // download writes these tables directly, in checkpoint order. The lease
+        // above is the app's check and Postgres is the authority.
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await

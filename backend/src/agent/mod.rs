@@ -517,8 +517,8 @@ pub enum TurnEvent {
         /// it; the loop measures it.
         duration_ms: u64,
     },
-    /// Live subagent state — one [`subagent::SubagentSnapshot`], as JSON
-    /// because this event crosses the seam to the webview. Never persisted: a
+    /// Live subagent state — one [`subagent::SubagentSnapshot`], as JSON. Never
+    /// persisted: a
     /// milestone is UI state, not transcript (§2.5).
     Subagent {
         snapshot: Value,
@@ -772,8 +772,7 @@ impl AgentService {
 
     /// The newest thread matching `scope`, creating one if none exists.
     ///
-    /// "Newest matching wins" is carried forward from the TypeScript stack
-    /// deliberately; it is ambient, and the thread picker is where a better
+    /// "Newest matching wins" is ambient; the thread picker is where a better
     /// rule belongs.
     ///
     /// # Errors

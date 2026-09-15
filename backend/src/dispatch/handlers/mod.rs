@@ -1,8 +1,8 @@
 //! Command behavior, free of any host runtime.
 //!
-//! One module per domain, mirroring `src/commands/`. A handler is a plain
-//! `async fn(&AppServices, args…) -> Result<T, CommandError>`: no `State<T>`,
-//! no `AppHandle`, no elided lifetime. Every host reaches these same bodies
+//! One module per domain. A handler is a plain
+//! `async fn(&AppServices, args…) -> Result<T, CommandError>` with no elided
+//! lifetime. Every host reaches these same bodies
 //! through the generated layers in the parent module, so a command has exactly
 //! one implementation.
 //!

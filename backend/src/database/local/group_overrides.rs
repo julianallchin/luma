@@ -47,8 +47,7 @@ pub async fn list(access: &mut impl AuthorizedVenue) -> Result<Vec<GroupOverride
 /// `None` means "this node has no rename / no move / no merge" and not "leave
 /// whatever was there". The three verbs are independent facets of one node's
 /// identity, and a caller that could only ever *add* facets could never clear
-/// a label without also undoing a move — which is what `COALESCE` in the
-/// conflict clause used to make impossible. Composing the new row from the old
+/// a label without also undoing a move. Composing the new row from the old
 /// one is [`crate::services::groups::GroupSources`]'s job; it has already read
 /// the old one.
 ///

@@ -2,7 +2,7 @@
 //!
 //! One manifest describes everything the agent's Python namespace can see; one
 //! artifact store owns the bytes behind it. This module is deliberately pure
-//! Rust — no Tauri, no SQLite, no app services — so that domain providers, the
+//! Rust — no SQLite, no app services — so that domain providers, the
 //! headless harness and the tests can all use it the same way.
 //!
 //! - [`bindings::manifest`] — the wire types (contract C1) and their exact JSON;

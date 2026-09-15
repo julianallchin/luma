@@ -255,7 +255,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
 }
 
 /// Kick off Python environment setup on a background thread at app startup.
-/// Emits `python-env-progress` events so the frontend can show a toast.
+/// Emits `python-env-progress` events so a host can show progress.
 /// After the env is ready, also pre-fetches model weights to the HF cache
 /// so the classifier preprocessor doesn't pay a ~400 MB download on first
 /// track import. The preload is silent (folded under the dependency-setup

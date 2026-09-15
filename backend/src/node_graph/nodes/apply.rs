@@ -1,8 +1,9 @@
 use super::*;
 pub fn get_node_types() -> Vec<NodeTypeDef> {
     vec![
-        // NOTE: apply_dimmer runtime handler is kept for backward compat (see run_node above),
-        // but it is no longer offered in the node palette. Users control brightness via Apply Color.
+        // `apply_dimmer` is not offered in the node palette; brightness comes
+        // from Apply Color. Saved graphs that use it load through the graph
+        // migration.
         NodeTypeDef {
             id: "apply_color".into(),
             name: "Apply Color".into(),
@@ -43,8 +44,8 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             outputs: vec![], // No output wire, contributes to Layer
             params: vec![],
         },
-        // NOTE: apply_position runtime handler is kept for backward compat (see run_node above),
-        // but it is no longer offered in the node palette. Use Apply Movement instead.
+        // `apply_position` is not offered in the node palette; use Apply
+        // Movement. Saved graphs that use it load through the graph migration.
         NodeTypeDef {
             id: "apply_movement".into(),
             name: "Apply Movement".into(),

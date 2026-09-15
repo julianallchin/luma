@@ -1,7 +1,7 @@
 //! The durable transcript.
 //!
 //! `agent_thread_messages.parts` is a **shipped JSON schema**: every thread
-//! written by the TypeScript stack must round-trip through the types here
+//! written by earlier builds must round-trip through the types here
 //! byte-compatibly, so the (de)serializers are hand-written against the wire
 //! shape rather than derived from a shape we would have chosen today. An
 //! unrecognized part is preserved verbatim ([`AgentChatPart::Unknown`]) instead
@@ -122,7 +122,7 @@ pub struct ToolPart {
 
 impl ToolPart {
     /// The tool this call addresses, or `"tool"` for a dynamic call that never
-    /// named one — matching the TypeScript renderer's fallback.
+    /// named one.
     #[must_use]
     pub fn tool_name(&self) -> &str {
         self.name.as_deref().unwrap_or("tool")

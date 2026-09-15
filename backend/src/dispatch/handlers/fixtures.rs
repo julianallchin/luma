@@ -156,8 +156,8 @@ pub async fn patch_fixture(
 
 /// Put one fixture at a hand-chosen address, and pin it there.
 ///
-/// Refuses a collision or a footprint past 512 with the conflict named, rather
-/// than truncating it the way `fixtures::engine` used to.
+/// Refuses a collision or a footprint past 512 with the conflict named; it
+/// does not truncate.
 pub async fn set_fixture_address(
     services: &AppServices,
     venue_id: String,
@@ -374,7 +374,7 @@ pub(super) fn require_changed(rows_affected: u64) -> Result<(), CommandError> {
 
 /// Reject a fixture path that would escape the fixtures root.
 ///
-/// The path comes from the frontend, which only ever echoes back a `path` the
+/// The path comes from the caller, which should only echo back a `path` the
 /// index handed it — but it is joined onto a root directory, so the seam is
 /// where it has to be constrained rather than trusted.
 fn confine_to_root(path: &str) -> Result<&Path, CommandError> {

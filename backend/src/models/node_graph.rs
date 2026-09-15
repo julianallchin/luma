@@ -145,8 +145,7 @@ pub struct ParamDef {
     pub default_number: Option<f32>,
     pub default_text: Option<String>,
     /// `(min, max)` for a number a slider can carry. Catalogue knowledge, not
-    /// view knowledge: both editors used to hardcode these per node type, and
-    /// the copies drifted. `None` means the param has no natural bounds and
+    /// view knowledge, so editors do not hardcode it. `None` means the param has no natural bounds and
     /// renders as a bare field.
     #[serde(default)]
     pub range: Option<(f32, f32)>,

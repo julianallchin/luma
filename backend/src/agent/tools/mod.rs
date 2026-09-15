@@ -39,8 +39,7 @@ pub enum ToolOutcome {
 ///
 /// Deliberately not a host handle: a tool reaches services, the durable
 /// thread, and the scope the *thread* declares — never a window, a canvas, or
-/// an editor. The two host-flavoured tools in the TypeScript stack are handled
-/// by turn events instead (§1).
+/// an editor. Host-specific actions are turn events instead (§1).
 ///
 /// It does carry the loop itself, because one tool — `subagent` — delegates by
 /// running another turn. That is the same [`AgentService`] the parent turn is

@@ -209,7 +209,7 @@ impl MixerManager {
         inner.connection = Some(connection);
         inner.connected_port_name = Some(port_name.to_string());
 
-        // Emit initial state so the frontend knows the mixer is live.
+        // Emit initial state so listeners know the mixer is live.
         if let Ok(st) = self.state.lock() {
             events.emit("mixer_state", &*st);
         }
@@ -259,7 +259,7 @@ impl MixerManager {
 
     // ── status (with dead-connection detection + auto-reconnect) ─────────────
 
-    /// Polled by the frontend every ~2 s. Detects disconnected ports and
+    /// Meant to be polled every ~2 s. Detects disconnected ports and
     /// reconnects automatically when the preferred port reappears.
     pub fn status(&self) -> MixerStatus {
         let available_ports = self.list_ports().unwrap_or_default();

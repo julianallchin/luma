@@ -3,9 +3,9 @@
 //! against the local library.
 //!
 //! `DeckState`/`DeckSnapshot`/`DeckEvent` are deliberately **snake_case on the
-//! wire** — no `rename_all` — because the frontend store reads `beat_bpm` and
+//! wire** — no `rename_all` — so consumers read `beat_bpm` and
 //! `track_network_path` directly. `PerformTrackMatch` is camelCase. Changing
-//! either casing is a frontend-visible break.
+//! either casing is a wire break.
 
 use serde::Serialize;
 
