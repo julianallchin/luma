@@ -4712,16 +4712,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "luma-gpui-harness"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "gpui-component",
- "gpui_platform",
- "luma-ui",
-]
-
-[[package]]
 name = "luma-md"
 version = "0.1.0"
 dependencies = [
