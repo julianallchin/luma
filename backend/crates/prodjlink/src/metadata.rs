@@ -120,12 +120,11 @@ async fn read_exact(stream: &mut TcpStream, n: usize) -> std::io::Result<Vec<u8>
 }
 
 /// Tagged field as returned by the server.
-#[allow(dead_code)]
 enum Field {
     U8(u8),
     U16(u16),
     U32(u32),
-    Blob(Vec<u8>),
+    Blob,
     Str(String),
 }
 
@@ -147,8 +146,8 @@ async fn read_field(stream: &mut TcpStream) -> std::io::Result<Field> {
         FIELD_BLOB => {
             let lb = read_exact(stream, 4).await?;
             let len = u32::from_be_bytes([lb[0], lb[1], lb[2], lb[3]]) as usize;
-            let data = read_exact(stream, len).await?;
-            Ok(Field::Blob(data))
+            read_exact(stream, len).await?;
+            Ok(Field::Blob)
         }
         FIELD_UTF16 => {
             let cb = read_exact(stream, 4).await?;
