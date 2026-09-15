@@ -101,11 +101,7 @@ fn handler_line(root: &Path, domain: &str, name: &str) -> usize {
 fn regenerate_events(root: &Path, previous: &Value) -> Vec<Value> {
     let repo = root.parent().expect("repo root");
     let mut sources = Vec::new();
-    for (directory, extensions) in [
-        ("backend/src", &["rs"][..]),
-        ("scripts", &["ts"][..]),
-        ("gpui/crates", &["rs"][..]),
-    ] {
+    for (directory, extensions) in [("backend/src", &["rs"][..]), ("gpui/crates", &["rs"][..])] {
         collect_sources(&repo.join(directory), extensions, &mut sources);
     }
     sources.sort();
@@ -279,8 +275,7 @@ fn render_markdown(table: &[Command], events: &[Value]) -> String {
         "`cargo test --manifest-path backend/Cargo.toml ipc_manifest` and it rewrites itself.\n",
         "The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per-command\n",
         "prose and the event names in it are the only hand-written parts and are carried across by\n",
-        "name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead\n",
-        "commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).\n\n",
+        "name.\n\n",
     ));
     let _ = writeln!(
         out,
