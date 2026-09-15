@@ -1,6 +1,8 @@
 # The haze density field — replacing `haze_noise`
 
-Status: steps 1-2 implemented (see §5, §7). Scope: `gpui/crates/render/` — `beam_transport.wgsl`'s
+Status: implemented. `src/haze_field.rs` bakes the field and
+`shaders/haze_noise_bake.wgsl` owns it. The field now has four scales, not the two this
+doc describes; the module doc is the current contract. Scope: `gpui/crates/render/` — `beam_transport.wgsl`'s
 density term and the resource that feeds it.
 
 Prerequisite reading: [`beampass-phase2.md`](beampass-phase2.md) §0.5, which is the
@@ -106,7 +108,7 @@ occupancy collapses. §5's falsification threshold exists for this reason and no
 `haze_noise`'s structure is preserved exactly:
 
 ```
-p     = (p_world.x, p_world.z, -p_world.y)        // the three.js Y-up basis, unchanged
+p     = (p_world.x, p_world.z, -p_world.y)        // Y-up basis, unchanged
 drift = elapsed * (0.4, 0.25, 0.15)
 q     = p * 2 + drift
 n     = F(q) * 0.6 + F(q * 3 + drift + 3.7) * 0.4

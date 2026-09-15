@@ -27,8 +27,45 @@ gpui/target/debug/haze-lab capture /tmp/haze/gasworks/suite.json /tmp/haze/live 
 Prepare records six views per score snapshot: wide, side, inside, broad source,
 source from the side, and close LED bar (where those fixture types exist).
 Inspect the first captures and edit `suite.json` to pin useful angles. Coordinates
-in the suite are renderer Z-up, unlike the legacy Y-up `Scene.camera` fields.
+in the suite are renderer Z-up, unlike the Y-up `Scene.camera` fields.
 Catalogue paths in a hand-written suite resolve relative to that suite.
+
+## Current result
+
+Measured 2026-09-09 on an RTX 5090. The live renderer keeps fine shadow
+intervals at native pixel resolution:
+
+- Native per-pixel integration walks cached min/max shadow maps to find the lit
+  intervals. Four-point Gaussian quadrature integrates only those spans, in
+  equiangular coordinates. Thin shadow shafts need no random ray samples.
+- A shared far-field grid (`fog_grid.rs`) carries broad lighting. Conservative
+  4×4×4 block bounds prove groups of cells wholly lit or dark.
+- Camera depth bounds skip prefixes that no visible pixel reads. Density and
+  camera transmittance are integrated once and shared across lights.
+- Fixed fixture shadows and their min/max mipmaps survive colour, dimmer and
+  blackout changes. Final coloured radiance is never cached across cues.
+
+The Get Lucky / Gasworks replay at 1634×750 measured 3.95–4.14 ms median and
+5.39–5.60 ms p95 GPU time over two 1,152-frame runs. These are GPU timings. They
+exclude GPUI, picking, presentation and readback, and are not live FPS.
+
+Against the exhaustive 64×32 reference, display-space RMSE over 26 pinned views
+was 0.17–1.06 on a 0–255 scale. Eight repeated frozen frames had zero temporal
+variance. Turning off both conservative visibility optimisations changed at most
+53 pixels per capture by one code level.
+
+The interval approach follows Chen et al., *Real-Time Volumetric Shadows using 1D
+Min-Max Mipmaps* (https://groups.csail.mit.edu/graphics/mmvs/). Luma uses a
+camera-independent 2D shadow hierarchy, not their epipolar structure.
+
+Limits:
+
+- The reference shares the single-scattering model, the source-extinction cache
+  and the fixture shadow maps. Agreement with it does not prove photographic
+  realism.
+- Far-field lighting has finite grid precision. Gobos stay stochastic.
+- Fixture shadow cameras cap their field of view at 170°. Very wide washes are
+  unshadowed outside that projection.
 
 ## Experiments
 
@@ -54,7 +91,7 @@ Keep each variant in its own output directory.
 | `LUMA_FOG_GRID_COUNTS=1` | Diagnostic `fog-grid` kernel (`haze_grid_counted.wgsl`) counting every `segment_shadow_visibility` outcome (proven lit / proven shadowed / 4-tap fallback) and what a 4-cell column-block union proof would give; emits `fog-grid-counts.json` after `still-7`; timings ineligible |
 | `LUMA_PROFILE_OMIT=NAME` | Diagnostic shader omission; changes the image and cannot pass the exact quality gate |
 | `LUMA_PROFILE_REPEAT=PASS` | Repeat one idempotent pass with identical inputs to measure incremental work; outputs must remain exact and timings are performance-ineligible |
-| `LUMA_VISIBILITY_REFERENCE=1 LUMA_GEOMETRY_SHADOW_SAMPLES=32` | Existing software triangle visibility instead of cached shadow maps; use with a reference mode |
+| `LUMA_VISIBILITY_REFERENCE=1 LUMA_GEOMETRY_SHADOW_SAMPLES=32` | Software triangle visibility instead of cached shadow maps; use with a reference mode |
 
 The reference converges our current single-scattering model. It is not an
 independent path-traced physical ground truth: source extinction still uses its
@@ -122,17 +159,8 @@ camera, grid/block dimensions and each block's candidate/wholly-visible light
 counts. These are conservative candidates; they are not actual illuminated-cell
 counts or hardware occupancy. `Renderer::fog_block_stats()` returns `None` before
 classification and after a frame that did not classify. Normal rendering adds
-no counter shader or readback. The Mac harness's `analyze_grid_blocks.py` produces
-the candidate histogram and depth-block distribution from this file.
+no counter shader or readback.
 
-```sh
-python3 gpui/crates/render/experiments/compare_haze.py /tmp/haze reference live
-```
-
-Requires Pillow and NumPy. Outputs an HTML contact sheet and JSON metrics. RMSE
-and temporal deviation are display RGB code values (0–255), not HDR radiance.
-The tool rejects differing cameras or output sizes. Uniform-haze variants change
-the physical scene and are labeled as such, not ranked as accuracy failures.
 GPU timestamps exclude GPUI layout, picking, presentation and readback waits;
 they are not live FPS measurements. Replay the full saved score separately when
 judging frame budget or moving/cue-changing lighting.
@@ -141,11 +169,9 @@ call. It includes CPU submission, the full GPU queue, pixel/query readback and
 completion, so work moved outside the GPU timestamp bracket remains visible.
 It is an offscreen latency measurement, not displayed FPS.
 
-The earliest frozen experiments accidentally used one subframe. Their timing tables are historical diagnostics, not equivalent to the production two-subframe path. Saved-score replays used the production budget throughout.
-
-The Mac Gasworks baseline and pass-instrumentation workflow are recorded in
-`harness/perf/mac-gasworks-2026-09-09/README.md`. Detailed GPU pass brackets are
-opt-in with `LUMA_PROFILE_DETAIL=1`; they overlap and must not be summed.
+Detailed GPU pass brackets are opt-in with `LUMA_PROFILE_DETAIL=1`; they
+overlap and must not be summed. The Mac Gasworks profiling notes are in
+`harness/perf/mac-gasworks-2026-09-09/PROFILING.md`.
 The expensive fragment-candidate counter runs only when `fragment_stats()`
 is explicitly requested, after the frame. `haze-lab` does not request it;
 `profile-volumetrics` requests it once in sixteen measured frames, outside

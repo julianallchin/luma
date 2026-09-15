@@ -2,8 +2,11 @@
 
 Companion to `volumetrics-v2.md` §1.3(c), §3.2 and Phase 4. Scope: replace
 `clusters.rs` and `gpu.rs::haze_tiles` with one module, one bounds math, one
-structure, serving both consumers. No code changes here — this is the design
-that Phase 4 implements.
+structure, serving both consumers.
+
+Status: implemented in `gpui/crates/render/src/light_index.rs`. The GPU
+compute builder is checked bit-identical against the CPU reference builder.
+`clusters.rs` and `haze_tiles` are deleted.
 
 ---
 

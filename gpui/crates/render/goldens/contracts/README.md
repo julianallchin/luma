@@ -9,7 +9,5 @@ cargo run --manifest-path gpui/Cargo.toml --release -p luma-render \
   --bin render-contract-goldens
 ```
 
-The suite intentionally contains no hard/soft-shadow comparison. The authored
-renderer contract currently exposes only a `shadows: bool` toggle; shadow
-filter softness is not controllable, so fabricating two labels over the same
-pipeline would be false evidence.
+`sun-shadow-hard` and `sun-shadow-soft` are the same sun scene with
+`shadow_softness` set to 0 and 3.
