@@ -2366,7 +2366,7 @@ fn add_button(app: &Entity<Luma>) -> AnyElement {
                 float::btn("Add", "stage-add")
                     .id("stage-add")
                     .child(
-                        luma_ui::icons::plus()
+                        gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
                             .size(px(18.0))
                             .text_color(ladder::foreground_alpha(0.7)),
                     )
