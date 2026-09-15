@@ -29,14 +29,12 @@
 //! # What is not here
 //!
 //! These functions cover the *resting appearance* of each control.
-//! `luma_input` renders a value, it does
-//! not edit one; a field that a person actually types into is
-//! [`text_input::TextInput`], which is an entity rather than a free function
-//! because an editor is exactly the case the note above reserves — it owns a
-//! caret, a selection and an undo history. `<Select>`'s open menu is a
-//! float ([`float::popover_card`] rows of [`luma_select_item`], hung by
-//! [`float::anchored_below`]); `luma_dropdown` still renders its closed
-//! trigger only.
+//! [`float::field`] is the box a value sits in; a field that a person
+//! actually types into puts a [`text_input::TextInput`] inside it. That is an
+//! entity rather than a free function because an editor is exactly the case
+//! the note above reserves — it owns a caret, a selection and an undo
+//! history. A select's open menu is a float ([`float::popover_card`] rows of
+//! [`luma_select_item`], hung by [`float::anchored_below`]).
 //!
 //! [`luma_slider`] drags without owning state, because gpui's drag payload
 //! carries the identity and the event carries the box — see its module docs.
@@ -62,14 +60,10 @@ pub mod split;
 pub mod text_input;
 
 mod button;
-mod checkbox;
 mod drag;
-mod dropdown;
-mod input;
 mod select;
 mod slider;
 mod text;
-mod toggle;
 
 /// The key context a focused field declares while it is taking typed text.
 ///
@@ -92,12 +86,8 @@ pub const TEXT_INPUT: &str = "TextInput";
 pub const CONTROL_HEIGHT: f32 = 24.;
 
 pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
-pub use checkbox::luma_checkbox;
-pub use dropdown::luma_dropdown;
-pub use input::luma_input;
-pub use select::{luma_select, luma_select_item, luma_selector};
+pub use select::luma_select_item;
 pub use slider::luma_slider;
 pub use text::{plate, silkscreen, silkscreen_in};
-pub use toggle::{luma_toggle, luma_toggle_group};
 
 pub mod icons;

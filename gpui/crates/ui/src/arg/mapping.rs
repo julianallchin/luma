@@ -6,7 +6,7 @@ use luma_patterns::{Cell, MappingSource, MappingSpec, MirrorPlane};
 use super::number::{DraftedNumber, NumberEvent};
 use super::select::luma_arg_select;
 use crate::node::{Instrument, Role};
-use crate::{ladder, luma_toggle};
+use crate::{float, ladder};
 
 #[derive(Clone, Debug)]
 pub struct MappingChanged(pub MappingSpec);
@@ -371,13 +371,15 @@ impl Render for MappingEditor {
             })
             .child(
                 div().flex().gap(px(6.)).child(
-                    luma_toggle("Reverse", self.value.reverse)
-                        .id("mapping-reverse")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.value.reverse = !this.value.reverse;
-                            this.publish(cx);
-                        }))
-                        .agent_node(Role::Button, format!("{}: Reverse", self.name)),
+                    float::segmented().child(
+                        float::segment("Reverse", self.value.reverse, "mapping-reverse")
+                            .id("mapping-reverse")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.value.reverse = !this.value.reverse;
+                                this.publish(cx);
+                            }))
+                            .agent_node(Role::Button, format!("{}: Reverse", self.name)),
+                    ),
                 ),
             )
             .when_some(self.error.clone(), |el, error| {

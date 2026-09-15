@@ -596,7 +596,7 @@ fn checkbox(app: &Entity<Luma>, key: &'static str, label: &str, checked: bool) -
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(luma_ui::luma_checkbox(checked))
+        .child(luma_ui::float::checkbox(checked))
         .child(div().text_size(px(12.)).child(label.to_string()))
         .on_click(move |_, _, cx| {
             let value = (!checked).to_string();
@@ -648,7 +648,10 @@ fn select(
 fn readonly_value(value: &str, placeholder: &str) -> AnyElement {
     let empty = value.is_empty();
     let text = if empty { placeholder } else { value };
-    luma_ui::luma_input(text, empty, 240.)
+    luma_ui::float::field()
+        .w(px(240.))
+        .when(empty, |field| field.text_color(ladder::muted_foreground()))
+        .child(text.to_string())
         .agent_node(Role::Input, text)
         .agent_disabled(true)
         .into_any_element()

@@ -28,7 +28,7 @@ impl Render for Buttons {
                             .id("play")
                             .agent_node(Role::Button, "Play"),
                     )
-                    .child(luma_ui::silkscreen("140.0 BPM"))
+                    .child(float::label("140.0 BPM"))
                     .child(
                         button("Beat grid correct", Enabled::Yes)
                             .id("approve")
@@ -50,15 +50,20 @@ impl Render for Buttons {
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .child(luma_ui::luma_toggle_group(
-                        "Bars",
-                        &["Bars", "Beats", "Seconds"],
-                    ))
-                    .child(luma_ui::luma_selector(
+                    .child(
+                        float::segmented().children(
+                            ["Bars", "Beats", "Seconds"]
+                                .map(|option| float::segment(option, option == "Bars", option)),
+                        ),
+                    )
+                    .child(float::picker_chip(
                         "Replace",
                         &["Replace", "Add", "Multiply"],
                     ))
-                    .child(luma_ui::luma_dropdown("Actions", &["Duplicate", "Remove"])),
+                    .child(float::picker_chip(
+                        "Actions",
+                        &["Actions", "Duplicate", "Remove"],
+                    )),
             )
             .child(float::label("Dialog actions"))
             .child(
