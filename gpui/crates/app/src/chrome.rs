@@ -70,7 +70,6 @@ use crate::Luma;
 pub const HEIGHT: f32 = 38.;
 /// A tab chip: comet's 24px rounded-6 chip.
 const CHIP_HEIGHT: f32 = 24.;
-const CHIP_RADIUS: f32 = 6.;
 /// One icon-button box in the band — the gear, a panel toggle, the `+`. The
 /// shell budgets bands against it, so it is stated here once rather than
 /// restated as a second 24 beside the code that reads it.
@@ -641,7 +640,7 @@ fn exit_chip(exit: &crate::tab_chrome::ExitChipFrame) -> impl IntoElement {
         .h(px(CHIP_HEIGHT))
         .opacity(exit.opacity)
         .overflow_hidden()
-        .rounded(px(CHIP_RADIUS))
+        .rounded(px(radius::CONTROL))
         .bg(glass::wash(0.08))
         .px(px(8.0))
         .flex()
@@ -661,7 +660,7 @@ fn exit_chip(exit: &crate::tab_chrome::ExitChipFrame) -> impl IntoElement {
 }
 
 /// One tab chip: a leading icon slot that swaps in place for a ✕ on hover, the
-/// title, active `wash(0.10)`, hover `wash(0.06)`. Click selects; the ✕
+/// title, and [`luma_ui::toggle_paint`]. Click selects; the ✕
 /// closes through the same teardown every close takes.
 fn chip(
     target: &Target,
@@ -684,18 +683,11 @@ fn chip(
         .h(px(CHIP_HEIGHT))
         .w_full()
         .px(px(8.))
-        .rounded(px(CHIP_RADIUS))
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .gap(px(6.))
-        .when(is_active, |chip| {
-            chip.bg(glass::wash(glass::WASH_REST))
-                .text_color(glass::ink(0.92))
-        })
-        .when(!is_active, |chip| {
-            chip.text_color(glass::ink(0.55))
-                .hover(|chip| chip.bg(glass::wash(glass::WASH_SUBTLE)))
-        })
+        .map(|chip| luma_ui::toggle_paint(chip, is_active))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
             cx.stop_propagation();
