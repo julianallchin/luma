@@ -1,115 +1,121 @@
 ---
 title: Selection System
-description: Tag expressions, spatial attributes, and circle fitting algorithm
+description: Group expressions, subsets, cells, mapping sources, rig UV and circle fitting
 ---
 
-The selection system translates abstract fixture queries into concrete fixture lists with spatial metadata. It is the key mechanism that enables venue-portable patterns.
+The selection system turns a group expression into a list of fixture heads.
+It is the mechanism that lets a score play in different venues.
 
-## Selection Expression Parser
+## Selection expressions
 
 File: `backend/src/services/groups.rs`
 
-Selection expressions support boolean algebra over **fixture group names**. Each token in the expression is matched against the snake_case names of groups in the current venue. A fixture matches a token if it belongs to a group with that name.
+An expression combines group names with operators. A name matches the fixtures
+in the group with that snake_case name in the current venue. The keyword `all`
+matches every fixture.
 
 ```
-all                          -- all fixtures in the venue
-front_wash                   -- fixtures in the "front_wash" group
+all                          -- every fixture in the venue
+front_wash                   -- fixtures in the front_wash group
 front_wash & left_truss      -- fixtures in both groups
 left_truss | right_truss     -- fixtures in either group
-floor_ring & ~dj_booth       -- floor ring fixtures not in the DJ booth group
-strobes > front_wash         -- prefer strobes, fall back to front wash
+floor_ring & ~dj_booth       -- floor_ring fixtures not in dj_booth
+strobes > front_wash         -- strobes; front_wash if strobes matches nothing
 ```
 
 ### Operators
 
-| Operator | Name | Description |
-|----------|------|-------------|
-| `&` | AND | Both conditions must match |
-| `\|` | OR | Either condition matches |
-| `^` | XOR | Exactly one condition matches |
-| `~` | NOT | Negate the following condition |
-| `>` | Fallback | Use left side; if zero matches, use right side |
-| `( )` | Grouping | Override operator precedence |
+The parser gives these operators precedence from lowest to highest:
 
-The `>` (fallback) operator is unique: it evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different group inventories. For example, `strobes > front_wash` prefers strobes but falls back to front wash if no strobes group exists in the venue.
+| Operator | Name | Meaning |
+|----------|------|---------|
+| `>` | Fallback | Use the left side. If it matches nothing, use the right side. |
+| `\|` | OR | Either side matches |
+| `^` | XOR | Exactly one side matches |
+| `&` | AND | Both sides match |
+| `~` | NOT | Negates the next term |
+| `( )` | Grouping | Changes the order |
 
-### How Selection Reaches the Graph
+## Subsets
 
-Fixture selection is not a node in the pattern graph. Instead, every pattern has a **Selection argument** -- a selection expression that is set when the pattern is placed on a timeline as an annotation. The resolved fixtures are passed into the graph's execution context and automatically available to Apply nodes and Get Attribute nodes.
+A selection has an expression and a subset (`Selection` in
+`backend/crates/patterns/src/selection.rs`). The subset decides how many of the
+matched fixtures stay:
 
-## Spatial Attributes
+| Subset | Meaning |
+|--------|---------|
+| `all` | Every match. This is the default. |
+| `{"fraction": f}` | `f` of the matches, rounded to nearest, at least one |
+| `{"count": n}` | `n` matches, clamped to the number of matches |
 
-The `get_attribute` node (in `backend/src/node_graph/nodes/selection.rs`) extracts per-fixture scalar values from a Selection and outputs them as a Signal with `N = fixture count`, `T = 1`, `C = 1`.
+A seed decides which fixtures stay. The same seed always keeps the same
+fixtures. When every match is a whole fixture, the subset picks whole fixtures.
+When a match covers only some heads of a fixture, the subset picks heads. The
+result keeps venue order.
 
-| Attribute | Description |
-|-----------|-------------|
-| `index` | Integer order within the selection (0, 1, 2, ...) |
-| `normalized_index` | Order normalized to 0.0-1.0 range |
-| `count` | Number of items in the selection, on every item |
-| `pos_x` | Absolute global X position (meters) |
-| `pos_y` | Absolute global Y position (meters) |
-| `pos_z` | Absolute global Z position (meters) |
-| `rel_x` | X position relative to selection bounding box (0.0-1.0) |
-| `rel_y` | Y position relative to selection bounding box (0.0-1.0) |
-| `rel_z` | Z position relative to selection bounding box (0.0-1.0) |
-| `u` | Position along the rig's own horizontal axis (0.0-1.0) -- see [Rig-Intrinsic UV Space](#rig-intrinsic-uv-space) |
-| `v` | Height within the selection (0.0-1.0), constant 0.5 when the rig is flat |
-| `rel_major_span` | Position along the axis with largest physical range |
-| `rel_major_count` | Position along the axis with most distinct fixture positions |
-| `circle_radius` | Distance from the selection's centroid |
-| `angular_position` | Angle on fitted circle via PCA + RANSAC (0.0-1.0) |
-| `angular_index` | Integer index around fitted circle: fixtures sorted by angle, then assigned 0, 1, 2, ... |
+## Cells
 
-### Rig-Intrinsic UV Space
+A graph does not reference fixtures. The host resolves the selection of each
+clip and gives the engine a list of `Cell` values
+(`backend/crates/patterns/src/mapping.rs`):
 
-`rel_x` / `rel_y` are world axes: a "chase along X" authored in one venue becomes a diagonal in the next one if that rig is hung at an angle. `u` and `v` are the rig's *own* axes, so the same pattern reads the same way anywhere.
+| Field | Meaning |
+|-------|---------|
+| `id` | Head identity |
+| `group` | Group name |
+| `world` | Position in venue space: X stage right, Y upstage, Z up |
+| `uvz` | Position in stage space |
 
-- **`u`** -- position along the first principal component of the selection's **horizontal** (XY) spread, normalized 0.0-1.0. For a straight bar of fixtures it is the bar; for an L or an arc it is the dominant run. It is sign-canonicalized so its largest world component is positive (broadly stage-right, or front-to-back for a rig that runs that way) -- a chase along `u` never silently reverses between venues. An axis has no inherent direction, so the direction is borrowed from the world: `u` survives any rig rotation within a 180 degree window and does reverse for a rig turned all the way around.
-- **`v`** -- world height, normalized 0.0-1.0 over the selection. Height is *not* discovered by PCA: gravity is a real shared axis, so up always stays up and a dipping truss reads as a dip rather than as a sweep.
+`Cell::stage_coordinates` converts venue space to stage space: U right, V
+downstage, Z up.
 
-Degenerate rigs: a selection with no horizontal spread (a single vertical stack) falls back to `u` = normalized index; a flat selection with no height spread gets `v` = 0.5 everywhere.
+## Mapping sources
 
-Both are computed over the current **selection**, like every other spatial attribute -- two different selections in the same venue can therefore have different `u` axes. A venue-wide basis with per-group overrides is future work.
+The `resolve_mapping` node turns cells into a coordinate from 0 to 1. The
+source is one of:
 
-Implementation: `rig_uv` in `backend/src/eval/ops/spatial.rs`.
+| Source | Meaning |
+|--------|---------|
+| `z` | Up |
+| `u` | Stage right |
+| `v` | Downstage |
+| `major_axis` | The principal axis, with its sign set by an authored direction |
+| `circle` | The angle on a fitted circle, with an authored origin |
+| `order` | Selection order |
+| `vector` | A custom direction in stage coordinates |
 
-### `rel_major_span` vs `rel_major_count`
+A mapping can also run per group and in reverse.
 
-The "span" variant picks the axis with the largest physical extent (useful for linear arrangements where fixtures are spread unevenly). The "count" variant picks the axis with the most distinct position values (useful when fixtures are evenly spaced but the physical range is similar across axes).
+## Rig UV
 
-## Circle Fitting Algorithm
+File: `backend/src/node_graph/geometry.rs`, function `rig_uv`.
 
-File: `backend/src/node_graph/circle_fit.rs`
+`rig_uv` gives each position a `(u, v)` pair from 0 to 1 over the selection:
 
-For detecting circular fixture arrangements in arbitrary 3D space (used by `angular_position` and `angular_index` attributes):
+- **`u`** is the first principal component of the horizontal (XY) spread. Its
+  sign is set so that its largest world component is positive. With no
+  horizontal spread, `u` is the normalized index.
+- **`v`** is world height (Z) over the selection. With no height spread, `v`
+  is 0.5.
 
-### Step 1: Centroid
+The agent venue tools use `rig_uv`
+(`backend/src/agent_execution/bindings/providers/venue.rs`).
 
-Compute the mean position of all input points.
+## Circle fitting
 
-### Step 2: PCA Plane Fitting
+File: `backend/crates/patterns/src/circle_fit.rs`
 
-Build the 3x3 covariance matrix of centered points. Extract the two dominant eigenvectors via power iteration with matrix deflation. These two vectors define the best-fit 2D plane containing the points.
+`fit_circle_3d` fits a circle to three or more 3D points. The `circle` mapping
+source and the `core/fit_circle` node use it.
 
-### Step 3: Project to 2D
-
-Map each 3D point onto the fitted plane using dot products with the two basis vectors. This reduces the problem from 3D circle fitting to 2D.
-
-### Step 4: RANSAC Circle Fit
-
-Run 100 iterations of random 3-point sampling:
-
-1. For each sample of 3 points, compute the circumcenter via the analytic formula
-2. Count inliers (points within 2.5 distance units of the circle)
-3. Keep the fit with the most inliers
-4. Early exit if 90% of points are inliers
-
-### Step 5: Kasa Refinement
-
-Apply the Kasa algebraic circle fit on inliers, solving the normal equations via Cramer's rule (3x3 determinant). Recompute inliers with the refined circle.
-
-### Step 6: Angular Positions
-
-Compute `atan2(v - center_v, u - center_u)` for each point's projected 2D coordinates, normalized from `[-pi, pi]` to `[0, 1]`.
-
-The algorithm is deterministic (fixed seed for the pseudo-random generator) so results are reproducible across graph executions.
+1. **Centroid**: the mean of the points.
+2. **Plane**: PCA on the covariance matrix. Power iteration (20 steps) with
+   deflation gives the two main axes.
+3. **Projection**: each point is projected onto the plane.
+4. **RANSAC**: 100 iterations. Each iteration fits a circle through 3 random
+   points and counts inliers within 2.5 units. It stops early when 90% of the
+   points are inliers. The pseudo-random seed is fixed, so the result is
+   repeatable.
+5. **Refinement**: a Kåsa fit on the inliers.
+6. **Angles**: `atan2` of each projected point around the center, normalized
+   to 0–1 and offset so that 0 is at the top.

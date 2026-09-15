@@ -1,13 +1,15 @@
 ---
 title: DMX Output Pipeline
-description: PrimitiveState to DMX mapping, color wheel matching, pan/tilt inversion, ArtNet broadcasting, and the render engine loop
+description: Lighting state to DMX channel values, strobe handling, color wheels and Art-Net output
 ---
 
-The DMX output pipeline converts abstract fixture states into concrete DMX byte values and broadcasts them over ArtNet.
+The DMX pipeline converts lighting states into DMX values and sends them over
+Art-Net.
 
-## PrimitiveState
+## Lighting state
 
-The `PrimitiveState` struct (defined in `backend/src/models/universe.rs`) represents a single fixture or head at a single moment in time:
+`PrimitiveState` (in `backend/src/models/universe.rs`) is the state of one
+fixture or head at one time:
 
 ```rust
 pub struct PrimitiveState {
@@ -19,94 +21,93 @@ pub struct PrimitiveState {
 }
 ```
 
-## PrimitiveState to DMX Mapping
+`UniverseState` maps an id to a `PrimitiveState`. The id is a fixture id, or a
+fixture id and a head index: `fixture-id:0`.
 
-File: `backend/src/fixtures/engine.rs`
+## Channel mapping
 
-| Property | DMX Mapping |
-|----------|-------------|
-| **dimmer** (0-1) | Master intensity channel, scaled by the Max Brightness setting. Derived automatically from the color's HSV Value by `apply_color`. For color wheel fixtures, multiplied by color luminance since the wheel cannot represent brightness. |
-| **color** [R,G,B] (0-1) | RGB channels mapped to 0-255 each. If fixture has a color wheel instead of RGB mixing, the nearest wheel color is selected using perceptual color distance. |
-| **position** [pan, tilt] (degrees) | Converted to 16-bit DMX values (MSB/LSB), normalized within the fixture's `pan_max`/`tilt_max` range. NaN values produce a `Hold` action that preserves the previous frame's value. |
-| **strobe** (0-1) | Mapped to the fixture's shutter/strobe capability range. When zero, the shutter "Open" capability is selected. |
-| **speed** (0/1) | Binary: 0 maps to DMX 255 (slowest/frozen), 1 maps to DMX 0 (fastest). Most fixtures use inverted speed channels. |
+File: `backend/src/fixtures/engine.rs`. The function `generate_dmx` writes one
+512-byte buffer per universe.
 
-## Multi-Head Fixture Handling
+| Channel type | Mapping |
+|--------------|---------|
+| Master dimmer | `dimmer × 255`, scaled by the Max Dimmer setting. On a color wheel fixture, the dimmer is first multiplied by the color luminance. |
+| Red, green, blue | `color × 255` for each channel |
+| Color wheel | The nearest wheel color. A black color holds the previous value. |
+| Pan, tilt | Signed degrees centered on 0, mapped over the fixture's pan or tilt range to a 16-bit value. A coarse channel gets the high byte. A channel with "fine" in its preset gets the low byte. A NaN value holds the previous value. |
+| Shutter | Controlled by the strobe rules below |
+| Speed | Speed above 0.5 writes 0 (fastest). Otherwise it writes 255 (slowest). |
 
-Each head maps to a separate primitive ID (e.g., `fixture-uuid:0`, `fixture-uuid:1`). The engine determines the correct primitive for each channel by checking the fixture definition's `<Head>` channel assignments.
+The engine does not invert pan or tilt. Pan and tilt go out as the evaluator
+produced them.
 
-Master dimmer channels always read from the fixture-level primitive, even when physically listed inside a head. As a fallback, if no fixture-level primitive exists but `fixture-uuid:0` does, it is used for all unmapped channels.
+The Max Dimmer setting is a percentage. Its default is 100.
 
-## Color Wheel Matching
+### Multi-head fixtures
 
-When a fixture has a color wheel instead of RGB mixing, the `map_nearest_color_capability()` function computes perceptual color distance between the desired RGB and each wheel position's hex color (parsed from QLC+ capability resources).
+Channels inside a `<Head>` read the state of that head. A master dimmer reads
+the fixture state. If there is no fixture state, channels fall back to head 0.
 
-The distance metric penalizes saturation mismatches, especially for desaturated targets -- a gray target strongly prefers white over a saturated color that happens to be numerically close in RGB space.
+### Color wheels
 
-When the desired color is black/dark, the engine returns `Hold` to avoid flashing the wheel during blackout.
+`map_nearest_color_capability` compares the requested color with the color of
+each wheel slot. The distance adds a saturation penalty. A gray request
+therefore prefers a white slot over a saturated slot.
 
-## Pan/Tilt Inversion
+## Strobe
 
-Ceiling-mounted fixtures (detected when `rot_x` is approximately pi) automatically get inverted pan and tilt. The inversion check uses a tolerance of 0.5 radians around pi.
+The engine picks one method per fixture per frame. It uses the first method
+that the fixture supports:
 
-This means fixtures mounted upside-down on a truss do not require manual pan/tilt inversion in their patch settings -- the engine handles it automatically based on the fixture's rotation.
+1. Per-head shutter channels.
+2. The master shutter channel, if all heads have the same strobe value.
+3. A pulse on per-head dimmer channels.
+4. A pulse on the master dimmer, if all heads agree.
+5. A pulse on per-head color channels.
+6. A pulse on the master color channels, if all heads agree.
 
-## ArtNet Broadcasting
+Two strobe values agree when they differ by less than 1/256. A pulse is a
+square wave. Its frequency is `strobe × 20` Hz.
 
-File: `backend/src/artnet.rs`
+When strobe is 0, the shutter writes its "Open" capability. If the channel has
+no "Open" capability, it holds the previous value. When the engine pulses
+another channel, the master shutter is set to "Open".
 
-Luma uses the standard Art-Net protocol over UDP to broadcast DMX data.
+## Art-Net
 
-### Packet Format
+File: `backend/src/artnet.rs`.
+
+### ArtDmx packet
 
 | Field | Value |
 |-------|-------|
-| Header | `Art-Net\0` (8 bytes) |
-| OpCode | `0x5000` (OpDmx, little-endian) |
+| ID | `Art-Net\0` |
+| OpCode | `0x5000`, low byte first |
 | Protocol version | 14 |
-| Sequence number | Auto-incrementing per packet |
-| Physical port | Port index |
-| Universe address | `(Net << 8) \| (Subnet << 4) \| (Universe & 0xF)` |
-| Data | 512 DMX channel values |
+| Sequence | Increments once per frame |
+| Physical | 0 |
+| Port address | 15-bit universe address |
+| Length | 512 |
+| Data | 512 DMX values |
 
-### Network Configuration
+### Destinations
 
-- Supports both broadcast (`255.255.255.255:6454`) and unicast to a configured IP
-- Node discovery via ArtPoll (`OpCode 0x2000`) with periodic 3-second polling
-- ArtPollReply (`OpCode 0x2100`) parsing for device enumeration
-- Socket management: binds to port 6454 on the configured interface, with automatic rebinding when settings change
+- A universe bound to a discovered node goes to that node's IP and port, with
+  the node's port address.
+- An unbound universe uses the address
+  `(net << 8) | (subnet << 4) | (universe & 0xF)`. Universes above 15 alias
+  onto 0–15. The engine logs a warning once per universe.
+- An unbound universe goes to the unicast IP when one is set. It also goes to
+  `255.255.255.255:6454` when broadcast is on or when no unicast IP is set.
 
-## Render Engine
+### Discovery
 
-File: `backend/src/render_engine.rs`
+Discovery sends ArtPoll (`0x2000`) every 3 seconds. It sends to
+`255.255.255.255` and to a directed broadcast address for the local network.
+It reads ArtPollReply (`0x2100`) packets to list nodes.
 
-The render engine runs a continuous async loop at approximately 60fps (16ms sleep between iterations).
+## Output loop
 
-### Track Editor Mode
-
-Read current playback time from `HostAudioState` (the rodio playback state), sample the active `LayerTimeSeries` at that time via `engine::render_frame()`.
-
-### Perform Mode
-
-For each deck with a non-zero volume, render its `LayerTimeSeries` at the deck's current time. Blend all contributing decks by weighted average (weights = effective volumes normalized by total volume).
-
-### Output
-
-The resulting `UniverseState` is emitted to:
-
-1. **Native visualizer** samples the shared render engine for its current frame
-2. **ArtNetManager** for DMX broadcast to physical hardware
-
-### `render_frame()`
-
-The `render_frame()` function (in `backend/src/engine/mod.rs`) samples each primitive's Series by finding the nearest sample via linear scan (closest time distance).
-
-Default values when no data is present:
-
-| Property | Default |
-|----------|---------|
-| dimmer | 0 |
-| color | white (so dimmer alone produces visible light) |
-| strobe | 0 |
-| position | (0, 0) |
-| speed | 1 |
+The desktop host runs `run_artnet` in `backend/src/dispatch/services.rs`. Every
+23 ms it samples the render engine at the audio playback time and sends the
+frame. When output stops, it sends one empty frame.

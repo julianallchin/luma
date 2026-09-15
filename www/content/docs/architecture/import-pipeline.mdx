@@ -1,92 +1,125 @@
 ---
 title: Import Pipeline
-description: Track import flow, Python worker management, and StageLinQ protocol integration
+description: Track import, the preprocessing DAG, Python workers and DJ equipment integration
 ---
 
-The import pipeline handles track ingestion, audio analysis, and DJ equipment integration.
+The import pipeline adds tracks to the library, analyzes their audio and
+connects to DJ equipment.
 
-## Track Import Flow
+## Track import
 
 File: `backend/src/services/tracks.rs`
 
-```
-Import request
-  |
-1. Deduplicate by Engine DJ source ID (db_uuid:track_id)
-  |
-2. Store reference to original file path (no copy)
-  |
-3. Extract metadata (lofty crate: title, artist, album, BPM, key, album art)
-  |
-4. Background: compute file hash (SHA-256) asynchronously
-  |
-5. Parallel workers:
-   |-- Beat detection (Python: beat_this) -> beat positions, BPM, downbeats
-   |-- Stem separation (Python: demucs htdemucs) -> drums, bass, vocals, other
-   '-- Waveform generation (Rust DSP) -> preview + full waveform data
-  |
-5. After stems complete:
-   '-- Harmonic analysis (Python: consonance-ACE) -> chord sections, key
-```
+There are three import paths:
 
-Audio is decoded using symphonia and resampled to a target sample rate of 48kHz (`TARGET_SAMPLE_RATE`). Stereo audio is converted to mono for analysis workers.
+| Path | Function | Behavior |
+|------|----------|----------|
+| Audio file | `file_fast_import` | Copies the file into the managed tracks directory with a new UUID name. Reads tags with `lofty`. Extracts album art. |
+| Engine DJ | `engine_dj_fast_import` | Imports a track from an Engine DJ library. |
+| rekordbox | `dj_fast_import` | Imports a track from a rekordbox library. |
 
-Progress reaches the native UI through the dispatch event sink (`track-import-state`). The preprocessing scheduler owns in-flight claims and identity-scoped task leases to prevent duplicate work and cancel analysis across identity changes.
+- A file import rejects tracks longer than 10 minutes.
+- Every path computes a content hash of the audio file.
+- The DJ paths match an existing track by source id first, then by content
+  hash.
 
-### Pipeline Timing
+Audio is decoded with symphonia at 48 kHz (`TARGET_SAMPLE_RATE`).
 
-Approximate processing times for a typical 3.5-minute track:
+## Background analysis
 
-| Stage | Time | Notes |
-|-------|------|-------|
-| beat_this | ~8s | Neural beat detection, CPU-bound |
-| demucs htdemucs | ~12s | Stem separation, MPS GPU acceleration |
-| consonance-ACE | ~3.6s | 2.1s module imports + 1.16s inference |
-| Waveform generation | ~0.83s | Pure Rust DSP |
+`run_background_analysis` runs after import:
 
-Beat detection, stem separation, and waveform generation run in parallel. Harmonic analysis waits for stems to complete because it operates on the separated harmonic content.
+1. It fills missing metadata from the file tags.
+2. It runs waveform generation and the preprocessing DAG at the same time.
 
-## Python Worker Management
+Waveforms are computed in Rust (`backend/src/services/waveforms.rs`).
+
+## Preprocessing DAG
+
+Files: `backend/src/preprocessing/`
+
+Each preprocessor declares its inputs and its output. The scheduler sorts them
+by dependency at startup. The registry is `registry.rs`.
+
+| Preprocessor | Inputs | Output | Worker |
+|--------------|--------|--------|--------|
+| `beat_grid` | Audio | Beat grid | `beat_worker.py` |
+| `stems` | Audio | Stems | `audio_preprocessor.py` (demucs `htdemucs`) |
+| `mert` | Audio, Stems | MERT features | `mert_worker.py` (MERT-95M) |
+| `roots` | Stems | Chord roots | `ace_chord_sections_worker.py` (consonance-ACE) |
+| `n2n` | Stems, MERT | Drum onsets | `n2n_worker.py` |
+| `classifier` | Beat grid, MERT | Bar classifications | `classifier_worker.py` |
+| `genre` | Audio, Beat grid | Genres | `genre_worker.py` (Discogs-EffNet, ONNX) |
+
+- Preprocessors in the same layer run in parallel for one track.
+- A semaphore limits how many tracks run at once. The limit is
+  `(RAM in GB − 4) / 3`, clamped to 1–6.
+- Each artifact row has a `processor_version`. A row with an older version runs
+  again. A row downloaded by sync counts as complete.
+- A failure is stored in the local `preprocessing_failures` table. The retry
+  uses exponential backoff, up to 24 hours. Preprocessors that depend on the
+  failed output are skipped for that run.
+- The scheduler emits `track-import-state` events during an import.
+
+The bar classifier weights are bundled in the app. The genre model is
+downloaded on first use into the models directory and checked against a pinned
+checksum.
+
+## Python environment
 
 File: `backend/src/python_env.rs`
 
-Luma manages a Python virtual environment for ML-based audio analysis:
+- Python 3.12 is required (`PY_MIN_VERSION` and `PY_MAX_VERSION_EXCLUSIVE`).
+- The virtual environment is in `python-env` in the app cache directory.
+- Requirements come from six files: the main `requirements.txt` and the files
+  for consonance-ACE, MERT, n2n, the classifier and genre.
+- A hash of the requirements and the PyTorch choice is stored in
+  `.requirements.hash`. Install runs again only when the hash changes.
 
-### Version Requirements
+### PyTorch choice
 
-Python 3.12 is required (3.12.x only), enforced by `PY_MIN_VERSION` and `PY_MAX_VERSION_EXCLUSIVE` constants.
+1. On macOS, Luma installs the default PyPI wheel. It includes MPS on Apple
+   Silicon.
+2. Otherwise Luma runs `nvidia-smi` to read the driver CUDA version and the GPU
+   compute capability. It picks the first matching row:
 
-### Virtual Environment Setup
+| Index | torch | torchvision | Minimum CUDA | Minimum compute capability |
+|-------|-------|-------------|--------------|----------------------------|
+| `cu128` | 2.8.0 | 0.23.0 | 12.8 | 7.5 |
+| `cu126` | 2.8.0 | 0.23.0 | 12.6 | 5.0 |
+| `cu124` | 2.6.0 | 0.21.0 | 12.4 | 5.0 |
+| `cu118` | 2.6.0 | 0.21.0 | 11.8 | 3.5 |
 
-1. Creates a venv in the app's cache directory
-2. Installs pip dependencies from two requirements files:
-   - Main `requirements.txt` (torch, demucs, beat_this, etc.)
-   - `consonance-ACE/requirements.txt`
-3. Worker scripts are written to the cache directory from bundled source via `ensure_worker_script()`
-4. Python resource directories (like consonance-ACE model files) are copied recursively from the build directory to the cache directory on first use
+3. With no match, or if the CUDA install fails, Luma installs the CPU wheel.
 
-### Dependency Fingerprinting
-
-Dependency installation is fingerprinted by SHA-256 hashing the requirements file contents. Reinstallation only triggers when the hash changes, so subsequent app launches skip the pip install step entirely.
-
-## StageLinQ Integration
+## StageLinQ
 
 Files: `backend/crates/stagelinq/src/`
 
-Luma includes a custom Rust implementation of Denon's StageLinQ protocol for real-time DJ equipment integration.
-
-### Protocol Components
+Luma has a Rust implementation of the Denon StageLinQ protocol.
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **Discovery** | `discovery.rs` | UDP broadcast/multicast for device detection on the local network |
-| **Device** | `device.rs` | TCP connection management for individual DJ devices |
-| **Protocol** | `protocol.rs` | Wire format encoding/decoding |
-| **State Map** | `services/` | Track metadata and playback position |
-| **Beat Info** | `services/` | Real-time BPM and beat phase synchronization |
+| Discovery | `discovery.rs` | UDP announcements on port 51337 |
+| Device | `device.rs` | TCP connection to one device |
+| Protocol | `protocol.rs` | Message encoding and decoding |
+| State map | `services/state_map.rs` | Track and deck state |
+| Beat info | `services/beat_info.rs` | Beat position and BPM |
 
-### macOS Multi-Homed Networking
+Discovery opens one announce socket per network interface. Each socket is bound
+to the interface address, so a broadcast leaves on the correct interface.
+Interfaces are listed with the `if-addrs` crate.
 
-The StageLinQ crate handles macOS multi-homed networking by binding UDP announce sockets per-interface (to the local IP, not 0.0.0.0) and binding TCP sockets to the matching subnet IP.
+## Pro DJ Link
 
-This is necessary because macOS routes 169.254.x.x (link-local) traffic via the WiFi interface when multiple interfaces have link-local routes, and Denon Prime hardware uses link-local addressing. The `if-addrs` crate provides cross-platform interface enumeration.
+Files: `backend/crates/prodjlink/src/`, `backend/src/prodjlink_manager.rs`
+
+The Pro DJ Link client binds UDP ports 50000, 50001 and 50002:
+
+| Port | Data |
+|------|------|
+| 50000 | Keepalive announcements |
+| 50001 | Precise position |
+| 50002 | Player status |
+
+`metadata.rs` fetches track metadata from players.
