@@ -1,82 +1,81 @@
 ---
 title: Groups
-description: How Luma's group system makes light shows portable between venues with different hardware.
+description: How groups name sets of fixtures so that a score works in more than one venue.
 ---
 
-# Step 2: Create Groups
+# Create Groups
 
-This is the core innovation that makes shows portable between venues. If you understand nothing else about Luma, understand this section.
+A score never refers to a fixture id. It refers to **group names**. Each venue defines its own groups. When a score plays, Luma resolves the group names against the current venue.
 
-## What Are Groups?
+## What a Group Is
 
-Groups are logical collections of fixtures organized by their **role and position** in the venue, NOT by their DMX address. When you create a group, you give it a descriptive snake_case name:
+A group is a named set of fixtures in one venue. Example names:
 
-- `front_wash` -- the wash lights pointing at the audience from the front
-- `back_truss` -- the moving heads on the rear truss
-- `floor_ring` -- uplights arranged in a circle on the floor
-- `dj_booth` -- lights illuminating the DJ
+- `front_wash`
+- `back_movers`
+- `floor_ring`
+- `dj_booth`
 
-Groups are a venue-level concept. They exist inside a specific venue. The same physical lights in two different venues will have different group names but might serve the same role.
+If two venues both have a group called `front_wash`, a clip that selects `front_wash` works in both venues. The fixtures in the two groups can be different models.
 
-### Group Naming
+### Group Names
 
-Group names are automatically normalized to snake_case: lowercase, spaces and hyphens become underscores, non-alphanumeric characters are stripped. Names must match `[a-z][a-z0-9_]*` and cannot be `all` (which is reserved to mean "every fixture").
+Luma changes group names to snake_case. It makes letters lowercase, changes spaces and hyphens to underscores, and removes other characters. A name must match `[a-z][a-z0-9_]*`. A name cannot be `all`, because `all` selects every fixture.
 
-## Spatial Axes
+## Make Groups
 
-Each group has three spatial axis values, which describe where the group sits in the room on a normalized scale:
+Groups are in the venue tab, next to the patch and the stage.
 
-| Axis | Range | Meaning |
-|------|-------|---------|
-| **Left/Right** | -1 to +1 | Stage left to stage right |
-| **Front/Back** | -1 to +1 | Downstage (audience) to upstage (back wall) |
-| **Above/Below** | -1 to +1 | Floor level to ceiling |
+- **Generate from stage.** This button shows when the venue has no groups. Luma makes a starting set of groups from the rig. It groups fixtures by role (for example wash, spot, beam, strobe, blinder, pixel and fx), by where their structure sits, and by how they split: top and bottom, left and right, downstage and upstage.
+- **Create group.** Make a group by hand.
+- **Group selected lights.** Make a group from the fixtures that you selected.
 
-These values are auto-calculated from the average positions of the fixtures in the group, but you can manually adjust them. They are used by patterns that want to treat groups differently based on their spatial role.
+Generation gives only a starting set. You can save, rename and change groups after that.
 
-## Why Groups Are the Magic
+### Missing Groups
 
-When you build a pattern ([Step 4](/docs/user-guide/patterns)), you do not say "animate fixtures 1 through 8." You say "animate `floor_ring`" or "animate `front_wash & back_truss`."
+A score can refer to a group that the venue does not have. The groups panel then shows **missing groups · Resolve**. The repair dialog lets you replace each missing name with a name that exists, and then **Fix affected scores**.
 
-Now your pattern works on ANY venue:
+## Axis Values
 
-- **Small club** with 8 par cans in a ring? Put them in a group called `floor_ring` and patterns that reference `floor_ring` pick them up.
-- **Stadium** with 200 moving heads on a circular truss? Same pattern, same group name. It animates all 200 lights in their circular arrangement, with zero changes to your pattern.
-- **Dive bar** with 4 random LED pars on the ceiling? No `floor_ring` group exists, so the pattern gracefully finds the best available alternative via the fallback operator.
+A saved group can have three axis values. Each value is from -1 to +1.
 
-This is the sheet-music analogy in action. Your pattern says "play a C major chord" and the venue provides whatever instruments it has.
+| Axis | -1 | +1 |
+|------|----|----|
+| `axis_lr` | Left | Right |
+| `axis_fb` | Front | Back |
+| `axis_ab` | Below | Above |
+
+Groups that are generated and not saved have no axis values.
 
 ## Selection Expressions
 
-Selection expressions let you write boolean logic over group names to precisely target fixtures. They support the following operators:
+A clip's selection is an expression over group names.
 
-| Operator | Name | Example | Meaning |
-|----------|------|---------|---------|
-| `&` | AND | `front_wash & left_truss` | Fixtures in both groups |
-| `\|` | OR | `left_truss \| right_truss` | Fixtures in either group |
-| `~` | NOT | `floor_ring & ~dj_booth` | Floor ring fixtures that are not in the DJ booth group |
-| `>` | FALLBACK | `strobes > front_wash` | Prefer strobes; if the group does not exist, use front wash instead |
+| Operator | Name | Example | Result |
+|----------|------|---------|--------|
+| `&` | And | `front_wash & left_truss` | Fixtures in both groups |
+| `\|` | Or | `left_truss \| right_truss` | Fixtures in either group |
+| `^` | Either | `left_truss ^ right_truss` | One side. If both sides match fixtures, Luma picks one side at random. |
+| `~` | Not | `floor_ring & ~dj_booth` | Fixtures in `floor_ring` that are not in `dj_booth` |
+| `>` | Fallback | `strobes > front_wash` | The left side. If the left side matches no fixtures, the right side. |
 
-Parentheses work for grouping: `(left_truss | right_truss) & front_wash` means "left or right truss fixtures, but only if they are also in the front wash group."
+Use parentheses to group terms: `(left_truss | right_truss) & front_wash`.
 
-The `>` (fallback) operator is unique to Luma. It evaluates the left side first, and only includes the right side's results if the left side matched zero fixtures. This enables graceful degradation across venues with different fixture inventories.
+`>` binds most loosely. An empty expression or `all` selects every fixture in the venue.
 
-The `all` token is the default if you leave the expression empty. It matches every fixture in the venue.
+## Name Groups for Portability
 
-## Designing Groups for Portability
+Use the same names in every venue. Name a group by its role, its position, or both:
 
-The key to portability is using **consistent, descriptive group names** across your venues. If every venue has a `front_wash` group (even if the actual fixtures are completely different), then patterns referencing `front_wash` will work everywhere.
+| Style | Examples |
+|-------|----------|
+| Role | `wash`, `strobes`, `movers` |
+| Position | `front`, `back`, `ceiling`, `floor` |
+| Both | `front_wash`, `back_movers`, `floor_ring` |
 
-Think about naming groups by their **role** (what they do) and **position** (where they are):
-
-| Convention | Example Groups |
-|-----------|---------------|
-| **By role** | `wash`, `strobes`, `accents`, `movers` |
-| **By position** | `front`, `back`, `left`, `right`, `ceiling`, `floor` |
-| **Combined** | `front_wash`, `back_movers`, `floor_ring`, `ceiling_spots` |
-
-When you move a show between venues, an LLM can automatically remap group names (e.g., `front_wash` in venue A maps to `house_pars` in venue B) based on the fixture positions and roles.
+Use `>` to give a fallback when a venue does not have a group.
 
 ## Next Steps
 
-With groups defined, you are ready to [import tracks](/docs/user-guide/importing-tracks) and start building your show.
+[Import tracks](/docs/user-guide/importing-tracks).
