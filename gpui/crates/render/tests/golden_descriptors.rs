@@ -23,7 +23,7 @@ fn scene_contract_round_trips_in_canonical_form() {
     );
     assert_eq!(canonical["camera"]["position"][0], 5.5);
     assert_eq!(canonical["camera"]["position"][2], 5.5);
-    assert!(canonical["render"].get("legacyShadowEye").is_none());
+    assert!(canonical["render"].get("goldenShadowEye").is_none());
 }
 
 #[test]

@@ -1,9 +1,8 @@
 //! One golden frame's inputs, resolved from the scene description into
 //! world-space draws and lights.
 //!
-//! Everything the three.js renderer computed per frame in TypeScript —
-//! model-kind resolution, physical-dimension scaling, cone geometry, beam axes,
-//! strobe gating — happens once here, against pre-resolved data.
+//! Model-kind resolution, physical-dimension scaling, cone geometry, beam axes
+//! and strobe gating happen once here, against pre-resolved data.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -135,7 +134,7 @@ pub struct DirectionalLight {
     /// Linear RGB colour multiplied by the configured intensity.
     pub radiance: Vec3,
     /// Directional shadow-camera anchor. Shading uses normalized `direction`;
-    /// this exists only to retain the captured legacy projection exactly.
+    /// this exists only to keep the golden catalogue's captured projection exact.
     pub shadow_eye: Vec3,
     /// Whether the shadow map is rendered and sampled.
     pub shadows: bool,
@@ -232,7 +231,7 @@ pub struct Frame {
     pub beam_proxy: bool,
     /// Whether opaque venue geometry casts into fixture cones and haze.
     pub fixture_shadows: bool,
-    /// Retained shadow maps for every fixture, beyond the legacy 16-map budget.
+    /// Retained shadow maps for every fixture, beyond the 16-map budget.
     pub geometry_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
@@ -281,7 +280,7 @@ pub struct Frame {
     pub haze_resolution: f32,
     /// The clock the golden was captured at; drives noise drift and strobe.
     pub time: f32,
-    /// Diagnostic output selected by the renderer lab.
+    /// Diagnostic output. `Pbr` is the display path.
     pub debug_view: crate::scene_desc::DebugView,
     /// Where the frame is seen from.
     pub camera: Camera,
@@ -502,8 +501,8 @@ pub(crate) fn housing_draws(
     for (node, world) in glb.nodes.iter().zip(&worlds) {
         for &p in &node.primitives {
             // Every fixture body is forced near-black so only beams and
-            // emissives read (`static-fixture.tsx`). `setRGB` is in the
-            // linear working space, so no sRGB decode here.
+            // emissives read. The colour is already linear, so no sRGB
+            // decode here.
             draws.push(glb_draw(
                 bank,
                 &mesh_rel,
@@ -580,10 +579,9 @@ fn intern<T>(
 /// Strobe duty gate. `PrimitiveState.strobe` is a 0..1 rate; the display clock
 /// turns it into on/off at 50% duty.
 ///
-/// The two rate constants are the three.js ones — 20 Hz/unit for lensed
-/// fixtures, 10 Hz/unit for bar pixels. That is two answers for one concept
-/// (spec §3.2 flags it); they are kept apart here only so the goldens
-/// reproduce, and should collapse to one when the port lands in the app.
+/// There are two rate constants — 20 Hz/unit for lensed fixtures, 10 Hz/unit
+/// for bar pixels. That is two answers for one concept (spec §3.2 flags it);
+/// they stay apart so the goldens reproduce.
 fn strobe_gate(state: PrimitiveState, time: f32, hz_per_unit: f32) -> f32 {
     if state.strobe <= 0.0 {
         return state.dimmer;
@@ -751,7 +749,7 @@ pub fn build_with(
 
     // --- floor -------------------------------------------------------------
     // Model space stays three-space throughout: every model matrix below is
-    // `to_world · (whatever three.js composed)`, so mesh data and local offsets
+    // `to_world · (a three-space pose)`, so mesh data and local offsets
     // need no per-vertex conversion.
     //
     // Outdoors the atmosphere attenuates geometry over kilometres, so the
@@ -947,7 +945,7 @@ pub fn build_with(
         );
 
         // Pan/tilt do not move the mesh here: the goldens pin `speed = 0`, and
-        // `static-fixture.tsx` freezes articulation when speed is zero.
+        // articulation is frozen when speed is zero.
         let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
 
         if kind.emits_beam() {
@@ -1197,7 +1195,7 @@ fn sun_from(scene: &Scene) -> Option<DirectionalLight> {
             radiance: Vec3::from(sun.color).max(Vec3::ZERO) * sun.intensity,
             shadow_eye: scene
                 .render
-                .legacy_shadow_eye
+                .golden_shadow_eye
                 .map_or(direction * 244.0_f32.sqrt(), Vec3::from),
             shadows: sun.shadows,
             shadow_softness: if sun.shadow_softness.is_finite() {
