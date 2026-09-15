@@ -170,7 +170,7 @@ fn playing_then_zooming_reports_where_the_frame_went() {
                     parkedMedian: q(parked, 0.5),
                     parkedMax: parked[parked.length - 1],
                     ui: readLabel("UI "),
-                    pres: readLabel("PRES "),
+                    pres: readLabel("Present "),
                     gpu: readLabel("CPU "),
                 };
             };

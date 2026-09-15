@@ -48,11 +48,11 @@ const SCRIPT: &str = r##"
 
     const rows = () =>
         app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("#"));
-    // `SCORE #n` is the timeline's own readout; `RIG SCORE #n` is the stage's.
+    // `Score #n` is the timeline's own readout; `RIG SCORE #n` is the stage's.
     // Disjoint prefixes, so neither find can pick the other up.
     const timeline = () =>
         app.snapshot().findAll({ role: "text" })
-            .find((n) => n.label.startsWith("SCORE #"))?.label;
+            .find((n) => n.label.startsWith("Score #"))?.label;
     const rig = () =>
         app.snapshot().findAll({ role: "card" })
             .find((n) => n.label.startsWith("RIG SCORE #"))?.label;
@@ -105,9 +105,10 @@ fn the_stage_is_lit_by_the_score_the_timeline_opened() {
     for (which, opened) in [("first", &out["one"]), ("second", &out["two"])] {
         let timeline = opened["timeline"].as_str().unwrap_or_default();
         let rig = opened["rig"].as_str().unwrap_or_default();
+        let ordinal = &timeline[timeline.find('#').unwrap_or(timeline.len())..];
         assert_eq!(
             rig,
-            &format!("RIG {timeline}"),
+            &format!("RIG SCORE {ordinal}"),
             "the {which} open lit the rig with something other than the open score"
         );
     }

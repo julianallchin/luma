@@ -80,7 +80,7 @@ const SCRIPT: &str = r#"
 
     function settled() {
         for (let i = 0; i < 60; i++) {
-            if (!status().includes("SAVING")) return true;
+            if (!status().includes("Saving")) return true;
             app.frames(1, { waitMs: 40 });
         }
         throw new Error("a write never left the editor");
@@ -146,7 +146,7 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
         "the fixture did not open on three layers: {opened:#}"
     );
     assert!(
-        labels(&out["selected"]).contains(&"2 SELECTED".to_string()),
+        labels(&out["selected"]).contains(&"2 selected".to_string()),
         "shift-click did not extend the selection: {:#}",
         out["selected"]
     );
@@ -187,17 +187,18 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
             .unwrap();
             // A clip names a score-local definition, and the definition's
             // name is what the timeline labelled it by.
-            let layers: std::collections::BTreeMap<String, i64> = sqlx::query_as::<_, (String, i64)>(
-                "SELECT json_extract(definition.definition_json, '$.name'), clip.z_index
+            let layers: std::collections::BTreeMap<String, i64> =
+                sqlx::query_as::<_, (String, i64)>(
+                    "SELECT json_extract(definition.definition_json, '$.name'), clip.z_index
                  FROM clips clip
                  JOIN score_definitions definition
                    ON definition.id = clip.score_id || ':' || clip.graph",
-            )
-            .fetch_all(&pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .collect();
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
             assert_eq!(
                 (
                     layers["Alpha"],

@@ -117,7 +117,7 @@ const SCRIPT: &str = r#"
         moved: moved.some((x, i) => x !== before[i]),
         status: app.snapshot().findAll({ role: "text" })
             .map((n) => n.label)
-            .find((l) => l.endsWith("NODES")),
+            .find((l) => l.endsWith(" nodes")),
         mode: app.timings().mode,
     })
 "#;
@@ -136,7 +136,7 @@ fn panning_and_zooming_a_hundred_node_graph_stays_inside_the_frame_budget() {
     );
     assert_eq!(
         out["status"],
-        json!(format!("{NODE_COUNT} NODES")),
+        json!(format!("{NODE_COUNT} nodes")),
         "the editor did not open the seeded graph: {out:#}"
     );
     assert_eq!(

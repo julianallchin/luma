@@ -300,7 +300,7 @@ fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_settings(cx)))
                 .agent_node(Role::Button, "Back"),
         )
-        .child(luma_ui::silkscreen("SETTINGS"))
+        .child(luma_ui::caption("Settings"))
         .child(div().flex_1())
         .child(tabs(state, app))
 }
@@ -539,7 +539,7 @@ fn about() -> Vec<Div> {
     vec![
         field(
             None,
-            luma_ui::silkscreen(format!("LUMA V{}", luma_lib::VERSION)).into_any_element(),
+            luma_ui::caption(format!("Luma v{}", luma_lib::VERSION)).into_any_element(),
             None,
         ),
         field(
@@ -563,13 +563,7 @@ fn field(label: Option<&str>, control: AnyElement, help: Option<&str>) -> Div {
         .items_start()
         .gap(px(8.))
         .when_some(label, |el, label| {
-            el.child(
-                div()
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(ladder::foreground_90())
-                    .child(label.to_uppercase()),
-            )
+            el.child(luma_ui::float::label(label.to_string()))
         })
         .child(control)
         .when_some(help, |el, help| el.child(help_text(help)))

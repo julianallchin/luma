@@ -153,11 +153,11 @@ fn keys_and_actions_route_to_the_focused_screen_and_a_text_field_keeps_its_own()
 
     // 0. Required onboarding held the keyboard before a single click. Its
     // focused search field proves the async picker committed focus, while the
-    // absent SETTINGS label proves a shell shortcut could not replace it.
+    // absent Settings label proves a shell shortcut could not replace it.
     assert!(
         out["cold"]["onVenueGrid"] == true
             && out["cold"]["search"]["focused"] == true
-            && !text(&out["cold"]).contains(&"SETTINGS".to_string()),
+            && !text(&out["cold"]).contains(&"Settings".to_string()),
         "required onboarding did not retain its focused modal scope: {:#}",
         out["cold"]
     );
@@ -239,7 +239,7 @@ fn keys_and_actions_route_to_the_focused_screen_and_a_text_field_keeps_its_own()
 
     // 7. `cmd-,` opened settings over the editor, and escape gave it back.
     assert!(
-        text(&out["settings"]).contains(&"SETTINGS".to_string()),
+        text(&out["settings"]).contains(&"Settings".to_string()),
         "cmd-, did not open settings: {:#}",
         out["settings"]
     );

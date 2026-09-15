@@ -9,7 +9,7 @@
 //! - deleting a score that holds clips asks first, quoting the count the row
 //!   showed, and the row survives a cancel;
 //! - confirming removes it from the list, and — when it was the score on the
-//!   timeline — leaves the editor in the defined `NO SCORE` state rather than
+//!   timeline — leaves the editor in the defined `No score` state rather than
 //!   drawing a document that no longer exists.
 //!
 //! The empty case is the fourth: a score with nothing in it goes without a
@@ -120,9 +120,9 @@ const CONFIRMS: &str = r##"
 /// empty state, and gets there without ever drawing the deleted document.
 const EDITOR: &str = r##"
     const ordinal = () =>
-        app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("SCORE #"))?.label;
+        app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"))?.label;
     const noScore = () =>
-        app.snapshot().findAll({ role: "text" }).some((n) => n.label === "NO SCORE");
+        app.snapshot().findAll({ role: "text" }).some((n) => n.label === "No score");
 
     const before = labels();
 

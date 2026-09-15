@@ -505,7 +505,7 @@ fn detail_card(tool: &ToolPart, cell: Option<&Cell>, theme: &Theme, window: &Win
         .into_any_element()
 }
 
-/// One labelled block of the detail card: a silkscreen heading over mono lines.
+/// One labelled block of the detail card: a heading over mono lines.
 ///
 /// `scroll` names the block when its lines are allowed to run past the card
 /// rather than being clipped to [`DETAIL_LINE_MAX`] — the one is what a cell's

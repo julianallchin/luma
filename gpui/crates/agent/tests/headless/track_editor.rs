@@ -152,7 +152,7 @@ fn a_clip_edge_dragged_on_the_timeline_moves_stays_moved_and_the_playhead_runs()
     // 1. The timeline names its scrubbing surface and every clip on it.
     let opened = &out["opened"];
     assert!(
-        status(opened).contains(&"2 CLIPS".to_string()),
+        status(opened).contains(&"2 clips".to_string()),
         "{opened:#}"
     );
     assert!(
@@ -185,7 +185,7 @@ fn a_clip_edge_dragged_on_the_timeline_moves_stays_moved_and_the_playhead_runs()
     //    — not what was still on screen.
     let reopened = &out["reopened"];
     assert!(
-        status(reopened).contains(&"2 CLIPS".to_string()),
+        status(reopened).contains(&"2 clips".to_string()),
         "{reopened:#}"
     );
     for (_, label, ..) in CLIPS {

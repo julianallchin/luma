@@ -1,37 +1,23 @@
-//! The two text shapes every screen writes: the panel's silkscreen label, and
-//! the plate a screen shows when it has nothing else to show.
+//! The two text shapes every screen writes: a quiet caption, and the plate a
+//! screen shows when it has nothing else to show.
 //!
 //! Neither is screen-local. A restyled label or a restyled empty state that
 //! only landed on four screens out of five would be two design systems, which
 //! is the thing this crate exists to prevent.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, FontWeight, Hsla};
+use gpui::{div, px, AnyElement, Hsla, SharedString};
 
-use crate::ladder;
+use crate::float;
 use crate::node::{Instrument, Role};
 
-/// 9px uppercase silkscreen, the panel's one label style.
+/// A quiet sentence-case readout: [`float::label`], published as a text node.
 ///
-/// The caller passes the text already cased, and it doubles as the automation
-/// node's label — a silkscreen is read, never pressed, so the words on it are
-/// the whole of its identity.
-pub fn silkscreen(label: impl Into<String>) -> impl IntoElement {
-    silkscreen_in(label, ladder::muted_foreground())
-}
-
-/// [`silkscreen`] at another tone — what a *floating* surface needs, where the
-/// instrument tier's muted grey is a foreign tint against glass. The shape (9px,
-/// bold, uppercase, read-never-pressed) is the part that must not fork, so only
-/// the colour is a parameter.
-pub fn silkscreen_in(label: impl Into<String>, color: impl Into<Hsla>) -> impl IntoElement {
+/// The caller passes the text in the case it is shown in, and the same words
+/// are the automation label, because a caption is read, never pressed.
+pub fn caption(label: impl Into<SharedString>) -> impl IntoElement {
     let label = label.into();
-    div()
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(color.into())
-        .child(label.clone())
-        .agent_node(Role::Text, label)
+    float::label(label.clone()).agent_node(Role::Text, label)
 }
 
 /// The whole body when there is nothing to list: one centred line that says

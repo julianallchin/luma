@@ -198,9 +198,9 @@ fn a_real_score_reports_where_each_second_goes() {
                     if (at !== null && at >= {from} && at <= {to}) {{
                         samples.push({{
                             t: at,
-                            draw: label("DRAW "),
+                            draw: label("Draw "),
                             ui: label("UI "),
-                            pres: label("PRES "),
+                            pres: label("Present "),
                             gpu: label("CPU "),
                         }});
                     }}
@@ -306,9 +306,9 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
                     step,
                     phase,
                     t: clock(),
-                    draw: label("DRAW "),
+                    draw: label("Draw "),
                     ui: label("UI "),
-                    pres: label("PRES "),
+                    pres: label("Present "),
                     gpu: label("CPU "),
                 }});
                 // Settled: what being at this zoom costs.
@@ -385,9 +385,9 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
             step["step"].as_i64().unwrap_or(-1),
             step["phase"].as_str().unwrap_or("?"),
             step["t"].as_f64().unwrap_or(-1.0),
-            step["draw"].as_str().unwrap_or("DRAW —"),
+            step["draw"].as_str().unwrap_or("Draw —"),
             step["ui"].as_str().unwrap_or("UI —"),
-            step["pres"].as_str().unwrap_or("PRES —"),
+            step["pres"].as_str().unwrap_or("Present —"),
         );
         if let Some(gpu) = step["gpu"].as_str() {
             println!("            {gpu}");

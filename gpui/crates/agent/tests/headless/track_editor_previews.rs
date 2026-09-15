@@ -36,6 +36,9 @@ fn harness() -> Harness {
         vec![Clip::new("pattern-pulse", "Pulse", 0.5, 4.5).lit()],
     )
     .with_rig()
+    // The size its pixel sibling uses. At the default size the toolbar wraps
+    // under headless text metrics and the lane sits at the window's edge.
+    .window(1480., 1000.)
     .open(Mode::Headless)
 }
 

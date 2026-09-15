@@ -91,7 +91,7 @@ pub fn patterns(
         // its interior so the renderer effect can be upgraded in one place.
         .text_color(ladder::foreground())
         .child(toolbar(state, app, first_focus, first_focused, track_open))
-        .child(luma_ui::silkscreen(
+        .child(luma_ui::caption(
             "Choose a pattern to preview and add to this score",
         ))
         .child(header())
@@ -118,7 +118,7 @@ fn toolbar(
     track_open: bool,
 ) -> Div {
     let close = app.clone();
-    let label = format!("{} PATTERNS", state.rows.len());
+    let label = format!("{} patterns", state.rows.len());
     div()
         .flex()
         .flex_shrink_0()
@@ -137,13 +137,11 @@ fn toolbar(
                 .agent_node(Role::Button, "Close")
                 .agent_focused(first_focused),
         )
-        .child(luma_ui::silkscreen(label))
+        .child(luma_ui::caption(label))
         // The inert rows' reason, said once for the list rather than muttered
         // per row (the row itself only dims).
         .when(!track_open, |strip| {
-            strip.child(luma_ui::silkscreen(
-                crate::graph::NO_TRACK_REASON.to_uppercase(),
-            ))
+            strip.child(luma_ui::caption(crate::graph::NO_TRACK_REASON))
         })
 }
 
@@ -153,12 +151,12 @@ fn header() -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
-        .text_size(px(10.))
+        .text_size(px(11.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(ladder::muted_foreground())
-        .child(div().flex_1().child("NAME"))
-        .child(div().w(px(CATEGORY_WIDTH)).child("CATEGORY"))
-        .child(div().w(px(AUTHOR_WIDTH)).child("AUTHOR"))
+        .text_color(ladder::foreground_alpha(0.55))
+        .child(div().flex_1().child("Name"))
+        .child(div().w(px(CATEGORY_WIDTH)).child("Category"))
+        .child(div().w(px(AUTHOR_WIDTH)).child("Author"))
 }
 
 fn body(

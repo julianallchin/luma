@@ -91,7 +91,7 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|label| label == "SETTINGS"),
+                .any(|label| label == "Settings"),
         "Back did not return to the venue shell: {:?}",
         out["home"]
     );

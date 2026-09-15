@@ -90,7 +90,7 @@ globalThis.nav = {
 		// for it here rather than in every caller keeps the walk's failure on
 		// the gesture that missed instead of on the assertion three lines on.
 		until("the timeline", (s) =>
-			s.findAll({ role: "text" }).find((n) => n.label.startsWith("SCORE #")) !== undefined);
+			s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined);
 		nav.step("the way back to the track list", "button", "Back to tracks");
 		until("the track list again", (s) =>
 			s.find({ role: "card", label: "Scores level" }) === undefined
@@ -121,7 +121,7 @@ globalThis.nav = {
 	patterns() {
 		app.action("luma::OpenPatterns");
 		until("the pattern picker", (s) =>
-			s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) !== undefined,
+			s.find((n) => n.role === "text" && n.label.endsWith(" patterns")) !== undefined,
 		);
 	},
 

@@ -3437,25 +3437,25 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
             fps_reading(&stage),
             stage
                 .last_draw_ms
-                .map_or_else(|| "DRAW —".to_string(), |ms| format!("DRAW {ms:.1} MS")),
+                .map_or_else(|| "Draw —".to_string(), |ms| format!("Draw {ms:.1} ms")),
             format!(
-                "UI {:.1} (S {:.1} B {:.1} P {:.1}) MS",
+                "UI {:.1} (sample {:.1} build {:.1} pick {:.1}) ms",
                 work.total_ms(),
                 work.sample_ms,
                 work.build_ms,
                 work.pick_ms
             ),
             stage.last_present.map_or_else(
-                || "PRES —".to_string(),
-                |present| format!("PRES {:.1}/{:.1} MS", present.p50_ms, present.p95_ms),
+                || "Present —".to_string(),
+                |present| format!("Present {:.1}/{:.1} ms", present.p50_ms, present.p95_ms),
             ),
             match (stage.last_cpu_ms, stage.last_gpu_ms, stage.last_cluster_ms) {
                 (Some(cpu), Some(gpu), Some(cluster)) => {
-                    format!("CPU {cpu:.2} · GPU {gpu:.2} · CLUSTER {cluster:.2} MS")
+                    format!("CPU {cpu:.2} · GPU {gpu:.2} · cluster {cluster:.2} ms")
                 }
                 _ => "CPU/GPU timing unavailable".to_string(),
             },
-            format!("SHADOWS {} REDRAWN", stage.last_shadow_maps.unwrap_or(0)),
+            format!("Shadows {} redrawn", stage.last_shadow_maps.unwrap_or(0)),
         )
     };
     // A resting stage is not rendering slowly, it is not rendering at all —
@@ -3485,7 +3485,7 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
                 .child(fps_text.clone())
                 .agent_node(Role::Text, format!("FPS {fps_text}")),
         )
-        .child(luma_ui::silkscreen("FPS"))
+        .child(luma_ui::caption("FPS"))
         .when(expanded, |el| {
             el.child(
                 div()
@@ -3535,11 +3535,11 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .when(expanded, |el| {
                         el.child(frame_graph(reading.intervals))
                             .child(div().h(px(1.)).bg(ladder::trim()))
-                            .child(luma_ui::silkscreen(draw))
-                            .child(luma_ui::silkscreen(ui))
-                            .child(luma_ui::silkscreen(pres))
-                            .child(luma_ui::silkscreen(gpu))
-                            .child(luma_ui::silkscreen(shadows))
+                            .child(luma_ui::caption(draw))
+                            .child(luma_ui::caption(ui))
+                            .child(luma_ui::caption(pres))
+                            .child(luma_ui::caption(gpu))
+                            .child(luma_ui::caption(shadows))
                     })
                     .on_click(toggle)
                     .agent_node(Role::Toggle, "Frame stats"),
@@ -4337,7 +4337,7 @@ fn plate(message: String) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .child(luma_ui::silkscreen(message.clone()))
+        .child(luma_ui::caption(message.clone()))
         .agent_node(Role::Text, message)
         .into_any_element()
 }

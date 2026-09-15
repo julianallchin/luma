@@ -51,7 +51,7 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
             // Hovering alone must leave the disclosure closed.
             app.scroll(gauge, {{ dx: 0, dy: 0 }});
             app.frames(3, {{ waitMs: 20 }});
-            if (app.snapshot().findAll({{ role: "text" }}).some((n) => n.label.startsWith("MODEL "))) {{
+            if (app.snapshot().findAll({{ role: "text" }}).some((n) => n.label.startsWith("Model "))) {{
                 throw new Error("hover opened the usage card");
             }}
             app.click(gauge);
@@ -60,7 +60,7 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
 
             app.click(app.snapshot().find({{ role: "button", label: {reading:?} }}));
             until("usage card exit", (s) =>
-                !s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("MODEL ")));
+                !s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Model ")));
             ({{ before: before.length, rows }})
         "#,
             until = chat::UNTIL,
@@ -81,20 +81,20 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
 
     // Every field the provider reported, in the card's own words.
     for row in [
-        "INPUT 4,800",
-        "CACHE READ 610,000",
-        "CACHE WRITE 12,000",
-        "OUTPUT 512",
-        "PROMPT 626,800",
-        "WINDOW 1,000,000",
-        "MODEL claude-opus-5",
+        "Input 4,800",
+        "Cache read 610,000",
+        "Cache write 12,000",
+        "Output 512",
+        "Prompt 626,800",
+        "Window 1,000,000",
+        "Model claude-opus-5",
     ] {
         assert!(has(row), "the card is missing `{row}`; it shows {rows:?}");
     }
     // The duration is measured, not scripted, so only its shape is assertable.
     assert!(
         rows.iter()
-            .any(|label| label.starts_with("TOOK ")
+            .any(|label| label.starts_with("Took ")
                 && (label.ends_with(" ms") || label.ends_with(" s"))),
         "the card does not report how long the request took: {rows:?}"
     );

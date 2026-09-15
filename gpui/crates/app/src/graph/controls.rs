@@ -568,7 +568,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
     let Some(controls) = source.controls.as_ref() else {
         return Some(
             content
-                .child(luma_ui::silkscreen("Select a node".to_string()))
+                .child(luma_ui::caption("Select a node".to_string()))
                 .into_any_element(),
         );
     };
@@ -577,12 +577,12 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
     {
         return Some(
             content
-                .child(luma_ui::silkscreen("Select a node".to_string()))
+                .child(luma_ui::caption("Select a node".to_string()))
                 .into_any_element(),
         );
     }
     if let Some((node, port)) = &source.selected_output {
-        content = content.child(luma_ui::silkscreen(format!("{node}.{port}")));
+        content = content.child(luma_ui::caption(format!("{node}.{port}")));
         let app = app.clone();
         let target = target.clone();
         let binding = p::Binding::Connection {
@@ -615,7 +615,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
         content = content.child(
             div()
                 .key_context(crate::keymap::context::GRAPH_INPUT_NAME)
-                .child(luma_ui::silkscreen("Name"))
+                .child(luma_ui::caption("Name"))
                 .child(
                     div()
                         .h(px(32.))
@@ -624,7 +624,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 ),
         );
         if controls.cells.is_empty() {
-            content = content.child(luma_ui::silkscreen(
+            content = content.child(luma_ui::caption(
                 "Connect to a parameter to choose its type and default",
             ));
         }
@@ -662,7 +662,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             .flex()
             .flex_col()
             .gap(px(5.))
-            .child(luma_ui::silkscreen(cell.spec.name.clone()));
+            .child(luma_ui::caption(cell.spec.name.clone()));
         let mut show_widget = true;
         if let (Some((options, custom)), Some(value)) = (&cell.presets, &cell.value) {
             let matching = options.iter().position(|preset| preset.value == *value);
@@ -792,7 +792,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 ))
             }
             Widget::Connection if matches!(cell.binding, Some(p::Binding::Input { .. })) => row,
-            Widget::Connection => row.child(luma_ui::silkscreen(match &cell.binding {
+            Widget::Connection => row.child(luma_ui::caption(match &cell.binding {
                 Some(p::Binding::Connection { node, output }) => format!("From {node}.{output}"),
                 _ if matches!(cell.value, Some(p::Value::Events(p::Events::Automatic))) => {
                     "Uses Repeat · connect a trigger to replace it".into()
@@ -801,7 +801,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             })),
         };
         if cell.spec.optional && cell.binding.is_none() {
-            row = row.child(luma_ui::silkscreen("Not written"));
+            row = row.child(luma_ui::caption("Not written"));
             if let Some(value) = &cell.value {
                 let app = app.clone();
                 let target = target.clone();

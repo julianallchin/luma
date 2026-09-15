@@ -46,7 +46,6 @@ use gpui::{
     canvas, div, point, px, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
 };
 
-use crate::text;
 
 /// Where a stateless control's box landed, readable by its own mouse
 /// listeners.
@@ -136,7 +135,7 @@ pub(crate) fn drag_fraction<T: OwnedDrag + Clone + 'static>(
 /// The seam between a row's label and its control.
 const LABEL_GAP: f32 = 6.;
 
-/// One arg of a schema: a 9px silkscreen label with its control under it,
+/// One arg of a schema: a [`crate::caption`] with its control under it,
 /// spanning the column's whole width.
 ///
 /// Label *over* rather than beside, which is the one thing this shape decides:
@@ -152,6 +151,6 @@ pub fn arg_row(label: &str, control: impl IntoElement) -> Div {
         .items_start()
         .gap(px(LABEL_GAP))
         .w_full()
-        .child(text::silkscreen(label.to_uppercase()))
+        .child(crate::caption(label.to_string()))
         .child(control)
 }

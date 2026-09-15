@@ -773,9 +773,7 @@ fn score_row(
                     .child(format!("{} clips · {}{}", row.clips, row.age, row.spend)),
             ),
     )
-    .when(row.read_only, |el| {
-        el.child(luma_ui::silkscreen("RO".to_string()))
-    })
+    .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
     .agent_node(Role::Row, label)
     .into_any_element()
 }
