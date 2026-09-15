@@ -424,41 +424,41 @@ impl Luma {
         .detach();
     }
 
-    /// A view toggle: applied to the lab now, persisted where it is durable.
+    /// A view toggle: applied to the stage now, persisted where it is durable.
     ///
     /// The three tiers of this panel meet here. Haze is **venue truth** and goes
     /// on the venue row; grid and gizmos are **local device settings** and follow
     /// the operator between rooms; fixture shadows is a session dial and outlives
     /// nothing.
-    pub(super) fn toggle_view_control(&mut self, control: LabToggle, cx: &mut Context<Self>) {
+    pub(super) fn toggle_view_control(&mut self, control: ViewToggle, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        state.render_lab.toggle(control);
+        state.render_controls.toggle(control);
         let (grid, gizmos) = (
-            state.render_lab.grid_enabled,
-            state.render_lab.gizmos_enabled,
+            state.render_controls.grid_enabled,
+            state.render_controls.gizmos_enabled,
         );
         match control {
-            LabToggle::Haze => self.save_venue_haze(cx),
+            ViewToggle::Haze => self.save_venue_haze(cx),
             // Straight through `set_setting`: it is already FIFO-ordered, and a
             // toggle cannot emit faster than a hand can click, so the
             // coalescing the scrubs need would buy nothing here.
-            LabToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
-            LabToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
-            LabToggle::FixtureShadows => {}
+            ViewToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
+            ViewToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
+            ViewToggle::FixtureShadows => {}
         }
         cx.notify();
     }
 
-    /// A view scrub: applied to the lab now, persisted where it is durable.
-    pub(super) fn set_view_value(&mut self, control: LabValue, value: f32, cx: &mut Context<Self>) {
+    /// A view scrub: applied to the stage now, persisted where it is durable.
+    pub(super) fn set_view_value(&mut self, control: ViewValue, value: f32, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        state.render_lab.set(control, value);
+        state.render_controls.set(control, value);
         match control {
-            LabValue::RenderScale => self.save_render_scale(cx),
+            ViewValue::RenderScale => self.save_render_scale(cx),
             _ => self.save_venue_haze(cx),
         }
         cx.notify();
@@ -468,7 +468,7 @@ impl Luma {
     ///
     /// Deliberately *not* `Luma::write_setting`: that one re-reads the whole
     /// settings record afterwards to repaint the Settings screen, which is a
-    /// screen this panel is not. The lab already holds the new value, so the
+    /// screen this panel is not. The stage already holds the new value, so the
     /// only thing left to report is a write that did not land.
     fn write_view_setting(&mut self, key: &'static str, value: String, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
@@ -491,17 +491,17 @@ impl Luma {
         .detach();
     }
 
-    /// Persist the haze the lab now holds.
+    /// Persist the haze the render controls now hold.
     ///
-    /// The lab is the authority — [`RenderLab::toggle`] and [`RenderLab::set`]
-    /// have already sanitized it — so this takes no value. Same guard as
+    /// The render controls are the authority — [`RenderControls::toggle`] and
+    /// [`RenderControls::set`] have already sanitized it — so this takes no value. Same guard as
     /// [`Self::save_visualizer_environment`], for the same reason: a dragged
     /// density emits a value per pointer move.
     fn save_venue_haze(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        let haze = state.render_lab.haze;
+        let haze = state.render_controls.haze;
         state.haze_edited = true;
         state.haze_error = None;
         *state.haze_pending.borrow_mut() = Some(haze);
@@ -554,13 +554,13 @@ impl Luma {
         .detach();
     }
 
-    /// Persist the render percent the lab now holds, coalescing the scrub.
+    /// Persist the render percent the render controls now hold, coalescing the scrub.
     fn save_render_scale(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
         state.view_setting_error = None;
-        *state.render_scale_pending.borrow_mut() = Some(state.render_lab.render_scale_percent);
+        *state.render_scale_pending.borrow_mut() = Some(state.render_controls.render_scale_percent);
         if state.render_scale_saving {
             return;
         }
