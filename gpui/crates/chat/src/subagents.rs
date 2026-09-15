@@ -168,22 +168,12 @@ pub fn pill(
         // A pill, not a menu: it is on this layer for its geometry and the
         // pointer has no say in its life.
         luma_ui::float::Dismiss::Never,
-        div()
+        luma_ui::float::chip()
             .id("chat-subagents-pill-button")
             .h(px(PILL_HEIGHT))
-            .flex()
             .flex_none()
-            .flex_row()
-            .items_center()
             .gap(px(theme::SPACE_SM))
             .px(px(theme::SPACE_SM))
-            // Square and unanimated: the pill is an instrument reading, and
-            // the ladder's answer to depth is a value step, not a radius.
-            .bg(theme::wash(0.10))
-            .border_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .hover(|style| style.bg(theme::wash(0.14)))
             .on_click(move |_, _, cx| {
                 opened.update(cx, |this, cx| this.request_subagents(None, cx));
             })

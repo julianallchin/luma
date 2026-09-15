@@ -1926,18 +1926,11 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
         .flex()
         .justify_center()
         .child(
-            div()
+            luma_ui::float::chip()
                 .id("chat-jump-to-bottom")
                 .size(px(theme::JUMP_DIAMETER))
-                .flex()
-                .items_center()
-                .justify_center()
+                .px(px(0.0))
                 .rounded_full()
-                .bg(theme::card_bg())
-                .border_1()
-                .border_color(theme.border)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme::glass_hover()))
                 .on_click(move |_, _, cx| {
                     pressed.update(cx, |this, cx| this.jump_to_bottom(cx));
                 })
@@ -2089,21 +2082,12 @@ fn suggestion(
     theme: &Theme,
 ) -> impl IntoElement {
     let pressed = chat.clone();
-    div()
+    luma_ui::float::chip()
         .id(("chat-suggestion", ix))
-        .h(px(theme::CHIP_HEIGHT - 6.0))
         .w_full()
-        .flex()
-        .items_center()
+        .justify_start()
         .px(px(theme::SPACE_MD))
-        .rounded(px(luma_ui::radius::CONTROL))
-        .bg(theme::card_bg())
-        .border_1()
-        .border_color(theme.border)
-        .text_size(px(12.0))
         .text_color(theme.text_muted)
-        .cursor_pointer()
-        .hover(|style| style.bg(theme::glass_hover()))
         .on_click(move |_, window, cx| {
             pressed.update(cx, |this, cx| this.suggest(prompt, window, cx));
         })
