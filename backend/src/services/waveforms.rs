@@ -6,7 +6,6 @@
 //! Stored envelopes serve library previews. Native timelines load filtered
 //! sample-rate bands once and aggregate their GPU hierarchy at draw time.
 
-use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
 use std::path::Path;
 use std::time::Instant;
@@ -31,8 +30,6 @@ struct ComputedWaveform {
     preview_bands: BandEnvelopes,
     /// The units `bands` and `preview_bands` are both in.
     gains: BandGains,
-    colors: Vec<u8>,
-    preview_colors: Vec<u8>,
     sample_rate: u32,
     duration_seconds: f64,
 }
@@ -92,8 +89,6 @@ pub(crate) async fn ensure_track_waveform(
         &StoredWaveform {
             preview_samples_blob: &preview_samples_blob,
             full_samples_blob: &full_samples_blob,
-            colors_blob: &computed.colors,
-            preview_colors_blob: &computed.preview_colors,
             bands_blob: &bands_blob,
             preview_bands_blob: &preview_bands_blob,
             band_gains: computed.gains,
@@ -114,8 +109,6 @@ pub(crate) async fn ensure_track_waveform(
             full_samples: Some(computed.full_samples),
             bands: Some(computed.bands),
             preview_bands: Some(computed.preview_bands),
-            colors: Some(computed.colors),
-            preview_colors: Some(computed.preview_colors),
             sample_rate: computed.sample_rate,
             duration_seconds: computed.duration_seconds,
         },
@@ -180,21 +173,13 @@ async fn compute_waveform_payload(
     analysis.checkpoint()?;
     let bands_ms = t0.elapsed().as_millis();
 
-    // Compute legacy colors for backwards compatibility
-    let t0 = Instant::now();
-    let colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
-    let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
-    analysis.checkpoint()?;
-    let colors_ms = t0.elapsed().as_millis();
-
     eprintln!(
-        "[waveform] track {} computed in {}ms (decode={}ms waveform={}ms bands={}ms colors={}ms)",
+        "[waveform] track {} computed in {}ms (decode={}ms waveform={}ms bands={}ms)",
         track_id,
         t_total.elapsed().as_millis(),
         decode_ms,
         waveform_ms,
         bands_ms,
-        colors_ms,
     );
 
     Ok(ComputedWaveform {
@@ -203,8 +188,6 @@ async fn compute_waveform_payload(
         bands,
         preview_bands,
         gains,
-        colors,
-        preview_colors,
         sample_rate,
         duration_seconds: decoded_duration,
     })
@@ -533,101 +516,6 @@ pub fn bucketize_band_peaks(
         peaks.high.push(peak(&filtered.high, bucket));
     }
     peaks
-}
-
-/// Compute RGB colors based on spectral content (Legacy - kept for backwards compatibility).
-/// Uses rayon to parallelize FFT computation across chunks of buckets.
-pub fn compute_spectral_colors(samples: &[f32], sample_rate: u32, num_buckets: usize) -> Vec<u8> {
-    use rayon::prelude::*;
-
-    if samples.is_empty() || num_buckets == 0 {
-        return vec![0; num_buckets * 3];
-    }
-
-    let fft_size = 2048;
-    let bin_freq = sample_rate as f32 / fft_size as f32;
-    let low_bin_end = (300.0 / bin_freq).ceil() as usize;
-    let mid_bin_end = (3000.0 / bin_freq).ceil() as usize;
-
-    // Pre-compute Hann window (shared across threads)
-    let window: Vec<f32> = (0..fft_size)
-        .map(|i| {
-            0.5 * (1.0 - ((2.0 * std::f32::consts::PI * i as f32) / (fft_size as f32 - 1.0)).cos())
-        })
-        .collect();
-
-    let total = samples.len() as f64;
-    let buckets = num_buckets as f64;
-
-    // Process buckets in parallel — each thread gets its own FFT plan + buffers
-    let chunk_size = (num_buckets / rayon::current_num_threads().max(1)).max(256);
-
-    let chunks: Vec<Vec<u8>> = (0..num_buckets)
-        .collect::<Vec<_>>()
-        .par_chunks(chunk_size)
-        .map(|bucket_indices| {
-            let mut planner = RealFftPlanner::<f32>::new();
-            let r2c = planner.plan_fft_forward(fft_size);
-            let mut spectrum = r2c.make_output_vec();
-            let mut input_window = r2c.make_input_vec();
-            let num_bins = spectrum.len();
-
-            let mut chunk_result = Vec::with_capacity(bucket_indices.len() * 3);
-
-            for &bucket_idx in bucket_indices {
-                let start = (bucket_idx as f64 * total / buckets) as usize;
-                if start + fft_size > samples.len() {
-                    chunk_result.extend_from_slice(&[0, 0, 0]);
-                    continue;
-                }
-
-                let slice = &samples[start..start + fft_size];
-                for i in 0..fft_size {
-                    input_window[i] = slice[i] * window[i];
-                }
-
-                if r2c.process(&mut input_window, &mut spectrum).is_err() {
-                    chunk_result.extend_from_slice(&[0, 0, 0]);
-                    continue;
-                }
-
-                let mut low_energy = 0.0f32;
-                for bin in &spectrum[..low_bin_end.min(num_bins)] {
-                    low_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
-                }
-                let mut mid_energy = 0.0f32;
-                for bin in &spectrum[low_bin_end.min(num_bins)..mid_bin_end.min(num_bins)] {
-                    mid_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
-                }
-                let mut high_energy = 0.0f32;
-                for bin in &spectrum[mid_bin_end.min(num_bins)..num_bins] {
-                    high_energy += (bin.re * bin.re + bin.im * bin.im).sqrt();
-                }
-
-                let l = (low_energy / 100.0).min(1.0);
-                let m = (mid_energy / 100.0).min(1.0);
-                let h = (high_energy / 100.0).min(1.0);
-
-                let r = 30.0 * l + 220.0 * m + 80.0 * h;
-                let g = 30.0 * l + 120.0 * m + 150.0 * h;
-                let b = 220.0 * l + 20.0 * m + 150.0 * h;
-
-                chunk_result.push(r.round().min(255.0) as u8);
-                chunk_result.push(g.round().min(255.0) as u8);
-                chunk_result.push(b.round().min(255.0) as u8);
-            }
-
-            chunk_result
-        })
-        .collect();
-
-    // Flatten chunks into final result
-    let total_bytes: usize = chunks.iter().map(|c| c.len()).sum();
-    let mut result = Vec::with_capacity(total_bytes);
-    for chunk in chunks {
-        result.extend_from_slice(&chunk);
-    }
-    result
 }
 
 // -----------------------------------------------------------------------------

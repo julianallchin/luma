@@ -52,11 +52,6 @@ pub struct TrackWaveform {
     pub bands: Option<BandEnvelopes>,
     /// 3-band envelopes for preview waveform
     pub preview_bands: Option<BandEnvelopes>,
-    /// Legacy: Colors for each bucket in full_samples (interleaved R, G, B bytes)
-    /// Note: Not synced to cloud - regenerated locally from audio
-    pub colors: Option<Vec<u8>>,
-    /// Legacy: Colors for each bucket in preview_samples (interleaved R, G, B bytes)
-    pub preview_colors: Option<Vec<u8>>,
     pub sample_rate: u32,
     pub duration_seconds: f64,
 }
@@ -87,10 +82,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
             .try_get::<Option<Vec<u8>>, _>("full_samples_blob")?
             .map(|b| bytes_to_f32_vec(&b));
 
-        let colors: Option<Vec<u8>> = row.try_get("colors_blob")?;
-
-        let preview_colors: Option<Vec<u8>> = row.try_get("preview_colors_blob")?;
-
         let bands: Option<BandEnvelopes> = row
             .try_get::<Option<Vec<u8>>, _>("bands_blob")?
             .and_then(|b| bytes_to_band_envelopes(&b));
@@ -117,8 +108,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
             full_samples,
             bands,
             preview_bands,
-            colors,
-            preview_colors,
             sample_rate,
             duration_seconds,
         })

@@ -266,8 +266,6 @@ impl Fixture {
             &crate::database::local::waveforms::StoredWaveform {
                 preview_samples_blob: &preview,
                 full_samples_blob: &[],
-                colors_blob: &[],
-                preview_colors_blob: &[],
                 bands_blob: &blob,
                 preview_bands_blob: &[],
                 band_gains: crate::models::waveforms::BandGains {

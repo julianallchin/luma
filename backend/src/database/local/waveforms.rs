@@ -13,8 +13,6 @@ use crate::models::waveforms::{BandGains, TrackWaveform};
 pub struct StoredWaveform<'a> {
     pub preview_samples_blob: &'a [u8],
     pub full_samples_blob: &'a [u8],
-    pub colors_blob: &'a [u8],
-    pub preview_colors_blob: &'a [u8],
     pub bands_blob: &'a [u8],
     pub preview_bands_blob: &'a [u8],
     pub band_gains: BandGains,
@@ -52,14 +50,12 @@ pub async fn upsert_track_waveform_for_connection(
     waveform: &StoredWaveform<'_>,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, band_gain_low, band_gain_mid, band_gain_high, sample_rate, decoded_duration)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, bands_blob, preview_bands_blob, band_gain_low, band_gain_mid, band_gain_high, sample_rate, decoded_duration)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             uid = excluded.uid,
             preview_samples_blob = excluded.preview_samples_blob,
             full_samples_blob = excluded.full_samples_blob,
-            colors_blob = excluded.colors_blob,
-            preview_colors_blob = excluded.preview_colors_blob,
             bands_blob = excluded.bands_blob,
             preview_bands_blob = excluded.preview_bands_blob,
             band_gain_low = excluded.band_gain_low,
@@ -73,8 +69,6 @@ pub async fn upsert_track_waveform_for_connection(
     .bind(uid)
     .bind(waveform.preview_samples_blob)
     .bind(waveform.full_samples_blob)
-    .bind(waveform.colors_blob)
-    .bind(waveform.preview_colors_blob)
     .bind(waveform.bands_blob)
     .bind(waveform.preview_bands_blob)
     .bind(f64::from(waveform.band_gains.low))
@@ -108,8 +102,7 @@ pub async fn fetch_track_waveform_for_connection(
 ) -> Result<Option<TrackWaveform>, String> {
     sqlx::query_as::<_, TrackWaveform>(
         "SELECT track_id, uid, preview_samples_blob, full_samples_blob,
-         colors_blob, preview_colors_blob, bands_blob, preview_bands_blob, sample_rate,
-         decoded_duration
+         bands_blob, preview_bands_blob, sample_rate, decoded_duration
          FROM track_waveforms WHERE track_id = ?",
     )
     .bind(track_id)
