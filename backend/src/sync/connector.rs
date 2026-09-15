@@ -251,51 +251,6 @@ impl Connector {
     }
 }
 
-/// Whether a non-success status means "later" rather than "no".
-///
-/// 5xx is the server failing, not refusing. 408 and 429 are the two 4xx that
-/// ask for a retry. Everything else in 4xx — a policy refusal, a constraint
-/// violation, a malformed body — will say the same thing every time.
-/// Join a venue by its share code, returning the venue's id.
-///
-/// Not a queued write, and not a local one: an ordinary client may not insert
-/// a membership into a venue it cannot yet see, so `public.join_venue` is a
-/// `security definer` function that writes the `venue_members` row on the
-/// server. The row — and the venue, and everything in it — arrives by
-/// download, which is why this is a free function rather than a method on the
-/// upload connector: joining needs a session and a URL, nothing else.
-///
-/// # Errors
-///
-/// If there is no session, the code matches no venue, or the request fails.
-pub async fn join_venue(state_pool: &SqlitePool, code: &str) -> Result<String, String> {
-    let token = auth::get_current_access_token(state_pool)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or("joining a venue needs a signed-in session")?;
-    let postgrest = crate::config::postgrest_url();
-    let response = reqwest::Client::new()
-        .post(format!(
-            "{}/rpc/join_venue",
-            postgrest.trim_end_matches('/')
-        ))
-        .header("apikey", crate::config::supabase_anon_key())
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "code": code }))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!("could not join the venue ({status}): {body}"));
-    }
-    // A `returns text` function answers with a bare JSON string.
-    serde_json::from_str::<String>(body.trim())
-        .map_err(|_| format!("unexpected join_venue response: {body}"))
-}
-
 /// Split a transaction's entries into the requests they become.
 ///
 /// A run of consecutive upserts of one table is one request; everything else

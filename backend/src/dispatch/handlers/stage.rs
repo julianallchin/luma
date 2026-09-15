@@ -19,9 +19,7 @@
 use std::collections::BTreeMap;
 
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::venue_graph::{
-    PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
-};
+use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use crate::services::stage_ops::{Stage, StageError};
 
 /// One venue's verbs, bound to this host's database and catalog.
@@ -63,49 +61,6 @@ pub async fn restore_graph(
     rows: VenueGraphRows,
 ) -> Result<ResolvedVenue, CommandError> {
     Ok(stage(services, &venue_id).restore(&rows).await?)
-}
-
-/// The venue as a top-down text map — the "Gauntlet view".
-///
-/// `cell_m` is metres per character; the drawer clamps it, so no value refuses.
-///
-/// # Errors
-/// As [`get_resolved_venue`].
-pub async fn venue_tiles(
-    services: &AppServices,
-    venue_id: String,
-    cell_m: Option<f64>,
-) -> Result<String, CommandError> {
-    Ok(stage(services, &venue_id).tiles(cell_m).await?)
-}
-
-/// The venue as an indented tree: parent, socket pair, params, and everything
-/// the solve left open.
-///
-/// The relation channel. `venue_tiles` says where a piece is; this says what it
-/// is bolted to, which is the sentence the metres cannot say.
-///
-/// # Errors
-/// As [`get_resolved_venue`].
-pub async fn describe_venue(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<String, CommandError> {
-    Ok(stage(services, &venue_id).describe().await?)
-}
-
-/// The placeable vocabulary: node kinds, the root's own surfaces, and every
-/// catalog piece with the sockets it resolves to.
-///
-/// A read of the catalog, not of a venue — but it takes no venue id and still
-/// needs the mesh root, which is why it lives beside the verbs that consume it.
-///
-/// # Errors
-/// Fails if the catalog's geometry cannot be resolved.
-pub async fn stage_catalog(services: &AppServices) -> Result<StageCatalog, CommandError> {
-    Ok(crate::services::stage_ops::catalog(
-        &services.fixtures_root,
-    )?)
 }
 
 /// What a run out of this socket would meet, and how far away it is.

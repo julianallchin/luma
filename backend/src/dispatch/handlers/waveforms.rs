@@ -33,23 +33,6 @@ pub async fn get_track_waveform_signal(
     .await?)
 }
 
-/// `get_track_waveform` minus the cache lookup: both funnel into
-/// `ensure_track_waveform` under the same analysis lease.
-pub async fn reprocess_waveform(
-    services: &AppServices,
-    track_id: String,
-) -> Result<TrackWaveform, CommandError> {
-    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
-        .await
-        .map_err(|error| CommandError::Internal(error.to_string()))?;
-    Ok(waveform_service::reprocess_track_waveform(
-        &services.db.0,
-        &services.analysis_tasks,
-        &track_id,
-    )
-    .await?)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;

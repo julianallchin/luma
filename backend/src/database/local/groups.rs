@@ -3,7 +3,6 @@ use uuid::Uuid;
 
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
     normalize_group_name, validate_group_name, FixtureGroup, MovementConfig,
 };
@@ -299,62 +298,6 @@ pub async fn remove_member_from_group(
     Ok(())
 }
 
-/// Replace a whole-fixture membership with explicit per-head rows.
-/// Used when removing one head from a fixture that was added whole:
-/// the -1 row is deleted and the remaining heads get their own rows.
-/// Returns false (and does nothing) when there is no whole-fixture row.
-pub async fn split_whole_fixture_membership(
-    access: &mut VenueAccess<'_, Write>,
-    fixture_id: &str,
-    group_id: &str,
-    keep_heads: &[i64],
-) -> Result<bool, String> {
-    require_fixture_and_group(access, fixture_id, group_id).await?;
-    let display_order: Option<i64> = sqlx::query_scalar(
-        "SELECT display_order FROM fixture_group_members
-         WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
-    )
-    .bind(fixture_id)
-    .bind(group_id)
-    .bind(WHOLE_FIXTURE)
-    .fetch_optional(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to read membership: {}", e))?;
-
-    let Some(display_order) = display_order else {
-        return Ok(false);
-    };
-
-    deletes::delete_where(
-        access.connection(),
-        "fixture_group_members",
-        "fixture_id = ? AND group_id = ? AND head_index = ?",
-        &[fixture_id, group_id, &WHOLE_FIXTURE.to_string()],
-    )
-    .await
-    .map_err(|e| format!("Failed to remove whole-fixture row: {}", e))?;
-
-    for &h in keep_heads {
-        sqlx::query(
-            "INSERT OR IGNORE INTO fixture_group_members
-                 (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(access.principal().map(str::to_owned))
-        .bind(access.venue_id().to_owned())
-        .bind(fixture_id)
-        .bind(group_id)
-        .bind(h)
-        .bind(display_order)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to insert head row: {}", e))?;
-    }
-
-    Ok(true)
-}
-
 async fn require_fixture_and_group(
     access: &mut VenueAccess<'_, Write>,
     fixture_id: &str,
@@ -437,48 +380,6 @@ pub async fn venue_memberships(
             head_index: r.head_index,
         })
         .collect())
-}
-
-/// Get fixtures not in any group for a venue
-pub async fn get_ungrouped_fixtures(
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<PatchedFixture>, String> {
-    sqlx::query_as::<_, PatchedFixture>(
-        "SELECT f.id, f.uid, f.venue_id, f.universe, f.address, f.num_channels,
-                f.address_pinned,
-                f.manufacturer, f.model, f.mode_name, f.fixture_path, f.label,
-                f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z
-         FROM fixtures f
-         WHERE f.venue_id = ?
-           AND NOT EXISTS (
-               SELECT 1 FROM fixture_group_members m WHERE m.fixture_id = f.id
-           )",
-    )
-    .bind(access.venue_id().to_owned())
-    .fetch_all(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to get ungrouped fixtures: {}", e))
-}
-
-/// Update movement config for a group
-pub async fn update_movement_config(
-    access: &mut VenueAccess<'_, Write>,
-    group_id: &str,
-    config: Option<&MovementConfig>,
-) -> Result<FixtureGroup, String> {
-    let config_json = config
-        .map(|c| serde_json::to_string(c).map_err(|e| format!("Failed to serialize config: {}", e)))
-        .transpose()?;
-
-    sqlx::query("UPDATE fixture_groups SET movement_config = ? WHERE id = ? AND venue_id = ?")
-        .bind(&config_json)
-        .bind(group_id)
-        .bind(access.venue_id().to_owned())
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to update movement config: {}", e))?;
-
-    get_group(access, group_id).await
 }
 
 /// The venue's fixture ids in creation order.

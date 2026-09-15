@@ -165,49 +165,6 @@ impl EventSink for DiscardSink {
 }
 
 // -----------------------------------------------------------------------------
-// Host control
-// -----------------------------------------------------------------------------
-
-/// The one piece of genuine host control on the command surface: `force_quit`
-/// terminates the process. Abstracted rather than left as a UI-specific adapter so
-/// the dispatch layer covers the whole surface.
-pub trait Host: Send + Sync + 'static {
-    /// Terminate the host. Does not return on a host that honours it.
-    fn exit(&self, code: i32);
-}
-
-/// Cloneable handle to a [`Host`].
-#[derive(Clone)]
-pub struct HostControl(Arc<dyn Host>);
-
-impl HostControl {
-    /// Route host control to `host`.
-    pub fn new<H: Host>(host: H) -> Self {
-        Self(Arc::new(host))
-    }
-
-    /// Terminate the current process directly. The default for a host with no
-    /// orderly shutdown of its own.
-    #[must_use]
-    pub fn process_exit() -> Self {
-        Self::new(ProcessExitHost)
-    }
-
-    /// Terminate the host with `code`.
-    pub fn exit(&self, code: i32) {
-        self.0.exit(code);
-    }
-}
-
-struct ProcessExitHost;
-
-impl Host for ProcessExitHost {
-    fn exit(&self, code: i32) {
-        std::process::exit(code);
-    }
-}
-
-// -----------------------------------------------------------------------------
 // Services
 // -----------------------------------------------------------------------------
 
@@ -217,10 +174,10 @@ impl Host for ProcessExitHost {
 /// live for the process, so one struct passed by reference covers the whole
 /// command surface and no body carries an injection lifetime.
 ///
-/// Explicit capabilities replace the narrow jobs command bodies once reached
-/// through a UI handle: [`Events`], resolved storage/fixture paths,
-/// [`WorkerEnvironment`] cache/resource paths, and [`HostControl`]. Nothing
-/// else about a host is abstracted here.
+/// Command bodies reach the host through explicit capabilities: [`Events`],
+/// resolved storage/fixture paths,
+/// and [`WorkerEnvironment`] cache/resource paths. Nothing else about a host
+/// is abstracted here.
 ///
 /// Fields are `pub(crate)`: handlers read them directly, and an external host
 /// neither builds nor inspects them beyond the accessors below. That keeps
@@ -260,7 +217,6 @@ pub struct AppServices {
     /// never runs a `subagent` call; it is only the concurrency cap's counter.
     pub(crate) subagents: Arc<crate::agent::subagent::SubagentRegistry>,
     pub(crate) events: Events,
-    pub(crate) host: HostControl,
     /// Explicit trusted principal for a disposable headless fixture. Unset on
     /// the desktop app, where identity resolves from the verified state
     /// database and the app-database admission gate instead.
@@ -293,9 +249,8 @@ impl AppServices {
     ///
     /// Everything constructible without a window is constructed here rather
     /// than by the caller, so the two adapters cannot drift on how a singleton
-    /// is configured. Events are discarded and process control is a direct
-    /// `exit` unless overridden with [`AppServices::with_events`] and
-    /// [`AppServices::with_host`].
+    /// is configured. Events are discarded unless overridden with
+    /// [`AppServices::with_events`].
     ///
     /// The deliberate absences are ArtNet
     /// and the loops: nothing spawns a render loop, a sync loop, or an audio
@@ -339,7 +294,6 @@ impl AppServices {
             fixtures: Arc::new(FixtureState::empty()),
             subagents: Arc::default(),
             events: Events::discard(),
-            host: HostControl::process_exit(),
             fixture_principal: None,
             sync: None,
         }
@@ -432,13 +386,6 @@ impl AppServices {
     /// Replace external DJ catalog reads, primarily for a disposable host.
     pub fn with_track_sources(mut self, sources: Arc<dyn TrackSources>) -> Self {
         self.track_sources = sources;
-        self
-    }
-
-    /// Take over process termination from the default direct `exit`.
-    #[must_use]
-    pub fn with_host(mut self, host: HostControl) -> Self {
-        self.host = host;
         self
     }
 

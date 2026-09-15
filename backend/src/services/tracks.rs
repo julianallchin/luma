@@ -3,8 +3,6 @@
 //! The database layer (database/local/tracks.rs) is pure SQL/CRUD. All
 //! filesystem work, hashing, audio workers, and orchestration live here.
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use lofty::picture::PictureType;
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
@@ -650,55 +648,6 @@ fn parse_track_beats(
     }
 }
 
-/// Per-bar tag classifications for a track, with the tag display order the
-/// classifier emitted. `None` when classification hasn't run.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackBarClassifications {
-    pub classifications: serde_json::Value,
-    pub tag_order: serde_json::Value,
-}
-
-pub async fn get_track_bar_classifications(
-    pool: &SqlitePool,
-    track_id: &str,
-) -> Result<Option<TrackBarClassifications>, String> {
-    let raw = tracks_db::get_track_bar_classifications_raw(pool, track_id).await?;
-    let Some((classifications_json, tag_order_json)) = raw else {
-        return Ok(None);
-    };
-    let classifications: serde_json::Value = serde_json::from_str(&classifications_json)
-        .map_err(|e| format!("Failed to parse classifications JSON: {e}"))?;
-    let tag_order: serde_json::Value = serde_json::from_str(&tag_order_json)
-        .map_err(|e| format!("Failed to parse tag order JSON: {e}"))?;
-    Ok(Some(TrackBarClassifications {
-        classifications,
-        tag_order,
-    }))
-}
-
-/// Per-tag F1-optimal suggestion thresholds bundled with the classifier
-/// weights. Returns `tag_name -> threshold`. The frontend uses these in place
-/// of a flat 0.5 cutoff so rare tags (e.g. `vocal_chop` at 0.165) surface at
-/// the calibration the model was tuned for.
-pub fn classifier_thresholds() -> Result<std::collections::HashMap<String, f64>, String> {
-    let payload: serde_json::Value =
-        serde_json::from_str(crate::classifier_worker::bundled_thresholds())
-            .map_err(|e| format!("Failed to parse bundled thresholds JSON: {e}"))?;
-    let map = payload
-        .get("thresholds")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| "Bundled thresholds JSON missing `thresholds` object".to_string())?;
-    let mut out = std::collections::HashMap::with_capacity(map.len());
-    for (k, v) in map {
-        let f = v
-            .as_f64()
-            .ok_or_else(|| format!("Threshold for `{k}` is not a number"))?;
-        out.insert(k.clone(), f);
-    }
-    Ok(out)
-}
-
 /// Delete a track and its derived data.
 pub async fn delete_track(
     pool: &SqlitePool,
@@ -1276,38 +1225,6 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
-}
-
-/// Read a track's audio file and return it as base64 + MIME type.
-pub async fn get_track_audio_base64(
-    pool: &SqlitePool,
-    track_id: &str,
-) -> Result<(String, String), String> {
-    let info = tracks_db::get_track_path_and_hash(pool, track_id).await?;
-    let path = Path::new(&info.file_path);
-
-    let mime_type = match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .as_str()
-    {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "flac" => "audio/flac",
-        "m4a" | "aac" => "audio/mp4",
-        "ogg" => "audio/ogg",
-        _ => "application/octet-stream",
-    }
-    .to_string();
-
-    let bytes = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-    let data = STANDARD.encode(&bytes);
-
-    Ok((data, mime_type))
 }
 
 #[cfg(test)]

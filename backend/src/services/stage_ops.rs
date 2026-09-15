@@ -31,7 +31,6 @@ use std::path::Path;
 
 use glam::{DMat4, DVec3};
 use luma_render::catalog::VenueSockets;
-use luma_render::venue_tiles::TileMap;
 use luma_scene::build;
 use luma_scene::sockets::{ResolvedSocket, SocketType};
 use luma_scene::venue::{
@@ -209,19 +208,6 @@ impl<'a> Stage<'a> {
         let mut access = self.read().await?;
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
         Ok(ResolvedVenue::from(&solved))
-    }
-
-    /// The venue as a top-down text map — the "Gauntlet view".
-    ///
-    /// # Errors
-    /// As [`Self::resolved`].
-    pub async fn tiles(&self, cell_m: Option<f64>) -> Result<String> {
-        let mut access = self.read().await?;
-        let options = TileMap {
-            cell_m: cell_m.unwrap_or(TileMap::default().cell_m),
-            ..TileMap::default()
-        };
-        Ok(venue_graph::tiles(&mut access, self.fixtures_root, options).await?)
     }
 
     /// The tree as text: parent, socket pair, params, and everything the solve
