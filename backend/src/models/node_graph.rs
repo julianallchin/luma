@@ -344,23 +344,6 @@ impl Stops {
         [r, g, bb, c0[3] + (c1[3] - c0[3]) * local]
     }
 
-    /// Sample at `k` evenly-spaced u positions.
-    pub fn sample_uniform(&self, k: usize) -> Vec<[f32; 4]> {
-        if k == 0 {
-            return Vec::new();
-        }
-        (0..k)
-            .map(|i| {
-                let u = if k == 1 {
-                    0.0
-                } else {
-                    i as f32 / (k - 1) as f32
-                };
-                self.sample(u)
-            })
-            .collect()
-    }
-
     /// Get the raw stop colors in order (positions discarded). For "use the
     /// K colors as-is" consumers.
     pub fn colors(&self) -> Vec<[f32; 4]> {

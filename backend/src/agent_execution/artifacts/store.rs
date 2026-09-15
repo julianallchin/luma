@@ -339,14 +339,6 @@ impl ArtifactStore {
         })
     }
 
-    /// Write a bounded UTF-8 input artifact (catalogs, exported proposals).
-    pub fn write_utf8(&mut self, text: &str) -> Result<ArtifactDescriptor> {
-        self.write_input(ArtifactEncoding::Utf8, ArtifactKind::Json, |path| {
-            fs::write(path, text)?;
-            Ok(text.len() as u64)
-        })
-    }
-
     fn write_input<F>(
         &mut self,
         encoding: ArtifactEncoding,
@@ -447,10 +439,6 @@ impl ArtifactStore {
         }
         self.leases.entry(revision.clone()).or_default().extend(ids);
         Ok(())
-    }
-
-    pub fn leased_by(&self, revision: &BindingRevision) -> Option<&BTreeSet<ArtifactId>> {
-        self.leases.get(revision)
     }
 
     pub fn is_leased(&self, id: &ArtifactId) -> bool {

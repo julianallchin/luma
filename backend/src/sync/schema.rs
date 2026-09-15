@@ -41,12 +41,6 @@ impl SyncedTable {
         self.id.replace('@', row)
     }
 
-    /// The row's owner, read off the trigger's `NEW` or `OLD` row.
-    #[must_use]
-    pub fn uid_of(&self, row: &str) -> String {
-        format!("{row}.{}", self.uid)
-    }
-
     /// Whether `id` is a real, writable column on this table.
     #[must_use]
     pub fn id_is_stored(&self) -> bool {

@@ -8,8 +8,6 @@ pub enum SyncError {
     Network(String),
     /// Supabase API returned a non-success status
     Api { status: u16, message: String },
-    /// Failed to parse a response from Supabase
-    Parse(String),
     /// Local SQLite operation failed
     Local(String),
     /// Authentication required or token expired
@@ -24,7 +22,6 @@ impl fmt::Display for SyncError {
         match self {
             SyncError::Network(msg) => write!(f, "network error: {msg}"),
             SyncError::Api { status, message } => write!(f, "API error {status}: {message}"),
-            SyncError::Parse(msg) => write!(f, "parse error: {msg}"),
             SyncError::Local(msg) => write!(f, "local DB error: {msg}"),
             SyncError::AuthRequired => write!(f, "authentication required"),
             SyncError::SessionRevoked => write!(f, "session revoked; sign in again"),
@@ -56,7 +53,6 @@ impl From<crate::database::remote::common::SyncError> for SyncError {
         match error {
             Remote::RequestFailed(message) => SyncError::Network(message),
             Remote::ApiError { status, message } => SyncError::Api { status, message },
-            Remote::ParseError(message) => SyncError::Parse(message),
         }
     }
 }

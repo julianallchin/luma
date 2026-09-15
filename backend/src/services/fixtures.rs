@@ -9,9 +9,7 @@ use std::sync::Mutex;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::fixtures::parser::{self, FixtureIndex};
-use crate::models::fixtures::{
-    FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
-};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
@@ -232,47 +230,6 @@ pub async fn get_patched_fixtures(
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<PatchedFixture>, String> {
     fixtures_db::get_patched_fixtures(access).await
-}
-
-/// Get patch hierarchy for a venue
-pub async fn get_patch_hierarchy(
-    root: &Path,
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<FixtureNode>, String> {
-    let fixtures = fixtures_db::get_patched_fixtures(access).await?;
-
-    let mut hierarchy = Vec::new();
-    for fixture in fixtures {
-        let def_path = root.join(&fixture.fixture_path);
-        let mut children = Vec::new();
-
-        if let Ok(def) = parser::parse_definition(&def_path) {
-            if let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) {
-                if !mode.heads.is_empty() {
-                    for (i, _head) in mode.heads.iter().enumerate() {
-                        children.push(FixtureNode {
-                            id: format!("{}:{}", fixture.id, i),
-                            label: format!("Head {}", i + 1),
-                            type_: FixtureNodeType::Head,
-                            children: vec![],
-                        });
-                    }
-                }
-            }
-        }
-
-        hierarchy.push(FixtureNode {
-            id: fixture.id.clone(),
-            label: fixture
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
-            type_: FixtureNodeType::Fixture,
-            children,
-        });
-    }
-
-    Ok(hierarchy)
 }
 
 // -----------------------------------------------------------------------------

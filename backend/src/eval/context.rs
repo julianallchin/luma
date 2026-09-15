@@ -48,13 +48,6 @@ const AUDIO_CACHE_MAX: usize = 8;
 static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), FixtureGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Drop the cached resident data for a track (called when leaving it).
-pub fn clear_track_audio_cache(track_hash: &str) {
-    if let Ok(mut c) = AUDIO_CACHE.lock() {
-        c.remove(track_hash);
-    }
-}
-
 /// Read the [`Selection`] a graph scopes to, if any. Two forms:
 ///   - Static: the value lives on a Selection-type input surfaced onto a node's
 ///     `params`, or as a flat `tagExpression`/`tag_expr` param (expression only —

@@ -384,7 +384,6 @@ pub struct WorkerHandle {
     pid: i32,
     alive: AtomicBool,
     counter: AtomicU64,
-    launcher: &'static str,
 }
 
 impl WorkerHandle {
@@ -457,7 +456,6 @@ impl WorkerHandle {
             pid,
             alive: AtomicBool::new(true),
             counter: AtomicU64::new(0),
-            launcher: launcher.name(),
         })
     }
 
@@ -467,10 +465,6 @@ impl WorkerHandle {
 
     pub fn pid(&self) -> i32 {
         self.pid
-    }
-
-    pub fn launcher_name(&self) -> &'static str {
-        self.launcher
     }
 
     /// Last bytes the child wrote to its *raw* stderr — i.e. crash output the

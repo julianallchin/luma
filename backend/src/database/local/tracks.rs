@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::database::local::deletes;
-use crate::models::tracks::{
-    ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
-};
+use crate::models::tracks::{ChordSection, TrackBeats, TrackBrowserRow, TrackStem, TrackSummary};
 
 // Helper structs for internal queries
 #[derive(FromRow)]
@@ -808,23 +806,6 @@ pub async fn get_track_stems(pool: &SqlitePool, track_id: &str) -> Result<Vec<Tr
     .map_err(|e| format!("Failed to load stems for track {}: {}", track_id, e))
 }
 
-pub async fn get_track_roots(
-    pool: &SqlitePool,
-    track_id: &str,
-) -> Result<Option<TrackRoots>, String> {
-    sqlx::query_as::<_, TrackRoots>(
-        "SELECT roots.track_id, roots.uid, roots.sections_json, roots.logits_path,
-                roots.logits_storage_path, roots.created_at, roots.updated_at
-         FROM track_roots roots
-         JOIN auth_visible_tracks visible ON visible.track_id = roots.track_id
-         WHERE roots.track_id = ?",
-    )
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to load track roots: {}", e))
-}
-
 /// Parsed chord sections from `track_roots.sections_json`, ordered as stored.
 ///
 /// `Ok(None)` means the track has no roots row at all (analysis hasn't run) —
@@ -996,26 +977,6 @@ pub async fn fill_track_metadata_gaps(
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to fill track metadata gaps: {}", e))?;
-    Ok(())
-}
-
-pub async fn update_track_source_metadata(
-    pool: &SqlitePool,
-    track_id: &str,
-    title: &Option<String>,
-    artist: &Option<String>,
-    source_filename: Option<&str>,
-) -> Result<(), String> {
-    sqlx::query(
-        "UPDATE tracks SET title = ?, artist = ?, source_filename = ?, updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(title)
-    .bind(artist)
-    .bind(source_filename)
-    .bind(track_id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to update track source metadata: {}", e))?;
     Ok(())
 }
 
