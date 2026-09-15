@@ -576,10 +576,8 @@ impl Picker {
                     .gap(px(4.))
                     .child(div().text_size(px(13.)).child(error.clone()))
                     .child(
-                        div()
+                        luma_ui::button("Retry", luma_ui::Enabled::Yes)
                             .id("retry-models")
-                            .cursor_pointer()
-                            .child("Retry")
                             .on_click(move |_, _, cx| {
                                 target.update(cx, |chat, cx| chat.browse_models(service, cx))
                             })

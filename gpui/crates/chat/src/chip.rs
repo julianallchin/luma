@@ -314,23 +314,15 @@ fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
         .items_center()
         .gap(px(theme::SPACE_SM))
         .child(
-            div()
+            luma_ui::float::chip()
                 .id(SharedString::from(format!(
                     "chat-subagent-{}",
                     tool.call_id
                 )))
-                .flex()
                 .flex_none()
-                .flex_row()
-                .items_center()
                 .gap(px(theme::SPACE_XS + 2.0))
                 .max_w(px(PILL_MAX_WIDTH))
                 .px(px(theme::SPACE_SM))
-                .py(px(2.0))
-                .border_1()
-                .border_color(theme.border)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme::wash(0.06)))
                 .on_click(move |_, _, cx| {
                     let child = child.clone();
                     chat.update(cx, |this, cx| this.request_subagents(child, cx));
@@ -363,8 +355,7 @@ fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
         .into_any_element()
 }
 
-/// React's `max-w-64`, which is what the pill's truncation was measured
-/// against.
+/// The widest a subagent pill grows before its description truncates.
 const PILL_MAX_WIDTH: f32 = 256.0;
 
 /// One tool call: a compact purpose label and disclosure chevron,
