@@ -3,9 +3,7 @@
 //!
 //! Pure decisions and identity — slot assignment, projection matrices, cache
 //! keys, and the atlas allocation. The passes that render into these maps and
-//! the buffers that carry the results still live in [`crate::gpu`]; phase 3 of
-//! `docs/design/shadows-phase3.md` pulls those in behind a `FixtureShadows`
-//! facade.
+//! the buffers that carry the results live in [`crate::gpu`].
 
 use glam::{Mat4, Vec3};
 

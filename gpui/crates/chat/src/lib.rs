@@ -1865,7 +1865,7 @@ impl AgentChat {
 
 /// One icon button in the panel's header — the chat's own chrome control.
 ///
-/// Square-cornered and unlabelled, sized to the header's own rhythm rather than
+/// Unlabelled, sized to the header's own rhythm rather than
 /// to a dialog's: these sit *in* the thread's frame, not on a card floating over
 /// it, so they take the header's recessive tone and gain their fill only on
 /// hover.

@@ -35,7 +35,7 @@ gpui_platform = { path = "vendor/zed/crates/gpui_platform", version = "=0.1.0" }
 # Line tables, not full DWARF. Backtraces through Luma's own crates keep
 # `file:line`, which is all a test failure needs; what goes is the type and
 # variable detail a stepping debugger would use. Measured at 60% off `deps/`
-# with `opt-level` held constant — see docs/build-overhaul.md.
+# with `opt-level` held constant — see gpui/BUILD.md.
 [profile.dev]
 debug = "line-tables-only"
 
