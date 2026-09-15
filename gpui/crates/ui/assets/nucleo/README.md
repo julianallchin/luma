@@ -12,6 +12,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | ArrowRight | arrow-right | 768 |
 | ArrowUp | arrow-up | 813 |
 | Bot | robot | 11184 |
+| Camera | camera | 3215 |
 | Check | check | 5801 |
 | ChevronDown | chevron-down | 887 |
 | ChevronLeft | chevron-left | 890 |
@@ -21,6 +22,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Cpu | microchip | 6661 |
 | Expand | expand | 950 |
 | Minimize | reduce | 1006 |
+| Minus | minus | 5945 |
 | Network | nodes | 4714 |
 | PanelLeft | sidebar-left | 6006 |
 | PanelRight | sidebar-right | 6016 |

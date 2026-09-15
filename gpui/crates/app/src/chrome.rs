@@ -261,7 +261,9 @@ fn panel_anchor(
     toggle: fn(&mut Luma),
 ) -> impl IntoElement {
     let button = if enabled {
-        toggle_button(id, icon, open)
+        luma_ui::icon_toggle(icon, open)
+            .id(id)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click({
                 let toggled = app.clone();
                 move |_, _, cx| {
@@ -273,7 +275,7 @@ fn panel_anchor(
             })
             .into_any_element()
     } else {
-        dim_icon(icon).into_any_element()
+        luma_ui::icon_button(icon, luma_ui::Enabled::No).into_any_element()
     };
     slot.child(
         div()
@@ -311,12 +313,12 @@ pub(crate) fn history_pair() -> Div {
         // the left cluster the fixed toggle pushes, so where it sits is the
         // observable half of the anchor rule (`chrome_anchors`).
         .child(
-            dim_icon(IconName::ArrowLeft)
+            luma_ui::icon_button(IconName::ArrowLeft, luma_ui::Enabled::No)
                 .agent_node(Role::Button, "Back")
                 .agent_disabled(true),
         )
         .child(
-            dim_icon(IconName::ArrowRight)
+            luma_ui::icon_button(IconName::ArrowRight, luma_ui::Enabled::No)
                 .agent_node(Role::Button, "Forward")
                 .agent_disabled(true),
         )
@@ -367,53 +369,6 @@ fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoEle
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, _| action(window))
         .agent_node(Role::Button, id)
-}
-
-/// One glass icon button: quiet ink in a rounded box that washes on hover.
-fn icon_button(id: &'static str, icon: IconName) -> Stateful<Div> {
-    toggle_button(id, icon, false)
-}
-
-/// [`icon_button`] that also reads its own state: a panel toggle wears the
-/// active tab chip's wash while the panel it opens is showing, so "which
-/// panels are up" is legible from the corners without counting regions.
-///
-/// One `hover` call, branching inside — gpui panics on a second one, and a
-/// wrapper that added its own active style on top of `icon_button`'s is
-/// exactly that.
-fn toggle_button(id: &'static str, icon: IconName, active: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .size(px(CONTROL))
-        .rounded(px(CHIP_RADIUS))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(glass::ink(if active { 0.92 } else { 0.55 }))
-        .when(active, |button| button.bg(glass::wash(glass::WASH_REST)))
-        .hover(move |button| {
-            button
-                .bg(glass::wash(if active {
-                    glass::WASH_EMPHASIS
-                } else {
-                    glass::WASH_SUBTLE
-                }))
-                .text_color(glass::ink(if active { 0.92 } else { 0.90 }))
-        })
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(Icon::new(icon).size(px(14.)))
-}
-
-/// A control that exists but cannot act yet, at rest: comet dims it rather
-/// than dropping it, so the chrome's anatomy holds still.
-fn dim_icon(icon: IconName) -> Div {
-    div()
-        .size(px(CONTROL))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(glass::ink(0.22))
-        .child(Icon::new(icon).size(px(14.)))
 }
 
 /// The shell tab strip: one rounded chip per open tab, and the `+`.
@@ -586,7 +541,9 @@ pub(crate) fn tab_transition_layer(
 fn new_tab_control(entity: &Entity<Luma>) -> Div {
     let toggled = entity.clone();
     div().size(px(CONTROL)).relative().child(
-        icon_button("new-tab", IconName::Plus)
+        luma_ui::icon_button(IconName::Plus, luma_ui::Enabled::Yes)
+            .id("new-tab")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, _, cx| {
                 toggled.update(cx, |this, cx| {
                     this.tab_chrome.toggle_menu();
