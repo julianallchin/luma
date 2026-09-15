@@ -409,20 +409,11 @@ fn main() -> anyhow::Result<()> {
                 gpu_total_p95: 73.0,
                 gpu_total_max: 81.0,
                 gpu_volumetric_p95: Some(68.0),
-                // Was 3.0, and the 3.75 that broke it is a *revealed*
-                // pre-existing cost, not a regression. `cpu_encode_submit`
-                // spans frame entry through `queue.submit`, so it absorbs
-                // back-pressure: while the volumetric pass took 34 ms this
-                // scene's 366 draws encoded inside the GPU's shadow and the
-                // span read 0.62 ms. Baking the density field
-                // (`docs/design/haze-noise-field.md` §7 step 4) took the pass
-                // to 9.5 ms, the CPU became the bottleneck, and the cost
-                // surfaced. The control that proves it is not the texture:
-                // sampling the field for real while keeping the old ALU noise,
-                // so the GPU stays slow, measures 0.58 ms. Its 366-draw
-                // siblings sit at 12-17 here, so 3.0 was the outlier.
-                // CPU encode is the next perf task; this budget is a
-                // regression guard, not a target.
+                // `cpu_encode_submit` spans frame entry through
+                // `queue.submit`, so it absorbs back-pressure: a slow GPU pass
+                // hides CPU encode cost, and a fast one reveals it. This
+                // scene's 366 draws cost real CPU encode time, and this budget
+                // is a regression guard, not a target.
                 cpu_encode_p95: 8.0,
                 mean_lights_per_tile: 100.0,
             },
@@ -713,10 +704,7 @@ fn profile_catalogue(
         } else {
             renderer.render(&frame, width, height, subframes)?
         };
-        let mut encoder = png::Encoder::new(fs::File::create(output)?, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header()?.write_image_data(&pixels)?;
+        luma_render::image_out::write(Path::new(&output), &pixels, width, height)?;
     }
     let opaque = frame.draws.len() - frame.transparent.len();
     let artifact = serde_json::json!({

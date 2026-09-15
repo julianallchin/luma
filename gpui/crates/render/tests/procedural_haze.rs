@@ -78,13 +78,7 @@ fn capture(name: &str, pixels: &[u8], width: u32, height: u32) {
     if let Some(dir) = std::env::var_os("LUMA_HAZE_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         let path = PathBuf::from(dir).join(format!("{name}.png"));
-        let mut png = png::Encoder::new(std::fs::File::create(path).unwrap(), width, height);
-        png.set_color(png::ColorType::Rgba);
-        png.set_depth(png::BitDepth::Eight);
-        png.write_header()
-            .unwrap()
-            .write_image_data(pixels)
-            .unwrap();
+        luma_render::image_out::write(&path, pixels, width, height).unwrap();
     }
 }
 #[test]

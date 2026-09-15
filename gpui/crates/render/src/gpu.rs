@@ -1980,6 +1980,8 @@ struct FogVisibilityPipelines {
     fill: wgpu::ComputePipeline,
 }
 
+/// The process-wide wgpu device and queue, with every pipeline and layout the
+/// renderers share. Built once and borrowed by each [`Renderer`].
 pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -5057,7 +5059,7 @@ impl Renderer {
 
     /// Explicit, timing-ineligible readback of the opt-in fog visibility
     /// cache's allocation, fallback, and raw-response counters.
-    pub fn fog_visibility_cache_stats(&self) -> anyhow::Result<crate::FogVisibilityCacheStats> {
+    pub fn fog_visibility_cache_stats(&self) -> anyhow::Result<crate::fog_visibility_cache::Stats> {
         self.fog_visibility
             .read_stats(&self.gpu.device, &self.gpu.queue)
     }
@@ -9076,24 +9078,14 @@ fn downsample(w: u32, h: u32, pixels: &[u8], encoding: TextureEncoding) -> (u32,
             for c in 0..4 {
                 let at = |px: u32, py: u32| pixels[((py * w + px) * 4 + c) as usize];
                 if encoding == TextureEncoding::Srgb && c < 3 {
-                    let linear = |value: u8| {
-                        let value = f32::from(value) / 255.0;
-                        if value <= 0.04045 {
-                            value / 12.92
-                        } else {
-                            ((value + 0.055) / 1.055).powf(2.4)
-                        }
-                    };
+                    let linear =
+                        |value: u8| crate::coords::srgb_to_linear(f32::from(value) / 255.0);
                     let mean = (linear(at(x0, y0))
                         + linear(at(x1, y0))
                         + linear(at(x0, y1))
                         + linear(at(x1, y1)))
                         * 0.25;
-                    let encoded = if mean <= 0.003_130_8 {
-                        mean * 12.92
-                    } else {
-                        1.055 * mean.powf(1.0 / 2.4) - 0.055
-                    };
+                    let encoded = crate::coords::linear_to_srgb(mean);
                     out.push((encoded * 255.0).round().clamp(0.0, 255.0) as u8);
                 } else {
                     let mean = u32::from(at(x0, y0))

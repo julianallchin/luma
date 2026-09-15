@@ -36,16 +36,15 @@ mod fog_visibility_cache;
 pub mod frame;
 mod gpu;
 mod haze_field;
-pub mod interval_cache;
 pub mod house;
 pub mod image_out;
+pub mod interval_cache;
 pub mod light_index;
 pub mod luminaire;
 mod medium;
 pub mod metrics;
 pub mod overlay;
 mod pass_profile;
-pub use pass_profile::GpuPassTiming;
 pub mod scene_desc;
 mod shadow;
 mod shadow_hierarchy;
@@ -56,13 +55,8 @@ pub mod viewport;
 pub mod warmup;
 pub mod waveform;
 
-pub use fog_grid::FogBlockStats;
-pub use fog_visibility_cache::Stats as FogVisibilityCacheStats;
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
-pub use gpu::{
-    CompactStats, CpuSpans, FixtureShadowCpuSpans, FrameTimings, Gpu, HazeWorkStats, Renderer, RendererProfile,
-    ShadowStats, SubmissionCpuSpans, UploadStats,
-};
+pub use gpu::{CpuSpans, FrameTimings, Gpu, Renderer, ShadowStats};
 pub use light_index::LightIndexStats;
 pub use metrics::MetricSummary;
 pub use scene_desc::Catalogue;
@@ -83,5 +77,17 @@ pub use warmup::{warm, warming, Warming};
 ///
 /// The live path has its own, much smaller, budget: [`LIVE_SUBFRAMES`].
 pub const DEFAULT_SUBFRAMES: u32 = 16;
+
+/// The repository root, for the bins and tests that read tracked data.
+///
+/// The crate sits at `<repo>/gpui/crates/render`.
+#[must_use]
+pub fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("crate is three levels below the repo root")
+        .to_path_buf()
+}
 
 mod visibility;

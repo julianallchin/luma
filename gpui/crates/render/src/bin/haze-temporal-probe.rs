@@ -23,7 +23,7 @@ const DT: f32 = 1.0 / 60.0;
 const START: f32 = 1.37;
 
 fn main() -> anyhow::Result<()> {
-    let repo = repo_root();
+    let repo = luma_render::repo_root();
     let out = PathBuf::from(
         std::env::args()
             .nth(1)
@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
             let time = START + step as f32 * DT;
             let frame = build_frame(scene, &catalogue.definitions, time, &mut library)?;
             let pixels = renderer.render(&frame, width, height, DEFAULT_SUBFRAMES)?;
-            write_png(
+            luma_render::image_out::write(
                 &out.join(format!("{id}-{step:02}.png")),
                 &pixels,
                 width,
@@ -93,21 +93,5 @@ fn main() -> anyhow::Result<()> {
         // this series; a flat min/max band is the absence of one.
         println!("    per-step mean|d| range {lo:.4}..{hi:.4}");
     }
-    Ok(())
-}
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .canonicalize()
-        .expect("repository root")
-}
-
-fn write_png(path: &std::path::Path, rgba: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
-    let file = std::fs::File::create(path)?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(rgba)?;
     Ok(())
 }

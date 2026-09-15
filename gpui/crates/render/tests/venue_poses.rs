@@ -16,7 +16,7 @@
 //! and then fails if it changed, so a stale capture cannot be committed
 //! silently.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
 use luma_render::venue_tiles::TileMap;
@@ -24,10 +24,6 @@ use luma_scene::venue::{
     resolve, ConstraintStatus, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET, RIG_SOCKET,
 };
 use serde_json::{json, Value};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
-}
 
 fn node(id: &str, kind: NodeKind, catalog_ref: &str, params: &[(&str, f64)]) -> Node {
     let mut p = Params::default();
@@ -297,8 +293,7 @@ fn venue() -> VenueGraph {
 /// so these poses pin the housing standing off its host rather than through it.
 ///
 /// This golden has no fixture bundle, so every `fixture:*` ref is answered with
-/// [`luma_render::catalog::StatedHousing::stock_head`] — the same statement the
-/// Tauri crate's copy of this rig makes, which is what lets the two be compared.
+/// [`luma_render::catalog::StatedHousing::stock_head`].
 struct Sockets(VenueSockets);
 
 impl luma_scene::venue::NodeSockets for Sockets {
@@ -316,7 +311,7 @@ fn catalog() -> &'static Sockets {
     SOCKETS.get_or_init(|| {
         Sockets(
             VenueSockets::load(
-                repo_root().join("resources/meshes"),
+                luma_render::repo_root().join("resources/meshes"),
                 std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
             )
             .expect("the catalog resolves against the shipped meshes"),
@@ -429,7 +424,7 @@ fn write_if_changed(path: PathBuf, contents: &str) -> bool {
 
 #[test]
 fn venue_poses_golden_is_current() {
-    let path = repo_root().join("harness/goldens/venue-poses.json");
+    let path = luma_render::repo_root().join("harness/goldens/venue-poses.json");
     assert!(
         !write_if_changed(path, &golden()),
         "the venue-pose golden was stale and has been rewritten — review and commit it"
@@ -561,7 +556,7 @@ fn a_fixture_hangs_off_its_host_by_its_housing() {
 
 #[test]
 fn venue_tiles_golden_is_current() {
-    let path = repo_root().join("harness/goldens/venue-tiles.json");
+    let path = luma_render::repo_root().join("harness/goldens/venue-tiles.json");
     assert!(
         !write_if_changed(path, &tiles_golden()),
         "the tile-map golden was stale and has been rewritten — review and commit it"
