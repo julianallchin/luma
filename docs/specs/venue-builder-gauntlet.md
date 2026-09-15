@@ -1,7 +1,9 @@
 # Venue builder gauntlet
 
-**Status:** acceptance contract for `docs/design/venue-graph.md` phases 3b–6.
-That doc decides; this one says what evidence proves each decision landed.
+**Status:** B1–B7 have code and goldens (`harness/goldens/patch-allocation.json`,
+`venue-groups.json`, `venue-tiles.json`, `scenes-wgpu/`). This doc is the acceptance
+contract for `docs/design/venue-graph.md` phases 3b–6. That doc decides; this one says
+what evidence proves each decision.
 **Meta-goal:** a rig is *built*, never typed — the human places structure on the
 stage page and fixes paperwork on the patch page, the agent calls the same
 resolver through a Python facade, same vocabulary. One machine, provably.
@@ -221,7 +223,7 @@ Every accepted round runs its narrow tests plus:
 
 ```sh
 cd gpui
-cargo fmt --all -- --check
+rustfmt --edition 2021 --check <each .rs file you touched>   # never tree-wide
 cargo check -p gpui-agent --all-targets        # headless tree; no --features
 cargo clippy --workspace --all-targets
 cargo test -p luma-scene -p luma-render

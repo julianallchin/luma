@@ -6,10 +6,11 @@ are derived by walking the tree through the one snap resolver, on load and after
 every edit. Moving a truss moves what is bolted to it because there is nothing else
 it could do.
 
-Today `stage_pieces` stores `pos_*`/`rot_*` in parent-local space and the relation
-that produced the pose — which socket met which — is discarded the moment the drag
-ends. That is why the agent can only be handed flattened metres, and why "put a light
-on the downstage truss" is not expressible.
+The graph lives in `venue_nodes`, `venue_edges`, `venue_node_params` and
+`venue_constraints`. `luma_scene::venue::resolve` derives the poses. The old
+`stage_pieces` table and the `fixtures.pos_*`/`rot_*` columns remain only as the
+source for `backend/src/venue_graph.rs::migrate`, which converts a venue the first
+time it is read. Nothing else reads them.
 
 ## Decisions
 
@@ -176,14 +177,13 @@ on the downstage truss" is not expressible.
   **Flip** inverts the subtree's handedness about its root socket, which is what
   an asymmetric wing needs. Agent: `duplicate(node, to=socket, flip=bool)`.
 - **Sockets keep what is golden-tested and gain polarity.** Bbox-anchor authoring
-  stays, as do both orientation guards in `snap.ts` (the edge-mode opposing-`outward`
+  stays, as do both orientation guards in `snap.rs` (the edge-mode opposing-`outward`
   test, and the parallel-normal self-mating side test that otherwise ties an
   upside-down pose with the correct one). The directed `COMPATIBLE` table is
   **replaced by polarity** — `Male` / `Female` / `Neutral` — plus a roll freedom per
   socket; a thirteen-entry hand-maintained adjacency list is a lookup table
-  pretending to be a rule. The catalog moves to Rust as the single copy with a
-  generated TS binding: it exists twice today (`src/features/stage/lib/sockets.ts`,
-  `gpui/crates/scene/src/sockets.rs`) and the goldens exist because it drifted.
+  pretending to be a rule. The catalog has one copy, in
+  `gpui/crates/scene/src/sockets.rs`.
 
 ## Two pages: patch and stage
 
@@ -192,12 +192,8 @@ what exists, and where it is.
 
 - **Patch page = inventory** — the rental sheet: fixture, mode, universe, address,
   label, N of a fixture added at once. **One allocator, in the backend, per
-  universe.** Three frontend first-fit allocators exist today and none of them
-  looks at the universe (`add-fixture-dialog.tsx:22-38`,
-  `use-fixture-store.ts:625-655`, `:768-790`); they are deleted. Collisions and
-  addresses past 512 render red and are **refused by `patch_fixture`** — today
-  nothing validates and `engine.rs:429` silently truncates. Address and mode are
-  editable; Auto Patch becomes real.
+  universe.** Collisions and addresses past 512 render red and are **refused by
+  `patch_fixture`**. Address and mode are editable; Auto Patch is real.
 - **Outputs live on the patch page.** Discovered Art-Net nodes bind to universes as
   a **table**, not the `(net<<8)|(sub<<4)|(u&0xF)` arithmetic in `artnet.rs:218`
   that aliases universe 17 onto 1. sACN later.
@@ -211,12 +207,9 @@ what exists, and where it is.
   other node. Re-addressing never touches placement, moving never touches the
   address.
 - **Groups default from structure** — same truss face is a group — with manual
-  groups as an override. The "must group everything before leaving" gate
-  (`App.tsx:328`) goes.
+  groups as an override. There is no "must group everything before leaving" gate.
 - **Build order:** patch page lands with **phase 3** (it needs the split row), stage
-  page with **phase 4**. Today `gpui/crates/app/src/universe.rs` is a read-only list
-  and the React page cannot edit an address at all — `move_patched_fixture` has zero
-  callers.
+  page with **phase 4**.
 
 ## Data model
 
@@ -270,9 +263,9 @@ at phase 0, when beam = mount normal moves every rest direction.
 ## Audit findings this fixes
 
 - Movers rest along `-Z` (`fixture_kinematics::REST_AXIS`), LED bars along `+Y`
-  (`luminaire::beam_direction` uses `Vec3::Z` for procedurals), and
-  `ask-venue-tool.ts`'s `facingLabel` assumes `+Y` with the **opposite yaw sign** —
-  three rest conventions, three sign conventions. `facingLabel` is deleted outright.
+  (`luminaire::beam_direction` uses `Vec3::Z` for procedurals), and the agent's
+  `facingLabel` assumed `+Y` with the **opposite yaw sign** — three rest conventions,
+  three sign conventions.
 - 460 fixtures across the golden venues, exactly one with a non-zero rotation — the
   rest-direction bug is invisible because nobody has ever successfully aimed a
   fixture. That is the symptom, not the mitigation.
@@ -296,7 +289,7 @@ at phase 0, when beam = mount normal moves every rest direction.
    `render/src/overlay.rs`); keep overlay.rs, extend it to rotate and stage pieces.
 2. **Procedural truss + socket catalog to Rust.** Corner box (2–6 way) and hinge join
    the landed straight generator; truss GLBs deleted, catalog metric. One catalog copy
-   with a generated TS binding; polarity replaces `COMPATIBLE`; roll freedom per
+   in Rust; polarity replaces `COMPATIBLE`; roll freedom per
    socket, hinge angle included. Goldens must still pass.
 3. **Graph model + resolver-on-load + persistence** — the four tables, the migration
    pass, `flatten_pieces` and its copy deleted. This is the load-bearing phase.
@@ -311,10 +304,6 @@ at phase 0, when beam = mount normal moves every rest direction.
 
 ## Open
 
-- **Does the React app get the new model, or is it frozen?** The gpui builder is the
-  one being invested in; keeping `src/features/stage` alive means porting polarity,
-  the resolver, and the builder twice. Freezing it means the React visualizer renders
-  venues it cannot edit.
 - **`run.along(t)` across a mitred corner.** Arc length through a corner block is not
   the sum of segment lengths, and `along(0.5)` on an L-shaped run should probably
   mean half the *walked* distance. Unresolved.

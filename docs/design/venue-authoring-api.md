@@ -184,5 +184,5 @@ Suggested seams (implementer may refine, not thin out):
 
 ## Out of scope
 
-- React stage editing (frozen), gpui editor UI changes beyond what reuses the
+- GPUI editor UI changes beyond what reuses the
   new host verbs, promoting drafts to the palette, aim cue layer.

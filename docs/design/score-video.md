@@ -5,16 +5,13 @@ and what the measurements changed, and §9 for the second sampling mode. §1–�
 are the original design; where a later section disagrees with an earlier one,
 the later one is what the code does.
 
-Original scope note: Scope: one new module in `backend/src`, one small change to
-`stage_render`, one change to `ffmpeg_env`, three thin callers.
+Scope: one module in `backend/src`, one change to `stage_render`, one change to
+`ffmpeg_env`, and thin callers.
 
-`docs/specs/wgpu-renderer.md` §6 already specified this. **Half of it landed**: the
-renderer side — deterministic K-subframe jitter accumulation with the temporal pass
-bypassed — is exactly what `Renderer::render(frame, w, h, subframes)` does today, and
-`DEFAULT_SUBFRAMES = 16` is that spec's `K`. What did not land is the orchestration:
-the time axis, the ffmpeg pipe, the audio mux, and the callers. This doc is that half,
-and it supersedes §6's `RenderTarget` / `FrameRequest` sketch, which the renderer
-implemented under different names (`Destination`, `Channels`).
+The renderer side is `Renderer::render(frame, w, h, subframes)`: deterministic
+K-subframe jitter accumulation with the temporal pass bypassed, with
+`DEFAULT_SUBFRAMES = 16`. This doc covers the orchestration: the time axis, the ffmpeg
+pipe, the audio mux, and the callers.
 
 ---
 
@@ -43,13 +40,9 @@ recording nearly free to build on top:
   `Gpu::shared()`; parsed GLBs live in a caller-owned `assets::Library`.
   `stage_render`'s pinned `luma-stage-render` thread already owns both for the life of
   the process.
-- **ffmpeg is bundled and alive.** `build.rs` downloads it, `tauri.conf.json` ships
-  `ffmpeg-runtime/*`, `ffmpeg_env::ffmpeg_path()` finds it. The local binary has
-  `libx264`, `h264_videotoolbox`, `aac` and `aac_at`.
-
-**The old export path is not in this tree.** `backend/src/commands/export.rs` lives
-only on `feat/video-export` (`4d39a707`), which is not an ancestor of `main` and never
-merged. Nothing on main references it. §5 says what to take from it.
+- **ffmpeg is bundled and alive.** `backend/build.rs` prepares it in
+  `backend/ffmpeg-runtime`, and `ffmpeg_env::ffmpeg_path()` finds it. The local binary
+  has `libx264`, `h264_videotoolbox`, `aac` and `aac_at`.
 
 ---
 
@@ -137,9 +130,7 @@ The module owns, and no caller sees:
 7. progress and cancellation.
 
 **The loop lives inside the seam.** Every caller only starts a recording and polls it.
-This is the one structural lesson from the old export: it put the loop in the frontend
-and therefore needed five Tauri commands, a raw-body IPC hack, and a batch-of-600
-amortisation, all of which are pure consequences of that choice.
+A loop in the caller needs a session protocol to carry each frame across the seam.
 
 ### The one change to `stage_render`
 
@@ -174,11 +165,9 @@ Keep the per-frame channel round-trip (it is microseconds against 10 ms, and it 
 
 ### The change to `ffmpeg_env`
 
-`ffmpeg_env::init(app: &tauri::AppHandle)` cannot be called by a headless bin, so
-`ffmpeg_path()` silently falls back to system PATH there — which on a clean machine
-fails at spawn time with no diagnosis. Split it: `init_from(dirs: &[PathBuf])` holds
-the search, `init(app)` and `headless_host::boot` each supply their dirs. Small, and
-required for the CLI to work at all.
+A headless bin must find the bundled ffmpeg, or `ffmpeg_path()` falls back to system
+PATH and fails at spawn time with no diagnosis. `ffmpeg_env::init_from(dirs)` holds the
+search; `init_headless()` supplies the headless dirs.
 
 ---
 
@@ -290,39 +279,6 @@ A dispatch handler `dispatch/handlers/recording.rs` exposing `record_video` /
 `record_status` / `record_cancel`, progress via the existing `EventSink`
 (`recording-progress`). The gpui app gets a dialog that fills in `Recording` and a
 progress bar. No new mechanism.
-
----
-
-## 5. The old export path: what to take
-
-**Take (as a pattern — the file is on an unmerged branch, so this is transcription,
-not import):**
-
-- the audio-mux argv shape: `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 192k -shortest -movflags +faststart`;
-- `kill_on_drop(true)`, explicit `stdin.shutdown()`, then `wait()` and check status;
-- `get_track_path_and_hash` + `get_track_duration` for the audio input and the frame count;
-- the *idea* behind `render_frame_max(layer, t_prev, t)` — a shutter over the frame
-  interval, not a point sample. See §7.
-
-**Change:**
-
-- `-f h264 … -c:v copy` → `-f rawvideo -pix_fmt rgba …` plus a real encoder. There is
-  no WebCodecs in a Rust process; we have RGBA8, not encoded H.264.
-- `stderr(Stdio::null())` → capture it. A bare exit code is not a diagnosis.
-
-**Do not port:**
-
-- the whole session protocol — `export_start` / `export_sample_frame` /
-  `export_sample_batch` / `export_push_chunk` / `export_finish` / `export_cancel`,
-  `ExportSessionsState`, the `x-session-id` raw-body invoke, the batch-of-600
-  amortisation. Every one of those exists because the loop was in the frontend.
-- `export-video-dialog.tsx`, `run-export.ts`, `use-export-store.ts` — React, dead.
-- `render_frame_max` itself — already gone, and a fold over `Vec<UniverseState>`
-  belongs beside `composite_frame`, not as a resurrected function.
-
-**Leave alone:** `build.rs`'s ffmpeg download, the `ffmpeg-runtime/*` resource entry,
-and `ffmpeg_env` — all still on main and still used by `audio/decoder.rs`,
-`sync/files.rs`, `stem_worker` and `genre_worker`. Only the `init` signature changes.
 
 ---
 
@@ -512,8 +468,8 @@ enum was dropped for the same reason.
 Every recording came out with **exactly ~7.04 s of audio missing from the end**
 — 10 s of video with 2.97 s of audio, 60 s with 52.95 s. `-shortest` finalises
 the file the moment the video pipe hits EOF, and a pipe delivering one frame
-every 50 ms leaves ffmpeg's audio decoder that far behind when it does. §5's
-"take the audio-mux argv shape" is therefore taken *except* for `-shortest`:
+every 50 ms leaves ffmpeg's audio decoder that far behind when it does. §4's
+audio-mux argv shape is therefore kept *except* for `-shortest`:
 the audio input is cut with `-t {frames/fps}` instead, which is exact and does
 not depend on how fast the video arrives. Verified at 0.9991 correlation against
 the source segment decoded independently.
