@@ -1092,8 +1092,8 @@ impl Library {
     ///
     /// Two commands in this order because they are two commit points and only
     /// this order is recoverable — `wipe_database` is the durability boundary
-    /// and leaves a journal that `remove_session_item` consumes. The web store
-    /// sequences them identically; a host that reversed them would delete the
+    /// and leaves a journal that `remove_session_item` consumes. A host that
+    /// reversed them would delete the
     /// credential it still needs to flush with.
     ///
     /// Both run inside *one* spawned task, not two: [`Self::call`] dispatches
@@ -1790,19 +1790,6 @@ impl Library {
 
     // -- the track editor -----------------------------------------------------
 
-    /// This track's scores in `venue_id`, newest first. A track with none has
-    /// never been annotated here, and there is no timeline to open.
-    pub fn scores_for_track(
-        &self,
-        track_id: &str,
-        venue_id: &str,
-    ) -> impl Future<Output = Result<Vec<ScoreSummary>, LibraryError>> + use<> {
-        self.call(
-            "list_scores_for_track",
-            json!({ "trackId": track_id, "venueId": venue_id }),
-        )
-    }
-
     /// Every score for this track the current admission may see, in any
     /// venue, newest first. What the editor's score rail lists: the venue in
     /// hand is one grouping of this, not a separate read.
@@ -2249,27 +2236,6 @@ impl Library {
                 .filter(|thread| scope.matches(thread))
                 .collect())
         }
-    }
-
-    /// Retitle a conversation. `None` clears the title back to whatever the
-    /// transcript implies, which is what the durable model does with it.
-    pub fn rename_thread(
-        &self,
-        thread_id: &str,
-        title: Option<&str>,
-    ) -> impl Future<Output = Result<AgentThread, LibraryError>> + use<> {
-        self.call(
-            "agent_thread_rename",
-            json!({ "threadId": thread_id, "title": title }),
-        )
-    }
-
-    /// Delete a conversation and its transcript.
-    pub fn delete_thread(
-        &self,
-        thread_id: &str,
-    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("agent_thread_delete", json!({ "threadId": thread_id }))
     }
 
     /// Install one score as the render engine's active scene, so
@@ -2968,14 +2934,6 @@ impl Library {
     }
 
     // -- outputs --------------------------------------------------------------
-
-    pub fn start_artnet_discovery(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("start_discovery", json!({}))
-    }
-
-    pub fn stop_artnet_discovery(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("stop_discovery", json!({}))
-    }
 
     /// Every Art-Net node that has answered a poll since discovery started.
     /// Fails on a host with no Art-Net at all, which is a state the outputs

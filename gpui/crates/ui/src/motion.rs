@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    px, Animation, AnimationElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba,
+    Animation, AnimationElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba,
     SharedString, Styled, Window,
 };
 
@@ -48,13 +48,11 @@ pub use gpui::AnimationExt;
 
 /// Repeat-tick interval for the pulse/spinner loaders (~30fps).
 ///
-/// The loaders used to run as gpui `with_animation(...repeating...)` elements,
-/// which request a redraw every display frame for as long as they are mounted
-/// — one Working session row pinned the whole window at 120Hz (measured 36%
-/// CPU on an M-series laptop, with the always-hot Metal pipeline holding
-/// hundreds of MB of graphics buffers). A shared 30fps clock is visually
-/// equivalent for these chunky cell waves at a quarter of the redraws, and a
-/// window with no spinner mounted schedules nothing at all.
+/// Do not drive loaders with a repeating gpui `with_animation`: it requests a
+/// redraw every display frame while mounted, which holds the whole window at
+/// display rate. A shared 30fps clock looks the same for these chunky cell
+/// waves at a quarter of the redraws, and a window with no spinner mounted
+/// schedules nothing at all.
 const PULSE_TICK: Duration = Duration::from_millis(33);
 
 /// How long a view stays on the tick list after its last spinner paint. One
@@ -261,16 +259,12 @@ pub const SLOW: u64 = 700;
 
 // -- the catalog --------------------------------------------------------------
 
-/// Entrances: fade + 4px rise.
-pub const FADE_IN: MotionSpec = MotionSpec::new(SLOW, ROOT);
 /// Opacity-only fade.
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Popover entrance, moving away from its trigger.
 pub const MENU_IN: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Popover exit uses the same timing and spring as its entrance.
 pub const MENU_OUT: MotionSpec = MENU_IN;
-/// Boot splash exit: fade + 6px lift after a hold.
-pub const SPLASH_OUT: MotionSpec = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
 /// Shared spring timing for panes, dialog route morphs, and dialog exits.
 pub const SURFACE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 /// Dialogs open more quickly while retaining the same spring shape.
@@ -289,12 +283,6 @@ pub const PUSH: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Per-row collapse (height).
 pub const COLLAPSE: MotionSpec = MotionSpec::new(BASE, ROOT);
-/// Chevron rotate (approximated as a crossfade — gpui divs have no rotation
-/// transform at the pinned rev, same caveat as scale).
-pub const CHEVRON: MotionSpec = MotionSpec::new(BASE, ROOT);
-/// Scroll-to-row glide over the whole distance — fixed duration, never
-/// percent-of-remaining.
-pub const SCROLL_GLIDE: MotionSpec = MotionSpec::new(SLOW, ROOT);
 /// The temporal blend every interactive hover wash rides.
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Loader pulse period (a loop length, not a transition — see the module docs).
@@ -305,16 +293,6 @@ pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, ROOT);
 // ---------------------------------------------------------------------------
 // Element helpers (paint-layer entrances/exits)
 // ---------------------------------------------------------------------------
-
-/// Standard entrance: opacity 0→1 + translateY 4→0 over [`FADE_IN`].
-pub fn fade_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, FADE_IN.animation(), |el, t| {
-        el.relative().opacity(t).top(px(4.0 * (1.0 - t)))
-    })
-}
 
 /// Quick opacity-only fade over [`FADE_QUICK`].
 pub fn fade_quick<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
@@ -396,16 +374,6 @@ pub fn exit_progress_at(spec: &MotionSpec, since: Instant, now: Instant) -> f32 
     spec.progress(raw)
 }
 
-/// Boot-splash exit: hold QUICK, then fade out + lift 6px over SLOW.
-pub fn splash_out<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, SPLASH_OUT.animation(), |el, t| {
-        el.opacity(1.0 - t).top(px(-6.0 * t))
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Loader math (pure; rendered by the working indicator)
 // ---------------------------------------------------------------------------
@@ -413,12 +381,6 @@ where
 // Pure functions of a phase in `0..1`, so a caller can drive them from a frame
 // delta or from elapsed wall-clock time and get identical output.
 
-/// Loader cells rest at this opacity between pulses.
-pub const PULSE_MIN_OPACITY: f32 = 0.08;
-/// …and at this scale.
-pub const PULSE_MIN_SCALE: f32 = 0.9;
-/// Per-cell stagger, as a fraction of the pulse period (0.15s of 2.4s).
-pub const PULSE_STAGGER: f32 = 0.15 / 2.4;
 /// Opacity a gradient-spinner cell rests at between pulses.
 pub const GSPIN_DIM: f32 = 0.1;
 
@@ -430,16 +392,6 @@ pub fn staggered_phase(raw_delta: f32, index: usize, stagger: f32) -> f32 {
 /// Cosine pulse: 0 at phase 0, 1 at phase 0.5, back to 0 at phase 1.
 pub fn pulse_wave(phase: f32) -> f32 {
     0.5 - 0.5 * (phase * std::f32::consts::TAU).cos()
-}
-
-/// Loader cell opacity for a phase: 0.08 → 1 → 0.08.
-pub fn pulse_opacity(phase: f32) -> f32 {
-    PULSE_MIN_OPACITY + (1.0 - PULSE_MIN_OPACITY) * pulse_wave(phase)
-}
-
-/// Loader cell scale for a phase: 0.9 → 1 → 0.9.
-pub fn pulse_scale(phase: f32) -> f32 {
-    PULSE_MIN_SCALE + (1.0 - PULSE_MIN_SCALE) * pulse_wave(phase)
 }
 
 /// Gradient-spin cell opacity for a local phase `t` (0..1 of the period): full
@@ -455,14 +407,6 @@ pub fn gspin_opacity(t: f32, dim: f32) -> f32 {
     } else {
         lerp(dim, 1.0, (t - 0.92) / 0.08)
     }
-}
-
-/// Gradient-matrix spinner wave: intensity (0..1) of cell `wave_index` out of
-/// `wave_count` diagonals, at raw delta `raw_delta` of the 750ms period. The wave
-/// front travels across diagonals once per period.
-pub fn matrix_wave(raw_delta: f32, wave_index: usize, wave_count: usize) -> f32 {
-    let count = wave_count.max(1) as f32;
-    pulse_wave(staggered_phase(raw_delta, wave_index, 1.0 / count))
 }
 
 /// Linear interpolation (layout tweens).
@@ -496,7 +440,7 @@ pub fn reveal_opacity(openness: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Hover color fades (CSS `transition-colors` parity)
+// Hover color fades
 // ---------------------------------------------------------------------------
 //
 // gpui `.hover()` styles snap by construction — the style applies the frame
@@ -775,18 +719,19 @@ mod tests {
     #[test]
     fn spec_delay_holds_then_runs() {
         // The delay and run share the catalog timing ladder.
-        assert_eq!(SPLASH_OUT.total(), Duration::from_millis(QUICK + SLOW));
-        assert_eq!(SPLASH_OUT.progress(0.0), 0.0);
+        let delayed = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
+        assert_eq!(delayed.total(), Duration::from_millis(QUICK + SLOW));
+        assert_eq!(delayed.progress(0.0), 0.0);
         // Still inside the delay window.
-        assert_eq!(SPLASH_OUT.progress(0.2), 0.0);
+        assert_eq!(delayed.progress(0.2), 0.0);
         // Fully done at the end; clamped beyond.
-        assert_eq!(SPLASH_OUT.progress(1.0), 1.0);
-        assert_eq!(SPLASH_OUT.progress(2.0), 1.0);
+        assert_eq!(delayed.progress(1.0), 1.0);
+        assert_eq!(delayed.progress(2.0), 1.0);
         // Part-way through the run.
-        let mid = SPLASH_OUT.progress(0.65);
+        let mid = delayed.progress(0.65);
         assert!(mid > 0.0 && mid < 1.0);
         // No-delay specs pass straight through the curve.
-        assert_close(FADE_IN.progress(0.5), ROOT.eval(0.5), 1e-6, "no-delay");
+        assert_close(FADE_QUICK.progress(0.5), ROOT.eval(0.5), 1e-6, "no-delay");
     }
 
     #[test]
@@ -795,18 +740,7 @@ mod tests {
         // and a duration off the ladder. Loader periods are loop lengths, not
         // transitions, so they carry their own numbers (module docs).
         let transitions = [
-            FADE_IN,
-            FADE_QUICK,
-            MENU_IN,
-            MENU_OUT,
-            SPLASH_OUT,
-            SURFACE,
-            PUSH,
-            TAB_SLIDE,
-            COLLAPSE,
-            CHEVRON,
-            SCROLL_GLIDE,
-            HOVER_FADE,
+            FADE_QUICK, MENU_IN, MENU_OUT, SURFACE, PUSH, TAB_SLIDE, COLLAPSE, HOVER_FADE,
         ];
         for spec in transitions {
             assert_eq!(spec.curve, ROOT, "{spec:?} rides a second curve");
@@ -864,32 +798,26 @@ mod tests {
         assert_close(pulse_wave(0.0), 0.0, 1e-6, "wave start");
         assert_close(pulse_wave(0.5), 1.0, 1e-6, "wave peak");
         assert_close(pulse_wave(1.0), 0.0, 1e-6, "wave end");
-        assert_close(pulse_opacity(0.0), 0.08, 1e-6, "opacity floor");
-        assert_close(pulse_opacity(0.5), 1.0, 1e-6, "opacity peak");
-        assert_close(pulse_scale(0.0), 0.9, 1e-6, "scale floor");
-        assert_close(pulse_scale(0.5), 1.0, 1e-6, "scale peak");
     }
 
     #[test]
     fn stagger_wraps_and_orders_cells() {
+        const STAGGER: f32 = 0.15 / 2.4;
         // Cell 0 at delta 0 is at phase 0; later cells lag by the stagger.
-        assert_close(staggered_phase(0.0, 0, PULSE_STAGGER), 0.0, 1e-6, "cell 0");
+        assert_close(staggered_phase(0.0, 0, STAGGER), 0.0, 1e-6, "cell 0");
         assert_close(
-            staggered_phase(0.0, 1, PULSE_STAGGER),
-            1.0 - PULSE_STAGGER,
+            staggered_phase(0.0, 1, STAGGER),
+            1.0 - STAGGER,
             1e-5,
             "cell 1 wraps",
         );
         // A full period later the phase is identical.
         assert_close(
-            staggered_phase(0.3, 2, PULSE_STAGGER),
-            staggered_phase(0.3 + 1.0, 2, PULSE_STAGGER),
+            staggered_phase(0.3, 2, STAGGER),
+            staggered_phase(0.3 + 1.0, 2, STAGGER),
             2e-6,
             "periodic",
         );
-        // Matrix wave peaks travel: diagonal k peaks when the front reaches it.
-        let peak0 = matrix_wave(0.5, 0, 5);
-        assert_close(peak0, 1.0, 1e-5, "diag 0 peak at half period");
     }
 
     #[test]

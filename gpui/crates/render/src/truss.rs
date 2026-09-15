@@ -503,16 +503,6 @@ impl Truss {
         self.panels as f32 * PANEL_PITCH_M
     }
 
-    /// The built span in feet.
-    ///
-    /// Display only. Truss is quantized in metres here and in the catalogue;
-    /// feet exist because riggers speak them, and nothing downstream may round
-    /// trip through this.
-    #[must_use]
-    pub fn display_feet(self) -> f32 {
-        self.span_m() / 0.3048
-    }
-
     /// Both end faces, upstream end first.
     ///
     /// Same shape as a [`Corner`]'s `-X` and `+X` faces, pushed out to the
@@ -1237,15 +1227,6 @@ mod tests {
         }
         assert_eq!(Truss::new(f32::NAN).panels(), 1);
         assert!((Truss::new(f32::INFINITY).span_m() - MAX_PANELS * PANEL_PITCH_M).abs() < 1e-3);
-    }
-
-    #[test]
-    fn feet_are_display_only_and_do_not_round_trip() {
-        let truss = Truss::new(6.0);
-        assert!((truss.display_feet() - 19.685_04).abs() < 1e-3);
-        // 6 m is not a whole number of feet, so anyone re-snapping the feet
-        // value would land somewhere else. That is the point of the doc note.
-        assert!((Truss::new(truss.display_feet()).span_m() - 6.0).abs() > 1.0);
     }
 
     #[test]

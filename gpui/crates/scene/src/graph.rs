@@ -66,18 +66,16 @@ pub enum NodeContent {
 }
 
 /// Bit flags on a node. A newtype rather than a `bitflags` dependency —
-/// there are four of them and they will not grow into a language.
+/// there are two of them and they will not grow into a language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NodeFlags(pub u8);
 
 impl NodeFlags {
     pub const VISIBLE: NodeFlags = NodeFlags(1 << 0);
     pub const PICKABLE: NodeFlags = NodeFlags(1 << 1);
-    pub const CASTS_SHADOW: NodeFlags = NodeFlags(1 << 2);
-    pub const RECEIVES_SHADOW: NodeFlags = NodeFlags(1 << 3);
     pub const NONE: NodeFlags = NodeFlags(0);
     /// What a piece of stage geometry gets by default.
-    pub const DEFAULT: NodeFlags = NodeFlags(0b1111);
+    pub const DEFAULT: NodeFlags = NodeFlags(0b11);
 
     pub fn contains(self, other: NodeFlags) -> bool {
         self.0 & other.0 == other.0
@@ -179,13 +177,10 @@ impl SceneGraph {
             .map(|(i, n)| (NodeId(i as u32), n))
     }
 
+    #[cfg(test)]
     pub fn set_local(&mut self, id: NodeId, local: Transform) {
         self.nodes[id.0 as usize].local = local;
         self.dirty[id.0 as usize] = true;
-    }
-
-    pub fn set_flags(&mut self, id: NodeId, flags: NodeFlags) {
-        self.nodes[id.0 as usize].flags = flags;
     }
 
     /// Re-parent a node, keeping its *local* transform. Rebuilds the

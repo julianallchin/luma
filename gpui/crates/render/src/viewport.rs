@@ -337,7 +337,6 @@ pub struct Viewport {
     renderer: Renderer,
     pixels: Vec<u8>,
     subframes: u32,
-    last_draw_time: Option<Duration>,
 }
 
 impl Viewport {
@@ -352,7 +351,6 @@ impl Viewport {
             renderer: Renderer::new()?,
             pixels: Vec::new(),
             subframes: LIVE_SUBFRAMES,
-            last_draw_time: None,
         })
     }
 
@@ -360,15 +358,6 @@ impl Viewport {
     /// frame; see [`LIVE_SUBFRAMES`].
     pub fn set_subframes(&mut self, subframes: u32) {
         self.subframes = subframes.max(1);
-    }
-
-    /// CPU wall time of the previous [`Self::draw`], including queue submit,
-    /// GPU completion and readback. This deliberately does not claim to be a
-    /// GPU timestamp; it measures the end-to-end cost the current synchronous
-    /// presentation seam imposes on its caller.
-    #[must_use]
-    pub fn last_draw_time(&self) -> Option<Duration> {
-        self.last_draw_time
     }
 
     /// Render `frame` at `width` x `height` physical pixels.
@@ -397,13 +386,13 @@ impl Viewport {
             Channels::Bgra,
             &mut self.pixels,
         );
-        self.last_draw_time = Some(started.elapsed());
+        let draw_time = started.elapsed();
         result?;
         Ok(Presentation {
             width,
             height,
             pixels: &self.pixels,
-            draw_time: self.last_draw_time.unwrap_or_default(),
+            draw_time,
         })
     }
 }
@@ -1157,7 +1146,7 @@ fn fail_in_flight<J>(shared: &Shared<J, anyhow::Result<AsyncPresentation>>, reas
 const PROFILE_EVERY: u64 = 16;
 
 fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>>) {
-    // The lab should expose honest GPU time where the adapter can provide it,
+    // The frame-stats panel should show honest GPU time where the adapter can provide it,
     // without making timestamp support a requirement for opening a viewport.
     // Both arms borrow the same process-wide device, so the fallback costs a
     // second set of query buffers rather than a second device.

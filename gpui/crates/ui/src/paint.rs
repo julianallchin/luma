@@ -20,10 +20,10 @@ pub const LINE_HEIGHT: f32 = 1.3;
 
 /// Where a line's box starts, given the baseline a canvas 2D context would
 /// have drawn it on. `fillText` places the baseline; gpui places the top edge,
-/// so a port of canvas coordinates has to walk back up by the ascent.
+/// so a baseline position has to walk back up by the ascent.
 ///
 /// One ratio for every size rather than a metric read from the font: the
-/// canvas side's own positions are hand-tuned round numbers, so matching the
+/// callers' baseline positions are hand-tuned round numbers, so matching the
 /// face's exact ascent would be false precision.
 pub const ASCENT: f32 = 0.8;
 
@@ -44,7 +44,7 @@ pub fn shape(
 }
 
 /// Shape one line in a named family — [`crate::fonts::MONO`] for the numeric
-/// readouts the web side sets in `font-mono`. [`shape`] is this in the app's
+/// readouts. [`shape`] is this in the app's
 /// UI face, which is what almost everything wants.
 pub fn shape_in(
     family: &'static str,
@@ -91,25 +91,10 @@ pub fn line(
         .ok();
 }
 
-/// The width one line will occupy at `tracking` (CSS `letter-spacing`), in
-/// pixels. CSS adds the spacing *after* every character, including the last,
-/// so a tracked run is that much wider than its shaped advance.
-pub fn tracked_width(
-    text: &gpui::SharedString,
-    font_size: f32,
-    weight: FontWeight,
-    tracking: f32,
-    window: &Window,
-) -> f32 {
-    let shaped = shape(text, font_size, weight, gpui::rgb(0), window);
-    f32::from(shaped.width) + tracking * text.chars().count() as f32
-}
-
-/// Draw one line with CSS `letter-spacing`.
+/// Draw one line with letter-spacing.
 ///
 /// gpui's `TextRun` has no letter-spacing, so the run is shaped and placed one
-/// character at a time with `tracking` added to each advance — which is what
-/// the browser does to the glyph positions anyway. Only worth it for the
+/// character at a time with `tracking` added to each advance. Only worth it for the
 /// screen's tracked styles (the 9px uppercase control face); everything else
 /// should use [`line()`], which shapes the run once.
 // One more argument than [`line`], and the extra one is the whole point.
