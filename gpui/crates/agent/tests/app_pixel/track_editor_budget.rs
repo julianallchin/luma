@@ -60,9 +60,9 @@ const CLIPS_PER_LANE: u32 = 15;
 /// machine this is developed on.
 const BUDGET_MS: f64 = 8.33;
 
-/// The scrub p95 of the removed web timeline, measured on 2026-08-20. The
+/// The scrub p95 of the earlier timeline, measured on 2026-08-20. The
 /// native editor must stay decisively under it, at half this value or less.
-const WEB_P95_MS: f64 = 27.;
+const BASELINE_P95_MS: f64 = 27.;
 
 fn harness() -> Harness {
     let clips = (0..LANES)
@@ -228,8 +228,8 @@ fn scrolling_and_scrubbing_at_full_zoom_out_stay_inside_the_frame_budget() {
             leg.total_p95,
         );
         assert!(
-            leg.total_p95 < WEB_P95_MS / 2.,
-            "{} p95 is {:.2} ms, not decisively under the web's {WEB_P95_MS} ms",
+            leg.total_p95 < BASELINE_P95_MS / 2.,
+            "{} p95 is {:.2} ms, not decisively under the baseline {BASELINE_P95_MS} ms",
             leg.name,
             leg.total_p95,
         );

@@ -400,12 +400,7 @@ pub struct AgentChat {
 impl AgentChat {
     /// Open a chat on `scope`, and start resolving its thread when there is
     /// one. `None` opens the panel unattached — see [`Self::scope`].
-    pub fn new(
-        agent: Agent,
-        scope: Option<ThreadScope>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(agent: Agent, scope: Option<ThreadScope>, cx: &mut Context<Self>) -> Self {
         let chat = Self {
             agent,
             scope: scope.clone(),
@@ -459,13 +454,8 @@ impl AgentChat {
     /// is not a second renderer and must never become one: the whole reason a
     /// subagent's thread is a real `agent_threads` row is that reading it
     /// needs no code of its own.
-    pub fn reader(
-        agent: Agent,
-        thread_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut chat = Self::new(agent, None, window, cx);
+    pub fn reader(agent: Agent, thread_id: &str, cx: &mut Context<Self>) -> Self {
+        let mut chat = Self::new(agent, None, cx);
         chat.read_only = true;
         chat.open_thread(thread_id, cx);
         chat

@@ -53,14 +53,14 @@ impl Luma {
             return;
         }
         let agent = self.library.agent();
-        let chat = cx.new(|cx| AgentChat::new(agent, wanted, window, cx));
+        let chat = cx.new(|cx| AgentChat::new(agent, wanted, cx));
         self.chat_subscription =
             Some(
-                cx.subscribe_in(&chat, window, |this, _, event, window, cx| match event {
+                cx.subscribe_in(&chat, window, |this, _, event, _, cx| match event {
                     luma_chat::ChatEvent::DocumentChanged => this.agent_documents_changed(cx),
                     luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
                     luma_chat::ChatEvent::SubagentsRequested(child) => {
-                        this.show_subagents(child.clone(), window, cx);
+                        this.show_subagents(child.clone(), cx);
                     }
                 }),
             );
