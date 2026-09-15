@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `backend/` through its dispatch seam. The backend has no Tauri dependency. `www/` is a separate documentation website.
+Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `backend/` through its dispatch seam. `www/` is a separate documentation website.
 
 ## Shared checkout
 
@@ -31,8 +31,6 @@ When you spot a smell adjacent to your work — a leaky abstraction, a guard tha
 
 Use standard Rust formatting and clippy. Keep backend modules cohesive around domains. Native frontend calls go through `luma_lib::dispatch`; do not add a webview UI.
 
-The backend retains `ts-rs` type metadata for shared schemas, but there is no desktop TypeScript consumer. Do not recreate `src/` for frontend work.
-
 ## Migrations
 
 - Migrations are **append-only** once run on any machine: sqlx checksums each version (SHA-384), so editing an applied file breaks every launch with a checksum mismatch.
@@ -55,14 +53,15 @@ Venues, scores, patterns and the `changes` log all live in that one database —
 
 ## UI Conventions
 
-Comet (https://github.com/zeronsh/comet) is the button-style reference. Use
-`luma_ui::button` for compact actions, `luma_ui::float::btn` / `btn_primary`
-for dialog actions, and the shared chip/segment primitives for triggers and
-toggles. This applies to panels and toolbars as well as floating surfaces.
-Buttons have rounded corners, normal-case labels and subtle hover fills.
-Never recreate the removed square, bordered, 9px uppercase button style or
-copy controls from the obsolete web frontend. Keep styling in the shared UI
-primitives so fixes reach every caller.
+The current style is the rounded, simple, glass look. Comet
+(https://github.com/zeronsh/comet) is the reference. `luma_ui::glass` holds
+the shared glass colors and surfaces. Use `luma_ui::button` for compact
+actions, `luma_ui::float::btn` / `btn_primary` for dialog actions, and the
+shared chip/segment primitives for triggers and toggles. This applies to
+panels and toolbars as well as floating surfaces. Controls have rounded
+corners, normal-case labels and subtle hover fills. Do not make square,
+bordered, 9px uppercase or silkscreen-style controls. Keep styling in the
+shared UI primitives so fixes reach every caller.
 
 Use native GPUI confirmation dialogs for destructive actions.
 
@@ -70,7 +69,7 @@ Always use Nucleo icons for new or replaced icons. The local bundle lives at `~/
 
 ## Releases
 
-The obsolete Tauri webview release workflow has been removed. Native GPUI packaging must be configured before publishing a new release.
+There is no release workflow. Configure native GPUI packaging before you publish a release.
 
 ## Commit & Pull Request Guidelines
 
@@ -109,6 +108,6 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 ## Documentation
 
 - [User Guide](https://luma.show/docs/user-guide/why-luma) — Why Luma exists, venues, groups & tags, patterns, annotations, performing
-- [Node Reference](https://luma.show/docs/node-reference) — Complete reference for all pattern graph node types
-- [Architecture](https://luma.show/docs/architecture/overview) — Signal system, node graph engine, compositor, DMX pipeline, selection system
+- [Node Reference](https://luma.show/docs/node-reference) — Pattern graph nodes, one generated page per category: audio, color, effects, masks, math, output, space, time and events, recipes
+- [Architecture](https://luma.show/docs/architecture/overview) — Node graph engine, compositor, DMX pipeline, fixture system, selection system, database, import pipeline, design decisions
 - [Glossary](https://luma.show/docs/glossary) — Canonical terms used throughout the codebase
