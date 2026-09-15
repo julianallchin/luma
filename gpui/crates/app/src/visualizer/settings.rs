@@ -101,24 +101,11 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     {
         content = content.child(float::error_row(error.clone()));
     }
-    let camera = div()
+    let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, state.settings_open)
         .id("visualizer-settings")
         .relative()
-        .size(px(28.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(8.))
-        .cursor_pointer()
-        .bg(glass::wash(0.10 * openness))
-        .hover(|s| s.bg(glass::wash(0.12)))
-        .child(
-            gpui::svg()
-                .path("nucleo/camera.svg")
-                .size(px(18.))
-                .text_color(ladder::foreground_alpha(0.8)),
-        )
+        // The open wash follows the popup's own motion.
+        .bg(glass::wash(glass::WASH_REST * openness))
         .child(
             canvas(
                 move |bounds, _, _| measured_camera.set(bounds),
@@ -452,7 +439,12 @@ impl Luma {
     }
 
     /// A view scrub: applied to the stage now, persisted where it is durable.
-    pub(super) fn set_view_value(&mut self, control: ViewValue, value: f32, cx: &mut Context<Self>) {
+    pub(super) fn set_view_value(
+        &mut self,
+        control: ViewValue,
+        value: f32,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
