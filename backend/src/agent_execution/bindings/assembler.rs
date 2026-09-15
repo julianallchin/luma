@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::agent_execution::artifacts::{ArtifactDescriptor, ArtifactEncoding};
 use crate::agent_execution::bindings::manifest::{
     AgentKind, AnalysisScope, ArtifactId, AxisSpec, BindingManifest, BindingRevision, BindingValue,
-    Coordinates, Provenance, TensorRef, SCHEMA_VERSION,
+    Coordinates, TensorRef, SCHEMA_VERSION,
 };
 use crate::agent_execution::error::{err, Result};
 
@@ -96,23 +96,6 @@ impl BindingBuilder {
     /// Mark a branch as existing-but-unavailable. Distinct from empty (§9.7).
     pub fn unavailable(&mut self, path: &str, reason: impl Into<String>) -> Result<&mut Self> {
         self.set(path, BindingValue::unavailable(reason))
-    }
-
-    /// As `unavailable`, keeping the source's provenance so the agent can see
-    /// which processor failed.
-    pub fn unavailable_with_provenance(
-        &mut self,
-        path: &str,
-        reason: impl Into<String>,
-        provenance: Provenance,
-    ) -> Result<&mut Self> {
-        self.set(
-            path,
-            BindingValue::Unavailable {
-                reason: reason.into(),
-                provenance: Some(provenance),
-            },
-        )
     }
 
     fn set(&mut self, path: &str, value: BindingValue) -> Result<&mut Self> {
@@ -310,6 +293,7 @@ fn validate_tensor(
 mod tests {
     use super::*;
     use crate::agent_execution::artifacts::ArtifactKind;
+    use crate::agent_execution::bindings::manifest::Provenance;
 
     fn artifact(id: &str, encoding: ArtifactEncoding, byte_len: u64) -> ArtifactDescriptor {
         ArtifactDescriptor {

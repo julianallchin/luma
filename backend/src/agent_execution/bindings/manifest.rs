@@ -637,10 +637,6 @@ impl BindingValue {
         }
     }
 
-    pub fn is_record(&self) -> bool {
-        matches!(self, BindingValue::Record(_))
-    }
-
     pub fn as_record_mut(&mut self) -> Option<&mut BTreeMap<String, BindingValue>> {
         match self {
             BindingValue::Record(m) => Some(m),
@@ -817,10 +813,6 @@ impl BindingManifest {
 
     pub fn to_json(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
-    }
-
-    pub fn to_json_pretty(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
     }
 
     pub fn from_json(s: &str) -> Result<Self> {

@@ -69,34 +69,6 @@ macro_rules! admitted_venue {
     };
 }
 
-/// Return the venue_id of the newest score for a track that has at least one
-/// clip, if any. Used by previews that only receive a track_id.
-pub async fn get_accessible_venue_for_track(
-    pool: &SqlitePool,
-    track_id: &str,
-) -> Result<Option<String>, String> {
-    // Aliased `score` so the tie-break below is the listings' `newest_first!`
-    // and not a second opinion about which score is the newest.
-    let row: Option<(String,)> = sqlx::query_as(concat!(
-        "SELECT score.venue_id
-         FROM scores score
-         JOIN venues venue ON venue.id = score.venue_id
-         CROSS JOIN auth_write_admission admission
-         WHERE score.track_id = ?
-           AND EXISTS(SELECT 1 FROM clips WHERE clips.score_id = score.id)
-           AND ",
-        admitted_venue!(),
-        " ",
-        newest_first!(),
-        " LIMIT 1"
-    ))
-    .bind(track_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to resolve venue for track: {}", e))?;
-    Ok(row.map(|r| r.0))
-}
-
 /// The provenance columns every score listing carries: when the score was last
 /// written, and what its agent threads have cost.
 ///

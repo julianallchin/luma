@@ -94,7 +94,7 @@ pub struct TrackBeats {
     pub updated_at: String,
 }
 
-/// One parsed entry of [`TrackRoots::sections_json`]: a time span with the
+/// One parsed entry of `track_roots.sections_json`: a time span with the
 /// detected harmonic root.
 ///
 /// The stored JSON is `{"start":2.716,"end":4.318,"root":9,"label":"A:(1)"}`.
@@ -107,27 +107,6 @@ pub struct ChordSection {
     pub end_s: f32,
     pub root_pitch_class: Option<u8>,
     pub label: Option<String>,
-}
-
-/// Root/section analysis data for a track
-#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackRoots {
-    #[sqlx(rename = "track_id")]
-    pub track_id: String,
-    pub uid: Option<String>,
-    #[sqlx(rename = "sections_json")]
-    pub sections_json: String,
-    /// Local file path to logits data
-    #[sqlx(rename = "logits_path")]
-    pub logits_path: Option<String>,
-    /// Cloud storage path for compressed logits
-    #[sqlx(rename = "logits_storage_path")]
-    pub logits_storage_path: Option<String>,
-    #[sqlx(rename = "created_at")]
-    pub created_at: String,
-    #[sqlx(rename = "updated_at")]
-    pub updated_at: String,
 }
 
 /// Stem audio file for a track

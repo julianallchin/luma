@@ -61,16 +61,6 @@ pub const TABLES: &[&str] = &[
     "venue_constraints",
 ];
 
-/// [`graph_committed`], if `table` is one of [`TABLES`].
-///
-/// A pulled truss moves the rig exactly as a local drag does, and the derived
-/// group tree is read out of these rows either way.
-pub fn graph_table_committed(table: &str) {
-    if TABLES.contains(&table) {
-        graph_committed();
-    }
-}
-
 // -----------------------------------------------------------------------------
 // Reads
 // -----------------------------------------------------------------------------
