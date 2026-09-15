@@ -1,8 +1,6 @@
 //! Where a fixture's light comes from, and where it points.
 //!
-//! One answer to two questions that used to have three drifting answers
-//! (`fixtures::layout::head_world_position` in millimetres, the renderer's
-//! `pixel_positions` in three.js space, and a partial `layout_of` beside it):
+//! One answer to two questions:
 //!
 //! - [`rig_position`] — the **static** point a fixture cell occupies in the rig.
 //!   This is what pattern space, spatial selection and the eval engine mean by

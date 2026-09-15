@@ -34,9 +34,7 @@
 //! highest number any label in the venue already claims for that term. It lives
 //! here rather than in the derivation because a name is minted when the fixture
 //! is made: what a light is called is a fact about the row, not something a
-//! solve recomputes. The frontend held a copy of this rule, spelled
-//! `<model> (<n>)` — drifted, as duplicated rules do — and it has been
-//! deleted, as has the derivation's.
+//! solve recomputes.
 
 use std::collections::BTreeMap;
 
@@ -226,9 +224,8 @@ mod tests {
         assert_eq!(names, ["Aura 1", "Rogue R2 Spot 1", "Aura 2", "Aura 3"]);
     }
 
-    /// A venue with four movers and one par numbers the next par 2, not 6 —
-    /// the property the frontend copy of this rule got right and the one thing
-    /// a shared counter must not lose.
+    /// A venue with four movers and one par numbers the next par 2, not 6: the
+    /// count is per model.
     #[test]
     fn seeding_continues_the_venues_own_count() {
         let mut numbering =

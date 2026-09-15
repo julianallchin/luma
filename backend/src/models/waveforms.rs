@@ -27,8 +27,7 @@ pub struct BandEnvelopes {
 /// envelope of that track is compressed against them. They are stored beside
 /// the envelopes because a visible range does not contain the whole-track
 /// statistic it has to be measured against — without them a range could only
-/// normalise against itself, which is a picture in different units and the
-/// reason a deep zoom used to change what the waveform looked like.
+/// normalise against itself, which would draw a deep zoom in different units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BandGains {
     pub low: f32,

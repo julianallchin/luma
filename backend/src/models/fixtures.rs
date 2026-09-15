@@ -390,8 +390,7 @@ pub struct PatchedFixture {
 ///
 /// Orientation is geometry and geometry has one implementation
 /// (`fixture-kinematics`), so this is how a caller *asks* for a fixture's facing
-/// rather than deriving it from `rotX/rotY/rotZ`. The frontend used to derive
-/// it, with the opposite yaw sign and a rest axis no renderer agreed with.
+/// rather than deriving it from `rotX/rotY/rotZ`.
 ///
 /// Not a column on [`PatchedFixture`]: that struct is a row, and a derived value
 /// stored beside the thing it is derived from is a value that can be stale.

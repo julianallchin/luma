@@ -347,9 +347,8 @@ pub async fn set_session_item(
 /// transition, not a cache delete.
 ///
 /// SMELL: unlike [`set_session_item`]'s identity-switch branch, this path does
-/// not reset host audio / render / devices / Python. It relies on
-/// [`wipe_database`] having run first — the frontend store calls that, then
-/// `signOut()`, which drives this. The asymmetry is load-bearing only by
+/// not reset host audio / render / devices / Python. It relies on the caller
+/// running [`wipe_database`] first. The asymmetry is load-bearing only by
 /// convention.
 pub async fn remove_session_item(services: &AppServices, key: String) -> Result<(), CommandError> {
     let state = &services.state_db;
@@ -664,11 +663,8 @@ mod tests {
 
     /// The admission gate is who this device may write as.
     ///
-    /// It used to be more than that: a trigger on every synced table refused a
-    /// row whose `uid` was not the admitted principal. That second copy of the
-    /// rule is gone — a download writes those tables directly and the triggers
-    /// refused that too (`migrations/20260914000000_local_write_guards.sql`).
-    /// What is left is the gate itself, which the commands read through
+    /// No local trigger checks a synced row's `uid`, because a download writes
+    /// those tables directly. The checks are the gate itself, which the commands read through
     /// `AppServices::require_session`, and Postgres row-level security, which
     /// is the authority a second device cannot talk its way past —
     /// `experiments/powersync/run.py` is where that is checked.

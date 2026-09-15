@@ -239,9 +239,7 @@ pub async fn migrate(
     }
     for fixture in &fixtures {
         // `catalog_ref` names a node's *geometry* — a mesh for a piece, a
-        // bundle path for a light. It used to hold the patch-row id, which the
-        // node id already is, so a fixture named nothing and hung by its own
-        // origin.
+        // bundle path for a light. The patch-row id is already the node id.
         local::venue_graph::insert_node_with_id(
             access,
             &fixture.id,

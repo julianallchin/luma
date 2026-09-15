@@ -11,8 +11,8 @@
 //! an agent's offscreen frame describe the same room the same way rather than
 //! twice.
 //!
-//! The parent chain is no longer flattened here, or anywhere else in this
-//! crate: [`crate::venue_graph`] solves the venue and this module reads poses
+//! The parent chain is not flattened here, or anywhere else in this crate:
+//! [`crate::venue_graph`] solves the venue and this module reads poses
 //! off the result. `gpui/crates/app/src/visualizer.rs` shares
 //! [`VenueGeometry::scene`]'s inputs through the same path, so there is one
 //! answer to "where is the booth" rather than two.
@@ -45,13 +45,9 @@ const HAZE_RESOLUTION: f32 = 1.0;
 
 /// Render settings one offscreen frame of `environment` uses.
 ///
-/// The room is lit by the venue's own environment and by nothing else. There
-/// used to be an "editor work light" here — a lit preset switched on because an
-/// offscreen frame is read by someone who was not in the room and a dark stage
-/// hides everything the score does not light. That reasoning was right and the
-/// mechanism was a second lighting system: the same picture now comes out of
-/// the *default* environment, indoor with the house at full, which is what
-/// every venue has unless someone turned it down on purpose.
+/// The room is lit by the venue's own environment and by nothing else. The
+/// *default* environment is indoor with the house at full, so an offscreen
+/// frame shows the room unless someone turned the house down on purpose.
 fn offscreen_render(environment: VenueEnvironment, haze: VenueHaze) -> RenderSettings {
     RenderSettings::room(environment, haze, FOV_Y_DEG, HAZE_RESOLUTION)
 }
@@ -242,7 +238,7 @@ impl VenueGeometry {
 /// [`scene_desc::Scene::fixtures`]), an array anchor, a node with no geometry.
 /// Which of those it is, is [`luma_scene::venue::NodePose::is_set_piece`]'s
 /// answer, carried across the boundary as [`ResolvedNode::set_piece`] so this
-/// path and the agent binding and the React store cannot disagree.
+/// path and the agent binding cannot disagree.
 ///
 /// Takes the wire projection rather than a [`luma_scene::venue::NodePose`]
 /// because the desktop viewport only ever sees a venue from the far side of

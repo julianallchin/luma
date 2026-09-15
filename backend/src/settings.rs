@@ -38,8 +38,8 @@ pub const DEFAULT_AGENT_PROVIDER: &str = crate::agent::model::Provider::DEFAULT.
 /// The track agent's model when nothing has been chosen.
 pub const DEFAULT_AGENT_MODEL: &str = crate::agent::model::DEFAULT_MODEL;
 
-/// Wire shape of `get_settings`. Deliberately **not** `rename_all` —
-/// the frontend reads these keys in `snake_case`.
+/// Wire shape of `get_settings`. Deliberately **not** `rename_all`: the keys
+/// are `snake_case` on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub audio_output_enabled: bool,

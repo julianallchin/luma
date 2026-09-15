@@ -22,9 +22,8 @@ use crate::agent::skills;
 
 /// Description of the fetch itself. The menu lives in the system prompt.
 ///
-/// Public, and a file rather than a literal, for the reason
-/// `PYTHON_TOOL_DESCRIPTION` is: the TypeScript loop imports this same file
-/// with `?raw`, and a second wording would be a second tool.
+/// Kept in a file, like `PYTHON_TOOL_DESCRIPTION`, so the wording has one
+/// source.
 pub const SKILL_TOOL_DESCRIPTION: &str = include_str!("../prompts/skill-tool.md");
 
 pub struct SkillTool;

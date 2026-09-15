@@ -2,7 +2,7 @@
 //!
 //! One [`WorkerHandle`] owns one live CPython kernel: its pipes, its reader
 //! threads, its process group, and the interruption ladder. It knows nothing
-//! about threads, tracks, Tauri or SQLite — a workspace directory, an
+//! about threads, tracks or SQLite — a workspace directory, an
 //! interpreter, a script and a launcher is the whole world.
 //!
 //! ## Why this is synchronous

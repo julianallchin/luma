@@ -2,9 +2,8 @@
 //! schema of each one.
 //!
 //! Both halves are fully backend-loadable (patterns + implementations live in
-//! `luma.db`), so they are published in Rust rather than shipped over the bridge
-//! from the frontend. Only the *unsaved* graph-editor buffer is frontend-owned;
-//! see `graph.rs`.
+//! `luma.db`), so they are published in Rust. Only the *unsaved* graph-editor
+//! buffer comes from the host; see `graph.rs`.
 
 use std::collections::BTreeMap;
 

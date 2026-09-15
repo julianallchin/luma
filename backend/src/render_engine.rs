@@ -192,7 +192,7 @@ pub(crate) struct RenderEngineInner {
     active_scene: Option<Scene>,
     /// Per-deck scenes for perform mode (the track's full composite per deck).
     perform_layers: HashMap<u8, Scene>,
-    /// Per-deck time + volume from frontend each frame
+    /// Per-deck time + volume, set by the host each frame
     perform_deck_states: Vec<PerformDeckInput>,
     /// Fixture identify blink (highest priority)
     identify: Option<IdentifyState>,

@@ -1,9 +1,8 @@
 //! The model seam: one trait, several transports, one model table.
 //!
 //! Provider and model are separate axes. "Kimi K3 Fast" is a *model id routed
-//! over OpenRouter*, not a third implementation — conflating the two is what
-//! produced four drifting model-id lists in the TypeScript stack, so [`MODELS`]
-//! is the single table every caller reads (the settings picker, the graph
+//! over OpenRouter*, not a third implementation. [`MODELS`] is the single
+//! table every caller reads (the settings picker, the graph
 //! agent, the venue expert, a subagent's `model` override).
 
 pub mod anthropic;
@@ -26,9 +25,8 @@ pub trait ModelClient: Send + Sync + 'static {
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>>;
 }
 
-/// A **delta** vocabulary, deliberately unlike the snapshot-and-diff shape the
-/// TypeScript stack inherited: the streaming renderer has to know which
-/// characters are new, and a snapshot cannot say.
+/// A **delta** vocabulary, not snapshots: the streaming renderer has to know
+/// which characters are new, and a snapshot cannot say.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ModelEvent {
@@ -326,9 +324,8 @@ pub struct ModelSpec {
     pub gateway: Option<&'static str>,
     pub default_reasoning: ReasoningLevel,
     /// Total prompt tokens the model will accept. The denominator of every
-    /// "how full is this conversation" readout, and the reason that question
-    /// has one answer: a second table of window sizes beside this one is how
-    /// the TypeScript stack ended up with four drifting model-id lists.
+    /// "how full is this conversation" readout, kept here so that question
+    /// has one answer.
     pub context_window: u32,
     /// Whether this model honours `ttl: "1h"` on a cache breakpoint. False for
     /// every model that caches *implicitly* — it is not a capability they lack
@@ -509,7 +506,7 @@ impl Eq for ModelId {}
 
 impl ModelId {
     /// Look a model up by its stable Luma key, or by any provider wire id it
-    /// carries — settings written by the TypeScript stack stored wire ids.
+    /// carries — settings written by earlier builds stored wire ids.
     /// A registered gateway model matches on any provider; use
     /// [`ModelId::resolve`] when the provider is known.
     #[must_use]
@@ -613,8 +610,8 @@ impl fmt::Display for ModelId {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ModelError {
-    /// No key for the provider that was actually selected — which the message
-    /// names, unlike the TypeScript stack's fixed "OpenRouter" text.
+    /// No key for the provider that was actually selected, which the message
+    /// names.
     #[error("no API key for {0}: set {1} or store it in settings")]
     NotConfigured(&'static str, &'static str),
     #[error("unknown model '{0}'")]

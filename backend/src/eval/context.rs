@@ -3,8 +3,7 @@
 //!
 //! Assembles a [`crate::eval::ResidentContext`] plus the ordered `primitive_ids`
 //! the pattern covers. This is the single way the app (and the golden harness)
-//! turns a `(track, venue, pattern-graph)` into eval inputs — it replaces the
-//! ad-hoc assembly that used to live in `bin/run_goldens.rs`.
+//! turns a `(track, venue, pattern-graph)` into eval inputs.
 //!
 //! Two entry points:
 //!   - [`resolve_primitive_ids`] — the t-invariant selection pre-pass: resolve the
@@ -398,8 +397,8 @@ async fn load_needed_stems(
                 out.insert(name, audio);
             }
             // Not fatal: a graph that splits stems must still evaluate (the
-            // missing stem reads as silence). Previously silent — log it, since
-            // "my stem pattern does nothing" had no diagnostic at all.
+            // missing stem reads as silence). Log it so a silent stem pattern
+            // has a diagnostic.
             None => log::warn!(
                 "[ctx] stem '{name}' unavailable for track {track_id} at {} — \
                  evaluating as silence",

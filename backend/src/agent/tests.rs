@@ -722,8 +722,7 @@ async fn steering_mid_turn_persists_every_assistant_row() {
         .map(|message| message.id.clone())
         .collect();
     assert_eq!(assistants.len(), 2, "steering must open a second row");
-    // The regression this rewrite exists for: the TypeScript loop prepared
-    // once per prompt, leaving the second row unprepared.
+    // Every assistant row is prepared, not only the first one of a prompt.
 }
 
 #[tokio::test]

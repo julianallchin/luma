@@ -9,9 +9,8 @@ use std::collections::HashMap;
 /// so they're treated as the same value for cascade decisions.
 const HEADS_AGREE_TOLERANCE: f32 = 1.0 / 256.0;
 
-/// Square-wave gate frequency: `hz = strobe * STROBE_HZ_MAX`. Matches the visualizer
-/// (`static-fixture.tsx:341`) so on-screen and physical strobe stay phase-coherent
-/// for fixtures rendered via the dimmer/color pulse fallback.
+/// Square-wave gate frequency: `hz = strobe * STROBE_HZ_MAX`. The visualizer uses
+/// the same maximum so on-screen and physical strobe stay phase-coherent.
 const STROBE_HZ_MAX: f64 = 20.0;
 
 /// Cascade rung chosen for the fixture this frame. The cascade prefers, in order:

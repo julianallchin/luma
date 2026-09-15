@@ -1,7 +1,7 @@
 //! Durable data shared by the native desktop and backend tools.
 //!
-//! Keep the application identifier and platform paths stable across frontend
-//! changes so existing libraries, caches, and authored history remain available.
+//! Keep the application identifier and platform paths stable so existing
+//! libraries, caches, and authored history remain available.
 
 use std::path::{Path, PathBuf};
 

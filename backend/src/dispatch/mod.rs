@@ -32,7 +32,7 @@ macro_rules! commands {
     ($( $domain:ident :: $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty );* $(;)?) => {
         /// Run a command by its wire name against `services`.
         ///
-        /// `args` is the same JSON object the frontend passes to `invoke`;
+        /// `args` is a JSON object of named arguments;
         /// arguments are accepted in either their `camelCase` wire spelling or
         /// their `snake_case` Rust spelling.
         ///

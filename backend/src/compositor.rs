@@ -3,8 +3,7 @@
 //! Builds a [`Scene`] (one [`CompiledAnnotation`] per score row) for a
 //! `(track, venue)` pair and installs it on the render engine. The Scene IS the
 //! reusable compiled form — every annotation's pattern is lowered to an eval
-//! [`Plan`] once, then `Scene::render` evaluates per-frame (cheap, seek-safe), so
-//! the legacy precomputed-`LayerTimeSeries` + composite-cache machinery is gone.
+//! [`Plan`] once, then `Scene::render` evaluates per-frame (cheap, seek-safe).
 
 use std::path::Path;
 

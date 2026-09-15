@@ -1,5 +1,5 @@
 /// Subprocess bridge: reads Rekordbox master.db and outputs JSON to stdout.
-/// Called by the Luma Tauri app since rbox's libsqlite3-sys conflicts with sqlx.
+/// Luma runs it as a subprocess because rbox's libsqlite3-sys conflicts with sqlx.
 ///
 /// Usage:
 ///   rekordbox_read library-info

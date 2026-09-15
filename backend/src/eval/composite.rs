@@ -6,13 +6,10 @@
 //! compositing is a fold over independent per-plan [`eval`](super::eval) results
 //! over the canonical graph outputs.
 //!
-//! The blend math is ported verbatim from the legacy `compositor.rs` /
-//! `engine::composite_layer_frame` so the look is preserved bit-for-bit through
-//! the engine swap. The one structural change: legacy carried a per-channel
-//! `Option<Series>` "set mask" (a layer that only drives dimmer leaves color
-//! untouched so the base shows through). Eval always emits a *full*
-//! [`UniverseState`], so the set mask comes from the plan's [`OutputBinding`]
-//! instead — only capabilities the plan actually binds get blended onto the base.
+//! A layer that only drives dimmer leaves color untouched so the base shows
+//! through. Eval always emits a *full* [`UniverseState`], so that set mask comes
+//! from the plan's [`OutputBinding`]: only capabilities the plan actually binds
+//! get blended onto the base.
 
 use crate::eval::{BlendMode, OutputBinding};
 use crate::models::universe::{PrimitiveState, UniverseState};

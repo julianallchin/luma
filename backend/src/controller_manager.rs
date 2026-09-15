@@ -332,7 +332,7 @@ impl ControllerManager {
 
     /// Get connection status, with dead-connection detection and auto-reconnect.
     ///
-    /// Called on every frontend poll (≈2s). If the preferred port has disappeared
+    /// Meant to be polled every ~2 s. If the preferred port has disappeared
     /// from the port list the dead connection is dropped. When it reappears the
     /// manager reconnects automatically.
     pub fn status(&self) -> crate::models::midi::ControllerStatus {

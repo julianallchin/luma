@@ -32,18 +32,17 @@ pub struct ResidentContext {
     /// Resident decoded audio for audio ops.
     pub audio: Option<ResidentAudio>,
     /// Per-stem decoded audio (key = `drums|bass|vocals|other`), same timeline as
-    /// `audio`. Consumed by `StemSplit`; populated by the compiler from the stem cache.
+    /// `audio`. Populated by the compiler from the stem cache.
     pub stems: std::collections::HashMap<String, ResidentAudio>,
     /// Drum-onset times per class (`kick|snare|hat|cymbal`), from the track's
     /// detected onsets, in absolute track seconds.
     pub drum_onsets: std::collections::HashMap<String, Vec<f32>>,
     /// Detected chord sections `(start, end, root_pitch_class)` over absolute time
-    /// (`root` is `0..11`, `None` = no chord). Consumed by `harmony_analysis`,
-    /// which emits a one-hot 12-channel chroma signal per frame.
+    /// (`root` is `0..11`, `None` = no chord).
     pub chord_sections: Vec<(f32, f32, Option<u8>)>,
-    /// The annotation's absolute `[start, end]` time span. Span-relative temporal
-    /// ops (`ramp_between`) compute progress as
-    /// `(t - start)/(end - start)` using the shared absolute clock.
+    /// The annotation's absolute `[start, end]` time span. Span-relative ops
+    /// compute progress as `(t - start)/(end - start)` using the shared absolute
+    /// clock.
     pub span: (f32, f32),
 }
 

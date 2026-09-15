@@ -748,7 +748,7 @@ mod tests {
     }
 
     /// The patch page's add takes the venue's next `<model> <n>` from the
-    /// backend — the frontend no longer has a naming rule to disagree with.
+    /// backend.
     #[tokio::test]
     async fn the_backend_names_a_patch_page_add() {
         let (_dir, services, venue) = room().await;

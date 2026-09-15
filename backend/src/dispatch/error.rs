@@ -126,7 +126,7 @@ impl From<&str> for CommandError {
 }
 
 /// The one lowering to the wire. Keeping it single is what makes retyping a
-/// handler invisible to the frontend.
+/// handler invisible to callers.
 impl From<CommandError> for String {
     fn from(error: CommandError) -> Self {
         error.to_string()
