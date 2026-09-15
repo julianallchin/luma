@@ -103,34 +103,39 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
    Artifact::DrumOnsets,  // wire name "drum_onsets"
    ```
 
-2. **Add the migration.** `migrations/20260502000000_track_drum_onsets.sql`
-   defines a `track_drum_onsets` table mirroring `track_roots`'s structure:
-   `track_id TEXT PRIMARY KEY`, JSON blob (`onsets_json`), `processor_version`,
-   `origin`, `synced_at`, the standard `updated_at` trigger, and the
-   `sync_delete_track_drum_onsets` trigger.
+2. **Add the migration.** Add a new file in `migrations/`. A new artifact table
+   follows the row model. Use `track_drum_onsets` as the model:
+   `track_id TEXT PRIMARY KEY`, `uid`, the JSON column (`onsets_json`),
+   `processor_version`, `created_at`, `updated_at`, the `updated_at` trigger,
+   and a generated `id` column (`GENERATED ALWAYS AS (track_id) VIRTUAL`) with a
+   unique index. Do not add `synced_at`, `origin`, `version` or sync triggers.
+   The sync and `changes` triggers are TEMP triggers that
+   `backend/src/sync/triggers.rs` generates from `backend/src/sync/schema.rs`.
+   If the table syncs, add it to `schema.rs`. Also add a Supabase migration
+   with the table, its row-level security policies and the `powersync`
+   publication. A local-only table needs neither.
 
-3. **Add the python worker.** `python/n2n_worker.py` takes the full-mix
-   audio path on argv plus `--ckpt <weights.pt>` and `--mert <cache.npy>`,
+3. **Add the python worker.** `python/n2n_worker.py` takes the drum stem
+   (`drums.ogg`) path plus `--ckpt <weights.pt>` and `--mert <cache.npy>`,
    and emits
    `{"onsets": {"kick": [t, ...], "snare": [...], "hat": [...], "cymbal": [...]}}`
-   on stdout (4-class native to v6+ n2n checkpoints). The vendored model
-   package + bundled weights live next to it in `python/n2n/`; a stripped
-   EMA-only checkpoint (~190 MB) ships at `python/n2n/weights.pt`.
+   on stdout. The vendored model package lives next to it in `python/n2n/`,
+   and the checkpoint (~190 MB, Git LFS) is `python/n2n/weights.pt`.
 
 4. **Wire the trait impl.** `workers/n2n.rs`:
    ```rust
    impl Preprocessor for N2NPreprocessor {
        fn name(&self) -> &'static str { "n2n" }
-       fn version(&self) -> u32 { 3 }
-       fn inputs(&self) -> &'static [Artifact] { &[Artifact::Mert] }
+       fn version(&self) -> u32 { 10 }
+       fn inputs(&self) -> &'static [Artifact] { &[Artifact::Stems, Artifact::Mert] }
        fn output(&self) -> Artifact { Artifact::DrumOnsets }
        fn artifact_table(&self) -> &'static str { "track_drum_onsets" }
        async fn run(&self, ctx, track_id) -> Result<(), String> { ... }
    }
    ```
-   The `run` body reads the cached MERT path from `track_mert`, shells out
-   to the worker with the full-mix audio + the cache path via
-   `spawn_blocking`, and `upsert_track_drum_onsets`.
+   The `run` body reads the drum MERT cache path from `track_mert`, runs the
+   worker on the drum stem and that cache via `spawn_blocking`, and writes
+   `track_drum_onsets`.
 
 5. **Register.** One line in `registry.rs`:
    ```rust
@@ -146,23 +151,19 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
 ## Shared MERT cache
 
 The bar classifier and the n2n drum-onset preprocessor both consume MERT-95M
-layer-7 features. They share a per-track cache (`track_mert.file_path` →
-fp16 .npy on disk under `<app_config>/tracks/mert/<track_hash>.npy`) so MERT
-extraction runs once per track, not twice. The cache is owned by the `mert`
-preprocessor (`workers/mert.rs`, `python/mert_worker.py`); both consumers
-slice their inputs out of the global stream:
+layer-7 features. The `mert` preprocessor (`workers/mert.rs`,
+`python/mert_worker.py`) computes two fp16 `.npy` caches per track in one
+Python process: the full mix (`track_mert.file_path`) and the demucs drum stem
+(`track_mert.drum_path`). The model loads once per track.
 
-- `classifier`: per-bar slice from `start_s × 75 → end_s × 75`.
-- `n2n`: full-song stream piped into the sliding-window EDM sampler.
+- `classifier`: slices the full-mix cache per bar, from `start_s × 75` to
+  `end_s × 75`.
+- `n2n`: runs sliding-window inference over the drum-stem cache. Its
+  checkpoints were trained on drum stems, so both of its inputs come from
+  `drums.ogg`.
 
-n2n's mel input also moves to the full mix so its two conditioning streams
-describe the same audio. ⚠ The bundled v10 checkpoint was trained on drum
-stems — running on full-mix audio is a distribution shift; verify event
-quality on representative tracks when bumping the checkpoint.
-
-That's it — the scheduler picks up the new node, reconcile-on-startup queues
-every existing track for it, and progress events surface in the UI without
-any frontend changes.
+The scheduler picks up the new node. Reconcile on startup queues every existing
+track for it. Progress events reach the UI without UI changes.
 
 ## Shared bar axis
 
