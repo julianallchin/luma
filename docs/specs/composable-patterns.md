@@ -1,6 +1,7 @@
 # Composable patterns
 
-Status: implementation in progress on `codex/composable-patterns`.
+Status: built. Code: `backend/crates/patterns`, `backend/src/services/composable_patterns.rs`,
+`backend/python/luma_exec/score.py`.
 
 ## Product contract
 
@@ -13,7 +14,7 @@ in the destination model. Graph labels are optional.
 The shipped node library is fixed. A clip may start with one node exposing its
 inputs. Repeated clips share the score-local definition; Make independent copies
 its reachable local subgraphs. Built-in definitions remain shared and read-only.
-There is no account-level custom library promotion in this reset.
+There is no account-level custom library.
 
 There is one input definition: type, default, evaluation rate, and description.
 A binding is a literal, another node's output, or an enclosing graph input.
@@ -25,9 +26,10 @@ bundle; intermediate graphs remain composable nodes.
 ## Evaluation contract
 
 Evaluation is seek-safe: a frame is a pure function of graph, clip inputs,
-resolved venue cells, musical time, immutable analyzed track data, and instance seed. Runtime cell IDs are
-not authored fixture references. Score selections continue to name venue groups.
-All masks operate on independently controllable cells/heads, including bar pixels.
+resolved venue cells, musical time, immutable analyzed track data, and instance
+seed. Runtime cell IDs are not authored fixture references. Score selections
+continue to name venue groups. All masks operate on independently controllable
+cells/heads, including bar pixels.
 
 Mapping assigns each selected cell a coordinate and domain. Open mappings may
 clip or wrap; closed mappings wrap by default. Mapping owns grouping,
@@ -58,24 +60,59 @@ sampling the shared Envelope type over its temporal phase.
 
 Envelope is a reusable curve value. An envelope evaluator creates a temporal
 signal; Chase samples it over the signed position within its width. Its native
-per-clip editor offers presets and editable knots, and is not tied to a specific node. Time durations have beat units;
-spatial proportions and normalized positions have distinct types.
+per-clip editor offers presets and editable knots, and is not tied to a
+specific node. Time durations have beat units; spatial proportions and
+normalized positions have distinct types.
 
-## Persistence and editing
+Gradient is the color equivalent of Envelope: the same ordered stops may be
+sampled along clip progress or a mapped per-head coordinate. Colors use
+normalized sRGB channels, and Gradient interpolates perceptually in OKLab,
+matching the existing library and the native editor. Masks multiply color
+before output separates chromaticity and dimmer. A dimmer-only output preserves
+underlying color. Noise is a deterministic function of spatial coordinates,
+musical time and the clip seed.
 
-The version-2 score serializes local definitions and clips together into the
-single `score.luma` revision file. The existing authored-history service owns
-validation, compare-and-swap, idempotency, undo, agent workspaces and sync.
-Independent clip/node edits merge structurally. Connections, typed values,
-selections and input declarations merge atomically. Conflicting agent edits are
-reported; device sync resolves overlap in server order and validates the result.
+Track data is a read-only source, bound once during score preparation. Frequency
+energy, drum-event time and harmony are fundamental sources; their response
+curves and complete effects are ordinary graphs. Selecting an unavailable stem
+or analysis is a preparation error. Audio source and drum choices remain typed
+inputs, with the same choices in Python, graph controls and clip controls.
 
-SQLite's `scores.graph_document_json` is a local projection of that history.
-It is excluded from row sync, and changing it does not dirty score metadata.
-Supabase already transports the revision file; this format requires no new
-remote projection field. NULL identifies a score still using legacy history.
-Migration removes its old clip projection in the same transaction. Restoring
-legacy history clears the graph projection before recreating the old clip rows.
+## Persistence
+
+A score is rows. See [docs/design/sync.md](../design/sync.md).
+
+- `scores` holds the score. `clips` holds one row per clip, with `graph`
+  naming a built-in or score-local definition. `score_definitions` holds one
+  row per score-local definition.
+- `luma_patterns::Score` (version 7) is the in-memory type. Loading reads the
+  three tables into a `Score`.
+- Saving compares the candidate with the rows and writes only the rows that
+  changed. There is no revision token. A stale candidate overwrites the rows it
+  touches.
+- Every insert, update and delete on a synced table adds one row to the local
+  `changes` log.
+- PowerSync replicates the rows. Concurrent edits to one row merge per column;
+  the last write wins.
+- Undo in the editors stays in memory.
+- A subagent edits a `drafts` row, not the live score. Merge writes the
+  changed clips and definitions onto the live rows.
+
+## Python
+
+Discovery uses `luma.track.nodes(search)` and `definition(id)`. Editing uses
+`edit.graph()`, `graph.node(definition_id, **inputs)`, output references,
+exposed inputs and explicit graph outputs. `edit.graph(node="chase")` is the
+one-node shortcut. `edit.add_clip(graph, beats=(32, 48), inputs={"width": .4})`
+places it; `edit.make_independent(clip)` detaches local dependencies. A
+subagent uses the same API on its draft.
+
+Saving validates fixed input relationships without venue geometry. Host checks
+also prepare the actual selected domain. Resource bounds in
+`backend/crates/patterns/src/graph.rs` reject excessive nesting and expansion
+before recursive execution: definition depth 24, 128 nodes per graph, 8192
+expanded nodes, execution depth 192. A dynamic expression may still fail at
+another sampled time.
 
 ## Acceptance path
 
@@ -84,44 +121,11 @@ legacy history clears the graph projection before recreating the old clip rows.
 - Combine Chase Mask and Dissolve Mask within a clip and return fixture output.
 - Exercise pixel bars, angled wings, circles, outside entry, wrapping and rest.
 - Save/reopen, reuse a graph in another clip, then Make independent and edit it.
-- Use the same definitions and edits through Python and an agent workspace.
-- Migrate EBF in a working copy and compare output before adopting the reset.
+- Use the same definitions and edits through Python and a subagent draft.
 
-## Delivery state
+## Known limits
 
-See `docs/design/graph-reset.md` for the verified ledger. Native port wiring,
-node addition, exposed-input editing, layout, clip playback, new-score creation,
-perform playback and Python editing now use the score document. The remaining
-EBF effects and their saved clips still need rebuilding and migration. The old
-production editor/runtime remains only for scores awaiting manual migration;
-it is not the destination model. No React/Tauri webview interface is involved.
-
-Continuous rate automation still needs integrated phase. Per-group mapping of
-a union selection still needs explicit mapping domains. The prepared evaluator
-flattens graph calls and folds constant expressions; it does not yet fuse ops.
-
-Python discovery uses `luma.track.nodes(search)` and `definition(id)`. Editing
-uses `edit.graph()`, `graph.node(definition_id, **inputs)`, output references,
-exposed inputs and explicit graph outputs. `edit.graph(node="chase")` is the
-one-node shortcut. `edit.add_clip(graph, beats=(32, 48), inputs={"width": .4})`
-places it; `edit.make_independent(clip)` detaches local dependencies. Detached
-workspaces use this same API and only advance their own revision until merged.
-
-Saving validates fixed input relationships without venue geometry. Host checks
-also prepare the actual selected domain. Resource bounds reject excessive
-nesting and expansion before recursive execution; see the execution ledger for
-the current limits. A dynamic expression may still fail at another sampled time.
-
-Gradient is the color equivalent of Envelope: the same ordered stops may be
-sampled along clip progress or a mapped per-head coordinate. Colors use normalized
-sRGB channels, and Gradient interpolates perceptually in OKLab, matching the
-existing library and the native editor. Masks multiply color before output
-separates chromaticity and dimmer.
-A dimmer-only output preserves underlying color. Noise is a deterministic
-function of spatial coordinates, musical time and the clip seed.
-
-Track data is a read-only source, bound once during score preparation. Frequency
-energy, drum-event time and harmony are fundamental sources; their response
-curves and complete effects are ordinary graphs. Selecting an unavailable stem
-or analysis is a preparation error. Audio source and drum choices remain typed
-inputs, with the same choices in Python, graph controls and clip controls.
+- Continuous rate automation needs integrated phase.
+- Per-group mapping of a union selection needs explicit mapping domains.
+- The prepared evaluator flattens graph calls and folds constant expressions.
+  It does not fuse ops.
