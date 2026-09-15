@@ -1,15 +1,15 @@
 {
-  "title": "Node Reference",
   "pages": [
     "index",
-    "input-nodes",
-    "audio-nodes",
-    "analysis-nodes",
-    "selection-nodes",
-    "color-nodes",
-    "signal-nodes",
-    "position-nodes",
-    "output-nodes",
+    "time-and-events",
+    "audio",
+    "space",
+    "masks",
+    "color",
+    "effects",
+    "math",
+    "output",
     "recipes"
-  ]
+  ],
+  "title": "Node Reference"
 }
