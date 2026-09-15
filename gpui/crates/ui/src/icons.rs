@@ -1,4 +1,4 @@
-//! Nucleo UI outline icons, embedded once for the app and both harnesses.
+//! Nucleo UI outline icons, embedded once for the app and the agent harness.
 use gpui::{AssetSource, SharedString};
 use gpui_component::IconNamed;
 use std::borrow::Cow;
@@ -9,7 +9,6 @@ pub enum IconName {
     ArrowLeft,
     ArrowRight,
     ArrowUp,
-    BookOpen,
     Bot,
     Check,
     ChevronDown,
@@ -40,7 +39,6 @@ impl IconNamed for IconName {
             Self::ArrowLeft => "nucleo/arrow-left.svg".into(),
             Self::ArrowRight => "nucleo/arrow-right.svg".into(),
             Self::ArrowUp => "nucleo/arrow-up.svg".into(),
-            Self::BookOpen => "nucleo/book-open.svg".into(),
             Self::Bot => "nucleo/robot.svg".into(),
             Self::Check => "nucleo/check.svg".into(),
             Self::ChevronDown => "nucleo/chevron-down.svg".into(),
@@ -76,7 +74,6 @@ impl AssetSource for Assets {
             "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),
             "nucleo/thumbs-up.svg" => Some(include_bytes!("../assets/nucleo/thumbs-up.svg")),
             "nucleo/thumbs-down.svg" => Some(include_bytes!("../assets/nucleo/thumbs-down.svg")),
-            "nucleo/camera.svg" => Some(include_bytes!("../assets/nucleo/camera.svg")),
             "nucleo/arrow-down.svg" | "icons/arrow-down.svg" => {
                 Some(include_bytes!("../assets/nucleo/arrow-down.svg"))
             }
@@ -95,9 +92,6 @@ impl AssetSource for Assets {
             "nucleo/arrow-up.svg" | "icons/arrow-up.svg" => {
                 Some(include_bytes!("../assets/nucleo/arrow-up.svg"))
             }
-            "nucleo/book-open.svg" | "icons/book-open.svg" => {
-                Some(include_bytes!("../assets/nucleo/book-open.svg"))
-            }
             "nucleo/check.svg" | "icons/check.svg" => {
                 Some(include_bytes!("../assets/nucleo/check.svg"))
             }
@@ -113,7 +107,6 @@ impl AssetSource for Assets {
             "nucleo/chevron-up.svg" | "icons/chevron-up.svg" => {
                 Some(include_bytes!("../assets/nucleo/chevron-up.svg"))
             }
-            "nucleo/eye.svg" | "icons/eye.svg" => Some(include_bytes!("../assets/nucleo/eye.svg")),
             "nucleo/media-play.svg" | "icons/play.svg" => {
                 Some(include_bytes!("../assets/nucleo/media-play.svg"))
             }
@@ -163,15 +156,15 @@ impl AssetSource for Assets {
                 "nucleo/arrow-rotate-anticlockwise.svg",
                 "nucleo/arrow-rotate-clockwise.svg",
                 "nucleo/arrow-up.svg",
-                "nucleo/book-open.svg",
                 "nucleo/check.svg",
                 "nucleo/chevron-down.svg",
                 "nucleo/chevron-left.svg",
                 "nucleo/chevron-right.svg",
                 "nucleo/chevron-up.svg",
-                "nucleo/eye.svg",
+                "nucleo/expand.svg",
                 "nucleo/media-play.svg",
                 "nucleo/microchip.svg",
+                "nucleo/minimize.svg",
                 "nucleo/nodes.svg",
                 "nucleo/plus.svg",
                 "nucleo/robot.svg",
@@ -189,13 +182,4 @@ impl AssetSource for Assets {
         );
         Ok(paths)
     }
-}
-
-/// View/render settings.
-pub fn eye() -> gpui::Svg {
-    gpui::svg().data(include_bytes!("../assets/nucleo/eye.svg"))
-}
-/// Add an object.
-pub fn plus() -> gpui::Svg {
-    gpui::svg().data(include_bytes!("../assets/nucleo/plus.svg"))
 }
