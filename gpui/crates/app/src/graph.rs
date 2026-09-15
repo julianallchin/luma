@@ -1547,7 +1547,7 @@ pub fn graph(
         .child(toolbar(state, app))
         .children(interaction::catalog(state, app))
         .when_some(state.error.clone(), |el, error| {
-            el.child(luma_ui::silkscreen(error))
+            el.child(luma_ui::caption(error))
         })
         .child(match (&state.error, state.shown_graph()) {
             (Some(message), None) => luma_ui::plate(message.clone(), ladder::danger()),
@@ -1583,9 +1583,9 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .children(graph_breadcrumbs(state, app))
         .children(controls::add_button(state, app))
         .when(state.inspecting_builtin(), |el| {
-            el.child(luma_ui::silkscreen("BUILT-IN · READ ONLY".to_owned()))
+            el.child(luma_ui::caption("Built-in · read only"))
         })
-        .child(luma_ui::silkscreen(format!("{nodes} NODES")))
+        .child(luma_ui::caption(format!("{nodes} nodes")))
         .child(
             luma_ui::button(
                 if state.preview_running {
@@ -1604,9 +1604,9 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         // The resolved context, shown: implicit context that silently changes
         // what the plots mean is obscurity; a context that is never shown is
         // worse than none (§6).
-        .child(luma_ui::silkscreen(format!(
-            "TRACK {}",
-            state.context.track_name.to_uppercase()
+        .child(luma_ui::caption(format!(
+            "Track {}",
+            state.context.track_name
         )))
         .child(div().flex_1())
 }

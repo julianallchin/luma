@@ -56,7 +56,7 @@ const SCRIPT: &str = r##"
     // already in.
     nav.track("Aurora");
     until("the timeline", (s) =>
-        s.findAll({ role: "text" }).find((n) => n.label.startsWith("SCORE #")) !== undefined);
+        s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #")) !== undefined);
     // Motion is on and stretched here, so the sidebar's own opening slide is
     // still running when the rows arrive. Every later assertion compares the
     // column's box against this frame's, so it has to be taken at rest.
@@ -137,7 +137,7 @@ const SCRIPT: &str = r##"
     // Put the timeline on #2, which is the row this level exists to reach.
     app.click(rows().find((n) => n.label.startsWith("#2 ")));
     until("the timeline on #2", (s) =>
-        s.findAll({ role: "text" }).find((n) => n.label === "SCORE #2") !== undefined);
+        s.findAll({ role: "text" }).find((n) => n.label === "Score #2") !== undefined);
     app.frames(6, { waitMs: 16 });
     const scoresBounds = sidebar().bounds;
     const scores = app.screenshot({ node: sidebar() });

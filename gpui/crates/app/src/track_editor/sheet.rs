@@ -1051,7 +1051,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .px(pad)
                 .pt(pad)
                 .pb(px(12.))
-                .child(luma_ui::silkscreen(
+                .child(luma_ui::caption(
                     if state.graph_score.is_some()
                         || built
                             .pattern
@@ -1059,9 +1059,9 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                             .and_then(|id| state.patterns.iter().find(|p| p.id == id.as_ref()))
                             .is_some_and(|p| p.score_id.is_some())
                     {
-                        "PATTERN · THIS SCORE"
+                        "Pattern · this score"
                     } else {
-                        "PATTERN · LIBRARY"
+                        "Pattern · library"
                     }
                     .to_string(),
                 ))
@@ -1110,7 +1110,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
 fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     let note = |message: &str| {
         vec![div()
-            .child(luma_ui::silkscreen(message.to_string()))
+            .child(luma_ui::caption(message.to_string()))
             .opacity(ladder::DISABLED_OPACITY)
             .agent_node(Role::Text, message.to_string())
             .into_any_element()]
@@ -1160,7 +1160,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
                 rows.push(
                     div()
                         .pt(px(8.))
-                        .child(luma_ui::silkscreen(title.to_string()))
+                        .child(luma_ui::caption(title.to_string()))
                         .agent_node(Role::Text, title.to_string())
                         .into_any_element(),
                 );

@@ -238,9 +238,8 @@ pub fn rail() -> Div {
 /// A quiet word on glass — the name of a control, or (padded, as
 /// [`section_heading`]) the heading over a group of rows.
 ///
-/// One step under body text and muted with it, so it reads as chrome. The
-/// instrument tier answers this with [`crate::silkscreen`]'s 9px uppercase,
-/// which is a *panel* legend and looks stencilled onto glass.
+/// One step under body text and muted with it, so it reads as chrome.
+/// [`crate::caption`] is the same word published as a text node.
 pub fn label(text: impl Into<SharedString>) -> Div {
     div()
         .flex_none()
@@ -254,13 +253,8 @@ pub fn label(text: impl Into<SharedString>) -> Div {
 /// names. **The** labelled row of this tier — a dialog field, a popover
 /// argument and an inspector row are one shape, and there is one of it.
 ///
-/// The float tier's answer to [`crate::arg::arg_row`], which stencils a 9px
-/// uppercase silkscreen legend because it belongs to the instrument panel. A
-/// dialog is not a panel: its legends are sentence case and quiet, and a card
-/// that borrowed the panel's would read as a different application.
-///
-/// Label *over* control, for `arg::arg_row`'s reason: every control then gets
-/// the surface's full width whatever it is called.
+/// The same shape as [`crate::arg::arg_row`]: label *over* control, so every
+/// control gets the surface's full width whatever it is called.
 pub fn field_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
     div()
         .flex()

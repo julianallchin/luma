@@ -43,7 +43,7 @@ const SCRIPT: &str = r##"
     nav.trackEditor("Test Venue", "Aurora");
     const ordinal = () =>
         app.snapshot().findAll({ role: "text" })
-            .find((n) => n.label.startsWith("SCORE #"))?.label;
+            .find((n) => n.label.startsWith("Score #"))?.label;
     until("the timeline on some score", () => ordinal() !== undefined);
     const opened = ordinal();
 
@@ -123,7 +123,7 @@ fn the_row_opens_a_track_s_scores_and_the_level_switches_mints_and_pops() {
     minted_ordinals.sort_unstable();
     assert_eq!(minted_ordinals, ["#1", "#2", "#3", "#4"], "{minted:?}");
     assert_eq!(
-        out["mintedOrdinal"], "SCORE #4",
+        out["mintedOrdinal"], "Score #4",
         "the minted score is not the one on the timeline: {minted:?}"
     );
     assert_eq!(

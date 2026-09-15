@@ -3309,14 +3309,14 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
             .agent_node(Role::Button, "Add pattern"),
         )
-        .child(luma_ui::silkscreen(format!(
+        .child(luma_ui::caption(format!(
             "{} / {}",
             clock(state.transport.position),
             clock(state.transport.duration)
         )))
-        .child(luma_ui::silkscreen(format!("{} CLIPS", state.clips.len())))
+        .child(luma_ui::caption(format!("{} clips", state.clips.len())))
         .when_some(state.beats.as_deref(), |el, grid| {
-            el.child(luma_ui::silkscreen(format!("{:.1} BPM", grid.bpm)))
+            el.child(luma_ui::caption(format!("{:.1} BPM", grid.bpm)))
         })
         .when(
             state
@@ -3433,16 +3433,14 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         )
         .when_some(state.beat_validation_error.clone(), |el, message| {
             el.child(
-                div()
-                    .text_size(px(9.))
+                luma_ui::float::label(message.clone())
                     .text_color(ladder::danger())
-                    .child(message.clone())
                     .agent_node(Role::Text, message),
             )
         })
         .when(!state.selected.is_empty(), |el| {
-            el.child(luma_ui::silkscreen(format!(
-                "{} SELECTED",
+            el.child(luma_ui::caption(format!(
+                "{} selected",
                 state.selected.len()
             )))
         })
@@ -3450,28 +3448,26 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         // span it covers. It is the only text that says where an edit would
         // land.
         .when_some(state.cursor, |el, cursor| {
-            el.child(luma_ui::silkscreen(match cursor.span() {
-                Some((from, to)) => format!("CURSOR {from:.2}-{to:.2}"),
-                None => format!("CURSOR {:.2}", cursor.start),
+            el.child(luma_ui::caption(match cursor.span() {
+                Some((from, to)) => format!("Cursor {from:.2}-{to:.2}"),
+                None => format!("Cursor {:.2}", cursor.start),
             }))
         })
         .when_some(state.loop_region, |el, (from, to)| {
-            el.child(luma_ui::silkscreen(format!("LOOP {from:.2}-{to:.2}")))
+            el.child(luma_ui::caption(format!("Loop {from:.2}-{to:.2}")))
         })
-        .when(state.follow, |el| {
-            el.child(luma_ui::silkscreen("FOLLOW".to_string()))
-        })
+        .when(state.follow, |el| el.child(luma_ui::caption("Follow")))
         .child(div().flex_1())
         // Which score is on the timeline, by the handle the sidebar names it
         // by.
         .when_some(state.score.as_ref(), |el, score| {
-            el.child(luma_ui::silkscreen(format!("SCORE #{}", score.ordinal)))
+            el.child(luma_ui::caption(format!("Score #{}", score.ordinal)))
         })
         .when(state.score.is_none() && state.loaded, |el| {
-            el.child(luma_ui::silkscreen("NO SCORE".to_string()))
+            el.child(luma_ui::caption("No score"))
         })
         .when(state.writable() && (state.saving || state.dirty), |el| {
-            el.child(luma_ui::silkscreen("SAVING".to_string()))
+            el.child(luma_ui::caption("Saving"))
         })
         // A refused write, over the timeline it was refused for.
         .when_some(
@@ -3485,18 +3481,15 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .filter(|_| state.waveform.is_some()),
             |el, message| {
                 el.child(
-                    div()
-                        .text_size(px(9.))
-                        .font_weight(FontWeight::BOLD)
+                    luma_ui::float::label(message.clone())
                         .text_color(ladder::danger())
-                        .child(message.clone())
                         .agent_node(Role::Text, message),
                 )
             },
         )
         .when(
             state.score.as_ref().is_some_and(|score| score.read_only),
-            |el| el.child(luma_ui::silkscreen("READ ONLY".to_string())),
+            |el| el.child(luma_ui::caption("Read only")),
         )
 }
 

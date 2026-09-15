@@ -62,7 +62,7 @@ fn the_chat_panel_is_captured_across_one_turn() {
             nav.venue("Studio A");
             nav.step("the venue filter", "toggle", "In Venue");
             // The walk to the pattern is `open_chat`'s, whole: a pattern row is
-            // disabled until a track is open ("OPEN A TRACK TO EDIT PATTERNS"),
+            // disabled until a track is open ("Open a track to edit patterns"),
             // so a `nav.pattern` ahead of it waits forever on a dead row.
             {open}
             const idle = app.screenshot();

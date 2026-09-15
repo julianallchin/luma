@@ -88,6 +88,6 @@ pub const CONTROL_HEIGHT: f32 = 24.;
 pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
 pub use select::luma_select_item;
 pub use slider::luma_slider;
-pub use text::{plate, silkscreen, silkscreen_in};
+pub use text::{caption, plate};
 
 pub mod icons;

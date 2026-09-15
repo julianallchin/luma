@@ -930,14 +930,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         })
         // How many rows the filters admit, kept in the head because the
         // sidebar has no second bar to spare.
-        .child({
-            let count = format!("{} TRACKS", state.shown.len());
-            div()
-                .text_size(px(10.))
-                .text_color(luma_ui::glass::ink(0.35))
-                .child(count.clone())
-                .agent_node(Role::Text, count)
-        })
+        .child(luma_ui::caption(format!("{} tracks", state.shown.len())))
 }
 
 /// The search over the filters, stacked — at sidebar width they do not share
@@ -1259,8 +1252,8 @@ fn score_count(track: &TrackBrowserRow) -> Option<impl IntoElement> {
     Some(
         div()
             .flex_shrink_0()
-            .text_size(px(9.))
-            .font_weight(FontWeight::BOLD)
+            .text_size(px(11.))
+            .font_weight(FontWeight::MEDIUM)
             .text_color(luma_ui::glass::ink(0.45))
             .child(format!("{count}"))
             // Track-scoped, because a script finds nodes across the whole

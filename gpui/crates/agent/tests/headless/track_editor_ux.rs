@@ -115,7 +115,7 @@ const SCRIPT: &str = r#"
     /** Wait until every queued write has landed, or say it never did. */
     function settled() {
         for (let i = 0; i < 60; i++) {
-            if (!status().includes("SAVING")) return true;
+            if (!status().includes("Saving")) return true;
             app.frames(1, { waitMs: 40 });
         }
         throw new Error("a write never left the editor");
@@ -196,7 +196,7 @@ const SCRIPT: &str = r#"
         // Select a fixed musical span, independent of inspector/sidebar width.
         app.drag({x: origin() + 13 * ZOOM, y: lane.bounds.y + lane.bounds.height / 2}, { dx: 7 * ZOOM, dy });
         app.frames(2);
-        return { status: status(), cursor: readout("CURSOR ") };
+        return { status: status(), cursor: readout("Cursor ") };
     }
 
     const sweptOneLane = sweep(0);
@@ -306,13 +306,13 @@ const SCRIPT: &str = r#"
     const loopLane = shot().find({ role: "row", label: "Lane 2" });
     app.drag(loopLane, { dx: 200, dy: 0 });
     app.frames(2);
-    const loopCursor = readout("CURSOR ");
+    const loopCursor = readout("Cursor ");
     app.key("cmd-l");
     app.frames(2);
-    const looped = { region: readout("LOOP "), status: status() };
+    const looped = { region: readout("Loop "), status: status() };
     app.key("cmd-l");
     app.frames(2);
-    const unlooped = readout("LOOP ");
+    const unlooped = readout("Loop ");
 
     // --- editing commands --------------------------------------------------
     // Everything below is a *write*: the working copy changes and one
@@ -330,7 +330,7 @@ const SCRIPT: &str = r#"
     }
     // Read the document count, independent of inspector and shell cards.
     function total() {
-        return parseInt(status().find(label => label.endsWith(" CLIPS")), 10);
+        return parseInt(status().find(label => label.endsWith(" clips")), 10);
     }
     function reopen() {
         settled();
@@ -644,14 +644,14 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     // 0. The screen loaded and named everything.
     let opened = &out["opened"];
     assert!(
-        labels(opened, "status").contains(&"3 CLIPS".to_string()),
+        labels(opened, "status").contains(&"3 clips".to_string()),
         "the editor did not open on the seeded score: {opened:#}"
     );
 
     // 1. Press regions. A clip selects and sets a cursor; the waveform clears
     //    both and does *not* move the playhead; the ruler seeks.
     assert!(
-        labels(&out["clipPressed"], "status").contains(&"1 SELECTED".to_string()),
+        labels(&out["clipPressed"], "status").contains(&"1 selected".to_string()),
         "pressing a clip's header did not select it: {:#}",
         out["clipPressed"]
     );
@@ -663,7 +663,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     assert!(
         !labels(waveform, "status")
             .iter()
-            .any(|label| label.ends_with("SELECTED")),
+            .any(|label| label.ends_with(" selected")),
         "pressing the waveform left the selection alone; it should clear it: {waveform:#}"
     );
     assert_eq!(
@@ -685,7 +685,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     assert!(
         !labels(&out["laneZeroPressed"], "")
             .iter()
-            .any(|label| label.ends_with("SELECTED")),
+            .any(|label| label.ends_with(" selected")),
         "pressing the empty row-0 lane did not clear the selection: {:#}",
         out["laneZeroPressed"]
     );
@@ -706,12 +706,12 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     //    clip that starts before the sweep did.
     let one = &out["sweptOneLane"];
     assert!(
-        labels(one, "status").contains(&"1 SELECTED".to_string()),
+        labels(one, "status").contains(&"1 selected".to_string()),
         "a one-lane sweep should have caught Strobe alone: {one:#}"
     );
     let two = &out["sweptTwoLanes"];
     assert!(
-        labels(two, "status").contains(&"2 SELECTED".to_string()),
+        labels(two, "status").contains(&"2 selected".to_string()),
         "a two-lane sweep should have caught Strobe and Wash: {two:#}"
     );
     assert!(
@@ -812,12 +812,12 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
 
     // 10. `F` toggles following the playhead, and says so.
     assert!(
-        labels(&out, "following").contains(&"FOLLOW".to_string()),
+        labels(&out, "following").contains(&"Follow".to_string()),
         "F did not turn on follow-playhead: {:#}",
         out["following"]
     );
     assert!(
-        !labels(&out, "unfollowed").contains(&"FOLLOW".to_string()),
+        !labels(&out, "unfollowed").contains(&"Follow".to_string()),
         "F did not turn follow-playhead back off: {:#}",
         out["unfollowed"]
     );
@@ -932,7 +932,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     let cursor = out["loopCursor"].as_str().unwrap_or_default();
     assert!(
         !region.is_empty()
-            && region.trim_start_matches("LOOP ") == cursor.trim_start_matches("CURSOR "),
+            && region.trim_start_matches("Loop ") == cursor.trim_start_matches("Cursor "),
         "Cmd+L should loop exactly the cursor's range: {cursor:?} -> {looped:#}"
     );
     assert!(

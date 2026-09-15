@@ -123,7 +123,7 @@ const SCRIPT: &str = r#"
     app.click(app.snapshot().find({ role: "input", label: "Search tracks…" }));
     app.action("luma::OpenPatterns");
     until("the pattern picker", (s) =>
-        s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) !== undefined);
+        s.find((n) => n.role === "text" && n.label.endsWith(" patterns")) !== undefined);
     until("a focusable pattern row", (s) =>
         s.find({ role: "row", label: "Strobe" }) !== undefined);
     const dialog = app.snapshot().find({ role: "card", label: "Pattern dialog" });

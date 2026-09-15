@@ -23,7 +23,7 @@ fn switching_score_preserves_the_selected_thread() {
         app.click(selected);
         until("selected transcript", s => s.find({{role:"text",label:selected.label}}));
         until("history dismissed", s => !s.find({{role:"input",label:"Search chats…"}}));
-        const opened = app.snapshot().findAll({{role:"text"}}).find(n => n.label.startsWith("SCORE #")).label;
+        const opened = app.snapshot().findAll({{role:"text"}}).find(n => n.label.startsWith("Score #")).label;
         nav.scores({track:?});
         const other = app.snapshot().findAll({{role:"row"}}).find(n => n.label.startsWith("#") && !n.label.startsWith(opened.slice("SCORE ".length)+" "));
         app.click(other);

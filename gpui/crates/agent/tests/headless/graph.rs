@@ -89,7 +89,7 @@ fn graph_closes_with_its_score_and_reopens_with_saved_edits() {
         check(!app.snapshot().find({{role:"card",label:"Multiply"}}),"reopened graph does not edit");
         app.key("secondary-z");node("card","Multiply");
         nav.scores("Aurora");app.click(node("button","New score"));
-        until("new score",s=>s.find({{role:"text",label:"SCORE #2"}}));
+        until("new score",s=>s.find({{role:"text",label:"Score #2"}}));
         check(!app.snapshot().find({{role:"button",label:"Canvas test"}}),"switching scores left an orphaned graph tab");
     "#)), Duration::from_secs(60));
     assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);

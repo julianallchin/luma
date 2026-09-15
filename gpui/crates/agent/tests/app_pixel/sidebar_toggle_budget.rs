@@ -65,7 +65,7 @@ fn toggling_the_sidebar_costs_no_cliff_over_holding_still() {
             until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
             nav.expand();
             app.frames(10, {{ waitMs: 60 }});
-            // `DRAW` is the renderer's own submit-to-completion span, and it is
+            // `Draw` is the renderer's own submit-to-completion span, and it is
             // the only view this suite has of the half a slide actually costs
             // — `drawMs` is the UI thread and never sees the GPU.
             nav.step("the frame-stats panel", "toggle", "Frame stats");
@@ -83,7 +83,7 @@ fn toggling_the_sidebar_costs_no_cliff_over_holding_still() {
             if (!stage) { throw new Error("the viewport is not on screen"); }
             const draw = () => {
                 const n = app.snapshot().find(
-                    (n) => n.role === "text" && n.label.startsWith("DRAW "));
+                    (n) => n.role === "text" && n.label.startsWith("Draw "));
                 const ms = n && Number(n.label.split(" ")[1]);
                 return Number.isFinite(ms) ? ms : null;
             };
@@ -201,7 +201,7 @@ fn toggling_the_sidebar_costs_no_cliff_over_holding_still() {
     );
     assert!(
         idle_draw > 0.0,
-        "the frame-stats panel reported no DRAW at all: {report}"
+        "the frame-stats panel reported no Draw at all: {report}"
     );
     assert!(
         slide_draw < idle_draw * 1.5,

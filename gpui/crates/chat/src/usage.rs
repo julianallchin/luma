@@ -220,7 +220,7 @@ fn card(request: &RequestUsage, theme: &Theme) -> gpui::AnyElement {
         .into_any_element()
 }
 
-/// One label/value pair: silkscreen on the left, a monospace value hard right.
+/// One label/value pair: a quiet label on the left, a monospace value hard right.
 ///
 /// Right-aligned and mono together are what let the eye read the column as
 /// numbers — a proportional face puts every digit at its own width, so a stack
@@ -232,10 +232,7 @@ fn row(label: &'static str, value: &str, theme: &Theme) -> impl IntoElement {
         .items_center()
         .justify_between()
         .gap(px(theme::SPACE_LG))
-        .child(luma_ui::silkscreen_in(
-            label.to_uppercase(),
-            theme.text_faint,
-        ))
+        .child(luma_ui::float::label(label).text_color(theme.text_faint))
         .child(
             div()
                 .font_family(theme.font_mono.clone())
@@ -247,7 +244,7 @@ fn row(label: &'static str, value: &str, theme: &Theme) -> impl IntoElement {
                 // which row it fell out of.
                 .agent_node(
                     NodeRole::Text,
-                    SharedString::from(format!("{} {value}", label.to_uppercase())),
+                    SharedString::from(format!("{label} {value}")),
                 ),
         )
 }

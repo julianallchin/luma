@@ -281,7 +281,7 @@ const SCRIPT: &str = r#"
     function read() {
         const shot = app.snapshot();
         return {
-            count: shot.find((node) => node.label.endsWith("TRACKS")).label,
+            count: shot.find((node) => node.label.endsWith(" tracks")).label,
             rows: shot.findAll({ role: "row" }).map((node) => node.label),
         };
     }
@@ -346,7 +346,7 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     // 2. Opening a venue lists that venue's tracks, not the whole library.
     assert_eq!(
         out["opened"]["count"],
-        format!("{} TRACKS", Expected::DEFAULT)
+        format!("{} tracks", Expected::DEFAULT)
     );
     assert_eq!(
         rows(&out["opened"])[..3],
@@ -356,20 +356,20 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     // 3. Each filter axis moves the count by exactly the rows it admits.
     assert_eq!(
         out["all"]["count"],
-        format!("{} TRACKS", Expected::IN_VENUE)
+        format!("{} tracks", Expected::IN_VENUE)
     );
     assert_eq!(
         out["anywhere"]["count"],
-        format!("{} TRACKS", Expected::ALL)
+        format!("{} tracks", Expected::ALL)
     );
-    assert_eq!(out["mine"]["count"], format!("{} TRACKS", Expected::MINE));
+    assert_eq!(out["mine"]["count"], format!("{} tracks", Expected::MINE));
 
     // 4. Search narrows to what it matches, and Escape puts it back.
-    assert_eq!(out["searched"]["count"], "1 TRACKS");
+    assert_eq!(out["searched"]["count"], "1 tracks");
     assert_eq!(rows(&out["searched"]), ["Drift"]);
     assert_eq!(
         out["cleared"]["count"],
-        format!("{} TRACKS", Expected::MINE)
+        format!("{} tracks", Expected::MINE)
     );
 
     // 5. The list is virtualized: a screenful of rows, not a library of them.
