@@ -817,26 +817,6 @@ pub async fn resolve_selection_expression_with_path(
 // Head membership
 // =============================================================================
 
-/// Remove one head of a fixture from a group. If the fixture is in the group
-/// whole (head_index = -1), the membership is split into explicit rows for the
-/// remaining heads; otherwise the head's own row is deleted.
-pub async fn remove_head_from_group(
-    resource_path: &Path,
-    access: &mut VenueAccess<'_, Write>,
-    fixture_id: &str,
-    group_id: &str,
-    head_index: i64,
-) -> Result<(), String> {
-    let fixture = fixtures_db::get_fixture(access, fixture_id).await?;
-    let head_count = head_count_with_path(resource_path, &fixture) as i64;
-    let keep: Vec<i64> = (0..head_count).filter(|&h| h != head_index).collect();
-
-    if groups_db::split_whole_fixture_membership(access, fixture_id, group_id, &keep).await? {
-        return Ok(());
-    }
-    groups_db::remove_member_from_group(access, fixture_id, group_id, Some(head_index)).await
-}
-
 // =============================================================================
 // The derived group tree
 // =============================================================================

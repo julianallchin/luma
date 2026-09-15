@@ -13,7 +13,7 @@ use crate::database::local::auth::principal_key;
 use crate::database::local::patterns as patterns_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
 use crate::models::node_graph::Graph;
-use crate::models::patterns::{ForkPatternInput, ForkPatternResult, PatternSummary};
+use crate::models::patterns::PatternSummary;
 use crate::models::scores::Score;
 use crate::services::graph_documents::exact_graph_json;
 
@@ -82,87 +82,6 @@ pub async fn create_pattern_with_graph(
         .await
         .map_err(|error| format!("commit pattern creation: {error}"))?;
     patterns_db::get_pattern_pool(pool, &pattern_id).await
-}
-
-/// Copy a pattern's graph into a new pattern of the caller's own.
-pub async fn fork_pattern(
-    pool: &SqlitePool,
-    principal: &str,
-    input: ForkPatternInput,
-) -> Result<ForkPatternResult, String> {
-    let request_id = request_uuid(&input.request_id)?;
-    let key = principal_key(Some(principal));
-    let pattern_id = derived_id(&key, "pattern_fork", &request_id, "subject");
-    let implementation_id = derived_id(&key, "pattern_fork", &request_id, "implementation");
-    if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
-        return Ok(ForkPatternResult {
-            pattern,
-            implementation_id,
-        });
-    }
-    let source = patterns_db::get_pattern_pool(pool, &input.source_pattern_id).await?;
-    let document = crate::services::graph_documents::load_visible_graph_document(
-        pool,
-        &input.source_pattern_id,
-        None,
-        Some(&input.source_implementation_id),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let graph_json = exact_graph_json(&document.graph).map_err(|error| error.to_string())?;
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| format!("begin pattern fork: {error}"))?;
-    sqlx::query(
-        "INSERT INTO patterns (id, uid, name, description, forked_from_id)
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&pattern_id)
-    .bind(principal)
-    .bind(format!("{}_fork", source.name))
-    .bind(&source.description)
-    .bind(&input.source_pattern_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("insert forked pattern: {error}"))?;
-    insert_implementation(
-        &mut transaction,
-        &implementation_id,
-        principal,
-        &pattern_id,
-        &graph_json,
-    )
-    .await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("commit pattern fork: {error}"))?;
-    Ok(ForkPatternResult {
-        pattern: patterns_db::get_pattern_pool(pool, &pattern_id).await?,
-        implementation_id,
-    })
-}
-
-/// Delete a pattern the caller owns. Its implementations go with it.
-pub async fn delete_pattern(pool: &SqlitePool, principal: &str, id: &str) -> Result<(), String> {
-    let owner: Option<Option<String>> = sqlx::query_scalar("SELECT uid FROM patterns WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|error| format!("read pattern owner: {error}"))?;
-    let Some(owner) = owner else {
-        return Err(format!("pattern {id} does not exist"));
-    };
-    if owner.as_deref() != Some(principal) {
-        return Err("you can only delete your own patterns".into());
-    }
-    sqlx::query("DELETE FROM patterns WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|error| format!("delete pattern: {error}"))?;
-    Ok(())
 }
 
 /// Create a score on a `(track, venue)` pair. A pair carries as many scores as

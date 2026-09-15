@@ -1,8 +1,7 @@
-use crate::database::local::auth;
 use crate::database::local::patterns as db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::node_graph::{Graph, PatternArgDef};
-use crate::models::patterns::{ForkPatternInput, ForkPatternResult, PatternSummary};
+use crate::models::patterns::PatternSummary;
 use crate::services::catalog;
 use crate::services::graph_documents::{
     load_visible_graph_document, GraphDocument, GraphEditResult,
@@ -10,15 +9,6 @@ use crate::services::graph_documents::{
 
 pub async fn list_patterns(services: &AppServices) -> Result<Vec<PatternSummary>, CommandError> {
     Ok(db::list_patterns_pool(&services.db.0).await?)
-}
-
-/// Errors rather than returning `None` for an unknown id — callers treat a
-/// pattern id as a resolved reference, not a lookup that may miss.
-pub async fn get_pattern(
-    services: &AppServices,
-    id: String,
-) -> Result<PatternSummary, CommandError> {
-    Ok(db::get_pattern_pool(&services.db.0, &id).await?)
 }
 
 /// Idempotent on `request_id`: replaying a request returns the same pattern
@@ -31,44 +21,6 @@ pub async fn create_pattern(
 ) -> Result<PatternSummary, CommandError> {
     let uid = services.require_session().await?;
     Ok(catalog::create_pattern(&services.db.0, &uid, &request_id, name, description).await?)
-}
-
-/// A full replace of both metadata fields, not a patch.
-pub async fn update_pattern(
-    services: &AppServices,
-    id: String,
-    name: String,
-    description: Option<String>,
-) -> Result<PatternSummary, CommandError> {
-    Ok(db::update_pattern_pool(&services.db.0, &id, name, description).await?)
-}
-
-pub async fn fork_pattern(
-    services: &AppServices,
-    input: ForkPatternInput,
-) -> Result<ForkPatternResult, CommandError> {
-    let uid = services.require_session().await?;
-    Ok(catalog::fork_pattern(&services.db.0, &uid, input).await?)
-}
-
-/// A delete is a delete. Ownership is enforced inside [`catalog::delete_pattern`],
-/// which is the layer that owns the invariant.
-pub async fn delete_pattern(services: &AppServices, id: String) -> Result<(), CommandError> {
-    let principal = services.require_session().await?;
-    Ok(catalog::delete_pattern(&services.db.0, &principal, &id).await?)
-}
-
-/// Does not notify the sync engine: a category change rides along with the next
-/// write that does.
-pub async fn set_pattern_category(
-    services: &AppServices,
-    pattern_id: String,
-    category_name: Option<String>,
-) -> Result<(), CommandError> {
-    Ok(
-        db::set_pattern_category_pool(&services.db.0, &pattern_id, category_name.as_deref())
-            .await?,
-    )
 }
 
 /// Resolves the visible implementation venue-agnostically (`venue_id = None`),
@@ -124,34 +76,6 @@ pub async fn get_pattern_score_template(
         .validate(&p::standard_library())
         .map_err(|error| CommandError::Invalid(error.to_string()))?;
     Ok(score)
-}
-
-/// Verifying also stamps the author's display name — the two are one write in
-/// the UI's model. The name is the account's own; there is no profile lookup,
-/// because a name this device does not know is not a name it should invent.
-pub async fn verify_pattern(
-    services: &AppServices,
-    id: String,
-    verify: bool,
-) -> Result<PatternSummary, CommandError> {
-    let pool = &services.db.0;
-    let auth = auth::get_current_auth(&services.state_db.0)
-        .await?
-        .ok_or_else(|| CommandError::Unauthorized("Not authenticated".to_string()))?;
-    let uid = auth.principal.user_id;
-    let pattern = db::get_pattern_pool(pool, &id).await?;
-    if pattern.uid.as_deref() != Some(uid.as_str()) {
-        return Err(CommandError::Unauthorized(
-            "You can only verify your own patterns".to_string(),
-        ));
-    }
-    let name = auth::load_current_account(&services.state_db.0)
-        .await?
-        .and_then(|account| account.email)
-        .unwrap_or_else(|| uid.clone());
-    db::set_author_name(pool, &id, &name).await?;
-    db::set_verified(pool, &id, verify).await?;
-    Ok(db::get_pattern_pool(pool, &id).await?)
 }
 
 /// Resolves against a venue, unlike `get_pattern_graph_document`, which passes

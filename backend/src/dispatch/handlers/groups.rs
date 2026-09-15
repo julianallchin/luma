@@ -3,7 +3,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Wri
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig};
+use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups as groups_service;
@@ -19,32 +19,6 @@ const DEFAULT_PREVIEW_SEED: u64 = 12345;
 // Group CRUD
 // -----------------------------------------------------------------------------
 
-pub async fn create_group(
-    services: &AppServices,
-    venue_id: String,
-    name: Option<String>,
-    axis_lr: Option<f64>,
-    axis_fb: Option<f64>,
-    axis_ab: Option<f64>,
-) -> Result<FixtureGroup, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    groups_service::require_unique_name(
-        &services.fixtures_root,
-        &mut access,
-        name.as_deref(),
-        None,
-    )
-    .await
-    .map_err(CommandError::Invalid)?;
-    let result =
-        groups_db::create_group(&mut access, name.as_deref(), axis_lr, axis_fb, axis_ab).await?;
-    access.commit().await?;
-    invalidate_venue_fixture_cache();
-    Ok(result)
-}
-
 pub async fn list_groups(
     services: &AppServices,
     venue_id: String,
@@ -52,38 +26,6 @@ pub async fn list_groups(
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(groups_db::list_groups(&mut access).await?)
-}
-
-pub async fn update_group(
-    services: &AppServices,
-    id: String,
-    name: Option<String>,
-    axis_lr: Option<f64>,
-    axis_fb: Option<f64>,
-    axis_ab: Option<f64>,
-) -> Result<FixtureGroup, CommandError> {
-    // The venue first, because the graph conversion needs a write of its own
-    // and the namespace this rename joins is derived from that graph.
-    let venue_id = VenueAccess::<Read>::read(&services.db.0, VenueResource::Group(&id))
-        .await?
-        .venue_id()
-        .to_string();
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&id)).await?;
-    groups_service::require_unique_name(
-        &services.fixtures_root,
-        &mut access,
-        name.as_deref(),
-        Some(&id),
-    )
-    .await
-    .map_err(CommandError::Invalid)?;
-    let result =
-        groups_db::update_group(&mut access, &id, name.as_deref(), axis_lr, axis_fb, axis_ab)
-            .await?;
-    access.commit().await?;
-    invalidate_venue_fixture_cache();
-    Ok(result)
 }
 
 pub async fn delete_group(services: &AppServices, id: String) -> Result<(), CommandError> {
@@ -98,71 +40,9 @@ pub async fn delete_group(services: &AppServices, id: String) -> Result<(), Comm
 // Membership
 // -----------------------------------------------------------------------------
 
-/// Add a whole fixture (`head_index` = `None`) or a single head to a group.
-pub async fn add_fixture_to_group(
-    services: &AppServices,
-    fixture_id: String,
-    group_id: String,
-    head_index: Option<i64>,
-) -> Result<(), CommandError> {
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&group_id)).await?;
-    let head = head_index.unwrap_or(groups_db::WHOLE_FIXTURE);
-    groups_db::add_member_to_group(&mut access, &fixture_id, &group_id, head).await?;
-    access.commit().await?;
-    invalidate_venue_fixture_cache();
-    Ok(())
-}
-
-/// Remove a whole fixture (`head_index` = `None`, drops per-head rows too) or a
-/// single head from a group. Removing a head from a whole-fixture membership
-/// splits it into per-head rows for the remaining heads.
-pub async fn remove_fixture_from_group(
-    services: &AppServices,
-    fixture_id: String,
-    group_id: String,
-    head_index: Option<i64>,
-) -> Result<(), CommandError> {
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&group_id)).await?;
-    match head_index {
-        None => {
-            groups_db::remove_member_from_group(&mut access, &fixture_id, &group_id, None).await
-        }
-        Some(head) => {
-            groups_service::remove_head_from_group(
-                &services.fixtures_root,
-                &mut access,
-                &fixture_id,
-                &group_id,
-                head,
-            )
-            .await
-        }
-    }?;
-    access.commit().await?;
-    invalidate_venue_fixture_cache();
-    Ok(())
-}
-
 // -----------------------------------------------------------------------------
 // Hierarchy and selection
 // -----------------------------------------------------------------------------
-
-/// The venue's groups with their fixtures: the merged tree
-/// ([`list_group_tree`]) with every node's members resolved to fixtures and
-/// heads. Flat with `parentId`, parents before children.
-pub async fn get_grouped_hierarchy(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<Vec<FixtureGroupNode>, CommandError> {
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(GroupSources::read(&services.fixtures_root, &mut access)
-        .await?
-        .hierarchy())
-}
 
 pub async fn preview_selection_query(
     services: &AppServices,
@@ -211,35 +91,9 @@ pub async fn highlight_selection(
     Ok(stage_render::highlight_state(&resolved))
 }
 
-/// Fixtures in the venue with no group membership row at all — what the group
-/// migration left behind.
-pub async fn get_ungrouped_fixtures(
-    services: &AppServices,
-    venue_id: String,
-) -> Result<Vec<PatchedFixture>, CommandError> {
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(groups_db::get_ungrouped_fixtures(&mut access).await?)
-}
-
 // -----------------------------------------------------------------------------
 // Movement config
 // -----------------------------------------------------------------------------
-
-/// `config: None` clears the movement config; it does not mean "leave
-/// unchanged".
-pub async fn update_movement_config(
-    services: &AppServices,
-    group_id: String,
-    config: Option<MovementConfig>,
-) -> Result<FixtureGroup, CommandError> {
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&group_id)).await?;
-    let group = groups_db::update_movement_config(&mut access, &group_id, config.as_ref()).await?;
-    access.commit().await?;
-    invalidate_venue_fixture_cache();
-    Ok(group)
-}
 
 // -----------------------------------------------------------------------------
 // The derived group tree, and the overrides on top of it
@@ -280,28 +134,18 @@ mod tests {
 
     #[tokio::test]
     async fn named_group_replacement_promotes_heads_and_preserves_membership_identity() {
-        use super::{
-            add_fixture_to_group, create_group, groups_db, groups_service, VenueAccess,
-            VenueResource, Write,
-        };
+        use super::{groups_db, groups_service, VenueAccess, VenueResource, Write};
         use crate::database::local::venue_access::AuthorizedVenue;
         let (_dir, services, venue) = rig().await;
         let nodes = tree(&services, &venue).await;
         let fixture = nodes[0]["fixtures"][0].as_str().unwrap().to_string();
-        let group = create_group(
-            &services,
-            venue.clone(),
-            Some("Head Set".into()),
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        add_fixture_to_group(&services, fixture.clone(), group.id.clone(), Some(0))
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
             .await
             .unwrap();
-        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+        let group = groups_db::create_group(&mut access, Some("Head Set"), None, None, None)
+            .await
+            .unwrap();
+        groups_db::add_member_to_group(&mut access, &fixture, &group.id, 0)
             .await
             .unwrap();
         let saved = groups_service::set_named_group(

@@ -1192,7 +1192,7 @@ async fn wait_for_upload(pool: &SqlitePool) {
     .await;
 }
 
-/// `public.join_venue(code)` over PostgREST, as the dispatch handler calls it.
+/// `public.join_venue(code)` over PostgREST.
 async fn rpc_join(containers: &Containers, user: &str, code: &str) -> String {
     let token = mint_jwt(&containers.secret, user);
     let response = reqwest::Client::new()

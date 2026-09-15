@@ -13,10 +13,8 @@
 
 pub mod agent_execution;
 pub mod agent_threads;
-pub mod annotation_preview;
 pub mod artnet;
 pub mod auth;
-pub mod categories;
 pub mod composable_patterns;
 pub mod compositor;
 pub mod controller;

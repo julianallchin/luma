@@ -12,9 +12,7 @@ pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use error::CommandError;
 pub use services::system_track_sources;
-pub use services::{
-    AppServices, EventSink, Events, Host, HostControl, SharedServices, TrackSources,
-};
+pub use services::{AppServices, EventSink, Events, SharedServices, TrackSources};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -96,18 +94,18 @@ macro_rules! commands {
     };
 }
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
 use crate::host_audio::HostAudioSnapshot;
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
-    AppendAgentThreadMessagesInput, CreateAgentThreadInput,
+    AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
+    CreateAgentThreadInput,
 };
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig};
+use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::midi::{
     ControllerState, ControllerStatus, CreateBindingInput, CreateCueInput, CreateModifierInput,
     Cue, MidiBinding, ModifierDef, Target, UpdateBindingInput, UpdateCueInput,
@@ -118,9 +116,7 @@ use crate::models::node_graph::{
 };
 use crate::models::patch::ArtNetNode;
 use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput};
-use crate::models::patterns::{
-    AnnotationPreview, ForkPatternInput, ForkPatternResult, PatternCategory, PatternSummary,
-};
+use crate::models::patterns::{AnnotationPreview, PatternSummary};
 use crate::models::perform::PerformTrackMatch;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
@@ -130,9 +126,7 @@ use crate::models::tracks::{
     TrackImportResult, TrackSummary,
 };
 use crate::models::universe::UniverseState;
-use crate::models::venue_graph::{
-    PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
-};
+use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use crate::models::venues::Venue;
 use crate::models::waveforms::TrackWaveform;
 
@@ -140,10 +134,8 @@ use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, Rekordbox
 use crate::render_engine::PerformDeckInput;
 use crate::services::graph_documents::{GraphDocument, GraphEditResult};
 use crate::services::group_derivation::FixtureRole;
-use crate::services::tracks::TrackBarClassifications;
 use crate::settings::AppSettings;
 pub use handlers::scores::prepare_score_clip_preview;
-use handlers::tracks::TrackAudioBase64;
 /// Large native audio payload; retains the dispatcher's visibility checks.
 pub use handlers::waveforms::get_track_waveform_signal;
 use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
@@ -169,27 +161,15 @@ commands! {
         fps: f32,
     ) -> Vec<UniverseState>;
 
-    composable_patterns::copy_pattern_to_library(pattern_id: String, request_id: String) -> PatternSummary;
-    composable_patterns::create_lighting_pattern(effect: String, score_id: String, request_id: String) -> PatternSummary;
     composable_patterns::get_pattern_node_library() -> Value;
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
 
     patterns::list_patterns() -> Vec<PatternSummary>;
-    patterns::get_pattern(id: String) -> PatternSummary;
     patterns::create_pattern(
         request_id: String,
         name: String,
         description: Option<String>,
     ) -> PatternSummary;
-    patterns::update_pattern(
-        id: String,
-        name: String,
-        description: Option<String>,
-    ) -> PatternSummary;
-    patterns::fork_pattern(input: ForkPatternInput) -> ForkPatternResult;
-    patterns::delete_pattern(id: String) -> ();
-    patterns::set_pattern_category(pattern_id: String, category_name: Option<String>) -> ();
-    patterns::verify_pattern(id: String, verify: bool) -> PatternSummary;
     patterns::get_pattern_graph_document(
         id: String,
         implementation_id: Option<String>,
@@ -207,7 +187,6 @@ commands! {
         graph: Graph,
     ) -> GraphEditResult;
 
-    agent_threads::agent_thread_get(thread_id: String) -> AgentThreadDetail;
     agent_threads::agent_thread_list(
         agent_kind: Option<String>,
         subject_kind: Option<String>,
@@ -279,38 +258,8 @@ commands! {
     groups::generate_venue_groups(venue_id: String) -> ();
     groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
-    groups::create_group(
-        venue_id: String,
-        name: Option<String>,
-        axis_lr: Option<f64>,
-        axis_fb: Option<f64>,
-        axis_ab: Option<f64>,
-    ) -> FixtureGroup;
-    groups::update_group(
-        id: String,
-        name: Option<String>,
-        axis_lr: Option<f64>,
-        axis_fb: Option<f64>,
-        axis_ab: Option<f64>,
-    ) -> FixtureGroup;
     groups::delete_group(id: String) -> ();
-    groups::add_fixture_to_group(
-        fixture_id: String,
-        group_id: String,
-        head_index: Option<i64>,
-    ) -> ();
-    groups::remove_fixture_from_group(
-        fixture_id: String,
-        group_id: String,
-        head_index: Option<i64>,
-    ) -> ();
-    groups::get_grouped_hierarchy(venue_id: String) -> Vec<FixtureGroupNode>;
     groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
-    groups::get_ungrouped_fixtures(venue_id: String) -> Vec<PatchedFixture>;
-    groups::update_movement_config(
-        group_id: String,
-        config: Option<MovementConfig>,
-    ) -> FixtureGroup;
     groups::preview_selection_query(
         venue_id: String,
         query: String,
@@ -336,51 +285,17 @@ commands! {
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
-    waveforms::reprocess_waveform(track_id: String) -> TrackWaveform;
-
     tracks::list_tracks() -> Vec<TrackSummary>;
     tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
-    tracks::update_track_metadata(
-        track_id: String,
-        title: Option<String>,
-        artist: Option<String>,
-        album: Option<String>,
-    ) -> ();
-    tracks::delete_track(track_id: String) -> ();
     tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
     tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
     tracks::set_track_beat_validation(track_id: String, grid: BeatGrid, verdict: BeatValidationVerdict, reason: Option<BeatValidationReason>) -> ();
-    tracks::get_track_bar_classifications(
-        track_id: String,
-    ) -> Option<TrackBarClassifications>;
-    tracks::get_track_drum_onsets(track_id: String) -> Option<HashMap<String, Vec<f32>>>;
-    tracks::get_classifier_thresholds() -> HashMap<String, f64>;
-    tracks::get_track_audio_base64(track_id: String) -> TrackAudioBase64;
-    tracks::get_venue_annotation_counts(venue_id: String) -> HashMap<String, i64>;
 
     compositor::composite_track(
         score_id: String,
         graph_score: Option<luma_patterns::Score>,
     ) -> ();
     compositor::leave_track(score_id: String) -> ();
-
-    annotation_preview::preview_pattern_image(
-        pattern_id: String,
-        track_id: String,
-        venue_id: String,
-        start_time: f32,
-        end_time: f32,
-        beat_grid: Option<BeatGrid>,
-    ) -> AnnotationPreview;
-    annotation_preview::preview_graph_image(
-        graph: Graph,
-        track_id: String,
-        venue_id: String,
-        start_time: f32,
-        end_time: f32,
-        beat_grid: Option<BeatGrid>,
-    ) -> AnnotationPreview;
-    categories::list_pattern_categories() -> Vec<PatternCategory>;
 
     scores::list_scores_for_track(track_id: String, venue_id: String) -> Vec<ScoreSummary>;
     scores::list_scores_across_venues(track_id: String) -> Vec<ScoreSummary>;
@@ -420,7 +335,6 @@ commands! {
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
     stage::restore_graph(venue_id: String, rows: VenueGraphRows) -> ResolvedVenue;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
-    stage::venue_tiles(venue_id: String, cell_m: Option<f64>) -> String;
     stage::attach(
         venue_id: String,
         kind: String,
@@ -479,8 +393,6 @@ commands! {
         their_socket: String,
         flip: Option<bool>,
     ) -> PlacementReport;
-    stage::describe_venue(venue_id: String) -> String;
-    stage::stage_catalog() -> StageCatalog;
     stage::detach(venue_id: String, node_id: String) -> PlacementReport;
     stage::set_params(
         venue_id: String,
@@ -498,11 +410,6 @@ commands! {
     venues::list_venues() -> Vec<Venue>;
     venues::get_venue(id: String) -> Venue;
     venues::create_venue(name: String, description: Option<String>) -> Venue;
-    venues::update_venue(id: String, name: String, description: Option<String>) -> Venue;
-    venues::delete_venue(id: String) -> ();
-    venues::get_or_create_share_code(venue_id: String) -> String;
-    venues::join_venue(code: String) -> Venue;
-    venues::leave_venue(venue_id: String) -> ();
     venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
     venues::set_venue_haze(venue_id: String, haze: VenueHaze) -> ();
 
@@ -605,7 +512,6 @@ commands! {
     host_audio::host_set_playback_rate(session: u64, rate: f32) -> ();
     host_audio::host_snapshot() -> HostAudioSnapshot;
 
-    sync::force_quit() -> ();
     sync::sync_status() -> SyncStatus;
 
     rekordbox::rekordbox_open_library() -> RekordboxLibraryInfo;

@@ -2,7 +2,7 @@ use crate::database::local::agent_threads as db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::actor::Actor;
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
+    AgentThread, AgentThreadAppendOutcome, AgentThreadMessage, AgentThreadUsage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
 
@@ -12,15 +12,6 @@ pub async fn agent_thread_create(
 ) -> Result<AgentThread, CommandError> {
     let owner_user_id = Some(services.require_session().await?);
     Ok(db::create_thread(&services.db.0, input, owner_user_id.as_deref()).await?)
-}
-
-/// A thread owned by another principal is invisible, not forbidden.
-pub async fn agent_thread_get(
-    services: &AppServices,
-    thread_id: String,
-) -> Result<AgentThreadDetail, CommandError> {
-    let owner_user_id = services.admitted_principal().await?;
-    Ok(db::get_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?)
 }
 
 /// Each filter is an independent `AND`; `None` is a wildcard for that field.

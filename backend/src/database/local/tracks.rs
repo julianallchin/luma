@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::database::local::deletes;
-use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::tracks::{
     ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
 };
@@ -55,31 +54,6 @@ pub struct ArtifactVersions {
     pub drum_onsets: i64,
     pub bar_classifications: i64,
     pub genres: i64,
-}
-
-/// Per-track clip counts for one venue, as `track_id -> count`.
-///
-/// Sparse: a track with no clips in this venue is absent, so callers default to
-/// zero. This is the same number [`list_tracks_enriched`] reports as
-/// `venue_annotation_count`, queried on its own so a venue switch can refresh
-/// that one column without re-running the enriched query.
-pub async fn get_venue_annotation_counts(
-    access: &mut impl AuthorizedVenue,
-) -> Result<HashMap<String, i64>, String> {
-    let venue_id = access.venue_id().to_string();
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT s.track_id,
-                SUM((SELECT COUNT(*) FROM clips WHERE clips.score_id = s.id)) AS cnt
-         FROM scores s
-         JOIN auth_venue_access access ON access.venue_id = s.venue_id
-         WHERE s.venue_id = ?
-         GROUP BY s.track_id HAVING cnt > 0",
-    )
-    .bind(&venue_id)
-    .fetch_all(access.connection())
-    .await
-    .map_err(|error| format!("Failed to get venue annotation counts: {error}"))?;
-    Ok(rows.into_iter().collect())
 }
 
 pub async fn list_tracks_enriched(
@@ -1022,26 +996,6 @@ pub async fn fill_track_metadata_gaps(
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to fill track metadata gaps: {}", e))?;
-    Ok(())
-}
-
-pub async fn update_track_metadata(
-    pool: &SqlitePool,
-    track_id: &str,
-    title: Option<&str>,
-    artist: Option<&str>,
-    album: Option<&str>,
-) -> Result<(), String> {
-    sqlx::query(
-        "UPDATE tracks SET title = ?, artist = ?, album = ?, updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(title)
-    .bind(artist)
-    .bind(album)
-    .bind(track_id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to update track metadata: {}", e))?;
     Ok(())
 }
 

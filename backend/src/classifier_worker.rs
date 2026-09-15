@@ -4,10 +4,8 @@
 //! writes it into the app cache on first use (mirrors the python script via
 //! `ensure_worker_script`). Bar boundaries are passed via a temp JSON file.
 //!
-//! Also bundles `tag_thresholds.json` — F1-optimal per-tag thresholds from
-//! the model's training-time LOTO sweep — surfaced via [`bundled_thresholds`]
-//! to a dispatch command so the frontend can filter "active" tags by per-tag
-//! threshold instead of a single 0.5 cutoff.
+//! Also bundles `tag_thresholds.json`: F1-optimal per-tag thresholds from the
+//! model's training-time LOTO sweep, read through [`bundled_thresholds`].
 //!
 //! Output: parsed [`BarClassification`] list, one per scored bar. The
 //! schema is intentionally text-LLM-friendly — see the python worker's
@@ -31,8 +29,7 @@ const WEIGHTS_FILE_NAME: &str = "bar_window_classifier.pt";
 const BUNDLED_THRESHOLDS: &str = include_str!("../python/classifier/tag_thresholds.json");
 
 /// Bundled per-tag suggestion thresholds (raw JSON from the training-time
-/// LOTO sweep). Frontend reads these via the `get_classifier_thresholds`
-/// dispatch command and uses them in place of a flat 0.5 cutoff.
+/// LOTO sweep), used in place of a flat 0.5 cutoff.
 pub fn bundled_thresholds() -> &'static str {
     BUNDLED_THRESHOLDS
 }

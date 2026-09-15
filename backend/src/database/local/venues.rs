@@ -114,24 +114,6 @@ pub async fn create_venue(
     Ok(venue)
 }
 
-/// Update a venue
-pub async fn update_venue(
-    access: &mut VenueAccess<'_, Write>,
-    name: String,
-    description: Option<String>,
-) -> Result<Venue, String> {
-    let venue_id = access.venue_id().to_string();
-    sqlx::query("UPDATE venues SET name = ?, description = ? WHERE id = ?")
-        .bind(&name)
-        .bind(&description)
-        .bind(venue_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to update venue: {}", e))?;
-
-    get_venue(access).await
-}
-
 /// Delete only an unused venue catalog entry owned by the trusted principal.
 /// Scores, conversations, and authored revision history are durable state; none
 /// may disappear as a side effect of the venue foreign-key cascade.
@@ -175,74 +157,6 @@ pub async fn delete_venue(access: &mut VenueAccess<'_, Write>) -> Result<(), Str
     }
     access.leave_maintenance().await?;
 
-    Ok(())
-}
-
-/// Set the share_code for a venue
-pub async fn set_share_code(access: &mut VenueAccess<'_, Write>, code: &str) -> Result<(), String> {
-    let venue_id = access.venue_id().to_string();
-    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
-        .bind(code)
-        .bind(venue_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to set venue share_code: {}", e))?;
-    Ok(())
-}
-
-// -----------------------------------------------------------------------------
-// Venue memberships
-// -----------------------------------------------------------------------------
-
-/// Remove only the active principal's own joined-venue membership. This is a
-/// membership lifecycle operation, not authority to mutate the venue
-/// aggregate, so it deliberately does not manufacture a write guard.
-pub async fn remove_current_venue_membership(
-    pool: &sqlx::SqlitePool,
-    venue_id: &str,
-    principal: &str,
-) -> Result<(), String> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| format!("Failed to begin venue leave: {error}"))?;
-    let admitted: i64 = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM auth_write_admission admission
-             JOIN venues venue ON venue.id = ?
-             JOIN venue_members membership
-               ON membership.venue_id = venue.id AND membership.uid = ?
-              AND membership.role = 'member'
-             WHERE admission.singleton = 1 AND admission.armed = 1
-               AND admission.accepting = 1 AND admission.maintenance = 0
-               AND admission.remote_writes = 0 AND admission.active_uid = ?
-               AND venue.uid IS NOT ?
-         )",
-    )
-    .bind(venue_id)
-    .bind(principal)
-    .bind(principal)
-    .bind(principal)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to authorize venue leave: {error}"))?;
-    if admitted != 1 {
-        return Err("Venue resource not found".into());
-    }
-    let deleted = sqlx::query("DELETE FROM venue_members WHERE venue_id = ? AND uid = ?")
-        .bind(venue_id)
-        .bind(principal)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|e| format!("Failed to remove venue membership: {}", e))?;
-    if deleted.rows_affected() != 1 {
-        return Err("Venue resource not found".into());
-    }
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("Failed to commit venue leave: {error}"))?;
     Ok(())
 }
 

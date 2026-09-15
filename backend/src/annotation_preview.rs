@@ -4,85 +4,11 @@
 //! Each preview is a small RGBA image where rows = fixtures, columns = time steps,
 //! and pixel color = fixture RGB × dimmer.
 
-use std::collections::HashMap;
-
-use crate::compositor::fetch_pattern_graph;
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
-use crate::eval::context::build_resident_context;
-use crate::eval::{compile::compile_pattern, Arena, Scene, Scope};
-use crate::models::node_graph::{BeatGrid, Graph};
+use crate::models::node_graph::BeatGrid;
 use crate::models::patterns::AnnotationPreview;
 use crate::models::universe::UniverseState;
-use crate::storage::StorageRoot;
 
-/// Columns per beat in the preview thumbnail
-const STEPS_PER_BEAT: u32 = 16;
-const MIN_PREVIEW_WIDTH: u32 = 8;
-const MAX_PREVIEW_WIDTH: u32 = 512;
 const MAX_PREVIEW_HEIGHT: u32 = 32;
-
-/// Column time axis for a preview over `[start, end]`.
-fn preview_times(beat_grid: Option<&BeatGrid>, start_time: f32, end_time: f32) -> Vec<f32> {
-    let width = compute_preview_width(beat_grid, start_time, end_time);
-    let span = end_time - start_time;
-    let divisor = (width - 1).max(1) as f32;
-    (0..width)
-        .map(|col| start_time + (col as f32 / divisor) * span)
-        .collect()
-}
-
-/// Compile + eval one pattern (Selection args forced to a provided arg map) over
-/// the preview column grid → one [`UniverseState`] per column.
-#[allow(clippy::too_many_arguments)]
-async fn eval_pattern_frames(
-    local_pool: &sqlx::SqlitePool,
-    project_pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    track_id: &str,
-    venue_id: &str,
-    instance: Option<&str>,
-    graph: &Graph,
-    args: &HashMap<String, serde_json::Value>,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-    times: &[f32],
-) -> Result<Vec<UniverseState>, String> {
-    // Fill unset args from the pattern defaults (annotations carry only
-    // overrides) before the context build — the selection pre-pass resolves
-    // arg-wired selections from this map.
-    let mut args = args.clone();
-    for ad in &graph.args {
-        args.entry(ad.id.clone())
-            .or_insert_with(|| ad.default_value.clone());
-    }
-    let (ctx, primitive_ids) = build_resident_context(
-        local_pool,
-        project_pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        instance,
-        &graph.nodes,
-        &graph.edges,
-        &args,
-        (start_time, end_time),
-        beat_grid,
-    )
-    .await;
-    let plan = compile_pattern(&graph, &args, ctx, primitive_ids)
-        .map_err(|e| format!("Failed to compile pattern: {:?}", e))?;
-    let scene = Scene::new(vec![crate::eval::CompiledAnnotation {
-        plan: std::sync::Arc::new(plan),
-        span: (start_time, end_time),
-        z_index: 0,
-        blend_mode: crate::models::node_graph::BlendMode::Replace,
-    }]);
-    let mut arena = Arena::default();
-    Ok(scene.render(times, Scope::Single(0), &mut arena))
-}
 
 fn empty_preview(annotation_id: String) -> AnnotationPreview {
     AnnotationPreview {
@@ -92,29 +18,6 @@ fn empty_preview(annotation_id: String) -> AnnotationPreview {
         pixels: vec![0, 0, 0, 0],
         dominant_color: [0.0; 3],
     }
-}
-
-/// Compute preview width from beat grid: count beats in [start, end), multiply by STEPS_PER_BEAT.
-/// Falls back to duration-based estimate if no beat grid.
-fn compute_preview_width(beat_grid: Option<&BeatGrid>, start_time: f32, end_time: f32) -> u32 {
-    let duration = end_time - start_time;
-    let beat_count = if let Some(bg) = beat_grid {
-        let count = bg
-            .beats
-            .iter()
-            .filter(|&&b| b >= start_time && b < end_time)
-            .count() as u32;
-        if count > 0 {
-            count
-        } else {
-            let bps = bg.bpm / 60.0;
-            (duration * bps).round().max(1.0) as u32
-        }
-    } else {
-        (duration * 2.0).round().max(1.0) as u32
-    };
-
-    (beat_count * STEPS_PER_BEAT).clamp(MIN_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH)
 }
 
 /// Render a heatmap from a column-sampled grid of [`UniverseState`] frames
@@ -227,126 +130,10 @@ pub(crate) fn render_preview(
     }
 }
 
-/// Build the default arg map for a pattern graph, forcing Selection args to "all".
-fn preview_arg_values(graph: &Graph) -> HashMap<String, serde_json::Value> {
-    graph
-        .args
-        .iter()
-        .map(|arg| {
-            let value = match arg.arg_type {
-                crate::models::node_graph::PatternArgType::Selection => {
-                    crate::models::selection::Selection::all().to_value()
-                }
-                _ => arg.default_value.clone(),
-            };
-            (arg.id.clone(), value)
-        })
-        .collect()
-}
-
-/// Render a heatmap preview for a single pattern over a time range, without
-/// placing it on the timeline. Args are the pattern's own defaults, with every
-/// Selection arg forced to `all` — so this is not what the timeline clip would
-/// render.
-#[allow(clippy::too_many_arguments)]
-pub async fn preview_pattern_image(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    pattern_id: &str,
-    track_id: &str,
-    venue_id: &str,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-) -> Result<AnnotationPreview, String> {
-    if end_time <= start_time {
-        return Err("end_time must be greater than start_time".into());
-    }
-    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-
-    let graph_json = fetch_pattern_graph(pool, pattern_id, Some(venue_id)).await?;
-    let graph: Graph = serde_json::from_str(&graph_json)
-        .map_err(|e| format!("Failed to parse pattern graph: {}", e))?;
-
-    let args = preview_arg_values(&graph);
-    let times = preview_times(beat_grid.as_ref(), start_time, end_time);
-    let frames = eval_pattern_frames(
-        pool,
-        pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        None,
-        &graph,
-        &args,
-        start_time,
-        end_time,
-        beat_grid.clone(),
-        &times,
-    )
-    .await?;
-
-    Ok(render_preview(
-        format!("preview_{pattern_id}"),
-        &frames,
-        beat_grid.as_ref(),
-        start_time,
-        end_time,
-    ))
-}
-
-/// [`preview_pattern_image`] for an *unsaved* graph — the graph arrives inline
-/// instead of being fetched by pattern id, which is how the graph-editor agent
-/// sees the output of an edit before it is saved.
-#[allow(clippy::too_many_arguments)]
-pub async fn preview_graph_image(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &std::path::Path,
-    graph: &Graph,
-    track_id: &str,
-    venue_id: &str,
-    start_time: f32,
-    end_time: f32,
-    beat_grid: Option<BeatGrid>,
-) -> Result<AnnotationPreview, String> {
-    if end_time <= start_time {
-        return Err("end_time must be greater than start_time".into());
-    }
-    let _venue_access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-
-    let args = preview_arg_values(graph);
-    let times = preview_times(beat_grid.as_ref(), start_time, end_time);
-    let frames = eval_pattern_frames(
-        pool,
-        pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        None,
-        graph,
-        &args,
-        start_time,
-        end_time,
-        beat_grid.clone(),
-        &times,
-    )
-    .await?;
-
-    Ok(render_preview(
-        "preview_graph".to_string(),
-        &frames,
-        beat_grid.as_ref(),
-        start_time,
-        end_time,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::models::universe::PrimitiveState;
 

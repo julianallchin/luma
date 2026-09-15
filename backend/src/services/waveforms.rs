@@ -210,19 +210,6 @@ async fn compute_waveform_payload(
     })
 }
 
-/// Force-recompute and atomically replace waveform data for a track.
-pub async fn reprocess_track_waveform(
-    pool: &SqlitePool,
-    tasks: &AnalysisTaskGroup,
-    track_id: &str,
-) -> Result<TrackWaveform, String> {
-    let epoch = tasks.current_epoch()?;
-    let lease = tasks.lease(epoch)?;
-    Ok(ensure_track_waveform(pool, track_id, &lease.guard())
-        .await?
-        .0)
-}
-
 /// Get waveform for a track, computing if missing.
 ///
 /// A row written before the band gains were stored counts as missing: the
