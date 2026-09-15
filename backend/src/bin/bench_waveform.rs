@@ -10,8 +10,8 @@ use std::time::Instant;
 use luma_lib::audio::{filter_3band, highpass_filter, lowpass_filter};
 use luma_lib::models::waveforms::BandGains;
 use luma_lib::services::waveforms::{
-    bucketize_band_peaks, compute_band_envelopes, compute_spectral_colors, compute_waveform,
-    FULL_WAVEFORM_SIZE, PREVIEW_WAVEFORM_SIZE,
+    bucketize_band_peaks, compute_band_envelopes, compute_waveform, FULL_WAVEFORM_SIZE,
+    PREVIEW_WAVEFORM_SIZE,
 };
 
 fn generate_test_audio(duration_secs: f64, sample_rate: u32) -> Vec<f32> {
@@ -83,14 +83,6 @@ fn main() {
         compute_band_envelopes(&samples, sample_rate, FULL_WAVEFORM_SIZE)
     });
 
-    let t_preview_colors = bench("compute_spectral_colors (preview)", iters, || {
-        compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE)
-    });
-
-    let t_full_colors = bench("compute_spectral_colors (full)", iters, || {
-        compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE)
-    });
-
     // Filter benchmarks
     println!("\n=== Filter stages ({iters} iterations each) ===\n");
 
@@ -125,7 +117,7 @@ fn main() {
     // Full pipeline benchmark
     println!("\n=== Full pipeline ({iters} iterations each) ===\n");
 
-    bench("full pipeline (all 6 outputs)", iters, || {
+    bench("full pipeline (all 4 outputs)", iters, || {
         let preview_waveform = compute_waveform(&samples, PREVIEW_WAVEFORM_SIZE);
         let full_waveform = compute_waveform(&samples, FULL_WAVEFORM_SIZE);
         let filtered = filter_3band(&samples, sample_rate as f32);
@@ -137,26 +129,12 @@ fn main() {
             0..samples.len(),
             PREVIEW_WAVEFORM_SIZE,
         ));
-        let preview_colors = compute_spectral_colors(&samples, sample_rate, PREVIEW_WAVEFORM_SIZE);
-        let full_colors = compute_spectral_colors(&samples, sample_rate, FULL_WAVEFORM_SIZE);
-        (
-            preview_waveform,
-            full_waveform,
-            bands,
-            preview_bands,
-            preview_colors,
-            full_colors,
-        )
+        (preview_waveform, full_waveform, bands, preview_bands)
     });
 
     // Summary
     println!("\n=== Summary ===\n");
-    let total = t_preview_waveform
-        + t_full_waveform
-        + t_preview_bands
-        + t_full_bands
-        + t_preview_colors
-        + t_full_colors;
+    let total = t_preview_waveform + t_full_waveform + t_preview_bands + t_full_bands;
     println!(
         "  Total (sum of stages):       {:.2}ms",
         total.as_secs_f64() * 1000.0
@@ -167,8 +145,6 @@ fn main() {
         ("full waveform", t_full_waveform),
         ("preview bands", t_preview_bands),
         ("full bands", t_full_bands),
-        ("preview colors", t_preview_colors),
-        ("full colors", t_full_colors),
     ];
 
     println!();
