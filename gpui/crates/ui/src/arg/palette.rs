@@ -72,12 +72,13 @@ pub fn luma_palette_row(
             .id(ElementId::Name(format!("{id}:swatch:{index}").into()))
             .flex_shrink_0()
             .size(px(CONTROL_HEIGHT))
+            .rounded(px(crate::radius::CHIP))
             .bg(*color)
             .map(|el| {
                 if is_selected {
                     el.border_2().border_color(ladder::primary())
                 } else {
-                    el.border_1().border_color(ladder::control_border())
+                    el.border_1().border_color(crate::glass::hairline(0.12))
                 }
             })
             .on_click(move |_, window, cx| select(PaletteEvent::Select(index), window, cx))

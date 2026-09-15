@@ -1,24 +1,12 @@
-//! GPUI port of `<Slider>` (src/shared/components/ui/slider.tsx).
-//!
-//! Not a thumb-on-a-track slider: the app's is an Ableton-style value box —
-//! a recessed `--input` slab with a `--primary` fill bar at `opacity-20`
-//! covering value% of the *content* box, and the numeric value drawn over it
-//! in 10px mono. The web version's range `<input>` is invisible, so the
-//! captured frame is exactly these three layers.
+//! The value slider: a rounded box with a fill bar that covers value% of its
+//! width, and the value drawn over it in mono. There is no thumb.
 //!
 //! # The drag lives here, not at the call sites
 //!
-//! For a long time this function painted those three layers and nothing else —
-//! the web control's interaction was the invisible `<input type=range>`, and
-//! porting the picture did not port the behaviour. Every slider in the app was
-//! therefore a picture of a value: the settings dialog said so in a comment,
-//! and the renderer lab grew a pair of nudge buttons beside each one to make up
-//! for it. Nothing had regressed; the drag had simply never been written.
-//!
-//! It is written *here* rather than at each call site because the arithmetic
-//! (pointer to fraction to value, against the box's live width) is the same
-//! everywhere and is the part that is easy to get subtly wrong. A caller says
-//! what the value is, what it is bounded by, and what to do with a new one.
+//! The arithmetic (pointer to fraction to value, against the box's live width)
+//! is the same everywhere and is easy to get subtly wrong, so it is written
+//! once here. A caller says what the value is, what bounds it, and what to do
+//! with a new one.
 //!
 //! # Absolute, and only while dragging
 //!
@@ -28,14 +16,14 @@
 //!
 //! A press with no movement changes nothing. That is not a limitation to route
 //! around: this control also sets Art-Net dimmer levels, and a stray click
-//! landing on a slab should not slam a rig to full. Movement is consent.
+//! landing on the box should not slam a rig to full. Movement is consent.
 
 use gpui::*;
 
 use crate::arg::{drag_fraction, OwnedDrag};
 use crate::drag::DragGhost;
-use crate::ladder;
 use crate::node::{Instrument, Role};
+use crate::{glass, ladder, radius};
 
 /// Height of the value box, and how it reads to the pointer.
 const HEIGHT: f32 = 28.;
@@ -83,8 +71,8 @@ pub fn luma_slider(
         .cursor_ew_resize()
         .on_drag(SliderDrag { id }, |_, _, _, cx| {
             // The press belongs to the slider, not to whatever it sits on: a
-            // lab panel over a 3D stage would otherwise start orbiting the
-            // camera under the drag.
+            // panel over a 3D stage would otherwise start orbiting the camera
+            // under the drag.
             cx.stop_propagation();
             cx.new(|_| DragGhost)
         })
@@ -104,9 +92,10 @@ fn slab(id: &SharedString, value: f32, fraction: f32, width: f32) -> Div {
         .flex_shrink_0()
         .w(px(width))
         .h(px(HEIGHT))
+        .rounded(px(radius::ROW))
         .border_1()
-        .border_color(ladder::control_border())
-        .bg(ladder::apex())
+        .border_color(glass::hairline(0.08))
+        .bg(glass::ink(0.03))
         .child(
             div()
                 .absolute()
@@ -114,6 +103,7 @@ fn slab(id: &SharedString, value: f32, fraction: f32, width: f32) -> Div {
                 .left_0()
                 .h_full()
                 .w(relative(fraction))
+                .rounded_l(px(radius::CONTROL))
                 .bg(ladder::primary())
                 .opacity(0.2),
         )
@@ -130,12 +120,7 @@ fn slab(id: &SharedString, value: f32, fraction: f32, width: f32) -> Div {
                 // digits jitter as they change.
                 .font_family(crate::fonts::MONO)
                 .text_size(px(10.))
-                // Foreground where the web side writes `--primary`: a hued
-                // readout was the one numeric text in the panel that wasn't
-                // white-on-ladder, and one canonical readout beats byte
-                // parity here. A deliberate divergence from the reference —
-                // the WebKit comparison shot will show it until the web
-                // slider follows.
+                // Foreground, like every other numeric readout in the panel.
                 .text_color(ladder::foreground())
                 .child(format!("{value}"))
                 // The number the box draws, published. A slider's own node

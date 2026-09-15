@@ -257,28 +257,33 @@ fn sv_square(
         .relative()
         .w(px(PICKER_WIDTH))
         .h(px(SV_HEIGHT))
-        .border_1()
-        .border_color(ladder::control_border())
+        .rounded(px(crate::radius::CONTROL))
         .bg(linear_gradient(
             90.,
             linear_color_stop(gpui::white(), 0.),
             linear_color_stop(hue, 1.),
         ))
-        .child(div().absolute().inset_0().bg(linear_gradient(
-            180.,
-            linear_color_stop(
-                Hsla {
-                    h: 0.,
-                    s: 0.,
-                    l: 0.,
-                    a: 0.,
-                },
-                0.,
-            ),
-            linear_color_stop(gpui::black(), 1.),
-        )))
         .child(
-            // The reticle: an 8px open square, offset to center on the point.
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(crate::radius::CONTROL))
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(
+                        Hsla {
+                            h: 0.,
+                            s: 0.,
+                            l: 0.,
+                            a: 0.,
+                        },
+                        0.,
+                    ),
+                    linear_color_stop(gpui::black(), 1.),
+                )),
+        )
+        .child(
+            // The reticle: an 8px open ring, offset to center on the point.
             div()
                 .absolute()
                 .left(gpui::relative(hsv.s))
@@ -286,6 +291,7 @@ fn sv_square(
                 .ml(px(-4.))
                 .mt(px(-4.))
                 .size(px(8.))
+                .rounded_full()
                 .border_1()
                 .border_color(gpui::white()),
         )
@@ -334,9 +340,15 @@ fn hue_strip(
         .flex()
         .w(px(PICKER_WIDTH))
         .h(px(HUE_HEIGHT))
-        .border_1()
-        .border_color(ladder::control_border())
-        .children([0., 60., 120., 180., 240., 300.].map(segment))
+        .rounded(px(crate::radius::CONTROL))
+        // A content mask is a rectangle, so the end segments round themselves.
+        .children([0., 60., 120., 180., 240., 300.].map(|from_deg| {
+            segment(from_deg)
+                .when(from_deg == 0., |s| s.rounded_l(px(crate::radius::CONTROL)))
+                .when(from_deg == 300., |s| {
+                    s.rounded_r(px(crate::radius::CONTROL))
+                })
+        }))
         .child(
             div()
                 .absolute()
@@ -345,6 +357,7 @@ fn hue_strip(
                 .ml(px(-1.))
                 .w(px(2.))
                 .h_full()
+                .rounded_full()
                 .bg(gpui::white()),
         )
         .on_drag(HueDrag { id: drag_id }, |_, _, _, cx| {
@@ -440,13 +453,14 @@ impl ColorArgEditor {
         let base = div()
             .flex_shrink_0()
             .size(px(CONTROL_HEIGHT))
+            .rounded(px(crate::radius::CHIP))
             .border_1()
-            .border_color(ladder::control_border());
+            .border_color(crate::glass::hairline(0.12));
         if inherit {
             // Dormant: the color is retained but not in effect, so the swatch
             // shows the control's resting fill, dimmed and inert.
             return base
-                .bg(ladder::control())
+                .bg(crate::glass::ink(0.06))
                 .opacity(ladder::DISABLED_OPACITY)
                 .agent_node(Role::Button, format!("{} swatch", self.id))
                 .agent_disabled(true)
