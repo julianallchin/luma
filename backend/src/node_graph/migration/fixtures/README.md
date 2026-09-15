@@ -4,8 +4,8 @@
 harmonic palette nodes, an ordinary sampler and Soft Voronoi. It covers empty
 Palette/Gradient arguments, single transparent colors, two colors, connected
 versus local harmonic fallbacks, chord changes and repeated seeks.
-`capture_empty_palettes.rs` captures only the original category evaluator and
-asserts that no canonical graph operation participates. The Color and Spatial
+The captures come only from the original category evaluator; no canonical
+graph operation participated. The Color and Spatial
 kernel files matched commit `7cfc6e8faf6ee583e7b50830d1878cbde12a8270` byte-for-byte
 at capture (Git blob hashes `928f8f05b3c2ca426d40c1cb4be5501a93dc36ab` and
 `ed6288c2f0e1614a9a9a1143a4abfed5d90b427e`).
@@ -17,18 +17,12 @@ fallback in that case. Unconnected harmonic consumers retain their local colors.
 Single stops stay single and retain position/opacity. All ten captures compare
 at the existing tolerance. Additional regressions change the default to white,
 apply empty clip overrides, rename the shared Input and round-trip saved data.
-Temporarily include the capture module from numerical.rs and run:
-
-```sh
-LUMA_CAPTURE_SHARED_PALETTES=/tmp/shared-palettes-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_shared_palettes
-```
 
 `spectral-v1.json` contains 153 original hue-shift cases: every pitch class,
 black/white/gray/near-gray/saturated/mixed colors, equal weights, and negative
-weights. `capture_spectral.rs` is a standalone capture of the HSL formula copied
-unchanged from commit `71320b4a05f97d2edbc2fa10f5ebd8a5dec2c58d`'s
-node implementation. It does not
-import the replacement evaluator. The category compiler omitted Spectral Shift,
+weights. The cases were captured from the HSL formula copied unchanged from commit
+`71320b4a05f97d2edbc2fa10f5ebd8a5dec2c58d`'s node implementation, not from the
+replacement evaluator. The category compiler omitted Spectral Shift,
 so this capture uses the earlier implementation rather than inventing a category
 rendering reference.
 
@@ -44,8 +38,8 @@ flat and volumetric layouts. It covers empty/one-color/three-color/uneven/transp
 palettes, clamped and fractional point counts, hard/soft regions, vibrance, speed,
 seed offsets, negative time and repeated seeks. Both spatial compiler and spatial
 kernel files matched commit `7cfc6e8faf6ee583e7b50830d1878cbde12a8270` at capture.
-`capture_voronoi.rs` records the original evaluator's raw RGBA values and frames;
-it never calls the replacement geometry or palette kernels.
+The file records the original evaluator's raw RGBA values and frames; the
+replacement geometry and palette kernels were not used.
 
 Converted graphs compose moving point signals, proximity weights and perceptual
 palette mixing. Point time is explicit seconds, independent of detected tempo.
@@ -59,8 +53,7 @@ including zero-width axes. No reference values or tolerances were changed.
 `selection-v1.json` contains 672 original Random Select Mask cases: zero, one
 and five heads; beat, kick, snare and unwired triggers; two clip starts; negative,
 zero, fractional and oversized counts; both avoid-repeat settings; and two node
-identities. `capture_selection.rs` records the original category evaluator's raw
-signals and output frames. The original captures remain unchanged.
+identities. It records the original category evaluator's raw signals and output frames. The original captures remain unchanged.
 
 Migration preserves selected counts, event timing, held selections and the old
 clip-start boundary. Exact head sequences intentionally change: independent
@@ -84,13 +77,8 @@ event lists, zero/unequal ADSR ratios, curve bias, amplitude and repeated seeks.
 The reference includes exact drum timestamps and samples at pulse boundaries.
 The signal compiler and kernels were unchanged from the original commit during
 capture (`git diff 7cfc6e8faf6ee583e7b50830d1878cbde12a8270` on those files was empty).
-`capture_events.rs` records expected frames and raw taps only through that old
-evaluator; the musical clock supplies fixture metadata, not expected samples.
-Temporarily include the generator as a test module and run:
-
-```sh
-LUMA_CAPTURE_EVENT_MIGRATION=/tmp/events-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_event_graphs
-```
+Expected frames and raw taps come only from that old evaluator; the musical
+clock supplies fixture metadata, not expected samples.
 
 Beat Pulses historically represented both a sampled numeric pulse and a traced
 event source. Conversion separates those meanings. Recorded events retain f32
@@ -115,13 +103,6 @@ depend on regenerating tones with a platform's trigonometry implementation.
 Sample times include the leading FFT padding, both audio boundaries, a later
 seek and a repeated time. Raw comparisons use a tighter audio tolerance of
 max(2e-8, |expected| × 5e-5); the original reductions accumulated in f32.
-
-`capture_audio.rs` follows the isolated-checkout procedure below, declaring
-`mod capture_audio`, then running:
-
-```sh
-LUMA_CAPTURE_AUDIO_MIGRATION=/tmp/audio-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_audio_graphs
-```
 
 The audio compiler and kernels matched the original commit during the first
 140 captures. The causal FFT implementation then moved to `audio/spectrum.rs`, shared
@@ -148,13 +129,6 @@ The capture includes raw signal/UV taps and color/movement outputs at six times,
 including a repeated seek. It never uses the new noise kernels or converter to
 generate expected values.
 
-`capture_noise.rs` follows the isolated-checkout procedure below, declaring
-`mod capture_noise`, then running:
-
-```sh
-LUMA_CAPTURE_NOISE_MIGRATION=/tmp/noise-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_noise_graphs
-```
-
 The original signal compiler and kernels match the original commit below.
 Preserving their f32 interpolation and octave accumulation is necessary to keep
 authored random textures and movement paths unchanged.
@@ -169,13 +143,6 @@ row storage. The original unconnected palette panicked when reading input zero;
 that invalid-graph case cannot supply an output reference and is covered by a
 separate black-output regression for the replacement.
 
-`capture_harmony.rs` follows the same isolated-checkout procedure below,
-declaring `mod capture_harmony`, then running:
-
-```sh
-LUMA_CAPTURE_HARMONY_MIGRATION=/tmp/harmony-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_harmony_graphs
-```
-
 The original signal/audio compilers and signal/color/audio kernels were unchanged
 during capture. Palette parsing uses the shared migration codec; its valid color
 behavior is unchanged. This fixture records chord sections alongside the original
@@ -185,14 +152,7 @@ frames and raw taps; it does not generate expected values through the converter.
 original spatial attribute/alias, each mirror axis, raw folded positions and
 mirror-side values. It includes empty, single-head, vertical, flat, asymmetric
 and tilted-circle layouts. Fixture IDs intentionally run in reverse lexical
-order. `capture_spatial.rs` follows the same isolated-checkout procedure below,
-declaring `mod capture_spatial`, then running:
-
-```sh
-LUMA_CAPTURE_SPATIAL_MIGRATION=/tmp/spatial-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_spatial_graphs
-```
-
-The spatial compiler and kernels match the original commit below. The existing
+order. The spatial compiler and kernels match the original commit below. The existing
 circle fitter has acquired fields for projecting additional points; its captured
 fit and angular-position computation are unchanged. The new geometry operations
 preserve f32 fitting precision and expose sample order explicitly: both can
@@ -210,26 +170,13 @@ expected values.
 
 `movement-v1.json` adds 37 cases from the same unchanged evaluator: Circle,
 Figure 8 and Sweep, both direct and composed with scalar/RGB arithmetic. Each
-captures raw UV taps and both movement/color sinks. `capture_movement.rs` follows
-the same isolated-checkout procedure, declaring `mod capture_movement`, with:
-
-```sh
-LUMA_CAPTURE_MOVEMENT_MIGRATION=/tmp/movement-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_movement_graphs
-```
+captures raw UV taps and both movement/color sinks.
 
 The original compiler passed UV values directly to pan/tilt angles; its comments
 described a movement pyramid that was not executed. Conversion preserves the
 executed values. Old arithmetic repeated the last component of a shorter vector;
 conversion now makes that padding explicit with channel extraction and joins.
 New numerical connections use normal broadcasting and reject incompatible widths.
-
-`capture_numerical.rs` is the independent generator. In an isolated copy of that
-revision, copy it to `backend/src/capture_numerical.rs`, declare
-`#[cfg(test)] mod capture_numerical;` in `backend/src/lib.rs`, and run:
-
-```sh
-LUMA_CAPTURE_NUMERICAL_MIGRATION=/tmp/numerical-v1.json cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma --lib capture_original_numerical_graphs
-```
 
 The active regression test uses the frozen data only. It checks raw arithmetic
 and channel counts within 3e-5 (the original used f32, the new core uses f64),
@@ -273,9 +220,7 @@ constant/variable beat intervals; two clip spans; and nested reductions. Capture
 used the original numerical kernels and 44 Hz sampling arithmetic. Comparison
 against `7cfc6e8faf6ee583e7b50830d1878cbde12a8270` verified that the only change to
 the range preparation function was error propagation. The replacement was not
-used to produce expected values. Register `capture_reductions.rs` temporarily as
-a test module and set `LUMA_CAPTURE_REDUCTIONS` to an output copy when recapturing
-from that original evaluator.
+used to produce expected values.
 
 The canonical range uses 1,024 evenly spaced musical-time samples, including both
 clip endpoints. Single-reduction comparisons measure the changed range estimate,
