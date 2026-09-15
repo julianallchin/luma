@@ -136,7 +136,10 @@ Replaces `apply_position` and `look_at_position`.
 
 The fixture-specific math (direction → pan/tilt) uses the same inverse kinematics already implemented in the current `look_at_position` node, but the input is now a per-group angular offset rather than a world-space target point.
 
-## Nodes to Remove
+## Removed Nodes
+
+Done. These nodes no longer exist. `apply_movement`, `circle`, `sweep`,
+`figure_8` and `wander` replace them.
 
 | Node | Reason |
 |------|--------|
@@ -211,6 +214,8 @@ When a group is created with movers:
 - UV rotation defaults to 0
 
 ## DSL Integration
+
+Status: not built. There is no bar-by-bar DSL in the code.
 
 The bar-by-bar DSL can express movement concisely:
 
