@@ -4,10 +4,17 @@ See [docs/design/sync.md](../docs/design/sync.md).
 
 ## Supabase
 
-Apply `../supabase/migrations/20260912000000_row_model.sql` and
-`../supabase/migrations/20260916000000_stage_child_venue_id.sql` (`supabase db
-push`, or paste them into the SQL editor). The first drops the old sync schema
-first, so it also runs on a project that has been reset.
+Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
+`20260912000000_row_model.sql` on into the SQL editor, in filename order:
+
+- `20260912000000_row_model.sql`
+- `20260916000000_stage_child_venue_id.sql`
+- `20260918000000_cued_patterns.sql`
+- `20260920000000_track_media_read_row_model.sql`
+- `20260921000000_venue_haze.sql`
+
+`row_model.sql` drops the old sync schema first, so it also runs on a project
+that has been reset.
 
 It creates `powersync_role` with a placeholder password. Set a real one and
 keep it for the next step:

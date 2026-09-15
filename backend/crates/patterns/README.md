@@ -4,10 +4,12 @@ This crate owns canonical score graphs, fixture × time × channel tensors,
 structured controls and deterministic event sampling. It has no database,
 playback-device state or separate scalar execution engine.
 
-- `chase`, `pulse` and `dissolve_flash` emit numerical brightness signals.
+- `chase`, `pulse` and `dissolve` emit numerical brightness signals.
   Events determine journey starts; travel sets each journey's duration. Longer
   journeys overlap with Max, and completed journeys contribute zero. A snare
   trigger and a periodic trigger connect to the same Chase input.
+  `dissolve_flash` is an old name. `migration::upgrade` rewrites it to
+  `dissolve` or `beat_dissolve`.
 - `src/recipes.json` is the editable source of built-in graph recipes. Primitive
   signatures live in Rust and are the only kernel registry. The catalog does
   not depend on the migration catalog or reconstruct old graphs at startup.
@@ -36,10 +38,9 @@ playback-device state or separate scalar execution engine.
   per-head weights for each requested event; with count one, those weights hold
   the current selection until the next event. Missing recorded events have zero
   weight, while global events broadcast their presence.
-- `shimmer` composes Beat trigger → Random subset → Pulse. Reroll interval and
-  envelope duration are independent; old selections finish their envelopes while
-  new selections begin, combining with Max. `circle` is a four-node vector recipe
-  which can feed ordinary scale/offset math for motion or sampled geometry.
+- `beat_shimmer` lights a share of heads on each beat. Its Coverage input is an
+  envelope over the event. `circle` is a four-node vector recipe which can feed
+  ordinary scale/offset math for motion or sampled geometry.
 - Wire rate follows its actual dependencies. Computed constants can feed fixed
   controls; time-varying wires cannot. Editable graph outputs remain able to
   accept animation after starting with a constant value.
@@ -82,7 +83,7 @@ playback-device state or separate scalar execution engine.
   callers can add a color input on Output without changing the Chase node.
 - Color-only Output extracts brightness. Color plus an explicit dimmer keeps
   the two independent. Perceptual gradient interpolation remains OKLab.
-- `Score` defaults to version 3. Named Input nodes preserve stable keys while
+- `Score::VERSION` is 7. Named Input nodes preserve stable keys while
   exposing destination-inferred controls; renaming a label does not lose clip
   overrides. Timing, selection, layering and the overall random seed belong to
   the clip; individual noise operations can also expose an explicit seed.
@@ -106,8 +107,8 @@ principal direction, independently normalized per requested group.
 Run checks from the repository root:
 
 ```
-cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma-patterns
-cargo +1.97.1 clippy --manifest-path gpui/Cargo.toml -p luma-patterns --all-targets -- -D warnings
+cargo +1.97.1 test --manifest-path backend/Cargo.toml -p luma-patterns
+cargo +1.97.1 clippy --manifest-path backend/Cargo.toml -p luma-patterns --all-targets -- -D warnings
 ```
 
 `pattern-eval` reads one JSON request on stdin and writes JSON on stdout. It
@@ -131,7 +132,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```
 
 ```
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
+cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
 ```
 
 ## Host integration and migration
@@ -142,23 +143,25 @@ retain journeys or replay a graph for each event. `Score::prepare_clip` freezes
 clip inputs and enforces the clip span. Native visualizer previews share this
 path, including real track audio, beat-grid interpolation and argument overrides.
 
-Opening an owned v2 score or a row-based score of typed patterns records its v3
-conversion through authored history. Referenced standalone patterns become shared
-score-owned graphs, preserving names, controls, overrides and layout. Clip seconds
-map through the real tempo grid. A historical selection seed remains separate
-from effect randomness. Read-only previews convert a copy; historical source
-bytes and revisions remain unchanged. Restoring an old source and reopening it
-creates a new migration operation against that restored history head.
+`migration::upgrade` brings a score of version 2 or later to version 7.
+Playback and previews upgrade a copy in memory
+(`backend/src/services/graph_scores.rs`). Referenced standalone patterns become
+score-owned graphs, preserving names, controls, overrides and layout. Clip
+seconds map through the real tempo grid. A selection seed stays separate from
+effect randomness.
 
-Frozen vocabularies live under `migrations/`. Historical validation reads their
-schemas without executing retired kernels. Standalone typed playback also lowers
-through that converter before execution. Old scalar/broadcast/bundle writer and
-Travel Clock runtime branches are removed. Older untyped pattern/document
-migration and removal of the remaining host evaluator are still integration work.
+Frozen vocabularies live under `migrations/`; see its README.
+`migration::validate` checks an old document against its own vocabulary without
+running retired kernels.
 
 Preserve legacy Major Span/Count behavior in migration: those old operators pick
 a world axis, whereas the new Major Axis fits a principal direction. Do not
 reinterpret one as the other.
+
+`scripts/library/ebf_graph_reset.py` holds manually rebuilt EBF graph recipes
+and compares them with recorded output. It calls `score_dsl_export`,
+`score_dsl_validate` and `score_dsl_import`, which are not in the dispatch
+table, so it does not run today.
 
 ## Native venue previews
 
@@ -169,7 +172,7 @@ The shared native/headless dispatcher exposes `get_pattern_node_library` and
 {
   "venueId": "venue UUID",
   "trackId": "track UUID",
-  "definition": "dissolve_flash",
+  "definition": "chase",
   "targets": [{"expression": "pixel_bars", "subset": {"fraction": 0.5}}],
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
@@ -186,10 +189,11 @@ than replaced by invented single-head geometry. Preview retains venue and track
 read authorization and does not change the active scene or drive hardware.
 An optional `library` supplies custom graph definitions using the same contracts.
 
-Save one returned frame as JSON to render it in the real venue:
+Save one returned frame as JSON to render it in the real venue. `render_venue`
+is a backend binary:
 
 ```
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml --bin render_venue -- \
+cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- \
   --db /path/to/disposable/luma.db --venue-id UUID \
   --state /path/to/frame.json --output /path/to/preview.png
 ```
@@ -197,7 +201,7 @@ cargo +1.97.1 run --manifest-path gpui/Cargo.toml --bin render_venue -- \
 For repeatable execution measurements, save the response's `cells` array:
 
 ```
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-patterns --release \
+cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --release \
   --example frame-budget < cells.json
 ```
 

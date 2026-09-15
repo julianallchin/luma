@@ -40,8 +40,8 @@ legacy cyclic Chase/Pulse/Dissolve recipes with event operations while retaining
 their exposed argument keys and defaults. It is conversion data, separate from
 the live numerical recipes in `src/recipes.json`.
 
-`migration::upgrade` chains these conversions to the current version. Opening an owned score applies
-it through the authored-history seam as one revision; history deserialization
-continues to validate the original version and preserve its hash. Read-only
-playback converts a copy. Unknown source content fails without modifying it,
-and newly introduced catalog names cannot overwrite an authored helper.
+`migration::upgrade` chains these conversions to the current version.
+`migration::validate` checks a document against its own version's vocabulary.
+Playback and previews upgrade a copy in memory (`backend/src/services/graph_scores.rs`).
+Unknown source content fails without modifying it, and newly introduced catalog
+names cannot overwrite an authored helper.
