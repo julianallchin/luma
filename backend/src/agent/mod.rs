@@ -15,9 +15,6 @@
 //! Turn deltas deliberately do **not** go through [`crate::dispatch::Events`].
 //! That bus is a string-keyed, fire-and-forget, app-wide broadcast of
 //! `serde_json::Value`; turn deltas are per-turn, ordered, high-rate and typed.
-//! A host that can only receive JSON (the webview) pays for its own adapter —
-//! see the `agent_turn_*` commands on the dispatch seam — and the host that can
-//! hold a Rust stream does not pay at all.
 //!
 //! # Implementation
 //!
@@ -29,7 +26,6 @@
 
 pub(crate) mod context;
 pub mod engine;
-pub mod host;
 pub mod model;
 pub mod skills;
 pub mod subagent;

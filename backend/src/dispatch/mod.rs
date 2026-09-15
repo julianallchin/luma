@@ -12,7 +12,6 @@ pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use error::CommandError;
 pub use services::system_track_sources;
-pub(crate) use services::WeakServices;
 pub use services::{
     AppServices, EventSink, Events, Host, HostControl, SharedServices, TrackSources,
 };
@@ -224,19 +223,6 @@ commands! {
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
-
-    // Only what a webview needs and a typed caller does not: it cannot hold a
-    // `TurnStream`, so a turn is addressed by thread id and its deltas arrive
-    // as `"agent-turn"` events.
-    agent::agent_turn_start(thread_id: String, prompt: String) -> String;
-    agent::agent_turn_cancel(thread_id: String) -> bool;
-    agent::agent_steer(thread_id: String, message: String) -> ();
-
-    // The bundled lighting-craft playbooks, read from `resources/skills` by the
-    // one registry in `agent::skills`. A webview has no filesystem to discover
-    // them itself.
-    skills::skills_listing() -> String;
-    skills::get_skill(name: String) -> String;
 
     agent_execution::run_python_cell(
         thread_id: String,

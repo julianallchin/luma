@@ -256,9 +256,6 @@ pub struct AppServices {
     /// because its interior is a bare `Mutex` — a clone would fork the index
     /// rather than share it.
     pub(crate) fixtures: Arc<FixtureState>,
-    /// Turns started through the seam by a host that cannot hold a
-    /// `TurnStream`. Empty and idle on every other host.
-    pub(crate) agent_turns: Arc<crate::agent::host::TurnRegistry>,
     /// Delegated turns in flight, per parent thread. Empty on a host that
     /// never runs a `subagent` call; it is only the concurrency cap's counter.
     pub(crate) subagents: Arc<crate::agent::subagent::SubagentRegistry>,
@@ -274,45 +271,20 @@ pub struct AppServices {
     pub(crate) sync: Option<crate::sync::service::Service>,
 }
 
-/// An owning handle to services whose [`TurnRegistry`] can reach them again.
+/// An owning, cloneable handle to services, for work that outlives the
+/// command that starts it, such as an agent turn.
 ///
-/// [`AppServices::into_shared`] is the only constructor, and it is what
-/// installs that back-reference, so the handle the agent's turn loop needs
-/// cannot be forged with a bare `Arc::new`: a host that skips the wiring fails
-/// to compile instead of failing every `agent_turn_start` at runtime.
-///
-/// Derefs to [`AppServices`], so a `&SharedServices` is a `&AppServices`
-/// everywhere a handler wants one.
-///
-/// [`TurnRegistry`]: crate::agent::host::TurnRegistry
+/// [`AppServices::into_shared`] is the only constructor. Derefs to
+/// [`AppServices`], so a `&SharedServices` is a `&AppServices` everywhere a
+/// handler wants one.
 #[derive(Clone)]
 pub struct SharedServices(Arc<AppServices>);
-
-impl SharedServices {
-    /// A non-owning handle, for the registry the services themselves hold —
-    /// an owning one would be a cycle.
-    pub(crate) fn downgrade(&self) -> WeakServices {
-        WeakServices(Arc::downgrade(&self.0))
-    }
-}
 
 impl std::ops::Deref for SharedServices {
     type Target = AppServices;
 
     fn deref(&self) -> &AppServices {
         &self.0
-    }
-}
-
-/// The back-reference [`SharedServices::downgrade`] hands the turn registry.
-///
-/// Upgrading is the only other way to obtain a [`SharedServices`], and it can
-/// only yield one that was constructed properly in the first place.
-pub(crate) struct WeakServices(std::sync::Weak<AppServices>);
-
-impl WeakServices {
-    pub(crate) fn upgrade(&self) -> Option<SharedServices> {
-        self.0.upgrade().map(SharedServices)
     }
 }
 
@@ -365,7 +337,6 @@ impl AppServices {
             storage,
             fixtures_root,
             fixtures: Arc::new(FixtureState::empty()),
-            agent_turns: Arc::default(),
             subagents: Arc::default(),
             events: Events::discard(),
             host: HostControl::process_exit(),
@@ -444,13 +415,10 @@ impl AppServices {
     /// Put the services behind a shared handle.
     ///
     /// The agent's turn loop outlives the command that starts it, so it cannot
-    /// borrow a command body's `&AppServices`; a host that wants the
-    /// `agent_turn_*` commands hands ownership over here instead.
+    /// borrow a command body's `&AppServices`.
     #[must_use]
     pub fn into_shared(self) -> SharedServices {
-        let shared = SharedServices(Arc::new(self));
-        shared.agent_turns.attach(&shared);
-        shared
+        SharedServices(Arc::new(self))
     }
 
     /// Observe the events commands emit.
@@ -569,11 +537,6 @@ impl AppServices {
     /// Where this host's push notifications go.
     pub fn events(&self) -> &Events {
         &self.events
-    }
-
-    /// Turns started through the dispatch seam.
-    pub fn agent_turns(&self) -> &Arc<crate::agent::host::TurnRegistry> {
-        &self.agent_turns
     }
 
     /// The app database.

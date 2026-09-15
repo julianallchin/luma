@@ -1003,8 +1003,6 @@ async fn run() -> Result<(), String> {
         return record_usage(args).await;
     }
     let config = HostConfig::parse_args(args)?;
-    // `into_shared`, not a bare `Arc::new`: the turn loop outlives the command
-    // that starts it, so it needs the back-reference `into_shared` attaches.
     let services = boot(&config).await?.into_shared();
     eprintln!(
         "[luma-mcp] ready: config={} fixtures={}",
