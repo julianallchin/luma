@@ -1,7 +1,7 @@
 # Comet (Zeron) style spec — design source for Luma's GPUI agent chat
 
-Every value below is copied from the comet clone at
-`…/scratchpad/comet`. Paths are relative to that clone root; `file:line`
+Every value below is copied from the comet repository
+(https://github.com/zeronsh/comet). Paths are relative to its root; `file:line`
 is the authority for each number. This spec is the *visual bar* a critic
 should measure our chat against — it is not a mandate to copy the code.
 

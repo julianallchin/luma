@@ -1,11 +1,26 @@
-# Native UI and renderer harness
+# Harness
 
-GPUI component fixtures live in `gpui/crates/harness/src/fixtures.rs` and use the shared controls from `gpui/crates/ui`. Fonts in `harness/fonts/` are embedded by the native app and must remain here.
+Reference data, fonts and image tools for native UI and renderer tests.
+
+- `fonts/`: Inter fonts. The native app embeds them, so they must stay here.
+- `goldens/`: numerical contracts and reference images. Backend, scene and
+  render tests read them. `goldens/scenes-wgpu/` holds renderer reference
+  images.
+- `gauntlet-chat/`: the chat style spec and its comet reference plates.
+- `gauntlet-te/`: the track editor interaction contract.
+- `agent-gauntlet/`: the venue and show MCP gauntlet. See its README.
+- `perf/`: dated performance and quality investigations.
+- `shots/`: saved captures.
+
+Render the renderer goldens:
 
 ```sh
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-gpui-harness -- --list
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-gpui-harness -- --fixture button
-cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-render --bin render-goldens -- single-mover
+cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-render --release --bin render-goldens -- single-mover
 ```
 
-`goldens/` contains numerical contracts and historical reference images consumed by native tests. The former React capture pages and scripts have been removed. To compare existing capture directories, install the local tools with `cd harness && bun install`, then run `bun compare-shots.mjs DIR_A DIR_B`.
+Compare two capture directories:
+
+```sh
+cd harness && bun install
+bun compare-shots.mjs DIR_A DIR_B
+```
