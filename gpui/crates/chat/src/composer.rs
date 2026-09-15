@@ -684,8 +684,8 @@ fn send(chat: &Entity<AgentChat>, action: Action, theme: &Theme) -> impl IntoEle
 mod tests {
     use super::*;
 
-    /// The button's four states, and the one that is inert. A turn running is
-    /// never inert — that was the bug: the composer went dead mid-turn.
+    /// The button's four states, and the one that is inert. A running turn is
+    /// never inert, so the composer stays live mid-turn.
     #[test]
     fn only_an_idle_empty_composer_is_inert() {
         assert_eq!(Action::of(false, false), Action::Inert);

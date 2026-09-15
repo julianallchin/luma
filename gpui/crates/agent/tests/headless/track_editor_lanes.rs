@@ -194,7 +194,7 @@ fn the_lane_stack_sits_on_the_floor_and_the_wheel_reaches_the_rest_of_it() {
     // Growing them again is not asserted back onto the floor: the anchor is
     // rows-from-the-floor under the pointer, and a stack that fitted the canvas
     // had no scroll to hold it with — so the notch that grows past the viewport
-    // starts from wherever that clamp left it, exactly as the web's does.
+    // starts from wherever that clamp left it.
     let grown = &out["grown"];
     assert_eq!(
         number(grown, "tallest"),

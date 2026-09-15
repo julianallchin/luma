@@ -5,12 +5,10 @@
 //!
 //! [`Gradient`] owns the invariants — stops sorted by `t`, positions in
 //! `0..=1`, including empty and single-color values — and every mutator preserves them, so no
-//! host ever sorts, clamps, or index-juggles. The web reference re-sorts after
-//! every pointer move and then hunts for where its dragged stop went; here
-//! [`Gradient::move_stop`] instead clamps a drag between its neighbours, so a
-//! stop can never cross another and **indices are stable for the whole drag**.
-//! That is a deliberate divergence: the resort dance is exactly the
-//! change-amplification the model exists to absorb.
+//! host ever sorts, clamps, or index-juggles. [`Gradient::move_stop`] clamps a
+//! drag between its neighbours, so a stop can never cross another and
+//! **indices are stable for the whole drag**. No caller has to re-sort and
+//! then search for the stop it was dragging.
 //!
 //! # The bar is exact, not sampled
 //!

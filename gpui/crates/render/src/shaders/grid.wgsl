@@ -1,5 +1,4 @@
-// The fading floor grid, ported verbatim from `stage-visualizer.tsx`'s
-// `GRID_FRAGMENT`. World-XY analytic grid (three's world-XZ), `fwidth`
+// The fading floor grid. World-XY analytic grid (three's world-XZ), `fwidth`
 // antialiasing, distance fade. Transparent, no depth write.
 
 const CELL_SIZE: f32 = 0.5;

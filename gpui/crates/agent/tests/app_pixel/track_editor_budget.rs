@@ -60,10 +60,8 @@ const CLIPS_PER_LANE: u32 = 15;
 /// machine this is developed on.
 const BUDGET_MS: f64 = 8.33;
 
-/// The web timeline this one replaces, measured scrubbing:
-/// `harness/perf/web-dev-2026-08-20.json`. Kept here because "faster than the
-/// thing we are replacing" is the migration's whole thesis, and a budget that
-/// passed while sitting just under 27 ms would have met the letter of it.
+/// The scrub p95 of the removed web timeline, measured on 2026-08-20. The
+/// native editor must stay decisively under it, at half this value or less.
 const WEB_P95_MS: f64 = 27.;
 
 fn harness() -> Harness {

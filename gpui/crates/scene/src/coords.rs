@@ -12,16 +12,15 @@
 //!
 //! * **data space** — Z-up already; `posZ` is height. What the DB stores.
 //! * **three space** — Y-up. The golden camera poses are in it, and every
-//!   fixture/piece transform in the three.js renderer was built in it via the
-//!   `(x, z, y)` swap.
+//!   stored fixture/piece transform is composed in it via the `(x, z, y)`
+//!   swap.
 //!
-//! The swap `data -> three` transposes two axes, so its determinant is −1: the
-//! three.js scene is a *mirror* of data space, not a rotation of it. That is
+//! The swap `data -> three` transposes two axes, so its determinant is −1:
+//! three space is a *mirror* of data space, not a rotation of it. That is
 //! smell #5 in the spec, and it is load-bearing here — the goldens record the
 //! mirrored world, so reproducing them means reproducing the mirror. It is
 //! isolated in [`world_from_data`] (note the negated Y) rather than smeared
-//! across every call site; when the app-side swap is deleted, this becomes the
-//! identity and the goldens are re-captured.
+//! across every call site.
 
 use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Vec3};
 
@@ -38,11 +37,10 @@ pub fn three_from_data(p: Vec3) -> Vec3 {
 ///
 /// Every stored transform in a venue — fixture or stage piece, root or attached
 /// — means this and nothing else, so it is spelled once. The `(x, z, y)` swap
-/// applies to *both* halves: three.js builds these as
+/// applies to *both* halves: the three-space convention is
 /// `position.set(posX, posZ, posY)` / `rotation.set(rotX, rotZ, rotY)`, and a
 /// pose whose translation is swapped but whose Euler triple is not is a pose in
-/// no space at all. That mistake is only visible once transforms compose, which
-/// is why it survived in the stage-piece parent chain for as long as it did.
+/// no space at all. That mistake is only visible once transforms compose.
 ///
 /// Scale is not included: it is uniform, commutes with the rotation, and the
 /// callers that have one apply it themselves.

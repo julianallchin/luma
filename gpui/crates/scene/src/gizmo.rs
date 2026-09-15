@@ -17,7 +17,7 @@ pub const SCREEN_RING_RADIUS: f32 = 1.0;
 const RING_WIDTH: f32 = 0.08;
 const PARALLEL_EPSILON: f32 = 1e-5;
 
-/// `TransformControls.size`. Larger than the 0.5 the React editor used: at 0.5
+/// Gizmo size factor. At 0.5
 /// the plane quads, ticks and centre octahedron all crowd the pivot and the
 /// axis arms end inside the selected piece's own silhouette — the handles read
 /// as one tangle. 0.9 spaces them apart at every zoom (the widget is

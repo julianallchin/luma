@@ -6,12 +6,11 @@
 //! this module owns only what the affordances *look* like, which is the half
 //! the goldens pin.
 //!
-//! Both shapes are transliterated rather than reinvented, because a gizmo that
-//! is "basically right" is worse than none: `fixture-object.tsx` renders the
-//! cage as a wireframe `BoxGeometry` at the fixture's physical dimensions, and
-//! `<TransformControls>` resolves to `three-stdlib`'s translate gizmo at
-//! `size = 0.5`. The handle table, the constant-screen-size factor and the
-//! edge-on hide/flip rules below are that implementation, term for term.
+//! The cage is a wireframe box at the fixture's physical dimensions. The gizmo
+//! follows `three-stdlib`'s translate gizmo: the handle table, the
+//! constant-screen-size factor and the edge-on hide/flip rules below are that
+//! implementation, term for term, because a gizmo that is "basically right" is
+//! worse than none.
 
 use glam::{Mat3, Mat4, Vec3};
 use luma_scene::{gizmo_scale, Axis, GizmoHandle, GizmoMode, RING_RADIUS};
@@ -22,7 +21,7 @@ use crate::frame::{Camera, Definitions, MeshData};
 use crate::scene_desc::{Geometry, Scene, SocketMarkState};
 
 /// How an overlay sits against the scene it is drawn over. The two variants are
-/// the two material configurations three.js uses, not a free combination:
+/// the two material configurations the goldens use, not a free combination:
 /// `MeshBasicMaterial` defaults for the cage, and the gizmo's
 /// `depthTest: false, depthWrite: false, transparent: true`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,8 +606,7 @@ fn aim_arrows(
 
 /// The world point the gizmo stands on, or `None` with nothing selected.
 ///
-/// Ported from `unified-transform.tsx`'s `stagePieceAnchorWorld`, which picked
-/// these to match what a hand expects to grab:
+/// The anchors match what a hand expects to grab:
 ///
 /// * **fixture** — its own origin, which is where its body is.
 /// * **stage piece** — the bottom centre of its mesh's bounds. Stage GLBs put
@@ -617,11 +615,8 @@ fn aim_arrows(
 ///   the piece rests on.
 /// * **several of either** — the mean of their anchors.
 ///
-/// The third React rule, a *parented* piece anchoring on the socket that
-/// attaches it to its parent, is not portable yet and is deliberately absent:
-/// a [`crate::scene_desc::Piece`] arrives flattened, with no parent, and the
-/// socket catalogue is still TypeScript-only. Both land in the venue graph
-/// (`docs/design/venue-graph.md`, phases 2–3).
+/// A *parented* piece does not anchor on the socket that attaches it: a
+/// [`crate::scene_desc::Piece`] arrives flattened, with no parent.
 pub(crate) fn pivot(scene: &Scene, lib: &mut Library, to_world: Mat4) -> Option<Vec3> {
     let fixtures = scene.selected_fixture_ids.iter().filter_map(|id| {
         let fixture = scene.fixtures.iter().find(|f| &f.id == id)?;

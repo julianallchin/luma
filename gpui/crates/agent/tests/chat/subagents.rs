@@ -41,7 +41,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
             {send}
 
             // The chip is a pill: the identicon, the model's own label, and
-            // React's own trailing line. The generic chip would read
+            // its own trailing line. The generic chip would read
             // "Started subagent · …" in one node — this reads as two.
             until("the delegation chip", (s) => chips(s).some(
                 (c) => c.indexOf({description:?}) >= 0));
@@ -128,7 +128,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
     );
     assert_eq!(
         result.result["working_line"], true,
-        "the pill's trailing line must be React's own `started working`"
+        "the pill's trailing line must be its own `started working`"
     );
     assert_eq!(result.result["pill_up"], true);
 

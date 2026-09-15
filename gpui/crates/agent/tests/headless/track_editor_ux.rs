@@ -1,13 +1,11 @@
 //! The track editor's pointer and view contract, driven through real input.
 //!
-//! Everything here is a behavior the web timeline has and this canvas had to
-//! grow: which vertical band answers a press, that only a clip's header bar is
+//! Everything here is a behavior this canvas must have: which vertical band answers a press, that only a clip's header bar is
 //! grabbable, that a sweep of empty lane selects what it *contains*, that a
 //! resize snaps to the beat grid and moves every selected clip, that every
 //! destructive command steps back under Cmd+Z, that two clips may share a
 //! layer, and that the wheel scrolls where it is not zooming. The contract
-//! they are checked against is `harness/gauntlet-te/behavior-spec.md`, which
-//! is the web source turned into an index.
+//! they are checked against is `harness/gauntlet-te/behavior-spec.md`.
 //!
 //! # Why one test and not one per cluster
 //!
@@ -152,7 +150,7 @@ const SCRIPT: &str = r#"
 
     // --- press regions -----------------------------------------------------
     // The ruler scrubs. The waveform under it does not: it clears the
-    // selection, which is the one surprise in the web's pointer map.
+    // selection, which is the one surprise in the pointer map.
 
     app.click(node("card", "Strobe"));
     app.frames(2);
@@ -387,7 +385,7 @@ const SCRIPT: &str = r#"
     //
     // No reopen inside the sequence: the history belongs to the screen, and
     // leaving the editor is leaving it behind. `ctrl-z` at the end is the
-    // other spelling of the same chord, which the web reads too.
+    // other spelling of the same chord.
     const beforeUndo = { total: total(), strobes: count("Strobe") };
     app.click(node("card", "Strobe"));
     app.frames(2);
@@ -450,9 +448,8 @@ const SCRIPT: &str = r#"
     reopen();
     const strobes = spans("Strobe");
 
-    // Overlap: two clips may share a layer *and* a span. The web timeline
-    // says so — it specifies which of two overlapping clips a press picks —
-    // so a move across a neighbour has to survive the write rather than be
+    // Overlap: two clips may share a layer *and* a span. The contract
+    // specifies which of two overlapping clips a press picks, so a move across a neighbour has to survive the write rather than be
     // painted, accepted and then quietly rolled back on the next visit.
     /** The leftmost card carrying this label. */
     function leftmost(label) {

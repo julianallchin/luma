@@ -1,19 +1,15 @@
-//! Golden-vector parity with the stage builder that used to be in TypeScript.
+//! Golden-vector tests for the snap and socket solvers.
 //!
-//! These are characterization tests, not specifications: they pin the exact
-//! numeric output `src/features/stage/lib/{snap,sockets}.ts` produced, so this
-//! port reproduces it rather than something that merely looks right.
+//! These are characterization tests, not specifications: they pin exact
+//! numeric output, so the solvers reproduce it rather than something that
+//! merely looks right.
 //!
-//! **The generator is gone.** Those modules and
-//! `__tests__/snap-goldens.gen.ts` were deleted when the React builder was
-//! frozen at phase 3 of `docs/design/venue-graph.md` — keeping a second solver
-//! alive only so it could be tested against is the duplication the port existed
-//! to remove. What is left is a *frozen capture*: it can be read, and it can be
-//! deleted if the behaviour it pins is deliberately abandoned, but it cannot be
-//! re-recorded. A change here is therefore a decision, not a refresh — which is
-//! the property a characterization test wants anyway.
+//! **The capture is frozen.** Its generator no longer exists. The capture can
+//! be read, and it can be deleted if the behaviour it pins is deliberately
+//! abandoned, but it cannot be re-recorded. A change here is therefore a
+//! decision, not a refresh.
 //!
-//! Serialization conventions, from the generator that produced the capture:
+//! Serialization conventions of the capture:
 //!   - matrices are 16 numbers in three.js `Matrix4.toArray()` order, i.e.
 //!     **column-major**, which is also glam's `to_cols_array`, so no transpose
 //!     is needed here;
@@ -32,11 +28,11 @@ use luma_scene::sockets::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Absolute, matching `snap.golden.test.ts`. Loose enough to absorb
+/// Absolute tolerance. Loose enough to absorb
 /// cross-engine ULP noise in trig and sqrt, tight enough that a flipped axis,
 /// a reordered multiply, or a different tie-break fails.
 const SNAP_TOL: f64 = 1e-6;
-/// `sockets.golden.test.ts` compares to 9 decimals.
+/// Socket values compare to 9 decimals.
 const SOCKET_TOL: f64 = 1e-9;
 
 fn golden(name: &str) -> Vec<Value> {
@@ -169,8 +165,7 @@ fn sockets_golden_vectors() {
 // stage-snap.json
 // ---------------------------------------------------------------------------
 
-/// The synthetic socket tables the goldens were recorded against — the Rust
-/// twin of `snap-fixtures.ts`. They mimic what `resolve_socket` would produce
+/// The synthetic socket tables the goldens were recorded against. They mimic what `resolve_socket` would produce
 /// for four canonical pieces but bypass anchor resolution, so the math under
 /// test is transparent and no GLB loading is involved.
 fn fixtures() -> HashMap<String, Vec<ResolvedSocket>> {

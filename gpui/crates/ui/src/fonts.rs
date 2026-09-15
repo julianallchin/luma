@@ -3,9 +3,8 @@
 //! Inter is Luma's UI font and is *not* a macOS system font, so without this
 //! the text system silently falls back to a different face. The screenshot
 //! harness cares because every typography comparison becomes noise; the app
-//! cares because it would ship the wrong typeface. Both call [`install`], and
-//! the two TTFs are the same files `harness/fonts.css` `@font-face`s on the
-//! web side (rsms/inter v4.1) — one set of outlines for all three renderers.
+//! cares because it would ship the wrong typeface. Both call [`install`]. The
+//! TTFs are rsms/inter v4.1.
 
 use std::borrow::Cow;
 
@@ -15,10 +14,9 @@ use gpui::{App, Font, FontFallbacks, SharedString};
 pub const FAMILY: &str = "Inter";
 
 /// The face behind every numeric readout (a slider's value, a plot's axis
-/// labels): the first *nameable* family in the `ui-monospace, SFMono-Regular,
-/// Menlo, monospace` stack the web side sets. The two ahead of it are not
-/// families a text system can be asked for — SF Mono ships as the reserved
-/// `.SF NS Mono` and matches nothing under its marketing name — and a family
+/// labels). Menlo, because SF Mono cannot be asked for by name: it ships as
+/// the reserved `.SF NS Mono` and matches nothing under its marketing name. A
+/// family
 /// that fails to match falls back to the UI face silently, which renders a
 /// proportional number where a tabular one belongs.
 pub const MONO: &str = "Menlo";

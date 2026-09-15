@@ -28,8 +28,7 @@ const FIELD_W: f32 = luma_ui::sheet::CONTENT_WIDTH;
 /// The expression field, which shares its row with the fixture-picker chip.
 const EXPR_W: f32 = FIELD_W - 62.;
 
-/// The trailing edge a burst of live arg edits is committed on — the web
-/// panel's 250 ms.
+/// The trailing edge a burst of live arg edits is committed on.
 const ARG_FLUSH: Duration = Duration::from_millis(250);
 
 /// The subset select's rows: how much of the expression's match to light.
@@ -69,7 +68,7 @@ pub(crate) struct State {
     /// The venue's group names, for the expression editor's autocomplete.
     groups: Groups,
     /// Arg definitions per pattern id, venue-resolved, cached for the life of
-    /// the editor — the web store's `patternArgs`.
+    /// the editor.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
     defs_inflight: HashSet<String>,
     /// Controls and readings for the current selection, retained during exit.
@@ -219,9 +218,9 @@ fn mapping_widget(
 
 //
 // The sheet's serialization edge: everything below speaks the widget kit's
-// typed values, everything above speaks the args JSON the score stores. The
-// shapes are the web panel's exactly — colors as 0–255 rgb with the tri-mode
-// alpha, palettes as hex lists, gradients as (color, t) stops.
+// typed values, everything above speaks the args JSON the score stores:
+// colors as 0–255 rgb with the tri-mode alpha, palettes as hex lists,
+// gradients as (color, t) stops.
 
 fn color_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> ColorArg {
     let read = |value: &serde_json::Value, key: &str| value.get(key).and_then(|v| v.as_f64());
@@ -285,7 +284,7 @@ fn rgba_to_hex(color: Rgba) -> String {
     )
 }
 
-/// The web panel's palette fallback, for an arg with no value and no default.
+/// The palette fallback, for an arg with no value and no default.
 const PALETTE_FALLBACK: [&str; 3] = ["#ff0080", "#00ffc8", "#ffbe28"];
 
 fn palette_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> Vec<Rgba> {
@@ -376,7 +375,7 @@ fn primary_clip(editor: &Editor) -> Option<&Clip> {
 }
 
 /// A cell's stored wire value: the primary clip's, falling back to the def's
-/// default — the same read the web panel makes.
+/// default.
 fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
     primary_clip(editor)
         .and_then(|clip| {
@@ -833,7 +832,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
 
 impl Luma {
     /// A blend pick from the sheet: every selected clip takes the mode, in
-    /// one committed write — the web's `updateAnnotationsBatch`.
+    /// one committed write.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
         self.track_command(
             move |editor| {

@@ -1,12 +1,6 @@
 //! The stage catalog: every placeable piece, and where its sockets are.
 //!
-//! This is the **single copy**. It used to exist twice — hand-authored in
-//! `src/features/stage/lib/stage-meshes.ts` and absent on the Rust side, which
-//! is why `gpui/crates/scene` could port the snap *algorithms* but not run them
-//! against a real piece. The TypeScript side now reads
-//! `src/features/stage/lib/catalog.generated.ts`, emitted from this module by
-//! `tests/binding.rs`; editing that file by hand is a merge conflict waiting to
-//! happen.
+//! This is the **single copy** of the catalog.
 //!
 //! # Three ways a piece has geometry
 //!
@@ -25,10 +19,9 @@
 //!   players standing on it. Its parts are *placements*, not a scene graph:
 //!   see [`Part`] for why the vocabulary stops where it does.
 //!
-//! The four ripped truss GLBs the palette used to carry are gone from here for
-//! that reason (the files stay on disk; render goldens still compare against
-//! them). They were imperial products — 1.22 m and 1.83 m spans, a Q30 at
-//! 254 mm — and only mated each other by luck of modelling.
+//! The ripped truss GLBs on disk are not catalog pieces, because the truss
+//! family is procedural. Render goldens still compare against those files.
+//! They are imperial products: 1.22 m and 1.83 m spans, and a Q30 at 254 mm.
 
 use crate::sockets::{BboxAnchor, SocketDef, SocketMode, SocketType};
 use glam::{DVec2, DVec3};
@@ -161,7 +154,7 @@ impl Family {
 }
 
 impl Geometry {
-    /// The tag the generated TypeScript discriminates on.
+    /// The geometry kind as a short tag.
     pub fn tag(self) -> &'static str {
         match self {
             Geometry::Mesh { .. } => "mesh",

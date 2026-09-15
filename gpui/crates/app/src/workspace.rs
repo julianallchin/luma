@@ -2,8 +2,7 @@
 //!
 //! # The strip belongs to a subject
 //!
-//! A tab strip used to be the app's — one set of tabs, whatever you were doing.
-//! It is now the *subject's*: picking a track in the sidebar brings back the
+//! A tab strip is the *subject's*: picking a track in the sidebar brings back the
 //! tabs that were open the last time that track was the subject, and leaves the
 //! previous track's exactly as they were. The subject is a [`TabScope`].
 //!

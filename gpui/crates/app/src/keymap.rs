@@ -213,7 +213,7 @@ actions!(
         FitLanes,
         /// Walk the insertion menu's active row, and put its pattern down.
         /// No-ops with no menu open, which is what leaves the bare arrows and
-        /// Return unbound everywhere else in the editor, as on the web.
+        /// Return unbound everywhere else in the editor.
         NextInsertOption,
         PrevInsertOption,
         CommitInsertOption,
@@ -382,8 +382,7 @@ pub(crate) fn init(cx: &mut App) {
 
 /// Bind one editing chord under both of its modifiers.
 ///
-/// The web editor reads `metaKey || ctrlKey` for every one of these, so
-/// control works on macOS too and the hand that learned the shortcut on one
+/// Control works on macOS too, so the hand that learned the shortcut on one
 /// platform keeps it on the next. On Linux and Windows `secondary-` already
 /// *is* control and the two spellings resolve to the same binding.
 fn chord<A: Action + Clone>(bindings: &mut Vec<KeyBinding>, key: &str, action: A, context: &str) {

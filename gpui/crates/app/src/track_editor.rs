@@ -1,26 +1,20 @@
 //! The track editor: one track's timeline, on a custom-painted canvas.
 //!
-//! Mirrors `src/features/track-editor/` — the same ruler, the same
-//! rekordbox-style three-band waveform, the same beat grid and bar numbers,
-//! the same lanes of clips over it, and the same transport underneath, which
-//! on both hosts is Rust's `host_audio` and not the UI's.
+//! A ruler, a rekordbox-style three-band waveform, the beat grid and bar
+//! numbers, the lanes of clips over them, and the transport underneath. The
+//! transport is the backend's `host_audio`, not the UI's.
 //!
-//! # The geometry is not re-derived, it is ported
+//! # The geometry rules are exact
 //!
-//! Every pixel this canvas puts down is `timeline-drawing.ts`'s arithmetic:
-//! the 6px beat cull that compares against the last *drawn* beat, the
-//! millisecond-rounded downbeat de-duplication, `ceil(80 / pixelsPerBar)` bar
-//! labels, `floor(low[i] * halfHeight)` band bars, `max(4, …)` clip widths.
-//! Those are pinned by golden vectors on the web side
-//! (`utils/timeline-drawing.golden.test.ts`), which is why they are copied
-//! rather than reasoned out again — a port that rounded one of them the other
-//! way would draw a subtly different timeline for the same track, and nothing
-//! would say so.
+//! The canvas keeps a fixed set of rounding rules: the 6px beat cull compares
+//! against the last *drawn* beat, downbeats are de-duplicated at millisecond
+//! precision, bar labels step by `ceil(80 / pixelsPerBar)`, band bars are
+//! `floor(low[i] * halfHeight)` and clips are at least 4px wide. Do not change
+//! one of them casually. A different rounding draws a slightly different
+//! timeline for the same track, and no error shows it.
 //!
-//! Canvas 2D strokes are centred on the path, which is why the web's
-//! coordinates are all `floor(x) + 0.5`. gpui paints quads, so [`hairline`]
-//! turns that back into the box the stroke actually covered; the pixels are
-//! the same, the spelling is not.
+//! Coordinates are written as stroke centres, `floor(x) + 0.5`. gpui paints
+//! quads, so [`hairline`] turns a centre back into the box the stroke covers.
 //!
 //! Both waveform strips query the same GPU peak hierarchy at every zoom. Audio
 //! is filtered and uploaded once; navigation only changes the rendered range.
@@ -47,8 +41,7 @@
 //!
 //! # Clip bodies are heatmap previews
 //!
-//! A clip's body carries its pattern's space-time heatmap — the same picture
-//! the web timeline stretches over `drawAnnotations` — rendered one clip at a
+//! A clip's body carries its pattern's space-time heatmap, rendered one clip at a
 //! time through `preview_score_clip` after each committed edit, coalesced per
 //! clip so a burst of writes costs one trailing render. The seam hands back a tiny
 //! RGBA grid (a column per sixteenth-beat, a row per primitive); it is baked
@@ -136,7 +129,7 @@ pub struct Editor {
     /// The score whose clips are on the timeline, and whether this host may
     /// write to it. `None` until the lookup lands, and still `None` for a
     /// track this venue has never annotated — there is no score to edit then,
-    /// and the web app shows the same empty lanes.
+    /// and the lanes stay empty.
     score: Option<Score>,
     /// Whether anything has yet decided what this tab is showing — set by
     /// [`rebase`], which is the only thing that ever writes [`Self::score`].
@@ -154,7 +147,7 @@ pub struct Editor {
     overview_waveform: waveform::Strip,
     minimap_drag: Option<minimap::Drag>,
     /// The analysed grid, or `None` for a track that has not been analysed —
-    /// in which case the header falls back to a clock ruler, as on the web.
+    /// in which case the header falls back to a clock ruler.
     beats: Option<Rc<BeatGrid>>,
     beat_verdict: BeatValidationVerdict,
     beat_reason: Option<BeatValidationReason>,
@@ -188,8 +181,7 @@ pub struct Editor {
     preview_queued: HashSet<SharedString>,
     /// Where the timeline has been, and where an undo took it back from.
     history: History<Snapshot>,
-    /// The last cut or copy, in the shape a paste needs. Local to the screen,
-    /// as the web store's is.
+    /// The last cut or copy, in the shape a paste needs. Local to the screen.
     clipboard: Option<Clipboard>,
     /// The span the transport is looping, if any. A property of playback and
     /// not of the score — it is never written back, and a read-only score can
@@ -205,7 +197,7 @@ pub struct Editor {
     /// the user cannot see.
     menu_scroll: ScrollHandle,
     /// Every selected clip, in the order they were added. A list rather than
-    /// one id because the web's shift-click, marquee and group drag all act on
+    /// one id because shift-click, marquee and group drag all act on
     /// a set, and "one selected clip" is only the common case of that.
     selected: Vec<SharedString>,
     /// Preserve the first hit while opening the inspector changes the canvas.
@@ -213,9 +205,8 @@ pub struct Editor {
     /// Where the next edit lands. Distinct from the selection: clicking a clip
     /// sets both, sweeping empty lane space sets only this.
     cursor: Option<Cursor>,
-    /// Follow the playhead: keep it centred while the transport runs. `F` on
-    /// the web, and persisted there — not here, because this host has no
-    /// per-screen preference store yet.
+    /// Follow the playhead: keep it centred while the transport runs. Not
+    /// persisted, because this host has no per-screen preference store yet.
     follow: bool,
     view: View,
     transport: Transport,
@@ -277,8 +268,7 @@ pub(crate) struct Score {
     /// the toolbar name it by. A position, not identity: [`Self::id`] is the
     /// key.
     pub(crate) ordinal: i64,
-    /// Somebody else's score: visible, not writable. The web browser computes
-    /// the same flag from `score.uid !== currentUserId`.
+    /// Somebody else's score: visible, not writable.
     pub(crate) read_only: bool,
 }
 
@@ -313,8 +303,8 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
 struct Clip {
     id: SharedString,
     pattern: SharedString,
-    /// The pattern's name, or the same `Pattern <id>` fallback the web label
-    /// falls back to when the catalogue does not know it.
+    /// The pattern's name, or a `Pattern <id>` fallback when the catalogue does
+    /// not know it.
     label: SharedString,
     color: Rgba,
     start: f64,
@@ -382,7 +372,7 @@ impl Preview {
     }
 }
 
-/// What a cut or a copy took, in the two shapes the web's clipboard has.
+/// What a cut or a copy took, in its two shapes.
 ///
 /// The clips are whole rows so a paste can mint real clips from them, and the
 /// offsets are relative to the region (or to the cursor) so a paste lands
@@ -420,7 +410,7 @@ struct Snapshot {
 /// A right-click's pending insertion: where the clip would go, and the
 /// patterns on offer.
 ///
-/// `insert` distinguishes the web's two modes — dropping a clip *onto* the
+/// `insert` distinguishes the two modes — dropping a clip *onto* the
 /// lane under the pointer, or opening a *new* lane at the boundary the pointer
 /// is within a quarter-lane of, shifting everything at or above it up.
 #[derive(Clone, Copy)]
@@ -467,8 +457,8 @@ impl InsertChoice {
 ///
 /// `start` and `end` are stored as the gesture produced them, not normalised,
 /// because a right-to-left sweep is a real cursor and every reader takes its
-/// own min and max — the web store does exactly this, and normalising here
-/// would quietly change which end a later edit anchors to.
+/// own min and max. Normalising here would quietly change which end a later
+/// edit anchors to.
 #[derive(Clone, Copy)]
 struct Cursor {
     row: usize,
@@ -502,11 +492,9 @@ struct Anchor {
 
 /// How long a zoom gesture's anchor survives without another notch.
 ///
-/// The web has two — 100 ms for a modified wheel, 120 ms for the trackpad
-/// pinch that arrives as ctrl-wheel — for one reason, which is that a momentum
-/// flick keeps delivering after the fingers lift. One number here, the longer
-/// of the two: two idle timeouts for one gesture is a distinction the web
-/// source does not defend.
+/// Long enough to cover a momentum flick, which keeps delivering after the
+/// fingers lift. One number serves the modified wheel and the trackpad pinch
+/// that arrives as ctrl-wheel.
 const ANCHOR_IDLE: Duration = Duration::from_millis(120);
 
 /// How often a scrub is allowed to move the transport. `SEEK_THROTTLE_MS`.
@@ -515,14 +503,13 @@ const SEEK_THROTTLE: Duration = Duration::from_millis(32);
 /// The snap capture radius, in screen pixels, for a cursor or an insertion —
 /// `snapToGrid`'s `15`.
 const SNAP_CAPTURE: f32 = 15.;
-/// The same radius inside a clip drag, which the web tightens to `12`.
+/// The tighter radius inside a clip drag.
 const SNAP_CAPTURE_DRAG: f32 = 12.;
 
 /// The shortest a clip may be left by a resize.
 ///
-/// Not `MIN_ANNOTATION_DURATION` (0.05 s): the web guards a resize at 0.1 s
-/// and reserves the smaller floor for splits, pastes and insertions, which
-/// are different commands and are not ported yet.
+/// Not `MIN_ANNOTATION_DURATION` (0.05 s): a resize is held to 0.1 s, and the
+/// smaller floor is for splits, pastes and insertions.
 const MIN_RESIZE: f64 = 0.1;
 
 /// `MIN_ANNOTATION_DURATION`: the shortest a clip a *command* produces may be.
@@ -535,8 +522,8 @@ const MIN_CLIP: f64 = 0.05;
 /// "open a new layer here" rather than "drop it on this lane".
 const INSERT_BOUNDARY: f32 = 0.25;
 
-/// One bar, for a track with no beat grid to ask: the web's default average
-/// beat of 0.5 s times its default four beats to the bar.
+/// One bar, for a track with no beat grid to ask: a default beat of 0.5 s
+/// times four beats to the bar.
 const DEFAULT_BAR: f64 = 2.;
 
 /// How long a clip a right-click inserts at `after` should be.
@@ -578,16 +565,14 @@ fn bar_length(beats: Option<&BeatGrid>, after: f64) -> f64 {
 const CONTAINED_EPSILON: f64 = 0.001;
 
 /// How close two loop bounds have to be to count as the same loop, which is
-/// what turns the loop key into a toggle. The web's 1 ms tolerance.
+/// what turns the loop key into a toggle. A 1 ms tolerance.
 const LOOP_EPSILON: f64 = 0.001;
 
 /// `snapToGrid`: quantise `time` to the beat subdivision the zoom asks for, but
 /// only when the quantised point is within `capture` screen pixels of it.
 ///
-/// The capture radius is a parameter because the web has two for the same
-/// conceptual gesture — 15 px for the selection cursor, 12 px inside a clip
-/// drag — written twice with duplicated bodies. Ported as one function with
-/// two call sites rather than as two functions.
+/// The capture radius is a parameter because one gesture has two radii: 15 px
+/// for the selection cursor and 12 px inside a clip drag.
 fn snap(beats: Option<&BeatGrid>, time: f64, zoom: f32, capture: f32) -> f64 {
     let Some(snapped) = beat_snap(beats, time, zoom) else {
         return time;
@@ -602,10 +587,8 @@ fn snap(beats: Option<&BeatGrid>, time: f64, zoom: f32, capture: f32) -> f64 {
 /// The quantised point, before the capture test, or `None` when there is no
 /// grid to quantise against.
 ///
-/// The subdivision ladder is the web's, numbers not names: at or above 200
-/// px/s and below 100 it is quarters of a beat, and in between it is halves.
-/// The web spells the two ends `sixteenth` and `quarter` and gives both four
-/// divisions, so the three-tier ladder it documents is really two tiers.
+/// The subdivision ladder has two tiers: at or above 200 px/s and below 100 it
+/// is quarters of a beat, and in between it is halves.
 fn beat_snap(beats: Option<&BeatGrid>, time: f64, zoom: f32) -> Option<f64> {
     let grid = beats.filter(|grid| !grid.beats.is_empty())?;
     let beats = &grid.beats;
@@ -638,7 +621,7 @@ fn beat_snap(beats: Option<&BeatGrid>, time: f64, zoom: f32) -> Option<f64> {
 }
 
 /// Where the eye is: a horizontal zoom in pixels per second, and a scroll in
-/// pixels. The same two numbers the web timeline's scroll container holds.
+/// pixels.
 #[derive(Clone, Copy)]
 struct View {
     zoom: f32,
@@ -652,8 +635,7 @@ struct View {
     /// The vertical scroll, measured from the **bottom** rather than from the
     /// top, because the lanes are bottom-anchored: at zero, z = 0 sits on the
     /// floor. Stated this way a new layer, a vertical zoom or a resize keeps
-    /// the floor where it is without anybody recomputing a scroll — which is
-    /// what the web does by hand every time, as `scrollTop = maxScrollTop`.
+    /// the floor where it is without anybody recomputing a scroll.
     lift: f32,
 }
 
@@ -692,9 +674,8 @@ enum Wheel {
 /// What the pointer is doing between a press and a release.
 enum Gesture {
     /// Dragging the playhead over the ruler. The 32px strip only — the
-    /// waveform below it clears the selection instead, which is the one
-    /// surprise in the web's pointer map and the one this host used to get
-    /// wrong.
+    /// waveform below it clears the selection instead. That is the one
+    /// surprise in the pointer map.
     Scrub,
     /// Sweeping a rectangular time × lane range out of empty lane space.
     /// `row` and `start` are where the sweep began; the far corner is wherever
@@ -762,15 +743,14 @@ impl View {
     /// per second.
     const MIN_ZOOM: f32 = 25.;
     const MAX_ZOOM: f32 = 5_000.;
-    /// The web store's opening `zoom`.
+    /// The opening zoom.
     const DEFAULT_ZOOM: f32 = 50.;
     /// `ZOOM_SENSITIVITY`: the exponential rate a modified wheel notch scales
     /// by.
     const ZOOM_PER_PIXEL: f32 = 0.002;
     /// The rate a trackpad pinch scales by, which arrives as a ctrl-wheel.
-    /// Five times [`Self::ZOOM_PER_PIXEL`] — hardcoded on the web, where the
-    /// named constant is bypassed on that path, and kept because a pinch's
-    /// deltas are a fifth the size of a wheel's.
+    /// Five times [`Self::ZOOM_PER_PIXEL`], because a pinch's deltas are a
+    /// fifth the size of a wheel's.
     const ZOOM_PER_PIXEL_PINCH: f32 = 0.01;
     /// `MIN_ZOOM_Y` / `MAX_ZOOM_Y`, and `ZOOM_Y_SENSITIVITY` for the alt-wheel
     /// that walks between them.
@@ -831,8 +811,7 @@ impl Editor {
     /// the quantity the bottom-anchored block preserves: zoom about a pixel and
     /// the floor would drift out from under z = 0.
     fn zoom_lanes(&mut self, delta: f32, at: f32) {
-        // Above the lanes the gesture means nothing — the web ignores an
-        // alt-wheel over the waveform for the same reason.
+        // Above the lanes the gesture means nothing.
         if at < TRACK_AREA_Y {
             return;
         }
@@ -1495,8 +1474,8 @@ impl Editor {
         self.replace_clips(clips);
     }
 
-    /// Walk the insertion menu's active row. Clamped at both ends, as the
-    /// web's is — a menu that wrapped would commit the wrong pattern to a hand
+    /// Walk the insertion menu's active row. Clamped at both ends: a menu that
+    /// wrapped would commit the wrong pattern to a hand
     /// that held the key a beat too long.
     fn step_menu(&mut self, down: bool) {
         let last = self.insertion_choices().len().saturating_sub(1);
@@ -1608,9 +1587,8 @@ fn row_to_z(layers: &[i64], row: i32) -> i64 {
 /// `resolveOverlaps` + `applyOverlapActions`: the clip list with `span`
 /// cleared out of the visible rows the cursor covers.
 ///
-/// One function rather than the web's plan-then-apply pair because nothing
-/// here inspects the plan — the two halves exist on the web so a caller can
-/// count what it is about to do, and no caller does. What survives is the
+/// One function rather than a plan-then-apply pair, because no caller inspects
+/// the plan. What survives is the
 /// interesting part: a clip the region *partly* covers is trimmed or split
 /// rather than deleted, and a remnant shorter than [`MIN_CLIP`] is dropped
 /// instead of being left as a sliver nothing can grab.
@@ -2330,8 +2308,8 @@ impl Luma {
     }
 
     /// `ArrowUp` / `ArrowDown` in the insertion menu. A no-op with no menu
-    /// open, which is what makes the bare arrows safe to bind at all: the web
-    /// timeline leaves them unbound everywhere else, and so does this.
+    /// open, which is what makes the bare arrows safe to bind at all: they stay
+    /// unbound everywhere else in the editor.
     pub(crate) fn step_insert_menu(&mut self, down: bool, cx: &mut Context<Self>) {
         self.with_track_editor(cx, |editor| editor.step_menu(down));
     }
@@ -2469,7 +2447,7 @@ impl Luma {
     /// A press on the canvas: take the playhead, a clip, or a sweep of empty
     /// lane.
     ///
-    /// The vertical dispatch is the web's, band by band. The ruler scrubs.
+    /// The vertical dispatch goes band by band. The ruler scrubs.
     /// Everything between it and the first lane — the waveform, and the empty
     /// insertion lane under it — clears the selection, which is the behavior
     /// that reads as surprising and is the one a person relies on to get back
@@ -2483,8 +2461,7 @@ impl Luma {
             let offset = f32::from(at.x - canvas.origin.x);
             let time = editor.view.time_at(offset);
             let y = f32::from(at.y - canvas.origin.y);
-            // A press anywhere dismisses an open insertion menu, the way the
-            // web's full-screen backdrop does.
+            // A press anywhere dismisses an open insertion menu.
             editor.menu = None;
 
             if y < HEADER_HEIGHT {
@@ -2700,8 +2677,8 @@ impl Luma {
 
     /// A wheel notch over the canvas.
     ///
-    /// A bare wheel scrolls both axes — the web's is the scroll container's,
-    /// and this canvas has to stand in for one. A modified wheel zooms, and
+    /// A bare wheel scrolls both axes, because this canvas is its own scroll
+    /// container. A modified wheel zooms, and
     /// the horizontal zoom is anchored on a *latched* point: whatever was
     /// under the pointer when the gesture started stays under it until the
     /// wheel goes quiet for [`ANCHOR_IDLE`]. Recomputing the anchor per event
@@ -2831,7 +2808,7 @@ impl Luma {
     /// A load or a write that lands after the user navigated away is a no-op.
     /// Re-render one clip's heatmap from the working copy's row.
     ///
-    /// Coalesced per clip, the way the web store's `updatePreview` is: an edit
+    /// Coalesced per clip: an edit
     /// landing while this clip's render is in flight queues one trailing
     /// re-issue instead of a backlog, and because the render reads the clip's
     /// *current* state when it is issued, that one trailing render covers
@@ -2929,7 +2906,7 @@ pub(crate) type Transition =
 /// halving the period halves the worst-case lag.
 const POLL: Duration = Duration::from_millis(33);
 
-/// The web browser's fallback chain for a track with no title.
+/// A track's title, or its file name when it has no title.
 fn track_title(track: &TrackBrowserRow) -> String {
     if let Some(title) = track.title.as_ref().filter(|title| !title.is_empty()) {
         return title.clone();
@@ -2942,13 +2919,13 @@ fn track_title(track: &TrackBrowserRow) -> String {
 
 // -- geometry -----------------------------------------------------------------
 //
-// `utils/timeline-constants.ts`, at `zoomY == 1` — which is the only zoom the
+// The layout at `zoomY == 1`, which is the only zoom the
 // ruler and the waveform have. Vertical zoom scales the lanes and nothing
 // else, so these are constants and [`Layout`] is what varies.
 
 /// The ruler strip: `HEADER_HEIGHT`.
 const HEADER_HEIGHT: f32 = 32.;
-/// `WAVEFORM_HEIGHT`. Fixed even under vertical zoom on the web too — it is a
+/// `WAVEFORM_HEIGHT`. Fixed even under vertical zoom — it is a
 /// navigation surface, not part of the annotation workspace.
 const WAVEFORM_HEIGHT: f32 = 80.;
 /// `TRACK_HEIGHT`: one lane.
@@ -2957,8 +2934,7 @@ const LANE_HEIGHT: f32 = 80.;
 const TRACK_AREA_Y: f32 = HEADER_HEIGHT + WAVEFORM_HEIGHT;
 /// `ANNOTATION_HEADER_H`: the opaque strip at the top of a clip.
 const CLIP_HEADER: f32 = 18.;
-/// The grab width of a clip's edge, in screen pixels. `handleSize` in
-/// `components/timeline.tsx`.
+/// The grab width of a clip's edge, in screen pixels.
 const HANDLE: f32 = 8.;
 /// The ruler's and the clip labels' type size.
 const LABEL_SIZE: f32 = 10.;
@@ -3471,8 +3447,8 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             )))
         })
         // The cursor's own readout: a point reads as one time, a range as the
-        // span it covers. It is the only account of where an edit would land,
-        // which on the web is left to the picture alone.
+        // span it covers. It is the only text that says where an edit would
+        // land.
         .when_some(state.cursor, |el, cursor| {
             el.child(luma_ui::silkscreen(match cursor.span() {
                 Some((from, to)) => format!("CURSOR {from:.2}-{to:.2}"),
@@ -3890,15 +3866,12 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
             return;
         }
         let wheel = event.delta.pixel_delta(window.line_height());
-        // The web timeline zooms on a modified wheel and scrolls on a bare
-        // one, because a bare wheel there is the scroll container's. Two
-        // modifiers, two rates: the platform key is a wheel and control is a
-        // trackpad pinch, which sends a fifth the distance for the same
-        // gesture.
+        // A modified wheel zooms and a bare one scrolls. Two modifiers, two
+        // rates: the platform key is a wheel and control is a trackpad pinch,
+        // which sends a fifth the distance for the same gesture.
         //
         // The sign is already right without a negation: gpui reports a wheel
-        // in the direction the *content* moves, which is the opposite of the
-        // DOM's `deltaY`, and the web's rate carries a minus for exactly that.
+        // in the direction the *content* moves.
         let gesture = if event.modifiers.alt {
             Wheel::Lanes
         } else if event.modifiers.control {
@@ -3914,11 +3887,11 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
     });
 }
 
-/// Paint the timeline in the web tile renderer's order: ground, ruler,
+/// Paint the timeline in order: ground, ruler,
 /// waveform, lanes and clips, playhead.
 ///
 /// The beat grid goes down *before* the waveform and the clips, so its lines
-/// run under both — which is what the web's `renderTile` does, and what makes
+/// run under both — which is what makes
 /// a clip's translucent body show the beats through it.
 fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut App) {
     let started = std::time::Instant::now();
@@ -3996,8 +3969,8 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
 }
 
 /// The box a canvas 2D stroke of `width` centred on `x + 0.5` actually covers.
-/// Every coordinate in `timeline-drawing.ts` is written that way; this is the
-/// one place the spelling is converted.
+/// Every timeline coordinate is written that way; this is the one place the
+/// spelling is converted.
 fn hairline(canvas: Bounds<Pixels>, x: f32, top: f32, bottom: f32, width: f32) -> Bounds<Pixels> {
     Bounds {
         origin: point(
@@ -4008,8 +3981,7 @@ fn hairline(canvas: Bounds<Pixels>, x: f32, top: f32, bottom: f32, width: f32) -
     }
 }
 
-/// The same color at a different alpha, for the places the web stacks a
-/// `globalAlpha` over a token.
+/// The same color at a different alpha.
 fn fade(color: Rgba, alpha: f32) -> Hsla {
     let mut color: Hsla = color.into();
     color.a = alpha;
@@ -4271,9 +4243,8 @@ fn paint_clip(
                 },
                 fade(ladder::foreground(), 0.9),
             ));
-            // Three grip dots down the middle of each plate. A 1px-radius arc
-            // on the web, which is a 2px square here — the shape is the affordance,
-            // and the difference is invisible at this size.
+            // Three grip dots down the middle of each plate. Each is a 2px
+            // square; a round dot would look the same at this size.
             let centre = box_.origin.y + px(CLIP_HEADER / 2.);
             for step in -1..=1 {
                 window.paint_quad(fill(
@@ -4295,8 +4266,8 @@ fn paint_clip(
     if f32::from(box_.size.width) <= 30. {
         return;
     }
-    // The clip clips its own label, which is what the web's `ctx.clip` does:
-    // a name too long for the header is cut off at the edge.
+    // The clip clips its own label: a name too long for the header is cut off
+    // at the edge.
     let text = Bounds {
         origin: point(box_.origin.x + px(8.), box_.origin.y),
         size: size(box_.size.width - px(16.), px(CLIP_HEADER)),
@@ -4317,9 +4288,9 @@ fn paint_clip(
     });
 }
 
-/// The translucency of an unselected clip's body — the web's `bodyAlpha`.
-/// What lets the beat grid, painted first, read through both the flat fill
-/// and the heatmap; selection goes opaque, on both hosts.
+/// The translucency of an unselected clip's body. It lets the beat grid,
+/// painted first, read through both the flat fill and the heatmap; selection
+/// goes opaque.
 const BODY_ALPHA: f32 = 0.75;
 
 /// A clip's body: everything under the header plate.
@@ -4344,7 +4315,7 @@ const CELL_TEXELS: u32 = 4;
 ///
 /// Answers whether it painted, so the caller can put the flat fill down when
 /// there is nothing to stretch — no decoded preview, or a body too narrow to
-/// read (the web's own floor: under 8px the heatmap is noise).
+/// read (under 8px the heatmap is noise).
 ///
 /// One `paint_image` of the whole body, whatever the zoom: the picture was
 /// baked at [`CELL_TEXELS`] a cell when it arrived, and the GPU does the
@@ -4427,7 +4398,7 @@ fn bake(width: u32, height: u32, pixels: &[u8]) -> RenderImage {
 }
 
 /// The drawn width of a selected clip's grab mark. Narrower than [`HANDLE`],
-/// which is what the pointer gets — the web draws 6px and grabs 8px.
+/// which is what the pointer gets: the mark is 6px and the grab is 8px.
 const HANDLE_MARK: f32 = 6.;
 
 /// The gap between two grip dots on a grab plate.
@@ -4513,8 +4484,7 @@ fn paint_loop(canvas: Bounds<Pixels>, region: (f64, f64), view: View, window: &m
     }
 }
 
-/// The loop band's yellow, `rgb(234 179 8)` — `timeline-drawing.ts`'s literal,
-/// which is not on the grey ladder because nothing else on this canvas needs
+/// The loop band's yellow, `rgb(234 179 8)`. It is not on the grey ladder because nothing else on this canvas needs
 /// a hue.
 const LOOP_BAND: Rgba = Rgba {
     r: 234. / 255.,
@@ -4608,7 +4578,7 @@ fn paint_playhead(
     }
 }
 
-/// One canvas-2D `fillText`, at the baseline the web draws it on.
+/// One line of canvas text, placed by its baseline.
 fn label(
     canvas: Bounds<Pixels>,
     x: f32,

@@ -1,13 +1,10 @@
 //! Cone geometry: one continuous luminaire model, one source of truth.
 //!
-//! Port of `src/features/visualizer/lib/luminaire.ts`. A fixture type is an
+//! A fixture type is an
 //! opening angle on a single zoom axis; concentration (lumens per solid angle)
 //! derives brightness, throw, edge hardness and scatter anisotropy. The angle
 //! comes from the definition's `Physical.Lens`; the per-kind table is a
 //! fallback for definitions that omit it, and it is the only such table.
-//!
-//! Spec §3.2 places this beside `head_world_position` in the Tauri crate once
-//! the port lands. It lives here for now because nothing else consumes it yet.
 
 use crate::scene_desc::Definition;
 use fixture_kinematics::{aim, Articulation, Mount};
@@ -201,8 +198,8 @@ impl ModelKind {
         }
     }
 
-    /// Distance from the head origin down to the face light, from
-    /// `static-fixture.tsx`'s `-(originOffset + 0.3)`.
+    /// Distance from the head origin down to the face light:
+    /// `originOffset + 0.3`.
     #[must_use]
     pub fn face_light_offset(self) -> f32 {
         let origin_offset = match self {
@@ -283,8 +280,8 @@ fn model_kind_exact(def: &Definition) -> Option<ModelKind> {
     }
 }
 
-/// Which bundled mesh a definition's `Type` selects. Port of
-/// `getModelForFixture`, exact-match first and then the same fuzzy fallbacks.
+/// Which bundled mesh a definition's `Type` selects. Exact match first, then
+/// fuzzy fallbacks.
 #[must_use]
 pub fn model_kind(def: &Definition) -> Option<ModelKind> {
     if let Some(exact) = model_kind_exact(def) {
