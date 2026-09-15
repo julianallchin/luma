@@ -100,13 +100,38 @@ impl std::fmt::Display for ArtifactId {
 // Scope
 // ---------------------------------------------------------------------------
 
+/// The route tag stored on a thread when it is created. Conversation behavior
+/// is the same for every kind; each turn supplies its own working context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     TrackCopilot,
     PatternGraph,
-    /// Legacy venue-only route tag; namespace availability is context-driven.
+    /// A venue route without an authored score or graph.
     VenueRig,
+}
+
+impl AgentKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentKind::TrackCopilot => "track_copilot",
+            AgentKind::PatternGraph => "pattern_graph",
+            AgentKind::VenueRig => "venue_rig",
+        }
+    }
+
+    /// # Errors
+    ///
+    /// A kind this build does not implement.
+    pub fn parse(value: &str) -> std::result::Result<Self, String> {
+        match value {
+            "track_copilot" => Ok(AgentKind::TrackCopilot),
+            "pattern_graph" => Ok(AgentKind::PatternGraph),
+            "venue_rig" => Ok(AgentKind::VenueRig),
+            other => Err(format!("unknown agent kind '{other}'")),
+        }
+    }
 }
 
 /// The window of interest, in absolute track seconds.

@@ -54,41 +54,7 @@ use crate::models::agent_threads::{
 };
 use model::{ModelClient, ModelError, StopReason, Usage};
 
-/// Legacy route tags retained in immutable thread creation metadata.
-/// Conversation behavior is unified; each turn supplies its working context.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentKind {
-    TrackCopilot,
-    PatternGraph,
-    /// A venue route without an authored score or graph.
-    VenueRig,
-}
-
-impl AgentKind {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AgentKind::TrackCopilot => "track_copilot",
-            AgentKind::PatternGraph => "pattern_graph",
-            AgentKind::VenueRig => "venue_rig",
-        }
-    }
-
-    /// # Errors
-    ///
-    /// [`AgentError::Invalid`] for a kind this build does not implement.
-    pub fn parse(value: &str) -> Result<Self, AgentError> {
-        match value {
-            "track_copilot" => Ok(AgentKind::TrackCopilot),
-            "pattern_graph" => Ok(AgentKind::PatternGraph),
-            "venue_rig" => Ok(AgentKind::VenueRig),
-            other => Err(AgentError::Invalid(format!(
-                "unsupported agent kind '{other}'"
-            ))),
-        }
-    }
-}
+pub use crate::agent_execution::AgentKind;
 
 /// One cacheable prompt for every conversation, independent of its context.
 #[must_use]

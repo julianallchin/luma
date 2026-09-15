@@ -73,12 +73,7 @@ pub struct BindingScope {
 
 impl BindingScope {
     fn agent_kind(&self) -> Result<AgentKind, String> {
-        match self.agent_kind.as_str() {
-            "track_copilot" => Ok(AgentKind::TrackCopilot),
-            "pattern_graph" => Ok(AgentKind::PatternGraph),
-            "venue_rig" => Ok(AgentKind::VenueRig),
-            other => Err(format!("unknown agent kind '{other}'")),
-        }
+        AgentKind::parse(&self.agent_kind)
     }
 
     fn analysis_scope(&self) -> AnalysisScope {
