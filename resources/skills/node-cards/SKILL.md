@@ -140,8 +140,6 @@ The standard "where is this head" node. Wire it into `core/greater`, `sample_gra
 
 **dissolve** — on each trigger, a random share of heads fades by a coverage curve. `trigger`, `duration: beats = 2`, `proportion: envelope = fade out`, `shape = flat`, `softness: proportion = 0`. Out `mask`.
 
-**shimmer** — on each trigger, a fresh random `proportion` of heads with their own lifetimes. `trigger`, `duration: beats = 0.5`, `proportion = 0.25`, `shape = attack`. Out `mask`.
-
 **random_heads_mask** — a rolling random subset that changes on a beat grid. `count: number = 1`, `repeat: beats = 1`, `delay: beats = 0`, `grid_aligned: bool = false`, `shuffle: bool = false`. Out `mask`. Shuffle off walks one seeded order; on draws a new set each change.
 
 **random_selection** — a seeded random share of heads for a given index. `index: number = 0`, `proportion = 0.25`, `softness = 0`. Out `selected`. A new index is a new draw.
@@ -174,7 +172,7 @@ Colors are RGB triples in 0..1 or `#RRGGBB`. A gradient is `{"stops": [{"t": 0..
 
 **strobe** — color through, plus a strobe rate. `color`, `rate: proportion = 0.9`. Out `color`, `strobe`. Wire both into `output`.
 
-**beat_chase / beat_pulse / beat_shimmer / beat_dissolve** — `beat_trigger` into the named mask, times `color`. Inputs are the mask's inputs plus `color` and the beat clock's `repeat`, `delay`, `grid_aligned`. Out `color`. Use the mask node directly when the trigger is not the beat grid.
+**beat_chase / beat_pulse / beat_shimmer / beat_dissolve** — `beat_trigger` into the named mask (`beat_shimmer` uses `dissolve`), times `color`. Inputs are the mask's inputs plus `color` and the beat clock's `repeat`, `delay`, `grid_aligned`. Out `color`. Use the mask node directly when the trigger is not the beat grid.
 
 ## Output
 
@@ -237,8 +235,6 @@ Random: **core/random** (`epoch: number = 0`, a new integer is a new draw; out 0
 
 **random_subset** — each event addresses a random `proportion` of heads. `events`, `proportion = 0.25`, `seed`, `cycle: bool = false`. Out `events`.
 
-**random_head_events** — per event, a random share of heads with progress and weight. `trigger`, `duration: beats = 0.5`, `proportion = 0.25`. Out `progress`, `weight`.
-
 **clip_range** — min and max of a signal sampled once across the clip. `value`, `samples = 1024`. Out `minimum`, `maximum`.
 
 ## Common wirings
@@ -247,5 +243,5 @@ Random: **core/random** (`epoch: number = 0`, a new integer is a new draw; out 0
 - Beat chase: `beat_trigger` into `chase` with `resolve_mapping`, times a color.
 - Drum hit: `drum_trigger` into `pulse`, times a color.
 - Slow color field: `noise_mask` times `spatial_gradient`.
-- Random sparkle: `beat_trigger` into `shimmer`, times a color.
+- Random sparkle: `beat_shimmer`, or `beat_trigger` into `dissolve` with a short `duration`, times a color.
 - Any mask to a color: `core/multiply` with `a = color`, `b = mask`.
