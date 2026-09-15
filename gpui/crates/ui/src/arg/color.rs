@@ -4,8 +4,7 @@
 //!
 //! A stored color arg is `(rgb, a)` where the alpha channel carries the
 //! *mode*: `a ≤ 0` inherit, `a ≥ 1` override, anything between is a mix whose
-//! amount is the alpha itself (the web reference:
-//! `src/features/track-editor/components/inspector-panel.tsx`). That encoding
+//! amount is the alpha itself. That encoding
 //! is confined to [`ColorArg::decode`] / [`ColorArg::encode`] — everything
 //! above them speaks [`ColorMode`], so no widget, host or test ever compares
 //! an alpha against a threshold again. Parse, don't validate: `decode` is
@@ -61,8 +60,7 @@ pub struct ColorArg {
 }
 
 /// Where a mix amount lands when a stored alpha would collapse it into
-/// inherit/override, and the default when entering mix mode cold. The web
-/// side's `0.5` fallback.
+/// inherit/override, and the default when entering mix mode cold.
 const MIX_DEFAULT: f32 = 0.5;
 
 /// One 8-bit step: the closest a mix may sit to either mode boundary before
@@ -428,13 +426,6 @@ impl ColorArgEditor {
         }
         self.value = value;
         self.hsv = Hsv::from_rgb(value.rgb);
-        cx.notify();
-    }
-
-    /// Open or close the picker plate — exposed so a fixture can capture the
-    /// open state deterministically.
-    pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.picker_open = open;
         cx.notify();
     }
 
