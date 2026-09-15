@@ -1,5 +1,4 @@
-//! GPUI port of `<Select>` / `<Selector>` (src/shared/components/ui/
-//! select.tsx, selector.tsx): the closed trigger, and the open menu.
+//! The select menu row and the self-sizing trigger geometry.
 //!
 //! The menu is *stateless* here, like every other control in this crate — a
 //! caller renders it only while its own state says the select is open, and
@@ -12,36 +11,12 @@ use gpui::*;
 use gpui_component::Icon;
 
 use crate::float::RowState;
-use crate::ladder;
 
-/// The `size-3` chevron every trigger ends with (`[&_svg]:size-3`). The color
-/// differs by call site — `<Select>` dims it with `opacity-50`, `<Dropdown>`
-/// inherits the trigger's `text-foreground/90` — so it's a parameter.
+/// The 12px chevron a trigger ends with.
 pub(crate) fn chevron(color: Hsla) -> Icon {
     Icon::new(IconName::ChevronDown)
         .size(px(12.))
         .text_color(color)
-}
-
-/// Rounded chip shared by fixed-width and self-sizing dropdown triggers.
-pub(crate) fn trigger_shell() -> Div {
-    crate::float::chip_plate(crate::Enabled::Yes).relative()
-}
-
-/// Raw `<Select>` trigger: an explicit width (`w-40`, `w-28`, …) and the
-/// primitive's `text-xs` data font — no uppercase, no bold.
-pub fn luma_select(value: &str, width: f32) -> Div {
-    trigger_shell().w(px(width)).text_size(px(12.)).child(
-        div()
-            .mx(px(8.))
-            .flex_1()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.))
-            .child(value.to_string())
-            .child(chevron(ladder::foreground_alpha(0.45))),
-    )
 }
 
 /// The self-sizing geometry every value trigger in the app is built on: an
@@ -91,27 +66,11 @@ pub(crate) fn ghost_stack(
         )
 }
 
-/// A self-sizing chip with the same casing as its menu items.
-pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -> Div {
-    ghost_stack(
-        trigger_shell(),
-        sentence_case(visible),
-        rows.iter().map(|row| sentence_case(row)).collect(),
-        10.,
-        chevron_color,
-    )
-}
-
-/// A rounded selector sized to its widest option.
-pub fn luma_selector(value: &str, options: &[&str]) -> Div {
-    ghost_trigger(value, options, ladder::foreground_alpha(0.45))
-}
-
-/// `<SelectItem>` on the float tier: one row of an open menu — a
+/// One row of an open select menu — a
 /// [`crate::float::menu_row`] carrying the label, and a check on the chosen
 /// row (a fixed-width hole otherwise, so a label does not shift when the
 /// selection moves to it). Float menu rows are sentence case, and the row owns
-/// its casing together with [`ghost_trigger`]: wire
+/// its casing together with [`crate::float::picker_chip`]: wire
 /// spellings arrive raw ("replace") and are display-cased here, so no caller
 /// keeps a parallel display list. Rows that are *code* (the expression
 /// suggestions) use [`crate::float::menu_row`] directly and stay lowercase.

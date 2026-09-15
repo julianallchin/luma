@@ -331,8 +331,7 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
 /// mark arrives — and one function rather than a glyph at each call site, so
 /// the single-select menus ([`crate::luma_select_item`]) and the multi-select
 /// lists that tick several rows cannot end up marking chosen-ness two
-/// different ways. This is what a checkbox is on glass; the instrument tier's
-/// square [`crate::luma_checkbox`] belongs on a plane.
+/// different ways. [`checkbox`] puts the same mark in a box.
 pub fn check(checked: bool) -> AnyElement {
     if checked {
         Icon::new(IconName::Check)
@@ -345,6 +344,23 @@ pub fn check(checked: bool) -> AnyElement {
 
 /// The mark's box — the glyph and the hole share it or rows jump.
 const CHECK: f32 = 12.0;
+
+/// A checkbox: the [`check`] mark in a small rounded plate, so the box shows
+/// when it is not checked. The caller's row takes the click and the label.
+pub fn checkbox(checked: bool) -> Div {
+    div()
+        .flex_none()
+        .size(px(CHECKBOX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::CHIP))
+        .bg(glass::ink(if checked { 0.16 } else { 0.08 }))
+        .text_color(ladder::foreground())
+        .child(check(checked))
+}
+
+const CHECKBOX: f32 = 16.0;
 
 // ---------------------------------------------------------------------------
 // Key caps
