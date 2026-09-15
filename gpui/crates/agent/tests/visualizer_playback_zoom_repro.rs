@@ -34,7 +34,7 @@
 //!   hit-test rebuild.
 //! - `PRES` — wall time between frames actually reaching the screen.
 //! - `gpu` — the renderer thread's own half: CPU encode, GPU pass total and
-//!   cluster binning, read off the Renderer Lab. This is the only one of the
+//!   cluster binning, read off the frame-stats panel. This is the only one of the
 //!   five that zooming can move, because zooming changes fill and nothing else.
 //!
 //! A UI-thread stall shows as `drawMs` rising with `PRES`. A renderer that

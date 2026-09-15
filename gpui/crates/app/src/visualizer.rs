@@ -78,8 +78,7 @@ use crate::library::Rig;
 use crate::shell::Body;
 use crate::{Library, LibraryError, Luma};
 
-/// The three.js `<Canvas camera>` the web visualizer mounts with, in three
-/// space: `position [0, 1, 3]`, target at the origin, 50° vertical field.
+/// The stage camera's vertical field of view, in degrees.
 pub(crate) const FOV_Y_DEG: f32 = 50.0;
 
 /// Frame shape to fit against before the viewport has been laid out once.
@@ -98,12 +97,12 @@ const TOOLBAR_OVERLAY_BOTTOM: Pixels = px(16.);
 /// span the toolbar occupies, and so the band the fit keeps clear.
 const OVERLAY_BAND: Pixels = px(30.);
 
-/// `zoomSpeed={0.5}` on the web's `<OrbitControls>`, and three's own
-/// `getZoomScale` base — `0.95 ** (zoomSpeed · distance · 0.01)`.
+/// Wheel zoom: the orbit distance scales by
+/// `ZOOM_BASE ** (ZOOM_SPEED · distance · 0.01)`.
 const ZOOM_SPEED: f32 = 0.5;
 const ZOOM_BASE: f32 = 0.95;
 
-/// The web toolbar's two zoom buttons are `dollyBy(0.8)` / `dollyBy(1.25)`.
+/// The dolly factors of the toolbar's zoom-in and zoom-out buttons.
 pub(crate) const DOLLY_IN: f32 = 0.8;
 pub(crate) const DOLLY_OUT: f32 = 1.25;
 
@@ -136,8 +135,8 @@ struct PickGeometry {
     meshes: Vec<Arc<TriMesh>>,
     /// Frame node → the authored object it draws. Identity is the *authored
     /// id*, never the node index: an index names whatever inherited the slot
-    /// after a re-solve, which is how deleting a piece used to leave the
-    /// selection pointing at some other object.
+    /// after a re-solve, so a selection held by index could point at some
+    /// other object.
     objects: Vec<Option<EditorObject>>,
     ordered: Vec<EditorObject>,
     /// Where each object is, for the marquee to test against.
@@ -509,7 +508,7 @@ pub(crate) struct Visualizer {
     viewport_origin: Point<Pixels>,
     /// The preview environment, shared by venue editing and score playback.
     venue_environment: VenueEnvironment,
-    render_lab: RenderLab,
+    render_controls: RenderControls,
     pub(crate) settings_open: bool,
     presentation: bool,
     bottom_bar_visible: bool,
@@ -527,7 +526,7 @@ pub(crate) struct Visualizer {
     haze_edited: bool,
     haze_pending: Rc<RefCell<Option<scene_desc::VenueHaze>>>,
     /// Whichever of the three local device settings last failed to save. One
-    /// field for all three because they are one tier and one message: the lab
+    /// field for all three because they are one tier and one message: the stage
     /// already shows the value, so the only news is that the database does not.
     view_setting_error: Option<String>,
     /// And a coalescing pair for the render-scale percent, which is a device
@@ -635,9 +634,9 @@ struct IdleKey {
     time_bits: u32,
     camera: Camera,
     size: (u32, u32),
-    /// The whole lab, its `open` flag normalised out — panel visibility draws
-    /// nothing.
-    lab: RenderLab,
+    /// Every renderer control. Panel visibility is not part of it, because it
+    /// draws nothing.
+    controls: RenderControls,
     selected: Vec<String>,
     selected_pieces: Vec<String>,
     gizmo_mode: GizmoMode,
@@ -764,10 +763,10 @@ enum EditorDrag {
 /// Runtime renderer controls. They belong to the viewport, not persisted venue
 /// data, so experimentation cannot silently rewrite a show.
 ///
-/// `PartialEq` because the whole lab rides inside [`IdleKey`]: a curated
+/// `PartialEq` because the whole set rides inside [`IdleKey`]: a curated
 /// field list there would silently miss every dial added later.
 #[derive(Clone, PartialEq)]
-struct RenderLab {
+struct RenderControls {
     /// The room's environment, unchanged by score playback.
     ///
     /// Every field below it is this value's *fill*, resolved once through
@@ -793,8 +792,6 @@ struct RenderLab {
     probe_visible: bool,
     fixture_surface_lighting: bool,
     fixture_shadows: bool,
-    geometry_shadows: bool,
-    cluster_debug: bool,
     /// The room's atmosphere — **venue truth**, saved on the venue row and
     /// synced with it, unlike every other dial here. Adopted from the rig and
     /// written back by [`Luma::set_visualizer_haze`].
@@ -810,14 +807,13 @@ struct RenderLab {
     /// What fraction of the element's pixels the stage renders, as a whole
     /// percent — the `render_scale` device setting. It rides here rather than in
     /// [`scene_desc::RenderSettings`] because it is how many pixels the picture
-    /// is sampled at, not what is in it, and because sitting in the lab puts it
+    /// is sampled at, not what is in it, and because sitting here puts it
     /// in [`IdleKey`] for free.
     render_scale_percent: u8,
-    debug_view: scene_desc::DebugView,
 }
 
-/// [`scene_desc::DirectionalLight::EDITOR`]'s direction as the lab's azimuth
-/// and elevation, in degrees. The lab authors a sun in polar form because that
+/// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
+/// elevation, in degrees. [`RenderControls`] holds a sun in polar form because that
 /// is what a pair of sliders can hold; the catalogue authors it as a vector.
 /// One of the two has to convert, and it is this one, because the vector is
 /// the shared contract.
@@ -828,11 +824,11 @@ fn editor_sun_angles() -> (f32, f32) {
 
 impl Visualizer {
     pub(crate) fn render_settings(&self) -> scene_desc::RenderSettings {
-        self.render_lab.settings(self.camera.fov_y_deg)
+        self.render_controls.settings(self.camera.fov_y_deg)
     }
 }
 
-impl RenderLab {
+impl RenderControls {
     /// One settings snapshot for the main viewport and both picker previews.
     fn settings(&self, fov: f32) -> scene_desc::RenderSettings {
         let mut render =
@@ -861,7 +857,7 @@ impl RenderLab {
             shadow_softness: self.sun_shadow_softness,
         });
         // The room's own two halves, which are not fill
-        // dials and so are not the lab's to override: the
+        // dials and so are not these controls' to override: the
         // house rig the frame builder hangs once it knows
         // the bounds, and the atmosphere an open-air venue
         // takes its background, ambient and sun from.
@@ -873,25 +869,20 @@ impl RenderLab {
         render.haze.resolution = self.haze_resolution;
         render.show_grid = self.grid_enabled;
         render.show_gizmos = self.gizmos_enabled;
-        render.debug_view = self.debug_view;
         render.fixture_surface_lighting = self.fixture_surface_lighting;
         render.fixture_shadows = self.fixture_shadows;
-        render.geometry_shadows = self.geometry_shadows;
-        render.cluster_debug = self.cluster_debug;
+        render.geometry_shadows = true;
         render
     }
 
     fn new(environment: VenueEnvironment) -> Self {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
-        let mut lab = Self {
+        let mut controls = Self {
             house: environment,
             sun_enabled: true,
-            // The editor key light, in the lab's own polar spelling. Read off
-            // `DirectionalLight::EDITOR` rather than typed again: the const and
-            // the three numbers that used to sit here were the same light said
-            // twice, and only one of them moved when the room was made
-            // legible — which is why the golden brightened and the page it is
-            // a golden *of* did not.
+            // The editor key light in polar form. Read off
+            // `DirectionalLight::EDITOR` rather than typed again, so the
+            // goldens and the stage cannot light the room differently.
             sun_azimuth_deg: azimuth_deg,
             sun_elevation_deg: elevation_deg,
             sun_intensity: scene_desc::DirectionalLight::EDITOR.intensity,
@@ -911,8 +902,6 @@ impl RenderLab {
             probe_visible: false,
             fixture_surface_lighting: true,
             fixture_shadows: true,
-            geometry_shadows: true,
-            cluster_debug: false,
             // The venue's own haze arrives with its rig; until then the haze
             // this app has always drawn, which is exactly `Default`.
             haze: scene_desc::VenueHaze::default(),
@@ -921,26 +910,23 @@ impl RenderLab {
             grid_enabled: true,
             gizmos_enabled: true,
             render_scale_percent: 100,
-            debug_view: scene_desc::DebugView::Pbr,
         };
-        lab.set_environment(environment);
-        lab
+        controls.set_environment(environment);
+        controls
     }
 
     /// Re-derive the lighting from the environment the room is now drawn
     /// under.
     ///
     /// Exactly the fields [`house::fill`] answers, and no others: everything
-    /// else in the lab is an authored tweak, and a stage that reset a hand-set
+    /// else here is an authored tweak, and a stage that reset a hand-set
     /// haze density because the track changed would be throwing away work
     /// nobody asked it to.
     ///
-    /// The grid in particular is **not** derived from the room. It used to be —
-    /// on whenever the room had a sun or a sky — and that made it user state and
-    /// derived state at once: this method runs on every light-slider sample,
-    /// every score change and every rig reload, so a grid switched off on a lit
-    /// venue popped back on at the next one of those. It is a device setting
-    /// now, and the operator's answer is the only answer.
+    /// The grid in particular is **not** derived from the room. This method
+    /// runs on every light-slider sample, every score change and every rig
+    /// reload, so a derived grid would undo the operator's choice. It is a
+    /// device setting, and the operator's answer is the only answer.
     fn set_environment(&mut self, environment: VenueEnvironment) {
         let fill = house::fill(environment);
         self.house = environment;
@@ -968,14 +954,14 @@ impl RenderLab {
 }
 
 #[derive(Clone, Copy)]
-enum LabToggle {
+enum ViewToggle {
     FixtureShadows,
     Haze,
     Grid,
     Gizmos,
 }
 #[derive(Clone, Copy)]
-enum LabValue {
+enum ViewValue {
     HazeDensity,
     Cloudiness,
     CloudSize,
@@ -991,32 +977,32 @@ enum LabValue {
 /// native, which is what 100 has always meant.
 const RENDER_SCALE_RANGE: std::ops::RangeInclusive<u8> = 25..=100;
 
-impl RenderLab {
-    fn toggle(&mut self, control: LabToggle) {
+impl RenderControls {
+    fn toggle(&mut self, control: ViewToggle) {
         match control {
-            LabToggle::FixtureShadows => self.fixture_shadows = !self.fixture_shadows,
-            LabToggle::Haze => {
+            ViewToggle::FixtureShadows => self.fixture_shadows = !self.fixture_shadows,
+            ViewToggle::Haze => {
                 self.haze.enabled = !self.haze.enabled;
                 self.haze = self.haze.sanitized();
             }
-            LabToggle::Grid => self.grid_enabled = !self.grid_enabled,
-            LabToggle::Gizmos => self.gizmos_enabled = !self.gizmos_enabled,
+            ViewToggle::Grid => self.grid_enabled = !self.grid_enabled,
+            ViewToggle::Gizmos => self.gizmos_enabled = !self.gizmos_enabled,
         }
     }
-    fn set(&mut self, control: LabValue, value: f32) {
-        if matches!(control, LabValue::RenderScale) {
+    fn set(&mut self, control: ViewValue, value: f32) {
+        if matches!(control, ViewValue::RenderScale) {
             self.render_scale_percent = clamp_render_scale(value.round() as i64);
             return;
         }
         match control {
-            LabValue::HazeDensity => self.haze.density = value,
-            LabValue::Cloudiness => self.haze.appearance.cloudiness = value,
-            LabValue::CloudSize => self.haze.appearance.cloud_size = value,
-            LabValue::Turbulence => self.haze.appearance.turbulence = value,
-            LabValue::WindSpeed => self.haze.appearance.wind_speed = value,
-            LabValue::WindDirection => self.haze.appearance.wind_direction = value,
+            ViewValue::HazeDensity => self.haze.density = value,
+            ViewValue::Cloudiness => self.haze.appearance.cloudiness = value,
+            ViewValue::CloudSize => self.haze.appearance.cloud_size = value,
+            ViewValue::Turbulence => self.haze.appearance.turbulence = value,
+            ViewValue::WindSpeed => self.haze.appearance.wind_speed = value,
+            ViewValue::WindDirection => self.haze.appearance.wind_direction = value,
             // Handled above; it is not part of the room's atmosphere.
-            LabValue::RenderScale => unreachable!(),
+            ViewValue::RenderScale => unreachable!(),
         }
         // The whole value, not just the appearance: `sanitized` is what keeps a
         // swept density inside [`scene_desc::VenueHaze::MAX_DENSITY`], which is
@@ -1084,9 +1070,9 @@ impl Visualizer {
                 };
                 state.composite_landed(installed);
                 state.rig_loaded(loaded);
-                state.render_lab.grid_enabled = settings.stage_grid;
-                state.render_lab.gizmos_enabled = settings.stage_gizmos;
-                state.render_lab.render_scale_percent =
+                state.render_controls.grid_enabled = settings.stage_grid;
+                state.render_controls.gizmos_enabled = settings.stage_gizmos;
+                state.render_controls.render_scale_percent =
                     clamp_render_scale(i64::from(settings.render_scale));
                 cx.notify();
             })
@@ -1116,7 +1102,7 @@ impl Visualizer {
             size: gpui::Size::default(),
             viewport_origin: Point::default(),
             venue_environment: VenueEnvironment::default(),
-            render_lab: RenderLab::new(environment),
+            render_controls: RenderControls::new(environment),
             settings_open: false,
             presentation: false,
             bottom_bar_visible: false,
@@ -1146,12 +1132,12 @@ impl Visualizer {
 
     /// Adopt an edited environment without waiting for the write to land.
     ///
-    /// The lab is re-derived from it, which is what puts the new light on
+    /// The render controls are re-derived from it, which is what puts the new light on
     /// screen: its `house` field rides in the idle key, so a resting viewport
     /// wakes for the change rather than re-presenting the room it had.
     pub(crate) fn set_venue_environment(&mut self, environment: VenueEnvironment) {
         self.venue_environment = environment;
-        self.render_lab.set_environment(self.environment());
+        self.render_controls.set_environment(self.environment());
     }
 
     /// Preview and authoring use the same saved room. Selecting a score
@@ -1170,11 +1156,11 @@ impl Visualizer {
     /// sample that follows is not (see [`Library::sample_universe`]).
     fn relight(&mut self, library: &Library, subject: Option<Lit>, cx: &mut Context<Luma>) {
         self.subject = subject.clone();
-        self.render_lab.set_environment(self.environment());
+        self.render_controls.set_environment(self.environment());
         let Some(lit) = subject else {
             // Nothing on screen is about a score any more, so the stage stops
             // claiming one. What the engine still holds is stale and unread —
-            // the lab has already gone back to editor lighting.
+            // the render controls have already gone back to editor lighting.
             self.lit = None;
             return;
         };
@@ -1267,10 +1253,10 @@ impl Visualizer {
         // local edit the rig read knows nothing about, and adopting the stored
         // row over it would snap the slider back under the hand.
         if !self.haze_edited {
-            self.render_lab.haze = rig.haze;
+            self.render_controls.haze = rig.haze;
         }
-        self.render_lab.set_environment(self.environment());
-        let scene = scene(&rig, &definitions, self.environment(), self.render_lab.haze);
+        self.render_controls.set_environment(self.environment());
+        let scene = scene(&rig, &definitions, self.environment(), self.render_controls.haze);
         self.framing = scene.framing(&definitions);
         self.camera = opening_camera(&self.framing, &self.view_finder());
         self.owes_opening_pose = true;
@@ -2124,8 +2110,8 @@ fn zoom_scale(distance: f32) -> f32 {
 
 // -- the venue, in the renderer's vocabulary ---------------------------------
 
-/// One venue as a scene description: geometry in data space, the render dials
-/// the web's dark-stage view pins, and an **empty** state map — head state
+/// One venue as a scene description: geometry in data space, the dark-stage
+/// render dials, and an **empty** state map — head state
 /// arrives per frame through [`luma_render::StateSource`] instead.
 ///
 /// Every pose here is read off the solved graph, through the same
@@ -2156,7 +2142,7 @@ pub(crate) fn scene(
         editing: true,
         aim_arrows: false,
         // The one preset a venue is drawn under, with the haze resolution
-        // reduced for the live path. The lab overwrites the fill dials each
+        // reduced for the live path. The render controls overwrite the fill dials each
         // frame; the house, the sky and the haze are re-read from this
         // environment and this haze there too, so the lamps hang and the room
         // has its atmosphere from the first frame on.
@@ -2379,8 +2365,8 @@ struct FrameSample {
     /// they are wall-clock brackets, not adapter timestamps. That is the whole
     /// point of them. A slot reads `Rendering` from the moment it is claimed,
     /// so a worker blocked in this span produces the stall signature — slots
-    /// rendering, nothing on the GPU, UI thread healthy — and no field in this
-    /// struct could previously see it.
+    /// rendering, nothing on the GPU, UI thread healthy — which no other field
+    /// in this struct can see.
     submit_total_ms: f32,
     submit_prepare_ms: f32,
     submit_clusters_ms: f32,
@@ -2480,10 +2466,10 @@ struct FrameSample {
     shared_surface: bool,
     /// Whether a completed frame reached the screen on this prepaint.
     ///
-    /// **False is the row that used to be missing.** The stage submits a frame
-    /// every prepaint but only sometimes has one to show, and recording only
-    /// the deliveries made a 345 ms outage look like one slow frame instead of
-    /// forty silent ones. Everything measured before submission is still valid
+    /// **False rows are recorded too.** The stage submits a frame every
+    /// prepaint but only sometimes has one to show, and recording only the
+    /// deliveries would make a 345 ms outage look like one slow frame instead
+    /// of forty silent ones. Everything measured before submission is still valid
     /// on a ghost row; everything measured on the way back is `None`.
     delivered: bool,
     /// Whether this submission displaced an older frame that never reached the
@@ -3095,97 +3081,97 @@ pub(crate) fn visualizer(
 }
 
 fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
-    let lab = &state.render_lab;
+    let controls = &state.render_controls;
     div()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(lab_toggle(
+        .child(view_toggle(
             state,
             app,
             "Haze",
-            lab.haze.enabled,
-            LabToggle::Haze,
+            controls.haze.enabled,
+            ViewToggle::Haze,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Haze density",
-            lab.haze.density,
+            controls.haze.density,
             0.,
             scene_desc::VenueHaze::MAX_DENSITY,
-            LabValue::HazeDensity,
+            ViewValue::HazeDensity,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Cloudiness",
-            lab.haze.appearance.cloudiness,
+            controls.haze.appearance.cloudiness,
             0.,
             1.,
-            LabValue::Cloudiness,
+            ViewValue::Cloudiness,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Cloud size (m)",
-            lab.haze.appearance.cloud_size,
+            controls.haze.appearance.cloud_size,
             0.5,
             20.,
-            LabValue::CloudSize,
+            ViewValue::CloudSize,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Turbulence",
-            lab.haze.appearance.turbulence,
+            controls.haze.appearance.turbulence,
             0.,
             1.,
-            LabValue::Turbulence,
+            ViewValue::Turbulence,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Wind speed (m/s)",
-            lab.haze.appearance.wind_speed,
+            controls.haze.appearance.wind_speed,
             0.,
             10.,
-            LabValue::WindSpeed,
+            ViewValue::WindSpeed,
         ))
-        .child(lab_value(
+        .child(view_value(
             app,
             "Wind direction (°)",
-            lab.haze.appearance.wind_direction,
+            controls.haze.appearance.wind_direction,
             0.,
             360.,
-            LabValue::WindDirection,
+            ViewValue::WindDirection,
         ))
-        .child(lab_toggle(
+        .child(view_toggle(
             state,
             app,
             "Fixture shadows",
-            lab.fixture_shadows,
-            LabToggle::FixtureShadows,
+            controls.fixture_shadows,
+            ViewToggle::FixtureShadows,
         ))
-        .child(lab_toggle(
+        .child(view_toggle(
             state,
             app,
             "Grid",
-            lab.grid_enabled,
-            LabToggle::Grid,
+            controls.grid_enabled,
+            ViewToggle::Grid,
         ))
-        .child(lab_toggle(
+        .child(view_toggle(
             state,
             app,
             "Gizmos",
-            lab.gizmos_enabled,
-            LabToggle::Gizmos,
+            controls.gizmos_enabled,
+            ViewToggle::Gizmos,
         ))
         // A cost knob, so it sits with the other cost knobs rather than in the
         // middle of the haze cluster, and it sits last because its caption
         // belongs directly under it.
-        .child(lab_value(
+        .child(view_value(
             app,
             "Render scale (%)",
-            f32::from(lab.render_scale_percent),
+            f32::from(controls.render_scale_percent),
             f32::from(*RENDER_SCALE_RANGE.start()),
             f32::from(*RENDER_SCALE_RANGE.end()),
-            LabValue::RenderScale,
+            ViewValue::RenderScale,
         ))
         .children(render_size_caption(state))
 }
@@ -3207,19 +3193,19 @@ fn render_size_caption(state: &Visualizer) -> Option<impl IntoElement> {
     )
 }
 
-fn lab_toggle(
+fn view_toggle(
     state: &Visualizer,
     app: &Entity<Luma>,
     label: &'static str,
     checked: bool,
-    control: LabToggle,
+    control: ViewToggle,
 ) -> impl IntoElement {
     use luma_ui::node::AgentNode as _;
     let index = match control {
-        LabToggle::Haze => 0,
-        LabToggle::FixtureShadows => 1,
-        LabToggle::Grid => 2,
-        LabToggle::Gizmos => 3,
+        ViewToggle::Haze => 0,
+        ViewToggle::FixtureShadows => 1,
+        ViewToggle::Grid => 2,
+        ViewToggle::Gizmos => 3,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -3265,21 +3251,21 @@ fn lab_toggle(
 }
 
 /// A labelled value scrub on the floating settings surface.
-fn lab_value(
+fn view_value(
     app: &Entity<Luma>,
     label: &'static str,
     value: f32,
     min: f32,
     max: f32,
-    control: LabValue,
+    control: ViewValue,
 ) -> Div {
     let app = app.clone();
     let (step, power) = match control {
-        LabValue::HazeDensity => (0.001, 2.0),
+        ViewValue::HazeDensity => (0.001, 2.0),
         // A whole percent, linearly: the quantity is already a percentage, so a
         // power curve would only make the number under the hand lie about where
         // the hand is.
-        LabValue::RenderScale => (1.0, 1.0),
+        ViewValue::RenderScale => (1.0, 1.0),
         _ => (0.01, 1.0),
     };
     div()
@@ -3454,9 +3440,8 @@ fn fps_reading(stage: &Stage) -> FpsReading {
 
 /// The corner FPS readout, and the frame-stats panel it unfolds into.
 ///
-/// This is the stats' one home — the toolbar and the lab used to publish
-/// overlapping halves of the same numbers, and two surfaces for one reading is
-/// a drifted duplicate waiting to happen. Folded it is the rate and its worst
+/// This is the stats' one home: two surfaces for one reading would drift
+/// apart. Folded it is the rate and its worst
 /// recent frame; unfolded it adds the frame-time graph and the per-phase
 /// numbers the hitch ring already records, under the same labels the harness
 /// has always read (`DRAW`, `UI`, `PRES`, `CPU`).
@@ -3777,7 +3762,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
-    // lab remains owned by the screen.
+    // render controls remain owned by the screen.
     let stage = Rc::clone(&state.stage);
     let camera = state.camera;
     // Overlay builder expects primary first; Selection keeps primary at the
@@ -3841,7 +3826,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             .as_ref()
             .filter(|_| !state.presentation)
             .is_some_and(|build| build.hand.owns_pointer());
-    let key_lab = state.render_lab.clone();
+    let key_controls = state.render_controls.clone();
     let sized = app.clone();
 
     canvas(
@@ -3883,7 +3868,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             // `from_env` caches in a `OnceLock`, so the live percent cannot go
             // through it and is threaded in instead.
             let (width, height) = RenderScale::from_env().size(
-                key_lab.render_scale_percent,
+                key_controls.render_scale_percent,
                 (
                     (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
                     (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
@@ -3903,18 +3888,18 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             time_bits: time.to_bits(),
                             camera,
                             size: (width, height),
-                            lab: key_lab.clone(),
+                            controls: key_controls.clone(),
                             selected: selected_fixture_ids.clone(),
                             selected_pieces: selected_piece_ids.clone(),
                             gizmo_mode,
                             gizmo_hover,
                             universe: universe.clone(),
                         };
-                        let moving_haze = key_lab.haze.enabled
-                            && key_lab.haze.density > 0.0
-                            && key_lab.haze.appearance.cloudiness > 0.0
-                            && (key_lab.haze.appearance.wind_speed > 0.0
-                                || key_lab.haze.appearance.turbulence > 0.0);
+                        let moving_haze = key_controls.haze.enabled
+                            && key_controls.haze.density > 0.0
+                            && key_controls.haze.appearance.cloudiness > 0.0
+                            && (key_controls.haze.appearance.wind_speed > 0.0
+                                || key_controls.haze.appearance.turbulence > 0.0);
                         let rest = if interacting || moving_haze {
                             stage.idle = None;
                             false
@@ -3950,7 +3935,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 coords::three_from_world(camera.position()).to_array();
                             scene.camera.target =
                                 coords::three_from_world(camera.target).to_array();
-                            scene.render = key_lab.settings(camera.fov_y_deg);
+                            scene.render = key_controls.settings(camera.fov_y_deg);
                             scene.selected_fixture_ids = selected_fixture_ids.clone();
                             scene.editor = scene_desc::Editor {
                                 selected_piece_ids: selected_piece_ids.clone(),
@@ -4103,8 +4088,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                             sample.submit_encode_ms = ms(completed.cpu.encode);
                                             Some((completed.frame, Some(completed.pick)))
                                         }
-                                        // Submitted, nothing back. The row that
-                                        // used to be missing entirely.
+                                        // Submitted, nothing back: a row with
+                                        // no delivered frame.
                                         _ => stage.previous.clone().map(|frame| (frame, None)),
                                     };
                                     trace_stage_frame(&sample);
@@ -4211,7 +4196,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 ///
 /// gpui hit-tests in paint order and reports *every* hitbox under the pointer,
 /// so this canvas is hovered even where something is drawn on top of it — the
-/// lab panel, the toolbar, a seam grip. Both guards below therefore mean "no
+/// settings panel, the toolbar, a seam grip. Both guards below therefore mean "no
 /// surface in front of me has claimed this": `is_hovered` is false behind an
 /// occluder, and `should_handle_scroll` is false behind a full one. That holds
 /// only because every surface that floats over this one says so with
@@ -4377,7 +4362,7 @@ fn plate(message: String) -> AnyElement {
 }
 
 #[cfg(test)]
-mod render_lab_tests {
+mod view_tests {
     use super::*;
 
     #[test]
@@ -4410,81 +4395,81 @@ mod render_lab_tests {
 
     #[test]
     fn view_controls_are_independent_and_bounded() {
-        let mut lab = RenderLab::new(VenueEnvironment::default());
-        let house = lab.house;
-        lab.set(LabValue::HazeDensity, 9.0);
-        assert_eq!(lab.haze.density, scene_desc::VenueHaze::MAX_DENSITY);
-        lab.toggle(LabToggle::FixtureShadows);
-        assert!(!lab.fixture_shadows);
-        assert_eq!(lab.house, house);
+        let mut controls = RenderControls::new(VenueEnvironment::default());
+        let house = controls.house;
+        controls.set(ViewValue::HazeDensity, 9.0);
+        assert_eq!(controls.haze.density, scene_desc::VenueHaze::MAX_DENSITY);
+        controls.toggle(ViewToggle::FixtureShadows);
+        assert!(!controls.fixture_shadows);
+        assert_eq!(controls.house, house);
     }
 
     #[test]
     fn a_fresh_lab_draws_the_default_room_atmosphere() {
-        let lab = RenderLab::new(VenueEnvironment::default());
-        assert_eq!(lab.haze, scene_desc::VenueHaze::default());
+        let controls = RenderControls::new(VenueEnvironment::default());
+        assert_eq!(controls.haze, scene_desc::VenueHaze::default());
         // The venue's haze, not the default, reaches the renderer — and the two
         // cost knobs the venue deliberately does not carry still do.
-        let mut lab = lab;
-        lab.haze = scene_desc::VenueHaze {
+        let mut controls = controls;
+        controls.haze = scene_desc::VenueHaze {
             enabled: true,
             density: 0.4,
             ..Default::default()
         };
-        lab.haze_steps = 13;
-        let render = lab.settings(50.0);
+        controls.haze_steps = 13;
+        let render = controls.settings(50.0);
         assert_eq!(render.haze.density, 0.4);
         assert_eq!(render.haze.steps, 13);
-        assert_eq!(render.haze.resolution, lab.haze_resolution);
+        assert_eq!(render.haze.resolution, controls.haze_resolution);
     }
 
-    /// The regression this whole change is about: the grid used to be derived
-    /// here, so a grid switched off came back at the next light sample, score
-    /// change or rig reload — all three run `set_environment`.
+    /// The grid is not derived from the room, so a grid switched off stays off
+    /// through a light sample, score change or rig reload — all three run
+    /// `set_environment`.
     #[test]
     fn changing_the_room_leaves_haze_and_chrome_alone() {
-        let mut lab = RenderLab::new(VenueEnvironment::default());
-        lab.toggle(LabToggle::Grid);
-        lab.toggle(LabToggle::Gizmos);
-        lab.set(LabValue::HazeDensity, 0.31);
-        lab.set(LabValue::Cloudiness, 0.7);
-        lab.set(LabValue::RenderScale, 40.0);
-        let before = lab.clone();
+        let mut controls = RenderControls::new(VenueEnvironment::default());
+        controls.toggle(ViewToggle::Grid);
+        controls.toggle(ViewToggle::Gizmos);
+        controls.set(ViewValue::HazeDensity, 0.31);
+        controls.set(ViewValue::Cloudiness, 0.7);
+        controls.set(ViewValue::RenderScale, 40.0);
+        let before = controls.clone();
 
         for environment in [
             VenueEnvironment::outdoor(40.0),
             VenueEnvironment::indoor(0.0),
             VenueEnvironment::default(),
         ] {
-            lab.set_environment(environment);
+            controls.set_environment(environment);
             assert!(
-                !lab.grid_enabled,
+                !controls.grid_enabled,
                 "{environment:?} switched the grid back on"
             );
             assert!(
-                !lab.gizmos_enabled,
+                !controls.gizmos_enabled,
                 "{environment:?} switched gizmos back on"
             );
-            assert_eq!(lab.haze, before.haze, "{environment:?} rewrote the haze");
-            assert_eq!(lab.render_scale_percent, before.render_scale_percent);
+            assert_eq!(controls.haze, before.haze, "{environment:?} rewrote the haze");
+            assert_eq!(controls.render_scale_percent, before.render_scale_percent);
         }
     }
 
     #[test]
     fn the_render_percent_is_a_whole_percent_in_range() {
-        let mut lab = RenderLab::new(VenueEnvironment::default());
-        assert_eq!(lab.render_scale_percent, 100);
-        lab.set(LabValue::RenderScale, 62.4);
-        assert_eq!(lab.render_scale_percent, 62);
-        lab.set(LabValue::RenderScale, 1.0);
-        assert_eq!(lab.render_scale_percent, 25);
-        lab.set(LabValue::RenderScale, 400.0);
-        assert_eq!(lab.render_scale_percent, 100);
+        let mut controls = RenderControls::new(VenueEnvironment::default());
+        assert_eq!(controls.render_scale_percent, 100);
+        controls.set(ViewValue::RenderScale, 62.4);
+        assert_eq!(controls.render_scale_percent, 62);
+        controls.set(ViewValue::RenderScale, 1.0);
+        assert_eq!(controls.render_scale_percent, 25);
+        controls.set(ViewValue::RenderScale, 400.0);
+        assert_eq!(controls.render_scale_percent, 100);
         // It is not haze, and touching it must not sanitize haze into range or
         // out of it.
-        let haze = lab.haze;
-        lab.set(LabValue::RenderScale, 50.0);
-        assert_eq!(lab.haze, haze);
+        let haze = controls.haze;
+        controls.set(ViewValue::RenderScale, 50.0);
+        assert_eq!(controls.haze, haze);
     }
 }
 
@@ -4901,7 +4886,7 @@ mod orbit_selection_tests {
             size: gpui::size(px(1200.0), px(800.0)),
             viewport_origin: Default::default(),
             venue_environment: Default::default(),
-            render_lab: RenderLab::new(Default::default()),
+            render_controls: RenderControls::new(Default::default()),
             settings_open: false,
             presentation: false,
             bottom_bar_visible: false,
@@ -4932,12 +4917,12 @@ mod orbit_selection_tests {
         let camera = Camera::default();
         let pick = empty_pick(camera);
         let mut view = visualizer(None, pick);
-        let lab = view.render_lab.clone();
+        let controls = view.render_controls.clone();
         let key = || IdleKey {
             time_bits: 0.0_f32.to_bits(),
             camera,
             size: (1200, 800),
-            lab: lab.clone(),
+            controls: controls.clone(),
             selected: Vec::new(),
             selected_pieces: vec!["deck".into()],
             gizmo_mode: Default::default(),
