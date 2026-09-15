@@ -5,8 +5,9 @@ edition = "2021"
 publish = false
 
 # Offscreen wgpu light-transport renderer (docs/specs/wgpu-renderer.md).
-# No windowing, no gpui: the device is ours, every frame lands in a texture and
-# comes back as bytes. `luma-viewport` will own presentation.
+# No windowing, no gpui: the device is ours, and every frame lands in a texture.
+# Presentation lives here too: `viewport` and `share` hand finished frames to
+# the app, whose `visualizer` puts them on screen.
 [dependencies]
 luma-scene = { path = "../scene" }
 # Reaches across into the backend workspace, the same direction `luma-app`
