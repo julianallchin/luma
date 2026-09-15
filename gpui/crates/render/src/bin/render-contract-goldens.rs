@@ -3,7 +3,7 @@
 //!     cargo run -p luma-render --release --bin render-contract-goldens
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use luma_render::coords::data_pose_of;
 use luma_render::scene_desc::{
@@ -15,7 +15,7 @@ use luma_render::{assets, build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 const TIME: f32 = 1.37;
 
 fn main() -> anyhow::Result<()> {
-    let repo = repo_root();
+    let repo = luma_render::repo_root();
     let source = Catalogue::load(&repo.join("gpui/crates/render/goldens/scenes.json"))?;
     let output = repo.join("gpui/crates/render/goldens/contracts");
     std::fs::create_dir_all(&output)?;
@@ -599,12 +599,4 @@ fn write_json(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> 
     serde_json::to_writer_pretty(&mut writer, value)?;
     std::io::Write::write_all(&mut writer, b"\n")?;
     Ok(())
-}
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("crate is three levels below the repo root")
-        .to_path_buf()
 }

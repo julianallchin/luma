@@ -38,13 +38,6 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     fs::write(path, serde_json::to_vec_pretty(value)?)?;
     Ok(())
 }
-fn png(path: &Path, bytes: &[u8], width: u32, height: u32) -> Result<()> {
-    let mut encoder = png::Encoder::new(fs::File::create(path)?, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(bytes)?;
-    Ok(())
-}
 struct ReplayInputs {
     suite: Suite,
     catalogue_path: PathBuf,
@@ -159,7 +152,7 @@ fn replay(suite_path: &Path, output: &Path) -> Result<()> {
         images.push(pixels);
     }
     for (index, pixels) in images.iter().enumerate() {
-        png(
+        luma_render::image_out::write(
             &output.join(format!("frame-{index:03}.png")),
             pixels,
             suite.width,
@@ -432,12 +425,22 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
         if reference_samples > 0 {
             let pixels =
                 renderer.render_reference(&frame, suite.width, suite.height, reference_samples)?;
-            png(&dir.join("settled.png"), &pixels, suite.width, suite.height)?;
+            luma_render::image_out::write(
+                &dir.join("settled.png"),
+                &pixels,
+                suite.width,
+                suite.height,
+            )?;
             frame.camera.eye.x += 0.2;
             frame.camera.target.x += 0.2;
             let pixels =
                 renderer.render_reference(&frame, suite.width, suite.height, reference_samples)?;
-            png(&dir.join("pan.png"), &pixels, suite.width, suite.height)?;
+            luma_render::image_out::write(
+                &dir.join("pan.png"),
+                &pixels,
+                suite.width,
+                suite.height,
+            )?;
         } else {
             let first = renderer.render_next(
                 &frame,
@@ -445,7 +448,12 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 suite.height,
                 luma_render::LIVE_SUBFRAMES,
             )?;
-            png(&dir.join("first.png"), &first, suite.width, suite.height)?;
+            luma_render::image_out::write(
+                &dir.join("first.png"),
+                &first,
+                suite.width,
+                suite.height,
+            )?;
             // Frozen scene time keeps the physical medium fixed. render_next
             // still advances sample seeds/history exactly as a paused viewport.
             for i in 1..64 {
@@ -468,7 +476,7 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                     suite.height,
                     luma_render::LIVE_SUBFRAMES,
                 )?;
-                png(
+                luma_render::image_out::write(
                     &dir.join(if i == 0 {
                         "settled.png".into()
                     } else {
@@ -541,7 +549,12 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                     luma_render::LIVE_SUBFRAMES,
                 )?;
                 if i == 8 {
-                    png(&dir.join("pan.png"), &pixels, suite.width, suite.height)?;
+                    luma_render::image_out::write(
+                        &dir.join("pan.png"),
+                        &pixels,
+                        suite.width,
+                        suite.height,
+                    )?;
                 }
             }
             let intensities: Vec<_> = frame.fixture_cones.iter().map(|l| l.intensity).collect();
@@ -554,7 +567,7 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 suite.height,
                 luma_render::LIVE_SUBFRAMES,
             )?;
-            png(
+            luma_render::image_out::write(
                 &dir.join("blackout.png"),
                 &pixels,
                 suite.width,
@@ -569,7 +582,12 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 suite.height,
                 luma_render::LIVE_SUBFRAMES,
             )?;
-            png(&dir.join("relight.png"), &pixels, suite.width, suite.height)?;
+            luma_render::image_out::write(
+                &dir.join("relight.png"),
+                &pixels,
+                suite.width,
+                suite.height,
+            )?;
         }
         if let Some(work) = renderer.haze_work_stats()? {
             let mut work = serde_json::to_value(work)?;
@@ -608,7 +626,12 @@ fn capture(suite_path: &Path, output: &Path, mode: &str, filter: Option<&str>) -
                 )?;
                 let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let image = format!("update-{i}.png");
-                png(&dir.join(&image), &pixels, suite.width, suite.height)?;
+                luma_render::image_out::write(
+                    &dir.join(&image),
+                    &pixels,
+                    suite.width,
+                    suite.height,
+                )?;
                 updates.push(json!({"offset":offset.to_array(), "image":image,
                     "wall_ms":wall_ms,
                     "shadowStats":renderer.shadow_stats(), "detail":timing}));

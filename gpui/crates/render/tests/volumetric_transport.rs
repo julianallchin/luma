@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -233,26 +232,16 @@ fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, bytes)
 }
 
-fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
-    let mut encoder = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .unwrap()
-        .write_image_data(pixels)
-        .unwrap();
-}
-
 fn capture_transport(name: &str, pixels: &[u8]) {
     if let Some(dir) = std::env::var_os("LUMA_HAZE_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
-        write_png(
+        luma_render::image_out::write(
             &PathBuf::from(dir).join(format!("{name}.png")),
+            pixels,
             WIDTH,
             HEIGHT,
-            pixels,
-        );
+        )
+        .unwrap();
     }
 }
 
@@ -433,7 +422,13 @@ fn tiled_transport_accepts_32_128_and_512_cones() {
         let actual_hash = hash(&pixels);
         let image_path = golden_dir.join(&case.image);
         if update {
-            write_png(&image_path, descriptor.width, descriptor.height, &pixels);
+            luma_render::image_out::write(
+                &image_path,
+                &pixels,
+                descriptor.width,
+                descriptor.height,
+            )
+            .unwrap();
             eprintln!("{} cones: 0x{actual_hash:016x}", case.cones);
             continue;
         }
