@@ -423,10 +423,6 @@ impl Luma {
                     // save is that save, or older than it: installing it would
                     // drop the selection and can put back the old value.
                     if editor.dirty || editor.saving || editor.writes != writes {
-                        blink_probe(format!(
-                            "reload skipped dirty={} saving={} writes {}->{}",
-                            editor.dirty, editor.saving, writes, editor.writes
-                        ));
                         return;
                     }
                     match result {
@@ -439,38 +435,7 @@ impl Luma {
                                 .as_ref()
                                 .is_some_and(|graph| same_document(&graph.base, &contents.score))
                             {
-                                blink_probe("reload equal, kept");
                                 return;
-                            }
-                            if let Some(graph) = editor.graph_score.as_ref() {
-                                let base = &graph.base;
-                                let stored = &contents.score;
-                                let changed: Vec<_> = base
-                                    .clips
-                                    .iter()
-                                    .filter(|(id, clip)| stored.clips.get(*id) != Some(*clip))
-                                    .map(|(id, clip)| {
-                                        format!(
-                                            "{id}: base={} stored={}",
-                                            serde_json::to_string(clip).unwrap_or_default(),
-                                            stored
-                                                .clips
-                                                .get(id)
-                                                .map(|c| serde_json::to_string(c)
-                                                    .unwrap_or_default())
-                                                .unwrap_or_else(|| "missing".into())
-                                        )
-                                    })
-                                    .collect();
-                                blink_probe(format!(
-                                    "reload INSTALL defs_equal={} clips {}->{} changed={:?}",
-                                    base.definitions == stored.definitions,
-                                    base.clips.len(),
-                                    stored.clips.len(),
-                                    changed
-                                ));
-                            } else {
-                                blink_probe("reload INSTALL (no graph score)");
                             }
                             // Installing a read initializes its scene baseline. Keep
                             // the actual installed baseline so the rig recompiles
