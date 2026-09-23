@@ -769,3 +769,52 @@ fn form_clips_stay_forms_when_copied_between_scores() {
     assert!(target.definitions.is_empty());
     assert!(target.make_independent(&library, "copy", "local").is_err());
 }
+
+#[test]
+fn stepped_color_curves_show_each_palette_stop_without_blending() {
+    let (form, mut inputs) = preset("Color fade");
+    let palette = [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0],
+    ];
+    set(
+        &mut inputs,
+        "colors",
+        Value::Gradient(Gradient {
+            stops: palette
+                .iter()
+                .enumerate()
+                .map(|(i, color)| ColorStop {
+                    t: i as f64 / 3.0,
+                    color: *color,
+                    alpha: 1.0,
+                })
+                .collect(),
+        }),
+    );
+    let Some(Author::Choice { options, .. }) =
+        &standard_library().definitions["color.time@1"].inputs["curve"].author
+    else {
+        panic!("curve choices")
+    };
+    let steps = options
+        .iter()
+        .find(|option| option.label == "Steps (4)")
+        .unwrap();
+    assert_eq!(steps.value, Value::Envelope(palette_steps(4)));
+    set(&mut inputs, "curve", steps.value.clone());
+    set(&mut inputs, "every", Value::Beats(8.0));
+    for (beat, expected) in [1.0, 3.0, 5.0, 7.0].into_iter().zip(palette) {
+        for color in colors(&form, &inputs, beat) {
+            assert_eq!(color, expected, "{beat}");
+        }
+    }
+    for label in ["Steps (2)", "Steps (3)", "Steps (6)", "Steps (8)"] {
+        assert!(
+            options.iter().any(|option| option.label == label),
+            "{label}"
+        );
+    }
+}
