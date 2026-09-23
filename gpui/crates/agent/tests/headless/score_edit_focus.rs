@@ -9,7 +9,7 @@ fn inspector_stays_open_and_swaps_between_presets_and_clip_inputs() {
     let mut harness = Fixture::new(
         "score-inspector-motion",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2., 5.).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2., 5.)],
     )
     .with_rig()
     .window(1400., 900.)
@@ -88,7 +88,7 @@ fn inspector_stays_above_timeline_and_pickers_accept_keyboard_input() {
     let mut harness = Fixture::new(
         "score-edit-focus",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2., 5.).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2., 5.)],
     )
     .with_rig()
     .window(1400., 900.)

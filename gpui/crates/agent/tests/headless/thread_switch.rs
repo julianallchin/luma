@@ -10,7 +10,7 @@ fn switching_score_switches_to_that_scores_chat() {
     let mut app = support::Fixture::new(
         "thread-switch",
         4,
-        vec![support::Clip::new("pat-glow", "Glow", 1., 2.).lit()],
+        vec![support::Clip::new("pat-glow", "Glow", 1., 2.)],
     )
     .with_extra_scores(1)
     .with_seeded_threads()

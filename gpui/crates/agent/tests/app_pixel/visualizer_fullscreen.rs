@@ -9,7 +9,7 @@ fn fullscreen_keeps_the_live_camera_and_restores_its_pose() {
     let mut harness = Fixture::new(
         "fullscreen-pixels",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2., 15.).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2., 15.)],
     )
     .with_rig()
     .window(1400., 900.)

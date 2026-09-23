@@ -34,8 +34,8 @@ fn harness() -> Harness {
         "sidebar-scores-pixels",
         TRACK_SECONDS,
         vec![
-            Clip::new("pat-glow", "Glow", 2.0, 5.0).lit(),
-            Clip::new("pat-glow", "Glow", 8.0, 11.0).lit(),
+            Clip::new("pat-glow", "Glow", 2.0, 5.0),
+            Clip::new("pat-glow", "Glow", 8.0, 11.0),
         ],
     )
     .with_extra_scores(EXTRA_SCORES)

@@ -18,14 +18,10 @@ use serde_json::Value;
 use super::support::{self, Clip, Fixture};
 
 fn harness(name: &'static str) -> Harness {
-    Fixture::new(
-        name,
-        20,
-        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0).lit()],
-    )
-    .with_rig()
-    .window(1400., 900.)
-    .open(Mode::Pixel)
+    Fixture::new(name, 20, vec![Clip::new("pat-glow", "Glow", 2.0, 5.0)])
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Pixel)
 }
 
 fn exec(harness: &mut Harness, script: &str) -> Value {

@@ -11,8 +11,7 @@
 //   cards are the old welcome grid's;
 // - a sidebar row click pushes the column to that track's scores; opening a
 //   timeline is choosing one of them (`nav.track` walks both halves);
-// - the pattern picker is an overlay on `luma::OpenPatterns`, and picking a
-//   row opens that pattern's graph tab;
+// - a double-click on a clip opens its score graph tab;
 // - `luma::CloseTab` closes the visible tab, dropping its state — the
 //   close-then-reopen idiom that used to be "Back then re-enter";
 // - `luma::DismissOverlay` is what Escape means.
@@ -116,28 +115,13 @@ globalThis.nav = {
 		nav.step("the settings row", "row", "Settings");
 	},
 
-	// The pattern picker overlay. An action rather than a button: the picker
-	// opens from anywhere, and the action is the same door ⌘P is.
-	patterns() {
-		app.action("luma::OpenPatterns");
-		until("the pattern picker", (s) =>
-			s.find((n) => n.role === "text" && n.label.endsWith(" patterns")) !== undefined,
-		);
-	},
-
-	// Reveal an existing score graph, or import a saved library template first.
+	// Reveal a clip's score graph: its tab when one is open, else a
+	// double-click on the clip.
 	pattern(name) {
 		const tab = app.snapshot().find({ role: "button", label: name });
 		if (tab) { app.click(tab); return; }
-		let clip = app.snapshot().find({ role: "card", label: name });
-		if (!clip) {
-			nav.patterns();
-			nav.step(`the pattern ${name}`, "row", name);
-			until("the insertion preview", s => s.find({role:"card",label:"Insert pattern dialog"}));
-			app.key("enter");
-			until("the inserted clip", s => s.find({role:"card",label:name}));
-			clip = app.snapshot().find({role:"card",label:name});
-		}
+		until(`the clip ${name}`, s => s.find({role:"card",label:name}));
+		const clip = app.snapshot().find({role:"card",label:name});
 		app.click(clip, {count:2});
 		until("the score graph", s => s.find({role:"card",label:"Graph workspace"}));
 	},

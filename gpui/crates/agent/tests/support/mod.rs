@@ -182,10 +182,6 @@ pub struct Clip {
     pub start: f64,
     pub end: f64,
     pub z_index: i64,
-    /// Whether the pattern gets a graph that actually emits light — see
-    /// [`Clip::lit`]. Off by default: a clip on a timeline is a rectangle, and
-    /// every test but the 3D view's is testing the rectangle.
-    pub lit: bool,
 }
 
 impl Clip {
@@ -196,20 +192,7 @@ impl Clip {
             start,
             end,
             z_index: 0,
-            lit: false,
         }
-    }
-
-    /// Give the pattern a graph that lights every fixture, pulsing with the
-    /// beat grid.
-    ///
-    /// Without this a clip's pattern is a `patterns` row with no graph
-    /// document behind it, which composites to a scene that evaluates to
-    /// nothing — fine for a timeline, useless for a view whose whole subject
-    /// is the light. See [`Fixture::light`] for the graph.
-    pub fn lit(mut self) -> Self {
-        self.lit = true;
-        self
     }
 
     pub fn lane(mut self, z_index: i64) -> Self {
@@ -252,7 +235,6 @@ pub struct Fixture {
     extra_scores: usize,
     seeded_threads: bool,
     graph_score: Option<Value>,
-    typed_pattern: Option<String>,
 }
 
 impl Fixture {
@@ -280,7 +262,6 @@ impl Fixture {
             extra_scores: 0,
             seeded_threads: false,
             graph_score: None,
-            typed_pattern: None,
         }
     }
 
@@ -326,11 +307,6 @@ impl Fixture {
             "graph fixture uses its canonical document"
         );
         self.graph_score = Some(score);
-        self
-    }
-
-    pub fn with_typed_patterns(mut self, effect: &str) -> Self {
-        self.typed_pattern = Some(effect.into());
         self
     }
 
@@ -585,31 +561,6 @@ impl Fixture {
             .execute(pool)
             .await
             .expect("failed to seed the venue");
-        // A lit clip's pattern is created through the seam instead, further
-        // down: `create_pattern` also makes the graph *implementation* a graph
-        // document hangs off, and a row inserted here has none.
-        for clip in self.clips.iter().filter(|clip| !clip.lit) {
-            sqlx::query("INSERT INTO patterns (id, uid, name) VALUES (?, ?, ?)")
-                .bind(&clip.pattern)
-                .bind(session::PRINCIPAL)
-                .bind(&clip.name)
-                .execute(pool)
-                .await
-                .expect("failed to seed a pattern");
-            if let Some(effect) = &self.typed_pattern {
-                let graph = luma_lib::node_graph::lighting::pattern(effect).unwrap();
-                sqlx::query(
-                    "INSERT INTO implementations(id,uid,pattern_id,graph_json) VALUES(?,?,?,?)",
-                )
-                .bind(format!("implementation-{}", clip.pattern))
-                .bind(session::PRINCIPAL)
-                .bind(&clip.pattern)
-                .bind(serde_json::to_string(&graph).unwrap())
-                .execute(pool)
-                .await
-                .expect("seed a historical typed graph");
-            }
-        }
         if self.seed_track {
             sqlx::query(
                 "INSERT INTO tracks
@@ -874,93 +825,6 @@ impl Fixture {
                     "messages": [
                         { "id": null, "role": "user", "parts": part(seeded_prompt(index)) },
                     ],
-                },
-            }),
-        )
-        .await;
-    }
-
-    /// Author `pattern`'s graph as "every selected fixture, red, pulsing once
-    /// every four beats".
-    ///
-    /// `pattern_args.selection → apply_color.selection` and
-    /// `color × sine_wave → apply_color.signal`, which is the smallest graph
-    /// that is both *visible* (a saturated hue no part of the rig or the grid
-    /// shares, so a red pixel can only have come from a beam) and *moving*
-    /// (half a cycle per second at the fixture's 120 bpm, so two shots a second
-    /// apart cannot agree by luck).
-    ///
-    /// Written through the seam rather than as a `patterns` row because a
-    /// graph is an authored document with a content-addressed revision, which
-    /// pattern graphs still are. See the module docs.
-    async fn light(&self, services: &luma_lib::dispatch::AppServices, pattern: &str, index: usize) {
-        let document = call(
-            services,
-            "get_pattern_graph_document",
-            json!({ "id": pattern, "implementationId": null }),
-        )
-        .await;
-        let node = |id: &str, type_id: &str, params: Value| {
-            let (x, y) = match id {
-                "pattern_args" => (-300.0, 0.0),
-                "pulse" => (0.0, 200.0),
-                "mix" => (300.0, 0.0),
-                "apply" => (600.0, 0.0),
-                _ => (0.0, 0.0),
-            };
-            json!({ "id": id, "typeId": type_id, "params": params,
-                    "positionX": x, "positionY": y })
-        };
-        let edge = |from: &str, from_port: &str, to: &str, to_port: &str| {
-            json!({ "id": format!("{from}{from_port}-{to}{to_port}"),
-                    "fromNode": from, "fromPort": from_port,
-                    "toNode": to, "toPort": to_port })
-        };
-        call(
-            services,
-            "save_pattern_graph_document",
-            json!({
-                "id": pattern,
-                "implementationId": document["implementationId"],
-                "operationId": request_id(900 + index),
-                "baseRevision": document["revision"],
-                "graph": {
-                    "nodes": [
-                        node("pattern_args", "pattern_args", json!({})),
-                        node("red", "color", json!({ "color": r#"{"r":255,"g":0,"b":0,"a":1}"# })),
-                        // A quarter cycle per beat — 2 s per pulse at 120 bpm
-                        // — a quarter turn ahead, so t = 0 is the peak rather
-                        // than the zero crossing a stopped transport sits on.
-                        node("pulse", "sine_wave",
-                             json!({ "subdivision": 0.25, "phase_deg": 90.0 })),
-                        node("mix", "math", json!({ "operation": "multiply" })),
-                        node("apply", "apply_color", json!({})),
-                    ],
-                    "edges": [
-                        edge("red", "out", "mix", "a"),
-                        edge("pulse", "out", "mix", "b"),
-                        edge("mix", "out", "apply", "signal"),
-                        edge("pattern_args", "selection", "apply", "selection"),
-                    ],
-                    // One arg of each editable family the args sheet must
-                    // host. Only `selection` is wired into the graph; the
-                    // rest are schema for the strip to render and write.
-                    "args": [{
-                        "id": "selection",
-                        "name": "selection",
-                        "argType": "Selection",
-                        "defaultValue": { "expression": "all" },
-                    }, {
-                        "id": "intensity",
-                        "name": "intensity",
-                        "argType": "Scalar",
-                        "defaultValue": 1.0,
-                    }, {
-                        "id": "tint",
-                        "name": "tint",
-                        "argType": "Color",
-                        "defaultValue": { "r": 255.0, "g": 0.0, "b": 0.0, "a": 1.0 },
-                    }],
                 },
             }),
         )

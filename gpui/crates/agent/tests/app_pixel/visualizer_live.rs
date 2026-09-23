@@ -42,7 +42,7 @@ fn harness(fixture: &'static str) -> Harness {
     Fixture::new(
         fixture,
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS)).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
     )
     .with_rig()
     .open(Mode::Pixel)

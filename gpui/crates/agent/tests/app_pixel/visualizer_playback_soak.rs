@@ -35,7 +35,7 @@ fn harness() -> Harness {
     Fixture::new(
         "visualizer-playback-soak",
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS)).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
     )
     .with_rig_of(RIG)
     // A full-screen-sized stage, not the suite's default 1200x800. The

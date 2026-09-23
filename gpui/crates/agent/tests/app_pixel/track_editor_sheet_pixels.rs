@@ -9,7 +9,7 @@ fn edit_focus_keeps_controls_usable_and_renders_both_picker_previews() {
     let mut harness = Fixture::new(
         "edit-focus-pixels",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2., 5.).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2., 5.)],
     )
     .with_rig()
     .window(1400., 900.)

@@ -176,7 +176,7 @@ fn the_transcript_grows_between_frames() {
 /// outcomes and only the second one is any use to the person looking at it.
 ///
 /// Both subject-less states the chat fixture can reach, in one session: the
-/// cold shell under the venue picker, and the pattern picker. Moving between
+/// cold shell under the venue picker, and the settings dialog. Moving between
 /// them keeps the centre, because neither names a subject and there is
 /// nothing to re-point.
 #[test]
@@ -224,19 +224,19 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
     );
 
     // …and it survives a move to another view that is equally about nothing.
-    let patterns = run(
+    let settings = run(
         &mut session,
         r#"
-            nav.patterns();
-            until("the pattern list", (s) => s.find({ role: "row", label: "chat-turn" }));
+            app.action("luma::OpenSettings");
+            until("the settings dialog", (s) => s.find({ role: "card", label: "Settings dialog" }));
             app.frames(4, { waitMs: 20 });
             app.snapshot().nodes
         "#,
     );
     assert!(
-        labels(&patterns, "text").iter().any(|l| l == "Luma"),
+        labels(&settings, "text").iter().any(|l| l == "Luma"),
         "the panel was dropped moving between two scopeless screens: {:?}",
-        labels(&patterns, "text")
+        labels(&settings, "text")
     );
 }
 
