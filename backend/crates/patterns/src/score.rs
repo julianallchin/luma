@@ -257,6 +257,11 @@ impl Score {
             .clips
             .get(clip_id)
             .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
+        if crate::forms::is_form(&clip.graph) {
+            return Err(Error(
+                "a form clip has no graph of its own; edit its inputs".into(),
+            ));
+        }
         let mut candidate = self.clone();
         candidate.definitions.extend(self.copy_definitions(
             base,
@@ -291,13 +296,16 @@ impl Score {
             .ok_or_else(|| Error(format!("unknown source clip {clip_id}")))?
             .clone();
         let mut candidate = self.clone();
-        candidate.definitions.extend(source.copy_definitions(
-            base,
-            &clip.graph,
-            new_id,
-            &self.library(base)?,
-        )?);
-        clip.graph = new_id.into();
+        // A form is shared like any built-in; only score-local graphs copy.
+        if !crate::forms::is_form(&clip.graph) {
+            candidate.definitions.extend(source.copy_definitions(
+                base,
+                &clip.graph,
+                new_id,
+                &self.library(base)?,
+            )?);
+            clip.graph = new_id.into();
+        }
         candidate.clips.insert(new_id.into(), clip);
         candidate.validate(base)?;
         *self = candidate;
