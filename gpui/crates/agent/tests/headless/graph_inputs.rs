@@ -27,14 +27,14 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
         app.click(node("card","Opacity ribbon"));app.click(node("card","Opacity ribbon"),{count:2});
         app.click(node("card","Mix palette"));node("button","Edit Input Palette");
         if(app.snapshot().findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")))throw new Error("connected gradient remained editable on its consumer");
-        app.click(node("button","Edit Input Palette"));expect(0.2);
-        app.click(node("slider","graph-gradient:stop:1 = 1"));expect(0.8);
-        app.click(node("slider","graph-gradient:stop:0 = 0"));set(0.4);expect(0.4);
-        app.click(node("card","Palette"));app.key("secondary-z");expect(0.2);
-        app.key("secondary-shift-z");expect(0.4);
+        app.click(node("button","Edit Input Palette"));expect(20);
+        app.click(node("slider","graph-gradient:stop:1 = 1"));expect(80);
+        app.click(node("slider","graph-gradient:stop:0 = 0"));set(40);expect(40);
+        app.click(node("card","Palette"));app.key("secondary-z");expect(20);
+        app.key("secondary-shift-z");expect(40);
         app.frames(12,{waitMs:80});app.click(node("button","Aurora"));app.click(node("card","Opacity ribbon"));
-        expect(0.4);set(0.6);expect(0.6);
-        app.frames(12,{waitMs:80});app.click(node("button","Opacity ribbon"));app.click(node("card","Palette"));expect(0.4);
+        expect(40);set(60);expect(60);
+        app.frames(12,{waitMs:80});app.click(node("button","Opacity ribbon"));app.click(node("card","Palette"));expect(40);
         app.frames(12,{waitMs:80});({opacity:true})
     "#),Duration::from_secs(60));
     assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);

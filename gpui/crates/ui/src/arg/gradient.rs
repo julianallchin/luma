@@ -1,5 +1,5 @@
 //! The gradient-stops editor: an ordered set of `(t, color)` stops drawn as a
-//! bar, stops draggable along it.
+//! bar, with a draggable color marker per stop under it.
 //!
 //! # The order is the type's, not the caller's
 //!
@@ -25,8 +25,7 @@ use crate::drag::DragGhost;
 use crate::ladder;
 use crate::node::{Instrument, Role};
 
-use super::{bounds_probe, drag_fraction, fraction_of, OwnedDrag};
-use crate::CONTROL_HEIGHT;
+use super::{bounds_probe, fraction_of, OwnedDrag};
 
 /// One stop: a position along the bar and the color there.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,16 +142,24 @@ impl Gradient {
     }
 }
 
-/// What the bar tells its host. Colors are edited via
+/// What the stops control tells its host. Colors are edited via
 /// [`Gradient::set_color`] against the selection the host keeps — the bar
 /// itself has no picker.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GradientEvent {
-    /// A stop handle was pressed.
+    /// A stop marker was pressed.
     Select(usize),
-    /// A handle is being dragged; apply via [`Gradient::move_stop`].
+    /// A marker is being dragged along the bar; apply via
+    /// [`Gradient::move_stop`].
     Move { index: usize, t: f32 },
-    /// The bar was clicked between handles; apply via [`Gradient::insert`].
+    /// A marker is being dragged off the bar (`off`), or back onto it. A stop
+    /// released off the bar is removed.
+    Detach { index: usize, off: bool },
+    /// The pointer went up: a detached stop goes now.
+    Release,
+    /// A marker was right-clicked.
+    Remove(usize),
+    /// The bar was clicked; apply via [`Gradient::insert`].
     Add { t: f32 },
 }
 
@@ -170,20 +177,12 @@ impl OwnedDrag for StopDrag {
     }
 }
 
-/// The bar, one control row tall: the exact gradient as fill, a handle per
-/// stop, click-to-add in the gaps.
-pub fn luma_gradient_bar(
-    id: impl Into<SharedString>,
-    gradient: &Gradient,
-    selected: Option<usize>,
-    width: f32,
-    on_event: impl Fn(GradientEvent, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<gpui::Div> {
-    let id = id.into();
+/// The exact gradient as a row of fills, to lay in a flex row the height of
+/// the fill: a flat lead-in, one two-stop segment per adjacent pair, a flat
+/// tail. The end segments take `radius` on their outer corners, since a
+/// content mask does not clip children to a rounded parent.
+pub fn gradient_fill(gradient: &Gradient, radius: f32) -> Vec<gpui::Div> {
     let stops = gradient.stops();
-    let (bounds, probe) = bounds_probe();
-
-    // Flat lead-in, one 2-stop segment per adjacent pair, flat tail.
     let mut segments: Vec<gpui::Div> = Vec::with_capacity(stops.len() + 1);
     if let Some(first) = stops.first().filter(|first| first.t > 0.) {
         segments.push(div().h_full().w(gpui::relative(first.t)).bg(first.color));
@@ -204,103 +203,149 @@ pub fn luma_gradient_bar(
     if let Some(last) = stops.last().filter(|last| last.t < 1.) {
         segments.push(div().h_full().w(gpui::relative(1. - last.t)).bg(last.color));
     }
-    // A content mask is a rectangle, so the bar's rounded corners do not clip
-    // its children. The end segments take the inner corner themselves.
     let last_segment = segments.len().saturating_sub(1);
-    let segments = segments.into_iter().enumerate().map(move |(at, segment)| {
-        segment
-            .when(at == 0, |s| s.rounded_l(px(crate::radius::CAP)))
-            .when(at == last_segment, |s| s.rounded_r(px(crate::radius::CAP)))
-    });
+    segments
+        .into_iter()
+        .enumerate()
+        .map(|(at, segment)| {
+            segment
+                .when(at == 0, |s| s.rounded_l(px(radius)))
+                .when(at == last_segment, |s| s.rounded_r(px(radius)))
+        })
+        .collect()
+}
 
-    let moved = id.clone();
-    let on_move = on_event.clone();
-    let on_add = on_event.clone();
-    let add_bounds = bounds.clone();
+/// How far past the control a dragged marker counts as off it.
+const DETACH: f32 = 24.;
+const BAR_H: f32 = 20.;
+const MARKER: f32 = 12.;
 
-    let handles = stops.iter().enumerate().map(|(index, stop)| {
-        let press = on_event.clone();
-        let is_selected = selected == Some(index);
-        div()
-            .id(ElementId::Name(format!("{id}:stop:{index}").into()))
-            .absolute()
-            .left(gpui::relative(stop.t))
-            .top_0()
-            .ml(px(-4.))
-            .w(px(8.))
-            .h_full()
-            .flex()
-            .justify_center()
-            .cursor_ew_resize()
-            // The hairline is what keeps a handle legible over *any* gradient
-            // color: the fill alone inverts — the accent vanishes over a
-            // matching section exactly when selection should read loudest.
-            .child(
-                div()
-                    .w(px(4.))
-                    .h_full()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(ladder::control_border())
-                    .bg(if is_selected {
-                        ladder::primary()
-                    } else {
-                        gpui::white().into()
-                    }),
-            )
-            .on_mouse_down(gpui::MouseButton::Left, {
-                let press = press.clone();
-                move |_, window, cx| {
-                    cx.stop_propagation();
-                    press(GradientEvent::Select(index), window, cx);
-                }
-            })
-            .on_drag(
-                StopDrag {
-                    id: id.clone(),
-                    index,
-                },
-                |_, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.new(|_| DragGhost)
-                },
-            )
-            .agent_node(Role::Slider, format!("{id}:stop:{index} = {}", stop.t))
-    });
-
-    div()
-        .id(ElementId::Name(format!("{moved}:bar").into()))
+/// The stops control: the exact gradient as a bar, one small color marker
+/// per stop under it. Click the bar to add a stop; drag a marker to move it,
+/// or off the control to remove it; right-click a marker to remove it.
+/// `detached` is the stop being dragged off, drawn faded.
+pub fn luma_gradient_stops(
+    id: impl Into<SharedString>,
+    gradient: &Gradient,
+    selected: Option<usize>,
+    detached: Option<usize>,
+    on_event: impl Fn(GradientEvent, &mut Window, &mut App) + Clone + 'static,
+) -> Stateful<gpui::Div> {
+    let id = id.into();
+    let (bounds, probe) = bounds_probe();
+    let add = on_event.clone();
+    let bar = div()
+        .id(ElementId::Name(format!("{id}:fill").into()))
         .relative()
         .flex()
-        .flex_shrink_0()
-        .w(px(width))
-        .h(px(CONTROL_HEIGHT))
+        .w_full()
+        .h(px(BAR_H))
         .rounded(px(crate::radius::CONTROL))
         .border_1()
-        .border_color(crate::glass::hairline(0.08))
+        .border_color(crate::glass::hairline(0.10))
         .bg(gpui::black())
         .overflow_hidden()
-        .children(segments)
+        .cursor_crosshair()
+        .children(gradient_fill(gradient, crate::radius::CAP))
         .child(probe)
-        .children(handles)
         .on_click(move |event, window, cx| {
-            if let Some(t) = fraction_of(&add_bounds, event.position().x) {
-                on_add(GradientEvent::Add { t }, window, cx);
+            if let Some(t) = fraction_of(&bounds, event.position().x) {
+                add(GradientEvent::Add { t }, window, cx);
             }
         })
-        .on_drag_move(drag_fraction(
-            moved,
-            move |at, drag: &StopDrag, window, cx| {
-                on_move(
-                    GradientEvent::Move {
-                        index: drag.index,
-                        t: at.x,
+        .agent_node(Role::Card, format!("{id} bar"));
+    let markers = gradient
+        .stops()
+        .iter()
+        .enumerate()
+        .map(|(index, stop)| {
+            let chosen = selected == Some(index);
+            let press = on_event.clone();
+            let remove = on_event.clone();
+            div()
+                .id(ElementId::Name(format!("{id}:stop:{index}").into()))
+                .absolute()
+                .left(gpui::relative(stop.t))
+                .top(px(2.))
+                .ml(px(-MARKER / 2.))
+                .size(px(MARKER))
+                .rounded(px(3.))
+                .bg(Rgba {
+                    a: 1.,
+                    ..stop.color
+                })
+                .border_color(if chosen {
+                    ladder::foreground()
+                } else {
+                    ladder::control_border()
+                })
+                .when(chosen, |marker| marker.border_2())
+                .when(!chosen, |marker| marker.border_1())
+                .when(detached == Some(index), |marker| marker.opacity(0.3))
+                .cursor_ew_resize()
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    press(GradientEvent::Select(index), window, cx);
+                })
+                .on_mouse_down(gpui::MouseButton::Right, move |_, window, cx| {
+                    cx.stop_propagation();
+                    remove(GradientEvent::Remove(index), window, cx);
+                })
+                .on_drag(
+                    StopDrag {
+                        id: id.clone(),
+                        index,
                     },
-                    window,
-                    cx,
-                );
-            },
-        ))
+                    |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.new(|_| DragGhost)
+                    },
+                )
+                .agent_node(Role::Slider, format!("{id}:stop:{index} = {}", stop.t))
+        })
+        .collect::<Vec<_>>();
+    let owner = id.clone();
+    let on_drag = on_event.clone();
+    let release = on_event.clone();
+    let release_out = on_event;
+    div()
+        .id(ElementId::Name(format!("{id}:bar").into()))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(bar)
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .h(px(MARKER + 4.))
+                .children(markers),
+        )
+        .on_drag_move(move |event: &gpui::DragMoveEvent<StopDrag>, window, cx| {
+            let drag = event.drag(cx);
+            if drag.owner() != &owner {
+                return;
+            }
+            let index = drag.index;
+            let (b, at) = (event.bounds, event.event.position);
+            let width = f32::from(b.size.width);
+            if width <= 0. {
+                return;
+            }
+            let off = at.y < b.top() - px(DETACH) || at.y > b.bottom() + px(DETACH);
+            on_drag(GradientEvent::Detach { index, off }, window, cx);
+            if !off {
+                let t = (f32::from(at.x - b.left()) / width).clamp(0., 1.);
+                on_drag(GradientEvent::Move { index, t }, window, cx);
+            }
+        })
+        .on_mouse_up(gpui::MouseButton::Left, move |_, window, cx| {
+            release(GradientEvent::Release, window, cx)
+        })
+        .on_mouse_up_out(gpui::MouseButton::Left, move |_, window, cx| {
+            release_out(GradientEvent::Release, window, cx)
+        })
 }
 
 #[cfg(test)]
