@@ -144,8 +144,22 @@ Strokes travel across the heads. Each event starts one stroke.
   start. No `delay` and no `grid_aligned`: to shift, move the clip.
 - **Strokes on the axis at once** = `travel / every`. Strokes overlap when
   events come faster than travel.
-- **width** `rel` is a share of the gap between two strokes: absolute width =
-  `rel × every / travel` of the axis. `abs` is a share of the axis.
+- **Overrun.** With boundary `clip` and a gliding path, a stroke enters fully
+  from outside the axis and leaves fully: path progress 0–1 maps onto stroke
+  centers from `−w/2` to `1 + w/2`, where `w` is the absolute width. Travel is
+  the time from first light to fully gone. A stroke is dark at the start and
+  at the end of its life. Stepped paths (`steps(N)`, or any path with `hold`
+  or `step` segments) keep their exact positions, and `wrap` has no overrun.
+- **width** `abs` is a share of the axis. `rel` is relative to the gap
+  between strokes. Let `g = every / travel` (per stroke, when `every` or
+  `travel` change). With overrun, stroke centers are `(1 + w) × g` apart, so
+  strokes just touch at rel 100% when `w = g / (1 − g)`. Absolute width is
+  `r g / (1 − r g)`, with `r g` capped at 1/2: at most a stroke as wide as
+  the axis. When `every ≥ travel` a stroke has left before the next one
+  enters, so rel 100% gives that full-axis stroke. Without overrun, absolute
+  width is `r g`, capped at 1.
+- In storage, `width` holds the share and a separate boolean input
+  `width_relative` holds rel (true) or abs (false).
 - **shape** presets: hard, soft, comet, reverse comet, spike. No preset has
   more than one bump; more strokes come from `every`. An asymmetric shape
   follows the travel direction, so a comet tail trails when the path runs
@@ -156,9 +170,11 @@ Strokes travel across the heads. Each event starts one stroke.
   positions at the centers of N equal parts, `(i + 0.5) / N`, and does not
   glide.
 
+The default axis is `x`.
+
 Presets: Chase, Wave (soft), Ripple (radial), Spin (angle), Bounce (bounce),
-Alternating sides (x, `steps(2)`, travel = every, width 50%, hard),
-Stepped chase (`steps(N)`).
+Alternating sides (x, `steps(2)`, travel = every, width abs 50%, hard),
+Stepped chase (`steps(N)`, width abs 1/N).
 
 ### `color.sparkle@1`
 

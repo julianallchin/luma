@@ -1,5 +1,5 @@
 //! Primitives that forms are built from: an odometer clock, event life, a
-//! keyframe curve and a random share of heads. None of them keeps state.
+//! keyframe curve, a random share of heads and a test for a gliding path. None of them keeps state.
 use super::pace::Pace;
 use crate::runtime::{Batch, EvaluatedValue};
 use crate::*;
@@ -117,6 +117,23 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ),
             ],
             vec![("value", ValueType::Signal(SignalType::ANY))],
+        ),
+        Primitive::PathGlides => (
+            "Path glides",
+            vec![(
+                "path",
+                port(
+                    "Path",
+                    "A curve of position over life",
+                    ValueType::Envelope,
+                    Rate::Fixed,
+                    Some(Value::Envelope(Envelope::linear(vec![[0., 0.], [1., 1.]]))),
+                ),
+            )],
+            vec![(
+                "value",
+                ValueType::Signal(SignalType::new(Unit::Number, Channels::Value)),
+            )],
         ),
         Primitive::RandomShare => (
             "Random share",
@@ -265,6 +282,19 @@ pub(crate) fn run(
                 progress.map(Unit::Number, |p| curve.sample(p)[0])?
             };
             Ok(BTreeMap::from([numeric("value", signal)?]))
+        }
+        Primitive::PathGlides => {
+            let Value::Envelope(path) = inputs["path"].control(0) else {
+                unreachable!("validated path")
+            };
+            let glides = path
+                .curves
+                .iter()
+                .all(|curve| !matches!(curve, EnvelopeCurve::Hold | EnvelopeCurve::Step));
+            Ok(BTreeMap::from([numeric(
+                "value",
+                Signal::scalar(if glides { 1.0 } else { 0.0 }, Unit::Number)?,
+            )?]))
         }
         Primitive::RandomShare => {
             let grain = inputs["grain"].fixed_scalar()?;

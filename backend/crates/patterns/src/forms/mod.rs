@@ -488,7 +488,27 @@ fn chase() -> Definition {
     let still = body.subtract("still", n(1.0), moving);
     let still_back = body.multiply("still_back", still, net_back);
     let backward = body.add("backward", moving_back, still_back);
-    // Width: a share of the axis, or of the gap to the next stroke.
+    // Overrun: with a clip boundary and a gliding path, the stroke enters
+    // fully from outside and leaves fully. Path 0–1 maps onto centers from
+    // -w/2 to 1 + w/2. Stepped paths and wrap keep exact positions.
+    body.node("axis", "resolve_mapping", vec![("mapping", i("axis"))]);
+    body.node(
+        "edge",
+        "coordinate_offset",
+        vec![
+            ("mapping", c("axis", "coordinates")),
+            ("position", Value::Position(0.0).into()),
+            ("boundary", i("boundary")),
+        ],
+    );
+    body.node("glides", "core/path_glides", vec![("path", i("path"))]);
+    let open = body.subtract("open", n(1.0), c("edge", "wrapped"));
+    let overrun = body.multiply("overrun", open, c("glides", "value"));
+    // Width: a share of the axis, or relative to the gap between strokes.
+    // g is the axis share between two stroke paths (every / travel). With
+    // overrun, centers are (1 + w) × g apart, so strokes touch at rel 1 when
+    // w = g / (1 - g); width = r g / (1 - r g), with r g capped at 1/2 (a
+    // stroke as wide as the axis). Without overrun, width = r g, capped at 1.
     body.node(
         "relative",
         "core/choose_number",
@@ -499,8 +519,18 @@ fn chase() -> Definition {
         ],
     );
     let absolute = body.subtract("absolute", n(1.0), c("relative", "value"));
-    let gap = body.multiply("gap_width", i("width"), c("life", "spacing"));
-    let gap_part = body.multiply("gap_part", gap, c("relative", "value"));
+    let gap = body.multiply("gap_share", i("width"), c("life", "spacing"));
+    let half_over = body.multiply("half_over", overrun.clone(), n(0.5));
+    let cap = body.subtract("gap_cap", n(1.0), half_over);
+    body.node("gap_capped", "core/minimum", vec![("a", gap), ("b", cap)]);
+    let grown = body.multiply("gap_grown", c("gap_capped", "value"), overrun.clone());
+    let rest = body.subtract("gap_rest", n(1.0), grown);
+    body.node(
+        "gap_width",
+        "core/divide",
+        vec![("a", c("gap_capped", "value")), ("b", rest)],
+    );
+    let gap_part = body.multiply("gap_part", c("gap_width", "value"), c("relative", "value"));
     let axis_part = body.multiply("axis_part", i("width"), absolute);
     let width = body.add("width", gap_part, axis_part);
     body.node(
@@ -508,14 +538,17 @@ fn chase() -> Definition {
         "core/maximum",
         vec![("a", width.clone()), ("b", n(1e-9))],
     );
+    let from_middle = body.subtract("from_middle", position.clone(), n(0.5));
+    let stretch = body.multiply("stretch", from_middle, width.clone());
+    let stretch = body.multiply("stretch_on", stretch, overrun.clone());
+    let center = body.add("center", position, stretch);
     // Phase across the stroke: 0 at the tail, 1 at the head.
-    body.node("axis", "resolve_mapping", vec![("mapping", i("axis"))]);
     body.node(
         "offset",
         "coordinate_offset",
         vec![
             ("mapping", c("axis", "coordinates")),
-            ("position", position),
+            ("position", center),
             ("boundary", i("boundary")),
         ],
     );
@@ -529,10 +562,15 @@ fn chase() -> Definition {
     let flip = body.subtract("flip", mirrored, phase.clone());
     let flip_back = body.multiply("flip_back", flip, backward);
     let directed = body.add("directed", phase.clone(), flip_back);
-    // The stroke covers its tail and head edges, so strokes that fill the
-    // axis leave no head dark at a boundary.
-    let after_tail = body.greater("after_tail", phase.clone(), n(-2e-9));
-    let before_head = body.greater("before_head", n(1.0 + 2e-9), phase);
+    // Without overrun the stroke covers its edges, so exact positions
+    // (steps) leave no head dark at a boundary. With overrun the edges are
+    // open, so a stroke is dark as it starts and as it ends.
+    let closed = body.subtract("closed", n(1.0), overrun);
+    let edge = body.multiply("edge_width", closed, n(2e-6));
+    let tail = body.add("tail", phase.clone(), edge.clone());
+    let head = body.add("head", n(1.0), edge);
+    let after_tail = body.greater("after_tail", tail, n(0.0));
+    let before_head = body.greater("before_head", head, phase);
     let visible = body.greater("visible", width, n(0.0));
     let stroke = body.envelope("stroke", directed, i("shape"));
     let lit = body.multiply("lit", stroke, after_tail);
@@ -546,7 +584,7 @@ fn chase() -> Definition {
         "Chase",
         vec![
             ("color", color_input()),
-            ("axis", axis_input(MappingSource::Order)),
+            ("axis", axis_input(MappingSource::U)),
             (
                 "every",
                 every_input(2.0, "Beats between strokes", &[Time, Stamps]),
@@ -566,7 +604,7 @@ fn chase() -> Definition {
                 input(
                     "Width",
                     "Stroke size",
-                    Value::Proportion(0.5),
+                    Value::Proportion(0.2),
                     Rate::Frame,
                     &[Time, Hit],
                 ),

@@ -387,6 +387,7 @@ pub enum Primitive {
     EventLife,
     SampleCurve,
     RandomShare,
+    PathGlides,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {

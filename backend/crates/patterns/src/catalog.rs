@@ -438,6 +438,7 @@ pub fn standard_library() -> Library {
                 ("core/odometer", Primitive::Odometer),
                 ("core/curve", Primitive::SampleCurve),
                 ("core/random_share", Primitive::RandomShare),
+                ("core/path_glides", Primitive::PathGlides),
                 ("core/event_spacing", Primitive::EventSpacing),
                 ("core/thin_events", Primitive::ThinEvents),
                 ("random_subset", Primitive::RandomEventTargets),
