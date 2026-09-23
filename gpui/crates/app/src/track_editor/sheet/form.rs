@@ -7,9 +7,9 @@
 use super::*;
 use luma_lib::node_graph::lighting::decode;
 use luma_patterns as p;
-use luma_ui::arg::curve_picker::luma_curve_picker;
 use luma_ui::arg::envelope::{EnvelopeChanged, EnvelopeEditor};
 use luma_ui::arg::number::format_value;
+use luma_ui::arg::preset_picker::{luma_preset_picker, Thumb};
 use luma_ui::text_input::{self, TextInput};
 
 /// Inputs in beats that must stay above zero.
@@ -38,6 +38,9 @@ pub(super) struct Slot {
     spec: &'static p::Input,
     speed: bool,
     mode: Option<p::SourceKind>,
+    /// Custom was chosen in the row's preset picker: its editor shows even
+    /// while the value matches a preset.
+    editing: bool,
 }
 
 impl Slot {
@@ -55,6 +58,7 @@ impl Slot {
             mode: decode(spec.value_type, stored)
                 .ok()
                 .and_then(|value| value.source_kind()),
+            editing: false,
         })
     }
 
@@ -381,7 +385,8 @@ pub(super) fn widget(
     match value {
         Some(p::Value::Time(curve) | p::Value::Hit(curve)) if curve.is_color() => {
             let hit = slot.mode == Some(p::SourceKind::Hit);
-            let entity = cx.new(|cx| GradientEditor::new(gradient_of(&curve), window, cx));
+            let entity =
+                cx.new(|cx| GradientEditor::new(gradient_of(&curve), window, cx).without_alpha());
             let def = def.clone();
             subs.push(cx.subscribe(
                 &entity,
@@ -558,7 +563,29 @@ pub(super) fn widget(
                 return Widget::Every(entity);
             }
             if let Some(p::Author::Choice { options, .. }) = &spec.author {
-                return Widget::Preset(options);
+                // A choice of curves edits a custom curve in the envelope editor.
+                let editor = envelope_options(options).map(|curves| {
+                    let envelope = match &value {
+                        Some(p::Value::Envelope(envelope)) if envelope.validate().is_ok() => {
+                            envelope.clone()
+                        }
+                        _ => match &curves[0].1 {
+                            Thumb::Curve(envelope) => envelope.clone(),
+                            Thumb::Gradient(_) => unreachable!("curve options"),
+                        },
+                    };
+                    let entity = cx.new(|_| EnvelopeEditor::new(envelope).without_presets());
+                    let def = def.clone();
+                    subs.push(cx.subscribe(
+                        &entity,
+                        move |this: &mut Luma, _, event: &EnvelopeChanged, cx| {
+                            let value = p::Value::Envelope(event.0.clone());
+                            this.arg_live(&def.id, document::wire_value(&value), cx);
+                        },
+                    ));
+                    entity
+                });
+                return Widget::Preset(options, editor);
             }
             plain_widget(def, stored, true, &[], window, cx, subs)
         }
@@ -618,7 +645,12 @@ pub(super) fn resync(
                 entity.update(cx, |field, cx| field.set_value(n, cx));
             }
         }
-        (Widget::Preset(_), _) => {}
+        (Widget::Preset(_, Some(entity)), Some(p::Value::Envelope(envelope))) => {
+            if envelope.validate().is_ok() {
+                entity.update(cx, |editor, cx| editor.set_value(envelope, cx));
+            }
+        }
+        (Widget::Preset(..), _) => {}
         _ => return false,
     }
     true
@@ -844,36 +876,62 @@ fn choice_select(
     )
 }
 
-/// A curve picker that opens under this row's `Menu::Choice`.
+/// A preset picker that opens under this row's `Menu::Choice`. Its Custom
+/// tile keeps the value and shows the row's editor.
 #[allow(clippy::too_many_arguments)]
-fn choice_curves(
+fn choice_presets(
     state: &Editor,
     app: &Entity<Luma>,
     index: usize,
     id: String,
     value: &p::Envelope,
     current: Option<usize>,
-    options: &[(SharedString, p::Envelope)],
+    options: &[(SharedString, Thumb)],
     on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
 ) -> Div {
-    luma_curve_picker(
+    let app_pick = app.clone();
+    let on_pick = Rc::new(on_pick);
+    luma_preset_picker(
         id,
-        value,
+        &Thumb::Curve(value.clone()),
         current,
         options,
+        true,
         state.sheet.open == Some(Menu::Choice(index)),
         choice_toggle(app, index),
-        choice_pick(app, on_pick),
+        move |picked, _, cx| {
+            let on_pick = on_pick.clone();
+            app_pick.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| {
+                    editor.sheet.open = None;
+                    let slot = editor
+                        .sheet
+                        .built
+                        .as_mut()
+                        .and_then(|built| built.cells.get_mut(index))
+                        .and_then(|cell| cell.form.as_mut());
+                    if let Some(slot) = slot {
+                        slot.editing = picked.is_none();
+                    }
+                });
+                if let Some(at) = picked {
+                    on_pick(at, this, cx);
+                }
+            });
+        },
     )
 }
 
 /// The shipped curve presets as the input's curves, each in the envelope
 /// editor's 0–1 box.
-fn curve_options(slot: &Slot) -> Vec<(SharedString, p::Envelope)> {
+fn curve_options(slot: &Slot) -> Vec<(SharedString, Thumb)> {
     slot.curves()
         .map(|preset| {
             let curve = scaled(slot, &preset.curve);
-            (preset.name.clone().into(), envelope_of(slot, &curve))
+            (
+                preset.name.clone().into(),
+                Thumb::Curve(envelope_of(slot, &curve)),
+            )
         })
         .collect()
 }
@@ -884,12 +942,14 @@ fn curve_preset(slot: &Slot, curve: &p::Keyframes) -> Option<usize> {
         .position(|preset| same_curve(&scaled(slot, &preset.curve), curve))
 }
 
-/// A choice's options as named envelopes, when every option is an envelope.
-fn envelope_options(options: &[p::Preset]) -> Option<Vec<(SharedString, p::Envelope)>> {
+/// A choice's options as named curves, when every option is an envelope.
+fn envelope_options(options: &[p::Preset]) -> Option<Vec<(SharedString, Thumb)>> {
     options
         .iter()
         .map(|option| match &option.value {
-            p::Value::Envelope(envelope) => Some((option.label.clone().into(), envelope.clone())),
+            p::Value::Envelope(envelope) => {
+                Some((option.label.clone().into(), Thumb::Curve(envelope.clone())))
+            }
             _ => None,
         })
         .collect()
@@ -910,7 +970,7 @@ fn control(
     let value = decode(spec.value_type, &cell.synced).ok();
     let column = || div().w_full().flex().flex_col().gap(px(6.));
     Some(match &cell.widget {
-        Widget::Preset(options) => {
+        Widget::Preset(options, editor) => {
             let options: &'static [p::Preset] = options;
             let current = options.iter().position(|option| {
                 document::close(&document::wire_value(&option.value), &cell.synced)
@@ -918,24 +978,31 @@ fn control(
             let pick = move |picked: usize, this: &mut Luma, cx: &mut Context<Luma>| {
                 this.arg_live(&def.id, document::wire_value(&options[picked].value), cx);
             };
-            match envelope_options(options) {
-                Some(curves) => {
+            match (envelope_options(options), editor) {
+                (Some(curves), Some(editor)) => {
                     let shown = match &value {
                         Some(p::Value::Envelope(envelope)) => envelope.clone(),
-                        _ => curves[current.unwrap_or(0)].1.clone(),
+                        _ => match &curves[current.unwrap_or(0)].1 {
+                            Thumb::Curve(envelope) => envelope.clone(),
+                            Thumb::Gradient(_) => unreachable!("curve options"),
+                        },
                     };
-                    choice_curves(
-                        state,
-                        app,
-                        index,
-                        name.to_string(),
-                        &shown,
-                        current,
-                        &curves,
-                        pick,
-                    )
+                    column()
+                        .child(choice_presets(
+                            state,
+                            app,
+                            index,
+                            name.to_string(),
+                            &shown,
+                            current,
+                            &curves,
+                            pick,
+                        ))
+                        .when(slot.editing || current.is_none(), |el| {
+                            el.child(editor.clone())
+                        })
                 }
-                None => {
+                _ => {
                     let labels: Vec<&str> =
                         options.iter().map(|option| option.label.as_str()).collect();
                     choice_select(
@@ -1014,8 +1081,9 @@ fn control(
             let shape = *slot;
             let [low, high] = slot.range();
             let unit = if slot.speed { " beats" } else { "" };
+            let custom = slot.editing || current.is_none();
             column()
-                .child(choice_curves(
+                .child(choice_presets(
                     state,
                     app,
                     index,
@@ -1035,12 +1103,13 @@ fn control(
                         });
                     },
                 ))
-                .child(entity.clone())
-                .child(luma_ui::caption(format!(
-                    "Values {}–{}{unit}",
-                    format_value(low),
-                    format_value(high)
-                )))
+                .when(custom, |el| {
+                    el.child(entity.clone()).child(luma_ui::caption(format!(
+                        "Values {}–{}{unit}",
+                        format_value(low),
+                        format_value(high)
+                    )))
+                })
         }
         Widget::Gradient(entity) if slot.mode.is_some() => column().child(entity.clone()).child(
             luma_ui::caption("Colors from the start to the end".to_string()),
@@ -1126,7 +1195,7 @@ fn range_row(low: &Entity<DraftedNumber>, high: &Entity<DraftedNumber>) -> Div {
 mod tests {
     use super::{
         curve_options, curve_preset, envelope_of, envelope_options, format_beats, keyframes_of,
-        parse_beats, promote, same_curve, scaled, stamped, Slot, CURVE_BEATS, MIN_BEATS,
+        parse_beats, promote, same_curve, scaled, stamped, Slot, Thumb, CURVE_BEATS, MIN_BEATS,
     };
     use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
     use luma_patterns as p;
@@ -1222,7 +1291,7 @@ mod tests {
         assert_eq!(options.len(), travel.curves().count());
         assert!(options
             .iter()
-            .all(|(_, envelope)| envelope.validate().is_ok()));
+            .all(|(_, thumb)| matches!(thumb, Thumb::Curve(e) if e.validate().is_ok())));
         for (at, preset) in travel.curves().enumerate() {
             assert_eq!(
                 curve_preset(&travel, &scaled(&travel, &preset.curve)),
