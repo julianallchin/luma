@@ -307,7 +307,28 @@ fn progress_presets() -> Vec<(&'static str, Value)> {
             "There and back",
             curve(&[[0., 0.], [0.5, 1.], [1., 0.]], &[]),
         ),
+        ("Steps (2)", Value::Envelope(palette_steps(2))),
+        ("Steps (3)", Value::Envelope(palette_steps(3))),
+        ("Steps (4)", Value::Envelope(palette_steps(4))),
+        ("Steps (6)", Value::Envelope(palette_steps(6))),
+        ("Steps (8)", Value::Envelope(palette_steps(8))),
     ]
+}
+
+/// N gradient positions i / (N − 1), evenly spaced from 0 to 1, each held
+/// for 1/N of a pass. A gradient used as a palette then shows each of its N
+/// stops with no blending. Chase `steps_path` uses part centers instead.
+pub fn palette_steps(count: usize) -> Envelope {
+    let count = count.max(2);
+    let last = (count - 1) as f64;
+    let mut points: Vec<[f64; 2]> = (0..count)
+        .map(|i| [i as f64 / count as f64, i as f64 / last])
+        .collect();
+    points.push([1.0, 1.0]);
+    Envelope {
+        curves: vec![EnvelopeCurve::Hold; points.len() - 1],
+        points,
+    }
 }
 
 fn axis(source: MappingSource) -> Value {

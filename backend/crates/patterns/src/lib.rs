@@ -46,7 +46,8 @@ mod event_timing;
 pub use event_timing::TrackTiming;
 pub use field_ops::{FieldMath, ScalarKind};
 pub use forms::{
-    axis_presets, input_order, is_form, path_presets, shape_presets, steps_path, FORMS,
+    axis_presets, input_order, is_form, palette_steps, path_presets, shape_presets, steps_path,
+    FORMS,
 };
 pub use graph::*;
 pub use mapping::*;
