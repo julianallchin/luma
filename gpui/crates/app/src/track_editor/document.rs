@@ -527,11 +527,13 @@ impl Luma {
 }
 
 impl Editor {
-    /// Place a preset as a new clip at the menu's span and lane.
+    /// Place a preset as a new clip on `selection`, at the menu's span and
+    /// lane.
     pub(super) fn insert_preset(
         &mut self,
         menu: InsertMenu,
         choice: InsertChoice,
+        selection: p::Selection,
     ) -> Result<(), String> {
         let clock = self
             .beats
@@ -556,6 +558,7 @@ impl Editor {
             .insert(id.clone(), choice.0.clip(start, duration));
         let clip = score.clips.get_mut(&id).unwrap();
         clip.z_index = z;
+        clip.selection = selection;
         clip.seed = uuid::Uuid::new_v4().as_u64_pair().0;
         score
             .validate(&p::standard_library())

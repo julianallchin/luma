@@ -930,7 +930,7 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     }
     let inspector = match app.workspace.active_body_mut() {
         Some(Body::TrackEditor(editor)) => {
-            track_editor::inspector(editor, &cx.entity(), window, cx)
+            Some(track_editor::inspector(editor, &cx.entity(), window, cx))
         }
         _ => None,
     };

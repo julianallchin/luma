@@ -109,6 +109,7 @@ mod playback;
 mod playback_clock;
 mod playback_surface;
 mod sheet;
+pub(crate) use sheet::Audition;
 mod trace;
 mod waveform;
 mod zoom_motion;
@@ -539,6 +540,11 @@ const DEFAULT_BAR: f64 = 2.;
 ///
 /// The next downbeat if there is one — so an inserted clip lands on the bar
 /// line the eye can see — and the mean bar otherwise.
+/// Where `bars` whole bars after `start` end, bar by bar along the grid.
+fn bars_after(beats: Option<&BeatGrid>, start: f64, bars: usize) -> f64 {
+    (0..bars).fold(start, |end, _| end + bar_length(beats, end))
+}
+
 fn bar_length(beats: Option<&BeatGrid>, after: f64) -> f64 {
     let Some(grid) = beats.filter(|grid| !grid.beats.is_empty()) else {
         return DEFAULT_BAR;
@@ -1536,6 +1542,41 @@ impl Editor {
             .collect()
     }
 
+    /// Where a clip `bars` long would go for a gesture at `at`, a window
+    /// position: the snapped time under it, and either the lane under it or
+    /// a new lane at the boundary it is within a quarter-lane of. `None` off
+    /// the lanes, on a read-only score, or with no room before the end.
+    fn insertion_at(&self, at: Point<Pixels>, bars: usize) -> Option<InsertMenu> {
+        if !self.writable() {
+            return None;
+        }
+        let canvas = self.canvas.get();
+        let time = self.view.time_at(f32::from(at.x - canvas.origin.x));
+        let y = f32::from(at.y - canvas.origin.y);
+        let layout = self.layout();
+        if y < TRACK_AREA_Y {
+            return None;
+        }
+        let beats = self.beats.as_deref();
+        let start = snap(beats, time, self.view.zoom, SNAP_CAPTURE).max(0.);
+        let end = bars_after(beats, start, bars).min(f64::from(self.transport.duration));
+        if end - start < MIN_CLIP {
+            return None;
+        }
+        let layers = z_ladder(&self.clips).len();
+        let offset = ((y - layout.start) / layout.lane).max(0.);
+        let boundary = offset.round();
+        let insert = (offset - boundary).abs() < INSERT_BOUNDARY
+            && (1. ..=layers as f32).contains(&boundary);
+        Some(InsertMenu {
+            start,
+            end,
+            row: if insert { boundary } else { offset.floor() } as usize,
+            insert,
+            active: 0,
+        })
+    }
+
     fn menu_choice(&self) -> Option<(InsertMenu, InsertChoice)> {
         let menu = self.menu?;
         Some((menu, *self.insertion_choices().get(menu.active)?))
@@ -2227,37 +2268,7 @@ impl Luma {
     /// lane under the pointer.
     fn timeline_insert_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.with_track_editor(cx, |editor| {
-            editor.menu = None;
-            if !editor.writable() {
-                return;
-            }
-            let canvas = editor.canvas.get();
-            let time = editor.view.time_at(f32::from(at.x - canvas.origin.x));
-            let y = f32::from(at.y - canvas.origin.y);
-            let layout = editor.layout();
-            if y < TRACK_AREA_Y {
-                return;
-            }
-
-            let beats = editor.beats.as_deref();
-            let start = snap(beats, time, editor.view.zoom, SNAP_CAPTURE).max(0.);
-            let end = (start + bar_length(beats, start)).min(f64::from(editor.transport.duration));
-            if end - start < MIN_CLIP {
-                return;
-            }
-
-            let layers = z_ladder(&editor.clips).len();
-            let offset = ((y - layout.start) / layout.lane).max(0.);
-            let boundary = offset.round();
-            let insert = (offset - boundary).abs() < INSERT_BOUNDARY
-                && (1. ..=layers as f32).contains(&boundary);
-            editor.menu = Some(InsertMenu {
-                start,
-                end,
-                row: if insert { boundary } else { offset.floor() } as usize,
-                insert,
-                active: 0,
-            });
+            editor.menu = editor.insertion_at(at, 1);
             editor.menu_scroll.scroll_to_item(0);
         });
         picker::open(self, cx);
@@ -2318,7 +2329,7 @@ impl Luma {
         let Some((menu, pattern)) = state.menu_choice() else {
             return;
         };
-        self.insert_pattern(menu, pattern, cx);
+        self.insert_pattern(menu, pattern, luma_patterns::Selection::all(), cx);
     }
 
     /// `H`: fit every lane on the canvas.
@@ -2353,16 +2364,13 @@ impl Luma {
         }
     }
 
-    /// Clear the clip selection, if there is one — which is what sends the
-    /// args sheet away. Reported so `Escape` knows the key was spent.
-    ///
-    /// The sheet is not closed directly: it *is* the selection, rendered, and
-    /// a second way to dismiss it would be a state the timeline's own
-    /// highlight could disagree with.
+    /// Clear the clip selection, if there is one — which is what brings the
+    /// preset browser back into the inspector. Reported so `Escape` knows the
+    /// key was spent.
     pub(crate) fn clear_clip_selection(&mut self, cx: &mut Context<Self>) -> bool {
         let mut cleared = false;
         self.with_track_editor(cx, |editor| {
-            cleared = editor.sheet.is_open();
+            cleared = !editor.selected.is_empty();
             if cleared {
                 editor.deselect();
             }
@@ -2373,8 +2381,14 @@ impl Luma {
         cleared
     }
 
-    /// Place the chosen preset as a new clip.
-    fn insert_pattern(&mut self, menu: InsertMenu, choice: InsertChoice, cx: &mut Context<Self>) {
+    /// Place the chosen preset as a new clip on `selection`.
+    fn insert_pattern(
+        &mut self,
+        menu: InsertMenu,
+        choice: InsertChoice,
+        selection: luma_patterns::Selection,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(
             self.overlay.as_open(),
             Some(crate::shell::Overlay::InsertPattern(_))
@@ -2383,7 +2397,7 @@ impl Luma {
         }
         self.track_command(
             |editor| {
-                if let Err(error) = editor.insert_preset(menu, choice) {
+                if let Err(error) = editor.insert_preset(menu, choice, selection) {
                     editor.error = Some(error);
                 }
             },
@@ -3143,15 +3157,16 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
         })
 }
 
-/// Selected clip controls occupy the editing area, even with the rig hidden.
+/// The inspector occupies the editing area, even with the rig hidden: the
+/// selected clip's controls, or the preset browser.
 pub(crate) fn inspector(
     state: &mut Editor,
     app: &Entity<Luma>,
     window: &mut Window,
     cx: &mut Context<Luma>,
-) -> Option<AnyElement> {
+) -> AnyElement {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app, window)
+    sheet::panel(state, app)
 }
 
 /// Render the screen: a toolbar strip over the canvas.
@@ -3560,33 +3575,42 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let canvas_bounds = Rc::clone(&state.canvas);
     let app = app.clone();
     let resized = app.clone();
+    let dropped = app.clone();
 
-    div().flex_1().overflow_hidden().child(
-        canvas(
-            move |bounds, window, cx| {
-                // Where the canvas ended up is what turns a window-space mouse
-                // position back into a time, and only prepaint knows it. A
-                // press can arrive before the next paint but never before the
-                // next prepaint, so this is also the only place it is safe to
-                // write.
-                //
-                canvas_bounds.set(bounds);
-                waveform::prepaint(&resized, false, bounds, window, cx);
-                register(&registered, bounds, window, cx);
-                window.insert_hitbox(bounds, HitboxBehavior::Normal)
-            },
-            move |bounds, hitbox, window, cx| {
-                paint(bounds, &scene, window, cx);
-                match alpha_cursor {
-                    Some((style, true)) => window.set_window_cursor_style(style),
-                    Some((style, false)) => window.set_cursor_style(style, &hitbox),
-                    None => {}
-                }
-                listen(&app, &hitbox, window);
-            },
+    div()
+        .flex_1()
+        .overflow_hidden()
+        // A preset carried from the browser lands where it is let go.
+        .on_drop(move |drag: &sheet::PresetDrag, window, cx| {
+            let at = window.mouse_position();
+            dropped.update(cx, |this, cx| this.drop_preset(drag, at, cx));
+        })
+        .child(
+            canvas(
+                move |bounds, window, cx| {
+                    // Where the canvas ended up is what turns a window-space mouse
+                    // position back into a time, and only prepaint knows it. A
+                    // press can arrive before the next paint but never before the
+                    // next prepaint, so this is also the only place it is safe to
+                    // write.
+                    //
+                    canvas_bounds.set(bounds);
+                    waveform::prepaint(&resized, false, bounds, window, cx);
+                    register(&registered, bounds, window, cx);
+                    window.insert_hitbox(bounds, HitboxBehavior::Normal)
+                },
+                move |bounds, hitbox, window, cx| {
+                    paint(bounds, &scene, window, cx);
+                    match alpha_cursor {
+                        Some((style, true)) => window.set_window_cursor_style(style),
+                        Some((style, false)) => window.set_cursor_style(style, &hitbox),
+                        None => {}
+                    }
+                    listen(&app, &hitbox, window);
+                },
+            )
+            .size_full(),
         )
-        .size_full(),
-    )
 }
 
 /// Everything one frame draws, resolved and refcounted.

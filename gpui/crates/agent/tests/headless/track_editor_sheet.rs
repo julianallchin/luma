@@ -2,9 +2,9 @@
 //!
 //! Six facts, each observable only through the node protocol:
 //!
-//! 1. **Selecting a clip brings the sheet in** — it is absent with nothing
-//!    selected, present with a clip selected, and reads that clip's blend
-//!    mode and args. The clip's span is deliberately absent: bounds are
+//! 1. **Selecting a clip brings the sheet in** — with nothing selected the
+//!    inspector shows the preset browser instead; with a clip selected it
+//!    shows the sheet, and reads that clip's blend mode and args. The clip's span is deliberately absent: bounds are
 //!    edited on the timeline.
 //! 2. **Every arg is reachable.** The strip this replaced ran a pattern's
 //!    third arg off the right edge of a 1200pt window; a column cannot, so
@@ -17,8 +17,8 @@
 //!    leaves the sheet's own box exactly where it was and swaps its contents.
 //!    And the timeline stays live underneath — a click on a lane the sheet
 //!    does not cover still registers.
-//! 6. **A mixed selection offers no args**, and clearing the selection sends
-//!    the sheet away.
+//! 6. **A mixed selection offers no args**, and clearing the selection brings
+//!    the preset browser back.
 //!
 //! The clips are lit (`Clip::lit`) because arg definitions live on a
 //! pattern's *graph document*, and only the lit path authors one; two clips
@@ -189,8 +189,7 @@ fn the_sheet_arrives_writes_batches_retargets_and_leaves() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    // 1. Nothing selected is nothing drawn: the sheet is not a permanent
-    //    plane, which is the whole difference from the strip it replaced.
+    // 1. Nothing selected shows the preset browser, not the sheet.
     assert!(
         out["empty"]["sheet"].is_null(),
         "the sheet is up with nothing selected: {:#}",

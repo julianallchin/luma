@@ -1,7 +1,9 @@
 //! Clip controls in the dedicated editing area, beside the visualizer.
-//! The inspector has its own scrolling viewport, independent of timeline height.
-//! Selection retargets the existing controls; argument writes retain their
-//! debounced history and persistence path.
+//! The inspector is always open and has its own scrolling viewport,
+//! independent of timeline height. With a clip selected it shows the clip's
+//! controls; with none it shows the preset browser. Selection retargets the
+//! existing controls; argument writes retain their debounced history and
+//! persistence path.
 
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
 use luma_lib::models::selection::Selection;
@@ -19,7 +21,11 @@ use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
 
+mod browser;
 mod form;
+
+pub(crate) use browser::Audition;
+pub(super) use browser::PresetDrag;
 
 /// Air between one arg row and the next, and between the sheet's bands.
 const ROW_GAP: f32 = 14.;
@@ -43,9 +49,10 @@ pub(crate) struct State {
     /// the editor.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
     defs_inflight: HashSet<String>,
-    /// Controls and readings for the current selection, retained during exit.
+    /// Controls and readings for the current selection.
     built: Option<Built>,
-    width: luma_ui::pane::PaneWidth,
+    /// The preset browser, shown while no clip is selected.
+    pub(super) browser: browser::State,
     /// Which sheet-owned menu is open. One at a time — opening one closes the
     /// rest, which is what a single field states for free.
     open: Option<Menu>,
@@ -68,7 +75,7 @@ impl Default for State {
             defs: HashMap::new(),
             defs_inflight: HashSet::new(),
             built: None,
-            width: luma_ui::pane::PaneWidth::new(0.0),
+            browser: browser::State::default(),
             open: None,
             was_open: None,
             closing: None,
@@ -82,11 +89,6 @@ impl State {
     pub(super) fn invalidate_defs(&mut self) {
         self.defs.clear();
         self.built = None;
-    }
-    /// Whether the sheet is up — heading open, not merely still painted. What
-    /// `Escape` asks before it decides the key meant "clear the selection".
-    pub(crate) fn is_open(&self) -> bool {
-        self.width.target() > 0.0
     }
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
@@ -402,11 +404,12 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
     ensure_groups(editor, cx);
     ensure_defs(editor, cx);
     let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
-        editor.sheet.width.retarget(0.0, cx);
         editor.sheet.open = None;
+        editor.sheet.built = None;
+        browser::sync(editor, cx);
         return;
     };
-    editor.sheet.width.retarget(luma_ui::sheet::WIDTH, cx);
+    browser::leave(editor);
     let pattern = shared_pattern(editor);
     let defs = pattern
         .as_ref()
@@ -1094,17 +1097,14 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-pub(super) fn panel(
-    state: &mut Editor,
-    app: &Entity<Luma>,
-    window: &mut Window,
-) -> Option<AnyElement> {
-    let width = state.sheet.width.eval(window);
-    if state.sheet.width.settled() && !state.sheet.is_open() {
-        state.sheet.built = None;
-        return None;
-    }
-    let built = state.sheet.built.as_ref()?;
+/// The inspector: the selected clip's controls, or the preset browser. It
+/// is always open at its full width.
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
+    let (label, body) = match state.sheet.built.as_ref() {
+        Some(built) => ("Clip inputs", body(state, built, app)),
+        None => ("Presets", browser::body(state, app)),
+    };
+    let width = px(luma_ui::sheet::WIDTH);
     let content = div()
         .id("clip-inspector")
         .size_full()
@@ -1112,13 +1112,11 @@ pub(super) fn panel(
         .bg(ladder::background())
         .border_r_1()
         .border_color(ladder::trim())
-        .child(body(state, built, app))
+        .child(body)
         .into_any_element();
-    Some(
-        luma_ui::pane::pane(width, px(luma_ui::sheet::WIDTH), content)
-            .agent_node(Role::Card, "Clip inputs")
-            .into_any_element(),
-    )
+    luma_ui::pane::pane(width, width, content)
+        .agent_node(Role::Card, label)
+        .into_any_element()
 }
 
 /// The sheet's content: what is selected, then the controls for it.
