@@ -40,6 +40,12 @@ const CLOSE: f64 = 0.02;
 const SAMPLES: usize = 32;
 /// Beats on either side of a boundary to sample.
 const AROUND: f64 = 0.01;
+/// Clip graphs, by definition name, whose clips are removed instead of
+/// converted, and why.
+const REMOVED: [(&str, &str); 1] = [(
+    "Hats · travelling pinpoints",
+    "removed by decision: a chase times a hi-hat pulse would need a multiply layer that darkens the clips under it",
+)];
 /// Room between two clips' z-index in the render check, for their layers.
 const STEP: i64 = 16;
 
@@ -296,7 +302,17 @@ impl ScoreRun<'_> {
                 ..host.clone()
             };
             let selection = selections.get(key).cloned().unwrap_or_default();
-            converted.insert(key.clone(), convert(&score, key, &selection, &host));
+            let name = score
+                .definitions
+                .get(&score.clips[key].graph)
+                .map(|definition| definition.name.as_str());
+            let result = match REMOVED.iter().find(|(removed, _)| Some(*removed) == name) {
+                Some((_, reason)) => Ok(Proposal::Delete {
+                    reason: (*reason).to_owned(),
+                }),
+                None => convert(&score, key, &selection, &host),
+            };
+            converted.insert(key.clone(), result);
         }
         // Each clip's layers sit just under and over it.
         let mut next = Score::default();
@@ -1059,83 +1075,108 @@ async fn change_set(
     }
     tables.insert("score_definitions", definitions);
 
-    // Library patterns and their implementations: presets replace them. A
-    // pattern that a cue plays stays, with its implementations: the cue's
-    // foreign key would fail the commit, and the perform stack is kept.
-    let mut patterns = TableChanges::default();
-    let mut implementations = TableChanges::default();
+    // Library patterns, their implementations and cues all go: presets
+    // replace patterns, and cues leave the product. Rows that point at them
+    // go too, so the commit passes its foreign keys and nothing dangles.
     if args.score.is_none() {
-        let cues = query("SELECT id, name, pattern_id FROM cues")
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut played: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for cue in &cues {
-            played
-                .entry(cue.get("pattern_id"))
-                .or_default()
-                .push(format!(
-                    "{} ({})",
-                    cue.get::<String, _>("name"),
-                    cue.get::<String, _>("id")
-                ));
-        }
-        for row in query("SELECT id, uid, name, score_id FROM patterns ORDER BY id")
+        let rows = |sql: &'static str| query(sql);
+        for row in rows("SELECT id, action_json FROM midi_bindings ORDER BY id")
             .await
             .map_err(|e| e.to_string())?
         {
-            let id: String = row.get("id");
-            let name: String = row.get("name");
-            if let Some(cues) = played.get(&id) {
-                kept.push(json!({
-                    "table": "patterns",
-                    "id": id,
-                    "name": name,
-                    "reason": "cues play it",
-                    "cues": cues,
-                }));
-                continue;
+            let action: Json =
+                serde_json::from_str(row.get::<&str, _>("action_json")).unwrap_or_default();
+            if action["type"] == "fireCue" {
+                tables
+                    .entry("midi_bindings")
+                    .or_default()
+                    .deletes
+                    .push(json!({
+                        "id": row.get::<String, _>("id"),
+                        "reason": "fires a cue",
+                        "cue_id": action["cue_id"],
+                    }));
             }
-            patterns.deletes.push(json!({
-                "id": id,
+        }
+        for row in rows("SELECT id, uid, name, pattern_id FROM cues ORDER BY id")
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            tables.entry("cues").or_default().deletes.push(json!({
+                "id": row.get::<String, _>("id"),
                 "uid": row.get::<Option<String>, _>("uid"),
-                "name": name,
+                "name": row.get::<String, _>("name"),
+                "pattern_id": row.get::<String, _>("pattern_id"),
+            }));
+        }
+        for row in rows(
+            "SELECT venue_id, pattern_id, implementation_id FROM venue_implementation_overrides",
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            tables
+                .entry("venue_implementation_overrides")
+                .or_default()
+                .deletes
+                .push(json!({
+                    "venue_id": row.get::<String, _>("venue_id"),
+                    "pattern_id": row.get::<String, _>("pattern_id"),
+                    "implementation_id": row.get::<String, _>("implementation_id"),
+                }));
+        }
+        for row in rows("SELECT id, uid, name, pattern_id FROM implementations ORDER BY id")
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            tables
+                .entry("implementations")
+                .or_default()
+                .deletes
+                .push(json!({
+                    "id": row.get::<String, _>("id"),
+                    "uid": row.get::<Option<String>, _>("uid"),
+                    "name": row.get::<Option<String>, _>("name"),
+                    "pattern_id": row.get::<String, _>("pattern_id"),
+                }));
+        }
+        for row in rows("SELECT id, uid, name, score_id FROM patterns ORDER BY id")
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            tables.entry("patterns").or_default().deletes.push(json!({
+                "id": row.get::<String, _>("id"),
+                "uid": row.get::<Option<String>, _>("uid"),
+                "name": row.get::<String, _>("name"),
                 "score_id": row.get::<Option<String>, _>("score_id"),
             }));
         }
-        for row in query("SELECT id, uid, name, pattern_id FROM implementations ORDER BY id")
-            .await
-            .map_err(|e| e.to_string())?
+        // Agent threads keep their history; only the link goes.
+        for row in rows(
+            "SELECT id, implementation_id FROM agent_threads \
+             WHERE implementation_id IS NOT NULL ORDER BY id",
+        )
+        .await
+        .map_err(|e| e.to_string())?
         {
-            let id: String = row.get("id");
-            let pattern: String = row.get("pattern_id");
-            if played.contains_key(&pattern) {
-                kept.push(json!({
-                    "table": "implementations",
-                    "id": id,
-                    "pattern_id": pattern,
-                    "reason": "its pattern is kept for cues",
+            tables
+                .entry("agent_threads")
+                .or_default()
+                .updates
+                .push(json!({
+                    "id": row.get::<String, _>("id"),
+                    "set": {"implementation_id": null, "updated_at": now},
+                    "was": {"implementation_id": row.get::<String, _>("implementation_id")},
                 }));
-                continue;
-            }
-            implementations.deletes.push(json!({
-                "id": id,
-                "uid": row.get::<Option<String>, _>("uid"),
-                "name": row.get::<Option<String>, _>("name"),
-                "pattern_id": pattern,
-            }));
         }
-        if !played.is_empty() {
-            warnings.push(format!(
-                "{} cues play {} library patterns. Those patterns and their implementations \
-                 are kept (see `kept`); deleting them would fail the cues' foreign key at \
-                 commit. Decide on the cues before removing them.",
-                cues.len(),
-                played.len()
-            ));
-        }
+        warnings.push(
+            "Every cue, library pattern and implementation is deleted, with the MIDI bindings \
+             that fire a cue, and agent threads lose their implementation link. \
+             `pattern_categories` is unaffected: patterns point at categories, not the other \
+             way."
+                .into(),
+        );
     }
-    tables.insert("patterns", patterns);
-    tables.insert("implementations", implementations);
     tables.insert("clips", changes.clips);
 
     let counts = tables
@@ -1235,16 +1276,41 @@ fn sql(set: &ChangeSet, now: &str) -> String {
         )
         .unwrap();
     }
-    for table in ["score_definitions", "implementations", "patterns"] {
-        let deletes = &set.tables[table].deletes;
-        writeln!(out, "\n-- {table}: {} deletes", deletes.len()).unwrap();
+    let empty = TableChanges::default();
+    let table = |name: &str| set.tables.get(name).unwrap_or(&empty);
+    let updates = &table("agent_threads").updates;
+    writeln!(out, "\n-- agent_threads: {} updates", updates.len()).unwrap();
+    for update in updates {
+        writeln!(
+            out,
+            "UPDATE agent_threads SET implementation_id = NULL, updated_at = {} WHERE id = {};",
+            text(&update["set"]["updated_at"]),
+            text(&update["id"])
+        )
+        .unwrap();
+    }
+    // Referencing rows first; the foreign keys are checked at commit anyway.
+    for name in [
+        "midi_bindings",
+        "cues",
+        "venue_implementation_overrides",
+        "score_definitions",
+        "implementations",
+        "patterns",
+    ] {
+        let deletes = &table(name).deletes;
+        writeln!(out, "\n-- {name}: {} deletes", deletes.len()).unwrap();
         for delete in deletes {
-            writeln!(
-                out,
-                "DELETE FROM {table} WHERE id = {};",
-                text(&delete["id"])
-            )
-            .unwrap();
+            let matches = if name == "venue_implementation_overrides" {
+                format!(
+                    "venue_id = {} AND pattern_id = {}",
+                    text(&delete["venue_id"]),
+                    text(&delete["pattern_id"])
+                )
+            } else {
+                format!("id = {}", text(&delete["id"]))
+            };
+            writeln!(out, "DELETE FROM {name} WHERE {matches};").unwrap();
         }
     }
     writeln!(out, "\nCOMMIT;").unwrap();
