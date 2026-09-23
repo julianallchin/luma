@@ -70,11 +70,11 @@ use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
-use luma_lib::models::node_graph::{BeatGrid, Graph, GraphContext, PatternArgDef, RunResult};
+use luma_lib::models::node_graph::BeatGrid;
 use luma_lib::models::patch::{
     ArtNetNode, AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput,
 };
-use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
+use luma_lib::models::patterns::AnnotationPreview;
 use luma_lib::models::scores::{Score, ScoreSummary};
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
@@ -1639,29 +1639,6 @@ impl Library {
         }
     }
 
-    /// Every pattern in the library.
-    pub fn patterns(
-        &self,
-    ) -> impl Future<Output = Result<Vec<PatternSummary>, LibraryError>> + use<> {
-        self.call("list_patterns", json!({}))
-    }
-
-    /// One pattern's arg definitions, resolved against a venue — the schema
-    /// the args sheet renders from. Venue-resolved on purpose, unlike
-    /// [`Self::pattern_graph`]: a venue can pin a different implementation of
-    /// the same pattern (`pattern-args-venue-divergence` in the IPC manifest),
-    /// and the strip must show the args of the graph that will actually run.
-    pub fn pattern_args(
-        &self,
-        pattern_id: &str,
-        venue_id: &str,
-    ) -> impl Future<Output = Result<Vec<PatternArgDef>, LibraryError>> + use<> {
-        self.call(
-            "get_pattern_args",
-            json!({ "id": pattern_id, "venueId": venue_id, "implementationId": null }),
-        )
-    }
-
     pub fn missing_venue_groups(
         &self,
         venue: &str,
@@ -1738,32 +1715,6 @@ impl Library {
         Output = Result<luma_lib::models::composable_patterns::ComposablePreview, LibraryError>,
     > + use<> {
         self.call("preview_composable_pattern", json!({"request":request}))
-    }
-
-    /// Run a graph against a resolved context and hand back everything the
-    /// run produced — the per-view signals a plot draws, and optionally the
-    /// mel spectrograms (`include_mel_specs`, expensive, wanted only when a
-    /// spectrogram node is actually on screen).
-    ///
-    /// Takes the graph by value, not by id: a live preview runs what the
-    /// editor *holds*, which is routinely ahead of what the seam has saved.
-    pub fn run_graph(
-        &self,
-        graph: &Graph,
-        context: &GraphContext,
-        include_mel_specs: bool,
-    ) -> impl Future<Output = Result<RunResult, LibraryError>> + use<> {
-        self.call(
-            "run_graph",
-            json!({
-                "graph": graph,
-                "context": context,
-                "includeMelSpecs": include_mel_specs,
-                "agentThreadId": null,
-                "agentExecutionId": null,
-                "driveLivePreview": null,
-            }),
-        )
     }
 
     // -- the track editor -----------------------------------------------------

@@ -29,7 +29,7 @@ use crate::Luma;
 /// pattern is opened from another track — never absent, because the doors that
 /// cannot resolve one are inert (§6/§9 ruling 1 of
 /// `docs/design/graph-editor-interaction.md`). That is what makes every open
-/// graph tab preview-capable by construction: `run_graph` needs a track and a
+/// graph tab preview-capable by construction: a preview needs a track and a
 /// venue, and an [`Editor`] cannot exist without both.
 #[derive(Clone)]
 pub(crate) struct TrackContext {
@@ -311,42 +311,7 @@ impl Editor {
 // These hang off `Luma` because opening a pattern is a pair of `Library` calls
 // plus a screen transition, and `Luma` owns both.
 
-/// Why the graph doors are inert without a track (§6/§9 ruling 1). One
-/// spelling, stated wherever a door is drawn — the pattern rows and the
-/// new-tab Pattern choice — so the two surfaces cannot drift.
-pub(crate) const NO_TRACK_REASON: &str = "Open a track to edit patterns";
-
 impl Luma {
-    /// The track context the graph doors resolve against: the active tab when
-    /// it is a track editor, else the strip's remaining track-editor tab.
-    /// `None` is what makes the doors inert (§6) — every caller states the
-    /// reason where it draws.
-    ///
-    /// "Most recently active" from the design doc collapses here: the strip
-    /// is scoped per track (see `workspace.rs`), so it holds at most one
-    /// track-editor tab in practice, and the last one in strip order is that
-    /// tab.
-    pub(crate) fn graph_track_context(&self) -> Option<TrackContext> {
-        let active = self.workspace.active().cloned();
-        let mut fallback = None;
-        for tab in self.workspace.iter() {
-            if let (Target::TrackEditor { track, venue }, TabBody::TrackEditor(state)) =
-                (&tab.target, &tab.body)
-            {
-                let context = TrackContext {
-                    track: track.clone(),
-                    venue: venue.clone(),
-                    track_name: state.track_name().to_string().into(),
-                };
-                if Some(&tab.target) == active.as_ref() {
-                    return Some(context);
-                }
-                fallback = Some(context);
-            }
-        }
-        fallback
-    }
-
     /// Run `edit` against one graph tab's editor, wherever it sits in the
     /// strip. The async loads come through here so a document landing late
     /// cannot write into whichever tab happens to be visible.

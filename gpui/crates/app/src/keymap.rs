@@ -60,7 +60,6 @@ pub(crate) mod context {
 
     // Overlay contexts. One overlay is up at a time, over all three regions.
     pub const VENUES: &str = "Venues";
-    pub const PATTERNS: &str = "Patterns";
     pub const SETTINGS: &str = "Settings";
     pub const ADD_TRACKS: &str = "AddTracks";
     /// The chat-history picker.
@@ -86,9 +85,8 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 10] = [
+    pub const DIALOGS: [&str; 9] = [
         VENUES,
-        PATTERNS,
         SETTINGS,
         ADD_TRACKS,
         CHAT_HISTORY,
@@ -139,8 +137,6 @@ actions!(
         /// keyboard is in a tab — where the same arrows are the timeline's.
         EnterScores,
         LeaveScores,
-        /// Open the pattern picker overlay.
-        OpenPatterns,
         /// Open settings over the whole shell.
         OpenSettings,
         /// Give the stage pane's room back to the editor under it, or take it
@@ -314,7 +310,6 @@ pub(crate) fn init(cx: &mut App) {
         // answerable from the focus path alone.
         KeyBinding::new("secondary-w", CloseTab, Some(context::WORKSPACE)),
         KeyBinding::new("secondary-t", NewTab, Some(&shell)),
-        KeyBinding::new("secondary-p", OpenPatterns, Some(&shell)),
         KeyBinding::new("secondary-,", OpenSettings, Some(&shell)),
         // Not a bare letter: the track editor's alphabet is already spoken
         // for, and this reshapes the column that editor sits in.
