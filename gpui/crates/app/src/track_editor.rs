@@ -375,22 +375,6 @@ impl Preview {
     }
 }
 
-// TEMP(blink probe): remove once the preview blink is found.
-pub(crate) fn blink_probe(message: impl AsRef<str>) {
-    use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/claude-1000/-home-julian-github-luma/74f0ba59-3fb9-48bc-9f6b-ab299488a4d6/scratchpad/blink.log")
-    {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let _ = writeln!(file, "{ms} {}", message.as_ref());
-    }
-}
-
 /// What a cut or a copy took, in its two shapes.
 ///
 /// The clips are whole rows so a paste can mint real clips from them, and the
@@ -1210,15 +1194,8 @@ impl Editor {
         let identity = previews
             .remove(row.annotation_id.as_str())
             .map(|previous| previous.image.id);
-        let annotation = row.annotation_id.clone();
         if let Some((id, preview)) = Preview::decode(row, identity) {
-            blink_probe(format!(
-                "preview installed {id} kept_identity={}",
-                identity.is_some()
-            ));
             previews.insert(id, preview);
-        } else {
-            blink_probe(format!("preview DECODE FAILED {annotation}"));
         }
     }
 
@@ -1938,10 +1915,7 @@ impl Luma {
                         return;
                     }
                     match contents {
-                        Ok(contents) => match {
-                            blink_probe("load_score INSTALL (clears previews)");
-                            editor.install_contents(contents)
-                        } {
+                        Ok(contents) => match editor.install_contents(contents) {
                             Ok(()) => {
                                 previews =
                                     editor.clips.iter().map(|clip| clip.id.clone()).collect();
@@ -2886,7 +2860,6 @@ impl Luma {
                             editor.install_preview(row);
                         }
                         Err(error) => {
-                            blink_probe(format!("preview ERROR {id}: {error}"));
                             editor.previews.borrow_mut().remove(&id);
                             editor
                                 .preview_errors
