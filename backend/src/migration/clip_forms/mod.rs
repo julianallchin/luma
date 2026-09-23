@@ -860,23 +860,20 @@ impl<'a> Build<'a> {
                 let mut angle = mapping.clone();
                 angle.source = MappingSource::Angle;
                 angle.plane = Some(AxisPlane::Auto);
-                match turn_between(&old, &angle, &self.host.cells) {
-                    Some((sign, offset, error)) if error <= 1e-6 => {
-                        *mapping = angle;
-                        self.note("solved circle → angle around the best-fit plane");
+                *mapping = angle;
+                match turn_between(&old, mapping, &self.host.cells) {
+                    Some((sign, offset, error)) => {
+                        if error <= 1e-6 {
+                            self.note("solved circle → angle around the best-fit plane");
+                        } else {
+                            self.note(format!(
+                                "solved circle → angle: heads move up to {error:.3} turns"
+                            ));
+                        }
                         (sign, offset)
                     }
-                    // The angle around the centroid does not read the heads
-                    // in the same order and spacing as the fitted circle:
-                    // keep the circle, which a form axis still accepts.
-                    Some((_, _, error)) => {
-                        self.note(format!(
-                            "solved circle kept: an angle axis would move heads up to {error:.3} turns"
-                        ));
-                        (1.0, 0.0)
-                    }
                     None => {
-                        self.note("solved circle kept: its heads are unknown");
+                        self.note("solved circle → angle: its heads are unknown");
                         (1.0, 0.0)
                     }
                 }
