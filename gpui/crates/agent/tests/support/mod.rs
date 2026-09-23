@@ -153,6 +153,20 @@ pub fn recipe_score(effect: &str) -> Value {
     serde_json::to_value(document).expect("a serializable score")
 }
 
+/// A score with one clip of a shipped preset at beats 2–6.
+#[must_use]
+pub fn preset_score(preset: &str) -> Value {
+    let mut document: luma_patterns::Score =
+        serde_json::from_value(score(json!({}), json!({}))).expect("an empty score");
+    let preset = luma_patterns::presets()
+        .preset(preset)
+        .expect("a shipped preset");
+    document
+        .clips
+        .insert("form-clip".into(), preset.clip(2.0, 4.0));
+    serde_json::to_value(document).expect("a serializable score")
+}
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";

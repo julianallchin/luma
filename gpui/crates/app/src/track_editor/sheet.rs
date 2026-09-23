@@ -19,6 +19,8 @@ use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
 
+mod form;
+
 /// Air between one arg row and the next, and between the sheet's bands.
 const ROW_GAP: f32 = 14.;
 
@@ -132,6 +134,8 @@ enum Menu {
     Subset(usize),
     /// The HSV plate for the selected swatch/stop of the cell at this index.
     Swatch(usize),
+    /// The plain-or-source menu of the form input at this index.
+    Source(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every
@@ -158,6 +162,8 @@ struct Cell {
     def: PatternArgDef,
     synced: serde_json::Value,
     widget: Widget,
+    /// Set for an input of a form clip.
+    form: Option<form::Slot>,
 }
 
 enum Widget {
@@ -177,6 +183,18 @@ enum Widget {
         hsv: Hsv,
     },
     Gradient(Entity<GradientEditor>),
+    /// A form input's named choices. The row reads the stored value.
+    Preset(&'static [luma_patterns::Preset]),
+    /// Sparkle's grain: a head, a fixture, or a clump; holds the clump size.
+    Grain(Entity<DraftedNumber>),
+    /// `every` of a color over time: once, or a period in beats.
+    Every(Entity<DraftedNumber>),
+    /// A noise source: speed, then the low and high of its range.
+    Noise([Entity<DraftedNumber>; 3]),
+    /// An audio source's range; the row reads the band.
+    Audio([Entity<DraftedNumber>; 2]),
+    /// A list of stamped beats.
+    Stamps(Entity<luma_ui::text_input::TextInput>),
 }
 
 // -- wire codecs --------------------------------------------------------------
@@ -510,206 +528,28 @@ fn build(
         _ => Vec::new(),
     };
 
+    let rgb_only = editor.graph_score.is_some()
+        || defs.iter().any(|input| {
+            matches!(
+                input.arg_type,
+                PatternArgType::Beats | PatternArgType::Proportion | PatternArgType::Mapping
+            )
+        });
+    let form = pattern.as_deref().filter(|id| luma_patterns::is_form(id));
     let cells = defs
         .iter()
         .map(|def| {
             let stored = stored_arg(editor, def);
-            let widget = if let Ok(signal) =
-                serde_json::from_value::<luma_patterns::Signal>(stored.clone())
-            {
-                let field =
-                    cx.new(|cx| SignalEditor::new(def.name.clone(), signal, FIELD_W, window, cx));
-                let arg_id = def.id.clone();
-                subs.push(cx.subscribe(
-                    &field,
-                    move |this: &mut Luma, _, event: &SignalChanged, cx| {
-                        this.arg_live(
-                            &arg_id,
-                            serde_json::to_value(&event.0).expect("serializable signal"),
-                            cx,
-                        );
-                    },
-                ));
-                Widget::Signal(field)
-            } else {
-                match def.arg_type {
-                    PatternArgType::Seed => {
-                        match luma_lib::node_graph::lighting::decode(
-                            luma_patterns::ValueType::Seed,
-                            &stored,
-                        ) {
-                            Ok(luma_patterns::Value::Seed(seed)) => {
-                                let field = cx.new(|cx| {
-                                    DraftedNumber::new(
-                                        def.name.clone(),
-                                        seed,
-                                        0,
-                                        u64::MAX,
-                                        FIELD_W,
-                                        window,
-                                        cx,
-                                    )
-                                });
-                                let arg_id = def.id.clone();
-                                subs.push(cx.subscribe(
-                                    &field,
-                                    move |this: &mut Luma, _, event: &NumberEvent<u64>, cx| {
-                                        let NumberEvent::Committed(value) = *event;
-                                        this.arg_live(
-                                            &arg_id,
-                                            serde_json::json!(value.to_string()),
-                                            cx,
-                                        );
-                                    },
-                                ));
-                                Widget::Seed(field)
-                            }
-                            Err(error) => Widget::Invalid(error),
-                            _ => unreachable!("seed decoder"),
-                        }
-                    }
-                    PatternArgType::Envelope => {
-                        let points = envelope_value(&stored, &def.default_value);
-                        let entity =
-                            cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
-                        let arg_id = def.id.clone();
-                        subs.push(cx.subscribe(
-                            &entity,
-                            move |this: &mut Luma,
-                                  _,
-                                  event: &luma_ui::arg::envelope::EnvelopeChanged,
-                                  cx| {
-                                this.arg_live(
-                                    &arg_id,
-                                    serde_json::to_value(&event.0).expect("validated envelope"),
-                                    cx,
-                                );
-                            },
-                        ));
-                        Widget::Envelope(entity)
-                    }
-                    PatternArgType::Color => {
-                        let value = color_from_wire(&stored, &def.default_value);
-                        let entity = cx.new(|cx| {
-                            let control = ColorArgEditor::new(def.name.clone(), value, cx);
-                            if editor.graph_score.is_some()
-                                || defs.iter().any(|input| {
-                                    matches!(
-                                        input.arg_type,
-                                        PatternArgType::Beats
-                                            | PatternArgType::Proportion
-                                            | PatternArgType::Mapping
-                                    )
-                                })
-                            {
-                                control.rgb_only()
-                            } else {
-                                control
-                            }
-                        });
-                        let arg_id = def.id.clone();
-                        subs.push(cx.subscribe(
-                            &entity,
-                            move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
-                                let ColorArgEvent::Changed(value) = *event;
-                                this.arg_live(&arg_id, color_to_wire(value), cx);
-                            },
-                        ));
-                        Widget::Color(entity)
-                    }
-                    PatternArgType::Mapping => mapping_widget(def, &stored, window, cx, &mut subs),
-                    PatternArgType::Boundary
-                    | PatternArgType::Boolean
-                    | PatternArgType::AudioSource
-                    | PatternArgType::Drum => {
-                        Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
-                    }
-                    PatternArgType::Scalar
-                    | PatternArgType::Beats
-                    | PatternArgType::Proportion
-                    | PatternArgType::Position => {
-                        let value = scalar_from_wire(&stored, &def.default_value);
-                        let entity = cx.new(|cx| {
-                            DraftedNumber::new(
-                                def.name.clone(),
-                                value,
-                                if matches!(
-                                    def.arg_type,
-                                    PatternArgType::Proportion | PatternArgType::Beats
-                                ) {
-                                    0.
-                                } else {
-                                    -1e9
-                                },
-                                if def.arg_type == PatternArgType::Proportion {
-                                    1.
-                                } else {
-                                    1e9
-                                },
-                                FIELD_W,
-                                window,
-                                cx,
-                            )
-                        });
-                        let arg_id = def.id.clone();
-                        subs.push(cx.subscribe(
-                            &entity,
-                            move |this: &mut Luma, _, event: &NumberEvent, cx| {
-                                let NumberEvent::Committed(value) = *event;
-                                this.arg_live(&arg_id, serde_json::json!(value), cx);
-                            },
-                        ));
-                        Widget::Scalar(entity)
-                    }
-                    PatternArgType::Selection => {
-                        let entity = cx.new(|cx| {
-                            GroupExpressionEditor::new(
-                                groups.iter().cloned(),
-                                selection_from_wire(&stored).expression,
-                                EXPR_W,
-                                window,
-                                cx,
-                            )
-                        });
-                        let arg_id = def.id.clone();
-                        let def_for_event = def.clone();
-                        subs.push(cx.subscribe(
-                            &entity,
-                            move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
-                                let ExpressionEvent::Committed(expression) = event.clone();
-                                this.arg_selection(&arg_id, &def_for_event, cx, |selection| {
-                                    selection.expression = expression;
-                                });
-                            },
-                        ));
-                        Widget::Selection(entity)
-                    }
-                    PatternArgType::Palette => Widget::Palette {
-                        selected: None,
-                        hsv: Hsv {
-                            h: 0.,
-                            s: 0.,
-                            v: 1.,
-                        },
-                    },
-                    PatternArgType::Gradient => {
-                        let value = gradient_from_wire(&stored, &def.default_value);
-                        let entity = cx.new(|cx| GradientEditor::new(value, window, cx));
-                        let arg_id = def.id.clone();
-                        subs.push(cx.subscribe(
-                            &entity,
-                            move |this: &mut Luma, _, event: &GradientChanged, cx| {
-                                this.arg_live(&arg_id, gradient_to_wire(&event.0), cx);
-                            },
-                        ));
-                        Widget::Gradient(entity)
-                    }
-                }
+            let slot = form.and_then(|form| form::Slot::new(form, def, &stored));
+            let widget = match &slot {
+                Some(slot) => form::widget(slot, def, &stored, window, cx, &mut subs),
+                None => plain_widget(def, &stored, rgb_only, &groups, window, cx, &mut subs),
             };
             Cell {
                 def: def.clone(),
                 synced: stored,
                 widget,
+                form: slot,
             }
         })
         .collect();
@@ -721,6 +561,194 @@ fn build(
         blend: primary_clip(editor).map_or(BlendMode::Replace, |clip| clip.blend),
         cells,
         _subs: subs,
+    }
+}
+
+/// The control for one arg's plain value.
+fn plain_widget(
+    def: &PatternArgDef,
+    stored: &serde_json::Value,
+    rgb_only: bool,
+    groups: &[SharedString],
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Widget {
+    let stored = stored.clone();
+    if let Ok(signal) = serde_json::from_value::<luma_patterns::Signal>(stored.clone()) {
+        let field = cx.new(|cx| SignalEditor::new(def.name.clone(), signal, FIELD_W, window, cx));
+        let arg_id = def.id.clone();
+        subs.push(cx.subscribe(
+            &field,
+            move |this: &mut Luma, _, event: &SignalChanged, cx| {
+                this.arg_live(
+                    &arg_id,
+                    serde_json::to_value(&event.0).expect("serializable signal"),
+                    cx,
+                );
+            },
+        ));
+        Widget::Signal(field)
+    } else {
+        match def.arg_type {
+            PatternArgType::Seed => {
+                match luma_lib::node_graph::lighting::decode(
+                    luma_patterns::ValueType::Seed,
+                    &stored,
+                ) {
+                    Ok(luma_patterns::Value::Seed(seed)) => {
+                        let field = cx.new(|cx| {
+                            DraftedNumber::new(
+                                def.name.clone(),
+                                seed,
+                                0,
+                                u64::MAX,
+                                FIELD_W,
+                                window,
+                                cx,
+                            )
+                        });
+                        let arg_id = def.id.clone();
+                        subs.push(cx.subscribe(
+                            &field,
+                            move |this: &mut Luma, _, event: &NumberEvent<u64>, cx| {
+                                let NumberEvent::Committed(value) = *event;
+                                this.arg_live(&arg_id, serde_json::json!(value.to_string()), cx);
+                            },
+                        ));
+                        Widget::Seed(field)
+                    }
+                    Err(error) => Widget::Invalid(error),
+                    _ => unreachable!("seed decoder"),
+                }
+            }
+            PatternArgType::Envelope => {
+                let points = envelope_value(&stored, &def.default_value);
+                let entity = cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
+                let arg_id = def.id.clone();
+                subs.push(cx.subscribe(
+                    &entity,
+                    move |this: &mut Luma,
+                          _,
+                          event: &luma_ui::arg::envelope::EnvelopeChanged,
+                          cx| {
+                        this.arg_live(
+                            &arg_id,
+                            serde_json::to_value(&event.0).expect("validated envelope"),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Envelope(entity)
+            }
+            PatternArgType::Color => {
+                let value = color_from_wire(&stored, &def.default_value);
+                let entity = cx.new(|cx| {
+                    let control = ColorArgEditor::new(def.name.clone(), value, cx);
+                    if rgb_only {
+                        control.rgb_only()
+                    } else {
+                        control
+                    }
+                });
+                let arg_id = def.id.clone();
+                subs.push(cx.subscribe(
+                    &entity,
+                    move |this: &mut Luma, _, event: &ColorArgEvent, cx| {
+                        let ColorArgEvent::Changed(value) = *event;
+                        this.arg_live(&arg_id, color_to_wire(value), cx);
+                    },
+                ));
+                Widget::Color(entity)
+            }
+            PatternArgType::Mapping => mapping_widget(def, &stored, window, cx, subs),
+            PatternArgType::Boundary
+            | PatternArgType::Boolean
+            | PatternArgType::AudioSource
+            | PatternArgType::Drum => {
+                Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
+            }
+            PatternArgType::Scalar
+            | PatternArgType::Beats
+            | PatternArgType::Proportion
+            | PatternArgType::Position => {
+                let value = scalar_from_wire(&stored, &def.default_value);
+                let entity = cx.new(|cx| {
+                    DraftedNumber::new(
+                        def.name.clone(),
+                        value,
+                        if matches!(
+                            def.arg_type,
+                            PatternArgType::Proportion | PatternArgType::Beats
+                        ) {
+                            0.
+                        } else {
+                            -1e9
+                        },
+                        if def.arg_type == PatternArgType::Proportion {
+                            1.
+                        } else {
+                            1e9
+                        },
+                        FIELD_W,
+                        window,
+                        cx,
+                    )
+                });
+                let arg_id = def.id.clone();
+                subs.push(cx.subscribe(
+                    &entity,
+                    move |this: &mut Luma, _, event: &NumberEvent, cx| {
+                        let NumberEvent::Committed(value) = *event;
+                        this.arg_live(&arg_id, serde_json::json!(value), cx);
+                    },
+                ));
+                Widget::Scalar(entity)
+            }
+            PatternArgType::Selection => {
+                let entity = cx.new(|cx| {
+                    GroupExpressionEditor::new(
+                        groups.iter().cloned(),
+                        selection_from_wire(&stored).expression,
+                        EXPR_W,
+                        window,
+                        cx,
+                    )
+                });
+                let arg_id = def.id.clone();
+                let def_for_event = def.clone();
+                subs.push(cx.subscribe(
+                    &entity,
+                    move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
+                        let ExpressionEvent::Committed(expression) = event.clone();
+                        this.arg_selection(&arg_id, &def_for_event, cx, |selection| {
+                            selection.expression = expression;
+                        });
+                    },
+                ));
+                Widget::Selection(entity)
+            }
+            PatternArgType::Palette => Widget::Palette {
+                selected: None,
+                hsv: Hsv {
+                    h: 0.,
+                    s: 0.,
+                    v: 1.,
+                },
+            },
+            PatternArgType::Gradient => {
+                let value = gradient_from_wire(&stored, &def.default_value);
+                let entity = cx.new(|cx| GradientEditor::new(value, window, cx));
+                let arg_id = def.id.clone();
+                subs.push(cx.subscribe(
+                    &entity,
+                    move |this: &mut Luma, _, event: &GradientChanged, cx| {
+                        this.arg_live(&arg_id, gradient_to_wire(&event.0), cx);
+                    },
+                ));
+                Widget::Gradient(entity)
+            }
+        }
     }
 }
 
@@ -770,6 +798,20 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
         if cell.synced == stored {
             continue;
         }
+        if let Some(slot) = cell.form.as_mut() {
+            if form::resync(
+                slot,
+                &cell.def,
+                &mut cell.widget,
+                &stored,
+                window,
+                cx,
+                &mut built._subs,
+            ) {
+                cell.synced = stored;
+                continue;
+            }
+        }
         if cell.def.arg_type == PatternArgType::Mapping {
             match (&cell.widget, mapping_value(&stored)) {
                 (Widget::Mapping(entity), Ok(value)) => {
@@ -786,7 +828,13 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
                 let points = envelope_value(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(points, cx));
             }
-            Widget::Choice(_) => {}
+            Widget::Choice(_)
+            | Widget::Preset(_)
+            | Widget::Grain(_)
+            | Widget::Every(_)
+            | Widget::Noise(_)
+            | Widget::Audio(_)
+            | Widget::Stamps(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -1052,7 +1100,9 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .pt(pad)
                 .pb(px(12.))
                 .child(luma_ui::caption(
-                    if state.graph_score.is_some()
+                    if is_form(built) {
+                        "Form"
+                    } else if state.graph_score.is_some()
                         || built
                             .pattern
                             .as_ref()
@@ -1089,21 +1139,32 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
-                    .children(state.graph_score.as_ref().map(|_| {
-                        let app = app.clone();
-                        luma_ui::button("Make independent", Enabled::Yes)
-                            .id("make-clip-independent")
-                            .on_click(move |_, _, cx| {
-                                app.update(cx, |this, cx| this.make_clips_independent(cx));
-                            })
-                            .agent_node(Role::Button, "Make independent")
-                            .into_any_element()
-                    }))
+                    .children(
+                        state
+                            .graph_score
+                            .as_ref()
+                            .filter(|_| !is_form(built))
+                            .map(|_| {
+                                let app = app.clone();
+                                luma_ui::button("Make independent", Enabled::Yes)
+                                    .id("make-clip-independent")
+                                    .on_click(move |_, _, cx| {
+                                        app.update(cx, |this, cx| this.make_clips_independent(cx));
+                                    })
+                                    .agent_node(Role::Button, "Make independent")
+                                    .into_any_element()
+                            }),
+                    )
                     .child(named("blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
         )
         .into_any_element()
+}
+
+/// Whether the selection is of one form. A form clip has no graph of its own.
+fn is_form(built: &Built) -> bool {
+    built.pattern.as_deref().is_some_and(luma_patterns::is_form)
 }
 
 /// The pattern's own schema, or the one line that says why there is none.
@@ -1118,6 +1179,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     match &built.pattern {
         None => note("Mixed patterns"),
         Some(_) if built.cells.is_empty() => note("No exposed inputs"),
+        Some(id) if luma_patterns::is_form(id) => form::rows(state, built, app),
         Some(_) => {
             let typed = built
                 .cells
@@ -1354,6 +1416,13 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
             ))
         }
         Widget::Gradient(entity) => one(div().child(entity.clone())),
+        // Form rows draw these themselves.
+        Widget::Preset(_)
+        | Widget::Grain(_)
+        | Widget::Every(_)
+        | Widget::Noise(_)
+        | Widget::Audio(_)
+        | Widget::Stamps(_) => Vec::new(),
     }
 }
 
