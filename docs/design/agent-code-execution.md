@@ -1537,7 +1537,7 @@ the complete saved score. All changes stay local until `apply()`.
   `seconds=(start, end)` gives a range. Ranges are half-open. Beats start at 0.
   Bars start at 1 and follow the detected downbeats.
 - `add_clip(graph, ...)` takes a graph or a definition ID, plus `selection`,
-  `subset`, `z`, `blend`, `seed` and `inputs`.
+  `z`, `blend`, `seed` and `inputs`.
 - `update_clip` changes only the fields it is given. `remove_clip` removes one
   clip.
 - `edit.graph(...)` builds or opens a score-local graph.

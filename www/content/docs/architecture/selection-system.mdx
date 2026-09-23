@@ -1,6 +1,6 @@
 ---
 title: Selection System
-description: Group expressions, subsets, cells, mapping sources, rig UV and circle fitting
+description: Group expressions, cells, mapping sources, rig UV and circle fitting
 ---
 
 The selection system turns a group expression into a list of fixture heads.
@@ -36,22 +36,15 @@ The parser gives these operators precedence from lowest to highest:
 | `~` | NOT | Negates the next term |
 | `( )` | Grouping | Changes the order |
 
-## Subsets
+## Whole groups
 
-A selection has an expression and a subset (`Selection` in
-`backend/crates/patterns/src/selection.rs`). The subset decides how many of the
-matched fixtures stay:
+A selection is only a group expression (`Selection` in
+`backend/crates/patterns/src/selection.rs`). It always means every fixture the
+expression matches. For a random share of heads, use the Sparkle form and set
+its coverage. For specific heads, make a group for them.
 
-| Subset | Meaning |
-|--------|---------|
-| `all` | Every match. This is the default. |
-| `{"fraction": f}` | `f` of the matches, rounded to nearest, at least one |
-| `{"count": n}` | `n` matches, clamped to the number of matches |
-
-A seed decides which fixtures stay. The same seed always keeps the same
-fixtures. When every match is a whole fixture, the subset picks whole fixtures.
-When a match covers only some heads of a fixture, the subset picks heads. The
-result keeps venue order.
+A stored selection that still has a `subset` key from an older version loads as
+the whole group. The key is dropped when the selection is saved.
 
 ## Cells
 

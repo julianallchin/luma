@@ -750,7 +750,7 @@ def main():
     host = Host(options.host, options.config, options.output / "host.log")
     try:
         library = host.call("get_pattern_node_library")["definitions"]
-        # Selection is the canonical expression/subset schema at the preview
+        # Selection is the canonical expression schema at the preview
         # boundary; legacy spatialReference is deliberately not a new control.
         for record in records:
             record["args"]["selection"].pop("spatialReference", None)
