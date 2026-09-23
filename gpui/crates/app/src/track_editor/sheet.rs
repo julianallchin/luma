@@ -13,7 +13,7 @@ use luma_ui::arg::gradient_editor::{GradientChanged, GradientEditor};
 use luma_ui::arg::mapping::{MappingChanged, MappingEditor};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::palette::{luma_palette_row, PaletteEvent};
-use luma_ui::arg::select::luma_arg_select;
+use luma_ui::arg::select::{luma_arg_select, MenuVisibility};
 use luma_ui::arg::signal::{SignalChanged, SignalEditor};
 use luma_ui::CONTROL_HEIGHT;
 
@@ -79,6 +79,10 @@ pub(crate) struct State {
     /// Which sheet-owned menu is open. One at a time — opening one closes the
     /// rest, which is what a single field states for free.
     open: Option<Menu>,
+    /// What `open` was when the sheet last synced, so a close is seen.
+    was_open: Option<Menu>,
+    /// The menu that just closed, playing its exit.
+    closing: Option<(Menu, MenuVisibility)>,
     /// A live arg burst is running: its checkpoint is recorded and a trailing
     /// commit is owed.
     burst: bool,
@@ -96,6 +100,8 @@ impl Default for State {
             built: None,
             width: luma_ui::pane::PaneWidth::new(0.0),
             open: None,
+            was_open: None,
+            closing: None,
             burst: false,
             flush_gen: 0,
         }
@@ -414,6 +420,7 @@ fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
 
 /// Refresh controls from the selected clip without overwriting active drafts.
 pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
+    tick_menus(&mut editor.sheet, window, cx);
     ensure_groups(editor, cx);
     ensure_defs(editor, cx);
     let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
@@ -440,6 +447,42 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         editor.sheet.built = Some(built);
     }
     resync(editor, window, cx);
+}
+
+/// Start a closed menu's exit, and keep frames coming while it plays: a menu
+/// leaves the way it came, whichever path closed it.
+fn tick_menus(sheet: &mut State, window: &mut Window, cx: &mut Context<Luma>) {
+    if sheet.was_open != sheet.open {
+        if let Some(closed) = sheet.was_open {
+            let mut exit = MenuVisibility::Open;
+            exit.close();
+            sheet.closing = Some((closed, exit));
+        }
+        sheet.was_open = sheet.open;
+    }
+    // Opened again before its exit finished: it is simply open.
+    if sheet
+        .closing
+        .is_some_and(|(menu, _)| sheet.open == Some(menu))
+    {
+        sheet.closing = None;
+    }
+    if let Some((_, visibility)) = &mut sheet.closing {
+        if visibility.tick_close(luma_ui::motion::reduced_motion(cx)) {
+            window.request_animation_frame();
+        } else {
+            sheet.closing = None;
+        }
+    }
+}
+
+/// How `menu` shows: open, playing its exit, or closed.
+fn menu_visibility(state: &Editor, menu: Menu) -> MenuVisibility {
+    match state.sheet.closing {
+        _ if state.sheet.open == Some(menu) => MenuVisibility::Open,
+        Some((closing, visibility)) if closing == menu => visibility,
+        _ => MenuVisibility::Closed,
+    }
 }
 
 /// Ask for the venue's group names, once.
@@ -1264,7 +1307,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
 /// else, applied to the whole selection on pick.
 fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
     let names: Vec<&str> = BlendMode::ALL.iter().map(|mode| mode.name()).collect();
-    let open = state.sheet.open == Some(Menu::Blend);
+    let open = menu_visibility(state, Menu::Blend);
     let toggle = app.clone();
     let pick = app.clone();
     luma_arg_select(
@@ -1320,7 +1363,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 name,
                 selected,
                 &labels,
-                state.sheet.open == Some(Menu::Choice(index)),
+                menu_visibility(state, Menu::Choice(index)),
                 move |_, cx| {
                     toggle.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| {
@@ -1357,7 +1400,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 format!("{name}:subset"),
                 &subset_label(selection.subset),
                 &subset_labels,
-                state.sheet.open == Some(Menu::Subset(index)),
+                menu_visibility(state, Menu::Subset(index)),
                 move |_, cx| {
                     toggle.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| {
