@@ -4,9 +4,11 @@
 //! Each preview is a small RGBA image where rows = fixtures, columns = time steps,
 //! and pixel color = fixture RGB × dimmer.
 
-use crate::models::node_graph::BeatGrid;
+use std::collections::HashMap;
+
 use crate::models::patterns::AnnotationPreview;
 use crate::models::universe::UniverseState;
+use luma_patterns as p;
 
 const MAX_PREVIEW_HEIGHT: u32 = 32;
 
@@ -20,19 +22,50 @@ fn empty_preview(annotation_id: String) -> AnnotationPreview {
     }
 }
 
+/// Where each head of a form clip sits along the line its strip is sorted
+/// by: the clip's own `axis` when it has one, resolved the way the engine
+/// resolves it, else the selection's major axis. Heads the line cannot place
+/// keep their selection order.
+pub(crate) fn head_order(clip: &p::Clip, cells: &[p::Cell]) -> HashMap<String, f64> {
+    let major = p::MappingSpec {
+        source: p::MappingSource::MajorAxis {
+            toward: [0., 0., 1.],
+        },
+        per_group: false,
+        reverse: false,
+        mirror: None,
+    };
+    let axis = match clip.inputs.get("axis") {
+        Some(p::Value::Mapping(spec)) => spec.resolve(cells).ok(),
+        _ => None,
+    };
+    match axis.or_else(|| major.resolve(cells).ok()) {
+        Some(mapping) => mapping
+            .coordinates
+            .into_iter()
+            .map(|coordinate| (coordinate.cell, coordinate.position))
+            .collect(),
+        None => cells
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| (cell.id.clone(), index as f64))
+            .collect(),
+    }
+}
+
 /// Render a heatmap from a column-sampled grid of [`UniverseState`] frames
-/// (`frames[col]` = the state at preview column `col`). Rows are primitives,
-/// ordered by brightness-weighted center of mass in time so spatial patterns
-/// read as diagonals; past [`MAX_PREVIEW_HEIGHT`] heads, a row is the
-/// brightest head of a band of neighbours in that order.
+/// (`frames[col]` = the state at preview column `col`). Rows are primitives.
+///
+/// With an `order` (see [`head_order`]) rows follow it, and past
+/// [`MAX_PREVIEW_HEIGHT`] heads a row is the mean of a band of neighbours:
+/// what that stretch of the rig shows. Without one, rows are ordered by
+/// brightness-weighted center of mass in time so spatial patterns read as
+/// diagonals, and a row is the brightest head of its band.
 pub(crate) fn render_preview(
     annotation_id: String,
     frames: &[UniverseState],
-    beat_grid: Option<&BeatGrid>,
-    start_time: f32,
-    end_time: f32,
+    order: Option<&HashMap<String, f64>>,
 ) -> AnnotationPreview {
-    let _ = (beat_grid, start_time, end_time); // width is implied by frames.len()
     let width = frames.len() as u32;
     if width == 0 {
         return empty_preview(annotation_id);
@@ -52,26 +85,30 @@ pub(crate) fn render_preview(
         return empty_preview(annotation_id);
     }
 
-    // Brightness-weighted center of mass per primitive.
-    prim_ids.sort_by(|a, b| {
-        let com = |id: &str| -> f64 {
-            let mut weighted = 0.0f64;
-            let mut total = 0.0f64;
-            for (col, f) in frames.iter().enumerate() {
-                let d = f.primitives.get(id).map(|p| p.dimmer).unwrap_or(0.0) as f64;
-                weighted += col as f64 * d;
-                total += d;
-            }
-            if total > 0.0 {
-                weighted / total
-            } else {
-                f64::MAX
-            }
-        };
-        com(a)
-            .partial_cmp(&com(b))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if let Some(order) = order {
+        let at = |id: &str| order.get(id).copied().unwrap_or(f64::MAX);
+        prim_ids.sort_by(|a, b| at(a).total_cmp(&at(b)).then_with(|| a.cmp(b)));
+    } else {
+        prim_ids.sort_by(|a, b| {
+            let com = |id: &str| -> f64 {
+                let mut weighted = 0.0f64;
+                let mut total = 0.0f64;
+                for (col, f) in frames.iter().enumerate() {
+                    let d = f.primitives.get(id).map(|p| p.dimmer).unwrap_or(0.0) as f64;
+                    weighted += col as f64 * d;
+                    total += d;
+                }
+                if total > 0.0 {
+                    weighted / total
+                } else {
+                    f64::MAX
+                }
+            };
+            com(a)
+                .partial_cmp(&com(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let height = (prim_ids.len() as u32).min(MAX_PREVIEW_HEIGHT);
     let mut pixels = vec![0u8; (width * height * 4) as usize];
@@ -88,15 +125,25 @@ pub(crate) fn render_preview(
     for row in 0..height as usize {
         for col in 0..width as usize {
             let frame = &frames[col];
-            let (color, dimmer) = band(row)
-                .iter()
-                .filter_map(|id| frame.primitives.get(id).map(|p| (p.color, p.dimmer)))
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .unwrap_or(([1.0, 1.0, 1.0], 0.0));
+            let heads = band(row).iter().filter_map(|id| frame.primitives.get(id));
+            let shown = |head: &crate::models::universe::PrimitiveState| {
+                head.color.map(|channel| channel * head.dimmer)
+            };
+            let rgb = if order.is_some() {
+                let (sum, count) = heads.fold(([0.0f32; 3], 0usize), |(sum, count), head| {
+                    let rgb = shown(head);
+                    (std::array::from_fn(|i| sum[i] + rgb[i]), count + 1)
+                });
+                sum.map(|channel| channel / count.max(1) as f32)
+            } else {
+                heads
+                    .max_by(|a, b| a.dimmer.total_cmp(&b.dimmer))
+                    .map_or([0.0; 3], shown)
+            };
 
-            let r = (color[0] * dimmer * 255.0).clamp(0.0, 255.0) as u8;
-            let g = (color[1] * dimmer * 255.0).clamp(0.0, 255.0) as u8;
-            let b = (color[2] * dimmer * 255.0).clamp(0.0, 255.0) as u8;
+            let r = (rgb[0] * 255.0).clamp(0.0, 255.0) as u8;
+            let g = (rgb[1] * 255.0).clamp(0.0, 255.0) as u8;
+            let b = (rgb[2] * 255.0).clamp(0.0, 255.0) as u8;
 
             let idx = ((row as u32 * width + col as u32) * 4) as usize;
             pixels[idx] = r;
@@ -168,7 +215,7 @@ mod tests {
         let mut frames = vec![frame(0..32)];
         frames.extend((0..30).map(|_| frame(std::iter::empty())));
         frames.push(frame(32..64));
-        let preview = render_preview("clip".into(), &frames, None, 0.0, 1.0);
+        let preview = render_preview("clip".into(), &frames, None);
         assert_eq!((preview.width, preview.height), (32, MAX_PREVIEW_HEIGHT));
         let green_at = |col: u32| {
             (0..preview.height)
