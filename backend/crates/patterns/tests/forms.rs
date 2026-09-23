@@ -612,3 +612,48 @@ fn radial_and_angle_axes_need_no_solved_circle() {
         assert!((coordinate.position - if n % 2 == 0 { 0.0 } else { 1.0 }).abs() < 1e-9);
     }
 }
+
+#[test]
+fn hit_width_grows_each_stroke_over_its_life() {
+    let (form, mut inputs) = preset("Chase");
+    set(&mut inputs, "width_relative", Value::Boolean(false));
+    set(
+        &mut inputs,
+        "width",
+        Value::Hit(curve(&[[0.0, 0.1], [1.0, 0.6]], Segment::Linear)),
+    );
+    // Hold the stroke in the middle of the axis, so only the width moves.
+    set(
+        &mut inputs,
+        "path",
+        Value::Envelope(Envelope::linear(vec![[0.0, 0.5], [1.0, 0.5]])),
+    );
+    let count = |beat| {
+        lit(&render(&form, &inputs, beat))
+            .iter()
+            .filter(|v| **v)
+            .count()
+    };
+    // Width 0.15 early in the life reaches the two middle heads (±0.071);
+    // width 0.55 late in the life reaches four (±0.214).
+    assert_eq!(count(0.2), 2);
+    assert_eq!(count(1.8), 4);
+    assert_eq!(count(2.2), 2);
+}
+
+#[test]
+fn form_clips_stay_forms_when_copied_between_scores() {
+    let library = standard_library();
+    let mut source = Score::default();
+    source.clips.insert(
+        "chase".into(),
+        presets().preset("Chase").unwrap().clip(0.0, 8.0),
+    );
+    let mut target = Score::default();
+    target
+        .import_clip(&library, &source, "chase", "copy")
+        .unwrap();
+    assert_eq!(target.clips["copy"].graph, "color.chase@1");
+    assert!(target.definitions.is_empty());
+    assert!(target.make_independent(&library, "copy", "local").is_err());
+}

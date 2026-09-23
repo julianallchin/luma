@@ -135,6 +135,29 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
 ```
 
+## Clip forms
+
+A form is a shipped graph with a fixed interface: `color.constant@1`,
+`color.time@1`, `color.space@1`, `color.chase@1`, `color.sparkle@1`,
+`color.noise@1` and `strobe.constant@1` (see `docs/specs/clip-forms.md`).
+A form clip sets `graph` to the form id and holds a value for every input.
+A missing or unknown input is an error. Score-local graph clips keep the
+older rules.
+
+- An input takes a plain value or, where its `promotable` list allows, a
+  source: `time` and `hit` keyframe curves, `noise`, `audio` (a band of the
+  full mix, scaled over the clip), or `events` (stamped beats from the clip
+  start, on `every` only). Sources are tagged values, for example
+  `{"type":"time","value":{"points":[[0,2],[1,0.5]],"segments":["linear"]}}`.
+- `PreparedGraph::new` lowers each source into nodes of a copy of the form.
+  A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
+  is summed over the clip like an odometer, from a table built from the
+  curve, so a sought frame equals a played frame.
+- `core/event_life`, `core/odometer`, `core/curve` and `core/random_share`
+  are the new primitives the forms use.
+- `presets()` reads `src/presets.json`: named presets (a form and every
+  input value) and named curves for `time` and `hit` sources.
+
 ## Host integration and migration
 
 `PreparedGraph` flattens once and executes each operation once per requested time
