@@ -1,0 +1,261 @@
+//! A form clip's alpha on the timeline: the fade handles, the bend handle and
+//! the level line write the clip's stored `alpha`, undo takes the edit back,
+//! and a clip moved over the end of another crosses the two with fades.
+
+use super::support::{self, Fixture};
+use gpui_agent::Mode;
+use serde_json::{json, Value};
+use std::time::Duration;
+
+fn stored(name: &str) -> Value {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(support::stored_score_json(&support::config_dir(name)))
+}
+
+fn alpha(name: &str, clip: &str) -> Value {
+    stored(name)["clips"][clip]["inputs"]["alpha"].clone()
+}
+
+/// The points of a stored alpha curve, as `(x, y)` pairs.
+fn points(alpha: &Value) -> Vec<(f64, f64)> {
+    assert_eq!(alpha["type"], "time", "{alpha}");
+    alpha["value"]["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+        .collect()
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 0.02
+}
+
+const HELPERS: &str = r#"
+    const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+    const settle=()=>app.frames(20,{waitMs:60});
+"#;
+
+/// Open the timeline, then `body`.
+fn opened(body: &str) -> String {
+    support::script(&format!(
+        r#"nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        {{ {HELPERS}
+        until("waveform",s=>s.find({{role:"card",label:"Waveform"}}));
+        settle();
+        {body} }}"#
+    ))
+}
+
+/// More steps on the timeline already open.
+fn then(body: &str) -> String {
+    support::script(&format!("{{ {HELPERS}\n{body} }}"))
+}
+
+fn run(harness: &mut gpui_agent::Harness, script: String) -> Value {
+    let result = harness.exec(&script, Duration::from_secs(60));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    result.result
+}
+
+#[test]
+fn fade_bend_and_level_handles_write_the_clip_alpha() {
+    const NAME: &str = "clip-fades-handles";
+    let mut harness = Fixture::new(NAME, 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Headless);
+
+    // Drag the fade-in handle a quarter of the way into the clip.
+    let out = run(
+        &mut harness,
+        opened(
+            r#"
+        const card=node("card","Chase").bounds;
+        const handle=node("slider","Chase fade in");
+        const start=handle.bounds.x+handle.bounds.width/2-card.x;
+        app.drag(handle,{dx:card.width/4,dy:0},{steps:6});
+        settle();
+        ({start, handles:app.snapshot().findAll({role:"slider"}).map(n=>n.label).filter(l=>l.startsWith("Chase "))})
+    "#,
+        ),
+    );
+    assert!(out["start"].as_f64().unwrap().abs() < 2., "{out}");
+    let faded = alpha(NAME, "form-clip");
+    let curve = points(&faded);
+    assert_eq!(curve.len(), 3, "{faded}");
+    assert!(close(curve[0].0, 0.) && close(curve[0].1, 0.), "{faded}");
+    assert!(close(curve[1].0, 0.25) && close(curve[1].1, 1.), "{faded}");
+    assert!(close(curve[2].0, 1.) && close(curve[2].1, 1.), "{faded}");
+    let handles: Vec<&str> = out["handles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(handles.contains(&"Chase fade in bend"), "{out}");
+
+    // Bend the fade up: it eases.
+    run(
+        &mut harness,
+        then(
+            r#"
+        app.drag(node("slider","Chase fade in bend"),{dx:0,dy:-20},{steps:6});
+        settle();
+        ({})
+    "#,
+        ),
+    );
+    let bent = alpha(NAME, "form-clip");
+    assert_eq!(bent["value"]["segments"][0], "ease", "{bent}");
+
+    // Pull the level line halfway down.
+    run(
+        &mut harness,
+        then(
+            r#"
+        const lane=app.snapshot().findAll({role:"row"}).find(n=>n.label==="Lane 1").bounds;
+        const travel=lane.height-2-18-6;
+        app.drag(node("slider","Chase alpha"),{dx:0,dy:travel/2},{steps:6});
+        settle();
+        ({travel})
+    "#,
+        ),
+    );
+    let lowered = alpha(NAME, "form-clip");
+    let curve = points(&lowered);
+    assert!(
+        close(curve[1].1, 0.5) && close(curve[2].1, 0.5),
+        "{lowered}"
+    );
+    assert_eq!(lowered["value"]["segments"][0], "ease", "{lowered}");
+
+    // Undo takes the level back.
+    run(
+        &mut harness,
+        then(
+            r#"
+        app.key("secondary-z"); settle();
+        ({})
+    "#,
+        ),
+    );
+    assert_eq!(alpha(NAME, "form-clip"), bent, "undo restores the level");
+
+    // Drag the fade back out past the clip edge: alpha is Fixed again.
+    run(
+        &mut harness,
+        then(
+            r#"
+        app.drag(node("slider","Chase fade in"),{dx:-400,dy:0},{steps:8});
+        settle();
+        ({})
+    "#,
+        ),
+    );
+    assert_eq!(
+        alpha(NAME, "form-clip"),
+        json!({"type": "proportion", "value": 1.0}),
+        "no fade left stores a plain value"
+    );
+}
+
+#[test]
+fn moving_a_clip_over_the_end_of_another_crosses_them() {
+    const NAME: &str = "clip-fades-crossfade";
+    let mut document: luma_patterns::Score =
+        serde_json::from_value(support::score(json!({}), json!({}))).unwrap();
+    let presets = luma_patterns::presets();
+    document.clips.insert(
+        "first".into(),
+        presets.preset("Wash").unwrap().clip(0.0, 4.0),
+    );
+    document.clips.insert(
+        "second".into(),
+        presets.preset("Chase").unwrap().clip(8.0, 4.0),
+    );
+    let mut harness = Fixture::new(NAME, 20, vec![])
+        .with_graph_score(serde_json::to_value(document).unwrap())
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &opened(
+            r#"
+        const chase=node("card","Chase").bounds;
+        const beat=chase.width/4;
+        // From beats 8–12 to 2–6: two beats over the end of the first clip.
+        app.drag(node("card","Chase"),{dx:-6*beat,dy:0},{steps:8});
+        settle();
+        ({beat, cards:app.snapshot().findAll({role:"card"}).map(n=>n.label)})
+    "#,
+        ),
+        Duration::from_secs(60),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let score = stored(NAME);
+    let second = &score["clips"]["second"];
+    assert!(
+        close(second["start"].as_f64().unwrap(), 2.),
+        "{second} {}",
+        result.result
+    );
+    let out = points(&score["clips"]["first"]["inputs"]["alpha"]);
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert!(
+        close(out[1].0, 0.5) && close(out[2].0, 1.) && close(out[2].1, 0.),
+        "{out:?}"
+    );
+    let into = points(&second["inputs"]["alpha"]);
+    assert!(
+        close(into[0].1, 0.) && close(into[1].0, 0.5) && close(into[1].1, 1.),
+        "{into:?}"
+    );
+
+    // One undo takes back the move and both fades.
+    let result = harness.exec(
+        &then(r#"app.key("secondary-z"); settle(); ({})"#),
+        Duration::from_secs(60),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let score = stored(NAME);
+    assert!(
+        close(score["clips"]["second"]["start"].as_f64().unwrap(), 8.),
+        "{}",
+        result.result
+    );
+    for clip in ["first", "second"] {
+        assert_eq!(
+            score["clips"][clip]["inputs"]["alpha"],
+            json!({"type": "proportion", "value": 1.0}),
+            "{clip}"
+        );
+    }
+}
+
+#[test]
+fn a_clip_with_its_own_graph_has_no_alpha_line() {
+    const NAME: &str = "clip-fades-recipe";
+    let mut harness = Fixture::new(NAME, 20, vec![])
+        .with_graph_score(support::recipe_score("beat_chase"))
+        .with_rig()
+        .open(Mode::Headless);
+    let out = run(
+        &mut harness,
+        opened(
+            r#"
+        node("card","Beat chase");
+        ({sliders:app.snapshot().findAll({role:"slider"}).map(n=>n.label).filter(l=>l.startsWith("Beat chase "))})
+    "#,
+        ),
+    );
+    assert_eq!(
+        out["sliders"],
+        json!(["Beat chase start", "Beat chase end"]),
+        "{out}"
+    );
+}
