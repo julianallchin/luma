@@ -100,6 +100,7 @@ use crate::{LibraryError, Luma};
 
 mod document;
 pub(crate) use document::GraphDraft;
+mod fades;
 mod lanes;
 use lanes::assign_rows;
 mod minimap;
@@ -711,6 +712,17 @@ enum Gesture {
         /// move.
         layers: Rc<[i64]>,
         moved: bool,
+    },
+    /// Dragging one part of a form clip's alpha line — see [`fades`]. Every
+    /// move is computed from the press, like a clip drag.
+    Alpha {
+        clip: SharedString,
+        part: fades::Part,
+        origin: Point<Pixels>,
+        /// The alpha when the pointer took hold.
+        initial: fades::Fades,
+        /// The line's travel from alpha 0 to 1, in pixels.
+        travel: f32,
     },
 }
 
@@ -2411,6 +2423,10 @@ impl Luma {
                 return;
             };
 
+            if editor.press_alpha(at, row) {
+                return;
+            }
+
             let Some(clip) = editor.clip_at(time, row, y) else {
                 // Empty lane: a point cursor here, and a rectangle if the
                 // pointer goes on to move.
@@ -2589,6 +2605,7 @@ impl Luma {
                     editor.drag_clips(&gesture, delta, rows);
                     editor.sync_cursor();
                 }
+                Gesture::Alpha { .. } => editor.drag_alpha(&gesture, at),
             }
             editor.gesture = Some(gesture);
         });
@@ -2606,10 +2623,26 @@ impl Luma {
         }
         let mut save = false;
         let mut flush = None;
+        let mut touched = Vec::new();
         self.with_track_editor(cx, |editor| {
             match editor.gesture.take() {
+                Some(Gesture::Clips {
+                    drag: Drag::Move,
+                    initial,
+                    moved: true,
+                    ..
+                }) => {
+                    touched = editor.crossfade(&initial);
+                    editor.abandon_checkpoint();
+                    save = editor.dirty;
+                }
                 Some(Gesture::Clips { .. }) => {
                     editor.abandon_checkpoint();
+                    save = editor.dirty;
+                }
+                Some(Gesture::Alpha { clip, .. }) => {
+                    editor.abandon_checkpoint();
+                    touched.push(clip);
                     save = editor.dirty;
                 }
                 // A scrub owes the transport whatever the throttle was still
@@ -2622,6 +2655,9 @@ impl Luma {
         });
         if let Some(seconds) = flush {
             self.seek(seconds, cx);
+        }
+        for id in touched {
+            self.refresh_clip_preview(id, cx);
         }
         if save {
             self.commit_clips(cx);
@@ -3559,18 +3595,7 @@ impl Scene {
 
     /// One clip's box in window space.
     fn clip_box(&self, canvas: Bounds<Pixels>, clip: &Clip) -> Bounds<Pixels> {
-        let x = self.view.x_of(clip.start);
-        let width = ((clip.end - clip.start) as f32 * self.view.zoom)
-            .floor()
-            .max(4.);
-        let layout = self.layout(canvas);
-        Bounds {
-            origin: point(
-                canvas.origin.x + px(x),
-                canvas.origin.y + px(layout.top(clip.row) + 1.),
-            ),
-            size: size(px(width), px(layout.lane - 2.)),
-        }
+        clip_bounds(self.view, self.layout(canvas), canvas, clip)
     }
 
     fn playhead_box(&self, canvas: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -3581,6 +3606,19 @@ impl Scene {
             ),
             size: size(px(1.), canvas.size.height),
         }
+    }
+}
+
+/// One clip's box in window space, for a canvas at `canvas`.
+fn clip_bounds(view: View, layout: Layout, canvas: Bounds<Pixels>, clip: &Clip) -> Bounds<Pixels> {
+    let x = view.x_of(clip.start);
+    let width = ((clip.end - clip.start) as f32 * view.zoom).floor().max(4.);
+    Bounds {
+        origin: point(
+            canvas.origin.x + px(x),
+            canvas.origin.y + px(layout.top(clip.row) + 1.),
+        ),
+        size: size(px(width), px(layout.lane - 2.)),
     }
 }
 
@@ -3651,6 +3689,7 @@ fn register(scene: &Scene, canvas: Bounds<Pixels>, window: &mut Window, cx: &mut
                     size: size(box_.size.width, px(CLIP_HEADER)),
                 };
                 agent_paint_node(Role::Card, clip.label.clone(), header, window, cx);
+                fades::register(box_, clip, window, cx);
                 // The body stays inert to the pointer; this node is evidence,
                 // not a control. It exists exactly when the clip has a decoded
                 // heatmap, which is the only way a headless probe can tell a
@@ -4158,6 +4197,7 @@ fn paint_clip(
     if !paint_preview(clip_body(box_), clip, previews, selected, window) {
         window.paint_quad(fill(clip_body(box_), fade(clip.color, body_alpha)));
     }
+    fades::paint(box_, clip, selected, window);
     window.paint_quad(quad(
         box_,
         Corners::default(),
