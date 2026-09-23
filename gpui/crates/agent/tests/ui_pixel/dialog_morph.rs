@@ -185,7 +185,7 @@ fn route_a(
                             .track_focus(focus)
                             .on_click(move |_, _, cx| {
                                 requested.update(cx, |proof, cx| {
-                                    proof.request_b(MorphTransition::Right, cx)
+                                    proof.request_b(MorphTransition::Forward, cx)
                                 })
                             })
                             .child("Next")
@@ -356,7 +356,7 @@ impl Render for Proof {
             .bg(gpui::rgb(0x111318))
             .on_action(cx.listener(|this, _: &GoA, _, cx| this.request_a(cx)))
             .on_action(
-                cx.listener(|this, _: &GoB, _, cx| this.request_b(MorphTransition::Right, cx)),
+                cx.listener(|this, _: &GoB, _, cx| this.request_b(MorphTransition::Forward, cx)),
             )
             .on_action(cx.listener(|this, _: &GoC, _, cx| this.request_c(cx)))
             .on_action(

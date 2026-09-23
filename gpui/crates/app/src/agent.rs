@@ -1,11 +1,12 @@
-//! The shell keeps one conversation open. Editor context seeds the first
-//! conversation; navigation updates the working context without replacing it.
+//! The shell keeps one chat panel. It shows the open score's chats; the other
+//! editors only supply the working context for each turn.
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
 use luma_lib::agent::ThreadScope;
 
 use crate::shell::Body;
+use crate::tabs::Target;
 use crate::Luma;
 
 /// Working context for the next turn, independent of the conversation.
@@ -18,9 +19,13 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
             return Some(ThreadScope::track(track, venue, score));
         }
     }
-    app.sidebar
-        .as_ref()
-        .map(|browser| ThreadScope::venue(browser.venue_id()))
+    None
+}
+
+/// Whose chats the thread shows: the score the picked track's editor has
+/// open, or `None` when no score is open.
+pub(crate) fn chat_subject(app: &Luma) -> Option<ThreadScope> {
+    current_track(app)
 }
 
 /// An open track remains available while another editor tab is in front.
@@ -45,15 +50,31 @@ fn current_track(app: &Luma) -> Option<ThreadScope> {
 }
 
 impl Luma {
-    /// Keep one chat entity and refresh its working context for the next turn.
+    /// Keep one chat entity on the open score's chats, and refresh its
+    /// working context for the next turn.
+    ///
+    /// The venue page hides the thread and leaves it alone, so the score's
+    /// chat, and any turn it is running, is there when the reader comes back.
     pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wanted = scope_for(self);
+        let context = scope_for(self);
+        let subject = chat_subject(self);
+        let follow = !self.venue_mode();
         if let Some(chat) = &self.chat {
-            chat.update(cx, |chat, cx| chat.set_editor_context(wanted, cx));
+            chat.update(cx, |chat, cx| {
+                chat.set_editor_context(context, cx);
+                if follow {
+                    chat.set_subject(subject, cx);
+                }
+            });
             return;
         }
         let agent = self.library.agent();
-        let chat = cx.new(|cx| AgentChat::new(agent, wanted, cx));
+        let chat = cx.new(|cx| {
+            let mut chat = AgentChat::new(agent, None, cx);
+            chat.set_editor_context(context, cx);
+            chat.set_subject(subject, cx);
+            chat
+        });
         self.chat_subscription =
             Some(
                 cx.subscribe_in(&chat, window, |this, _, event, _, cx| match event {
@@ -135,8 +156,8 @@ impl Luma {
                 }
                 Some(Body::Graph(_)) => {}
                 Some(Body::Patch(_)) => {
-                    if let Some(venue) = target.venue() {
-                        self.reload_patch(venue.to_owned(), cx);
+                    if let Target::Patch { venue } = &target {
+                        self.reload_patch(venue.clone(), cx);
                     }
                 }
                 _ => {}

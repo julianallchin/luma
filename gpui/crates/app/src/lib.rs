@@ -126,8 +126,9 @@ pub struct Luma {
     /// Visual-only state for keyed chip reflow and the floating `+` menu.
     /// Logical tab identity and teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
-    /// The most recently opened subjects seed the `+` menu's editor choices.
-    pub(crate) selected_track: Option<String>,
+    /// What the sidebar has picked: a track, or the venue page. The tab set,
+    /// the thread and the `+` menu all follow it.
+    pub(crate) picked: Option<workspace::Pick>,
     pub(crate) workspace_hidden: bool,
     pub(crate) shell_presented: bool,
     pub(crate) restoring_venue: bool,
@@ -144,8 +145,11 @@ pub struct Luma {
     /// every future window.
     pub(crate) workspace_split: luma_ui::split::SplitFraction,
     /// Whether an open workspace takes over everything right of the sidebar
-    /// (this phase's default) or shares it with the thread column.
+    /// or shares it with the thread column. The venue page always takes over.
     pub(crate) expanded: bool,
+    /// Device pixels per logical pixel, as of the last render. Offscreen
+    /// previews are drawn at the size they are shown.
+    pub(crate) scale_factor: f32,
     /// The stage above the editors, when the visible tab is about a room.
     ///
     /// Not a tab and not keyed like one: it is a *view of whatever is below
@@ -251,7 +255,7 @@ impl Luma {
             workspace: Tabs::default(),
             parked: workspace::ParkedTabs::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
-            selected_track: None,
+            picked: None,
             workspace_hidden: false,
             shell_presented: false,
             restoring_venue: false,
@@ -259,6 +263,7 @@ impl Luma {
             workspace_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace_split: shell::workspace_split(),
             expanded: false,
+            scale_factor: 1.0,
             visualizer: None,
             graph_audio: graph::preview::Audio::default(),
             fullscreen: None,
@@ -444,6 +449,7 @@ impl Luma {
 
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.scale_factor = window.scale_factor();
         // Nobody is signed in yet, so there is no library to show and no shell
         // to show it in — the gate is the app, not a plane over it.
         if self.refreshing_session {

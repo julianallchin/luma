@@ -60,7 +60,7 @@ const READ: &str = r#"
         const strip = shot.find({ role: "card", label: "Tab strip" });
         // The thread's own left cluster — the thing the fixed toggle pushes.
         const back = shot.find({ role: "button", label: "Back" });
-        const search = shot.find({ role: "input", label: "Search tracks…" });
+        const search = shot.find({ role: "input", label: "Search tracks" });
         return {
             sidebarToggle: sidebar === undefined ? null : sidebar.bounds.x,
             panelToggle: panel === undefined ? null : panel.bounds.x,

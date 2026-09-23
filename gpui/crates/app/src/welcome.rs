@@ -52,6 +52,7 @@ enum Route {
 impl Route {
     fn descriptor(self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self, PICKER_SIZE.width, PICKER_SIZE.height)
+            .with_transition(morph::direction(self == Self::Create))
     }
 }
 

@@ -1,4 +1,4 @@
-//! Venue workspace: lights, placement and groups share one tab.
+//! The venue page: lights, placement and groups share one body.
 //!
 //! # One allocator, and it is not here
 //!
@@ -299,8 +299,22 @@ impl Patch {
 // ---------------------------------------------------------------------------
 
 impl Luma {
-    /// Reveal the selected venue's patch as one target-keyed workspace tab.
-    pub(crate) fn open_patch(&mut self, cx: &mut Context<Self>) {
+    /// Pick the sidebar's Venue row: the venue page fills the workspace and
+    /// the thread collapses behind it. Picking a track leaves it again.
+    pub(crate) fn open_venue_page(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar.is_none() {
+            return;
+        }
+        self.picked = Some(crate::workspace::Pick::Venue);
+        self.workspace_hidden = false;
+        // Swap the venue's set in first, so the page opens into it and not
+        // into the track set that was on screen.
+        self.sync_workspace_scope(cx);
+        self.open_patch(cx);
+    }
+
+    /// Reveal the selected venue's patch: the venue page's one body.
+    fn open_patch(&mut self, cx: &mut Context<Self>) {
         let Some(browser) = &self.sidebar else {
             return;
         };

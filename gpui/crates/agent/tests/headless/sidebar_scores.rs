@@ -54,7 +54,7 @@ const SCRIPT: &str = r##"
     const listed = rows().map((n) => n.label);
     // The track list is gone, not merely covered: a level parked off the edge
     // would still be here, and would still be a tab stop.
-    const listGone = app.snapshot().find({ role: "input", label: "Search tracks…" }) === undefined;
+    const listGone = app.snapshot().find({ role: "input", label: "Search tracks" }) === undefined;
 
     // Move the timeline to a score it is not on. The list stays: choosing is
     // reading, and a list that dismissed itself could not be compared.
@@ -73,7 +73,7 @@ const SCRIPT: &str = r##"
     // …and back out.
     app.click(app.snapshot().find({ role: "button", label: "Back to tracks" }));
     until("the track list again", (s) =>
-        s.find({ role: "input", label: "Search tracks…" })
+        s.find({ role: "input", label: "Search tracks" })
             && s.find({ role: "card", label: "Scores level" }) === undefined ? s : undefined);
     const backOnList = app.snapshot().find({ role: "row", label: "Aurora" }) !== undefined;
 

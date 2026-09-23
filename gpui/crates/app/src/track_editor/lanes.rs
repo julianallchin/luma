@@ -20,6 +20,11 @@ pub(super) fn drag_z(layers: &[i64], from: i32, delta: i32) -> i64 {
 /// Pack each lighting layer into enough visible rows to expose every clip.
 /// This is presentation only: z, blend order, IDs and score contents stay intact.
 /// Half-open spans let consecutive clips reuse a row at a shared boundary.
+/// A boundary is shared within [`TOUCH`]: seconds are derived from stored
+/// beats, and that round trip is not bit exact.
+/// How far one clip's end may run past the next one's start and still share a row.
+const TOUCH: f64 = 1e-6;
+
 pub(super) fn assign_rows(clips: &mut [Clip]) {
     let mut layers: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (index, clip) in clips.iter().enumerate() {
@@ -38,7 +43,7 @@ pub(super) fn assign_rows(clips: &mut [Clip]) {
             let clip = &mut clips[index];
             let slot = ends
                 .iter()
-                .position(|end| *end <= clip.start)
+                .position(|end| *end <= clip.start + TOUCH)
                 .unwrap_or(ends.len());
             if slot == ends.len() {
                 ends.push(clip.end);
@@ -81,6 +86,14 @@ mod tests {
             args: serde_json::json!({}),
             core: None,
         }
+    }
+
+    #[test]
+    fn a_clip_that_starts_where_another_ends_shares_its_row() {
+        // The end comes back from a beat round trip a hair past the start.
+        let mut clips = vec![clip("a", 0., 2.000_000_000_001, 0), clip("b", 2., 4., 0)];
+        assign_rows(&mut clips);
+        assert_eq!(clips[0].row, clips[1].row);
     }
 
     #[test]

@@ -1,18 +1,18 @@
 //! The track browser: one venue's library, as the shell's sidebar.
 //!
 //! A row list at sidebar width, in comet's session-row anatomy: a status lead,
-//! the title, and `artist · bpm` muted under it. Three filters and a search
-//! work over one query's worth of rows. There are no added-by or preprocessing
+//! the title, and `artist · bpm` muted under it. An ownership filter and a
+//! search work over the venue's rows. There are no added-by or preprocessing
 //! columns; a wider tracks surface can add them if one is ever wanted.
 //!
 //! # Filtering is the view's job, not the query's
 //!
 //! `list_tracks_enriched(venue_id)` returns the *whole visible library* and
 //! decorates each row with that venue's clip count; the venue id scopes the
-//! decoration, not the result set. "In venue" is the durable score-existence
-//! signal returned as `is_in_venue`; clip counts remain presentation metadata
-//! and never decide membership. This keeps a newly added track visible before
-//! its first annotation is authored.
+//! decoration, not the result set. The list keeps only the rows with
+//! `is_in_venue`, the durable score-existence signal. Clip counts are
+//! presentation metadata and never decide membership, so a newly added track
+//! is visible before its first annotation is authored.
 //!
 //! Album art comes from `album_art_path` — a path on disk, never inlined bytes
 //! (see CLAUDE.md on why bulk responses carry paths). The native host reads
@@ -132,7 +132,6 @@ pub struct Tracks {
     loaded: bool,
     error: Option<String>,
     ownership: Ownership,
-    in_venue: bool,
     /// The typed query, mirrored out of [`Self::search`] on every edit. The
     /// field is the editor; this is what `refilter` reads.
     query: String,
@@ -213,8 +212,8 @@ impl Tracks {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                self.ownership.admits(row, self.user.as_deref())
-                    && (!self.in_venue || row.is_in_venue)
+                row.is_in_venue
+                    && self.ownership.admits(row, self.user.as_deref())
                     && matches(row, &query)
             })
             .map(|(index, _)| index)
@@ -337,28 +336,28 @@ fn matches(track: &TrackBrowserRow, query: &str) -> bool {
 
 impl Luma {
     /// Select a venue: the sidebar fills with its tracks, the picker overlay
-    /// closes, and any *rig* tabs of another venue close with it — a
-    /// visualizer is a view of a venue, and a view of a room you left is a
-    /// window into nowhere. Track and graph tabs stay: they are about their
-    /// own subjects, and closing somebody's open timeline because they glanced
-    /// at another room would be the shell throwing work away.
+    /// closes, and the venue page of any other venue closes with it — a view
+    /// of a room you left is a window into nowhere. Track and graph tabs
+    /// stay: they are about their own subjects, and closing somebody's open
+    /// timeline because they glanced at another room would be the shell
+    /// throwing work away.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
-        // A remembered row belongs to the browser that named it. Keeping it
-        // across a venue switch would make the new-tab menu advertise an
-        // editor subject the current browser cannot honestly open.
-        self.selected_track = None;
+        // A remembered pick belongs to the browser that named it, and that
+        // includes the venue page: a switch leaves venue mode, and nothing is
+        // picked until the reader picks again.
+        self.picked = None;
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
-        // Across every parked set, not just the one on screen: a patch tab for
-        // the room being left is just as stale sitting in another track's
-        // remembered strip as it is in this one. The track and graph tabs in
-        // those sets stay — they are about their own subjects, and the room
-        // they were opened beside is not one of them.
+        // Only the venue pages go. The track scopes of the room being left
+        // stay parked — the room still exists, and its track work is worth
+        // remembering.
         let leaving: Vec<crate::shell::Body> =
-            self.parked.close_where(&mut self.workspace, |target| {
-                target.venue().is_some_and(|owner| owner != venue.id)
-            });
+            self.parked
+                .retain(&mut self.workspace, |scope| match scope {
+                    crate::workspace::TabScope::Venue { venue: owner } => owner == &venue.id,
+                    crate::workspace::TabScope::Track { .. } => true,
+                });
         for body in leaving {
             self.teardown(body, cx);
         }
@@ -367,7 +366,11 @@ impl Luma {
         let remember = self
             .library
             .set_session_item(crate::welcome::LAST_VENUE, &venue.id);
-        let search = cx.new(|cx| luma_ui::text_input::TextInput::search(PLACEHOLDER, cx));
+        let search = cx.new(|cx| {
+            let mut field = luma_ui::text_input::TextInput::search(PLACEHOLDER, cx);
+            field.set_text_size(HEADER_TEXT, cx);
+            field
+        });
         let search_focus = search.read(cx).focus_handle(cx);
         let search_subscription = cx.subscribe(&search, |luma, field, event, cx| {
             if event == &luma_ui::text_input::Event::Edited {
@@ -386,7 +389,6 @@ impl Luma {
             loaded: false,
             error: None,
             ownership: Ownership::Mine,
-            in_venue: true,
             query: String::new(),
             search,
             _search_subscription: search_subscription,
@@ -443,7 +445,7 @@ impl Luma {
         // while they read another was the disagreement this avoids. Setting
         // the field is the whole gesture — the scope is synced at draw
         // ([`crate::Luma::sync_workspace_scope`]).
-        self.selected_track = Some(track.clone());
+        self.picked = Some(crate::workspace::Pick::Track(track.clone()));
         self.show_scores(&track, row_top, window, cx);
     }
 
@@ -460,7 +462,7 @@ impl Luma {
         if matches!(browser.level, Level::Scores(_)) {
             return;
         }
-        let Some(picked) = self.selected_track.as_deref() else {
+        let Some(picked) = self.selected_track() else {
             return;
         };
         let Some(index) = browser
@@ -516,13 +518,6 @@ impl Luma {
     fn show_ownership(&mut self, ownership: Ownership, cx: &mut Context<Self>) {
         self.with_tracks(cx, |state| {
             state.ownership = ownership;
-            state.refilter();
-        });
-    }
-
-    fn toggle_in_venue(&mut self, cx: &mut Context<Self>) {
-        self.with_tracks(cx, |state| {
-            state.in_venue = !state.in_venue;
             state.refilter();
         });
     }
@@ -689,8 +684,8 @@ fn flight(state: &Tracks, t: f32) -> Option<Div> {
     Some(
         div()
             .absolute()
-            .left_0()
-            .right_0()
+            .left(px(PAD_X))
+            .right(px(PAD_X))
             .top(px(motion::lerp(push.row_top, scores::BACK_ROW_HEIGHT, t)))
             .child(track_face(track, true)),
     )
@@ -704,8 +699,8 @@ fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Windo
         .size_full()
         .flex()
         .flex_col()
-        .child(head(state, app, window))
-        .child(filters(state, app, window))
+        .child(header(state, shell.venue_mode(), app, window))
+        .child(count(state))
         .child(match &state.error {
             Some(message) => luma_ui::plate(
                 format!("Failed to load tracks: {message}"),
@@ -722,7 +717,7 @@ fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Windo
                 },
                 ladder::muted_foreground(),
             ),
-            None => body(state, shell.selected_track.as_deref(), flying, app).into_any_element(),
+            None => body(state, shell.selected_track(), flying, app).into_any_element(),
         })
 }
 
@@ -757,7 +752,7 @@ fn account_foot(shell: &Luma, app: &Entity<Luma>, window: &Window) -> Div {
         // it. The hairline is the whole separation.
         .border_t_1()
         .border_color(luma_ui::glass::hairline(0.07))
-        .px(px(PAD_X - float::ROW_INSET))
+        .px(px(PAD_X))
         .py(px(6.))
         .child(
             float::nav_row(RowState::Rest, "account-foot")
@@ -873,85 +868,155 @@ fn account_menu(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
                 .agent_node(Role::Row, identity)
                 .agent_disabled(!pressable),
         );
-    Some(float::anchored_above(
-        "account-menu",
-        float::NAV_ROW_HEIGHT,
-        float::Dismiss::on_press_out(move |_, cx| {
-            dismiss.update(cx, |this, cx| this.close_account_menu(cx));
-        }),
-        card.into_any_element(),
-    ))
+    Some(match closing {
+        Some(since) => float::anchored_above_closing(
+            "account-menu",
+            float::NAV_ROW_HEIGHT,
+            card.into_any_element(),
+            luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
+        ),
+        None => float::anchored_above(
+            "account-menu",
+            float::NAV_ROW_HEIGHT,
+            float::Dismiss::on_press_out(move |_, cx| {
+                dismiss.update(cx, |this, cx| this.close_account_menu(cx));
+            }),
+            card.into_any_element(),
+        ),
+    })
 }
 
 /// Wide enough for the longer of the two rows plus its key cap, and no wider:
 /// a menu of two words that spanned the sidebar would read as a panel.
 const ACCOUNT_MENU_WIDTH: f32 = 200.0;
 
-/// The venue at the head of the sidebar. Pressing it reopens the venue picker
-/// — the picker overlay is the one venue-choosing mechanism, so the head is a
-/// door to it rather than a second selector that could disagree with it.
+/// The sidebar's header: the venue select and the venue page's button, the
+/// search and the add-track button, and the ownership filter.
 ///
-/// The sidebar head uses the shared glass tones for window chrome.
-fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
-    let picker = app.clone();
-    let venue_focus = state.venue_focus.clone();
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(GAP))
-        .px(px(PAD_X))
-        .py(px(8.))
-        .child(
-            float::chip()
-                .id("venue")
-                .track_focus(&state.venue_focus)
-                .tab_stop(true)
-                .on_click(move |_, window, cx| {
-                    window.focus(&venue_focus, cx);
-                    picker.update(cx, |this, cx| this.show_venues(cx));
-                })
-                .child(state.venue_name.clone())
-                .child(
-                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronDown)
-                        .size(px(11.))
-                        .text_color(luma_ui::glass::ink(0.45)),
-                )
-                .agent_node(Role::Button, state.venue_name.clone())
-                .agent_focused(state.venue_focus.is_focused(window)),
-        )
-        .child(div().flex_1())
-        .child({
-            let add = app.clone();
-            luma_ui::icon_button(luma_ui::icons::IconName::Plus, luma_ui::Enabled::Yes)
-                .id("add-track")
-                .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
-                .agent_node(Role::Button, "Add track")
-        })
-        // How many rows the filters admit, kept in the head because the
-        // sidebar has no second bar to spare.
-        .child(luma_ui::caption(format!("{} tracks", state.shown.len())))
-}
-
-/// The search over the filters, stacked — at sidebar width they do not share
-/// a row.
-fn filters(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+/// Every control here shares one height, one text size and the field's
+/// material, so the rows read as one block.
+fn header(state: &Tracks, venue_mode: bool, app: &Entity<Luma>, window: &Window) -> Div {
+    let add = app.clone();
     div()
         .flex()
         .flex_shrink_0()
         .flex_col()
-        .gap(px(6.))
+        .gap(px(HEADER_GAP))
         .px(px(PAD_X))
-        .py(px(8.))
-        .child(search(state, app, window))
+        .pt(px(HEADER_GAP))
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(GAP))
-                .child(ownership_filter(state, app))
-                .child(in_venue_filter(state, app)),
+                .gap(px(HEADER_GAP))
+                .child(venue_select(state, app, window))
+                .child(venue_page_button(venue_mode, app)),
         )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(HEADER_GAP))
+                .child(search(state, app, window))
+                .child(
+                    square(luma_ui::icons::IconName::Plus, false, "add-track")
+                        .id("add-track")
+                        .on_click(move |_, _, cx| {
+                            add.update(cx, |this, cx| this.show_add_tracks(cx))
+                        })
+                        .agent_node(Role::Button, "Add track"),
+                ),
+        )
+        .child(ownership_filter(state, app))
+}
+
+/// The height every header control shares: a sidebar nav row's.
+const HEADER_CONTROL: f32 = float::NAV_ROW_HEIGHT;
+
+/// The header's one text size, the same as the sidebar's rows and menus.
+const HEADER_TEXT: f32 = 13.;
+
+/// The gap between header rows, and between a field and its button.
+const HEADER_GAP: f32 = 6.;
+
+/// The icon size of a header control.
+const HEADER_ICON: f32 = 14.;
+
+/// The quiet field material every header control wears.
+fn header_field() -> Div {
+    float::field()
+        .h(px(HEADER_CONTROL))
+        .text_size(px(HEADER_TEXT))
+}
+
+/// A square header button in the field's material. `active` swaps the rest
+/// fill for the selected fill.
+fn square(icon: luma_ui::icons::IconName, active: bool, fade_key: &str) -> Div {
+    let button = header_field()
+        .w(px(HEADER_CONTROL))
+        .px(px(0.))
+        .justify_center()
+        .cursor_pointer()
+        .text_color(luma_ui::glass::ink(if active { 0.95 } else { 0.7 }))
+        .child(gpui_component::Icon::new(icon).size(px(HEADER_ICON)));
+    if active {
+        button.bg(luma_ui::glass::card_selected_bg())
+    } else {
+        let fade_key = SharedString::from(fade_key.to_string());
+        let mut button = button.bg(luma_ui::motion::hover_blend(
+            &fade_key,
+            luma_ui::glass::ink(0.03),
+            luma_ui::glass::glass_hover(),
+        ));
+        button
+            .interactivity()
+            .on_hover(luma_ui::motion::hover_listener(fade_key));
+        button
+    }
+}
+
+/// The venue select. It reopens the venue picker — the picker overlay is the
+/// one venue-choosing mechanism, so the field is a door to it rather than a
+/// second selector that could disagree with it.
+fn venue_select(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
+    let picker = app.clone();
+    let venue_focus = state.venue_focus.clone();
+    header_field()
+        .id("venue")
+        .flex_1()
+        .min_w(px(0.))
+        .gap(px(GAP))
+        .cursor_pointer()
+        .track_focus(&state.venue_focus)
+        .tab_stop(true)
+        .on_click(move |_, window, cx| {
+            window.focus(&venue_focus, cx);
+            picker.update(cx, |this, cx| this.show_venues(cx));
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .child(state.venue_name.clone()),
+        )
+        .child(
+            gpui_component::Icon::new(luma_ui::icons::IconName::ChevronDown)
+                .size(px(HEADER_ICON))
+                .text_color(luma_ui::glass::ink(0.45)),
+        )
+        .agent_node(Role::Button, state.venue_name.clone())
+        .agent_focused(state.venue_focus.is_focused(window))
+}
+
+/// The door to the venue page. Its selected fill is the only sign that the
+/// page is up.
+fn venue_page_button(venue_mode: bool, app: &Entity<Luma>) -> impl IntoElement {
+    let open = app.clone();
+    square(luma_ui::icons::IconName::Stage, venue_mode, "venue-page")
+        .id("venue-page")
+        .on_click(move |_, _, cx| open.update(cx, |this, cx| this.open_venue_page(cx)))
+        .agent_node(Role::Toggle, "Venue")
 }
 
 /// The search field: a [`float::field`] that takes keystrokes.
@@ -965,9 +1030,11 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
     let typed = app.clone();
-    float::field()
+    header_field()
         .id("search")
-        .w(px(crate::shell::SIDEBAR_WIDTH - 2. * PAD_X))
+        .flex_1()
+        .min_w(px(0.))
+        .gap(px(6.))
         // Keys the field leaves unbound bubble through here — see
         // `Luma::track_search_escape`.
         .on_key_down(move |event, _, cx| {
@@ -975,7 +1042,12 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
                 typed.update(cx, |this, cx| this.track_search_escape(cx));
             }
         })
-        .child(state.search.clone())
+        .child(
+            gpui_component::Icon::new(luma_ui::icons::IconName::Search)
+                .size(px(HEADER_ICON))
+                .text_color(luma_ui::glass::ink(0.45)),
+        )
+        .child(div().flex_1().min_w(px(0.)).child(state.search.clone()))
         // The semantic label is the field's VALUE once there is one: a driver
         // asserting on this is asking what it says, not what it would say if
         // empty.
@@ -985,33 +1057,42 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
 
 /// What the sidebar filter says while it is empty. One spelling: the field is
 /// constructed where the venue opens and rendered far below it.
-const PLACEHOLDER: &str = "Search tracks…";
+const PLACEHOLDER: &str = "Search tracks";
 
-/// The `mine` / `all` axis: always exactly one pressed.
+/// The `mine` / `all` axis: always exactly one pressed. Full width, so the two
+/// cells split the row evenly.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
-    float::segmented().children(Ownership::ALL.into_iter().map(|ownership| {
-        let app = app.clone();
-        float::segment(
-            ownership.label(),
-            ownership == state.ownership,
-            ownership.label(),
-        )
-        .id(ownership.label())
-        .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
-        .agent_node(Role::Toggle, ownership.label())
-    }))
+    float::segmented()
+        .w_full()
+        .h(px(HEADER_CONTROL))
+        .children(Ownership::ALL.into_iter().map(|ownership| {
+            let app = app.clone();
+            float::segment(
+                ownership.label(),
+                ownership == state.ownership,
+                ownership.label(),
+            )
+            // A soft fill, without the selection ring a list row carries.
+            .shadow(Vec::new())
+            .text_size(px(HEADER_TEXT))
+            .id(ownership.label())
+            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
+            .agent_node(Role::Toggle, ownership.label())
+        }))
 }
 
-/// The other axis, and independent of ownership: whether to show only tracks
-/// this venue has annotations on.
-fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
-    let app = app.clone();
-    float::segmented().child(
-        float::segment("In venue", state.in_venue, "in-venue")
-            .id("in-venue")
-            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.toggle_in_venue(cx)))
-            .agent_node(Role::Toggle, "In Venue"),
-    )
+/// How many rows the filters admit, over a hairline that opens the list.
+fn count(state: &Tracks) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .flex_col()
+        .gap(px(6.))
+        .px(px(PAD_X))
+        .pt(px(12.))
+        .pb(px(6.))
+        .child(luma_ui::caption(format!("{} tracks", state.shown.len())))
+        .child(float::divider())
 }
 
 /// The scrolling rows. `uniform_list` virtualizes them, so a library of
@@ -1071,7 +1152,7 @@ fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
         .flex()
         .items_center()
         .gap(px(GAP))
-        .px(px(PAD_X))
+        .px(px(float::ROW_INSET))
         .overflow_hidden()
         // The lead column: how much of the track this venue has annotated,
         // and — when there is more than nothing — how many scores say so. The
@@ -1144,7 +1225,7 @@ fn track_row(
 ) -> AnyElement {
     let name = track_name(track);
     let deeper = app.clone();
-    div()
+    let row = div()
         .id(SharedString::from(track.id.clone()))
         .w_full()
         .h(px(ROW_HEIGHT))
@@ -1185,7 +1266,7 @@ fn track_row(
         .child(
             div()
                 .absolute()
-                .right(px(PAD_X - 2.))
+                .right(px(float::ROW_INSET - 2.))
                 .size(px(CHEVRON_SLOT))
                 .flex()
                 .items_center()
@@ -1195,7 +1276,14 @@ fn track_row(
                     gpui_component::Icon::new(luma_ui::icons::IconName::ChevronRight).size(px(11.)),
                 ),
         )
-        .agent_node(Role::Row, name)
+        .agent_node(Role::Row, name);
+    // Inset by the sidebar's gutter, so the fill lines up with the search
+    // field above it.
+    div()
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .px(px(PAD_X))
+        .child(row)
         .into_any_element()
 }
 

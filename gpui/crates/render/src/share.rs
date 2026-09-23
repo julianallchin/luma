@@ -533,7 +533,17 @@ mod tests {
             };
             let Ok((device, queue)) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    required_limits: wgpu::Limits::default(),
+                    // What gpui's compositor asks for (`gpui_wgpu::WgpuContext`).
+                    required_limits: wgpu::Limits {
+                        max_storage_buffer_binding_size: adapter
+                            .limits()
+                            .max_storage_buffer_binding_size,
+                        max_buffer_size: adapter.limits().max_buffer_size,
+                        max_storage_buffers_per_shader_stage: adapter
+                            .limits()
+                            .max_storage_buffers_per_shader_stage,
+                        ..wgpu::Limits::default().using_resolution(adapter.limits())
+                    },
                     ..Default::default()
                 }))
             else {

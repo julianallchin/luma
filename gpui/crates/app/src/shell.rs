@@ -262,6 +262,10 @@ impl Luma {
     /// ⌘W inside the workspace; also the handler behind every tab-closing
     /// gesture, so the teardown cannot be skipped by one of them.
     pub(crate) fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        // The venue page is not a tab: it leaves when a track is picked.
+        if self.venue_mode() {
+            return;
+        }
         let Some(target) = self.workspace.active().cloned() else {
             return;
         };
@@ -482,7 +486,10 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // thread, because the thread is the flexible one.
     let room = shared_room(viewport, f32::from(sidebar_w));
     let squeezed = room < CENTER_MIN + WORKSPACE_MIN;
-    let workspace_open_w = if app.expanded || squeezed {
+    // The venue page has no chat, so it always takes the thread's room.
+    let venue_mode = app.venue_mode();
+    let expanded = app.expanded || venue_mode;
+    let workspace_open_w = if expanded || squeezed {
         room
     } else {
         app.workspace_split.resolve(room).1
@@ -517,7 +524,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // the thread cannot host them instead without the strip having two homes
     // again. The panel takes the room, through the branch takeover already is.
     let takeover =
-        !app.workspace_hidden && (app.expanded || squeezed) && f32::from(workspace_w) >= room - 0.5;
+        !app.workspace_hidden && (expanded || squeezed) && f32::from(workspace_w) >= room - 0.5;
     let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
     let show_thread = !takeover;
     // The panel is up exactly when it has not been put away. Emptiness is not
@@ -529,24 +536,19 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     } else {
         f32::from(workspace_w)
     };
-    // Reserve room for the visible expand control. Narrow windows already
+    // The thread toggle leads the strip on a track. Narrow windows already
     // give the workspace all available room and do not offer a no-op toggle.
-    let expansion_width = if !squeezed && !app.workspace.is_empty() {
-        84.0
-    } else {
-        0.0
-    };
-    let workspace_strip_width = (chrome::band_room(
+    let thread_toggle = !squeezed && app.selected_track().is_some();
+    let workspace_strip_width = chrome::band_room(
         chrome::BandSpan {
             x: viewport - workspace_panel_width,
             width: workspace_panel_width,
             viewport,
         },
+        if thread_toggle { chrome::CONTROL } else { 0.0 },
         0.0,
-        0.0,
-        0,
-    ) - expansion_width)
-        .max(0.0);
+        usize::from(thread_toggle),
+    );
     // The `+` menu hangs off the strip, and the strip is the panel's: put the
     // panel away or empty it and the menu has nothing to hang off, so it goes
     // too rather than waiting armed for whatever brings the strip back.
@@ -556,7 +558,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // the state has already committed to. ⌘T opens the panel and its menu in
     // one action, and nothing about that pair should turn on where a tween
     // happens to be sampled.
-    if app.workspace_hidden || app.workspace.is_empty() {
+    if app.workspace_hidden || app.workspace.is_empty() || venue_mode {
         app.tab_chrome.dismiss_menu();
     }
     // Same rule for the account menu: it hangs off the sidebar's foot, so a
@@ -672,38 +674,23 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             width: workspace_panel_width,
             viewport,
         };
-        let mut head = chrome::band(span).child(chrome::tab_strip(
-            app,
-            &entity,
-            workspace_strip_width,
-            chrome::tab_strip_origin(span),
-            window,
-            cx,
-        ));
-        if expansion_width > 0.0 {
-            let label = if app.expanded { "Show chat" } else { "Expand" };
-            let expanded = entity.clone();
-            head = head.child(
-                div()
-                    .w(px(expansion_width))
-                    .flex_none()
-                    .flex()
-                    .justify_end()
-                    .child(
-                        luma_ui::button(label, luma_ui::Enabled::Yes)
-                            .id("workspace-expand")
-                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation()
-                            })
-                            .on_click(move |_, _, cx| {
-                                expanded.update(cx, |this, cx| {
-                                    this.expanded = !this.expanded;
-                                    cx.notify();
-                                });
-                            })
-                            .agent_node(Role::Button, label),
-                    ),
-            );
+        // The venue page has one body and no strip: the sidebar's Venue row
+        // is all that says it is up.
+        let mut head = chrome::band(span);
+        if !venue_mode {
+            let mut origin = chrome::tab_strip_origin(span);
+            if thread_toggle {
+                head = head.child(chrome::thread_toggle(&entity, !app.expanded));
+                origin += chrome::THREAD_TOGGLE_SLOT;
+            }
+            head = head.child(chrome::tab_strip(
+                app,
+                &entity,
+                workspace_strip_width,
+                origin,
+                window,
+                cx,
+            ));
         }
         if show_thread {
             // Both sides are lit surfaces whose own value step already divides
@@ -1027,10 +1014,10 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
         .into_any_element()
 }
 
-/// What the panel shows before its first tab: the three ways to open one,
-/// stacked and centred.
+/// What the panel shows before its first tab: the ways to open one, stacked
+/// and centred.
 ///
-/// These are [`tab_chrome::NewTabChoice`] — the same three the `+` menu
+/// These are [`tab_chrome::NewTabChoice`] — the same ones the `+` menu
 /// offers, with the same labels and the same prerequisites. The choices are
 /// stated once and drawn twice: a menu when the strip has tabs to sit beside,
 /// and this when it does not. A second list here would be the one that drifts.
@@ -1051,7 +1038,6 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
         let enabled = availability.enabled();
         let label = choice.label();
         let icon = match choice {
-            tab_chrome::NewTabChoice::Patch => luma_ui::icons::IconName::Cpu,
             tab_chrome::NewTabChoice::Pattern => luma_ui::icons::IconName::Network,
             tab_chrome::NewTabChoice::Track => luma_ui::icons::IconName::Play,
         };

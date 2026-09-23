@@ -38,9 +38,9 @@ fn modal_traps_both_tab_directions_and_restores_the_exact_opener() {
         };
 
         poll("the venue track search", (s) =>
-            s.find({ role: "input", label: "Search tracks…" }) !== undefined);
-        app.click(app.snapshot().find({ role: "input", label: "Search tracks…" }));
-        const openerBefore = app.snapshot().find({ role: "input", label: "Search tracks…" });
+            s.find({ role: "input", label: "Search tracks" }) !== undefined);
+        app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
+        const openerBefore = app.snapshot().find({ role: "input", label: "Search tracks" });
 
         app.action("luma::OpenPatterns");
         poll("the focusable pattern row", (s) =>
@@ -66,7 +66,7 @@ fn modal_traps_both_tab_directions_and_restores_the_exact_opener() {
 
         app.key("escape");
         app.frames(2);
-        const restored = app.snapshot().find({ role: "input", label: "Search tracks…" });
+        const restored = app.snapshot().find({ role: "input", label: "Search tracks" });
         const dismissed = app.snapshot().find({ role: "card", label: "Pattern dialog" });
 
         ({ openerBefore, initialDialog, first, afterForward, focusedAfterForward, last, afterReverse, wrapped, restored, dismissed })
@@ -103,8 +103,8 @@ fn route_policy_dismisses_optional_scrims_but_keeps_onboarding_modal() {
             r#"
             nav.venue("Test Venue");
             const shell = until("the venue shell", (s) =>
-                s.find({ role: "input", label: "Search tracks…" }) ? s : undefined);
-            app.click(shell.find({ role: "input", label: "Search tracks…" }));
+                s.find({ role: "input", label: "Search tracks" }) ? s : undefined);
+            app.click(shell.find({ role: "input", label: "Search tracks" }));
             app.action("luma::OpenPatterns");
             const opened = until("the optional scrim", (s) =>
                 s.find({ role: "button", label: "Dismiss dialog" }) ? s : undefined);
@@ -112,7 +112,7 @@ fn route_policy_dismisses_optional_scrims_but_keeps_onboarding_modal() {
             app.frames(2);
             const dismissed = app.snapshot();
             ({ dialogGone: dismissed.find({ role: "card", label: "Pattern dialog" }) === undefined,
-               shellRestored: dismissed.find({ role: "input", label: "Search tracks…" })?.focused === true })
+               shellRestored: dismissed.find({ role: "input", label: "Search tracks" })?.focused === true })
             "#,
         ),
     );

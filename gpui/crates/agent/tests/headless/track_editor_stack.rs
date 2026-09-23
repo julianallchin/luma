@@ -79,11 +79,10 @@ const SCRIPT: &str = r#"
     }
 
     function settled() {
-        for (let i = 0; i < 60; i++) {
-            if (!status().includes("Saving")) return true;
-            app.frames(1, { waitMs: 40 });
-        }
-        throw new Error("a write never left the editor");
+        // The editor shows no save state; outwait the arg debounce and the
+        // write's round trip.
+        app.frames(20, { waitMs: 40 });
+        return true;
     }
 
     function open() {
@@ -221,4 +220,52 @@ fn rank(reading: &Value, label: &str) -> u64 {
 
 fn labels(reading: &Value) -> Vec<String> {
     serde_json::from_value(reading.clone()).unwrap_or_default()
+}
+
+/// Shift-selected clips copy and paste as a group, not just the last one
+/// pressed: the cursor a multi-selection leaves is a point, so copy takes the
+/// selection rather than the region around one clip.
+#[test]
+fn a_shift_selection_copies_and_pastes_every_clip() {
+    let mut harness = Fixture::new(
+        "track-editor-multi-copy",
+        TRACK_SECONDS,
+        vec![
+            Clip::new("pattern-alpha", "Alpha", 1., 3.).lane(0),
+            Clip::new("pattern-bravo", "Bravo", 4., 5.).lane(1),
+        ],
+    )
+    .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue");
+        app.frames(8);
+        nav.track("Aurora");
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+        nav.expand();
+        nav.stageOff();
+        until("the clips", (s) => s.find({ role: "card", label: "Bravo" }) !== undefined);
+        const count = (label) => app.snapshot().findAll({ role: "card", label }).length;
+        app.click(app.snapshot().find({ role: "card", label: "Alpha" }));
+        app.frames(2);
+        app.click(app.snapshot().find({ role: "card", label: "Bravo" }), { modifiers: ["shift"] });
+        app.frames(2);
+        app.key("ctrl-c");
+        // An empty spot well after both clips: the lane's middle.
+        app.click(app.snapshot().find({ role: "row", label: "Lane 0" }));
+        app.frames(2);
+        app.key("ctrl-v");
+        app.frames(20);
+        ({ alpha: count("Alpha"), bravo: count("Bravo") })
+    "#,
+        ),
+        Duration::from_secs(120),
+    );
+    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
+    assert_eq!(
+        result.result,
+        serde_json::json!({ "alpha": 2, "bravo": 2 }),
+        "a paste dropped part of the selection"
+    );
 }

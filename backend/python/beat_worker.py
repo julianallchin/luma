@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 """
-Beat grid extractor with multi-anchor tempo segmentation.
+Beat grid extractor: one fixed grid per tempo section, fitted to the audio.
 
 Pipeline:
   1. Run beat_this to get per-frame beat / downbeat probability logits.
   2. Build a tempogram (windowed autocorrelation with a 120-BPM log-prior) and
-     find anchor regions — long stretches where σ is tiny and the
-     autocorrelation peak is strong. These are sections of the song with a
-     confident, stable tempo.
-  3. For each anchor, run the joint beat+downbeat scorer on that slice to get
-     a precise (BPM, beat_phase, downbeat_index) — locally optimal per region.
-  4. Extend each anchor outward by walking expected downbeat positions and
-     keeping those that match the downbeat-prob curve above an adaptive
-     threshold. Stops cleanly where the bar structure fades.
-  5. Concatenate all anchors' beats/downbeats into the flat output schema.
-     `bpm` is the longest anchor's tempo; `downbeat_offset` is the first
-     downbeat in the song.
-
-Single-tempo songs collapse to one anchor → indistinguishable from the old
-fixed-grid output. Multi-tempo songs get multiple locally-correct grids that
-together cover the song (with gaps in true breakdowns where no grid is
-supported).
+     find anchor regions — long stretches with a confident, stable tempo.
+     Octave-related anchors share one consensus BPM.
+  3. Merge anchors with the same tempo into sections. A single-tempo song is
+     one section that spans the whole track; only a real tempo change makes a
+     second section.
+  4. Fit each section as a fixed grid `t0 + n * period` against a fine onset
+     envelope (1.45 ms hops). beat_this runs at 20 ms frames, which is too
+     coarse to place a beat on its onset. No beat or bar moves on its own.
+  5. Pick the downbeat phase from the downbeat-probability curve.
 """
 
 from __future__ import annotations
@@ -297,100 +290,6 @@ def _fit_anchor(beat_logits, db_logits, hop, anchor, target_bpm=None):
     }
 
 
-def _interp_between_snaps(downbeats, snapped_mask):
-    """Distribute unsnapped (drift-following) downbeats evenly between
-    bookending strong-snapped downbeats so the local BPM fits an integer bar
-    count exactly. Each gap is filled at whatever uniform period fits the
-    actual time between snaps — local tempo wobble gets absorbed cleanly.
-    """
-    if not downbeats:
-        return list(downbeats)
-    out = list(downbeats)
-    i = 0
-    while i < len(out):
-        if not snapped_mask[i]:
-            i += 1
-            continue
-        # find the next snapped index
-        j = i + 1
-        while j < len(out) and not snapped_mask[j]:
-            j += 1
-        if j >= len(out):
-            break
-        n_between = j - i  # number of bar intervals between the two snaps
-        if n_between > 1:
-            actual_period = (out[j] - out[i]) / n_between
-            for k in range(1, n_between):
-                out[i + k] = out[i] + k * actual_period
-        i = j
-    return out
-
-
-def _snap_to_peaks(downbeats, db_probs, hop, max_shift_ms=40.0, threshold=0.5,
-                    beat_probs=None, beat_threshold=0.6):
-    """Snap each downbeat to the nearest peak within ±max_shift_ms.
-
-    Two-stage: prefer downbeat-probability (precise bar location), but if
-    db-prob is below threshold in this window, fall back to beat-probability
-    (which stays strong in breakdowns where the model has lost bar structure
-    but the underlying beat is still audibly there).
-
-    Only snaps when the chosen signal clears its threshold — so completely
-    silent regions leave the original grid position.
-
-    Returns (snapped_positions, snapped_mask).
-    """
-    if not downbeats:
-        return list(downbeats), []
-    tol_frames = max(1, int(max_shift_ms / 1000.0 / hop))
-    snapped = []
-    mask = []
-    for d in downbeats:
-        idx = int(round(d / hop))
-        lo = max(0, idx - tol_frames)
-        hi = min(len(db_probs), idx + tol_frames + 1)
-        if hi <= lo:
-            snapped.append(d); mask.append(False); continue
-        db_window = db_probs[lo:hi]
-        k = int(np.argmax(db_window))
-        if float(db_window[k]) >= threshold:
-            snapped.append((lo + k) * hop); mask.append(True); continue
-        # db-prob too weak — try beat-prob fallback
-        if beat_probs is not None:
-            b_window = beat_probs[lo:hi]
-            kb = int(np.argmax(b_window))
-            if float(b_window[kb]) >= beat_threshold:
-                snapped.append((lo + kb) * hop); mask.append(True); continue
-        snapped.append(d); mask.append(False)
-    return snapped, mask
-
-
-def _rederive_beats(downbeats, original_beats, bpb=4):
-    """After snapping downbeats, re-derive beats as evenly-spaced positions
-    within each bar. The last bar (after the final downbeat) keeps its
-    original-period beats since there's no following downbeat to interpolate
-    against."""
-    if len(downbeats) < 2:
-        return list(original_beats)
-    new_beats = []
-    for i in range(len(downbeats) - 1):
-        start = downbeats[i]
-        end = downbeats[i + 1]
-        bar = end - start
-        step = bar / bpb
-        for k in range(bpb):
-            new_beats.append(start + k * step)
-    # tail: beats after the last downbeat — use prev bar's beat period
-    last_db = downbeats[-1]
-    prev_bar = downbeats[-1] - downbeats[-2]
-    step = prev_bar / bpb
-    # how far past last_db did the original beats extend?
-    last_orig = max(original_beats) if original_beats else last_db
-    t = last_db
-    while t <= last_orig + 1e-6:
-        new_beats.append(t)
-        t += step
-    return sorted(set(round(b, 4) for b in new_beats))
 
 
 def _is_octave_halved(downbeats_abs, db_probs, hop, tol_ms=60.0, ratio=0.65):
@@ -556,259 +455,235 @@ def _extend_anchor(fit, db_probs, hop, duration,
     return all_beats, all_db
 
 
-def multi_anchor_grid(beat_logits, downbeat_logits, hop_seconds,
-                      bpm_min=70.0, bpm_max=170.0):
-    """Top-level entry. Returns (bpm, downbeat_offset, beats_per_bar,
-    beats_concat, downbeats_concat) for the whole song.
+# ---------------------------------------------------------------------------
+# Tempo sections
+# ---------------------------------------------------------------------------
 
-    Strategy: pick the longest anchor as the *primary* grid and extend it as
-    far as it goes. Any region the primary can't cover (because the bar
-    structure breaks down — a real tempo change) gets a separate anchor fit
-    inside the gap. This avoids overlapping grids when the song is single-
-    tempo, and naturally produces a multi-anchor result only when needed.
-    """
+
+def _tempo_regions(beat_logits, downbeat_logits, hop_seconds, bpm_min, bpm_max):
+    """Confident fixed-tempo regions as (t_start, t_end, bpm, beats_per_bar),
+    sorted by time. Empty when no anchor is stable enough."""
     beat_probs = _sigmoid_array(beat_logits)
     db_probs = _sigmoid_array(downbeat_logits)
     duration = (len(beat_probs) - 1) * hop_seconds if len(beat_probs) else 0.0
 
     tg_t, tg_b, tg_c = compute_tempogram(
-        beat_probs, hop_seconds,
-        bpm_min=bpm_min, bpm_max=bpm_max,
+        beat_probs, hop_seconds, bpm_min=bpm_min, bpm_max=bpm_max,
     )
     anchors = _find_anchors(tg_t, tg_b, tg_c)
-
     if not anchors:
-        grid = fixed_bpm_from_logits(
-            beat_logits, downbeat_logits, hop_seconds,
-            bpm_min=bpm_min, bpm_max=bpm_max,
-        )
-        return grid.bpm, grid.offset, grid.beats_per_bar, grid.beats, grid.downbeats
+        return []
 
     # cluster anchors by octave-equivalent BPM; each anchor gets a target
     # BPM that all members of its cluster share
     targets = _consensus_bpms(anchors)
-
-    # sort longest first (just for stable iteration order — no primary anchor)
     anchor_order = sorted(range(len(anchors)),
                           key=lambda i: anchors[i]["t_end"] - anchors[i]["t_start"],
                           reverse=True)
+    fits = {
+        idx: _fit_anchor(beat_logits, downbeat_logits, hop_seconds, anchors[idx],
+                         target_bpm=targets.get(idx))
+        for idx in anchor_order
+    }
 
-    covered_regions = []  # list of (t_start, t_end, beats, downbeats, bpm, bpb)
-
-    def overlaps(t0, t1):
-        for r in covered_regions:
-            if not (t1 < r[0] or t0 > r[1]):
-                return True
-        return False
-
-    # PASS 1: fit each anchor at its consensus target
-    pass1_fits = {}
+    # Global doubling vote, weighted by anchor duration. Short intros with a
+    # different rhythmic feel don't get to override a long main section.
+    yes_dur = no_dur = 0.0
     for idx in anchor_order:
         a = anchors[idx]
-        pass1_fits[idx] = _fit_anchor(beat_logits, downbeat_logits, hop_seconds, a,
-                                       target_bpm=targets.get(idx))
-
-    # GLOBAL doubling vote, weighted by anchor duration. Each anchor "votes"
-    # for or against doubling based on whether its midpoint-downbeat pattern
-    # looks like a halved fit. The longer-duration side wins — short intros
-    # with a different rhythmic feel don't get to override a long main
-    # section, and vice versa.
-    yes_dur = 0.0
-    no_dur = 0.0
-    for idx in anchor_order:
-        a = anchors[idx]
-        dur = a["t_end"] - a["t_start"]
-        fit = pass1_fits[idx]
-        votes_yes = (fit["bpm"] * 2 < 200.0) and _is_octave_halved(
+        fit = fits[idx]
+        halved = (fit["bpm"] * 2 < 200.0) and _is_octave_halved(
             fit["downbeats_abs"], db_probs, hop_seconds
         )
-        if votes_yes:
-            yes_dur += dur
+        if halved:
+            yes_dur += a["t_end"] - a["t_start"]
         else:
-            no_dur += dur
+            no_dur += a["t_end"] - a["t_start"]
     needs_doubling = yes_dur > no_dur
 
-    # PASS 2: assemble covered regions, refitting at 2× if vote passed
+    regions = []
+
+    def overlaps(t0, t1):
+        return any(not (t1 < r[0] or t0 > r[1]) for r in regions)
+
     for idx in anchor_order:
         a = anchors[idx]
         if overlaps(a["t_start"], a["t_end"]):
             continue
-        fit = pass1_fits[idx]
+        fit = fits[idx]
         if needs_doubling and fit["bpm"] * 2 < 200.0:
             fit = _fit_anchor(beat_logits, downbeat_logits, hop_seconds, a,
                               target_bpm=fit["bpm"] * 2)
-        beats, downbeats = _extend_anchor(fit, db_probs, hop_seconds, duration)
+        beats, _ = _extend_anchor(fit, db_probs, hop_seconds, duration)
         if not beats:
             continue
-        # clip extension so we don't overlap regions covered by previously-
-        # accepted (longer) anchors
-        eff_start = beats[0]
-        eff_end = beats[-1]
-        for r in covered_regions:
-            if eff_start < r[0] <= eff_end:
-                # we extended forward into a later anchor's region — clip
-                eff_end = r[0] - 1e-3
-            if eff_start <= r[1] < eff_end:
-                # extended backwards into earlier anchor's region — clip
-                eff_start = r[1] + 1e-3
-        beats = [b for b in beats if eff_start <= b <= eff_end]
-        downbeats = [d for d in downbeats if eff_start <= d <= eff_end]
-        if not beats:
-            continue
-        covered_regions.append((beats[0], beats[-1], beats, downbeats,
-                                fit["bpm"], fit["beats_per_bar"]))
+        start, end = beats[0], beats[-1]
+        for r in regions:
+            if start < r[0] <= end:
+                end = r[0] - 1e-3
+            if start <= r[1] < end:
+                start = r[1] + 1e-3
+        if end > start:
+            regions.append((start, end, fit["bpm"], fit["beats_per_bar"]))
+    regions.sort(key=lambda r: r[0])
+    return regions
 
-    # sort regions left-to-right
-    covered_regions.sort(key=lambda r: r[0])
 
-    # ---- gap filling ----
-    # For each gap between confident regions, choose an integer bar count that
-    # phase-aligns both endpoints. For pre/post-song gaps, just extend the
-    # adjacent anchor's grid.
-    filled_segments = []  # (beats, downbeats)
-    # Track which regions had their trailing partial bar absorbed by a
-    # gap-fill — those regions' beats must be clipped to their last downbeat
-    # so the fill owns that territory exclusively (otherwise the trailing
-    # beats from one grid overlap with the fill grid's beats at a different
-    # period, producing visual "6 beats in a bar" artifacts).
-    region_filled_after = [False] * len(covered_regions)
+def _sections(regions, duration, same_tempo_bpm=1.0):
+    """Merge same-tempo regions and cover the whole track.
 
-    # before first region: extend backwards from first region's grid
-    if covered_regions:
-        first = covered_regions[0]
-        if first[0] > 0.0:
-            period = 60.0 / first[4]
-            t = first[2][0] - period
-            beats_pre = []
-            while t >= 0.0:
-                beats_pre.append(t)
-                t -= period
-            beats_pre.reverse()
-            # downbeats: keep bar phase with first region
-            bar = period * first[5]
-            db_pre = []
-            t = first[3][0] - bar if first[3] else first[2][0] - bar
-            while t >= 0.0:
-                db_pre.append(t)
-                t -= bar
-            db_pre.reverse()
-            if beats_pre:
-                filled_segments.append((beats_pre, db_pre))
-
-    # interior gaps
-    for i in range(len(covered_regions) - 1):
-        a = covered_regions[i]
-        b = covered_regions[i + 1]
-        # last downbeat of A, first downbeat of B
-        if not a[3] or not b[3]:
-            continue
-        t_a = a[3][-1]
-        t_b = b[3][0]
-        gap = t_b - t_a
-        if gap <= 0:
-            continue
-        bpb = a[5]
-        # if the gap is shorter than a bar at either side's tempo, the two
-        # anchors are essentially adjacent — don't invent a weird-BPM bridge,
-        # just let them meet at their natural downbeat positions.
-        prev_bar = (60.0 / a[4]) * a[5]
-        next_bar = (60.0 / b[4]) * b[5]
-        if gap < min(prev_bar, next_bar):
-            continue
-
-        # prior from tempogram in the gap region
-        mask = (tg_t >= a[1]) & (tg_t <= b[0])
-        if mask.any():
-            prior_bpm = float(np.median(tg_b[mask]))
+    Returns (t_start, t_end, bpm_hint, beats_per_bar) spans. The seam between
+    two real tempo sections sits halfway through the gap between them.
+    """
+    merged = []
+    for start, end, bpm, bpb in regions:
+        if merged and abs(merged[-1][2] - bpm) < same_tempo_bpm:
+            prev = merged[-1]
+            weight = prev[1] - prev[0]
+            span = end - start
+            hint = (prev[2] * weight + bpm * span) / max(weight + span, 1e-9)
+            merged[-1] = (prev[0], end, hint, prev[3])
         else:
-            prior_bpm = 0.5 * (a[4] + b[4])
-        # ensure positive plausible prior
-        prior_bpm = max(60.0, min(200.0, prior_bpm))
-        prior_bar = (60.0 / prior_bpm) * bpb
+            merged.append((start, end, bpm, bpb))
+    sections = []
+    for i, (start, end, bpm, bpb) in enumerate(merged):
+        lo = 0.0 if i == 0 else 0.5 * (merged[i - 1][1] + start)
+        hi = duration if i == len(merged) - 1 else 0.5 * (end + merged[i + 1][0])
+        sections.append((lo, hi, bpm, bpb))
+    return sections
 
-        # pick integer N that minimises |bar_period - prior_bar|
-        N = max(1, int(round(gap / prior_bar)))
-        # also try N±1 in case round goes the wrong way at the boundary
-        candidates = sorted({N - 1, N, N + 1} - {0})
-        best_n = min(candidates, key=lambda n: abs((gap / n) - prior_bar))
-        if best_n < 1:
-            continue
-        actual_bar = gap / best_n
-        actual_period = actual_bar / bpb
-        # generate fill beats (exclusive of t_a, inclusive up to but not equal to t_b)
-        fill_beats = []
-        for k in range(1, best_n * bpb):
-            fill_beats.append(t_a + k * actual_period)
-        fill_db = []
-        for k in range(1, best_n):
-            fill_db.append(t_a + k * actual_bar)
-        filled_segments.append((fill_beats, fill_db))
-        region_filled_after[i] = True
 
-    # after last region: extend forward
-    if covered_regions:
-        last = covered_regions[-1]
-        if last[1] < duration:
-            period = 60.0 / last[4]
-            t = last[2][-1] + period
-            beats_post = []
-            while t <= duration:
-                beats_post.append(t)
-                t += period
-            bar = period * last[5]
-            db_post = []
-            t = last[3][-1] + bar if last[3] else last[2][-1] + bar
-            while t <= duration:
-                db_post.append(t)
-                t += bar
-            if beats_post:
-                filled_segments.append((beats_post, db_post))
+# ---------------------------------------------------------------------------
+# Onset-fitted fixed grid
+# ---------------------------------------------------------------------------
 
-    # concatenate everything
-    all_beats = []
-    all_downbeats = []
-    for i, r in enumerate(covered_regions):
-        beats = r[2]
-        if region_filled_after[i] and r[3]:
-            # gap-fill follows this region — clip trailing partial-bar beats
-            # so the gap-fill grid takes over cleanly after the last downbeat
-            last_db = r[3][-1]
-            beats = [b for b in beats if b <= last_db + 1e-6]
-        all_beats.extend(beats)
-        all_downbeats.extend(r[3])
-    for fb, fd in filled_segments:
-        all_beats.extend(fb)
-        all_downbeats.extend(fd)
-    all_beats = sorted(set(round(b, 4) for b in all_beats))
-    all_downbeats = sorted(set(round(d, 4) for d in all_downbeats))
+ONSET_SR = 44100
+ONSET_HOP = 64
+ONSET_FPS = ONSET_SR / ONSET_HOP
 
-    # drift correction: iteratively snap each downbeat to the nearest strong
-    # peak (preferring db-prob, falling back to beat-prob when db-prob is
-    # absent — handles breakdown sections where the model has lost bar
-    # structure but the underlying beat is audibly there).
-    last_mask = None
-    for _shift_ms in (40.0, 60.0, 80.0, 100.0):
-        snapped, mask = _snap_to_peaks(
-            all_downbeats, db_probs, hop_seconds,
-            max_shift_ms=_shift_ms, beat_probs=beat_probs,
+
+def onset_envelope(audio_path):
+    import librosa
+
+    y, _ = librosa.load(str(audio_path), sr=ONSET_SR, mono=True)
+    return librosa.onset.onset_strength(
+        y=y, sr=ONSET_SR, hop_length=ONSET_HOP, n_fft=2048, fmax=8000,
+        lag=1, max_size=1,
+    )
+
+
+def _comb(strength, bpms, t_start, t_end, step_sec=0.001):
+    """(bpm, t0) whose grid t0 + k*period over [t_start, t_end) collects the
+    most onset strength."""
+    best = (-np.inf, float(bpms[0]), t_start)
+    for bpm in bpms:
+        period = 60.0 / bpm
+        k = np.arange(max(1, int((t_end - t_start) / period)))
+        phases = t_start + np.arange(0.0, period, step_sec)
+        idx = np.rint((phases[:, None] + k[None, :] * period) * ONSET_FPS).astype(int)
+        score = strength[np.clip(idx, 0, len(strength) - 1)].sum(axis=1)
+        j = int(np.argmax(score))
+        if score[j] > best[0]:
+            best = (float(score[j]), float(bpm), float(phases[j]))
+    return best[1], best[2]
+
+
+def _refine(envelope, period, t0, t_start, t_end):
+    """Robust straight-line fit of (beat index, onset time) pairs. Each pass
+    narrows the search window and drops onsets far from the line, so hats and
+    off-beat hits don't pull the grid."""
+    threshold = np.percentile(envelope, 90)
+    for window, trim in ((0.03, 0.012), (0.02, 0.008)):
+        n = np.arange(int(np.ceil((t_start - t0) / period)),
+                      int((t_end - t0) / period) + 1)
+        w = int(window * ONSET_FPS)
+        idx, times = [], []
+        for k in n:
+            c = int(round((t0 + k * period) * ONSET_FPS))
+            lo, hi = max(0, c - w), min(len(envelope), c + w + 1)
+            if hi <= lo:
+                continue
+            peak = lo + int(np.argmax(envelope[lo:hi]))
+            if envelope[peak] >= threshold:
+                idx.append(k)
+                times.append(peak / ONSET_FPS)
+        idx, times = np.asarray(idx, float), np.asarray(times)
+        for _ in range(3):
+            if len(idx) < 16:
+                return period, t0
+            slope, icept = np.polyfit(idx, times, 1)
+            keep = np.abs(times - (slope * idx + icept)) < trim
+            idx, times = idx[keep], times[keep]
+        if len(idx) < 16:
+            return period, t0
+        period, t0 = np.polyfit(idx, times, 1)
+    return float(period), float(t0)
+
+
+def fit_section(envelope, bpm_hint, t_start, t_end):
+    """Fixed (period, t0) for one tempo section."""
+    strength = np.log1p(envelope / (np.median(envelope[envelope > 0]) + 1e-9))
+    bpm, t0 = _comb(strength, np.arange(bpm_hint - 0.6, bpm_hint + 0.6, 0.02), t_start, t_end)
+    bpm, t0 = _comb(strength, np.arange(bpm - 0.03, bpm + 0.03, 0.001), t_start, t_end)
+    return _refine(envelope, 60.0 / bpm, t0, t_start, t_end)
+
+
+def _downbeat_index(beats, db_probs, hop_seconds, beats_per_bar):
+    times = np.arange(len(db_probs)) * hop_seconds
+    scores = [
+        float(_interpolate_at(times, db_probs, beats[k::beats_per_bar]).mean())
+        if len(beats[k::beats_per_bar]) else -np.inf
+        for k in range(beats_per_bar)
+    ]
+    return int(np.argmax(scores))
+
+
+def fixed_grid(beat_logits, downbeat_logits, hop_seconds, envelope,
+               bpm_min=70.0, bpm_max=170.0):
+    """Top-level entry. Returns (bpm, downbeat_offset, beats_per_bar, beats,
+    downbeats). `bpm` is the longest section's tempo."""
+    duration = min((len(beat_logits) - 1) * hop_seconds, len(envelope) / ONSET_FPS)
+    regions = _tempo_regions(beat_logits, downbeat_logits, hop_seconds, bpm_min, bpm_max)
+    if not regions:
+        grid = fixed_bpm_from_logits(
+            beat_logits, downbeat_logits, hop_seconds, bpm_min=bpm_min, bpm_max=bpm_max,
         )
-        if snapped == all_downbeats:
-            break
-        all_downbeats = snapped
-        last_mask = mask
-    # for unsnapped downbeats between two strong-snapped ones, distribute
-    # them evenly — fixes drift in low-signal sections (Gimme breakdowns)
-    # where individual snaps can't fire but the surrounding context does.
-    if last_mask:
-        all_downbeats = _interp_between_snaps(all_downbeats, last_mask)
-    all_beats = _rederive_beats(all_downbeats, all_beats)
+        regions = [(0.0, duration, grid.bpm, grid.beats_per_bar)]
+    db_probs = _sigmoid_array(downbeat_logits)
 
-    # primary = longest region
-    primary = max(covered_regions, key=lambda r: len(r[2]))
-    primary_bpm = float(primary[4])
-    primary_bpb = int(primary[5])
-    offset = float(all_downbeats[0]) if all_downbeats else 0.0
-    return primary_bpm, offset, primary_bpb, all_beats, all_downbeats
+    all_beats, all_downbeats = [], []
+    primary = (0.0, 0.0, 4)  # (length, bpm, beats_per_bar)
+    for t_start, t_end, bpm_hint, bpb in _sections(regions, duration):
+        period, t0 = fit_section(envelope, bpm_hint, t_start, t_end)
+        n = np.arange(int(np.ceil((t_start - t0) / period)),
+                      int(np.ceil((t_end - t0) / period)))
+        beats = t0 + n * period
+        beats = beats[(beats >= 0.0) & (beats < t_end) & (beats <= duration)]
+        if len(beats) == 0:
+            continue
+        k = _downbeat_index(beats, db_probs, hop_seconds, bpb)
+        all_beats.extend(beats)
+        all_downbeats.extend(beats[k::bpb])
+        if t_end - t_start > primary[0]:
+            primary = (t_end - t_start, 60.0 / period, bpb)
+
+    all_beats = [round(float(b), 4) for b in all_beats]
+    all_downbeats = [round(float(d), 4) for d in all_downbeats]
+    offset = all_downbeats[0] if all_downbeats else 0.0
+    return primary[1], offset, primary[2], all_beats, all_downbeats
+
+
+def _detect_device() -> str:
+    """CUDA when a real kernel runs there, else CPU."""
+    import torch
+
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1, device="cuda")
+            return "cuda"
+        except RuntimeError:
+            pass
+    return "cpu"
 
 
 def main() -> int:
@@ -833,13 +708,14 @@ def main() -> int:
 
     try:
         signal, sr = load_audio(args.audio_file)
-        tracker = Audio2Frames(checkpoint_path=str(args.checkpoint), device="cpu", float16=False)
+        tracker = Audio2Frames(checkpoint_path=str(args.checkpoint), device=_detect_device(), float16=False)
         beat_logits, downbeat_logits = tracker(signal, sr)
         hop_seconds = 441 / 22050  # matches beat_this preprocessing
-        bpm, offset, bpb, beats, downbeats = multi_anchor_grid(
+        bpm, offset, bpb, beats, downbeats = fixed_grid(
             beat_logits.cpu().numpy(),
             downbeat_logits.cpu().numpy(),
             hop_seconds,
+            onset_envelope(args.audio_file),
             bpm_min=args.bpm_min,
             bpm_max=args.bpm_max,
         )

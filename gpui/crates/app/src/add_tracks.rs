@@ -113,6 +113,7 @@ pub(crate) struct TrackImportActivity {
 impl Route {
     fn descriptor(self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self, PALETTE_SIZE.width, PALETTE_SIZE.height)
+            .with_transition(morph::direction(self.parent().is_some()))
     }
 
     /// Where "back" goes from here — `None` at the root.
@@ -1294,14 +1295,22 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
                 .agent_node(Role::Row, choice.label()),
         );
     }
-    Some(float::anchored_below(
-        "add-tracks-source-menu",
-        SUBMIT_CHIP_HEIGHT,
-        float::Dismiss::on_press_out(move |_, cx| {
-            dismiss.update(cx, |this, cx| this.toggle_source_menu(cx));
-        }),
-        card.into_any_element(),
-    ))
+    Some(match closing {
+        Some(since) => float::anchored_below_closing(
+            "add-tracks-source-menu",
+            SUBMIT_CHIP_HEIGHT,
+            card.into_any_element(),
+            luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since),
+        ),
+        None => float::anchored_below(
+            "add-tracks-source-menu",
+            SUBMIT_CHIP_HEIGHT,
+            float::Dismiss::on_press_out(move |_, cx| {
+                dismiss.update(cx, |this, cx| this.toggle_source_menu(cx));
+            }),
+            card.into_any_element(),
+        ),
+    })
 }
 
 /// The key legend, plus whatever the route has to say about an import in

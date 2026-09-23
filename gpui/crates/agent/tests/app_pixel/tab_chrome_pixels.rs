@@ -384,7 +384,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
                 app.frames(1, { waitMs: 80 });
             }
             until("compact sidebar closed", (s) =>
-                s.find({ role: "input", label: "Search tracks…" }) === undefined &&
+                s.find({ role: "input", label: "Search tracks" }) === undefined &&
                 s.find({ role: "row", label: "Aurora" }) === undefined ? s : undefined);
             until("compact universe", (s) =>
                 s.find({ role: "card", label: "Test Venue Patch" }));

@@ -46,7 +46,6 @@ use gpui::{
     canvas, div, point, px, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
 };
 
-
 /// Where a stateless control's box landed, readable by its own mouse
 /// listeners.
 ///

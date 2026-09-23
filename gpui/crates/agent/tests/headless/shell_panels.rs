@@ -49,7 +49,7 @@ const SCRIPT: &str = r#"
         const waveform = shot.find({ role: "card", label: "Waveform" });
         // By label: the composer is an input too, and it is the one that
         // answers a bare role query.
-        const search = shot.find({ role: "input", label: "Search tracks…" });
+        const search = shot.find({ role: "input", label: "Search tracks" });
         return {
             // Where the panel's left edge is, and how wide the tab body is.
             seam: seam === undefined ? null : seam.bounds.x,
@@ -107,7 +107,7 @@ const SCRIPT: &str = r#"
     const maxed = read();
     app.action("luma::ToggleSidebar");
     until("the sidebar after the clamped drag", (s) => {
-        const search = s.find({ role: "input", label: "Search tracks…" });
+        const search = s.find({ role: "input", label: "Search tracks" });
         return search !== undefined && search.bounds.width > 0 ? s : undefined;
     });
 
@@ -120,7 +120,7 @@ const SCRIPT: &str = r#"
     //    automation tree underneath it, but pressing those coordinates lands
     //    on the optional scrim: it dismisses the dialog without toggling the
     //    covered sidebar.
-    app.click(app.snapshot().find({ role: "input", label: "Search tracks…" }));
+    app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
     app.action("luma::OpenPatterns");
     until("the pattern picker", (s) =>
         s.find((n) => n.role === "text" && n.label.endsWith(" patterns")) !== undefined);
@@ -154,7 +154,7 @@ const SCRIPT: &str = r#"
     const firstAfterWrap = app.snapshot().find({ role: "button", label: "Close" });
     app.key("escape");
     app.frames(2);
-    const restoredSearch = app.snapshot().find({ role: "input", label: "Search tracks…" });
+    const restoredSearch = app.snapshot().find({ role: "input", label: "Search tracks" });
 
     ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, beforeDrag, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterScrim, dialogAfterTab, firstAfterTab, dialogAfterReverse, firstAfterReverse, lastAfterReverse, firstAfterWrap, restoredSearch })
 "#;

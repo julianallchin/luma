@@ -100,7 +100,7 @@ const SCRIPT: &str = r##"
             const shot = app.screenshot({ node });
             shots.push(shot);
             const x = s.find({ role: "button", label: "New score" })?.bounds.x;
-            const both = s.find({ role: "input", label: "Search tracks…" }) !== undefined;
+            const both = s.find({ role: "input", label: "Search tracks" }) !== undefined;
             seen.push(`${both ? "both" : "one"}@${x === undefined ? "-" : Math.round(x)}`);
             if (mid === null && both && x >= NEAR && x <= FAR) {
                 mid = shot;
@@ -130,7 +130,7 @@ const SCRIPT: &str = r##"
 
     until("the settled scores level", (s) =>
         s.find({ role: "button", label: "New score" })
-            && s.find({ role: "input", label: "Search tracks…" }) === undefined ? s : undefined);
+            && s.find({ role: "input", label: "Search tracks" }) === undefined ? s : undefined);
     app.frames(4, { waitMs: 16 });
     const labels = rows().map((n) => n.label);
 
@@ -154,7 +154,7 @@ const SCRIPT: &str = r##"
     const popFlight = pop.shots;
 
     until("the track list again", (s) =>
-        s.find({ role: "input", label: "Search tracks…" })
+        s.find({ role: "input", label: "Search tracks" })
             && s.find({ role: "card", label: "Scores level" }) === undefined ? s : undefined);
     app.frames(6, { waitMs: 16 });
     const poppedBounds = sidebar().bounds;

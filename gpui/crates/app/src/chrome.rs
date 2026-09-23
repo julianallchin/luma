@@ -241,6 +241,33 @@ pub(crate) fn panel_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> imp
     )
 }
 
+/// The room the thread toggle takes at the head of the panel band, with the
+/// gap after it.
+pub(crate) const THREAD_TOGGLE_SLOT: f32 = CONTROL + BAND_GAP;
+
+/// The thread's show/hide toggle, at the left end of the tab strip. It flips
+/// the same flag as `ToggleExpand`. It is lit while the thread is shown.
+pub(crate) fn thread_toggle(app: &Entity<Luma>, thread_shown: bool) -> impl IntoElement {
+    let label = if thread_shown {
+        "Hide chat"
+    } else {
+        "Show chat"
+    };
+    let toggled = app.clone();
+    div().flex_none().child(
+        luma_ui::icon_toggle(IconName::Bot, thread_shown)
+            .id("thread-toggle")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| {
+                toggled.update(cx, |this, cx| {
+                    this.expanded = !this.expanded;
+                    cx.notify();
+                });
+            })
+            .agent_node(Role::Button, label),
+    )
+}
+
 /// One toggle in its fixed slot. Both corners are the same control with a
 /// different icon and a different flag, so they are the same function: an
 /// anchor that behaved differently on one side would be two rules wearing one

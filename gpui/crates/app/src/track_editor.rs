@@ -234,6 +234,9 @@ pub struct Editor {
     /// A write is in flight. Serialized rather than concurrent: two whole-score
     /// writes in the air at once would land in an order nobody chose.
     saving: bool,
+    /// Writes that have come back. A reload read that saw this change under
+    /// it may hold the document from before our own write.
+    writes: u64,
     error: Option<String>,
     /// Whether the screen's first load has finished. Written in one assignment
     /// with the data, so "still loading" and "nothing here" cannot be confused.
@@ -369,6 +372,23 @@ impl Preview {
                 published: false,
             },
         ))
+    }
+}
+
+
+// TEMP(blink probe): remove once the preview blink is found.
+pub(crate) fn blink_probe(message: impl AsRef<str>) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/claude-1000/-home-julian-github-luma/74f0ba59-3fb9-48bc-9f6b-ab299488a4d6/scratchpad/blink.log")
+    {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "{ms} {}", message.as_ref());
     }
 }
 
@@ -1180,8 +1200,12 @@ impl Editor {
         let identity = previews
             .remove(row.annotation_id.as_str())
             .map(|previous| previous.image.id);
+        let annotation = row.annotation_id.clone();
         if let Some((id, preview)) = Preview::decode(row, identity) {
+            blink_probe(format!("preview installed {id} kept_identity={}", identity.is_some()));
             previews.insert(id, preview);
+        } else {
+            blink_probe(format!("preview DECODE FAILED {annotation}"));
         }
     }
 
@@ -1493,22 +1517,31 @@ impl Editor {
     /// The pattern `Enter` would put down, with the insertion it belongs to.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
-        let mut choices: Vec<_> = luma_patterns::standard_library()
-            .definitions
-            .into_iter()
-            .filter(|(_, definition)| {
-                // The bare Apply terminal is a node, not a pattern.
-                definition.placeable()
-                    && definition.body
-                        != luma_patterns::Body::Primitive(luma_patterns::Primitive::Output)
-                    && definition
-                        .inputs
-                        .values()
-                        .all(|input| input.default.is_some())
-            })
-            .map(|(effect, definition)| InsertChoice::Node {
-                effect,
-                name: definition.name,
+        // The standard library never changes, and `standard_library()` hands
+        // back a copy of all of it, so its placeable nodes are listed once.
+        static NODES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+        let nodes = NODES.get_or_init(|| {
+            luma_patterns::standard_library()
+                .definitions
+                .into_iter()
+                .filter(|(_, definition)| {
+                    // The bare Apply terminal is a node, not a pattern.
+                    definition.placeable()
+                        && definition.body
+                            != luma_patterns::Body::Primitive(luma_patterns::Primitive::Output)
+                        && definition
+                            .inputs
+                            .values()
+                            .all(|input| input.default.is_some())
+                })
+                .map(|(effect, definition)| (effect, definition.name))
+                .collect()
+        });
+        let mut choices: Vec<_> = nodes
+            .iter()
+            .map(|(effect, name)| InsertChoice::Node {
+                effect: effect.clone(),
+                name: name.clone(),
             })
             .collect();
         if let Some(score) = &self.graph_score {
@@ -1674,7 +1707,7 @@ impl Luma {
         let Some(track) = browser.find(track_id) else {
             return;
         };
-        self.selected_track = Some(track.id.clone());
+        self.picked = Some(crate::workspace::Pick::Track(track.id.clone()));
         // Picking the track *is* changing the strip's subject, and the tab
         // this gesture is about to open belongs to the arriving set. Syncing
         // here rather than waiting for the next draw is what keeps it out of
@@ -1771,6 +1804,7 @@ impl Luma {
             seek_at: None,
             dirty: false,
             saving: false,
+            writes: 0,
             error: None,
             loaded: false,
             score_chosen: false,
@@ -1905,7 +1939,10 @@ impl Luma {
                         return;
                     }
                     match contents {
-                        Ok(contents) => match editor.install_contents(contents) {
+                        Ok(contents) => match {
+                            blink_probe("load_score INSTALL (clears previews)");
+                            editor.install_contents(contents)
+                        } {
                             Ok(()) => {
                                 previews =
                                     editor.clips.iter().map(|clip| clip.id.clone()).collect();
@@ -2511,11 +2548,29 @@ impl Luma {
                 // by any one of its members.
                 (true, false) => {}
             }
-            editor.cursor = Some(Cursor {
-                row,
-                row_end: None,
-                start,
-                end: Some(end),
+            // One clip is its own region. Several are not: a range around the
+            // last one pressed would make copy, cut and delete act on it
+            // alone, so the cursor becomes a point at the selection's
+            // top-left corner and those commands take the whole selection.
+            let held: Vec<&Clip> = editor
+                .clips
+                .iter()
+                .filter(|clip| editor.selected.contains(&clip.id))
+                .collect();
+            editor.cursor = Some(if held.len() > 1 {
+                Cursor {
+                    row: held.iter().map(|clip| clip.row).min().unwrap_or(row),
+                    row_end: None,
+                    start: held.iter().map(|clip| clip.start).fold(f64::INFINITY, f64::min),
+                    end: None,
+                }
+            } else {
+                Cursor {
+                    row,
+                    row_end: None,
+                    start,
+                    end: Some(end),
+                }
             });
             // Read-only stops here: the selection is a view of the score, the
             // drag is a write to it.
@@ -2871,6 +2926,7 @@ impl Luma {
                             editor.install_preview(row);
                         }
                         Err(error) => {
+                            blink_probe(format!("preview ERROR {id}: {error}"));
                             editor.previews.borrow_mut().remove(&id);
                             editor
                                 .preview_errors
@@ -3465,9 +3521,6 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         })
         .when(state.score.is_none() && state.loaded, |el| {
             el.child(luma_ui::caption("No score"))
-        })
-        .when(state.writable() && (state.saving || state.dirty), |el| {
-            el.child(luma_ui::caption("Saving"))
         })
         // A refused write, over the timeline it was refused for.
         .when_some(

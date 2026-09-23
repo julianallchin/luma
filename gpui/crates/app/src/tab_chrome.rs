@@ -437,17 +437,15 @@ fn progress(started: Instant, now: Instant) -> f32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
-    Patch,
     Pattern,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 3] = [Self::Patch, Self::Pattern, Self::Track];
+    pub(crate) const ALL: [Self; 2] = [Self::Pattern, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Patch => "Venue",
             Self::Pattern => "Patterns",
             Self::Track => "Track editor",
         }
@@ -476,10 +474,9 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 3] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 2] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
-            NewTabChoice::Patch if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
             NewTabChoice::Pattern if prerequisites.graph_track.is_none() => {
@@ -501,7 +498,7 @@ impl Luma {
                 .sidebar
                 .as_ref()
                 .map(|state| state.venue_id().to_string()),
-            track: self.selected_track.clone(),
+            track: self.selected_track().map(str::to_string),
             graph_track: self.graph_track_context().map(|context| context.track),
         }
     }
@@ -560,10 +557,9 @@ impl Luma {
     ) {
         self.tab_chrome.menu_open = false;
         match choice {
-            NewTabChoice::Patch => self.open_patch(cx),
             NewTabChoice::Pattern => self.show_patterns(cx),
             NewTabChoice::Track => {
-                if let Some(track) = self.selected_track.clone() {
+                if let Some(track) = self.selected_track().map(str::to_string) {
                     self.open_track(&track, cx);
                 }
             }
@@ -743,10 +739,6 @@ mod tests {
         };
         let none = NewTabPrerequisites::default();
         assert_eq!(
-            reason(&none, NewTabChoice::Patch),
-            Some("Select a venue first")
-        );
-        assert_eq!(
             reason(&none, NewTabChoice::Pattern),
             Some("Open a track to edit patterns")
         );
@@ -759,7 +751,6 @@ mod tests {
             venue: Some("v".into()),
             ..Default::default()
         };
-        assert_eq!(reason(&venue, NewTabChoice::Patch), None);
         assert_eq!(
             reason(&venue, NewTabChoice::Track),
             Some("Select a track first")

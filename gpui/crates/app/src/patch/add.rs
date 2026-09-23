@@ -59,6 +59,7 @@ pub(crate) enum Route {
 impl Route {
     fn descriptor(&self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self.clone(), CARD.width, CARD.height)
+            .with_transition(morph::direction(matches!(self, Self::Configure(_))))
     }
 }
 

@@ -97,14 +97,10 @@ const SEEDS: [Seed; 5] = [
 struct Expected;
 
 impl Expected {
-    /// Mine and in this venue: the browser's default.
-    const DEFAULT: usize = 3 + FILLER;
+    /// Mine, in this venue: the browser's default.
+    const MINE: usize = 3 + FILLER;
     /// Everyone's, in this venue.
-    const IN_VENUE: usize = 4 + FILLER;
-    /// Mine, anywhere.
-    const MINE: usize = 4 + FILLER;
-    /// The whole visible library.
-    const ALL: usize = 5 + FILLER;
+    const ALL: usize = 4 + FILLER;
 }
 
 async fn seed(config_dir: &Path) {
@@ -160,7 +156,7 @@ async fn seed(config_dir: &Path) {
         insert_clip(pool, &id, "venue-main").await;
     }
     // Membership is score existence, not clip existence. Cascade has an
-    // intentionally empty score and must survive the In Venue filter.
+    // intentionally empty score and must stay in the venue's list.
     insert_empty_score(pool, "track-cascade", "venue-main").await;
     session::signed_in(config_dir).await;
     pool.close().await;
@@ -281,7 +277,7 @@ const SCRIPT: &str = r#"
     function read() {
         const shot = app.snapshot();
         return {
-            count: shot.find((node) => node.label.endsWith(" tracks")).label,
+            count: shot.find((node) => /^\d+ tracks$/.test(node.label)).label,
             rows: shot.findAll({ role: "row" }).map((node) => node.label),
         };
     }
@@ -313,10 +309,9 @@ const SCRIPT: &str = r#"
     const opened = read();
 
     const all = press("toggle", "All");
-    const anywhere = press("toggle", "In Venue");
     const mine = press("toggle", "Mine");
 
-    app.type(app.snapshot().find({ role: "input" }), "drif");
+    app.type(app.snapshot().find({ role: "input" }), "bassl");
     app.frames(2);
     const searched = read();
 
@@ -325,7 +320,7 @@ const SCRIPT: &str = r#"
     app.frames(2);
     const cleared = read();
 
-    ({ entry, opened, all, anywhere, mine, searched, cleared })
+    ({ entry, opened, all, mine, searched, cleared })
 "#;
 
 #[test]
@@ -344,29 +339,19 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     );
 
     // 2. Opening a venue lists that venue's tracks, not the whole library.
-    assert_eq!(
-        out["opened"]["count"],
-        format!("{} tracks", Expected::DEFAULT)
-    );
+    assert_eq!(out["opened"]["count"], format!("{} tracks", Expected::MINE));
     assert_eq!(
         rows(&out["opened"])[..3],
         ["Aurora", "Basslines", "Cascade"]
     );
 
     // 3. Each filter axis moves the count by exactly the rows it admits.
-    assert_eq!(
-        out["all"]["count"],
-        format!("{} tracks", Expected::IN_VENUE)
-    );
-    assert_eq!(
-        out["anywhere"]["count"],
-        format!("{} tracks", Expected::ALL)
-    );
+    assert_eq!(out["all"]["count"], format!("{} tracks", Expected::ALL));
     assert_eq!(out["mine"]["count"], format!("{} tracks", Expected::MINE));
 
     // 4. Search narrows to what it matches, and Escape puts it back.
     assert_eq!(out["searched"]["count"], "1 tracks");
-    assert_eq!(rows(&out["searched"]), ["Drift"]);
+    assert_eq!(rows(&out["searched"]), ["Basslines"]);
     assert_eq!(
         out["cleared"]["count"],
         format!("{} tracks", Expected::MINE)
@@ -376,9 +361,9 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     let built = rows(&out["opened"]).len();
     assert!(built > 0, "the list built no rows at all");
     assert!(
-        built < Expected::DEFAULT / 4,
+        built < Expected::MINE / 4,
         "the list built {built} of {} rows — it is not virtualizing",
-        Expected::DEFAULT
+        Expected::MINE
     );
 }
 

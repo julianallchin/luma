@@ -23,7 +23,6 @@ fn returning_to_a_parked_song_plays_its_own_audio() {
         }
         nav.venue("Test Venue");
         nav.step("all tracks", "toggle", "All");
-        nav.step("tracks in all venues", "toggle", "In Venue");
         nav.track("Aurora");
         until("Aurora waveform", () => node("card","Waveform"));
         const first = play("0:20");
