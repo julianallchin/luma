@@ -234,6 +234,10 @@ pub struct Luma {
     /// Correlates per-venue track reads. Venue identity is checked as well;
     /// the generation distinguishes reopening the same venue twice.
     pub(crate) venue_selection_generation: u64,
+    /// The `hdr_output` setting, as last read. The window applies it on each
+    /// render (see [`Luma::render`]); it has an effect only on a display that
+    /// accepts HDR.
+    pub(crate) hdr_output_allowed: bool,
 }
 
 impl Luma {
@@ -294,6 +298,7 @@ impl Luma {
             agent_stale_tabs: Vec::new(),
             sign_in_generation: 0,
             venue_selection_generation: 0,
+            hdr_output_allowed: true,
         };
         // Which door the app opens on. Nothing opens without a principal: a
         // stored session that still proves one goes straight in; one that
@@ -308,6 +313,7 @@ impl Luma {
         } else {
             app.show_sign_in(false, cx);
         }
+        app.load_display_settings(cx);
         app.auto_repro(cx);
         app.watch_session(cx);
         app.watch_sync(cx);
@@ -450,6 +456,10 @@ impl Luma {
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.scale_factor = window.scale_factor();
+        // Render is where the window is at hand. The call does nothing unless
+        // the value changed; when it did, the frame this render builds is the
+        // first one presented in the new mode.
+        window.set_hdr_output_allowed(self.hdr_output_allowed);
         // Nobody is signed in yet, so there is no library to show and no shell
         // to show it in — the gate is the app, not a plane over it.
         if self.refreshing_session {

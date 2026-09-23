@@ -196,6 +196,9 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
+                if let Ok(values) = &result {
+                    this.apply_display_settings(values, cx);
+                }
                 this.with_settings(cx, |state| match result {
                     Ok(values) => {
                         state.values = Some(values);
@@ -207,6 +210,26 @@ impl Luma {
             .ok();
         })
         .detach();
+    }
+
+    /// Read the settings the window itself applies, once, at launch. A failed
+    /// read keeps the defaults: the window has to open either way.
+    pub(crate) fn load_display_settings(&self, cx: &mut Context<Self>) {
+        let pending = self.library.settings();
+        cx.spawn(async move |this, cx| {
+            if let Ok(values) = pending.await {
+                this.update(cx, |this, cx| this.apply_display_settings(&values, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn apply_display_settings(&mut self, values: &AppSettings, cx: &mut Context<Self>) {
+        if self.hdr_output_allowed != values.hdr_output {
+            self.hdr_output_allowed = values.hdr_output;
+            cx.notify();
+        }
     }
 
     /// Open or dismiss the account menu that hangs off the sidebar's foot.
@@ -348,16 +371,23 @@ fn body(
 }
 
 fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
-    vec![field(
-        None,
-        checkbox(
-            app,
-            "audio_output_enabled",
-            "Enable Audio Output",
-            values.audio_output_enabled,
+    vec![
+        field(
+            None,
+            checkbox(
+                app,
+                "audio_output_enabled",
+                "Enable Audio Output",
+                values.audio_output_enabled,
+            ),
+            Some("When disabled, playback stays in sync but stays silent."),
         ),
-        Some("When disabled, playback stays in sync but stays silent."),
-    )]
+        field(
+            None,
+            checkbox(app, "hdr_output", "HDR output", values.hdr_output),
+            Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
+        ),
+    ]
 }
 
 fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {

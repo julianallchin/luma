@@ -58,6 +58,9 @@ pub struct AppSettings {
     /// Viewport render scale as a percentage of native resolution, 25..=100.
     /// A cost knob, so it belongs to the machine rather than the venue.
     pub render_scale: u8,
+    /// Whether the window may present HDR where the display supports it.
+    /// Device-global: it is a fact about this machine's display.
+    pub hdr_output: bool,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -78,6 +81,7 @@ impl Default for AppSettings {
             stage_grid: true,
             stage_gizmos: true,
             render_scale: 100,
+            hdr_output: true,
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -141,6 +145,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.clamp(25, 100))
             .unwrap_or(100),
+        hdr_output: map.get("hdr_output").map(|v| v == "true").unwrap_or(true),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
