@@ -950,9 +950,10 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
         Value::Time(curve) | Value::Hit(curve) => {
             curve.is_color() == color && within(Box::new(curve.values()))
         }
-        Value::Noise(NoiseSource { range, .. }) | Value::Audio(AudioLevel { range, .. }) => {
+        Value::Noise(NoiseSource { range, .. }) => {
             !color && !speed && within(Box::new(range.iter().copied()))
         }
+        Value::Audio(_) => !color && !speed,
         Value::Events(Events::Beats { times }) => times.as_slice().iter().all(|t| *t >= 0.0),
         _ => false,
     };
@@ -1045,7 +1046,7 @@ pub(crate) fn lower(
                 ))
             }
             Value::Audio(audio) => {
-                let (low, high) = audio.band.hz();
+                let (low, high) = (audio.from_hz, audio.to_hz);
                 body.node(
                     &key("energy"),
                     "band_energy",
@@ -1060,11 +1061,12 @@ pub(crate) fn lower(
                     "normalize",
                     vec![("value", c(&key("energy"), "value"))],
                 );
+                // Quiet gives the floor; loud gives 1.
                 Some(scale(
                     &mut body,
                     &key,
                     c(&key("level"), "value"),
-                    audio.range,
+                    [audio.floor, 1.0],
                 ))
             }
             _ => unreachable!("checked source"),

@@ -621,11 +621,17 @@ fn noise_and_audio_sources_stay_in_their_range() {
     struct Mix;
     impl FeatureSource for Mix {
         fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample> {
-            let FeatureRequest::Band { source, low_hz, .. } = request else {
+            let FeatureRequest::Band {
+                source,
+                low_hz,
+                high_hz,
+            } = request
+            else {
                 return Err(Error("only band energy".into()));
             };
             assert_eq!(source.source(), AudioSource::Mix);
-            assert_eq!(*low_hz, 20.0);
+            // A custom range reaches the analysis as it was set.
+            assert_eq!((*low_hz, *high_hz), (55.0, 130.0));
             Ok(FeatureSample::Energy(0.5 + 0.4 * beat.sin()))
         }
         fn onsets(&self, _: Drum) -> Result<EventTimes> {
@@ -636,8 +642,9 @@ fn noise_and_audio_sources_stay_in_their_range() {
         &mut inputs,
         "alpha",
         Value::Audio(AudioLevel {
-            band: Band::Low,
-            range: [0.2, 0.6],
+            from_hz: 55.0,
+            to_hz: 130.0,
+            floor: 0.3,
         }),
     );
     let program = prepare(&form, &inputs).unwrap();
@@ -649,11 +656,44 @@ fn noise_and_audio_sources_stay_in_their_range() {
             lighting(&result["lighting"])["left:0"].dimmer.unwrap()
         })
         .collect();
+    // The quietest moment of the clip gives the floor, the loudest gives 1,
+    // and between them value = floor + (1 - floor) × energy.
     assert!(
-        values.iter().all(|v| (0.2 - 1e-9..=0.6 + 1e-9).contains(v)),
+        values.iter().all(|v| (0.3 - 1e-9..=1.0 + 1e-9).contains(v)),
         "{values:?}"
     );
-    assert!(values.iter().any(|v| (*v - 0.6).abs() < 1e-3));
+    // Samples every quarter beat come near both ends.
+    assert!(values.iter().any(|v| (*v - 1.0).abs() < 1e-2));
+    assert!(values.iter().any(|v| (*v - 0.3).abs() < 1e-2));
+
+    // A bad range or floor is rejected.
+    for bad in [
+        AudioLevel {
+            from_hz: 130.0,
+            to_hz: 55.0,
+            floor: 0.3,
+        },
+        AudioLevel {
+            from_hz: 10.0,
+            to_hz: 55.0,
+            floor: 0.3,
+        },
+        AudioLevel {
+            from_hz: 55.0,
+            to_hz: 130.0,
+            floor: 1.5,
+        },
+    ] {
+        set(&mut inputs, "alpha", Value::Audio(bad));
+        assert!(prepare(&form, &inputs).is_err());
+    }
+    let named: Vec<_> = presets()
+        .frequencies
+        .iter()
+        .map(|f| (f.name.as_str(), f.from_hz, f.to_hz))
+        .collect();
+    assert_eq!(named[0], ("Kick", 40.0, 100.0));
+    assert_eq!(named.len(), 5);
 }
 
 #[test]
@@ -671,7 +711,7 @@ fn sources_are_tagged_values_in_stored_clips() {
         serde_json::json!({"type": "hit", "value": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}}),
         serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["ease"]}}),
         serde_json::json!({"type": "noise", "value": {"speed": 4.0, "range": [0.2, 1.0]}}),
-        serde_json::json!({"type": "audio", "value": {"band": "low", "range": [0.0, 1.0]}}),
+        serde_json::json!({"type": "audio", "value": {"from_hz": 40.0, "to_hz": 100.0, "floor": 0.3}}),
         serde_json::json!({"type": "events", "value": {"source": "beats", "times": [0.0, 1.5, 3.0]}}),
     ] {
         let value: Value = serde_json::from_value(json.clone()).unwrap();

@@ -176,6 +176,13 @@
       "rate": {"type": "proportion", "value": 0.9}
     }}
   ],
+  "frequencies": [
+    {"name": "Kick", "from_hz": 40, "to_hz": 100},
+    {"name": "Bass", "from_hz": 20, "to_hz": 250},
+    {"name": "Mids", "from_hz": 250, "to_hz": 4000},
+    {"name": "Highs", "from_hz": 4000, "to_hz": 16000},
+    {"name": "Full", "from_hz": 20, "to_hz": 16000}
+  ],
   "curves": [
     {"name": "Ramp up", "curve": {"points": [[0, 0], [1, 1]], "segments": ["linear"]}},
     {"name": "Ramp down", "curve": {"points": [[0, 1], [1, 0]], "segments": ["linear"]}},

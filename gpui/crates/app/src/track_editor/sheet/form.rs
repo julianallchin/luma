@@ -1,8 +1,8 @@
 //! Form clip inputs. A form clip names a shipped form and holds a value for
 //! each of its inputs. The sheet shows them in the form's order, under the
 //! engine's names. Where the form allows it, an input can hold a source in
-//! place of a plain value: a curve over the clip or over each hit, noise, an
-//! audio band, or a list of stamped beats.
+//! place of a plain value: a curve over the clip or over each hit, noise, the
+//! level of a frequency range of the mix, or a list of stamped beats.
 
 use super::*;
 use luma_lib::node_graph::lighting::decode;
@@ -126,8 +126,9 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
     };
     let number = match value {
         p::Value::Time(curve) | p::Value::Hit(curve) => Some(curve.sample(0.)[0]),
-        p::Value::Noise(p::NoiseSource { range, .. })
-        | p::Value::Audio(p::AudioLevel { range, .. }) => Some(range[1]),
+        p::Value::Noise(p::NoiseSource { range, .. }) => Some(range[1]),
+        // Audio at its loudest gives 1.
+        p::Value::Audio(_) => Some(1.),
         p::Value::Events(p::Events::Beats { times }) => match times.as_slice() {
             [first, second, ..] if second > first => Some(second - first),
             _ => None,
@@ -150,10 +151,14 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
             speed: NOISE_SPEED,
             range: [0., number],
         }),
-        Some(p::SourceKind::Audio) => p::Value::Audio(p::AudioLevel {
-            band: p::Band::Low,
-            range: [0., number],
-        }),
+        Some(p::SourceKind::Audio) => {
+            let first = &p::presets().frequencies[0];
+            p::Value::Audio(p::AudioLevel {
+                from_hz: first.from_hz,
+                to_hz: first.to_hz,
+                floor: 0.,
+            })
+        }
         Some(p::SourceKind::Events) => p::Value::Events(p::Events::Beats {
             times: p::EventTimes::new((0..STAMPS).map(|i| i as f64 * number).collect::<Vec<_>>())
                 .expect("ordered beats"),
@@ -479,35 +484,43 @@ pub(super) fn widget(
         }
         Some(p::Value::Audio(audio)) => {
             let half = (FIELD_W - 8.) / 2.;
-            let low = number(
-                format!("{name}: Low"),
-                audio.range[0],
-                0.,
-                1.,
-                half,
-                window,
-                cx,
-            );
-            let high = number(
-                format!("{name}: High"),
-                audio.range[1],
-                0.,
-                1.,
-                half,
-                window,
-                cx,
-            );
-            subs.push(on_number(&low, cx, |value, v| {
+            let (min, max) = (p::AudioLevel::MIN_HZ, p::AudioLevel::MAX_HZ);
+            let hz = |label: String, value: f64, window: &mut Window, cx: &mut Context<Luma>| {
+                cx.new(|cx| {
+                    DraftedNumber::new(label, value, min, max, half, window, cx).with_unit("Hz")
+                })
+            };
+            let from = hz(format!("{name}: From"), audio.from_hz, window, cx);
+            let to = hz(format!("{name}: To"), audio.to_hz, window, cx);
+            let floor = cx.new(|cx| {
+                DraftedNumber::new(
+                    format!("{name}: Floor"),
+                    audio.floor * 100.,
+                    0.,
+                    100.,
+                    FIELD_W,
+                    window,
+                    cx,
+                )
+                .with_unit("%")
+            });
+            // A range that would cross is not stored.
+            subs.push(on_number(&from, cx, |value, v| {
                 if let p::Value::Audio(audio) = value {
-                    audio.range[0] = v;
+                    audio.from_hz = v.min(audio.to_hz - 1.);
                 }
             }));
-            subs.push(on_number(&high, cx, |value, v| {
+            subs.push(on_number(&to, cx, |value, v| {
                 if let p::Value::Audio(audio) = value {
-                    audio.range[1] = v;
+                    audio.to_hz = v.max(audio.from_hz + 1.);
                 }
             }));
-            Widget::Audio([low, high])
+            subs.push(on_number(&floor, cx, |value, v| {
+                if let p::Value::Audio(audio) = value {
+                    audio.floor = (v / 100.).clamp(0., 1.);
+                }
+            }));
+            Widget::Audio([from, to, floor])
         }
         Some(p::Value::Events(p::Events::Beats { times })) => {
             let text = format_beats(times.as_slice());
@@ -634,9 +647,10 @@ pub(super) fn resync(
             low.update(cx, |field, cx| field.set_value(noise.range[0], cx));
             high.update(cx, |field, cx| field.set_value(noise.range[1], cx));
         }
-        (Widget::Audio([low, high]), Some(p::Value::Audio(audio))) => {
-            low.update(cx, |field, cx| field.set_value(audio.range[0], cx));
-            high.update(cx, |field, cx| field.set_value(audio.range[1], cx));
+        (Widget::Audio([from, to, floor]), Some(p::Value::Audio(audio))) => {
+            from.update(cx, |field, cx| field.set_value(audio.from_hz, cx));
+            to.update(cx, |field, cx| field.set_value(audio.to_hz, cx));
+            floor.update(cx, |field, cx| field.set_value(audio.floor * 100., cx));
         }
         (Widget::Stamps(field), Some(value)) => {
             let times = stamped(&value).unwrap_or_default().to_vec();
@@ -1116,44 +1130,45 @@ fn control(
         Widget::Noise([speed, low, high]) => column()
             .child(arg_row("Speed (beats)", speed.clone()))
             .child(arg_row("Range", range_row(low, high))),
-        Widget::Audio([low, high]) => {
-            let bands = [
-                ("Low", p::Band::Low),
-                ("Mid", p::Band::Mid),
-                ("High", p::Band::High),
-                ("Full", p::Band::Full),
-            ];
-            let band = match &value {
-                Some(p::Value::Audio(audio)) => audio.band,
-                _ => p::Band::Low,
+        Widget::Audio([from, to, floor]) => {
+            // Named ranges only fill the two frequency fields.
+            let named = &p::presets().frequencies;
+            let mut labels: Vec<&str> = named.iter().map(|f| f.name.as_str()).collect();
+            labels.push("Custom");
+            let current = match &value {
+                Some(p::Value::Audio(audio)) => named
+                    .iter()
+                    .find(|f| f.from_hz == audio.from_hz && f.to_hz == audio.to_hz)
+                    .map_or("Custom", |f| f.name.as_str()),
+                _ => "Custom",
             };
-            let labels = bands.map(|(label, _)| label);
-            let current = bands
-                .iter()
-                .find(|(_, at)| *at == band)
-                .map_or("Low", |(label, _)| label);
             column()
                 .child(arg_row(
-                    "Band",
+                    "Frequency",
                     choice_select(
                         state,
                         app,
                         index,
-                        format!("{name}:band"),
+                        format!("{name}:frequency"),
                         current,
                         &labels,
                         move |picked, this, cx| {
+                            let Some(range) = p::presets().frequencies.get(picked) else {
+                                return;
+                            };
                             this.form_edit(&def, spec, cx, |value| match value {
                                 p::Value::Audio(audio) => Some(p::Value::Audio(p::AudioLevel {
-                                    band: bands[picked].1,
-                                    range: audio.range,
+                                    from_hz: range.from_hz,
+                                    to_hz: range.to_hz,
+                                    ..audio.clone()
                                 })),
                                 _ => None,
                             });
                         },
                     ),
                 ))
-                .child(arg_row("Range", range_row(low, high)))
+                .child(arg_row("Range", range_row(from, to)))
+                .child(arg_row("Floor", floor.clone()))
         }
         Widget::Stamps(field) => {
             let times = value.as_ref().and_then(stamped).unwrap_or_default();
@@ -1247,8 +1262,9 @@ mod tests {
                 Some(p::SourceKind::Audio)
             ),
             p::Value::Audio(p::AudioLevel {
-                band: p::Band::Low,
-                range: [0., 0.8]
+                from_hz: 40.,
+                to_hz: 100.,
+                floor: 0.
             })
         );
     }
