@@ -256,17 +256,51 @@ pub(super) enum Part {
     FadeOut,
     BendIn,
     BendOut,
-    Level,
+    /// One segment of the line, between two of its points.
+    Segment(usize),
 }
 
 impl Part {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::FadeIn => "fade in",
-            Self::FadeOut => "fade out",
-            Self::BendIn => "fade in bend",
-            Self::BendOut => "fade out bend",
-            Self::Level => "alpha",
+            Self::FadeIn => "fade in".into(),
+            Self::FadeOut => "fade out".into(),
+            Self::BendIn => "fade in bend".into(),
+            Self::BendOut => "fade out bend".into(),
+            Self::Segment(index) => format!("alpha {}", index + 1),
+        }
+    }
+
+    /// The pointer over this part, or dragging it.
+    pub fn cursor(self, dragging: bool) -> CursorStyle {
+        match self {
+            Self::FadeIn | Self::FadeOut => CursorStyle::ResizeLeftRight,
+            Self::BendIn | Self::BendOut if dragging => CursorStyle::ClosedHand,
+            Self::BendIn | Self::BendOut => CursorStyle::OpenHand,
+            Self::Segment(_) => CursorStyle::ResizeUpDown,
+        }
+    }
+}
+
+/// What a press took hold of, and the alpha as it was then.
+#[derive(Clone, Debug)]
+pub(super) struct Grab {
+    pub part: Part,
+    /// The line as a curve: a plain value is one flat segment.
+    curve: p::Keyframes,
+    /// The fade shape, when the line is one.
+    fades: Option<Fades>,
+}
+
+impl Alpha {
+    /// The line as a curve over the clip.
+    fn curve(&self) -> p::Keyframes {
+        match self {
+            Self::Fades(fades) => match fades.value() {
+                p::Value::Time(curve) => curve,
+                _ => p::Keyframes::numbers(&[[0., fades.level], [1., fades.level]], &[]),
+            },
+            Self::Custom(curve) => curve.clone(),
         }
     }
 }
@@ -326,36 +360,82 @@ fn handles(frame: Frame, fades: Fades) -> Vec<(Part, Point<f32>)> {
     handles
 }
 
-/// What part of `clip`'s alpha line, drawn in `box_`, is under `at`.
-pub(super) fn hit(box_: Bounds<Pixels>, clip: &Clip, at: Point<Pixels>) -> Option<(Part, Fades)> {
+/// What part of `clip`'s alpha line, drawn in `box_`, is under `at`. Fade
+/// handles first, then any segment of the line.
+pub(super) fn hit(box_: Bounds<Pixels>, clip: &Clip, at: Point<Pixels>) -> Option<Grab> {
     let frame = Frame::of(box_);
     let (x, y) = (f32::from(at.x), f32::from(at.y));
-    if y < f32::from(frame.body.origin.y) || y > f32::from(frame.body.bottom()) {
+    if !frame.editable()
+        || x < frame.left - GRAB
+        || x > frame.left + frame.width + GRAB
+        || y < f32::from(frame.body.origin.y)
+        || y > f32::from(frame.body.bottom())
+    {
         return None;
     }
-    let Some(Alpha::Fades(fades)) = alpha(clip) else {
-        return None;
+    let alpha = alpha(clip)?;
+    let fades = match &alpha {
+        Alpha::Fades(fades) => Some(*fades),
+        Alpha::Custom(_) => None,
+    };
+    let curve = alpha.curve();
+    let grab = |part| {
+        Some(Grab {
+            part,
+            curve: curve.clone(),
+            fades,
+        })
     };
     let near = |c: Point<f32>| (c.x - x).abs() <= GRAB && (c.y - y).abs() <= GRAB;
-    if let Some((part, _)) = handles(frame, fades).into_iter().find(|(_, c)| near(*c)) {
-        return Some((part, fades));
+    if let Some((part, _)) = fades
+        .map(|fades| handles(frame, fades))
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(_, c)| near(*c))
+    {
+        return grab(part);
     }
-    let flat = frame.x(fades.fade_in) + GRAB..frame.x(1. - fades.fade_out) - GRAB;
-    (frame.editable() && flat.contains(&x) && (y - frame.y(fades.level)).abs() <= LINE_GRAB)
-        .then_some((Part::Level, fades))
+    let progress = f64::from((x - frame.left) / frame.width);
+    if (y - frame.y(curve.sample(progress.clamp(0., 1.))[0])).abs() > LINE_GRAB {
+        return None;
+    }
+    let index = curve
+        .points
+        .windows(2)
+        .position(|pair| pair[0].0 < pair[1].0 && (pair[0].0..=pair[1].0).contains(&progress))?;
+    grab(Part::Segment(index))
 }
 
-/// A drag of `part`, from `fades` as they were at the press. `time` is the
-/// pointer's time, snapped; `rise` is how far the pointer went up, in pixels;
-/// `height` is the line's travel from alpha 0 to 1, in pixels.
-pub(super) fn dragged(
-    part: Part,
-    fades: Fades,
-    span: (f64, f64),
-    time: f64,
-    rise: f32,
-    height: f32,
-) -> Fades {
+/// The alpha a drag leaves, from `grab` at the press. `span` is the clip's
+/// seconds, `time` the pointer's time, snapped; `rise` is how far the pointer
+/// went up and `height` the line's travel from 0 to 1, in pixels.
+pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height: f32) -> p::Value {
+    match (grab.part, grab.fades) {
+        (Part::Segment(index), _) => lift(&grab.curve, index, f64::from(rise / height.max(1.))),
+        (part, Some(fades)) => dragged(part, fades, span, time, rise).value(),
+        (_, None) => p::Value::Time(grab.curve.clone()),
+    }
+}
+
+/// `curve` with segment `index` moved up by `by`: both of its points, each
+/// kept in 0–1. A line that is a fade shape again is stored as one.
+pub(super) fn lift(curve: &p::Keyframes, index: usize, by: f64) -> p::Value {
+    let mut curve = curve.clone();
+    for (_, key) in curve.points.iter_mut().skip(index).take(2) {
+        if let p::Key::Number(value) = key {
+            *value = (*value + by).clamp(0., 1.);
+        }
+    }
+    match Fades::of_curve(&curve) {
+        Some(fades) => fades.value(),
+        None => p::Value::Time(curve),
+    }
+}
+
+/// A drag of a fade handle, from `fades` as they were at the press. `time`
+/// is the pointer's time, snapped; `rise` is how far the pointer went up, in
+/// pixels.
+pub(super) fn dragged(part: Part, fades: Fades, span: (f64, f64), time: f64, rise: f32) -> Fades {
     let length = (span.1 - span.0).max(EPSILON);
     match part {
         Part::FadeIn => fades.with_fade_in((time - span.0) / length),
@@ -382,10 +462,7 @@ pub(super) fn dragged(
                 }
             }
         }
-        Part::Level => Fades {
-            level: (fades.level + f64::from(rise / height.max(1.))).clamp(0., 1.),
-            ..fades
-        },
+        Part::Segment(_) => fades,
     }
 }
 
@@ -513,37 +590,41 @@ fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
 }
 
 /// Name each handle for a script: `<clip> fade in`, `<clip> fade out`, the
-/// two bends, and `<clip> alpha` for the flat part of the line.
+/// two bends, and `<clip> alpha N` for the Nth segment of the line, placed a
+/// fifth of the way along it, clear of the handles.
 pub(super) fn register(box_: Bounds<Pixels>, clip: &Clip, window: &mut Window, cx: &mut App) {
-    let Some(Alpha::Fades(fades)) = alpha(clip) else {
+    let Some(alpha) = alpha(clip) else {
         return;
     };
     let frame = Frame::of(box_);
+    if !frame.editable() {
+        return;
+    }
     let square = |c: Point<f32>| Bounds {
         origin: point(px(c.x - GRAB / 2.), px(c.y - GRAB / 2.)),
         size: size(px(GRAB), px(GRAB)),
     };
-    for (part, centre) in handles(frame, fades) {
-        agent_paint_node(
-            Role::Slider,
-            format!("{} {}", clip.label, part.label()),
-            square(centre),
-            window,
-            cx,
-        );
+    if let Alpha::Fades(fades) = alpha {
+        for (part, centre) in handles(frame, fades) {
+            agent_paint_node(
+                Role::Slider,
+                format!("{} {}", clip.label, part.label()),
+                square(centre),
+                window,
+                cx,
+            );
+        }
     }
-    let (from, to) = (
-        frame.x(fades.fade_in) + GRAB,
-        frame.x(1. - fades.fade_out) - GRAB,
-    );
-    if frame.editable() && to - from >= GRAB {
+    let curve = alpha.curve();
+    for (index, pair) in curve.points.windows(2).enumerate() {
+        if pair[0].0 >= pair[1].0 {
+            continue;
+        }
+        let at = pair[0].0 + (pair[1].0 - pair[0].0) * 0.2;
         agent_paint_node(
             Role::Slider,
-            format!("{} {}", clip.label, Part::Level.label()),
-            Bounds {
-                origin: point(px(from), px(frame.y(fades.level) - LINE_GRAB / 2.)),
-                size: size(px(to - from), px(LINE_GRAB)),
-            },
+            format!("{} {}", clip.label, Part::Segment(index).label()),
+            square(point(frame.x(at), frame.y(curve.sample(at)[0]))),
             window,
             cx,
         );
@@ -551,34 +632,39 @@ pub(super) fn register(box_: Bounds<Pixels>, clip: &Clip, window: &mut Window, c
 }
 
 impl Editor {
-    /// Take hold of a form clip's alpha line if the press at `at`, in lane
-    /// `row`, is on one of its handles. Selects the clip, so the sheet shows
-    /// the alpha being edited.
-    pub(super) fn press_alpha(&mut self, at: Point<Pixels>, row: usize) -> bool {
+    /// The part of an alpha line under `at`, in window space.
+    fn alpha_under(&self, at: Point<Pixels>) -> Option<(&Clip, Bounds<Pixels>, Grab)> {
         if !self.writable() {
-            return false;
+            return None;
         }
         let (canvas, layout, view) = (self.canvas.get(), self.layout(), self.view);
-        let found = self
-            .clips
+        let row = layout.row_at(f32::from(at.y - canvas.origin.y))?;
+        self.clips
             .iter()
             .filter(|clip| clip.row == row)
             .find_map(|clip| {
                 let box_ = clip_bounds(view, layout, canvas, clip);
-                hit(box_, clip, at).map(|(part, fades)| {
-                    (
-                        clip.id.clone(),
-                        clip.start,
-                        clip.end,
-                        part,
-                        fades,
-                        travel(box_),
-                    )
-                })
-            });
-        let Some((id, start, end, part, initial, travel)) = found else {
+                hit(box_, clip, at).map(|grab| (clip, box_, grab))
+            })
+    }
+
+    /// Follow the pointer over the alpha lines, for the cursor. `true` when
+    /// what it is over changed.
+    pub(super) fn hover_alpha(&mut self, at: Point<Pixels>) -> bool {
+        let over = self.alpha_under(at).map(|(_, _, grab)| grab.part);
+        let changed = over != self.alpha_hover;
+        self.alpha_hover = over;
+        changed
+    }
+
+    /// Take hold of a form clip's alpha line if the press at `at` is on it.
+    /// Selects the clip.
+    pub(super) fn press_alpha(&mut self, at: Point<Pixels>) -> bool {
+        let Some((clip, box_, grab)) = self.alpha_under(at) else {
             return false;
         };
+        let (id, row, start, end) = (clip.id.clone(), clip.row, clip.start, clip.end);
+        let travel = travel(box_);
         self.selected = vec![id.clone()];
         self.cursor = Some(Cursor {
             row,
@@ -591,9 +677,8 @@ impl Editor {
         self.checkpoint();
         self.gesture = Some(Gesture::Alpha {
             clip: id,
-            part,
+            grab,
             origin: at,
-            initial,
             travel,
         });
         true
@@ -605,9 +690,8 @@ impl Editor {
     pub(super) fn drag_alpha(&mut self, gesture: &Gesture, at: Point<Pixels>) {
         let Gesture::Alpha {
             clip,
-            part,
+            grab,
             origin,
-            initial,
             travel,
         } = gesture
         else {
@@ -622,9 +706,10 @@ impl Editor {
             return;
         };
         let zoom = self.view.zoom;
-        let grabbed = match part {
-            Part::FadeOut => span.1 - initial.fade_out * (span.1 - span.0),
-            _ => span.0 + initial.fade_in * (span.1 - span.0),
+        let fades = grab.fades.unwrap_or(Fades::flat(1.));
+        let grabbed = match grab.part {
+            Part::FadeOut => span.1 - fades.fade_out * (span.1 - span.0),
+            _ => span.0 + fades.fade_in * (span.1 - span.0),
         };
         let time = grabbed + f64::from(f32::from(at.x - origin.x) / zoom);
         let mut time = snap(self.beats.as_deref(), time, zoom, SNAP_CAPTURE_DRAG);
@@ -635,12 +720,9 @@ impl Editor {
             }
         }
         let rise = f32::from(origin.y - at.y);
-        let fades = dragged(*part, *initial, span, time, rise, *travel);
-        if fades == *initial {
-            return;
-        }
+        let value = moved(grab, span, time, rise, *travel);
         let mut clips = self.clips.to_vec();
-        if store(&mut clips, clip, &fades.value()) {
+        if store(&mut clips, clip, &value) {
             self.replace_clips(clips);
         }
     }
@@ -685,7 +767,7 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{dragged, Fades, Part};
+    use super::{dragged, lift, Fades, Part};
     use luma_patterns as p;
 
     fn curve(value: p::Value) -> p::Keyframes {
@@ -778,19 +860,37 @@ mod tests {
     fn dragging_the_handles() {
         let flat = Fades::flat(1.);
         let span = (10., 14.);
-        let fade_in = dragged(Part::FadeIn, flat, span, 11., 0., 40.);
+        let fade_in = dragged(Part::FadeIn, flat, span, 11., 0.);
         assert!((fade_in.fade_in - 0.25).abs() < 1e-12);
-        let fade_out = dragged(Part::FadeOut, fade_in, span, 12., 0., 40.);
+        let fade_out = dragged(Part::FadeOut, fade_in, span, 12., 0.);
         assert!((fade_out.fade_out - 0.5).abs() < 1e-12);
         // Past the other fade it stops there; back past the edge it is gone.
-        assert!((dragged(Part::FadeIn, fade_out, span, 13.9, 0., 40.).fade_in - 0.5).abs() < 1e-12);
+        assert!((dragged(Part::FadeIn, fade_out, span, 13.9, 0.).fade_in - 0.5).abs() < 1e-12);
+        assert_eq!(dragged(Part::FadeIn, fade_in, span, 9., 0.).fade_in, 0.);
         assert_eq!(
-            dragged(Part::FadeIn, fade_in, span, 9., 0., 40.).fade_in,
-            0.
+            dragged(Part::FadeIn, fade_in, span, 10., 0.).value(),
+            p::Value::Proportion(1.)
         );
-        assert!(dragged(Part::BendIn, fade_in, span, 0., 10., 40.).ease_in);
-        assert!(!dragged(Part::BendIn, fade_in, span, 0., 3., 40.).ease_in);
-        let level = dragged(Part::Level, flat, span, 0., -10., 40.);
-        assert!((level.level - 0.75).abs() < 1e-12);
+        assert!(dragged(Part::BendIn, fade_in, span, 0., 10.).ease_in);
+        assert!(!dragged(Part::BendIn, fade_in, span, 0., 3.).ease_in);
+    }
+
+    #[test]
+    fn lifting_a_segment_moves_both_its_points() {
+        let flat = p::Keyframes::numbers(&[[0., 1.], [1., 1.]], &[]);
+        assert_eq!(lift(&flat, 0, -0.25), p::Value::Proportion(0.75));
+        assert_eq!(lift(&flat, 0, -2.), p::Value::Proportion(0.));
+        // The hold of a fade moves the level and keeps the fade.
+        let fade = curve(Fades::flat(1.).with_fade_in(0.25).value());
+        let lowered = Fades::flat(0.5).with_fade_in(0.25).value();
+        assert_eq!(lift(&fade, 1, -0.5), lowered);
+        // The ramp lifts off zero: a custom curve, each point kept in 0–1.
+        assert_eq!(
+            lift(&curve(lowered), 0, 0.75),
+            p::Value::Time(p::Keyframes::numbers(
+                &[[0., 0.75], [0.25, 1.], [1., 0.5]],
+                &[p::Segment::Linear, p::Segment::Linear]
+            ))
+        );
     }
 }

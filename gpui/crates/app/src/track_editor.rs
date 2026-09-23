@@ -213,6 +213,8 @@ pub struct Editor {
     transport: Transport,
     playback_surface: Option<Entity<playback_surface::Surface>>,
     gesture: Option<Gesture>,
+    /// The part of an alpha line the pointer is over, for the cursor.
+    alpha_hover: Option<fades::Part>,
     /// The latched zoom anchor: what was under the pointer when the gesture
     /// started, and when it was last fed. Held for the whole gesture so a
     /// momentum flick cannot walk the point it is zooming about.
@@ -717,10 +719,9 @@ enum Gesture {
     /// move is computed from the press, like a clip drag.
     Alpha {
         clip: SharedString,
-        part: fades::Part,
+        /// The part taken hold of, and the alpha when the pointer took hold.
+        grab: fades::Grab,
         origin: Point<Pixels>,
-        /// The alpha when the pointer took hold.
-        initial: fades::Fades,
         /// The line's travel from alpha 0 to 1, in pixels.
         travel: f32,
     },
@@ -1757,6 +1758,7 @@ impl Luma {
             transport: Transport::default(),
             playback_surface: None,
             gesture: None,
+            alpha_hover: None,
             canvas: Rc::new(Cell::new(Bounds::default())),
             anchor: None,
             zoom_motion: None,
@@ -2428,7 +2430,7 @@ impl Luma {
                 return;
             };
 
-            if editor.press_alpha(at, row) {
+            if editor.press_alpha(at) {
                 return;
             }
 
@@ -2558,8 +2560,16 @@ impl Luma {
     /// is what keeps an idle mouse anywhere in the app from redrawing this
     /// screen.
     fn timeline_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        match self.workspace.active_body() {
+        match self.workspace.active_body_mut() {
             Some(Body::TrackEditor(state)) if state.gesture.is_some() => {}
+            // Idle, only the cursor over an alpha line can change, and only
+            // a change redraws.
+            Some(Body::TrackEditor(state)) => {
+                if state.hover_alpha(at) {
+                    cx.notify();
+                }
+                return;
+            }
             _ => return,
         }
         let mut seek = None;
@@ -3544,6 +3554,13 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
         menu: state.menu,
     };
     let registered = scene.clone();
+    // Over an alpha line, the cursor says what a drag does. A drag keeps it
+    // wherever the pointer goes.
+    let alpha_cursor = match &state.gesture {
+        Some(Gesture::Alpha { grab, .. }) => Some((grab.part.cursor(true), true)),
+        Some(_) => None,
+        None => state.alpha_hover.map(|part| (part.cursor(false), false)),
+    };
     let canvas_bounds = Rc::clone(&state.canvas);
     let app = app.clone();
     let resized = app.clone();
@@ -3564,6 +3581,11 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
             },
             move |bounds, hitbox, window, cx| {
                 paint(bounds, &scene, window, cx);
+                match alpha_cursor {
+                    Some((style, true)) => window.set_window_cursor_style(style),
+                    Some((style, false)) => window.set_cursor_style(style, &hitbox),
+                    None => {}
+                }
                 listen(&app, &hitbox, window);
             },
         )

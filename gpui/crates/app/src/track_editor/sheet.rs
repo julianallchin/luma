@@ -537,7 +537,13 @@ fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
     }
     if editor.graph_score.is_some() {
         if let Some(defs) = editor.graph_input_defs(&key) {
-            editor.sheet.defs.insert(key, defs.into());
+            // A form clip's alpha is edited on the timeline, as its alpha line.
+            let form = luma_patterns::is_form(&key);
+            let defs: Rc<[PatternArgDef]> = defs
+                .into_iter()
+                .filter(|def| !form || def.id != super::fades::ALPHA)
+                .collect();
+            editor.sheet.defs.insert(key, defs);
         }
         return;
     }
