@@ -386,7 +386,7 @@ pub(super) fn widget(
         Some(p::Value::Time(curve) | p::Value::Hit(curve)) if curve.is_color() => {
             let hit = slot.mode == Some(p::SourceKind::Hit);
             let entity =
-                cx.new(|cx| GradientEditor::new(gradient_of(&curve), window, cx).without_alpha());
+                cx.new(|cx| GradientEditor::new(gradient_of(&curve), window, cx).without_alpha(cx));
             let def = def.clone();
             subs.push(cx.subscribe(
                 &entity,
@@ -778,7 +778,7 @@ fn promote_select(
         format!("{}:source", slot.spec.name),
         current,
         &labels,
-        state.sheet.open == Some(Menu::Source(index)),
+        menu_visibility(state, Menu::Source(index)),
         move |_, cx| {
             toggle.update(cx, |this, cx| {
                 this.with_track_editor(cx, |editor| {
@@ -870,7 +870,7 @@ fn choice_select(
         id,
         current,
         labels,
-        state.sheet.open == Some(Menu::Choice(index)),
+        menu_visibility(state, Menu::Choice(index)),
         choice_toggle(app, index),
         choice_pick(app, on_pick),
     )
@@ -897,7 +897,7 @@ fn choice_presets(
         current,
         options,
         true,
-        state.sheet.open == Some(Menu::Choice(index)),
+        menu_visibility(state, Menu::Choice(index)),
         choice_toggle(app, index),
         move |picked, _, cx| {
             let on_pick = on_pick.clone();
