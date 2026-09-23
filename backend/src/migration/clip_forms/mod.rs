@@ -1259,7 +1259,6 @@ fn turn_between(old: &MappingSpec, new: &MappingSpec, cells: &[Cell]) -> Option<
     if pairs.is_empty() {
         return None;
     }
-    eprintln!("PAIRS {pairs:?}");
     let wrap = |x: f64| (x + 0.5).rem_euclid(1.0) - 0.5;
     [1.0, -1.0]
         .into_iter()
