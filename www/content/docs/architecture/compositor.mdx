@@ -93,14 +93,13 @@ every 23 ms with the audio playback time (`run_artnet` in
 
 ## Perform mode
 
-When deck states, manual cues or a manual layer are active, `sample` uses the
+When deck states or the controller layer are active, `sample` uses the
 perform mix instead of the editor scene:
 
 1. Each deck with a volume above zero renders its own scene at the deck time.
 2. Dimmer, color, strobe and speed are averaged, weighted by deck volume.
    Position comes from the deck with the highest volume.
-3. Active cues are composited on top with `composite_frame`. Cue intensity
-   comes from the master and group intensity.
+3. Group intensities from the MIDI controller dim the fixtures of each group.
 
 The native app does not have a Perform UI yet. See
 [Performing](/docs/user-guide/performing).

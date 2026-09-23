@@ -49,13 +49,13 @@ The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 | Fixtures and groups | `fixtures`, `fixture_groups`, `fixture_group_members` |
 | Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
 | Scores | `scores`, `clips`, `score_definitions`, `drafts` |
-| Patterns and MIDI | `patterns`, `implementations`, `cues`, `midi_modifiers`, `midi_bindings` |
+| MIDI | `midi_modifiers`, `midi_bindings` |
 | Agents | `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` |
 | History | `changes` |
 
 Local-only tables include `settings`, `universe_outputs`,
 `preprocessing_failures`, `track_waveforms`, `track_mert`,
-`fixture_group_overrides`, `pattern_categories` and `stage_pieces`. Some
+`fixture_group_overrides` and `stage_pieces`. Some
 columns of synced tables are also local, such as `tracks.file_path` and
 `venues.controller_port`.
 
@@ -71,9 +71,9 @@ A clip id and a definition id are `score_id:key`. Loading a score reads the
 three tables into a `luma_patterns::Score`. Saving a score compares it with the
 rows and writes only the rows that changed (`backend/src/database/local/scores/rows.rs`).
 
-`patterns`, `implementations` and `cues` store MIDI cue patterns. The graph is
-the `graph_json` column. A pattern with `is_verified` set is readable by every
-user.
+Clips play only score-local definitions. There is no shared pattern library.
+Migration `20260923100000_drop_cues_and_pattern_library.sql` dropped the old
+`patterns`, `implementations`, `cues` and `pattern_categories` tables.
 
 ## Change log
 
