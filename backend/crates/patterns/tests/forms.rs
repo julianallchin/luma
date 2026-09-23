@@ -275,28 +275,96 @@ fn time_and_space_gradients() {
 #[test]
 fn chase_width_is_relative_to_the_gap_between_strokes() {
     let (form, inputs) = preset("Chase");
-    // Every 2, travel 2, width 0.5 of the gap: a stroke half the axis wide.
+    // Every = travel, rel 0.2: width 0.2 / 0.8 = 0.25 of the axis. Halfway
+    // through its life the stroke is centered on the axis.
     assert_eq!(
         lit(&render(&form, &inputs, 1.0)),
-        [false, false, true, true, true, true, false, false]
+        [false, false, false, true, true, false, false, false]
     );
+    // Every 1, travel 2: g = 0.5. Rel 0.4 is width 0.2 / 0.8 = 0.25.
     let mut relative = inputs.clone();
     set(&mut relative, "every", Value::Beats(1.0));
-    set(&mut relative, "width", Value::Proportion(0.5));
+    set(&mut relative, "width", Value::Proportion(0.4));
     let mut absolute = relative.clone();
     set(&mut absolute, "width_relative", Value::Boolean(false));
     set(&mut absolute, "width", Value::Proportion(0.25));
     for step in 0..40 {
-        let beat = f64::from(step) * 0.1;
+        let beat = f64::from(step) * 0.1 + 0.05;
         assert_eq!(
-            render(&form, &relative, beat),
-            render(&form, &absolute, beat),
+            lit(&render(&form, &relative, beat)),
+            lit(&render(&form, &absolute, beat)),
             "{beat}"
         );
     }
     // Two strokes are on the axis at once when travel is twice every.
-    let two = lit(&render(&form, &relative, 1.5));
-    assert_eq!(two.iter().filter(|on| **on).count(), 4);
+    let on = lit(&render(&form, &relative, 1.5));
+    let runs = on.windows(2).filter(|pair| pair[1] && !pair[0]).count() + usize::from(on[0]);
+    assert_eq!(runs, 2, "{on:?}");
+    // Rel 1 at every = travel is capped at a stroke as wide as the axis.
+    let mut wide = inputs.clone();
+    set(&mut wide, "width", Value::Proportion(1.0));
+    // Its open edges sit on the end heads at that moment.
+    assert_eq!(
+        lit(&render(&form, &wide, 1.0)),
+        [false, true, true, true, true, true, true, false]
+    );
+}
+
+#[test]
+fn clipped_strokes_enter_and_leave_fully() {
+    for name in ["Chase", "Wave", "Ripple"] {
+        let (form, mut inputs) = preset(name);
+        set(
+            &mut inputs,
+            "axis",
+            presets().preset("Chase").unwrap().inputs["axis"].clone(),
+        );
+        // A rest between strokes: every 4, travel 2.
+        let mut rest = inputs.clone();
+        set(&mut rest, "every", Value::Beats(4.0));
+        for beat in [0.0, 2.0, 4.0, 6.0] {
+            assert_eq!(render(&form, &rest, beat), vec![0.0; 8], "{name} at {beat}");
+        }
+        assert!(render(&form, &rest, 1.0).iter().any(|v| *v > 0.0), "{name}");
+    }
+}
+
+#[test]
+fn back_to_back_strokes_are_never_cut_off() {
+    for name in ["Wave", "Ripple"] {
+        let (form, mut inputs) = preset(name);
+        set(
+            &mut inputs,
+            "axis",
+            presets().preset("Chase").unwrap().inputs["axis"].clone(),
+        );
+        let program = prepare(&form, &inputs).unwrap();
+        let beats: Vec<f64> = (0..=800)
+            .map(|step| START + f64::from(step) * 0.01)
+            .collect();
+        let batch = program.evaluate_batch(&beats).unwrap();
+        let frames: Vec<Vec<f64>> = (0..beats.len())
+            .map(|t| {
+                let value = batch["lighting"].sample(t).unwrap();
+                let lit = lighting(&value);
+                heads()
+                    .iter()
+                    .map(|id| lit[id].dimmer.unwrap_or(0.0))
+                    .collect()
+            })
+            .collect();
+        // Every head changes smoothly from one sample to the next, also
+        // across the start of each new stroke.
+        for (t, pair) in frames.windows(2).enumerate() {
+            for (head, (a, b)) in pair[0].iter().zip(&pair[1]).enumerate() {
+                assert!(
+                    (a - b).abs() < 0.1,
+                    "{name}: head {head} jumps {a} -> {b} at {}",
+                    beats[t]
+                );
+            }
+        }
+    }
 }
 
 #[test]
