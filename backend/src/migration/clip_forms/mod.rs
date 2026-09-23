@@ -242,10 +242,6 @@ struct Build<'a> {
     boundaries: Vec<f64>,
 }
 
-/// A clip that starts less than this many beats after an event that is
-/// still lit is taken to start on that event.
-const SNAP: f64 = 1.0 / 16.0;
-
 fn preset(name: &str) -> FormPreset {
     presets()
         .preset(name)
@@ -715,24 +711,19 @@ impl<'a> Build<'a> {
     }
 
     /// `lit` are the events before the clip, in order, that are still lit at
-    /// its start. A start less than [`SNAP`] after the first of them moves
-    /// back onto it; otherwise the light they leave at the start is lost.
-    /// True when the start moved.
+    /// its start. The start moves back onto the first of them, whatever the
+    /// gap, so their light is kept; the clip shows that event before the old
+    /// start too. True when the start moved.
     fn lit_before(&mut self, lit: &[f64]) -> bool {
         let Some(event) = lit.first().copied() else {
             return false;
         };
         let gap = self.clip.start - event;
-        if gap < SNAP {
-            self.note(format!(
-                "start moved back {gap:.4} beats to the event just before it"
-            ));
-            self.move_start(event);
-            true
-        } else {
-            self.note("an event before the clip is still lit at its start");
-            false
-        }
+        self.note(format!(
+            "start moved back {gap:.4} beats onto an event still lit at the old start"
+        ));
+        self.move_start(event);
+        true
     }
 
     /// Start the clip at `beat`, keeping its end. Curves over the clip keep

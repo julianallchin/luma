@@ -298,6 +298,21 @@ fn a_drum_chase_stamps_the_hits_inside_the_clip() {
     };
     assert_eq!(times.as_slice().len(), 2);
     assert_eq!(times.as_slice()[0], 0.0);
+
+    // So does a hit a whole beat before it, as long as its stroke is lit.
+    let host = Host {
+        onsets: BTreeMap::from([(Drum::Snare, vec![7.0, 9.0])]),
+        ..Host::default()
+    };
+    let converted = run(&score, &host).unwrap();
+    assert_eq!(
+        (converted.clip.start, converted.clip.duration),
+        (7.0, DURATION + 1.0)
+    );
+    assert!(converted
+        .notes
+        .iter()
+        .any(|n| n == "start moved back 1.0000 beats onto an event still lit at the old start"));
 }
 
 #[test]
