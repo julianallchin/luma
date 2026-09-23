@@ -22,6 +22,7 @@ mod agent_chat_track;
 mod agent_chat_venue;
 mod chrome_anchors;
 mod click_off;
+mod clip_fades;
 mod clip_forms;
 mod dialog_escape;
 mod dialog_focus;
