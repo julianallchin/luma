@@ -63,7 +63,7 @@ source is one level deep: a source's own settings are plain values.
 | `time[...]` | One curve over the whole clip, all heads equal |
 | `hit[...]` | One curve over the life of each event (chase and sparkle only) |
 | `noise(speed, range)` | Smooth random wandering over time |
-| `audio(from_hz, to_hz, floor)` | Energy of one frequency range of the track's mix |
+| `audio(from_hz, to_hz, floor, threshold)` | Energy of one frequency range of the track's mix |
 
 - `time[...]` and `hit[...]` are keyframes over progress 0–1. Segments are
   `hold`, `linear`, `step` or `bezier`. A `bezier` segment stores its two
@@ -78,11 +78,14 @@ source is one level deep: a source's own settings are plain values.
   Named ranges only fill the two numbers: Kick 40–100, Bass 20–250, Mids
   250–4000, Highs 4000–16000, Full 20–16000. The energy is scaled over the
   clip, so its quietest moment is 0 and its loudest is 1. `floor` (0–1) is
-  the lowest the value goes: value = floor + (1 − floor) × energy. The
+  the lowest the value goes: value = floor + (1 − floor) × energy.
+  `threshold` (0–1, default 0 = no gate) is a gate on the energy: energy
+  below it gives 0, below the floor too; at or above it the value is
+  floor + (1 − floor) × energy, not remapped from the threshold. The
   energy is the mean of the FFT magnitude bins in the range (2048-point FFT,
   about 21.5 Hz per bin at 44.1 kHz), so a narrow low range uses few bins.
   Stored form: `{"type": "audio", "value": {"from_hz": 40, "to_hz": 100,
-  "floor": 0.3}}`.
+  "floor": 0.3, "threshold": 0.5}}`. A threshold of 0 is left out.
 - Engine note for speed inputs (`every`, `travel`) with a `time` curve: count
   strokes by adding up progress frame by frame, like an odometer, not by
   dividing the clock by the current speed. Dividing makes strokes jump when the

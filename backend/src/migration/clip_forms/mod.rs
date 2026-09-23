@@ -568,6 +568,7 @@ impl<'a> Build<'a> {
                 from_hz: audio.low_hz,
                 to_hz: audio.high_hz,
                 floor: audio.floor,
+                threshold: 0.0,
             });
         }
         let curve = match parts.curves.as_slice() {

@@ -323,7 +323,8 @@ fn a_bass_pulse_follows_a_band_of_the_mix() {
         Value::Audio(AudioLevel {
             from_hz: 20.0,
             to_hz: 250.0,
-            floor: 0.2
+            floor: 0.2,
+            threshold: 0.0,
         })
     );
     assert!(converted.notes.iter().any(|n| n == "stem → mix (bass)"));

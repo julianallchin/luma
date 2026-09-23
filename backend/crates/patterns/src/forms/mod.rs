@@ -1094,12 +1094,27 @@ pub(crate) fn lower(
                     vec![("value", c(&key("energy"), "value"))],
                 );
                 // Quiet gives the floor; loud gives 1.
-                Some(scale(
+                let level = scale(
                     &mut body,
                     &key,
                     c(&key("level"), "value"),
                     [audio.floor, 1.0],
-                ))
+                );
+                // Below the threshold the level is 0, under the floor too.
+                Some(if audio.threshold > 0.0 {
+                    body.node(
+                        &key("gate"),
+                        "core/greater",
+                        vec![
+                            ("a", c(&key("level"), "value")),
+                            ("b", n(audio.threshold - 1e-9)),
+                            ("tolerance", n(0.0)),
+                        ],
+                    );
+                    body.multiply(&key("gated"), level, c(&key("gate"), "mask"))
+                } else {
+                    level
+                })
             }
             _ => unreachable!("checked source"),
         };
