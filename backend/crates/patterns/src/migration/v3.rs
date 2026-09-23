@@ -101,11 +101,12 @@ pub fn upgrade_v3(score: &Score) -> Result<Score> {
         }
     }
     remove_unused_exposures(&mut definitions, &mut clips, unused);
-    let upgraded = Score {
+    let mut upgraded = Score {
         version: 4,
         definitions,
         clips,
     };
+    super::lit_heads_density(&mut upgraded);
     upgraded.validate(&standard_library())?;
     Ok(upgraded)
 }

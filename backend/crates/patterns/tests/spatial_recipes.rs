@@ -38,10 +38,10 @@ fn selected(program: &PreparedGraph, beat: f64) -> BTreeSet<String> {
 }
 
 #[test]
-fn shuffled_walk_lights_exact_head_counts_without_repeating_until_needed() {
+fn shuffled_walk_lights_a_density_of_heads_without_repeating_until_needed() {
     let library = standard_library();
     let mut cells = cells();
-    let args = BTreeMap::from([("count".into(), Value::Number(2.))]);
+    let args = BTreeMap::from([("density".into(), Value::Proportion(0.125))]);
     let program =
         support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
     let mut seen = BTreeSet::new();
@@ -60,8 +60,9 @@ fn shuffled_walk_lights_exact_head_counts_without_repeating_until_needed() {
     for beat in [20., 1., 7., 0.1, 3.] {
         assert_eq!(selected(&program, beat), selected(&reordered, beat));
     }
-    for (count, expected) in [(-1., 0), (0., 0), (1., 1), (2.9, 2), (16., 16), (100., 16)] {
-        let args = BTreeMap::from([("count".into(), Value::Number(count))]);
+    let densities = [(0., 0), (0.01, 1), (0.1, 2), (0.5, 8), (0.99, 16), (1., 16)];
+    for (density, expected) in densities {
+        let args = BTreeMap::from([("density".into(), Value::Proportion(density))]);
         let p =
             support::prepare_effect(&library, "random_heads_mask", &args, frame(&cells)).unwrap();
         for beat in [0., 1., 17.] {
@@ -77,7 +78,7 @@ fn fresh_random_sets_and_phase_delay_replay_after_seeking() {
     let library = standard_library();
     let cells = cells();
     let args = BTreeMap::from([
-        ("count".into(), Value::Number(3.)),
+        ("density".into(), Value::Proportion(0.1875)),
         ("shuffle".into(), Value::Boolean(true)),
         ("delay".into(), Value::Beats(0.5)),
         ("grid_aligned".into(), Value::Boolean(true)),

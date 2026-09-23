@@ -45,3 +45,7 @@ the live numerical recipes in `src/recipes.json`.
 Playback and previews upgrade a copy in memory (`backend/src/services/graph_scores.rs`).
 Unknown source content fails without modifying it, and newly introduced catalog
 names cannot overwrite an authored helper.
+
+Random heads lit a count of heads; it now lights a Density share of them.
+Score rows carry no version, so `migration::lit_heads_density` runs on every
+row read and inside the version chain. Every count resets to half the heads.

@@ -16,6 +16,7 @@ fn stem(id: &str) -> Option<&str> {
 
 /// Mask color was colour × mask before one Multiply took every signal.
 pub(super) fn retire(score: &mut Score) {
+    super::lit_heads_density(score);
     for definition in score.definitions.values_mut() {
         let Body::Graph(graph) = &mut definition.body else {
             continue;
@@ -51,6 +52,7 @@ pub(super) fn retire(score: &mut Score) {
 pub fn flatten(score: &mut Score) -> Result<()> {
     let library = standard_library();
     adopt_shipped_helpers(&mut score.definitions, &library);
+    super::lit_heads_density(score);
     // Copies of the version 2 library; a copy of an authored helper stays
     // the node the author made.
     let historical = super::v2_library();
@@ -106,6 +108,7 @@ fn referenced(
 }
 
 /// A copy that computes exactly what a shipped graph computes is that graph.
+/// A copy of Random heads mask counted heads; it takes the shipped Density graph.
 fn adopt_shipped_helpers(definitions: &mut BTreeMap<String, Definition>, library: &Library) {
     loop {
         let adopted: BTreeMap<String, String> = definitions
@@ -113,7 +116,8 @@ fn adopt_shipped_helpers(definitions: &mut BTreeMap<String, Definition>, library
             .filter_map(|(id, copy)| {
                 let stem = stem(id)?;
                 let shipped = library.definitions.get(stem)?;
-                same_shape(copy, shipped).then(|| (id.clone(), stem.to_owned()))
+                (stem == "random_heads_mask" || same_shape(copy, shipped))
+                    .then(|| (id.clone(), stem.to_owned()))
             })
             .collect();
         if adopted.is_empty() {

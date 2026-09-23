@@ -176,17 +176,17 @@ Selects Proportion of the heads in a random order. A new Index gives a new order
 
 ## Random heads mask
 
-`random_heads_mask` · Graph of 15 nodes
+`random_heads_mask` · Graph of 18 nodes
 
-Lights Lit heads and changes them every Change every beats.
+Lights a Density share of the heads and changes them every Change every beats.
 
 | Input | Name | Type | Rate | Default | Description |
 |---|---|---|---|---|---|
-| `count` | Lit heads | Signal (number, one channel) | per frame | `1` | Value |
 | `delay` | Phase delay | Signal (beats, one channel) | fixed | `0 beats` | Shift stroke starts later on the beat grid |
+| `density` | Density | Signal (0–1, one channel) | per frame | `0.5` | Share of the selected heads that are lit, rounded to whole heads. Above zero lights at least one head. |
 | `grid_aligned` | Follow track grid | Boolean | fixed | `off` | Otherwise start at the clip boundary |
 | `repeat` | Change every (beats) | Signal (beats, one channel) | fixed | `1 beats` | Time between stroke starts, in beats |
-| `shuffle` | Shuffle each change | Boolean | per frame | `off` | Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. Counts are floored and bounded by the selection size. |
+| `shuffle` | Shuffle each change | Boolean | per frame | `off` | Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. |
 
 | Output | Type | Rate |
 |---|---|---|

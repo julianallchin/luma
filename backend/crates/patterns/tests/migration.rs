@@ -81,6 +81,7 @@ fn v2_builtins_migrate_against_independent_original_engine_samples() {
             {
                 "Dissolve Flash" => assert_dissolve_order(&actual, expected, &label),
                 "Chase" => assert_chase_passage(&actual, expected, &label),
+                "Random heads" => assert_half_lit(&actual, expected, &label),
                 _ => assert_outputs(&actual, expected, &label),
             }
         }
@@ -181,6 +182,38 @@ fn assert_dissolve_order(
         actual.is_subset(&expected) || expected.is_subset(&actual),
         "{label}: {actual:?} and {expected:?} are not prefixes of one order"
     );
+}
+
+/// Random heads counted one head; the migration lights half of them in the
+/// color the one head showed.
+fn assert_half_lit(
+    actual: &BTreeMap<String, FixtureOutput>,
+    expected: &BTreeMap<String, FixtureOutput>,
+    label: &str,
+) {
+    let lit = |outputs: &BTreeMap<String, FixtureOutput>| {
+        outputs
+            .values()
+            .filter(|v| v.rgb().iter().any(|c| *c > 0.))
+            .map(FixtureOutput::rgb)
+            .collect::<Vec<_>>()
+    };
+    let (actual_lit, expected_lit) = (lit(actual), lit(expected));
+    assert_eq!(expected_lit.len(), 1, "{label}");
+    assert_eq!(
+        actual_lit.len(),
+        (actual.len() as f64 / 2.).round() as usize,
+        "{label}"
+    );
+    for rgb in actual_lit {
+        for (a, e) in rgb.iter().zip(expected_lit[0]) {
+            assert!(
+                (a - e).abs() < 2e-6,
+                "{label}: {rgb:?} != {:?}",
+                expected_lit[0]
+            );
+        }
+    }
 }
 
 fn assert_outputs(
@@ -645,4 +678,70 @@ fn version_seven_refuses_a_retired_shimmer_call_and_keeps_everything_else() {
     let upgraded = migration::upgrade(&document("dissolve")).unwrap();
     assert_eq!(upgraded.version(), Score::VERSION);
     assert_eq!(upgraded.definitions, document("dissolve").definitions);
+}
+
+/// A saved clip graph exposed Lit heads to its clip; it now exposes Density at
+/// half the heads, and a count written on the call resets to half too.
+#[test]
+fn lit_heads_become_density_at_half_the_heads() {
+    let heads = |count: serde_json::Value| serde_json::json!({"definition": "random_heads_mask", "inputs": {"count": count}});
+    let mut score = serde_json::from_value::<Score>(serde_json::json!({
+        "version": Score::VERSION,
+        "definitions": {
+            "clip": {
+                "name": "Random heads",
+                "inputs": {"count": {"name": "Lit heads", "description": "Value",
+                    "value_type": {"signal": {"unit": "number", "channels": "value"}},
+                    "rate": "frame", "default": {"type": "number", "value": 1.0}}},
+                "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
+                "body": {"kind": "graph", "body": {
+                    "input_nodes": {"count": {"name": "Lit heads", "position": [0.0, 0.0]}},
+                    "nodes": {
+                        "exposed": heads(serde_json::json!({"source": "input", "input": "count"})),
+                        "fixed": heads(serde_json::json!({"source": "value", "value": {"type": "number", "value": 3.0}})),
+                        "both": {"definition": "core/maximum", "inputs": {
+                            "a": {"source": "connection", "node": "exposed", "output": "mask"},
+                            "b": {"source": "connection", "node": "fixed", "output": "mask"}}},
+                        "color": {"definition": "core/multiply", "inputs": {
+                            "a": {"source": "value", "value": {"type": "color", "value": [1.0, 1.0, 1.0]}},
+                            "b": {"source": "connection", "node": "both", "output": "value"}}},
+                        "output": {"definition": "output", "inputs": {
+                            "color": {"source": "connection", "node": "color", "output": "value"}}}
+                    },
+                    "outputs": {"lighting": {"source": "connection", "node": "output", "output": "lighting"}}
+                }}
+            }
+        },
+        "clips": {"one": {"graph": "clip", "start": 0.0, "duration": 4.0, "seed": 1,
+            "inputs": {"count": {"type": "number", "value": 2.0}}}}
+    }))
+    .unwrap();
+    assert!(score.validate(&standard_library()).is_err());
+    migration::validate(&score).unwrap();
+    migration::lit_heads_density(&mut score);
+    score.validate(&standard_library()).unwrap();
+    let definition = &score.definitions["clip"];
+    assert_eq!(definition.inputs.keys().collect::<Vec<_>>(), ["density"]);
+    assert_eq!(
+        definition.inputs["density"].default,
+        Some(Value::Proportion(0.5))
+    );
+    let Body::Graph(graph) = &definition.body else {
+        panic!()
+    };
+    assert_eq!(graph.input_nodes["density"].name, "Density");
+    assert_eq!(
+        graph.nodes["exposed"].inputs["density"],
+        Binding::Input {
+            input: "density".into()
+        }
+    );
+    assert_eq!(
+        graph.nodes["fixed"].inputs["density"],
+        Value::Proportion(0.5).into()
+    );
+    assert!(score.clips["one"].inputs.is_empty());
+    let repaired = score.clone();
+    migration::lit_heads_density(&mut score);
+    assert_eq!(score, repaired);
 }
