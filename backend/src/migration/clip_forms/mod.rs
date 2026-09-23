@@ -612,11 +612,12 @@ impl<'a> Build<'a> {
                     .onsets
                     .get(&drum)
                     .ok_or_else(|| format!("the track has no {} onsets", drum.name()))?;
-                if let Some(hit) = onsets.iter().rev().find(|t| **t < start).copied() {
-                    if hit + life > start + 1e-9 {
-                        self.lit_before(hit);
-                    }
-                }
+                let lit: Vec<f64> = onsets
+                    .iter()
+                    .copied()
+                    .filter(|t| *t < start && *t + life > start + 1e-9)
+                    .collect();
+                self.lit_before(&lit);
                 let start = self.clip.start;
                 let stamps: Vec<f64> = onsets
                     .iter()
@@ -639,8 +640,12 @@ impl<'a> Build<'a> {
                 }
                 let origin = if grid_aligned { 0.0 } else { start } + delay;
                 let first = origin + ((start - origin) / repeat - 1e-9).ceil() * repeat;
-                let previous = first - repeat;
-                if previous + life > start + 1e-9 && self.lit_before(previous) {
+                let mut lit: Vec<f64> = (1..=64)
+                    .map(|k| first - f64::from(k) * repeat)
+                    .take_while(|at| at + life > start + 1e-9)
+                    .collect();
+                lit.reverse();
+                if self.lit_before(&lit) {
                     // The clip now starts on the event before it.
                 } else if first >= end - 1e-3 {
                     self.note("no event starts inside the clip");
@@ -667,10 +672,14 @@ impl<'a> Build<'a> {
         Ok(value)
     }
 
-    /// An event at `event`, before the clip, is still lit at the clip start.
-    /// A start less than [`SNAP`] after it moves back onto it; otherwise the
-    /// light it leaves at the start is lost. True when the start moved.
-    fn lit_before(&mut self, event: f64) -> bool {
+    /// `lit` are the events before the clip, in order, that are still lit at
+    /// its start. A start less than [`SNAP`] after the first of them moves
+    /// back onto it; otherwise the light they leave at the start is lost.
+    /// True when the start moved.
+    fn lit_before(&mut self, lit: &[f64]) -> bool {
+        let Some(event) = lit.first().copied() else {
+            return false;
+        };
         let gap = self.clip.start - event;
         if gap < SNAP {
             self.note(format!(
