@@ -40,6 +40,7 @@ mod graph_spectrogram;
 mod keyboard;
 mod library_foundation;
 mod pointer_ownership;
+mod preset_browser;
 mod score_edit_focus;
 mod score_menu;
 mod settings;
