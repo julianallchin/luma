@@ -67,7 +67,7 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
         "a search matches the form's name: {out}"
     );
     let order = [
-        "Color", "Axis", "Every", "Travel", "Width", "Shape", "Path", "Alpha", "Boundary",
+        "Color", "Axis", "Every", "Travel", "Width", "Shape", "Path", "Boundary",
     ];
     let inputs: Vec<&str> = out["inputs"]
         .as_array()
@@ -77,6 +77,14 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
         .filter(|label| order.contains(label))
         .collect();
     assert_eq!(inputs, order, "the sheet shows the form's inputs in order");
+    assert!(
+        !out["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "Alpha"),
+        "alpha is edited on the timeline, not in the sheet: {out}"
+    );
     assert_eq!(out["graph"], false, "a form clip opens no graph tab: {out}");
     assert_eq!(
         out["sheet"], true,
@@ -223,8 +231,8 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
 }
 
 #[test]
-fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
-    let mut harness = Fixture::new("clip-forms-alpha-curves", 20, vec![])
+fn a_curve_input_offers_its_curves_and_custom_opens_the_editor() {
+    let mut harness = Fixture::new("clip-forms-width-curves", 20, vec![])
         .with_graph_score(support::preset_score("Chase"))
         .with_rig()
         .window(1400., 1000.)
@@ -250,37 +258,31 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
         };
         const settle=()=>app.frames(16,{waitMs:60});
         app.click(node("card","Chase"));
-        until("form inputs",s=>s.find({role:"row",label:"Alpha"}));
-        app.click(inRow("Alpha","select","Fixed"));
+        until("form inputs",s=>s.find({role:"row",label:"Width"}));
+        app.click(inRow("Width","select","Fixed"));
         app.click(node("button","↗ Over time"));
-        until("full",s=>s.find({role:"select",label:"Full"}));
-        settle();
-        // A preset keeps the editor out of the way.
-        const hidden=!app.snapshot().find({role:"card",label:"Envelope curve"});
-        app.click(inRow("Alpha","select","Full"));
-        app.click(node("button","Custom"));
+        // A flat curve is no preset: Custom, with its editor open.
         until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
         settle();
         const editorPresets=["Hard","Soft","Triangle"].filter(l=>app.snapshot().find({role:"button",label:l}));
-        const chip=inRow("Alpha","select","Full");
+        const chip=inRow("Width","select","Custom");
         app.click(chip);
         const grid=node("card","Presets").bounds;
         const cells=app.snapshot().findAll({role:"button"})
             .filter(n=>n.bounds.x>=grid.x&&n.bounds.y>=grid.y&&n.bounds.x<grid.x+grid.width&&n.bounds.y<grid.y+grid.height)
             .map(n=>({label:n.label,y:n.bounds.y,w:n.bounds.width}));
-        app.click(node("button","Fade in-out"));
-        until("picked",s=>s.find({role:"select",label:"Fade in-out"}));
+        app.click(node("button","Swell"));
+        until("picked",s=>s.find({role:"select",label:"Swell"}));
         settle();
         const closed=!app.snapshot().find({role:"card",label:"Presets"});
         const editorGone=!app.snapshot().find({role:"card",label:"Envelope curve"});
-        ({hidden,editorPresets,grid,chip:chip.bounds,cells,closed,editorGone})
+        ({editorPresets,grid,chip:chip.bounds,cells,closed,editorGone})
     "#,
         ),
         Duration::from_secs(90),
     );
     assert_eq!(result.error, None, "{}", result.stdout);
     let out = &result.result;
-    assert_eq!(out["hidden"], true, "a preset hides the editor: {out}");
     assert_eq!(
         out["editorGone"], true,
         "picking a preset hides it again: {out}"
@@ -290,8 +292,8 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
         serde_json::json!([]),
         "the editor drops its own presets beside the picker: {out}"
     );
-    let alpha: Vec<&str> = luma_patterns::presets()
-        .curves_for("alpha")
+    let offered: Vec<&str> = luma_patterns::presets()
+        .curves_for("width")
         .map(|curve| curve.name.as_str())
         .chain(["Custom"])
         .collect();
@@ -300,13 +302,10 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|c| alpha.contains(&c["label"].as_str().unwrap()))
+        .filter(|c| offered.contains(&c["label"].as_str().unwrap()))
         .collect();
     let labels: Vec<&str> = cells.iter().map(|c| c["label"].as_str().unwrap()).collect();
-    assert_eq!(
-        labels, alpha,
-        "alpha offers its own curves, then Custom: {out}"
-    );
+    assert_eq!(labels, offered, "the input's curves, then Custom: {out}");
     // A tidy grid: rows as full as the first, the last no longer.
     let mut rows: Vec<usize> = Vec::new();
     let mut last = f64::NAN;
@@ -318,7 +317,7 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
         }
         *rows.last_mut().unwrap() += 1;
     }
-    assert_eq!(rows, [5, 4], "{out}");
+    assert_eq!(rows, [4, 4], "{out}");
     assert!(
         out["chip"]["width"].as_f64().unwrap() > 250.,
         "the chip spans the column like every value control: {out}"
@@ -335,16 +334,16 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
     );
     assert_eq!(out["closed"], true, "a pick closes the popover: {out}");
 
-    let score = stored("clip-forms-alpha-curves");
-    let fade = luma_patterns::presets()
-        .curves_for("alpha")
-        .find(|curve| curve.name == "Fade in-out")
+    let score = stored("clip-forms-width-curves");
+    let swell = luma_patterns::presets()
+        .curves_for("width")
+        .find(|curve| curve.name == "Swell")
         .unwrap();
     assert_eq!(
-        score["clips"]["form-clip"]["inputs"]["alpha"],
-        serde_json::json!({"type": "time", "value": fade.curve}),
-        "the pick stores the alpha curve: {}",
-        score["clips"]["form-clip"]["inputs"]["alpha"]
+        score["clips"]["form-clip"]["inputs"]["width"],
+        serde_json::json!({"type": "time", "value": swell.curve}),
+        "the pick stores the curve: {}",
+        score["clips"]["form-clip"]["inputs"]["width"]
     );
 }
 
@@ -460,13 +459,9 @@ fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
         };
         const settle=()=>app.frames(16,{waitMs:60});
         app.click(node("card","Chase"));
-        until("form inputs",s=>s.find({role:"row",label:"Alpha"}));
-        app.click(inRow("Alpha","select","Fixed"));
+        until("form inputs",s=>s.find({role:"row",label:"Width"}));
+        app.click(inRow("Width","select","Fixed"));
         app.click(node("button","↗ Over time"));
-        until("full",s=>s.find({role:"select",label:"Full"}));
-        settle();
-        app.click(inRow("Alpha","select","Full"));
-        app.click(node("button","Custom"));
         until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
         settle();
         const box=node("card","Envelope curve").bounds;
@@ -481,13 +476,13 @@ fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
     );
     assert_eq!(result.error, None, "{}", result.stdout);
     let score = stored("clip-forms-envelope-drag");
-    let alpha = &score["clips"]["form-clip"]["inputs"]["alpha"];
-    assert_eq!(alpha["type"], "time", "{alpha}");
-    let points = alpha["value"]["points"].as_array().unwrap();
+    let width = &score["clips"]["form-clip"]["inputs"]["width"];
+    assert_eq!(width["type"], "time", "{width}");
+    let points = width["value"]["points"].as_array().unwrap();
     let last = points.last().unwrap();
     // The end point keeps its x and follows the pointer to the bottom.
-    assert_eq!(last[0].as_f64(), Some(1.0), "{alpha}");
-    assert_eq!(last[1].as_f64(), Some(0.0), "{alpha}");
+    assert_eq!(last[0].as_f64(), Some(1.0), "{width}");
+    assert_eq!(last[1].as_f64(), Some(0.0), "{width}");
 }
 
 #[test]
@@ -502,9 +497,9 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
             r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
-        const field=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Alpha = "));
+        const field=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Width = "));
         app.click(node("card","Chase"));
-        until("alpha",()=>field());
+        until("width",()=>field());
         app.click(field());
         until("focused",()=>field().focused);
         app.key("secondary-a backspace");
@@ -525,12 +520,12 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
     assert_eq!(out["typing"], true, "{out}");
     assert_eq!(out["focused"], false, "{out}");
     assert_eq!(
-        out["after"], "Alpha = 50",
-        "alpha reads as a percent: {out}"
+        out["after"], "Width = 50",
+        "width reads as a percent: {out}"
     );
     let score = stored("clip-forms-blur");
     assert_eq!(
-        score["clips"]["form-clip"]["inputs"]["alpha"],
+        score["clips"]["form-clip"]["inputs"]["width"],
         serde_json::json!({"type": "proportion", "value": 0.5}),
         "blur commits the typed value"
     );
@@ -579,14 +574,7 @@ fn every_sheet_row_has_one_shape() {
             "row labels are sentence case: {labels:?}"
         );
     }
-    for want in [
-        "Blend",
-        "Selection",
-        "How many",
-        "Brightness",
-        "Grain",
-        "Alpha",
-    ] {
+    for want in ["Blend", "Selection", "How many", "Brightness", "Grain"] {
         assert!(labels.contains(&want), "no {want} row: {labels:?}");
     }
     // Mode menus in the header all have one width.
