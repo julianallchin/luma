@@ -417,3 +417,61 @@ fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
         );
     }
 }
+
+#[test]
+fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
+    let mut harness = Fixture::new("clip-forms-envelope-drag", 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 1400.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const reveal=target=>{
+            const p=node("card","Clip inputs").bounds, b=target.bounds;
+            if(b.y<p.y+70 || b.y+b.height>p.y+p.height-160) {
+                app.scroll({x:p.x+p.width/2,y:p.y+p.height/2},{dy:(p.y+140)-b.y,steps:5});
+                app.frames(3);
+            }
+        };
+        const inRow=(row,role,label)=>{
+            reveal(node("row",row));
+            const r=node("row",row).bounds;
+            const found=app.snapshot().findAll({role,label}).find(n=>n.bounds.y>=r.y&&n.bounds.y<r.y+r.height);
+            if(!found) throw new Error(`no ${role} ${label} in ${row}`);
+            return found;
+        };
+        const settle=()=>app.frames(16,{waitMs:60});
+        app.click(node("card","Chase"));
+        until("form inputs",s=>s.find({role:"row",label:"Alpha"}));
+        app.click(inRow("Alpha","select","Fixed"));
+        app.click(node("button","↗ Over time"));
+        until("full",s=>s.find({role:"select",label:"Full"}));
+        settle();
+        app.click(inRow("Alpha","select","Full"));
+        app.click(node("button","Custom"));
+        until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
+        settle();
+        const box=node("card","Envelope curve").bounds;
+        const end=node("slider","Envelope anchor 2");
+        // Down and to the left, far past the box, and released out there.
+        app.drag(end,{dx:-300,dy:box.height*3},{steps:8});
+        settle();
+        ({box})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let score = stored("clip-forms-envelope-drag");
+    let alpha = &score["clips"]["form-clip"]["inputs"]["alpha"];
+    assert_eq!(alpha["type"], "time", "{alpha}");
+    let points = alpha["value"]["points"].as_array().unwrap();
+    let last = points.last().unwrap();
+    // The end point keeps its x and follows the pointer to the bottom.
+    assert_eq!(last[0].as_f64(), Some(1.0), "{alpha}");
+    assert_eq!(last[1].as_f64(), Some(0.0), "{alpha}");
+}
