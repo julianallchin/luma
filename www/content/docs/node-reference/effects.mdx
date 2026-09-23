@@ -166,11 +166,11 @@ Random heads mask multiplied by Color.
 | Input | Name | Type | Rate | Default | Description |
 |---|---|---|---|---|---|
 | `color` | Color | Signal (0–1, RGB) | per frame | `RGB (1, 1, 1)` |  |
-| `count` | Lit heads | Signal (number, one channel) | per frame | `1` | Value |
 | `delay` | Phase delay | Signal (beats, one channel) | fixed | `0 beats` | Shift stroke starts later on the beat grid |
+| `density` | Density | Signal (0–1, one channel) | per frame | `0.5` | Share of the selected heads that are lit, rounded to whole heads. Above zero lights at least one head. |
 | `grid_aligned` | Follow track grid | Boolean | fixed | `off` | Otherwise start at the clip boundary |
 | `repeat` | Change every (beats) | Signal (beats, one channel) | fixed | `1 beats` | Time between stroke starts, in beats |
-| `shuffle` | Shuffle each change | Boolean | per frame | `off` | Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. Counts are floored and bounded by the selection size. |
+| `shuffle` | Shuffle each change | Boolean | per frame | `off` | Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. |
 
 | Output | Type | Rate |
 |---|---|---|

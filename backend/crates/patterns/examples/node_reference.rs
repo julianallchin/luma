@@ -104,7 +104,7 @@ const CATEGORIES: &[Category] = &[
             ("multiply_mask", "Multiplies two masks and clamps the result to 0–1."),
             ("scale_mask", "Multiplies a mask by Amount and clamps the result to 0–1."),
             ("random_selection", "Selects Proportion of the heads in a random order. A new Index gives a new order. Softness fades the heads near the edge of the selection."),
-            ("random_heads_mask", "Lights Lit heads and changes them every Change every beats."),
+            ("random_heads_mask", "Lights a Density share of the heads and changes them every Change every beats."),
             ("event_envelope", "Samples Shape at the progress of each event, multiplies by its weight, and takes the maximum over events."),
             ("envelope", "Samples an editable curve at Progress."),
             ("soft_edges", "Makes an envelope that rises and falls linearly at both edges. Edge softness sets the width of the edges."),

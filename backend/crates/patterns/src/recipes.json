@@ -382,16 +382,16 @@
     "name": "Random heads",
     "inputs": {
       "color": {"name":"Color","description":"Color","value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame","default":{"type":"color","value":[1.0,1.0,1.0]}},
-      "count": {"name":"Lit heads","description":"Value","value_type":{"signal":{"unit":"number","channels":"value"}},"rate":"frame","default":{"type":"number","value":1.0}},
+      "density": {"name":"Density","description":"Share of the selected heads that are lit, rounded to whole heads. Above zero lights at least one head.","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.5}},
       "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
       "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
       "repeat": {"name":"Change every (beats)","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":1.0}},
-      "shuffle": {"name":"Shuffle each change","description":"Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. Counts are floored and bounded by the selection size.","value_type":"boolean","rate":"frame","default":{"type":"boolean","value":false}}
+      "shuffle": {"name":"Shuffle each change","description":"Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change.","value_type":"boolean","rate":"frame","default":{"type":"boolean","value":false}}
     },
     "outputs": {"color":{"value_type":{"signal":{"unit":"proportion","channels":"rgb"}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
       "nodes": {
-        "mask": {"definition":"random_heads_mask","inputs":{"count":{"source":"input","input":"count"},"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"},"shuffle":{"source":"input","input":"shuffle"}}},
+        "mask": {"definition":"random_heads_mask","inputs":{"density":{"source":"input","input":"density"},"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"},"shuffle":{"source":"input","input":"shuffle"}}},
         "output": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"color"},"b":{"source":"connection","node":"mask","output":"mask"}}}
       },
       "outputs": {"color":{"source":"connection","node":"output","output":"value"}}
@@ -401,27 +401,30 @@
   "random_heads_mask": {
     "name": "Random heads mask",
     "inputs": {
-      "count": {"name":"Lit heads","description":"Value","value_type":{"signal":{"unit":"number","channels":"value"}},"rate":"frame","default":{"type":"number","value":1.0}},
+      "density": {"name":"Density","description":"Share of the selected heads that are lit, rounded to whole heads. Above zero lights at least one head.","value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame","default":{"type":"proportion","value":0.5}},
       "delay": {"name":"Phase delay","description":"Shift stroke starts later on the beat grid","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":0.0}},
       "grid_aligned": {"name":"Follow track grid","description":"Otherwise start at the clip boundary","value_type":"boolean","rate":"fixed","default":{"type":"boolean","value":false}},
       "repeat": {"name":"Change every (beats)","description":"Time between stroke starts, in beats","value_type":{"signal":{"unit":"beats","channels":"value"}},"rate":"fixed","default":{"type":"beats","value":1.0}},
-      "shuffle": {"name":"Shuffle each change","description":"Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change. Counts are floored and bounded by the selection size.","value_type":"boolean","rate":"frame","default":{"type":"boolean","value":false}}
+      "shuffle": {"name":"Shuffle each change","description":"Off walks through a seeded shuffled order, minimizing repeated heads. On draws a fresh set each change.","value_type":"boolean","rate":"frame","default":{"type":"boolean","value":false}}
     },
     "outputs": {"mask":{"value_type":{"signal":{"unit":"proportion","channels":"value"}},"rate":"frame"}},
     "body": {"kind":"graph","body":{
       "nodes": {
         "advance": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"count","output":"value"},"b":{"source":"connection","node":"cycle","output":"value"}}},
+        "any": {"definition":"core/greater","inputs":{"a":{"source":"input","input":"density"},"b":{"source":"value","value":{"type":"number","value":0.0}},"tolerance":{"source":"value","value":{"type":"number","value":1e-09}}}},
         "clock": {"definition":"rhythm","inputs":{"delay":{"source":"input","input":"delay"},"grid_aligned":{"source":"input","input":"grid_aligned"},"repeat":{"source":"input","input":"repeat"}}},
-        "count": {"definition":"core/minimum","inputs":{"a":{"source":"connection","node":"positive","output":"value"},"b":{"source":"connection","node":"size","output":"value"}}},
+        "count": {"definition":"core/minimum","inputs":{"a":{"source":"connection","node":"lit","output":"value"},"b":{"source":"connection","node":"size","output":"value"}}},
         "cycle": {"definition":"core/choose_number","inputs":{"condition":{"source":"input","input":"shuffle"},"no":{"source":"connection","node":"clock","output":"cycle"},"yes":{"source":"value","value":{"type":"number","value":0.0}}}},
         "epoch": {"definition":"core/choose_number","inputs":{"condition":{"source":"input","input":"shuffle"},"no":{"source":"value","value":{"type":"number","value":0.0}},"yes":{"source":"connection","node":"clock","output":"cycle"}}},
-        "floor": {"definition":"core/floor","inputs":{"value":{"source":"input","input":"count"}}},
+        "floor": {"definition":"core/floor","inputs":{"value":{"source":"connection","node":"half_up","output":"value"}}},
         "fraction": {"definition":"core/fraction","inputs":{"value":{"source":"connection","node":"turns","output":"value"}}},
+        "half_up": {"definition":"core/add","inputs":{"a":{"source":"connection","node":"scaled","output":"value"},"b":{"source":"value","value":{"type":"number","value":0.5}}}},
         "index": {"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"fraction","output":"value"},"b":{"source":"connection","node":"size","output":"value"}}},
-        "positive": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"floor","output":"value"},"b":{"source":"value","value":{"type":"number","value":0.0}}}},
+        "lit": {"definition":"core/maximum","inputs":{"a":{"source":"connection","node":"floor","output":"value"},"b":{"source":"connection","node":"any","output":"mask"}}},
         "random": {"definition":"core/random","inputs":{"epoch":{"source":"connection","node":"epoch","output":"value"}}},
         "rank": {"definition":"core/rank","inputs":{"value":{"source":"connection","node":"random","output":"value"}}},
         "rotated": {"definition":"core/subtract","inputs":{"a":{"source":"connection","node":"rank","output":"value"},"b":{"source":"connection","node":"advance","output":"value"}}},
+        "scaled": {"definition":"core/multiply","inputs":{"a":{"source":"input","input":"density"},"b":{"source":"connection","node":"size","output":"value"}}},
         "selected": {"definition":"core/greater","inputs":{"a":{"source":"connection","node":"count","output":"value"},"b":{"source":"connection","node":"index","output":"value"},"tolerance":{"source":"value","value":{"type":"number","value":1e-09}}}},
         "size": {"definition":"core/head_count","inputs":{"value":{"source":"connection","node":"rank","output":"value"}}},
         "turns": {"definition":"core/divide","inputs":{"a":{"source":"connection","node":"rotated","output":"value"},"b":{"source":"connection","node":"size","output":"value"}}}

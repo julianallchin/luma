@@ -140,7 +140,7 @@ The standard "where is this head" node. Wire it into `core/greater`, `sample_gra
 
 **dissolve** — on each trigger, a random share of heads fades by a coverage curve. `trigger`, `duration: beats = 2`, `proportion: envelope = fade out`, `shape = flat`, `softness: proportion = 0`. Out `mask`.
 
-**random_heads_mask** — a rolling random subset that changes on a beat grid. `count: number = 1`, `repeat: beats = 1`, `delay: beats = 0`, `grid_aligned: bool = false`, `shuffle: bool = false`. Out `mask`. Shuffle off walks one seeded order; on draws a new set each change.
+**random_heads_mask** — a rolling random subset that changes on a beat grid. `density: proportion = 0.5` (share of the selected heads, rounded; above 0 lights at least one), `repeat: beats = 1`, `delay: beats = 0`, `grid_aligned: bool = false`, `shuffle: bool = false`. Out `mask`. Shuffle off walks one seeded order; on draws a new set each change.
 
 **random_selection** — a seeded random share of heads for a given index. `index: number = 0`, `proportion = 0.25`, `softness = 0`. Out `selected`. A new index is a new draw.
 

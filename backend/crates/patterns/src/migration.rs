@@ -21,6 +21,7 @@ pub fn upgrade(score: &Score) -> Result<Score> {
             version => return Err(Error(format!("cannot migrate score version {version}"))),
         };
     }
+    lit_heads_density(&mut score);
     score.validate(&standard_library())?;
     Ok(score)
 }
@@ -35,7 +36,11 @@ pub fn validate(score: &Score) -> Result<()> {
             flatten::retire(&mut retired);
             retired.validate(&standard_library())
         }
-        _ => score.validate(&standard_library()),
+        _ => {
+            let mut current = score.clone();
+            lit_heads_density(&mut current);
+            current.validate(&standard_library())
+        }
     }
 }
 
@@ -50,8 +55,88 @@ pub fn upgrade_v6(score: &Score) -> Result<Score> {
     }
     let mut upgraded = score.clone();
     upgraded.version = 7;
+    lit_heads_density(&mut upgraded);
     upgraded.validate(&standard_library())?;
     Ok(upgraded)
+}
+
+/// Random heads lit a count of heads; it now lights a share of them. Score
+/// rows carry no version, so hosts run this on every read. Every count resets
+/// to half the heads. A graph input that only fed that count becomes the
+/// graph's Density, and callers and clips stop binding the old key.
+pub fn lit_heads_density(score: &mut Score) {
+    const CALLS: [&str; 2] = ["random_heads", "random_heads_mask"];
+    let half = || Binding::from(Value::Proportion(0.5));
+    let mut renamed: BTreeMap<String, String> = BTreeMap::new();
+    for (id, definition) in &mut score.definitions {
+        let Body::Graph(graph) = &mut definition.body else {
+            continue;
+        };
+        let mut counts: Vec<(String, Option<String>)> = Vec::new();
+        for (node_id, node) in &mut graph.nodes {
+            if !CALLS.contains(&node.definition.as_str()) {
+                continue;
+            }
+            let Some(count) = node.inputs.remove("count") else {
+                continue;
+            };
+            let key = match count {
+                Binding::Input { input } => Some(input),
+                _ => None,
+            };
+            node.inputs.insert("density".into(), half());
+            counts.push((node_id.clone(), key));
+        }
+        let still_read = |key: &str| {
+            graph
+                .nodes
+                .values()
+                .flat_map(|node| node.inputs.values())
+                .chain(graph.outputs.values())
+                .any(|binding| matches!(binding, Binding::Input { input } if input == key))
+        };
+        let exposed = counts
+            .iter()
+            .filter_map(|(_, key)| key.clone())
+            .find(|key| !still_read(key))
+            .filter(|_| !definition.inputs.contains_key("density"));
+        let Some(key) = exposed else {
+            continue;
+        };
+        for (node_id, _) in counts.iter().filter(|(_, k)| k.as_ref() == Some(&key)) {
+            graph.nodes.get_mut(node_id).unwrap().inputs.insert(
+                "density".into(),
+                Binding::Input {
+                    input: "density".into(),
+                },
+            );
+        }
+        definition.inputs.remove(&key);
+        definition.inputs.insert(
+            "density".into(),
+            standard_library().definitions["random_heads_mask"].inputs["density"].clone(),
+        );
+        if let Some(mut socket) = graph.input_nodes.remove(&key) {
+            socket.name = "Density".into();
+            graph.input_nodes.insert("density".into(), socket);
+        }
+        renamed.insert(id.clone(), key);
+    }
+    for definition in score.definitions.values_mut() {
+        let Body::Graph(graph) = &mut definition.body else {
+            continue;
+        };
+        for node in graph.nodes.values_mut() {
+            if let Some(key) = renamed.get(&node.definition) {
+                node.inputs.remove(key);
+            }
+        }
+    }
+    for clip in score.clips.values_mut() {
+        if let Some(key) = renamed.get(&clip.graph) {
+            clip.inputs.remove(key);
+        }
+    }
 }
 
 /// The original vocabulary is data, not another execution engine.
