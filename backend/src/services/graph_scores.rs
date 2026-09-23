@@ -312,6 +312,76 @@ fn strip(
     ))
 }
 
+/// Heads in the stand-in rig of [`stand_in_strip`].
+const STAND_IN_HEADS: usize = 16;
+
+/// The strip of `preset` over `beats` beats on a stand-in rig: a straight
+/// line of heads at 120 BPM. It needs no venue, track or score, so a preset
+/// browser always has a picture to show before, or without, the real rig's.
+pub fn stand_in_strip(
+    preset: &luma_patterns::FormPreset,
+    beats: f64,
+) -> Result<crate::models::patterns::AnnotationPreview, String> {
+    synthetic_strip(&preset.clip(0.0, beats), &line_cells(STAND_IN_HEADS))
+}
+
+/// `heads` heads evenly along U, in order.
+fn line_cells(heads: usize) -> Vec<luma_patterns::Cell> {
+    (0..heads)
+        .map(|i| {
+            let u = i as f64 / (heads.max(2) - 1) as f64;
+            luma_patterns::Cell {
+                id: format!("head-{i:02}"),
+                group: "row".into(),
+                world: [u, 0., 2.],
+                uvz: [u, 0., 1.],
+            }
+        })
+        .collect()
+}
+
+/// A single clip's strip over `cells`, on a 120 BPM grid, with no track
+/// features.
+fn synthetic_strip(
+    clip: &luma_patterns::Clip,
+    cells: &[luma_patterns::Cell],
+) -> Result<crate::models::patterns::AnnotationPreview, String> {
+    // 120 BPM: a beat every half second, far past any clip here.
+    let beats = (clip.start + clip.duration).ceil() as usize + 64;
+    let clock = luma_patterns::BeatTimeline::new((0..beats).map(|i| i as f64 * 0.5).collect(), 0.)
+        .map_err(|error| error.to_string())?;
+    let library = standard_library();
+    let prepared = luma_patterns::PreparedGraph::new(
+        &library,
+        &clip.graph,
+        &clip.inputs,
+        luma_patterns::Frame {
+            cells,
+            features: None,
+            beat: clip.start,
+            clip_start: clip.start,
+            clip_duration: clip.duration,
+            seed: clip.seed,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let output = library
+        .definitions
+        .get(&clip.graph)
+        .and_then(|definition| definition.lighting_output())
+        .ok_or("clip graph must produce fixture output")?;
+    let plan = crate::eval::lighting::compile_clip(clip, clock, cells.to_vec(), prepared, output)
+        .map_err(|error| error.to_string())?;
+    let span = plan.ctx.span;
+    let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
+        span,
+        plan: std::sync::Arc::new(plan),
+        z_index: 0,
+        blend_mode: clip.blend_mode,
+    }]);
+    strip("clip", clip, &scene, span, cells)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,53 +389,23 @@ mod tests {
     /// The strip of a shipped preset over `heads` heads in a row along U,
     /// shuffled so selection order says nothing about where a head is.
     fn preset_strip(preset: &str, heads: usize) -> crate::models::patterns::AnnotationPreview {
-        let mut cells: Vec<luma_patterns::Cell> = (0..heads)
-            .map(|i| {
-                let u = i as f64 / (heads - 1) as f64;
-                luma_patterns::Cell {
-                    id: format!("head-{i:02}"),
-                    group: "row".into(),
-                    world: [u, 0., 2.],
-                    uvz: [u, 0., 1.],
-                }
-            })
-            .collect();
+        let mut cells = line_cells(heads);
         cells.reverse();
         cells.swap(1, heads / 2);
         let clip = luma_patterns::presets()
             .preset(preset)
             .expect("a shipped preset")
             .clip(0.0, 4.0);
-        // 120 BPM: a beat every half second.
-        let clock = luma_patterns::BeatTimeline::new((0..64).map(|i| i as f64 * 0.5).collect(), 0.)
-            .unwrap();
-        let library = standard_library();
-        let prepared = luma_patterns::PreparedGraph::new(
-            &library,
-            &clip.graph,
-            &clip.inputs,
-            luma_patterns::Frame {
-                cells: &cells,
-                features: None,
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        )
-        .unwrap();
-        let output = library.definitions[&clip.graph].lighting_output().unwrap();
-        let plan =
-            crate::eval::lighting::compile_clip(&clip, clock, cells.clone(), prepared, output)
-                .unwrap();
-        let span = plan.ctx.span;
-        let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
-            span,
-            plan: std::sync::Arc::new(plan),
-            z_index: 0,
-            blend_mode: clip.blend_mode,
-        }]);
-        strip("clip", &clip, &scene, span, &cells).unwrap()
+        synthetic_strip(&clip, &cells).unwrap()
+    }
+
+    #[test]
+    fn every_shipped_preset_has_a_stand_in_strip() {
+        for preset in &luma_patterns::presets().presets {
+            let strip = stand_in_strip(preset, 8.0)
+                .unwrap_or_else(|error| panic!("{}: {error}", preset.name));
+            assert_eq!(strip.width, 128, "{}", preset.name);
+        }
     }
 
     /// The row with the most light in each column, or `None` for a dark one.
