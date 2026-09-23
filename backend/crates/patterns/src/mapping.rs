@@ -26,19 +26,26 @@ pub enum MappingSource {
     Circle {
         origin: f64,
     },
+    /// Distance from the middle of the selection's U/V extent.
+    Radial,
+    /// Turns around the middle of the selection's U/V extent, from stage right
+    /// (U+) toward downstage (V+). It needs no solved circle.
+    Angle,
     /// Direction in stage coordinates: U right, V downstage, Z up.
     Vector {
         direction: [f64; 3],
     },
 }
 impl MappingSource {
-    pub const OPTIONS: [(&'static str, &'static str); 7] = [
+    pub const OPTIONS: [(&'static str, &'static str); 9] = [
         ("z", "Up (Z+)"),
         ("u", "Stage right (U+)"),
         ("v", "Downstage (V+)"),
         ("major_axis", "Major axis"),
         ("circle", "Solved circle"),
         ("order", "Selection order"),
+        ("radial", "Radial"),
+        ("angle", "Angle"),
         ("vector", "Custom vector"),
     ];
 
@@ -50,6 +57,8 @@ impl MappingSource {
             Self::Order => "order",
             Self::MajorAxis { .. } => "major_axis",
             Self::Circle { .. } => "circle",
+            Self::Radial => "radial",
+            Self::Angle => "angle",
             Self::Vector { .. } => "vector",
         }
     }
@@ -64,6 +73,8 @@ impl MappingSource {
                 toward: [0., 0., 1.],
             },
             "circle" => Self::Circle { origin: 0. },
+            "radial" => Self::Radial,
+            "angle" => Self::Angle,
             "vector" => Self::Vector {
                 direction: [1., 0., 1.],
             },
@@ -195,6 +206,29 @@ impl MappingSpec {
                         self.reverse,
                     )?
                 }
+                MappingSource::Angle => {
+                    let points = planar(group, folded.as_deref());
+                    let center = extent_center(&points);
+                    Mapping::circle(
+                        group.iter().zip(&points).map(|(c, p)| {
+                            let turns =
+                                (p[1] - center[1]).atan2(p[0] - center[0]) / std::f64::consts::TAU;
+                            (c.id.clone(), turns.rem_euclid(1.0))
+                        }),
+                        0.0,
+                        self.reverse,
+                    )?
+                }
+                MappingSource::Radial => {
+                    let points = planar(group, folded.as_deref());
+                    let center = extent_center(&points);
+                    Mapping::linear(
+                        group.iter().zip(&points).map(|(c, p)| {
+                            (c.id.clone(), (p[0] - center[0]).hypot(p[1] - center[1]))
+                        }),
+                        self.reverse,
+                    )?
+                }
                 source => {
                     let axis = match source {
                         MappingSource::MajorAxis { toward } => major_axis(group, toward)?,
@@ -231,6 +265,30 @@ impl MappingSpec {
         result.validate()?;
         Ok(result)
     }
+}
+/// Stage U/V of each cell, after an optional mirror fold.
+fn planar(cells: &[&Cell], folded: Option<&[[f64; 3]]>) -> Vec<[f64; 2]> {
+    cells
+        .iter()
+        .enumerate()
+        .map(|(index, c)| {
+            let uvz = folded.map_or(c.uvz, |folded| folded[index]);
+            [uvz[0], uvz[1]]
+        })
+        .collect()
+}
+/// The middle of the extent, like the mirror plane: fixture density on one
+/// side does not move it.
+fn extent_center(points: &[[f64; 2]]) -> [f64; 2] {
+    std::array::from_fn(|axis| {
+        let (min, max) = points
+            .iter()
+            .map(|p| p[axis])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), v| {
+                (min.min(v), max.max(v))
+            });
+        min * 0.5 + max * 0.5
+    })
 }
 fn unit_direction(direction: [f64; 3]) -> Result<[f64; 3]> {
     if direction.iter().any(|value| !value.is_finite()) {
