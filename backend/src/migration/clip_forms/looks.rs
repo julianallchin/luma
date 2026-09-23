@@ -11,11 +11,11 @@ use std::collections::BTreeMap;
 
 /// Score-local helper graphs that are copies of shipped recipes. They open
 /// up into the clip graph so the recipe inside them is read like any other.
-const OPEN: [&str; 4] = [
+/// `dissolve_mask/signals` stays closed: it is read as one dissolve.
+const OPEN: [&str; 3] = [
     "chase_mask/signals",
     "drum_mask/signals",
     "pulse_mask/signals",
-    "dissolve_mask/signals",
 ];
 
 /// What starts events.
@@ -49,6 +49,10 @@ pub(super) struct Stroke {
     pub wrap: bool,
     /// The old graph showed one stroke at a time: each event cut the last.
     pub single: bool,
+    /// A fade over each event's life, multiplied into the stroke.
+    pub fade: Option<Envelope>,
+    /// Events before the clip are not the old look's: the start stays.
+    pub keep_start: bool,
     pub notes: Vec<String>,
 }
 
@@ -63,6 +67,17 @@ pub(super) enum Look {
     },
     /// The gradient read at the track's chord root; dark without a chord.
     Harmony(Gradient),
+    /// `colors` read at `curve(t / every)`, `t` counted from the clip start.
+    ColorTime {
+        colors: Gradient,
+        curve: Envelope,
+        every: f64,
+    },
+    /// A gradient along a mapping.
+    Space {
+        colors: Gradient,
+        mapping: MappingSpec,
+    },
     Pulse {
         trigger: Trigger,
         duration: f64,
@@ -70,6 +85,7 @@ pub(super) enum Look {
     },
     Dissolve {
         trigger: Trigger,
+        /// Beats; ignored for [`Trigger::Clip`], whose event is the clip.
         duration: f64,
         coverage: Envelope,
         brightness: Envelope,
@@ -94,12 +110,26 @@ impl Look {
             Self::ColorOverTime(_) => "color over time",
             Self::Rainbow { .. } => "rainbow",
             Self::Harmony(_) => "harmony",
+            Self::ColorTime { .. } => "color over time",
+            Self::Space { .. } => "spatial gradient",
             Self::Pulse { .. } => "pulse",
             Self::Dissolve { .. } => "dissolve",
             Self::RandomHeads { .. } => "random heads",
             Self::Noise { .. } => "noise",
             Self::Stroke(_) => "chase",
         }
+    }
+
+    /// The look sets the color, not only where and when there is light.
+    pub(super) fn colored(&self) -> bool {
+        matches!(
+            self,
+            Self::ColorOverTime(_)
+                | Self::Rainbow { .. }
+                | Self::Harmony(_)
+                | Self::ColorTime { .. }
+                | Self::Space { .. }
+        )
     }
 }
 
@@ -127,6 +157,8 @@ pub(super) enum Factor {
     /// A gate that the look already has: a stroke's own "active", or the
     /// presence of a chord.
     Implied,
+    /// Why the reading may not render like the old graph.
+    Note(String),
 }
 
 /// The parts that the output node multiplies.
@@ -378,9 +410,9 @@ impl<'a> Parser<'a> {
             ("chase", "mask") => {
                 out.push(Factor::Look(Look::Stroke(Box::new(self.recipe_chase(id)?))))
             }
-            ("profile_mask/signals", "mask") => out.push(Factor::Look(Look::Stroke(Box::new(
-                self.profile_stroke(id)?,
-            )))),
+            ("profile_mask/signals" | "profile_mask", "mask") => out.push(Factor::Look(
+                Look::Stroke(Box::new(self.profile_stroke(id)?)),
+            )),
             ("core/absolute", "value") => out.push(Factor::Look(Look::Stroke(Box::new(
                 self.alternating_sides(id)?,
             )))),
@@ -407,6 +439,28 @@ impl<'a> Parser<'a> {
                     floor: 0.0,
                 }));
             }
+            ("wash", "color") => self.factors(&port("color")?, out)?,
+            ("spatial_gradient", "color") => out.push(Factor::Look(Look::Space {
+                colors: self.gradient(id, "gradient")?,
+                mapping: self.mapping(id, "mapping")?,
+            })),
+            ("dissolve_mask/signals", "mask") => {
+                out.push(Factor::Look(self.dissolve_over_clip(id)?));
+            }
+            // A level meter: a head is lit while the level is above its
+            // height.
+            ("core/greater", "mask")
+                if self.source_is(id, "a", "band_mask")
+                    && self.source_is(id, "b", "mapped_position") =>
+            {
+                let (band, output) = self.source(id, "a")?;
+                self.node_factors(&band, &output, out)?;
+                out.push(Factor::Note(
+                    "a level meter (heads lit up to the audio level) → every head follows the level"
+                        .into(),
+                ));
+            }
+            ("ripple", "mask") => out.push(Factor::Look(Look::Stroke(Box::new(self.ripple(id)?)))),
             ("core/greater", "mask") if self.upstream(id, "band_energy").is_some() => {
                 // The old level is energy remapped between the clip's quiet
                 // and full levels, the same 0–1 scale as the audio source.
@@ -432,6 +486,24 @@ impl<'a> Parser<'a> {
                     out.push(Factor::Look(Look::Harmony(gradient)));
                 } else if self.clip_progress(id, "position") {
                     out.push(Factor::Look(Look::ColorOverTime(gradient)));
+                } else if let Some(every) = self.cycles_over_clip(&position)? {
+                    if self.upstream(&position, "mapped_position").is_some() {
+                        out.push(Factor::Note(
+                            "a color wave along the rig → every head shows the same color".into(),
+                        ));
+                    }
+                    out.push(Factor::Look(Look::ColorTime {
+                        colors: gradient,
+                        curve: Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]]),
+                        every,
+                    }));
+                } else if self.node(&position)?.definition == "core/greater"
+                    && self.upstream(&position, "core/rank").is_some()
+                {
+                    out.push(Factor::Note(
+                        "alternating colors along the rig → all heads swap colors together".into(),
+                    ));
+                    out.push(Factor::Look(self.alternating_colors(&position, &gradient)?));
                 } else {
                     return Err("a gradient read at something other than the clip time".into());
                 }
@@ -486,6 +558,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn gradient(&self, id: &str, port: &str) -> Found<Gradient> {
+        match self.value(id, port)? {
+            Value::Gradient(gradient) => Ok(gradient),
+            _ => Err(format!("{port} is not a gradient")),
+        }
+    }
+
     fn mapping(&self, id: &str, port: &str) -> Found<MappingSpec> {
         match self.value(id, port)? {
             Value::Mapping(mapping) => Ok(mapping),
@@ -531,6 +610,8 @@ impl<'a> Parser<'a> {
             mapping,
             wrap,
             single: false,
+            fade: None,
+            keep_start: false,
             notes: Vec::new(),
         })
     }
@@ -548,6 +629,9 @@ impl<'a> Parser<'a> {
             }
             "core/subtract" if self.source_is(&offset, "a", "core/fraction") => {
                 self.circle_stroke(&offset, width, shape)
+            }
+            "core/subtract" if self.upstream(&offset, "core/sine").is_some() => {
+                self.turning_line(&offset, width, shape)
             }
             "coordinate_offset" => {
                 let (position, _) = self.source(&offset, "position")?;
@@ -573,6 +657,8 @@ impl<'a> Parser<'a> {
                     mapping,
                     wrap,
                     single: false,
+                    fade: None,
+                    keep_start: false,
                     notes: Vec::new(),
                 })
             }
@@ -619,6 +705,8 @@ impl<'a> Parser<'a> {
             mapping,
             wrap: false,
             single: true,
+            fade: None,
+            keep_start: false,
             notes,
         })
     }
@@ -693,7 +781,155 @@ impl<'a> Parser<'a> {
             mapping: self.mapping(&field, "mapping")?,
             wrap: true,
             single: false,
+            fade: None,
+            keep_start: false,
             notes,
+        })
+    }
+
+    /// A ripple: each event draws a random head and a ring of `ring` grows
+    /// from it to `reach` over `duration`, fading by `fade`.
+    fn ripple(&self, id: &str) -> Found<Stroke> {
+        let reach = self.number(id, "reach")?;
+        if reach <= 0.0 {
+            return Err(format!("ripple reach {reach}"));
+        }
+        Ok(Stroke {
+            trigger: self.trigger(id, "trigger")?,
+            travel: self.number(id, "duration")?,
+            path: Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]]),
+            center: (0.0, 1.0),
+            width: self.number(id, "width")? / reach,
+            shape: self.envelope(id, "ring")?,
+            mapping: MappingSpec {
+                source: MappingSource::Radial,
+                per_group: false,
+                reverse: false,
+                mirror: None,
+            },
+            wrap: false,
+            single: false,
+            fade: Some(self.envelope(id, "fade")?),
+            keep_start: false,
+            notes: vec![
+                "ripple: rings start at the rig center, not at a random head".into(),
+                format!("ripple: rings reach the rig edge, not {reach} m"),
+            ],
+        })
+    }
+
+    /// `(z − z̄)·sin(θ + ¼) − (u − ū)·sin(θ)`: the distance from a line
+    /// through the center that turns once per rhythm cycle. It lights two
+    /// opposite sides, so it becomes two strokes half a turn apart.
+    fn turning_line(&self, offset: &str, width: f64, shape: Envelope) -> Found<Stroke> {
+        let rhythm = self
+            .upstream(offset, "rhythm")
+            .ok_or("a turning line without a rhythm")?;
+        let repeat = self.number(&rhythm, "repeat")?;
+        Ok(Stroke {
+            trigger: Trigger::Periodic {
+                repeat: repeat / 2.0,
+                grid_aligned: self.boolean(&rhythm, "grid_aligned")?,
+                delay: self.number(&rhythm, "delay")?,
+            },
+            travel: repeat,
+            path: Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]]),
+            center: (0.0, 1.0),
+            width: 0.5,
+            shape,
+            mapping: MappingSpec {
+                source: MappingSource::Angle,
+                per_group: false,
+                reverse: false,
+                mirror: None,
+            },
+            wrap: true,
+            single: false,
+            fade: None,
+            keep_start: true,
+            notes: vec![
+                format!(
+                    "a line {width} wide turning in the u–z plane → two strokes half a turn apart on the angle axis (u–v plane)"
+                ),
+                "the first half turn misses the stroke that began before the clip".into(),
+            ],
+        })
+    }
+
+    /// The `dissolve_mask/signals` helper with a fixed order: heads light in
+    /// random order as the coverage curve over the clip rises.
+    fn dissolve_over_clip(&self, id: &str) -> Found<Look> {
+        if self.boolean(id, "refresh")? {
+            return Err("a dissolve that flickers".into());
+        }
+        let coverage = match self.port(id, "coverage")? {
+            Binding::Value { value } => {
+                let level = number(&value).ok_or("coverage is not a number")?;
+                Envelope::linear(vec![[0.0, level], [1.0, level]])
+            }
+            Binding::Connection { node, output }
+                if output == "value"
+                    && self.node(&node)?.definition == "envelope"
+                    && self.clip_progress(&node, "progress") =>
+            {
+                self.envelope(&node, "shape")?
+            }
+            _ => return Err("a dissolve coverage that is not a curve over the clip".into()),
+        };
+        Ok(Look::Dissolve {
+            trigger: Trigger::Clip,
+            duration: 0.0,
+            coverage,
+            brightness: Envelope::linear(vec![[0.0, 1.0], [1.0, 1.0]]),
+            softness: self.number(id, "softness")?,
+        })
+    }
+
+    /// `fraction(… + clip elapsed / period)`: a gradient read once every
+    /// `period` beats from the clip start. The period.
+    fn cycles_over_clip(&self, position: &str) -> Found<Option<f64>> {
+        if self.node(position)?.definition != "core/fraction" {
+            return Ok(None);
+        }
+        let Some(divide) = self.upstream(position, "core/divide") else {
+            return Ok(None);
+        };
+        let Ok((clock, output)) = self.source(&divide, "a") else {
+            return Ok(None);
+        };
+        if output != "elapsed" || self.node(&clock)?.definition != "clip_time" {
+            return Ok(None);
+        }
+        let (sum, _) = self.source(position, "value")?;
+        if self.node(&sum)?.definition != "core/add" {
+            return Err("a color wave that does not add its phase".into());
+        }
+        Ok(Some(self.number(&divide, "b")?))
+    }
+
+    /// `fraction((rank + cycle) / 2) > ¼`: the two ends of a gradient on
+    /// alternate heads, swapping every rhythm cycle.
+    fn alternating_colors(&self, position: &str, gradient: &Gradient) -> Found<Look> {
+        let rhythm = self
+            .upstream(position, "rhythm")
+            .ok_or("alternating colors without a rhythm")?;
+        if self.number(&rhythm, "delay")? != 0.0 || self.boolean(&rhythm, "grid_aligned")? {
+            return Err("alternating colors with a phase offset".into());
+        }
+        let stop = |t: f64| luma_patterns::ColorStop {
+            t,
+            color: gradient.sample(t),
+            alpha: 1.0,
+        };
+        Ok(Look::ColorTime {
+            colors: Gradient {
+                stops: vec![stop(0.0), stop(1.0)],
+            },
+            curve: Envelope {
+                points: vec![[0.0, 0.0], [0.5, 1.0], [1.0, 1.0]],
+                curves: vec![EnvelopeCurve::Hold; 2],
+            },
+            every: 2.0 * self.number(&rhythm, "repeat")?,
         })
     }
 
@@ -724,6 +960,8 @@ impl<'a> Parser<'a> {
             mapping: self.mapping(&field, "mapping")?,
             wrap: false,
             single: false,
+            fade: None,
+            keep_start: false,
             notes: Vec::new(),
         })
     }
