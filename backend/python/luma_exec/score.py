@@ -365,12 +365,12 @@ class Edit:
         return result
 
     def add_clip(self, graph, *, id=None, beats=None, bars=None, seconds=None,
-                 selection="all", subset=None, z=None, blend="replace", seed=None, inputs=None):
+                 selection="all", z=None, blend="replace", seed=None, inputs=None):
         """Stage a clip and return its Clip value; graph may be a Graph or ID.
 
         Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
         seconds=(0,16). Beats start at zero; bars at one. selection is a group
-        expression. subset accepts a fraction, head count, or "all".
+        expression; it always lights the whole group.
         inputs overrides the graph's exposed controls; definition(graph.id)
         gives their types/defaults. Clips composite bottom-up by integer z.
         Omit z to place above clips overlapping this time range (or at zero
@@ -389,14 +389,14 @@ class Edit:
                      if clip["start"] < end and start < clip["start"] + clip["duration"]),
                     default=-1) + 1
         value = {"graph": graph, "start": start, "duration": end-start,
-                 "selection": _selection(selection, subset), "z_index": _z(z), "blend_mode": _blend(blend),
+                 "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend),
                  "seed": seed if seed is not None else uuid.uuid4().int & ((1 << 64)-1),
                  "inputs": self._inputs(graph, inputs)}
         self._candidate["clips"][id] = value
         return Clip.read(id, value)
 
     def update_clip(self, clip, *, beats=None, bars=None, seconds=None,
-                    selection=None, subset=None, z=None, blend=None, seed=None, inputs=None):
+                    selection=None, z=None, blend=None, seed=None, inputs=None):
         """Update a Clip or clip ID and return its new value; other fields stay.
 
         Ranges, selection, z and blend use add_clip's conventions. inputs
@@ -411,9 +411,7 @@ class Edit:
             start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
             value.update(start=start, duration=end-start)
         if selection is not None:
-            value.setdefault("selection", {"expression": "all"})["expression"] = _selection(selection)["expression"]
-        if subset is not None:
-            value["selection"] = _selection(value.get("selection", {}).get("expression", "all"), subset)
+            value["selection"] = _selection(selection)
         if z is not None:
             value["z_index"] = _z(z)
         if blend is not None:

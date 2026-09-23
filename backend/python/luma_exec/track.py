@@ -153,22 +153,6 @@ class Clip:
         value = self._selection_value()
         return None if value is None else str(_field(value, "expression", default=""))
 
-    @property
-    def subset(self) -> Any:
-        """How much of the selection the clip lights: ``"all"``, a float
-        fraction, or an integer count.  ``None`` when the clip has no single
-        Selection argument."""
-        value = self._selection_value()
-        if value is None:
-            return None
-        raw = _field(value, "subset", default="all")
-        if isinstance(raw, Mapping):
-            if "fraction" in raw:
-                return float(raw["fraction"])
-            if "count" in raw:
-                return int(raw["count"])
-        return "all"
-
     def _selection_value(self) -> Mapping[str, Any] | None:
         if not isinstance(self.args, Mapping):
             return None
@@ -267,7 +251,6 @@ class _PatternCatalog:
         pattern_id: str,
         args: Mapping[str, Any] | None,
         selection: str | None,
-        subset: Any = None,
     ) -> dict[str, Any]:
         definitions = list(_sequence(self._schemas.get(pattern_id, [])))
         by_id = {str(_required(d, "id")): d for d in definitions}
@@ -297,7 +280,7 @@ class _PatternCatalog:
             normalized[key] = self._normalize_arg_value(by_id.get(key), value)
 
         if selection is not None:
-            normalized[self.selection_arg_id(pattern_id)] = _selection(selection, subset)
+            normalized[self.selection_arg_id(pattern_id)] = _selection(selection)
         return normalized
 
     @staticmethod
@@ -588,33 +571,11 @@ def _canonical_clips(clips: Iterable[Clip]) -> tuple[Clip, ...]:
     return tuple(sorted(clips, key=lambda clip: (clip.start_s, clip.z, clip.id)))
 
 
-def _selection(expression: str, subset: Any = None) -> dict[str, Any]:
+def _selection(expression: str) -> dict[str, Any]:
     expression = str(expression).strip()
     if not expression:
         raise TrackError("Selection expression cannot be empty")
-    value: dict[str, Any] = {"expression": expression}
-    if subset is not None:
-        value["subset"] = _subset(subset)
-    return value
-
-
-def _subset(value: Any) -> Any:
-    """Which fixtures of the expression to keep: ``"all"``, a float share, or an
-    integer count.  A float is a fraction of the matched set (``0.5`` = half);
-    an int is a fixed number of fixtures.  Omitting it entirely means all."""
-    if value is None or (isinstance(value, str) and value.strip().casefold() == "all"):
-        return "all"
-    if isinstance(value, bool):
-        raise TrackError(f"invalid subset {value!r}; expected 'all', a fraction, or a count")
-    if isinstance(value, int):
-        if value < 1:
-            raise TrackError(f"subset count must be at least 1, got {value}")
-        return {"count": value}
-    if isinstance(value, float):
-        if not 0.0 < value <= 1.0:
-            raise TrackError(f"subset fraction must be in (0, 1], got {value}")
-        return {"fraction": value}
-    raise TrackError(f"invalid subset {value!r}; expected 'all', a fraction, or a count")
+    return {"expression": expression}
 
 
 def _blend(value: str) -> str:

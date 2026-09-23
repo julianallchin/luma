@@ -207,14 +207,14 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             window.start_s = 0
 
-    def test_override_reset_preserves_selection_subset_and_source_is_independent(self):
+    def test_override_reset_sets_selection_and_source_is_independent(self):
         track = self.track()
         edit = track.edit()
         graph = edit.graph(node="chase", id="local")
-        clip = edit.add_clip(graph, id="clip", beats=(0, 4), subset=.5, inputs={"width": .8})
+        clip = edit.add_clip(graph, id="clip", beats=(0, 4), inputs={"width": .8})
         edit.update_clip(clip, selection="bars", inputs={"width": None})
         value = edit.candidate["clips"]["clip"]
-        self.assertEqual(value["selection"], {"expression": "bars", "subset": {"fraction": .5}})
+        self.assertEqual(value["selection"], {"expression": "bars"})
         self.assertNotIn("width", value["inputs"])
         candidate = edit.candidate
         candidate["clips"].clear()
