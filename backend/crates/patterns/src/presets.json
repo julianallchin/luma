@@ -30,7 +30,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
       "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "proportion", "value": 0.2},
+      "width": {"type": "number", "value": 0.2},
       "width_relative": {"type": "boolean", "value": true}
     }},
     {"name": "Wave", "form": "color.chase@1", "inputs": {
@@ -42,8 +42,8 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]], "curves": [{"kind": "bezier", "control1": [0.2, 0.0], "control2": [0.3, 1.0]}, {"kind": "bezier", "control1": [0.7, 1.0], "control2": [0.8, 0.0]}]}},
       "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "proportion", "value": 1.0},
-      "width_relative": {"type": "boolean", "value": true}
+      "width": {"type": "number", "value": 1.0},
+      "width_relative": {"type": "boolean", "value": false}
     }},
     {"name": "Ripple", "form": "color.chase@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -54,7 +54,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]], "curves": [{"kind": "bezier", "control1": [0.2, 0.0], "control2": [0.3, 1.0]}, {"kind": "bezier", "control1": [0.7, 1.0], "control2": [0.8, 0.0]}]}},
       "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "proportion", "value": 0.4},
+      "width": {"type": "number", "value": 0.4},
       "width_relative": {"type": "boolean", "value": true}
     }},
     {"name": "Spin", "form": "color.chase@1", "inputs": {
@@ -66,7 +66,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.95, 1.0], [1.0, 0.0]]}},
       "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "proportion", "value": 0.25},
+      "width": {"type": "number", "value": 0.25},
       "width_relative": {"type": "boolean", "value": true}
     }},
     {"name": "Bounce", "form": "color.chase@1", "inputs": {
@@ -78,7 +78,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]], "curves": [{"kind": "bezier", "control1": [0.2, 0.0], "control2": [0.3, 1.0]}, {"kind": "bezier", "control1": [0.7, 1.0], "control2": [0.8, 0.0]}]}},
       "travel": {"type": "beats", "value": 4.0},
-      "width": {"type": "proportion", "value": 0.2},
+      "width": {"type": "number", "value": 0.2},
       "width_relative": {"type": "boolean", "value": false}
     }},
     {"name": "Alternating sides", "form": "color.chase@1", "inputs": {
@@ -90,7 +90,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.25], [0.5, 0.75], [1.0, 0.75]], "curves": [{"kind": "hold"}, {"kind": "hold"}]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
       "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "proportion", "value": 0.5},
+      "width": {"type": "number", "value": 0.5},
       "width_relative": {"type": "boolean", "value": false}
     }},
     {"name": "Stepped chase", "form": "color.chase@1", "inputs": {
@@ -102,7 +102,7 @@
       "path": {"type": "envelope", "value": {"points": [[0.0, 0.125], [0.25, 0.375], [0.5, 0.625], [0.75, 0.875], [1.0, 0.875]], "curves": [{"kind": "hold"}, {"kind": "hold"}, {"kind": "hold"}, {"kind": "hold"}]}},
       "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
       "travel": {"type": "beats", "value": 4.0},
-      "width": {"type": "proportion", "value": 0.25},
+      "width": {"type": "number", "value": 0.25},
       "width_relative": {"type": "boolean", "value": false}
     }},
     {"name": "Pulse", "form": "color.sparkle@1", "inputs": {

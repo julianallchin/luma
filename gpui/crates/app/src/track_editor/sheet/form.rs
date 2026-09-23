@@ -62,12 +62,23 @@ impl Slot {
         })
     }
 
+    /// The bounds the form gives a number input, such as a chase width.
+    fn bounds(&self) -> Option<[f64; 2]> {
+        match self.spec.author {
+            Some(p::Author::Number {
+                min: Some(min),
+                max: Some(max),
+            }) => Some([min, max]),
+            _ => None,
+        }
+    }
+
     /// The span a number curve's value axis covers, in the input's unit.
     fn range(&self) -> [f64; 2] {
         if self.speed {
             [0., CURVE_BEATS]
         } else {
-            [0., 1.]
+            self.bounds().unwrap_or([0., 1.])
         }
     }
 
@@ -76,12 +87,14 @@ impl Slot {
         p::presets().curves_for(self.key)
     }
 
-    /// A number the input accepts: speeds stay above zero, the rest in 0–1.
+    /// A number the input accepts: speeds stay above zero, the rest within
+    /// the input's bounds, 0–1 by default.
     fn fit(&self, value: f64) -> f64 {
         if self.speed {
             value.max(MIN_BEATS)
         } else {
-            value.clamp(0., 1.)
+            let [low, high] = self.range();
+            value.clamp(low, high)
         }
     }
 
@@ -641,6 +654,22 @@ pub(super) fn widget(
                     entity
                 });
                 return Widget::Preset(options, editor);
+            }
+            if let Some([min, max]) = slot.bounds() {
+                // A number with bounds of its own, such as a chase width.
+                let entity = number(
+                    name,
+                    slot.fit(current.unwrap_or(min)),
+                    min,
+                    max,
+                    FIELD_W,
+                    window,
+                    cx,
+                );
+                subs.push(on_number(&entity, cx, |value, v| {
+                    *value = p::Value::Number(v)
+                }));
+                return Widget::Scalar(entity);
             }
             plain_widget(def, stored, true, &[], window, cx, subs)
         }

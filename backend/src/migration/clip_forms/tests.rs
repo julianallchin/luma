@@ -260,7 +260,7 @@ fn alternating_sides_becomes_a_two_step_chase() {
     assert_eq!(converted.clip.graph, "color.chase@1");
     assert_eq!(converted.clip.inputs["every"], Value::Beats(2.0));
     assert_eq!(converted.clip.inputs["travel"], Value::Beats(2.0));
-    assert_eq!(converted.clip.inputs["width"], Value::Proportion(0.5));
+    assert_eq!(converted.clip.inputs["width"], Value::Number(0.5));
     assert!(difference(&score, &converted) < 2e-6);
 }
 
@@ -380,4 +380,19 @@ fn two_moving_looks_in_one_product_match_no_rule() {
     let score = score(colored(nodes, wire("both", "mask")));
     let error = run(&score, &Host::default()).unwrap_err();
     assert_eq!(error, "two looks multiplied: pulse × chase");
+}
+
+#[test]
+fn a_colored_strobe_becomes_a_color_layer_under_a_strobe() {
+    let mut nodes = colored(json!({}), value("proportion", json!(0.5)));
+    nodes["output"]["inputs"]["strobe"] = value("proportion", json!(0.9));
+    let converted = run(&score(nodes), &Host::default()).unwrap();
+    assert_eq!(converted.clip.graph, "strobe.constant@1");
+    assert_eq!(converted.clip.inputs["rate"], Value::Proportion(0.9));
+    assert_eq!(converted.clip.inputs["alpha"], Value::Proportion(1.0));
+    let under = converted.under.expect("a color layer");
+    assert_eq!(under.graph, "color.constant@1");
+    assert_eq!(under.inputs["color"], Value::Color([1.0, 0.5, 0.25]));
+    assert_eq!(under.inputs["alpha"], Value::Proportion(0.5));
+    assert_eq!((under.start, under.duration), (START, DURATION));
 }

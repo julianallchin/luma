@@ -43,6 +43,10 @@ pub struct Converted {
     pub notes: Vec<String>,
     /// Absolute beats where the output changes, for a render check.
     pub boundaries: Vec<f64>,
+    /// A color layer under `clip`, with the same timing. A strobe form only
+    /// writes the shutter, so a colored strobe becomes this color layer and
+    /// a strobe layer above it.
+    pub under: Option<Clip>,
 }
 
 /// Convert clip `id` of `score`. `selection` is the stored selection JSON,
@@ -64,6 +68,7 @@ pub fn convert(
             look: "already a form".into(),
             notes: Vec::new(),
             boundaries: Vec::new(),
+            under: None,
         });
     }
     let library = score
@@ -74,19 +79,40 @@ pub fn convert(
         return Err("pan and tilt: aim forms are a later spec".into());
     }
     let mut build = Build::new(clip, host);
-    let (form, look) = match (parsed.color, parsed.strobe) {
+    let (form, look, under) = match (parsed.color, parsed.strobe) {
         (color, Some(strobe)) => {
-            build.strobe(color.map(Parts::of).transpose()?, Parts::of(strobe)?)?
+            let under = match color {
+                Some(color) => {
+                    let (form, look) = build.color(Parts::of(color)?)?;
+                    Some(build.subset(selection, form, look)?)
+                }
+                None => None,
+            };
+            let (form, look) = build.strobe(Parts::of(strobe)?)?;
+            let look = match &under {
+                Some((_, color)) => format!("{look} over {color}"),
+                None => look,
+            };
+            (form, look, under.map(|(form, _)| form))
         }
-        (Some(color), None) => build.color(Parts::of(color)?)?,
+        (Some(color), None) => {
+            let (form, look) = build.color(Parts::of(color)?)?;
+            let (form, look) = build.subset(selection, form, look)?;
+            (form, look, None)
+        }
         (None, None) => return Err("the graph writes no light".into()),
     };
-    let (form, look) = build.subset(selection, form, look)?;
-    let mut clip = build.clip;
-    clip.graph = form.form.clone();
-    clip.inputs = form.inputs.clone();
-    form.validate(&standard_library())
-        .map_err(|e| format!("the converted clip is invalid: {e}"))?;
+    let library = standard_library();
+    let place = |form: &FormPreset, base: &Clip| -> Result<Clip, String> {
+        form.validate(&library)
+            .map_err(|e| format!("the converted clip is invalid: {e}"))?;
+        let mut clip = base.clone();
+        clip.graph = form.form.clone();
+        clip.inputs = form.inputs.clone();
+        Ok(clip)
+    };
+    let clip = place(&form, &build.clip)?;
+    let under = under.map(|form| place(&form, &build.clip)).transpose()?;
     build.boundaries.retain(|b| b.is_finite());
     build.boundaries.sort_by(f64::total_cmp);
     build.boundaries.dedup();
@@ -95,6 +121,7 @@ pub fn convert(
         look,
         notes: build.notes,
         boundaries: build.boundaries,
+        under,
     })
 }
 
@@ -467,15 +494,22 @@ impl<'a> Build<'a> {
             direction if direction == facing => stroke.shape.clone(),
             _ => curves::mirror(&stroke.shape),
         };
-        if width > 1.0 {
-            self.note(format!("stroke width {width} is wider than the axis"));
+        if width > luma_patterns::MAX_WIDTH {
+            self.note(format!(
+                "stroke width {width} is wider than {} axes; clamped",
+                luma_patterns::MAX_WIDTH
+            ));
         }
         let mut form = preset("Chase");
         set(&mut form, "color", Value::Color(parts.color));
         set(&mut form, "axis", Value::Mapping(axis));
         set(&mut form, "every", every);
         set(&mut form, "travel", Value::Beats(travel));
-        set(&mut form, "width", Value::Proportion(width.clamp(0.0, 1.0)));
+        set(
+            &mut form,
+            "width",
+            Value::Number(width.clamp(0.0, luma_patterns::MAX_WIDTH)),
+        );
         set(&mut form, "width_relative", Value::Boolean(false));
         set(&mut form, "shape", Value::Envelope(shape));
         set(&mut form, "path", Value::Envelope(path));
@@ -493,12 +527,9 @@ impl<'a> Build<'a> {
         Ok(form)
     }
 
-    /// Strobe with an optional color product. The strobe form lights white.
-    fn strobe(
-        &mut self,
-        color: Option<Parts>,
-        rate: Parts,
-    ) -> Result<(FormPreset, String), String> {
+    /// The shutter of a strobe. The strobe form writes only the strobe
+    /// channel; the color of a colored strobe is a layer under it.
+    fn strobe(&mut self, rate: Parts) -> Result<(FormPreset, String), String> {
         if rate.look.is_some() || !rate.curves.is_empty() || rate.audio.is_some() {
             return Err("a strobe rate that moves".into());
         }
@@ -511,22 +542,7 @@ impl<'a> Build<'a> {
             "rate",
             Value::Proportion(rate.scalar.clamp(0.0, 1.0)),
         );
-        match color {
-            None => {
-                self.note("the strobe form also lights white; the old clip only strobed");
-                set(&mut form, "alpha", Value::Proportion(1.0));
-            }
-            Some(parts) => {
-                if let Some(look) = &parts.look {
-                    return Err(format!("strobe over {}", look.name()));
-                }
-                if !parts.white() {
-                    self.note("the strobe form lights white; the old color is dropped");
-                }
-                let alpha = self.alpha(&parts);
-                set(&mut form, "alpha", alpha);
-            }
-        }
+        set(&mut form, "alpha", Value::Proportion(1.0));
         Ok((form, "strobe".into()))
     }
 

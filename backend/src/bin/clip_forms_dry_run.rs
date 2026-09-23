@@ -220,10 +220,16 @@ impl ScoreRun<'_> {
             let selection = selections.get(key).cloned().unwrap_or_default();
             converted.insert(index, convert(&score, key, &selection, &host));
         }
+        // A color layer under a strobe takes the position after every clip.
         let mut next = Score::default();
         for (index, key) in keys.iter().enumerate() {
             if let Some(Ok(result)) = converted.get(&index) {
                 next.clips.insert(key.clone(), result.clip.clone());
+                if let Some(under) = &result.under {
+                    let mut under = under.clone();
+                    under.z_index = (keys.len() + index) as i64;
+                    next.clips.insert(format!("{key}~under"), under);
+                }
             }
         }
         let new = self.scene(&next).await;
@@ -278,14 +284,30 @@ impl ScoreRun<'_> {
                         "graph": result.clip.graph,
                         "inputs": result.clip.inputs,
                         "selection": result.clip.selection,
+                        "under": result.under.as_ref().map(|under| json!({
+                            "graph": under.graph,
+                            "inputs": under.inputs,
+                        })),
                     }));
                     rows.push(row(&id, self.score_id, clip, &result.clip));
+                    if let Some(under) = &result.under {
+                        let mut under_row = row(&id, self.score_id, clip, under);
+                        under_row["id"] = json!(uuid::Uuid::new_v4().to_string());
+                        under_row["insert_under"] = json!(id);
+                        rows.push(under_row);
+                    }
+                    let none = Ok(None);
+                    let under = result
+                        .under
+                        .as_ref()
+                        .map(|_| new.get(&(keys.len() + index)).unwrap_or(&none));
                     let check = check(
                         &clock,
                         clip,
                         result,
-                        old.get(&index).unwrap_or(&Ok(None)),
-                        new.get(&index).unwrap_or(&Ok(None)),
+                        old.get(&index).unwrap_or(&none),
+                        new.get(&index).unwrap_or(&none),
+                        under,
                     );
                     match check {
                         Err(error) => {
@@ -570,6 +592,7 @@ fn check(
     converted: &Converted,
     old: &Result<Option<CompiledAnnotation>, String>,
     new: &Result<Option<CompiledAnnotation>, String>,
+    under: Option<&Result<Option<CompiledAnnotation>, String>>,
 ) -> Result<Check, String> {
     let old = old
         .as_ref()
@@ -577,6 +600,13 @@ fn check(
     let new = new
         .as_ref()
         .map_err(|e| format!("new render failed: {e}"))?;
+    let under = under
+        .map(|under| {
+            under
+                .as_ref()
+                .map_err(|e| format!("color layer render failed: {e}"))
+        })
+        .transpose()?;
     let (start, end) = (old_clip.start, old_clip.start + old_clip.duration);
     let mut beats: Vec<f64> = (0..SAMPLES)
         .map(|i| start + old_clip.duration * (i as f64 + 0.5) / SAMPLES as f64)
@@ -617,7 +647,18 @@ fn check(
                 .collect())
         };
     let before = render(old)?;
-    let after = render(new)?;
+    let mut after = render(new)?;
+    // The strobe layer writes only the shutter over the color layer's light.
+    if let Some(under) = under {
+        for (frame, color) in after.iter_mut().zip(render(under)?) {
+            for (head, mut state) in color.primitives {
+                if let Some(top) = frame.primitives.get(&head) {
+                    state.strobe = top.strobe;
+                }
+                frame.primitives.insert(head, state);
+            }
+        }
+    }
     let mut check = Check {
         max: 0.0,
         worst: None,
@@ -628,7 +669,13 @@ fn check(
             (Some(a), Some(b)) => {
                 let bound =
                     |o: &luma_lib::eval::OutputBinding| [o.color || o.dimmer, o.strobe, o.position];
-                bound(&a.plan.outputs) != bound(&b.plan.outputs)
+                let mut written = bound(&b.plan.outputs);
+                if let Some(Some(c)) = under {
+                    for (w, u) in written.iter_mut().zip(bound(&c.plan.outputs)) {
+                        *w |= u;
+                    }
+                }
+                bound(&a.plan.outputs) != written
             }
             _ => false,
         },

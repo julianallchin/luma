@@ -90,6 +90,16 @@ fn input(
         promotable: promotable.to_vec(),
     }
 }
+/// The widest chase stroke, in axis lengths.
+pub const MAX_WIDTH: f64 = 4.0;
+
+fn number(mut input: Input, min: f64, max: f64) -> Input {
+    input.author = Some(Author::Number {
+        min: Some(min),
+        max: Some(max),
+    });
+    input
+}
 fn choice(mut input: Input, options: Vec<(&str, Value)>, custom: bool) -> Input {
     input.author = Some(Author::Choice {
         options: options
@@ -528,8 +538,8 @@ fn chase() -> Definition {
     // Width: a share of the axis, or relative to the gap between strokes.
     // g is the axis share between two stroke paths (every / travel). With
     // overrun, centers are (1 + w) × g apart, so strokes touch at rel 1 when
-    // w = g / (1 - g); width = r g / (1 - r g), with r g capped at 1/2 (a
-    // stroke as wide as the axis). Without overrun, width = r g, capped at 1.
+    // w = g / (1 - g); width = r g / (1 - r g), with r g capped at 4/5 (a
+    // stroke four axes wide). Without overrun, width = r g, capped at 4.
     body.node(
         "relative",
         "core/choose_number",
@@ -541,8 +551,8 @@ fn chase() -> Definition {
     );
     let absolute = body.subtract("absolute", n(1.0), c("relative", "value"));
     let gap = body.multiply("gap_share", i("width"), c("life", "spacing"));
-    let half_over = body.multiply("half_over", overrun.clone(), n(0.5));
-    let cap = body.subtract("gap_cap", n(1.0), half_over);
+    let cap_drop = body.multiply("cap_drop", overrun.clone(), n(MAX_WIDTH - 0.8));
+    let cap = body.subtract("gap_cap", n(MAX_WIDTH), cap_drop);
     body.node("gap_capped", "core/minimum", vec![("a", gap), ("b", cap)]);
     let grown = body.multiply("gap_grown", c("gap_capped", "value"), overrun.clone());
     let rest = body.subtract("gap_rest", n(1.0), grown);
@@ -622,12 +632,17 @@ fn chase() -> Definition {
             ),
             (
                 "width",
-                input(
-                    "Width",
-                    "Stroke size",
-                    Value::Proportion(0.2),
-                    Rate::Frame,
-                    &[Time, Hit],
+                number(
+                    input(
+                        "Width",
+                        "Stroke size: a share of the axis, or of the gap between strokes. \
+                         Above 1 a stroke is wider than the axis",
+                        Value::Number(0.2),
+                        Rate::Frame,
+                        &[Time, Hit],
+                    ),
+                    0.0,
+                    MAX_WIDTH,
                 ),
             ),
             (
@@ -862,8 +877,10 @@ fn noise() -> Definition {
 
 fn strobe() -> Definition {
     let mut body = Body::default();
-    body.node("strobe", "write_strobe", vec![("value", i("rate"))]);
-    let color = body.multiply("color", Value::Color([1.0; 3]).into(), i("alpha"));
+    // Only the shutter: the strobe flashes whatever color the layers under
+    // it give. Alpha scales the rate, so a gate stops the strobe.
+    let rate = body.multiply("gated_rate", i("rate"), i("alpha"));
+    body.node("strobe", "write_strobe", vec![("value", rate)]);
     body.form_with(
         "Strobe",
         vec![
@@ -879,7 +896,7 @@ fn strobe() -> Definition {
             ),
             ("alpha", alpha_input(&[Time, Noise, Audio])),
         ],
-        vec![("color", color), ("strobe", c("strobe", "strobe"))],
+        vec![("strobe", c("strobe", "strobe"))],
     )
 }
 
@@ -912,7 +929,22 @@ pub(crate) fn check_inputs(
 }
 
 fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
+    // A number field's bounds; any other plain input is a share, 0 to 1.
+    let (low, high) = match spec.author {
+        Some(Author::Number { min, max }) => (
+            min.unwrap_or(f64::NEG_INFINITY),
+            max.unwrap_or(f64::INFINITY),
+        ),
+        _ => (0.0, 1.0),
+    };
     let Some(kind) = value.source_kind() else {
+        if let (Value::Number(v) | Value::Proportion(v), Some(Author::Number { .. })) =
+            (value, &spec.author)
+        {
+            if !(low..=high).contains(v) {
+                return Err(Error(format!("{v} is outside {low} to {high}")));
+            }
+        }
         if !spec.value_type.accepts(value.value_type()) {
             return Err(Error(format!(
                 "expected {}, got {:?}",
@@ -942,7 +974,7 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
             if speed {
                 v > 0.0
             } else {
-                (0.0..=1.0).contains(&v)
+                (low..=high).contains(&v)
             }
         })
     };

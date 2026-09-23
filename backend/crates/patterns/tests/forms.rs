@@ -115,11 +115,11 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
             .flat_map(|result| {
                 lighting(&result["lighting"])
                     .values()
-                    .map(|head| head.dimmer.unwrap_or(0.0))
+                    .map(|head| head.dimmer.or(head.strobe).unwrap_or(0.0))
                     .collect::<Vec<_>>()
             })
             .fold(0.0, f64::max);
-        assert!(bright > 0.1, "{name} never lights");
+        assert!(bright > 0.1, "{name} never lights or strobes");
     }
     for preset in &shipped.curves {
         let (name, curve) = (&preset.name, &preset.curve);
@@ -213,9 +213,13 @@ fn form_inputs_must_be_complete_known_and_promotable() {
             }),
         ),
         ("shape", Value::Time(ramp.clone())),
-        // A proportion curve must stay within 0..1.
+        // A curve must stay within the input's range: width 0 to 4.
         (
             "width",
+            Value::Time(curve(&[[0.0, 0.0], [1.0, 5.0]], Segment::Linear)),
+        ),
+        (
+            "alpha",
             Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Segment::Linear)),
         ),
         // A speed curve must stay positive.
@@ -327,14 +331,60 @@ fn chase_width_is_relative_to_the_gap_between_strokes() {
     let on = lit(&render(&form, &relative, 1.5));
     let runs = on.windows(2).filter(|pair| pair[1] && !pair[0]).count() + usize::from(on[0]);
     assert_eq!(runs, 2, "{on:?}");
-    // Rel 1 at every = travel is capped at a stroke as wide as the axis.
+    // Rel 1 at every = travel is capped at a stroke four axes wide: rel
+    // 4/5 of the gap, as wide as the largest absolute width.
     let mut wide = inputs.clone();
-    set(&mut wide, "width", Value::Proportion(1.0));
-    // Its open edges sit on the end heads at that moment.
-    assert_eq!(
-        lit(&render(&form, &wide, 1.0)),
-        [false, true, true, true, true, true, true, false]
+    set(&mut wide, "width", Value::Number(1.0));
+    let mut four = wide.clone();
+    set(&mut four, "width_relative", Value::Boolean(false));
+    set(&mut four, "width", Value::Number(MAX_WIDTH));
+    for beat in [0.3, 1.0, 1.7] {
+        assert_eq!(
+            render(&form, &wide, beat),
+            render(&form, &four, beat),
+            "{beat}"
+        );
+    }
+    assert_eq!(lit(&render(&form, &wide, 1.0)), [true; 8]);
+}
+
+#[test]
+fn a_stroke_wider_than_the_axis_keeps_the_rig_partly_lit() {
+    // A soft stroke 1.36 axes wide, one stroke every 2 beats, with its
+    // center on the axis from start to end (the old graphs' centers).
+    let (form, mut inputs) = preset("Wave");
+    let width = 1.36;
+    set(&mut inputs, "width", Value::Number(width));
+    let (from, to) = (
+        width / 2.0 / (1.0 + width),
+        (1.0 + width / 2.0) / (1.0 + width),
     );
+    set(
+        &mut inputs,
+        "path",
+        Value::Envelope(Envelope {
+            points: vec![[0.0, from], [1.0, to]],
+            curves: Vec::new(),
+        }),
+    );
+    // Halfway through its life it covers the whole rig, brightest in the
+    // middle.
+    let middle = render(&form, &inputs, 1.0);
+    assert!(middle.iter().all(|v| *v > 0.0), "{middle:?}");
+    assert!(middle[0] < middle[3] && middle[7] < middle[4], "{middle:?}");
+    // Through the rest of its life part of the rig is lit and part is dim.
+    for step in 1..20 {
+        let beat = f64::from(step) * 0.1;
+        let frame = render(&form, &inputs, beat);
+        let (low, high) = frame
+            .iter()
+            .fold((f64::MAX, 0.0_f64), |(l, h), v| (l.min(*v), h.max(*v)));
+        assert!(high > 0.2, "{beat}: {frame:?}");
+        assert!(high - low > 0.05, "{beat}: {frame:?}");
+    }
+    // Wider than the largest width, it is refused.
+    set(&mut inputs, "width", Value::Number(MAX_WIDTH + 0.5));
+    assert!(prepare(&form, &inputs).is_err());
 }
 
 #[test]
@@ -427,7 +477,8 @@ fn chase_paths_and_direction_following_shapes() {
         .unwrap()
         .1;
     set(&mut inputs, "shape", comet);
-    set(&mut inputs, "width", Value::Proportion(1.0));
+    set(&mut inputs, "width", Value::Number(1.0));
+    set(&mut inputs, "width_relative", Value::Boolean(false));
     // Forward: the bright head leads toward the end of the axis.
     let forward = render(&form, &inputs, 1.0);
     assert!(forward[5] > forward[3], "{forward:?}");
@@ -598,11 +649,19 @@ fn noise_and_strobe_forms() {
     assert!(frames[0].iter().any(|v| *v != frames[0][0]));
     assert!(frames.iter().any(|frame| *frame != frames[0]));
 
-    let (form, inputs) = preset("Strobe");
+    // The strobe writes only the shutter, so it strobes the color under it.
+    let (form, mut inputs) = preset("Strobe");
     let result = prepare(&form, &inputs).unwrap().evaluate(START).unwrap();
     for head in lighting(&result["lighting"]).values() {
         assert_eq!(head.strobe, Some(0.9));
-        assert_eq!(head.dimmer, Some(1.0));
+        assert_eq!(head.dimmer, None);
+        assert_eq!(head.color, None);
+    }
+    // Alpha scales the rate; at 0 the strobe stops.
+    set(&mut inputs, "alpha", Value::Proportion(0.0));
+    let result = prepare(&form, &inputs).unwrap().evaluate(START).unwrap();
+    for head in lighting(&result["lighting"]).values() {
+        assert_eq!(head.strobe, Some(0.0));
     }
 }
 
