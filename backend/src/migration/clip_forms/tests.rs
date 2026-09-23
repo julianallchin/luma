@@ -397,3 +397,41 @@ fn a_colored_strobe_becomes_a_color_layer_under_a_strobe() {
     assert_eq!(under.inputs["alpha"], Value::Proportion(0.5));
     assert_eq!((under.start, under.duration), (START, DURATION));
 }
+
+#[test]
+fn a_bass_strobe_gate_becomes_an_audio_threshold() {
+    let mut nodes = colored(
+        json!({
+            "energy": {"definition": "band_energy", "inputs": {
+                "source": value("audio_source", json!("mix")),
+                "low_hz": value("number", json!(20.0)),
+                "high_hz": value("number", json!(60.0))}},
+            "sensitivity": {"definition": "remap_field/signals", "inputs": {
+                "value": wire("energy", "value"),
+                "low": value("number", json!(0.01)),
+                "high": value("number", json!(0.3))}},
+            "gate": {"definition": "core/greater", "inputs": {
+                "a": wire("sensitivity", "value"),
+                "b": value("number", json!(0.36)),
+                "tolerance": value("number", json!(0.0))}},
+            "rate": {"definition": "core/multiply", "inputs": {
+                "a": value("proportion", json!(0.9)), "b": wire("gate", "mask")}},
+        }),
+        wire("sensitivity", "value"),
+    );
+    nodes["output"]["inputs"]["strobe"] = wire("rate", "value");
+    let converted = run(&score(nodes), &Host::default()).unwrap();
+    assert_eq!(converted.clip.graph, "strobe.constant@1");
+    assert_eq!(converted.clip.inputs["rate"], Value::Proportion(0.9));
+    assert_eq!(
+        converted.clip.inputs["alpha"],
+        Value::Audio(AudioLevel {
+            from_hz: 20.0,
+            to_hz: 60.0,
+            floor: 1.0,
+            threshold: 0.36,
+        })
+    );
+    let under = converted.under.expect("a color layer");
+    assert!(matches!(under.inputs["alpha"], Value::Audio(_)));
+}

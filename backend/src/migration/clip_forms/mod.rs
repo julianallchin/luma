@@ -172,6 +172,8 @@ struct Parts {
     curves: Vec<Envelope>,
     audio: Option<Audio>,
     gated: bool,
+    /// The band and threshold of the gate, when they are known.
+    gate: Option<(Audio, f64)>,
     look: Option<Look>,
     /// The look's own gate was multiplied in.
     implied: bool,
@@ -185,6 +187,7 @@ impl Parts {
             curves: Vec::new(),
             audio: None,
             gated: false,
+            gate: None,
             look: None,
             implied: false,
         };
@@ -205,7 +208,10 @@ impl Parts {
                         return Err("two audio levels multiplied".into());
                     }
                 }
-                Factor::Gate => parts.gated = true,
+                Factor::Gate(gate) => {
+                    parts.gated = true;
+                    parts.gate = gate;
+                }
                 Factor::Implied => parts.implied = true,
                 Factor::Look(look) => {
                     if let Some(first) = &parts.look {
@@ -533,16 +539,35 @@ impl<'a> Build<'a> {
         if rate.look.is_some() || !rate.curves.is_empty() || rate.audio.is_some() {
             return Err("a strobe rate that moves".into());
         }
-        if rate.gated {
-            self.note("the strobe gate on the audio level is dropped");
-        }
         let mut form = preset("Strobe");
         set(
             &mut form,
             "rate",
             Value::Proportion(rate.scalar.clamp(0.0, 1.0)),
         );
-        set(&mut form, "alpha", Value::Proportion(1.0));
+        // A gate on the audio level: alpha is 1 at or above the old gate
+        // level and 0 below it (floor 1, threshold = the gate level).
+        let alpha = match &rate.gate {
+            Some((audio, level)) if (0.0..=1.0).contains(level) => {
+                if !looks::is_mix(&audio.source) {
+                    self.note(format!("stem → mix ({})", audio.source.name()));
+                }
+                self.note("the strobe gate is now on the audio level scaled over the clip");
+                Value::Audio(AudioLevel {
+                    from_hz: audio.low_hz,
+                    to_hz: audio.high_hz,
+                    floor: 1.0,
+                    threshold: *level,
+                })
+            }
+            _ => {
+                if rate.gated {
+                    self.note("the strobe gate on the audio level is dropped");
+                }
+                Value::Proportion(1.0)
+            }
+        };
+        set(&mut form, "alpha", alpha);
         Ok((form, "strobe".into()))
     }
 
