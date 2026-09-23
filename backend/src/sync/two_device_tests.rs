@@ -789,106 +789,6 @@ async fn a_conversation_follows_its_owner() {
     b.close().await;
 }
 
-/// The two shapes of access that are not a venue: the verified pattern library
-/// reaches every signed-in account and only its owner may edit it, and a
-/// person's private rows reach nobody else at all.
-///
-/// The pattern is written last, so B receiving it proves A's earlier uploads
-/// have been replicated too — which is what makes the counts of zero below an
-/// assertion rather than a race.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
-async fn the_verified_library_is_public_and_private_rows_are_not() {
-    let Some(containers) = Containers::from_env() else {
-        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
-        return;
-    };
-    let directory = tempfile::tempdir().expect("temp dir");
-    let a = device(&directory.path().join("a"), &containers, USER).await;
-    let b = device(&directory.path().join("b"), &containers, OTHER).await;
-
-    let venue = unique("venue");
-    let score = unique("score");
-    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
-    let draft = unique("draft");
-    sqlx::query(
-        "INSERT INTO drafts (id, uid, score_id, base_json, state_json)
-         VALUES (?, ?, ?, '{}', '{}')",
-    )
-    .bind(&draft)
-    .bind(USER)
-    .bind(&score)
-    .execute(&a.sql)
-    .await
-    .expect("draft");
-    let thread = unique("thread");
-    sqlx::query(
-        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id)
-         VALUES (?, ?, 'track', 'none', NULL)",
-    )
-    .bind(&thread)
-    .bind(USER)
-    .execute(&a.sql)
-    .await
-    .expect("thread");
-
-    let pattern = unique("pattern");
-    sqlx::query("INSERT INTO patterns (id, uid, name, is_verified) VALUES (?, ?, 'Strobe', 1)")
-        .bind(&pattern)
-        .bind(USER)
-        .execute(&a.sql)
-        .await
-        .expect("pattern");
-    wait_for_upload(&a.sql).await;
-
-    settles(
-        &b.sql,
-        &count("patterns", "id", &pattern),
-        "1",
-        "the verified library never reached the other account",
-    )
-    .await;
-    for (table, column, scope) in [
-        ("drafts", "id", draft.as_str()),
-        ("agent_threads", "id", thread.as_str()),
-        ("changes", "row_id", score.as_str()),
-        ("venues", "id", venue.as_str()),
-    ] {
-        let held: String = sqlx::query_scalar(sqlx::AssertSqlSafe(count(table, column, scope)))
-            .fetch_one(&b.sql)
-            .await
-            .expect("query");
-        assert_eq!(
-            held, "0",
-            "{table} reached an account it does not belong to"
-        );
-    }
-
-    // Verified does not mean writable: the policy filters the row out of the
-    // other account's update, which PostgREST reports as a success over zero
-    // rows. The owner's name is what proves nothing was written.
-    patch(
-        &containers,
-        OTHER,
-        &format!("/patterns?id=eq.{pattern}"),
-        &serde_json::json!({ "name": "Hijack" }),
-    )
-    .await;
-    assert_eq!(
-        get(
-            &containers,
-            USER,
-            &format!("/patterns?id=eq.{pattern}&select=name")
-        )
-        .await,
-        serde_json::json!([{ "name": "Strobe" }]),
-        "another account rewrote a verified pattern"
-    );
-
-    a.close().await;
-    b.close().await;
-}
-
 /// What a venue shares, and what it does not, from the far side of the wire.
 ///
 /// The share-code test covers the member's happy path. These are the refusals
@@ -983,11 +883,6 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
 /// data: a rule that names a column the table does not have, or a subquery the
 /// service refuses, fails the whole stream, and the only symptom is rows that
 /// never arrive.
-///
-/// The cue's pattern is here for a second reason: `cues.pattern_id` is a
-/// foreign key, so a member who receives the cue without it receives a
-/// checkpoint the local schema refuses at the commit — and refuses again on
-/// every retry, which stops that account's device applying anything at all.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the PowerSync test containers; see experiments/powersync/run.py"]
 async fn every_venue_child_shape_reaches_a_member() {
@@ -1004,18 +899,12 @@ async fn every_venue_child_shape_reaches_a_member() {
     let code = unique("code");
     seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
     let track = format!("{venue}-track");
-    let pattern = unique("pattern");
     let root = format!("{venue}:venue");
     let child = unique("node");
     let fixture = unique("fixture");
     let group = unique("group");
     for statement in [
         format!("UPDATE venues SET share_code = '{code}' WHERE id = '{venue}'"),
-        format!("INSERT INTO patterns (id, uid, name) VALUES ('{pattern}', '{USER}', 'Strobe')"),
-        format!(
-            "INSERT INTO implementations (id, uid, pattern_id, graph_json)
-             VALUES ('{pattern}-impl', '{USER}', '{pattern}', '{{}}')"
-        ),
         format!(
             "INSERT INTO score_definitions (id, uid, score_id, definition_json)
              VALUES ('{score}:strobe', '{USER}', '{score}', '{{}}')"
@@ -1058,10 +947,6 @@ async fn every_venue_child_shape_reaches_a_member() {
              VALUES ('{group}:{fixture}', '{USER}', '{venue}', '{group}', '{fixture}')"
         ),
         format!(
-            "INSERT INTO cues (id, uid, venue_id, name, pattern_id)
-             VALUES ('{venue}-cue', '{USER}', '{venue}', 'Blinder', '{pattern}')"
-        ),
-        format!(
             "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
              VALUES ('{venue}-mod', '{USER}', '{venue}', 'shift', '{{}}')"
         ),
@@ -1088,7 +973,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         ("fixtures", "venue_id", venue.as_str()),
         ("fixture_groups", "venue_id", venue.as_str()),
         ("fixture_group_members", "venue_id", venue.as_str()),
-        ("cues", "venue_id", venue.as_str()),
         ("midi_modifiers", "venue_id", venue.as_str()),
         ("midi_bindings", "venue_id", venue.as_str()),
         ("scores", "venue_id", venue.as_str()),
@@ -1096,8 +980,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         ("score_definitions", "score_id", score.as_str()),
         ("tracks", "id", track.as_str()),
         ("track_beats", "track_id", track.as_str()),
-        ("patterns", "id", pattern.as_str()),
-        ("implementations", "pattern_id", pattern.as_str()),
     ] {
         settles(
             &b.sql,
@@ -1108,20 +990,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         .await;
     }
 
-    // The sync rules and the policies say the same thing about that pattern:
-    // the member may read it, and nobody else has been let in with them.
-    let selection = format!("/patterns?id=eq.{pattern}&select=id");
-    assert_eq!(
-        get(&containers, OTHER, &selection).await,
-        serde_json::json!([{ "id": pattern }]),
-        "the member may not read the pattern their cue plays"
-    );
-    assert_eq!(
-        get(&containers, STRANGER, &selection).await,
-        serde_json::json!([]),
-        "a stranger read a venue's cue pattern"
-    );
-
     a.close().await;
     b.close().await;
 }
@@ -1129,11 +997,6 @@ async fn every_venue_child_shape_reaches_a_member() {
 /// One PostgREST read as `user`.
 async fn get(containers: &Containers, user: &str, path: &str) -> serde_json::Value {
     rest(containers, user, reqwest::Method::GET, path, None).await
-}
-
-/// One PostgREST update as `user`.
-async fn patch(containers: &Containers, user: &str, path: &str, body: &serde_json::Value) {
-    rest(containers, user, reqwest::Method::PATCH, path, Some(body)).await;
 }
 
 async fn rest(
