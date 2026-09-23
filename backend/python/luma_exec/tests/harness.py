@@ -64,9 +64,6 @@ def build_workspace(root: Path) -> Path:
         )
         fh.write(frames.tobytes())
 
-    view = np.random.default_rng(7).random((3, 10, 2)).astype("<f4")
-    view.tofile(inputs / "view.raw")
-
     write_manifest(workspace, "r-1", title="Synthetic One")
     write_manifest(workspace, "r-2", title="Synthetic Two")
     return workspace
@@ -86,8 +83,6 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
             "track_id": "track-synthetic",
             "venue_id": None,
             "score_id": None,
-            "pattern_id": None,
-            "implementation_id": None,
             "window": {"start_s": 0.0, "end_s": 30.0},
         },
         "root": {
@@ -180,41 +175,6 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                     "provenance": {"source": "librosa.melspectrogram"},
                 },
             },
-            "graph": {
-                "run": {
-                    "views": {
-                        "view_signal_1": {
-                            "$kind": "tensor",
-                            "artifact_id": "view",
-                            "dtype": "f32",
-                            "shape": [3, 10, 2],
-                            "byte_offset": 0,
-                            "unit": None,
-                            "axes": [
-                                {
-                                    "kind": "labels",
-                                    "name": "primitive",
-                                    "labels": ["p0", "p1", "p2"],
-                                },
-                                {
-                                    "kind": "linear",
-                                    "name": "time",
-                                    "start": 4.0,
-                                    "step": 0.05,
-                                    "count": 10,
-                                    "unit": "s",
-                                },
-                                {
-                                    "kind": "labels",
-                                    "name": "channel",
-                                    "labels": ["dimmer", "strobe"],
-                                },
-                            ],
-                            "provenance": {"source": "graph_run"},
-                        }
-                    }
-                }
-            },
             "venue": {
                 "id": "venue-synthetic",
                 "name": "Synthetic Room",
@@ -258,13 +218,6 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                 "content_hash": None,
                 "sample_rate_hz": PCM_SAMPLE_RATE,
                 "channels": PCM_CHANNELS,
-            },
-            "view": {
-                "kind": "tensor",
-                "encoding": "raw_le",
-                "rel_path": "inputs/view.raw",
-                "byte_len": 3 * 10 * 2 * 4,
-                "content_hash": None,
             },
         },
     }

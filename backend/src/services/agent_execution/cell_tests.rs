@@ -11,20 +11,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::sandbox;
 use crate::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
-use crate::eval::graph_run::{evaluate_graph, EvaluateOptions};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
     AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
-};
-use crate::models::node_graph::{
-    Edge, Graph, GraphContext, NodeInstance, PatternArgDef, PatternArgType,
 };
 use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 use crate::storage::StorageRoot;
@@ -33,7 +28,6 @@ const TRACK_ID: &str = "trk-cell";
 const TRACK_HASH: &str = "hashcell";
 const SCORE_ID: &str = "score-cell";
 const ANALYSIS_SCORE_ID: &str = "analysis-score-cell";
-const PATTERN_ID: &str = "pattern-cell";
 const SAMPLE_RATE: u32 = 48_000;
 /// Absolute seconds; the values the assertions below are computed from.
 const KICKS: [f64; 3] = [0.5, 1.5, 2.5];
@@ -111,7 +105,6 @@ struct Fixture {
     storage: StorageRoot,
     resource_root: PathBuf,
     service: PythonWorkspaceService,
-    graph_runs: GraphRunStore,
     venue_id: String,
 }
 
@@ -138,7 +131,6 @@ impl Fixture {
             storage,
             resource_root: repo_fixtures_root(),
             service,
-            graph_runs: GraphRunStore::new(),
             // Unique per test: `services::groups` keeps a process-wide cache.
             venue_id: format!("ven-{}", uuid::Uuid::new_v4()),
         };
@@ -217,59 +209,31 @@ impl Fixture {
         }
     }
 
-    async fn thread(&self, agent_kind: &str) -> String {
-        let (subject_kind, subject_id, implementation_id, score_id) =
-            if agent_kind == "track_copilot" {
-                // A track thread's durable venue and score are one indivisible
-                // guest scope. Mutation authorization is exercised separately;
-                // these tests care only about analysis and namespace behavior.
-                sqlx::query(
-                    "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
-                 VALUES (?, NULL, ?, ?, 'Analysis')",
-                )
-                .bind(ANALYSIS_SCORE_ID)
-                .bind(TRACK_ID)
-                .bind(&self.venue_id)
-                .execute(&self.pool)
-                .await
-                .unwrap();
-                ("track", TRACK_ID, None, Some(ANALYSIS_SCORE_ID.to_string()))
-            } else {
-                sqlx::query(
-                    "INSERT OR IGNORE INTO patterns (id, name, description, is_verified)
-                 VALUES (?, 'Blank canvas', 'empty test graph', 1)",
-                )
-                .bind(PATTERN_ID)
-                .execute(&self.pool)
-                .await
-                .unwrap();
-                sqlx::query(
-                    "INSERT OR IGNORE INTO implementations (id, pattern_id, graph_json)
-                 VALUES ('implementation-cell', ?, '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
-                )
-                .bind(PATTERN_ID)
-                .execute(&self.pool)
-                .await
-                .unwrap();
-                (
-                    "pattern",
-                    PATTERN_ID,
-                    Some("implementation-cell".to_string()),
-                    None,
-                )
-            };
+    /// A track thread. Its durable venue and score are one indivisible guest
+    /// scope. Mutation authorization is exercised separately; these tests care
+    /// only about analysis and namespace behavior.
+    async fn thread(&self) -> String {
+        sqlx::query(
+            "INSERT OR IGNORE INTO scores (id, uid, track_id, venue_id, name)
+             VALUES (?, NULL, ?, ?, 'Analysis')",
+        )
+        .bind(ANALYSIS_SCORE_ID)
+        .bind(TRACK_ID)
+        .bind(&self.venue_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
         crate::database::local::auth::arm_write_admission(&self.pool, None)
             .await
             .unwrap();
         crate::database::local::agent_threads::create_thread(
             &self.pool,
             CreateAgentThreadInput {
-                agent_kind: agent_kind.to_string(),
-                subject_kind: Some(subject_kind.into()),
-                subject_id: Some(subject_id.into()),
-                implementation_id,
+                agent_kind: "track_copilot".to_string(),
+                subject_kind: Some("track".into()),
+                subject_id: Some(TRACK_ID.into()),
                 venue_id: Some(self.venue_id.clone()),
-                score_id,
+                score_id: Some(ANALYSIS_SCORE_ID.to_string()),
                 ..Default::default()
             },
             None,
@@ -280,22 +244,6 @@ impl Fixture {
     }
 
     async fn editable_thread(&self) -> String {
-        sqlx::query(
-            "INSERT OR IGNORE INTO patterns (id, name, description, is_verified)
-             VALUES (?, 'Blank canvas', 'empty test graph', 1)",
-        )
-        .bind(PATTERN_ID)
-        .execute(&self.pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT OR IGNORE INTO implementations (id, pattern_id, graph_json)
-             VALUES ('implementation-cell', ?, '{\"nodes\":[],\"edges\":[],\"args\":[]}')",
-        )
-        .bind(PATTERN_ID)
-        .execute(&self.pool)
-        .await
-        .unwrap();
         sqlx::query(
             "INSERT INTO scores (id, uid, track_id, venue_id, name)
              VALUES (?, 'owner', ?, ?, 'Main')",
@@ -360,7 +308,6 @@ impl Fixture {
             &self.storage,
             &self.resource_root,
             &self.service,
-            &self.graph_runs,
             thread_id.to_string(),
             code.to_string(),
             scope,
@@ -404,7 +351,7 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
     else {
         return;
     };
-    let thread = f.thread("track_copilot").await;
+    let thread = f.thread().await;
 
     // §22.6 — precomputed drum onsets, straight out of the binding.
     let out = f
@@ -486,7 +433,7 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
     assert!(png.starts_with(b"\x89PNG"), "figure is not a PNG");
 
     // §22.4 — a second thread is a second namespace.
-    let other = f.thread("track_copilot").await;
+    let other = f.thread().await;
     let out = f.run(&other, "kicks").await;
     assert_eq!(out.status, "error", "second thread saw {:?}", out.repr);
     assert!(out.traceback.unwrap_or_default().contains("NameError"));
@@ -510,7 +457,6 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         &f.storage,
         &f.resource_root,
         &f.service,
-        &f.graph_runs,
         thread.clone(),
         "1 + 1".into(),
         scope,
@@ -563,7 +509,6 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             &f.storage,
             &f.resource_root,
             &f.service,
-            &f.graph_runs,
             thread.clone(),
             "1 + 1".into(),
             scope.clone(),
@@ -584,7 +529,6 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         &f.storage,
         &f.resource_root,
         &f.service,
-        &f.graph_runs,
         thread.clone(),
         "1 + 1".into(),
         scope,
@@ -630,7 +574,6 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         &f.storage,
         &f.resource_root,
         &f.service,
-        &f.graph_runs,
         thread.clone(),
         "1 + 1".into(),
         session_scope,
@@ -646,123 +589,6 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
 }
 
 // ---------------------------------------------------------------------------
-// §22.8 — the graph agent correlates a run against onsets in one cell
-// ---------------------------------------------------------------------------
-
-fn node(id: &str, type_id: &str, params: &[(&str, Value)]) -> NodeInstance {
-    NodeInstance {
-        id: id.into(),
-        type_id: type_id.into(),
-        params: params
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect(),
-        position_x: None,
-        position_y: None,
-    }
-}
-
-fn edge(from: &str, fp: &str, to: &str, tp: &str) -> Edge {
-    Edge {
-        id: format!("{from}:{fp}->{to}:{tp}"),
-        from_node: from.into(),
-        from_port: fp.into(),
-        to_node: to.into(),
-        to_port: tp.into(),
-    }
-}
-
-/// A ramp over the span, tapped by one view — the smallest graph that produces
-/// a time-varying signal on every primitive.
-fn ramp_graph() -> Graph {
-    Graph {
-        nodes: vec![
-            node("s0", "scalar", &[("value", Value::from(0.0))]),
-            node("s1", "scalar", &[("value", Value::from(1.0))]),
-            node("ramp", "ramp_between", &[]),
-            node("view_value", "view_signal", &[]),
-        ],
-        edges: vec![
-            edge("s0", "out", "ramp", "start"),
-            edge("s1", "out", "ramp", "end"),
-            edge("ramp", "out", "view_value", "in"),
-        ],
-        args: vec![PatternArgDef {
-            id: "selection".into(),
-            name: "Selection".into(),
-            arg_type: PatternArgType::Selection,
-            default_value: json!({ "expression": "all", "spatialReference": "global" }),
-        }],
-    }
-}
-
-#[tokio::test]
-async fn the_graph_agent_reads_its_own_run_next_to_the_onsets() {
-    let Some(f) = Fixture::new("the_graph_agent_reads_its_own_run_next_to_the_onsets").await else {
-        return;
-    };
-    let thread = f.thread("pattern_graph").await;
-    let graph = ramp_graph();
-    let span = (0.0f32, 4.0f32);
-
-    let evaluation = evaluate_graph(
-        &f.pool,
-        &f.storage,
-        &f.resource_root,
-        &graph,
-        &GraphContext {
-            track_id: TRACK_ID.into(),
-            venue_id: f.venue_id.clone(),
-            start_time: span.0,
-            end_time: span.1,
-            arg_values: None,
-            beat_grid: None,
-            instance_seed: None,
-        },
-        EvaluateOptions { include_mel: false },
-    )
-    .await
-    .expect("evaluate_graph");
-    assert!(
-        !evaluation.primitive_ids.is_empty(),
-        "the run selected no fixtures"
-    );
-    assert!(evaluation.views.contains_key("view_value"));
-
-    // Exactly what `run_graph(agentThreadId=…)` does.
-    f.graph_runs.publish_for_test(&thread, Arc::new(evaluation));
-
-    let scope = PythonScopeInput {
-        graph_definition: Some(serde_json::to_value(&graph).unwrap()),
-        ..f.scope()
-    };
-    let out = f
-        .run_scoped(
-            &thread,
-            "import numpy as np\n\
-             view = luma.graph.run.views[\"view_value\"]\n\
-             vals = np.asarray(view.values)\n\
-             times = np.asarray(view.times_s)\n\
-             kicks = np.asarray(luma.features.drum_onsets[\"kick\"].values)\n\
-             print(vals.shape, times.shape, kicks.shape)\n\
-             peak_t = float(times[int(np.argmax(vals[0, :, 0]))])\n\
-             float(np.min(np.abs(kicks - peak_t)))\n",
-            scope,
-        )
-        .await;
-    let distance = repr_f64(&out, "peak vs onsets");
-    // The ramp peaks at the end of the span; the last kick is at 2.5s.
-    assert!(
-        (distance - (4.0 - KICKS[KICKS.len() - 1])).abs() < 0.05,
-        "distance {distance}, stdout {}",
-        out.stdout
-    );
-    assert!(out.stdout.contains("(3,)"), "stdout: {}", out.stdout);
-
-    f.service.shutdown_all();
-}
-
-// ---------------------------------------------------------------------------
 // §22.17 — cancellation reaches the cell
 // ---------------------------------------------------------------------------
 
@@ -771,7 +597,7 @@ async fn cancelling_a_thread_interrupts_its_busy_cell() {
     let Some(f) = Fixture::new("cancelling_a_thread_interrupts_its_busy_cell").await else {
         return;
     };
-    let thread = f.thread("track_copilot").await;
+    let thread = f.thread().await;
     // Warm the kernel, so the cancel below races the loop and not the startup.
     expect_ok(&f.run(&thread, "keep = 5").await, "warm up");
 

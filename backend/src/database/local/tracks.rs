@@ -1268,12 +1268,6 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO patterns (id, uid, name) VALUES ('bob-pattern', 'bob', 'Pattern')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
             "INSERT INTO scores (id, uid, track_id, venue_id, name)
              VALUES ('bob-score', 'bob', 'alice-track', 'bob-venue', 'Private')",
         )

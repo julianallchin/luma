@@ -64,7 +64,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 67
+        "line": 66
       },
       "name": "agent_thread_delete",
       "prose": {
@@ -120,7 +120,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 90
+        "line": 87
       },
       "name": "agent_thread_record_usage",
       "prose": {
@@ -142,7 +142,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 115
+        "line": 112
       },
       "name": "agent_thread_rename",
       "prose": {
@@ -169,7 +169,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 104
+        "line": 101
       },
       "name": "agent_thread_set_actor",
       "prose": {
@@ -191,7 +191,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_threads.rs",
-        "line": 130
+        "line": 127
       },
       "name": "agent_thread_set_model",
       "returns": "AgentThread"
@@ -354,7 +354,7 @@
       "domain": "agent_execution",
       "handler": {
         "file": "backend/src/dispatch/handlers/agent_execution.rs",
-        "line": 48
+        "line": 47
       },
       "name": "cancel_python_cell",
       "prose": {
@@ -619,37 +619,6 @@
         ]
       },
       "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "requestId",
-          "rust": "String"
-        },
-        {
-          "name": "name",
-          "rust": "String"
-        },
-        {
-          "name": "description",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 16
-      },
-      "name": "create_pattern",
-      "prose": {
-        "notes": "Idempotent on requestId: retrying the same request returns the same pattern. Owner uid resolved server-side from StateDb auth (get_current_user_id) — never passed by the caller, and Option, so an unauthenticated create is allowed with uid = null. Name is normalized to snake_case in the frontend (toSnakeCase) before sending, not in Rust. The dialog keeps the requestId in a ref keyed by a fingerprint of [name, description] so an edited retry gets a fresh key. Category is a separate follow-up set_pattern_category call — creation and categorization are not atomic.",
-        "returns": "PatternSummary",
-        "sideEffects": [
-          "creates the pattern's authored document (per-document Git repo) + SQLite projection",
-          "engine.push_notify.notify_one() — wakes the sync push loop"
-        ]
-      },
-      "returns": "PatternSummary"
     },
     {
       "args": [
@@ -1236,21 +1205,6 @@
       "returns": "Vec<FixtureFacing>"
     },
     {
-      "args": [],
-      "domain": "node_graph",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/node_graph.rs",
-        "line": 15
-      },
-      "name": "get_node_types",
-      "prose": {
-        "notes": "Synchronous (non-async) command, no Db/State deps — pure static catalog built in Rust. Returns Result-less Vec, so it can never error. Frontend loads it lazily only on pattern routes into a store; the pattern editor appends a synthetic `patternArgsNodeDef` client-side, so the node catalog the editor uses is NOT purely this response.",
-        "returns": "NodeTypeDef[] — { id, name, description?, category?, inputs: PortDef[], outputs: PortDef[], params: ParamDef[] }",
-        "sideEffects": []
-      },
-      "returns": "Vec<NodeTypeDef>"
-    },
-    {
       "args": [
         {
           "name": "venueId",
@@ -1274,58 +1228,6 @@
       "returns": "Vec<PatchedFixture>"
     },
     {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "implementationId",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 84
-      },
-      "name": "get_pattern_args",
-      "prose": {
-        "notes": "Loads the whole graph document and throws away everything but `args` — same work as get_pattern_graph_document plus venue scoping. Both call sites pass implementationId: null and rely on venueId to pick the implementation; perform-page caches on the composite key `${venueId}:${patternId}`, which is the correct invalidation key because the args returned genuinely depend on the venue. Errors are swallowed per-pattern in track-editor (falls back to []).",
-        "returns": "PatternArgDef[]",
-        "sideEffects": []
-      },
-      "returns": "Vec<PatternArgDef>"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "implementationId",
-          "rust": "Option<String>"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 28
-      },
-      "name": "get_pattern_graph_document",
-      "prose": {
-        "notes": "Existence-checks the pattern first (get_pattern_pool) so an unknown id errors before document resolution. Passes venue_id = None, so implementation resolution here is venue-agnostic — get_pattern_args does the same load WITH a venue and can therefore resolve a different implementation for the same pattern. `revision` is the mandatory optimistic-concurrency base for save_pattern_graph_document. Callers must re-check `implementationId` in the response against what they asked for: both graph-agent and pattern-editor throw if the resolved implementation differs. smoke.ts:509 invokes it with `{}` deliberately to assert the missing-required-argument error path.",
-        "returns": "GraphDocument { implementationId, revision, graph }",
-        "sideEffects": []
-      },
-      "returns": "GraphDocument"
-    },
-    {
       "args": [],
       "domain": "composable_patterns",
       "handler": {
@@ -1337,25 +1239,6 @@
         "returns": "Value"
       },
       "returns": "Value"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 40
-      },
-      "name": "get_pattern_score_template",
-      "returns": "luma_patterns::Score"
     },
     {
       "args": [
@@ -1911,21 +1794,6 @@
       "returns": "Vec<UniverseOutput>"
     },
     {
-      "args": [],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 10
-      },
-      "name": "list_patterns",
-      "prose": {
-        "notes": "No venue or user scoping and no pagination — returns every local pattern; the store filters client-side (`mine` by uid, `verified` by isVerified). track-editor's loadPatterns fans out one get_pattern_args call per returned pattern (N+1 over IPC).",
-        "returns": "PatternSummary[]",
-        "sideEffects": []
-      },
-      "returns": "Vec<PatternSummary>"
-    },
-    {
       "args": [
         {
           "name": "trackId",
@@ -2025,37 +1893,6 @@
     {
       "args": [
         {
-          "name": "deckId",
-          "rust": "u8"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 180
-      },
-      "name": "midi_compile_cues_for_deck",
-      "prose": {
-        "notes": "Unlike midi_reload_mapping this one propagates compile errors to the caller. deckId is u8 — values > 255 are a deserialization error, not a clamp. Called immediately after render_composite_deck for the same deck/track/venue; ordering matters (composite first, then cue compile). Doc comment claims it is 'called automatically after render_composite_deck' but that chaining is done in TS, not in Rust — drifted comment.",
-        "returns": "void",
-        "sideEffects": [
-          "replaces the RenderEngine group→fixture map for the venue",
-          "compiles all venue cues into RenderEngine cue_buffers keyed by (deck_id, cue_id) — stem decode via StemCache, FFT via FftService, fixture defs from resolve_fixtures_root, audio from StorageRoot"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "input",
           "rust": "CreateBindingInput"
         }
@@ -2063,7 +1900,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 101
+        "line": 51
       },
       "name": "midi_create_binding",
       "prose": {
@@ -2079,35 +1916,13 @@
       "args": [
         {
           "name": "input",
-          "rust": "CreateCueInput"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 27
-      },
-      "name": "midi_create_cue",
-      "prose": {
-        "notes": "Payload is nested under a single `input` key, not flattened. Optional fields are omitted (undefined) rather than null by the caller — e.g. args is only sent when non-empty. executionMode is a tagged union built client-side: { type: 'loop', bars: n } | { type: 'trackTime' }. Caller then immediately creates a fireCue binding with the returned cue id, so create-cue + create-binding are effectively one logical operation with no transactional link (partial failure leaves an orphan cue).",
-        "returns": "Cue (fully materialized row incl. id, uid, createdAt, updatedAt)",
-        "sideEffects": [
-          "commits the write transaction (IMMEDIATE tx)"
-        ]
-      },
-      "returns": "Cue"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
           "rust": "CreateModifierInput"
         }
       ],
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 70
+        "line": 20
       },
       "name": "midi_create_modifier",
       "prose": {
@@ -2129,7 +1944,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 123
+        "line": 73
       },
       "name": "midi_delete_binding",
       "prose": {
@@ -2151,30 +1966,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 49
-      },
-      "name": "midi_delete_cue",
-      "prose": {
-        "notes": "Uses require_changed(): rows_affected != 1 errors with 'Venue resource not found', so deleting a non-existent id is an error, not a no-op — a port must not treat delete as idempotent. Buffer eviction happens after commit and is not rolled back on failure. Bindings referencing the cue are not cleaned up here.",
-        "returns": "void",
-        "sideEffects": [
-          "commits the write transaction",
-          "drops compiled cue buffers for this cue from the RenderEngine (all decks)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 81
+        "line": 31
       },
       "name": "midi_delete_modifier",
       "prose": {
@@ -2189,34 +1981,6 @@
     {
       "args": [
         {
-          "name": "cueId",
-          "rust": "String"
-        },
-        {
-          "name": "targetOverride",
-          "rust": "Option<Target>"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 211
-      },
-      "name": "midi_fire_cue",
-      "prose": {
-        "notes": "Target resolution: All -> ResolvedTarget::All; Explicit{groups} -> Groups; FromModifiers -> falls back to ResolvedTarget::All because there are no held modifiers when firing from the UI — a real port must keep that fallback or UI-fired FromModifiers cues will target nothing. z_index is i64 in the model but cast to i8 here (silent wrap for |z| > 127). Fires latch (not flash); pair with midi_release_cue. The UI derives on/off from ctrlState.activeCueIds, which comes from the emitted event, so the event is load-bearing, not just telemetry.",
-        "returns": "void",
-        "sideEffects": [
-          "latches the cue on in RenderEngine manual layer at cue.z_index",
-          "emits Tauri event 'controller_state' with a ControllerState snapshot",
-          "eprintln! diagnostics"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         }
@@ -2224,7 +1988,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 92
+        "line": 42
       },
       "name": "midi_list_bindings",
       "prose": {
@@ -2244,27 +2008,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 18
-      },
-      "name": "midi_list_cues",
-      "prose": {
-        "notes": "Read-only, no commit. Ordered by display_y ASC, display_x ASC, name ASC — the perform canvas relies on that ordering. Venue access is authorization: an unknown/unauthorized venueId errors with a string, it does not return []. Called in a Promise.all alongside midi_list_bindings / midi_list_modifiers / list_patterns / list_groups.",
-        "returns": "Cue[] (src/bindings/midi.ts — camelCase; args is Record<string, unknown>, zIndex/displayX/displayY numbers, blendMode, defaultTarget: Target tagged union, executionMode: CueExecutionMode tagged union)",
-        "sideEffects": []
-      },
-      "returns": "Vec<Cue>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 61
+        "line": 11
       },
       "name": "midi_list_modifiers",
       "prose": {
@@ -2277,30 +2021,6 @@
     {
       "args": [
         {
-          "name": "cueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 234
-      },
-      "name": "midi_release_cue",
-      "prose": {
-        "notes": "The Read access is acquired and immediately dropped as `_access` — it exists only to verify the caller may touch this cue; the cue row is never read. Conditional dark-frame emit is required behavior: without it the visualizer holds the last frame.",
-        "returns": "void",
-        "sideEffects": [
-          "clears both latch and flash state for the cue",
-          "emits 'controller_state'",
-          "emits 'universe-state-update' with an EMPTY UniverseState when no cues remain active and the manual layer is inactive (clears the visualizer)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
           "name": "venueId",
           "rust": "String"
         }
@@ -2308,7 +2028,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 137
+        "line": 86
       },
       "name": "midi_reload_mapping",
       "prose": {
@@ -2333,7 +2053,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 112
+        "line": 62
       },
       "name": "midi_update_binding",
       "prose": {
@@ -2344,28 +2064,6 @@
         ]
       },
       "returns": "MidiBinding"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "UpdateCueInput"
-        }
-      ],
-      "domain": "midi",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 38
-      },
-      "name": "midi_update_cue",
-      "prose": {
-        "notes": "Sparse patch keyed by cue id — venue is derived from the cue, not passed. Omitted fields are left untouched; there is no way to clear args/target back to NULL (Option<T>, not Option<Option<T>> like UpdateBindingInput.targetOverride / UpdateModifierInput.groups). Drag-to-move (line 276) optimistically mutates local state then fires an { id, displayX, displayY } patch and swallows errors. Does NOT recompile cue buffers — callers must follow with midi_reload_mapping to make the change audible/visible.",
-        "returns": "Cue (updated row)",
-        "sideEffects": [
-          "commits the write transaction"
-        ]
-      },
-      "returns": "Cue"
     },
     {
       "args": [
@@ -2804,53 +2502,6 @@
     {
       "args": [
         {
-          "name": "patternId",
-          "rust": "String"
-        },
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "startTime",
-          "rust": "f32"
-        },
-        {
-          "name": "endTime",
-          "rust": "f32"
-        },
-        {
-          "name": "beatGrid",
-          "rust": "Option<BeatGrid>"
-        },
-        {
-          "name": "fps",
-          "rust": "f32"
-        }
-      ],
-      "domain": "node_graph",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/node_graph.rs",
-        "line": 119
-      },
-      "name": "preview_pattern",
-      "prose": {
-        "notes": "Clamps: fps into [10, 30]; frame_count = ceil(duration*fps) clamped into [1, 256] — so a long span silently under-samples. Errors on duration <= 0 and on an empty pattern graph (\"Pattern produced no output\"). Args come from the pattern's own defaults with every Selection arg forced to \"all\" (merge_arg_values(graph, None, true)) — the hover card has no venue selection context, so preview colors/coverage will differ from a real run. Caller derives [startTime, endTime] from the enclosing downbeat bar and returns { frames, durationSec } with a cancel token; durationSec is recomputed frontend-side, the backend does not return it.",
-        "returns": "UniverseState[] — one frame per sample time",
-        "sideEffects": [
-          "VenueAccess::<Read> at entry, VenueAccess::<Operate> + commit at exit; errors if the principal changed mid-render",
-          "does NOT touch the render engine / live scene"
-        ]
-      },
-      "returns": "Vec<UniverseState>"
-    },
-    {
-      "args": [
-        {
           "name": "scoreId",
           "rust": "String"
         },
@@ -3187,7 +2838,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 353
+        "line": 351
       },
       "name": "remove_session_item",
       "prose": {
@@ -3303,50 +2954,6 @@
           "composite_track writes the compiled Scene into RenderEngine.active_scene",
           "promote_active_scene_to_deck moves it (take) into perform_layers[deck_id] — active_scene ends up None",
           "reads stems via StemCache and FFT via FftService (may compute/cache analysis)"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "deckId",
-          "rust": "u8"
-        },
-        {
-          "name": "bpm",
-          "rust": "f64"
-        },
-        {
-          "name": "beatNumber",
-          "rust": "u8"
-        },
-        {
-          "name": "positionSecs",
-          "rust": "f64"
-        },
-        {
-          "name": "durationSecs",
-          "rust": "f64"
-        },
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "perform",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/perform.rs",
-        "line": 266
-      },
-      "name": "render_composite_deck_unmatched",
-      "prose": {
-        "notes": "Used when a CDJ deck has no matching Luma track: builds a synthetic beat grid from live BPM + beat-in-bar so beat-reactive cues stay in phase. beat_number is 1-indexed (1–4 in 4/4); position_secs is playback position at load time. resolve_fixtures_root failure is swallowed to None (.ok()) — silent degradation smell. Caller only invokes when bpm > 0 and deck.song_loaded.",
-        "returns": "void",
-        "sideEffects": [
-          "installs compiled MIDI cue buffers for the deck in RenderEngine (cue_buffers), no perform_layers scene",
-          "reads fixture definitions from the resolved resources root and app storage root",
-          "takes VenueAccess<Read> on VenueResource::Venue(venue_id)"
         ]
       },
       "returns": "()"
@@ -3472,50 +3079,6 @@
     {
       "args": [
         {
-          "name": "graph",
-          "rust": "Graph"
-        },
-        {
-          "name": "context",
-          "rust": "GraphContext"
-        },
-        {
-          "name": "includeMelSpecs",
-          "rust": "Option<bool>"
-        },
-        {
-          "name": "agentThreadId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "agentExecutionId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "driveLivePreview",
-          "rust": "Option<bool>"
-        }
-      ],
-      "domain": "node_graph",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/node_graph.rs",
-        "line": 39
-      },
-      "name": "run_graph",
-      "prose": {
-        "notes": "The command is a projection: evaluate_graph returns strictly more (time grid, primitive ids/positions, channel names, hashes) than RunResult carries. An empty `graph.nodes` clears the scene (Scene = None) rather than installing an empty plan. includeMelSpecs=false is the param-only/slider-drag path (skips FFT + heavy payload). Authorization is pinned to the durable parent thread (agentThreadId); agentExecutionId only namespaces Python workspace/run storage and defaults to thread_id. Venue fallback in the UI: `selectedInstance.venueId ?? currentVenue?.id ?? \"\"` — an empty venueId resolves selection to zero fixtures (black output), it is not an error. src/features/patterns/agent/graph-subagent-tools.test.ts:72 is NOT an IPC call site — it asserts an agent tool named `run_graph` exists.",
-        "returns": "RunResult { views: Record<string, Signal>, melSpecs: Record<string, MelSpec>, colorViews: Record<string, string>, universeState: UniverseState | null }",
-        "sideEffects": [
-          "installs/clears the RenderEngine active scene (live visualizer) unless driveLivePreview === false",
-          "when agentThreadId is set: publishes the full evaluation into the agent thread's Python workspace via GraphRunStore::commit_evaluation (binds `luma.graph.run`)",
-          "venue access gates: VenueAccess::<Read> at entry, VenueAccess::<Operate> at exit + commit; errors if the authenticated principal changed mid-run"
-        ]
-      },
-      "returns": "RunResult"
-    },
-    {
-      "args": [
-        {
           "name": "threadId",
           "rust": "String"
         },
@@ -3551,41 +3114,6 @@
         ]
       },
       "returns": "PythonCellResult"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "implementationId",
-          "rust": "String"
-        },
-        {
-          "name": "baseRevision",
-          "rust": "String"
-        },
-        {
-          "name": "graph",
-          "rust": "Graph"
-        }
-      ],
-      "domain": "patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/patterns.rs",
-        "line": 101
-      },
-      "name": "save_pattern_graph_document",
-      "prose": {
-        "notes": "The returned `graph` is authoritative and may differ from what was sent (normalization) — the caller replaces its local state with a structuredClone of it, re-derives patternArgs from graph.args, and stores the new revision as the next baseRevision. `changed: false` means a no-op save (identical content). Two post-conditions are enforced in Rust and surface as plain error strings: the projection must be a PatternGraph (not a track projection) and its implementation_id must equal the requested one. The caller sends the whole invoke payload object straight through (`save: (input) => invoke(\"save_pattern_graph_document\", input)`), so the TS input object's keys ARE the command's arg names — renaming one breaks silently at runtime. A fingerprint check skips the call when the graph is unchanged, and a generation gate (graphAuthorityGateRef) rejects the result if a newer load superseded it.",
-        "returns": "GraphEditResult { revision, graph, changed }",
-        "sideEffects": [
-          "commits a revision to the pattern's authored Git document + refreshes the SQLite projection",
-          "engine.push_notify.notify_one() only when result.changed"
-        ]
-      },
-      "returns": "GraphEditResult"
     },
     {
       "args": [
@@ -4083,7 +3611,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 440
+        "line": 438
       },
       "name": "wipe_database",
       "prose": {
@@ -4168,7 +3696,7 @@
       "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
     {
-      "commandCount": 15,
+      "commandCount": 8,
       "domain": "midi",
       "handlers": "backend/src/dispatch/handlers/midi.rs"
     },
@@ -4178,17 +3706,7 @@
       "handlers": "backend/src/dispatch/handlers/mixer.rs"
     },
     {
-      "commandCount": 3,
-      "domain": "node_graph",
-      "handlers": "backend/src/dispatch/handlers/node_graph.rs"
-    },
-    {
-      "commandCount": 6,
-      "domain": "patterns",
-      "handlers": "backend/src/dispatch/handlers/patterns.rs"
-    },
-    {
-      "commandCount": 9,
+      "commandCount": 8,
       "domain": "perform",
       "handlers": "backend/src/dispatch/handlers/perform.rs"
     },
@@ -4246,7 +3764,7 @@
   "events": [
     {
       "emitters": [
-        "backend/src/controller_manager.rs:311"
+        "backend/src/controller_manager.rs:309"
       ],
       "listeners": [],
       "name": "controller_port_change",
@@ -4255,9 +3773,7 @@
     },
     {
       "emitters": [
-        "backend/src/controller_manager.rs:645",
-        "backend/src/dispatch/handlers/midi.rs:230",
-        "backend/src/dispatch/handlers/midi.rs:239"
+        "backend/src/controller_manager.rs:535"
       ],
       "listeners": [],
       "name": "controller_state",
@@ -4275,8 +3791,8 @@
     },
     {
       "emitters": [
-        "backend/src/controller_manager.rs:279",
-        "backend/src/controller_manager.rs:384"
+        "backend/src/controller_manager.rs:277",
+        "backend/src/controller_manager.rs:382"
       ],
       "listeners": [],
       "name": "midi_learn_captured",
@@ -4348,8 +3864,7 @@
     },
     {
       "emitters": [
-        "backend/src/controller_manager.rs:657",
-        "backend/src/dispatch/handlers/midi.rs:248"
+        "backend/src/controller_manager.rs:544"
       ],
       "listeners": [],
       "name": "universe-state-update",
@@ -4374,8 +3889,8 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 167,
-    "domainCount": 28,
+    "commandCount": 150,
+    "domainCount": 26,
     "eventCount": 13
   },
   "version": 2

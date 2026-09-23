@@ -74,7 +74,6 @@ pub fn system_prompt() -> &'static str {
 #[serde(rename_all = "snake_case")]
 pub enum SubjectKind {
     Track,
-    Pattern,
     Venue,
 }
 
@@ -83,7 +82,6 @@ impl SubjectKind {
     pub fn as_str(self) -> &'static str {
         match self {
             SubjectKind::Track => "track",
-            SubjectKind::Pattern => "pattern",
             SubjectKind::Venue => "venue",
         }
     }
@@ -317,7 +315,6 @@ pub struct ThreadScope {
     pub agent_kind: AgentKind,
     pub subject_kind: SubjectKind,
     pub subject_id: String,
-    pub implementation_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
 }
@@ -326,26 +323,15 @@ impl TryFrom<&AgentThread> for ThreadScope {
     type Error = AgentError;
 
     fn try_from(thread: &AgentThread) -> Result<Self, Self::Error> {
-        use crate::models::agent_threads::{AuthoredThreadRoute, ThreadRoute};
+        use crate::models::agent_threads::ThreadRoute;
         match thread.route().map_err(AgentError::Invalid)? {
             ThreadRoute::Unbound => Err(AgentError::Invalid("no editor context is open".into())),
             ThreadRoute::Venue { venue_id } => Ok(Self::venue(venue_id)),
-            ThreadRoute::Authored(AuthoredThreadRoute::Track {
+            ThreadRoute::Track {
                 track_id,
                 venue_id,
                 score_id,
-            }) => Ok(Self::track(track_id, venue_id, score_id)),
-            ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
-                pattern_id,
-                implementation_id,
-            }) => Ok(Self {
-                agent_kind: AgentKind::PatternGraph,
-                subject_kind: SubjectKind::Pattern,
-                subject_id: pattern_id.into(),
-                implementation_id: Some(implementation_id.into()),
-                venue_id: thread.venue_id.clone(),
-                score_id: thread.score_id.clone(),
-            }),
+            } => Ok(Self::track(track_id, venue_id, score_id)),
         }
     }
 }
@@ -362,7 +348,6 @@ impl ThreadScope {
             agent_kind: AgentKind::TrackCopilot,
             subject_kind: SubjectKind::Track,
             subject_id: subject_id.into(),
-            implementation_id: None,
             venue_id: Some(venue_id.into()),
             score_id: Some(score_id.into()),
         }
@@ -380,7 +365,6 @@ impl ThreadScope {
             agent_kind: AgentKind::VenueRig,
             subject_kind: SubjectKind::Venue,
             subject_id: venue_id.clone(),
-            implementation_id: None,
             venue_id: Some(venue_id),
             score_id: None,
         }
@@ -389,14 +373,14 @@ impl ThreadScope {
     /// Whether `thread` is one of the conversations this scope names.
     ///
     /// Public because the native shell lists a subject's threads through
-    /// `agent_thread_list`, which filters on three of the six fields — the
-    /// other three are narrowed here rather than by a second copy of this rule.
+    /// `agent_thread_list`, which filters on three of the five fields — the
+    /// other two are narrowed here rather than by a second copy of this rule.
     #[must_use]
     pub fn matches(&self, thread: &AgentThread) -> bool {
         thread.agent_kind == self.agent_kind.as_str()
             && thread.subject_kind.as_deref() == Some(self.subject_kind.as_str())
             && thread.subject_id.as_deref() == Some(self.subject_id.as_str())
-            && thread.implementation_id == self.implementation_id
+            && thread.implementation_id.is_none()
             && thread.venue_id == self.venue_id
             && thread.score_id == self.score_id
     }
@@ -407,7 +391,7 @@ impl ThreadScope {
             agent_kind: self.agent_kind.as_str().to_string(),
             subject_kind: Some(self.subject_kind.as_str().to_string()),
             subject_id: Some(self.subject_id.clone()),
-            implementation_id: self.implementation_id.clone(),
+            implementation_id: None,
             venue_id: self.venue_id.clone(),
             score_id: self.score_id.clone(),
             title: None,

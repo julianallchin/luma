@@ -37,18 +37,6 @@ name = "dump_venue"
 path = "src/bin/dump_venue.rs"
 
 [[bin]]
-name = "bench_eval"
-path = "src/bin/bench_eval.rs"
-
-[[bin]]
-name = "run_goldens"
-path = "src/bin/run_goldens.rs"
-
-[[bin]]
-name = "dump_node_types"
-path = "src/bin/dump_node_types.rs"
-
-[[bin]]
 name = "luma-record"
 path = "src/bin/luma-record.rs"
 

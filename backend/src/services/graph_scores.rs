@@ -133,7 +133,7 @@ async fn prepare_scene_data(
             crate::eval::lighting::compile_clip(clip, clock.clone(), cells, prepared, output)
                 .map_err(|error| format!("clip {id}: {error}"))?;
         compiled.push(crate::eval::CompiledAnnotation {
-            span: plan.ctx.span,
+            span: plan.span,
             plan: std::sync::Arc::new(plan),
             z_index: clip.z_index,
             blend_mode: clip.blend_mode,
@@ -372,7 +372,7 @@ fn synthetic_strip(
         .ok_or("clip graph must produce fixture output")?;
     let plan = crate::eval::lighting::compile_clip(clip, clock, cells.to_vec(), prepared, output)
         .map_err(|error| error.to_string())?;
-    let span = plan.ctx.span;
+    let span = plan.span;
     let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
         span,
         plan: std::sync::Arc::new(plan),

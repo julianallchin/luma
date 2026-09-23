@@ -6,7 +6,7 @@
 //!
 //! Named "controller" rather than "midi" because MIDI is also used elsewhere
 //! (e.g. DJM mixer fader input) — this manager is specifically for the live
-//! pad/cue controller.
+//! pad controller.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
@@ -16,10 +16,9 @@ use midir::{MidiInput, MidiInputConnection, MidiInputPort};
 use crate::artnet::ArtNetManager;
 use crate::dispatch::Events;
 use crate::models::midi::{
-    ControllerState, Cue, MidiAction, MidiBinding, MidiInput as MidiInputKind, ModifierDef, Target,
-    TriggerMode,
+    ControllerState, MidiAction, MidiBinding, MidiInput as MidiInputKind, ModifierDef,
 };
-use crate::render_engine::{RenderEngine, ResolvedTarget};
+use crate::render_engine::RenderEngine;
 
 const CLIENT_NAME: &str = "Luma";
 
@@ -27,12 +26,11 @@ const CLIENT_NAME: &str = "Luma";
 // Mapping Snapshot (no DB access in callback)
 // ============================================================================
 
-/// Pre-joined bindings+cues snapshot. Rebuilt after any CRUD and on venue change.
+/// Bindings and modifiers snapshot. Rebuilt after any CRUD and on venue change.
 #[derive(Clone, Default)]
 pub struct ControllerMappingSnapshot {
     pub modifiers: Vec<ModifierDef>,
-    /// Bindings joined with the cue definition (if action is FireCue).
-    pub bindings: Vec<(MidiBinding, Option<Cue>)>,
+    pub bindings: Vec<MidiBinding>,
 }
 
 // ============================================================================
@@ -399,30 +397,11 @@ impl ControllerManager {
         Ok(())
     }
 
-    /// Rebuild ControllerMappingSnapshot from provided cues, modifiers, and bindings.
-    pub fn reload_mapping(
-        &self,
-        cues: Vec<Cue>,
-        modifiers: Vec<ModifierDef>,
-        bindings: Vec<MidiBinding>,
-    ) {
-        let cue_map: std::collections::HashMap<String, Cue> =
-            cues.into_iter().map(|c| (c.id.clone(), c)).collect();
-
-        let joined: Vec<(MidiBinding, Option<Cue>)> = bindings
-            .into_iter()
-            .map(|b| {
-                let cue = match &b.action {
-                    MidiAction::FireCue { cue_id } => cue_map.get(cue_id).cloned(),
-                    _ => None,
-                };
-                (b, cue)
-            })
-            .collect();
-
+    /// Rebuild ControllerMappingSnapshot from provided modifiers and bindings.
+    pub fn reload_mapping(&self, modifiers: Vec<ModifierDef>, bindings: Vec<MidiBinding>) {
         if let Ok(mut snap) = self.snapshot.write() {
             snap.modifiers = modifiers;
-            snap.bindings = joined;
+            snap.bindings = bindings;
         }
     }
 }
@@ -460,7 +439,7 @@ fn process_midi_event(
         .collect();
 
     // 3. Find most-specific matching binding
-    let Some((binding, cue)) = find_best_binding(&snapshot.bindings, event, &held) else {
+    let Some(binding) = find_best_binding(&snapshot.bindings, event, &held) else {
         return;
     };
 
@@ -476,27 +455,6 @@ fn process_midi_event(
                 render_engine.set_group_intensity(group_id.clone(), v);
             }
         }
-
-        MidiAction::Blackout => {
-            render_engine.clear_all_cues();
-        }
-
-        MidiAction::FireCue { cue_id } => {
-            let Some(cue) = cue else { return };
-            let target = binding
-                .target_override
-                .as_ref()
-                .unwrap_or(&cue.default_target);
-            let resolved = resolve_target(target, &snapshot.modifiers, &held);
-            process_cue_trigger(
-                binding,
-                cue_id,
-                resolved,
-                cue.z_index as i8,
-                event,
-                render_engine,
-            );
-        }
     }
 
     emit_controller_state(render_engine, events, artnet);
@@ -504,20 +462,20 @@ fn process_midi_event(
 
 /// Find the binding that best matches the event + held modifiers.
 fn find_best_binding<'a>(
-    bindings: &'a [(MidiBinding, Option<Cue>)],
+    bindings: &'a [MidiBinding],
     event: &MidiEvent,
     held: &HashSet<String>,
-) -> Option<(&'a MidiBinding, Option<&'a Cue>)> {
+) -> Option<&'a MidiBinding> {
     let is_press = matches!(event, MidiEvent::NoteOn { .. })
         || matches!(event, MidiEvent::ControlChange { value, .. } if *value > 0);
     let is_release = matches!(event, MidiEvent::NoteOff { .. })
         || matches!(event, MidiEvent::ControlChange { value, .. } if *value == 0);
 
-    let mut best: Option<(&MidiBinding, Option<&Cue>)> = None;
+    let mut best: Option<&MidiBinding> = None;
     let mut best_specificity: usize = 0;
     let mut best_index: usize = 0;
 
-    for (idx, (b, c)) in bindings.iter().enumerate() {
+    for (idx, b) in bindings.iter().enumerate() {
         let trigger_matches = if is_press {
             event.matches_press(&b.trigger)
         } else if is_release {
@@ -547,79 +505,11 @@ fn find_best_binding<'a>(
         {
             best_specificity = specificity;
             best_index = idx;
-            best = Some((b, c.as_ref()));
+            best = Some(b);
         }
     }
 
     best
-}
-
-fn process_cue_trigger(
-    binding: &MidiBinding,
-    cue_id: &str,
-    resolved_target: ResolvedTarget,
-    z_index: i8,
-    event: &MidiEvent,
-    render_engine: &RenderEngine,
-) {
-    let is_press = matches!(event, MidiEvent::NoteOn { .. })
-        || matches!(event, MidiEvent::ControlChange { value, .. } if *value > 0);
-    let is_release = matches!(event, MidiEvent::NoteOff { .. })
-        || matches!(event, MidiEvent::ControlChange { value, .. } if *value == 0);
-
-    match &binding.mode {
-        TriggerMode::Toggle => {
-            if is_press {
-                render_engine.toggle_cue(cue_id, resolved_target, z_index);
-            }
-        }
-
-        TriggerMode::Flash => {
-            if is_press {
-                render_engine.flash_cue_on(cue_id, resolved_target);
-            } else if is_release {
-                render_engine.flash_cue_off(cue_id);
-            }
-        }
-
-        TriggerMode::TapToggleHoldFlash { threshold_ms } => {
-            if is_press {
-                render_engine.record_tap(&binding.id);
-                render_engine.flash_cue_on(cue_id, resolved_target);
-            } else if is_release {
-                render_engine.flash_cue_off(cue_id);
-                if let Some(elapsed) = render_engine.consume_tap_elapsed_ms(&binding.id) {
-                    if elapsed < *threshold_ms {
-                        render_engine.toggle_cue(cue_id, resolved_target, z_index);
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn resolve_target(
-    target: &Target,
-    modifiers: &[ModifierDef],
-    held: &HashSet<String>,
-) -> ResolvedTarget {
-    match target {
-        Target::All => ResolvedTarget::All,
-        Target::Explicit { groups } => ResolvedTarget::Groups(groups.clone()),
-        Target::FromModifiers => {
-            let groups: Vec<String> = modifiers
-                .iter()
-                .filter(|m| held.contains(&m.name))
-                .filter_map(|m| m.groups.as_ref())
-                .flat_map(|g| g.iter().cloned())
-                .collect();
-            if groups.is_empty() {
-                ResolvedTarget::All
-            } else {
-                ResolvedTarget::Groups(groups)
-            }
-        }
-    }
 }
 
 fn event_to_midi_input(event: &MidiEvent) -> Option<MidiInputKind> {
@@ -644,12 +534,9 @@ fn emit_controller_state(
     let state: ControllerState = render_engine.get_manual_state_snapshot();
     events.emit("controller_state", &state);
 
-    // When no cues are active and output is off, push a dark universe frame
-    // so the visualizer clears and ArtNet fixtures go dark rather than holding
-    // the last lit frame.
-    let arc = render_engine.inner_arc();
-    let guard = arc.lock().expect("poisoned");
-    if !guard.manual_layer.has_any_cues() && !guard.manual_layer.active {
+    // When output is off, push a dark universe frame so the visualizer clears
+    // and ArtNet fixtures go dark rather than holding the last lit frame.
+    if !state.active {
         use std::collections::HashMap;
         let dark = crate::models::universe::UniverseState {
             primitives: HashMap::new(),

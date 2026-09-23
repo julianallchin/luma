@@ -294,7 +294,7 @@ class VenueRenderTests(unittest.TestCase):
             {
                 "schema_version": 1,
                 "revision": "r-1",
-                "agent_kind": "pattern_graph",
+                "agent_kind": "venue_rig",
                 "scope": {},
                 "root": {"venue": {"id": "venue-1", "views": list(VIEWS)}},
                 "artifacts": {},

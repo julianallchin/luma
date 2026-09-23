@@ -19,7 +19,6 @@ pub mod artifacts;
 pub mod bindings;
 pub mod cell_host;
 pub mod error;
-pub mod graph_runs;
 pub mod headless_env;
 #[cfg(test)]
 mod kernel_tests;
@@ -41,7 +40,6 @@ pub use bindings::{
 };
 pub use cell_host::CellHost;
 pub use error::{DataPlaneError, Result};
-pub use graph_runs::GraphRunStore;
 pub use worker_launcher::{SandboxPolicy, WorkerLauncher};
 pub use worker_process::{
     CancelToken, ExecOutcome, ExecStatus, HostCallError, HostCallHandler, WorkerConfig,

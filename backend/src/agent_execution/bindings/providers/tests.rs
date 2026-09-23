@@ -6,9 +6,8 @@
 //! shapes and axes, the bytes behind the artifacts, and the exact unavailable
 //! reasons — the strings the agent reads when data is missing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -18,16 +17,12 @@ use super::*;
 use crate::agent_execution::artifacts::codecs;
 use crate::agent_execution::artifacts::ArtifactStore;
 use crate::agent_execution::BindingManifest;
-use crate::eval::graph_run::{graph_hash, GraphEvaluation, SemanticSignal};
-use crate::eval::{Plan, ResidentContext};
-use crate::models::node_graph::{Edge, Graph, NodeInstance, Signal};
 use crate::storage::StorageRoot;
 
 const TRACK_ID: &str = "trk-1";
 const TRACK_HASH: &str = "hash1";
 const SCORE_ID: &str = "sc-1";
 const OWNER: &str = "11111111-2222-3333-4444-555555555555";
-const PATTERN_ID: &str = "pat-1";
 
 /// Temp-file pool built the way `init_app_db` builds the real one.
 async fn test_pool(dir: &Path) -> SqlitePool {
@@ -63,7 +58,7 @@ async fn test_pool(dir: &Path) -> SqlitePool {
 }
 
 /// One synthetic library: a track with every analysis artifact, a venue with two
-/// fixtures in a group, an authored timeline with one clip, one pattern.
+/// fixtures in a group, and an authored timeline with one clip.
 struct Fixture {
     _dir: tempfile::TempDir,
     pool: SqlitePool,
@@ -102,7 +97,7 @@ impl Fixture {
         };
         f.seed_track().await;
         f.seed_venue().await;
-        f.seed_patterns_and_score().await;
+        f.seed_score().await;
         crate::database::local::auth::arm_write_admission(&f.pool, Some(OWNER))
             .await
             .expect("arm test admission");
@@ -121,29 +116,17 @@ impl Fixture {
             score_id: Some(SCORE_ID.into()),
             track_editable: true,
             track_document: None,
-            pattern_id: None,
-            implementation_id: None,
             window: Some((0.0, 30.0)),
-            graph_definition: None,
         }
     }
 
     async fn assemble(&self, scope: &BindingScope) -> (BindingManifest, ArtifactStore) {
-        self.assemble_with(scope, None).await
-    }
-
-    async fn assemble_with(
-        &self,
-        scope: &BindingScope,
-        run: Option<&GraphRunContribution>,
-    ) -> (BindingManifest, ArtifactStore) {
         let mut store = self.store();
         let manifest = assemble_bindings(
             &self.pool,
             &self.storage,
             &self.resource_root,
             scope,
-            run,
             &mut store,
         )
         .await
@@ -377,38 +360,7 @@ impl Fixture {
         .unwrap();
     }
 
-    async fn seed_patterns_and_score(&self) {
-        sqlx::query(
-            "INSERT INTO patterns (id, uid, name, description, category_name, is_verified)
-             VALUES (?, ?, 'Strobe', 'a strobe', 'Effects', 1)",
-        )
-        .bind(PATTERN_ID)
-        .bind(OWNER)
-        .execute(&self.pool)
-        .await
-        .unwrap();
-        let graph = json!({
-            "nodes": [{
-                "id": "pattern_args",
-                "typeId": "pattern_args",
-                "params": {},
-                "positionX": null,
-                "positionY": null
-            }],
-            "edges": [],
-            "args": [{"id": "color", "name": "color", "argType": "Color",
-                      "defaultValue": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}}]
-        });
-        sqlx::query(
-            "INSERT INTO implementations (id, uid, pattern_id, graph_json) VALUES ('imp-1', ?, ?, ?)",
-        )
-        .bind(OWNER)
-        .bind(PATTERN_ID)
-        .bind(graph.to_string())
-        .execute(&self.pool)
-        .await
-        .unwrap();
-
+    async fn seed_score(&self) {
         sqlx::query(
             "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, 'Main')",
         )
@@ -634,7 +586,7 @@ async fn full_assembly_covers_every_schema_branch() {
     assert!(cdj["attachment"]["my_socket"].is_string());
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
-    // §10.2 authored timeline + patterns. Persistence vocabulary (`score`)
+    // §10.2 authored timeline. Persistence vocabulary (`score`)
     // deliberately does not leak into the agent namespace.
     assert!(v.get("score").is_none());
     assert_eq!(at(&v, "track.editable"), true);
@@ -644,14 +596,7 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(clip["duration"], 7.5);
     assert_eq!(clip["z_index"], 3);
     assert_eq!(clip["blend_mode"], "add");
-    // A score in scope publishes the node library, not the pattern catalog:
-    // persistence vocabulary does not leak into the agent namespace.
     assert!(at(&v, "nodes").is_object());
-    assert!(v.get("patterns").is_none());
-
-    // §10.3 graph: nothing was contributed.
-    assert_eq!(at(&v, "graph.run")["$kind"], "unavailable");
-    assert_eq!(at(&v, "graph.definition")["$kind"], "unavailable");
 
     // The worker synthesizes these; the host must not emit them (appendix A.4).
     assert!(v.get("meta").is_none());
@@ -862,35 +807,6 @@ async fn unavailable_reasons_name_the_real_cause() {
 
     assert!(reason(&v, "track.key").contains("no key data source"));
     assert!(reason(&v, "features.mel").contains("librosa"));
-    assert!(reason(&v, "graph.run").contains("no graph run"));
-}
-
-#[tokio::test]
-async fn invalid_pattern_schema_is_reported_instead_of_looking_empty() {
-    let f = Fixture::new().await;
-    sqlx::query("UPDATE implementations SET graph_json = 'not-json' WHERE pattern_id = ?")
-        .bind(PATTERN_ID)
-        .execute(&f.pool)
-        .await
-        .unwrap();
-
-    // The pattern catalog is a graph thread's vocabulary; a score in scope
-    // publishes the node library instead.
-    let mut scope = f.scope();
-    scope.score_id = None;
-    let (manifest, _store) = f.assemble(&scope).await;
-    let v = root(&manifest);
-    assert!(at(&v, "patterns.argument_schemas")
-        .get(PATTERN_ID)
-        .is_none());
-    let error = at(&v, "patterns.argument_schema_errors")[PATTERN_ID]
-        .as_str()
-        .unwrap();
-    assert!(error.contains("corrupt"), "{error}");
-    assert!(at(&v, "patterns.note")
-        .as_str()
-        .unwrap()
-        .contains("1 invalid"));
 }
 
 #[tokio::test]
@@ -932,16 +848,13 @@ async fn a_track_with_no_analysis_reports_has_not_run() {
 async fn a_scope_with_no_track_marks_every_track_branch_unavailable() {
     let f = Fixture::new().await;
     let scope = BindingScope {
-        agent_kind: "pattern_graph".into(),
+        agent_kind: "venue_rig".into(),
         track_id: None,
         venue_id: Some(f.venue_id.clone()),
         score_id: None,
         track_editable: false,
         track_document: None,
-        pattern_id: Some(PATTERN_ID.into()),
-        implementation_id: Some("imp-1".into()),
         window: None,
-        graph_definition: None,
     };
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
@@ -1134,16 +1047,8 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
     assert_eq!(axes[1]["labels"], json!(["u", "v", "z"]));
 
     // …and they are exactly what the evaluator would resolve, in its order.
-    let resolved = crate::eval::context::resolve_primitive_ids(
-        &f.pool,
-        &f.venue_id,
-        &f.resource_root,
-        &[],
-        &[],
-        &HashMap::new(),
-        None,
-    )
-    .await;
+    let resolved =
+        crate::eval::context::resolve_primitive_ids(&f.pool, &f.venue_id, &f.resource_root).await;
     let expected: Vec<_> = resolved.iter().map(|(id, _)| id).collect();
     assert_eq!(
         axes[0]["labels"],
@@ -1167,242 +1072,15 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
     assert_eq!(fixture["z"], 4.75);
 }
 
-// ---------------------------------------------------------------------------
-// Graph run compatibility
-// ---------------------------------------------------------------------------
-
-fn demo_graph() -> Graph {
-    Graph {
-        nodes: vec![NodeInstance {
-            id: "s0".into(),
-            type_id: "scalar".into(),
-            params: [("value".to_string(), json!(1.0))].into_iter().collect(),
-            position_x: None,
-            position_y: None,
-        }],
-        edges: vec![Edge {
-            id: "e0".into(),
-            from_node: "s0".into(),
-            from_port: "out".into(),
-            to_node: "view_signal_1".into(),
-            to_port: "in".into(),
-        }],
-        args: vec![],
-    }
-}
-
-/// A hand-built evaluation: `evaluate_graph` needs a compiled plan and a venue
-/// on disk, and neither is what the compatibility gate is about.
-fn evaluation(graph: &Graph, venue_id: &str, span: (f32, f32)) -> GraphEvaluation {
-    let primitive_ids = vec!["fix-a:0".to_string(), "fix-b:0".to_string()];
-    let times_s: Vec<f32> = (0..4)
-        .map(|i| span.0 + (span.1 - span.0) * i as f32 / 3.0)
-        .collect();
-    let signal = Signal {
-        n: 2,
-        t: 4,
-        c: 3,
-        data: (0..24).map(|i| i as f32).collect(),
-    };
-    let mut views = HashMap::new();
-    views.insert(
-        "view_signal_1".to_string(),
-        SemanticSignal {
-            signal,
-            channels: vec!["r".into(), "g".into(), "b".into()],
-        },
-    );
-    GraphEvaluation {
-        plan: Arc::new(Plan {
-            program: None,
-            primitive_ids: primitive_ids.clone(),
-            outputs: Default::default(),
-            ctx: ResidentContext {
-                span,
-                ..Default::default()
-            },
-            views: Vec::new(),
-        }),
-        views,
-        mel_views: None,
-        times_s,
-        positions: vec![[0.0, 0.0, 2.0], [1.0, 0.0, 2.0]],
-        primitive_ids,
-        span,
-        graph_hash: graph_hash(graph),
-        arg_hash: "arg".into(),
-        selection_hash: "sel".into(),
-        track_id: TRACK_ID.into(),
-        venue_id: venue_id.into(),
-        universe_state: None,
-    }
-}
-
-#[tokio::test]
-async fn a_matching_graph_run_is_published_with_identity_on_every_axis() {
-    let f = Fixture::new().await;
-    let graph = demo_graph();
-    let mut scope = f.scope();
-    scope.agent_kind = "pattern_graph".into();
-    scope.window = Some((0.0, 3.0));
-    scope.graph_definition = Some(serde_json::to_value(&graph).unwrap());
-    sqlx::query("UPDATE fixtures SET pos_x = 1.25, pos_y = 3.5, pos_z = 4.75 WHERE id = 'fix-a'")
-        .execute(&f.pool)
-        .await
-        .unwrap();
-    let mut evaluated = evaluation(&graph, &f.venue_id, (0.0, 3.0));
-    evaluated.positions[0] = [1.25, 3.5, 4.75];
-    let contribution = GraphRunContribution::new(Arc::new(evaluated));
-
-    let (manifest, store) = f.assemble_with(&scope, Some(&contribution)).await;
-    let v = root(&manifest);
-
-    let view = at(&v, "graph.run.views.view_signal_1");
-    assert_eq!(view["$kind"], "tensor");
-    assert_eq!(shape(&v, "graph.run.views.view_signal_1"), vec![2, 4, 3]);
-    assert_eq!(view["axes"][0]["labels"], json!(["fix-a:0", "fix-b:0"]));
-    assert_eq!(view["axes"][1]["kind"], "linear");
-    assert_eq!(view["axes"][1]["start"], 0.0);
-    assert_eq!(view["axes"][1]["count"], 4);
-    assert_eq!(view["axes"][1]["unit"], "s");
-    assert_eq!(view["axes"][2]["labels"], json!(["r", "g", "b"]));
-    // [n][t][c] row-major, straight through.
-    let data = read_f32(&manifest, &store, "graph.run.views.view_signal_1");
-    assert_eq!(data[..3], [0.0, 1.0, 2.0]);
-    assert_eq!(data[23], 23.0);
-
-    assert_eq!(
-        at(&v, "graph.run.primitive_ids"),
-        &json!(["fix-a:0", "fix-b:0"])
-    );
-    assert_eq!(shape(&v, "graph.run.positions"), vec![2, 3]);
-    assert_eq!(
-        at(&v, "graph.run.positions")["axes"][1]["labels"],
-        json!(["u", "v", "z"])
-    );
-    let run_positions = read_f32(&manifest, &store, "graph.run.positions");
-    assert_eq!(&run_positions[..3], &[1.25, -3.5, 4.75]);
-    let venue_positions = read_f32(&manifest, &store, "venue.positions");
-    assert_eq!(run_positions.len(), venue_positions.len());
-    // The synthetic run has exact zeros; the live socket solve carries
-    // trigonometric roundoff (about 2e-17 m at a quarter-turn).
-    for (run, venue) in run_positions.iter().zip(&venue_positions) {
-        assert!(
-            (run - venue).abs() < 1e-6,
-            "graph and venue stage coordinates disagree: {run} vs {venue}"
-        );
-    }
-    assert_eq!(at(&v, "graph.run.span.end_s"), 3.0);
-    assert_eq!(
-        at(&v, "graph.run.fingerprints.graph"),
-        &json!(graph_hash(&graph))
-    );
-    assert!(reason(&v, "graph.run.mel_views").contains("not computed"));
-
-    // The definition branch mirrors what the editor sent.
-    assert_eq!(at(&v, "graph.definition.nodes")[0]["id"], "s0");
-    assert_eq!(at(&v, "graph.definition.nodes")[0]["type"], "scalar");
-    assert_eq!(at(&v, "graph.definition.edges")[0]["to_port"], "in");
-
-    // The venue positions and the run's primitives are the same universe.
-    assert_eq!(
-        at(&v, "venue.positions")["axes"][0]["labels"],
-        at(&v, "graph.run.positions")["axes"][0]["labels"]
-    );
-}
-
-#[tokio::test]
-async fn an_edited_graph_invalidates_its_own_run() {
-    let f = Fixture::new().await;
-    let graph = demo_graph();
-    let contribution =
-        GraphRunContribution::new(Arc::new(evaluation(&graph, &f.venue_id, (0.0, 3.0))));
-
-    let mut edited = graph.clone();
-    edited.nodes[0].params.insert("value".into(), json!(0.25));
-    let mut scope = f.scope();
-    scope.window = Some((0.0, 3.0));
-    scope.graph_definition = Some(serde_json::to_value(&edited).unwrap());
-
-    let (manifest, _store) = f.assemble_with(&scope, Some(&contribution)).await;
-    assert_eq!(
-        reason(&root(&manifest), "graph.run"),
-        super::graph::GRAPH_CHANGED
-    );
-}
-
-#[tokio::test]
-async fn moving_a_node_does_not_invalidate_a_run() {
-    let f = Fixture::new().await;
-    let graph = demo_graph();
-    let contribution =
-        GraphRunContribution::new(Arc::new(evaluation(&graph, &f.venue_id, (0.0, 3.0))));
-
-    let mut moved = graph.clone();
-    moved.nodes[0].position_x = Some(999.0);
-    moved.nodes[0].position_y = Some(-42.0);
-    let mut scope = f.scope();
-    scope.window = Some((0.0, 3.0));
-    scope.graph_definition = Some(serde_json::to_value(&moved).unwrap());
-
-    let (manifest, _store) = f.assemble_with(&scope, Some(&contribution)).await;
-    assert_eq!(
-        at(&root(&manifest), "graph.run.views.view_signal_1")["$kind"],
-        "tensor"
-    );
-}
-
-#[tokio::test]
-async fn a_run_from_another_scope_is_never_silently_reused() {
-    let f = Fixture::new().await;
-    let graph = demo_graph();
-    let definition = Some(serde_json::to_value(&graph).unwrap());
-
-    // Different span.
-    let contribution =
-        GraphRunContribution::new(Arc::new(evaluation(&graph, &f.venue_id, (0.0, 3.0))));
-    let mut scope = f.scope();
-    scope.graph_definition = definition.clone();
-    scope.window = Some((10.0, 20.0));
-    let (manifest, _store) = f.assemble_with(&scope, Some(&contribution)).await;
-    assert!(reason(&root(&manifest), "graph.run").contains("not the window in scope"));
-
-    // Different venue.
-    let contribution =
-        GraphRunContribution::new(Arc::new(evaluation(&graph, "some-other-venue", (0.0, 3.0))));
-    let mut scope = f.scope();
-    scope.graph_definition = definition.clone();
-    scope.window = Some((0.0, 3.0));
-    let (manifest, _store) = f.assemble_with(&scope, Some(&contribution)).await;
-    assert!(reason(&root(&manifest), "graph.run").contains("different venue"));
-
-    // Different track.
-    let mut other = evaluation(&graph, &f.venue_id, (0.0, 3.0));
-    other.track_id = "trk-other".into();
-    let contribution = GraphRunContribution::new(Arc::new(other));
-    let mut scope = f.scope();
-    scope.graph_definition = definition;
-    scope.window = Some((0.0, 3.0));
-    let (manifest, _store) = f.assemble_with(&scope, Some(&contribution)).await;
-    assert!(reason(&root(&manifest), "graph.run").contains("different track"));
-}
-
 #[tokio::test]
 async fn an_unknown_agent_kind_is_a_hard_error() {
     let f = Fixture::new().await;
     let mut scope = f.scope();
     scope.agent_kind = "wat".into();
     let mut store = f.store();
-    let e = assemble_bindings(
-        &f.pool,
-        &f.storage,
-        &f.resource_root,
-        &scope,
-        None,
-        &mut store,
-    )
-    .await
-    .unwrap_err();
+    let e = assemble_bindings(&f.pool, &f.storage, &f.resource_root, &scope, &mut store)
+        .await
+        .unwrap_err();
     assert!(e.contains("unknown agent kind"), "{e}");
 }
 
@@ -1417,10 +1095,7 @@ async fn venue_context_explains_that_no_track_is_open() {
         score_id: None,
         track_editable: false,
         track_document: None,
-        pattern_id: None,
-        implementation_id: None,
         window: None,
-        graph_definition: None,
     };
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
@@ -1428,8 +1103,7 @@ async fn venue_context_explains_that_no_track_is_open() {
     at(&v, "venue.pieces");
     at(&v, "venue.unplaced_snapshot");
     assert_eq!(reason(&v, "track"), "no track is open");
-    assert!(v.get("patterns").is_some());
+    assert!(v.get("nodes").is_some());
     assert!(v.get("audio").is_some());
     assert!(v.get("features").is_some());
-    assert!(v.get("graph").is_some());
 }

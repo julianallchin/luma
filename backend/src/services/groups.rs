@@ -671,12 +671,11 @@ pub struct ResolvedFixture {
 /// # Determinism
 ///
 /// `rng_seed` decides every random choice the resolution makes — which side an
-/// `^` takes — so one seed always lights the same rig. Callers own that contract: the eval pre-pass seeds from the
-/// selection node's id *and the clip it belongs to*
-/// ([`crate::eval::context::seed_for`]), so one clip renders the same lights on
-/// every run while the same pattern placed twice can draw two different sides —
-/// hold a motion for a phrase, then mix it up. The IPC preview passes a fixed
-/// seed so the picker does not flicker between calls.
+/// `^` takes — so one seed always lights the same rig. Callers own that
+/// contract: a clip seeds from its own stored seed, so one clip renders the same
+/// lights on every run while the same graph placed twice can draw two different
+/// sides. The IPC preview passes a fixed seed so the picker does not flicker
+/// between calls.
 pub async fn resolve_selection_expression_with_path(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
@@ -1095,37 +1094,6 @@ mod tests {
         let error = super::validate_selection_names("missing | empty", &tree).unwrap_err();
         assert!(error.contains("missing") && error.contains("Available groups: empty"));
         assert!(super::validate_selection_names("empty |", &tree).is_err());
-    }
-
-    /// The point of a per-clip seed: place one pattern twice and the two clips
-    /// draw independently, while either clip on its own draws the same way on
-    /// every run.
-    #[test]
-    fn two_clips_of_one_pattern_draw_independently() {
-        use crate::eval::context::seed_for;
-
-        assert_eq!(
-            seed_for(Some("clip-a"), "select-1"),
-            seed_for(Some("clip-a"), "select-1")
-        );
-        assert_ne!(
-            seed_for(Some("clip-a"), "select-1"),
-            seed_for(Some("clip-b"), "select-1")
-        );
-
-        // And the node still matters: two selection nodes in one clip draw
-        // independently, so an `^` inside a clip is not forced to agree.
-        let a = seed_for(Some("clip-a"), "select-1");
-        let b = seed_for(Some("clip-a"), "select-2");
-        assert_ne!(a, b);
-
-        // No clip (a pattern's own preview) leaves the seed as it always was.
-        assert_eq!(seed_for(None, "select-1"), {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            "select-1".hash(&mut h);
-            h.finish()
-        });
     }
 
     /// The bug this key exists to prevent: two libraries holding a venue of the

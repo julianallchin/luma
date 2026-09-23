@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**167 commands** across **28 domains** · **13 events**
+**150 commands** across **26 domains** · **13 events**
 
 ## Domains
 
@@ -26,11 +26,9 @@ name.
 | `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 7 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `backend/src/dispatch/handlers/host_audio.rs` |
-| `midi` | 15 | `backend/src/dispatch/handlers/midi.rs` |
+| `midi` | 8 | `backend/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `backend/src/dispatch/handlers/mixer.rs` |
-| `node_graph` | 3 | `backend/src/dispatch/handlers/node_graph.rs` |
-| `patterns` | 6 | `backend/src/dispatch/handlers/patterns.rs` |
-| `perform` | 9 | `backend/src/dispatch/handlers/perform.rs` |
+| `perform` | 8 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
 | `scores` | 8 | `backend/src/dispatch/handlers/scores.rs` |
@@ -41,7 +39,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **167** | |
+| **total** | **150** | |
 
 ## Commands
 
@@ -194,10 +192,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `midi_list_cues` | `venueId: String` | `Vec<Cue>` |
-| `midi_create_cue` | `input: CreateCueInput` | `Cue` |
-| `midi_update_cue` | `input: UpdateCueInput` | `Cue` |
-| `midi_delete_cue` | `id: String` | `()` |
 | `midi_list_modifiers` | `venueId: String` | `Vec<ModifierDef>` |
 | `midi_create_modifier` | `input: CreateModifierInput` | `ModifierDef` |
 | `midi_delete_modifier` | `id: String` | `()` |
@@ -206,9 +200,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `midi_update_binding` | `input: UpdateBindingInput` | `MidiBinding` |
 | `midi_delete_binding` | `id: String` | `()` |
 | `midi_reload_mapping` | `venueId: String` | `()` |
-| `midi_compile_cues_for_deck` | `deckId: u8`<br>`trackId: String`<br>`venueId: String` | `()` |
-| `midi_fire_cue` | `cueId: String`<br>`targetOverride: Option<Target>` | `()` |
-| `midi_release_cue` | `cueId: String` | `()` |
 
 ### `mixer`
 
@@ -223,25 +214,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `mixer_start_learn` | `venueId: String` | `()` |
 | `mixer_cancel_learn` | `venueId: String` | `()` |
 
-### `node_graph`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `get_node_types` | — | `Vec<NodeTypeDef>` |
-| `run_graph` | `graph: Graph`<br>`context: GraphContext`<br>`includeMelSpecs: Option<bool>`<br>`agentThreadId: Option<String>`<br>`agentExecutionId: Option<String>`<br>`driveLivePreview: Option<bool>` | `RunResult` |
-| `preview_pattern` | `patternId: String`<br>`trackId: String`<br>`venueId: String`<br>`startTime: f32`<br>`endTime: f32`<br>`beatGrid: Option<BeatGrid>`<br>`fps: f32` | `Vec<UniverseState>` |
-
-### `patterns`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `list_patterns` | — | `Vec<PatternSummary>` |
-| `create_pattern` | `requestId: String`<br>`name: String`<br>`description: Option<String>` | `PatternSummary` |
-| `get_pattern_graph_document` | `id: String`<br>`implementationId: Option<String>` | `GraphDocument` |
-| `get_pattern_score_template` | `id: String`<br>`venueId: String` | `luma_patterns::Score` |
-| `get_pattern_args` | `id: String`<br>`venueId: Option<String>`<br>`implementationId: Option<String>` | `Vec<PatternArgDef>` |
-| `save_pattern_graph_document` | `id: String`<br>`implementationId: String`<br>`baseRevision: String`<br>`graph: Graph` | `GraphEditResult` |
-
 ### `perform`
 
 | Command | Arguments | Returns |
@@ -254,7 +226,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `perform_match_track` | `trackNetworkPath: String`<br>`venueId: String` | `PerformTrackMatch` |
 | `perform_match_track_by_metadata` | `title: String`<br>`artist: String`<br>`bpm: f64`<br>`durationSecs: f64`<br>`venueId: String` | `PerformTrackMatch` |
 | `render_composite_deck` | `deckId: u8`<br>`trackId: String`<br>`venueId: String` | `()` |
-| `render_composite_deck_unmatched` | `deckId: u8`<br>`bpm: f64`<br>`beatNumber: u8`<br>`positionSecs: f64`<br>`durationSecs: f64`<br>`venueId: String` | `()` |
 
 ### `rekordbox`
 
@@ -364,7 +335,7 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | Event | Emitters | Listeners | Note |
 | --- | ---: | ---: | --- |
 | `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
-| `controller_state` | 3 | 0 | **orphan** |
+| `controller_state` | 1 | 0 | **orphan** |
 | `library-changed` | 3 | 0 | **orphan** |
 | `midi_learn_captured` | 2 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
@@ -373,6 +344,6 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `python-env-progress` | 5 | 0 | **orphan** |
 | `track-import-state` | 8 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 0 | **orphan** |
-| `universe-state-update` | 2 | 0 | **orphan** |
+| `universe-state-update` | 1 | 0 | **orphan** |
 | `upload-progress-start` | 1 | 0 | **orphan** |
 | `upload-progress-tick` | 1 | 0 | **orphan** |

@@ -1,5 +1,4 @@
-//! Creating and deleting the rows a person owns: patterns, their default
-//! implementation, and scores.
+//! Creating and deleting the scores a person owns.
 //!
 //! Every id here is derived from the caller's `request_id`, so a retried
 //! request finds the row it made the first time instead of making a second one.
@@ -10,79 +9,8 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::database::local::auth::principal_key;
-use crate::database::local::patterns as patterns_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
-use crate::models::node_graph::Graph;
-use crate::models::patterns::PatternSummary;
 use crate::models::scores::Score;
-use crate::services::graph_documents::exact_graph_json;
-
-/// Create a pattern and its single, empty implementation.
-pub async fn create_pattern(
-    pool: &SqlitePool,
-    principal: &str,
-    request_id: &str,
-    name: String,
-    description: Option<String>,
-) -> Result<PatternSummary, String> {
-    create_pattern_with_graph(pool, principal, request_id, name, description, None, None).await
-}
-
-/// Create a pattern whose implementation starts from `graph`, optionally local
-/// to one score.
-pub async fn create_pattern_with_graph(
-    pool: &SqlitePool,
-    principal: &str,
-    request_id: &str,
-    name: String,
-    description: Option<String>,
-    graph: Option<Graph>,
-    score_id: Option<&str>,
-) -> Result<PatternSummary, String> {
-    let request_id = request_uuid(request_id)?;
-    let key = principal_key(Some(principal));
-    let pattern_id = derived_id(&key, "pattern", &request_id, "subject");
-    let implementation_id = derived_id(&key, "pattern", &request_id, "implementation");
-    if let Some(pattern) = patterns_db::optional_pattern(pool, &pattern_id).await? {
-        return Ok(pattern);
-    }
-    let graph = graph.unwrap_or(Graph {
-        nodes: Vec::new(),
-        edges: Vec::new(),
-        args: Vec::new(),
-    });
-    crate::services::graph_documents::canonicalize_graph(&graph)
-        .map_err(|error| error.to_string())?;
-    let graph_json = exact_graph_json(&graph).map_err(|error| error.to_string())?;
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| format!("begin pattern creation: {error}"))?;
-    sqlx::query(
-        "INSERT INTO patterns (id, uid, name, description, score_id) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&pattern_id)
-    .bind(principal)
-    .bind(&name)
-    .bind(&description)
-    .bind(score_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("insert pattern: {error}"))?;
-    insert_implementation(
-        &mut transaction,
-        &implementation_id,
-        principal,
-        &pattern_id,
-        &graph_json,
-    )
-    .await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("commit pattern creation: {error}"))?;
-    patterns_db::get_pattern_pool(pool, &pattern_id).await
-}
 
 /// Create a score on a `(track, venue)` pair. A pair carries as many scores as
 /// there are people who annotated it, so this always makes a new one.
@@ -180,27 +108,6 @@ pub async fn delete_score(pool: &SqlitePool, score_id: &str) -> Result<(), Strin
         .await
         .map_err(|error| format!("delete score: {error}"))?;
     access.commit().await
-}
-
-async fn insert_implementation(
-    connection: &mut sqlx::SqliteConnection,
-    id: &str,
-    principal: &str,
-    pattern_id: &str,
-    graph_json: &str,
-) -> Result<(), String> {
-    sqlx::query(
-        "INSERT INTO implementations (id, uid, pattern_id, name, graph_json)
-         VALUES (?, ?, ?, NULL, ?)",
-    )
-    .bind(id)
-    .bind(principal)
-    .bind(pattern_id)
-    .bind(graph_json)
-    .execute(&mut *connection)
-    .await
-    .map_err(|error| format!("insert pattern implementation: {error}"))?;
-    Ok(())
 }
 
 fn request_uuid(request_id: &str) -> Result<String, String> {

@@ -14,7 +14,7 @@
 //! ```
 use luma_lib::{
     eval::{Arena, CompiledAnnotation, Scene, Scope},
-    migration::clip_forms::{convert, repair_draft_inputs, Converted, Host, Proposal},
+    migration::clip_forms::{clip_cells, convert, repair_draft_inputs, Converted, Host, Proposal},
     models::universe::{PrimitiveState, UniverseState},
     storage::StorageRoot,
 };
@@ -205,7 +205,14 @@ async fn main() -> Result<(), String> {
         &args.output.join("proposed_changes.json"),
         &serde_json::to_string_pretty(&set).unwrap(),
     )?;
-    write(&args.output.join("proposed_changes.sql"), &sql(&set, &now))?;
+    write(
+        &args.output.join("proposed_changes.sql"),
+        &sql(&set, &now, Part::Synced),
+    )?;
+    write(
+        &args.output.join("proposed_library_deletes.sql"),
+        &sql(&set, &now, Part::Library),
+    )?;
     let old_rows = args.output.join("proposed_rows.json");
     if old_rows.exists() {
         fs::remove_file(&old_rows).map_err(|e| e.to_string())?;
@@ -292,13 +299,30 @@ impl ScoreRun<'_> {
         let old = self.scene(&score).await;
 
         let mut converted: BTreeMap<String, Result<Proposal, String>> = BTreeMap::new();
+        let mut domains: BTreeMap<(String, u64), Vec<luma_patterns::Cell>> = BTreeMap::new();
         for key in &order {
             let heads = match old.get(&(rank[key] * STEP)) {
                 Some(Ok(Some(annotation))) => annotation.plan.primitive_ids.len(),
                 _ => 0,
             };
+            let clip = &score.clips[key];
+            let domain = (
+                serde_json::to_string(&clip.selection).unwrap(),
+                clip.selection_seed.unwrap_or(clip.seed),
+            );
+            let cells = match domains.get(&domain) {
+                Some(cells) => cells.clone(),
+                None => {
+                    let cells = clip_cells(self.pool, self.fixtures, self.score_id, clip)
+                        .await
+                        .unwrap_or_default();
+                    domains.insert(domain, cells.clone());
+                    cells
+                }
+            };
             let host = Host {
                 heads,
+                cells,
                 ..host.clone()
             };
             let selection = selections.get(key).cloned().unwrap_or_default();
@@ -1007,10 +1031,21 @@ async fn change_set(
     let mut tables = BTreeMap::new();
     let mut kept = Vec::new();
     let mut warnings = vec![
-        "Apply in one transaction on a connection with the sync triggers installed \
-         (backend/src/sync/triggers.rs `install`). A plain sqlite3 connection neither logs \
-         the rows to `changes` nor queues them for upload, and the next download would \
-         bring the old rows back."
+        "proposed_changes.sql (clips, score_definitions, agent_threads, midi_bindings) is \
+         SQLite for the app's library database (luma.db). Run it as one transaction on a \
+         writer connection that carries both sync trigger sets \
+         (backend/src/sync/triggers.rs `install`, as `open_app_db_at` sets up), with the app \
+         closed, then let the app sync so the upload queue drains. A plain sqlite3 connection \
+         neither logs the rows to `changes` nor queues them for upload, and the next \
+         download would bring the old rows back."
+            .to_owned(),
+        "proposed_library_deletes.sql (cues, venue_implementation_overrides, \
+         implementations, patterns) covers tables the app no longer syncs. Run it only while \
+         those tables still exist; the drop_cues_and_pattern_library migrations (local and \
+         Supabase) remove them anyway, so on a database that has run them it is not needed."
+            .to_owned(),
+        "Both files can run twice: inserts skip an existing id, updates set the same values \
+         and deletes find nothing."
             .to_owned(),
         "Every clips update and delete also matches on `uid`; an update that matches no \
          row means the row changed after the snapshot."
@@ -1086,14 +1121,14 @@ async fn change_set(
         {
             let action: Json =
                 serde_json::from_str(row.get::<&str, _>("action_json")).unwrap_or_default();
-            if action["type"] == "fireCue" {
+            if action["type"] == "fireCue" || action["type"] == "blackout" {
                 tables
                     .entry("midi_bindings")
                     .or_default()
                     .deletes
                     .push(json!({
                         "id": row.get::<String, _>("id"),
-                        "reason": "fires a cue",
+                        "reason": "fires or blacks out cues",
                         "cue_id": action["cue_id"],
                     }));
             }
@@ -1171,7 +1206,7 @@ async fn change_set(
         }
         warnings.push(
             "Every cue, library pattern and implementation is deleted, with the MIDI bindings \
-             that fire a cue, and agent threads lose their implementation link. \
+             that fire or black out cues, and agent threads lose their implementation link. \
              `pattern_categories` is unaffected: patterns point at categories, not the other \
              way."
                 .into(),
@@ -1203,7 +1238,25 @@ async fn change_set(
 }
 
 /// The change set as one SQL transaction. It is written, never run.
-fn sql(set: &ChangeSet, now: &str) -> String {
+/// Which SQL file: the tables the app still syncs, or the cue and pattern
+/// library, which the app no longer syncs and a migration drops.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Synced,
+    Library,
+}
+
+/// Tables in the library part, referencing rows first.
+const LIBRARY: [&str; 4] = [
+    "cues",
+    "venue_implementation_overrides",
+    "implementations",
+    "patterns",
+];
+
+/// One part of the change set as one SQL transaction for the app's SQLite
+/// database. It is written, never run. Every statement can run twice.
+fn sql(set: &ChangeSet, now: &str, part: Part) -> String {
     use std::fmt::Write;
     let text = |value: &Json| match value {
         Json::Null => "NULL".to_owned(),
@@ -1215,12 +1268,39 @@ fn sql(set: &ChangeSet, now: &str) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "-- Clip forms migration, generated {now} from {}.\n\
-         -- Not run by the dry run. Read proposed_changes.json `warnings` first.\n\
+        "-- Clip forms migration ({}), generated {now} from {}.\n\
+         -- SQLite. Not run by the dry run. Read proposed_changes.json `warnings` first.\n\
          PRAGMA foreign_keys = ON;\nBEGIN IMMEDIATE;",
+        if part == Part::Synced {
+            "synced tables"
+        } else {
+            "cue and pattern library"
+        },
         set.snapshot
     )
     .unwrap();
+    let empty = TableChanges::default();
+    let table = |name: &str| set.tables.get(name).unwrap_or(&empty);
+    if part == Part::Library {
+        for name in LIBRARY {
+            let deletes = &table(name).deletes;
+            writeln!(out, "\n-- {name}: {} deletes", deletes.len()).unwrap();
+            for delete in deletes {
+                let matches = if name == "venue_implementation_overrides" {
+                    format!(
+                        "venue_id = {} AND pattern_id = {}",
+                        text(&delete["venue_id"]),
+                        text(&delete["pattern_id"])
+                    )
+                } else {
+                    format!("id = {}", text(&delete["id"]))
+                };
+                writeln!(out, "DELETE FROM {name} WHERE {matches};").unwrap();
+            }
+        }
+        writeln!(out, "\nCOMMIT;").unwrap();
+        return out;
+    }
     let clips = &set.tables["clips"];
     writeln!(out, "\n-- clips: {} updates", clips.updates.len()).unwrap();
     for update in &clips.updates {
@@ -1260,7 +1340,7 @@ fn sql(set: &ChangeSet, now: &str) -> String {
         let values: Vec<String> = COLUMNS.iter().map(|c| text(&insert[*c])).collect();
         writeln!(
             out,
-            "INSERT INTO clips ({}) VALUES ({});",
+            "INSERT INTO clips ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING;",
             COLUMNS.join(", "),
             values.join(", ")
         )
@@ -1276,8 +1356,6 @@ fn sql(set: &ChangeSet, now: &str) -> String {
         )
         .unwrap();
     }
-    let empty = TableChanges::default();
-    let table = |name: &str| set.tables.get(name).unwrap_or(&empty);
     let updates = &table("agent_threads").updates;
     writeln!(out, "\n-- agent_threads: {} updates", updates.len()).unwrap();
     for update in updates {
@@ -1289,28 +1367,16 @@ fn sql(set: &ChangeSet, now: &str) -> String {
         )
         .unwrap();
     }
-    // Referencing rows first; the foreign keys are checked at commit anyway.
-    for name in [
-        "midi_bindings",
-        "cues",
-        "venue_implementation_overrides",
-        "score_definitions",
-        "implementations",
-        "patterns",
-    ] {
+    for name in ["midi_bindings", "score_definitions"] {
         let deletes = &table(name).deletes;
         writeln!(out, "\n-- {name}: {} deletes", deletes.len()).unwrap();
         for delete in deletes {
-            let matches = if name == "venue_implementation_overrides" {
-                format!(
-                    "venue_id = {} AND pattern_id = {}",
-                    text(&delete["venue_id"]),
-                    text(&delete["pattern_id"])
-                )
-            } else {
-                format!("id = {}", text(&delete["id"]))
-            };
-            writeln!(out, "DELETE FROM {name} WHERE {matches};").unwrap();
+            writeln!(
+                out,
+                "DELETE FROM {name} WHERE id = {};",
+                text(&delete["id"])
+            )
+            .unwrap();
         }
     }
     writeln!(out, "\nCOMMIT;").unwrap();

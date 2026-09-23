@@ -8,7 +8,6 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::CommandError;
-use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::artnet::ArtNetManager;
 use crate::audio::{FftService, StemCache};
@@ -186,7 +185,6 @@ pub struct AppServices {
     pub(crate) db: Db,
     pub(crate) state_db: StateDb,
     pub(crate) workspaces: Arc<PythonWorkspaceService>,
-    pub(crate) graph_runs: Arc<GraphRunStore>,
     pub(crate) analysis_tasks: AnalysisTaskGroup,
     pub(crate) workers: WorkerEnvironment,
     pub(crate) track_sources: Arc<dyn TrackSources>,
@@ -275,7 +273,6 @@ impl AppServices {
             db,
             state_db,
             workspaces,
-            graph_runs: Arc::new(GraphRunStore::new()),
             analysis_tasks: AnalysisTaskGroup::new(),
             workers: WorkerEnvironment::from_env_default()
                 .expect("headless worker environment paths must resolve"),
@@ -516,11 +513,6 @@ impl AppServices {
     /// One Python kernel per agent thread.
     pub fn workspaces(&self) -> &PythonWorkspaceService {
         &self.workspaces
-    }
-
-    /// Published graph evaluations, keyed by execution id.
-    pub fn graph_runs(&self) -> &GraphRunStore {
-        &self.graph_runs
     }
 
     /// Shared FFT service for audio analysis.

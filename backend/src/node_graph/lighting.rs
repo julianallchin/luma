@@ -252,47 +252,6 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
     Ok(decoded)
 }
 
-pub fn node_types() -> Vec<NodeTypeDef> {
-    // Schema-v3 standalone patterns retain their historical ports for decoding;
-    // the score canvas calls types_for with its canonical library directly.
-    let library = p::migration::v2_library();
-    let mut types = types_for(&library);
-    types.retain(|node| {
-        node.id
-            .strip_prefix(PREFIX)
-            .is_some_and(|id| library.definitions.contains_key(id))
-    });
-    for node in &mut types {
-        let definition = &library.definitions[node.id.strip_prefix(PREFIX).unwrap()];
-        node.outputs.extend(
-            definition
-                .outputs
-                .iter()
-                .filter(|(_, output)| output.value_type == ValueType::Lighting)
-                .map(|(id, _)| PortDef {
-                    id: id.clone(),
-                    name: id.clone(),
-                    port_type: PortType::Lighting,
-                }),
-        );
-    }
-    // Only legacy graphs bind their execution domain through a Selection port.
-    for node in &mut types {
-        if node
-            .outputs
-            .iter()
-            .any(|output| output.port_type == PortType::Lighting)
-        {
-            node.inputs.push(PortDef {
-                id: "selection".into(),
-                name: "Selection".into(),
-                port_type: PortType::Selection,
-            });
-        }
-    }
-    types
-}
-
 pub fn input_node_id(key: &str) -> String {
     format!("$input/{key}")
 }
@@ -487,78 +446,6 @@ pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
     })
 }
 
-/// A playable one-node Pattern, with the node's inputs exposed to each clip.
-pub fn pattern(effect: &str) -> Result<Graph, String> {
-    let library = p::migration::v2_library();
-    let def = library
-        .definitions
-        .get(effect)
-        .ok_or("Unknown lighting node")?;
-    if def.lighting_output().is_none() {
-        return Err("A score requires one Lighting output".into());
-    }
-    let mut args = Vec::new();
-    for (id, input) in &def.inputs {
-        if input.value_type == ValueType::Events {
-            continue;
-        }
-        let arg_type = arg_type(input.value_type).ok_or_else(|| {
-            format!(
-                "{} needs an enclosing graph to supply {}",
-                def.name, input.name
-            )
-        })?;
-        let default = input.default.as_ref().ok_or_else(|| {
-            format!(
-                "{} needs an enclosing graph to supply {}",
-                def.name, input.name
-            )
-        })?;
-        args.push(PatternArgDef {
-            id: id.clone(),
-            name: input_label(input),
-            arg_type,
-            default_value: wire_value(default),
-        });
-    }
-    args.push(PatternArgDef {
-        id: "selection".into(),
-        name: "Selection".into(),
-        arg_type: PatternArgType::Selection,
-        default_value: crate::models::selection::Selection::all().to_value(),
-    });
-    let edges = args
-        .iter()
-        .map(|arg| Edge {
-            id: format!("input-{}", arg.id),
-            from_node: "pattern_args".into(),
-            from_port: arg.id.clone(),
-            to_node: "effect".into(),
-            to_port: arg.id.clone(),
-        })
-        .collect();
-    Ok(Graph {
-        nodes: vec![
-            NodeInstance {
-                id: "pattern_args".into(),
-                type_id: "pattern_args".into(),
-                params: HashMap::new(),
-                position_x: Some(0.),
-                position_y: Some(0.),
-            },
-            NodeInstance {
-                id: "effect".into(),
-                type_id: format!("{PREFIX}{effect}"),
-                params: HashMap::new(),
-                position_x: Some(320.),
-                position_y: Some(0.),
-            },
-        ],
-        edges,
-        args,
-    })
-}
-
 pub fn arg_choices(kind: &PatternArgType) -> Vec<ParamOption> {
     choices(match kind {
         PatternArgType::Mapping => ValueType::Mapping,
@@ -568,70 +455,6 @@ pub fn arg_choices(kind: &PatternArgType) -> Vec<ParamOption> {
         PatternArgType::Boolean => ValueType::Boolean,
         _ => return Vec::new(),
     })
-}
-
-/// Preserve old authored softness controls by making their envelope construction
-/// explicit. Clip overrides and graph connections retain their original IDs.
-pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
-    let mut changed = false;
-    let targets: Vec<_> = graph
-        .nodes
-        .iter()
-        .filter(|n| {
-            matches!(
-                n.type_id.as_str(),
-                "lighting/chase" | "lighting/chase_mask" | "lighting/pill"
-            )
-        })
-        .map(|n| n.id.clone())
-        .collect();
-    for target in targets {
-        let old_edge = graph
-            .edges
-            .iter()
-            .position(|e| e.to_node == target && e.to_port == "softness");
-        let old_value = graph
-            .nodes
-            .iter_mut()
-            .find(|n| n.id == target)
-            .unwrap()
-            .params
-            .remove("softness");
-        if old_edge.is_none() && old_value.is_none() {
-            continue;
-        }
-        let mut id = format!("{target}_shape");
-        while graph.nodes.iter().any(|n| n.id == id) {
-            id.push('_');
-        }
-        let mut params = HashMap::new();
-        if let Some(value) = old_value {
-            params.insert("softness".into(), value);
-        }
-        if let Some(index) = old_edge {
-            graph.edges[index].to_node = id.clone();
-        }
-        graph.nodes.push(NodeInstance {
-            id: id.clone(),
-            type_id: "lighting/soft_edges".into(),
-            params,
-            position_x: None,
-            position_y: None,
-        });
-        let mut edge_id = format!("{id}_output");
-        while graph.edges.iter().any(|e| e.id == edge_id) {
-            edge_id.push('_');
-        }
-        graph.edges.push(Edge {
-            id: edge_id,
-            from_node: id,
-            from_port: "shape".into(),
-            to_node: target,
-            to_port: "shape".into(),
-        });
-        changed = true;
-    }
-    changed
 }
 
 /// Canvas projection of a definition. A node the document does not place

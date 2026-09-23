@@ -1,14 +1,12 @@
-use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::midi::{
-    CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, CueExecutionMode, MidiBinding,
-    ModifierDef, Target, UpdateBindingInput, UpdateCueInput, UpdateModifierInput,
+    CreateBindingInput, CreateModifierInput, MidiBinding, ModifierDef, UpdateBindingInput,
+    UpdateModifierInput,
 };
-use crate::models::node_graph::BlendMode;
 
 // ============================================================================
 // JSON helpers
@@ -22,52 +20,9 @@ fn from_json<T: for<'de> serde::Deserialize<'de>>(s: &str) -> Result<T, String> 
     serde_json::from_str(s).map_err(|e| format!("deserialize '{}': {}", s, e))
 }
 
-fn blend_mode_from_str(s: &str) -> Result<BlendMode, String> {
-    serde_json::from_str(&format!("\"{}\"", s)).map_err(|e| format!("blend_mode '{}': {}", s, e))
-}
-
 // ============================================================================
 // Row types
 // ============================================================================
-
-#[derive(FromRow)]
-struct CueRow {
-    id: String,
-    uid: Option<String>,
-    venue_id: String,
-    name: String,
-    pattern_id: String,
-    args_json: String,
-    z_index: i64,
-    blend_mode: String,
-    default_target_json: String,
-    execution_mode_json: String,
-    display_x: i64,
-    display_y: i64,
-    created_at: String,
-    updated_at: String,
-}
-
-impl CueRow {
-    fn into_cue(self) -> Result<Cue, String> {
-        Ok(Cue {
-            id: self.id,
-            uid: self.uid,
-            venue_id: self.venue_id,
-            name: self.name,
-            pattern_id: self.pattern_id,
-            args: from_json(&self.args_json)?,
-            z_index: self.z_index,
-            blend_mode: blend_mode_from_str(&self.blend_mode)?,
-            default_target: from_json(&self.default_target_json)?,
-            execution_mode: from_json(&self.execution_mode_json)?,
-            display_x: self.display_x,
-            display_y: self.display_y,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
 
 #[derive(FromRow)]
 struct ModifierRow {
@@ -133,134 +88,6 @@ impl BindingRow {
             updated_at: self.updated_at,
         })
     }
-}
-
-// ============================================================================
-// Cues
-// ============================================================================
-
-pub async fn list_cues(access: &mut impl AuthorizedVenue) -> Result<Vec<Cue>, String> {
-    sqlx::query_as::<_, CueRow>(
-        "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
-         FROM cues WHERE venue_id = ? ORDER BY display_y ASC, display_x ASC, name ASC",
-    )
-    .bind(access.venue_id().to_owned())
-    .fetch_all(&mut *access.connection())
-    .await
-    .map_err(|e| format!("list_cues: {}", e))?
-    .into_iter()
-    .map(|r| r.into_cue())
-    .collect()
-}
-
-pub async fn get_cue(access: &mut impl AuthorizedVenue, id: &str) -> Result<Cue, String> {
-    sqlx::query_as::<_, CueRow>(
-        "SELECT id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                default_target_json, execution_mode_json, display_x, display_y, created_at, updated_at
-         FROM cues WHERE id = ? AND venue_id = ?",
-    )
-    .bind(id)
-    .bind(access.venue_id().to_owned())
-    .fetch_one(&mut *access.connection())
-    .await
-    .map_err(|e| format!("get_cue: {}", e))?
-    .into_cue()
-}
-
-pub async fn create_cue(
-    access: &mut VenueAccess<'_, Write>,
-    input: CreateCueInput,
-) -> Result<Cue, String> {
-    access.require_venue(&input.venue_id)?;
-    let id = Uuid::new_v4().to_string();
-    let args = input.args.unwrap_or(Value::Object(Default::default()));
-    let args_json = to_json(&args)?;
-    let z_index = input.z_index.unwrap_or(1);
-    let blend_mode = input.blend_mode.unwrap_or(BlendMode::Replace);
-    let blend_mode_str = to_json(&blend_mode)?.trim_matches('"').to_string();
-    let default_target_json = to_json(&input.default_target.unwrap_or(Target::All))?;
-    let execution_mode_json = to_json(
-        &input
-            .execution_mode
-            .unwrap_or(CueExecutionMode::Loop { bars: 4 }),
-    )?;
-    let display_x = input.display_x.unwrap_or(0);
-    let display_y = input.display_y.unwrap_or(0);
-
-    sqlx::query(
-        "INSERT INTO cues (id, uid, venue_id, name, pattern_id, args_json, z_index, blend_mode,
-                           default_target_json, execution_mode_json, display_x, display_y)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(access.principal().map(str::to_owned))
-    .bind(access.venue_id().to_owned())
-    .bind(&input.name)
-    .bind(&input.pattern_id)
-    .bind(&args_json)
-    .bind(z_index)
-    .bind(&blend_mode_str)
-    .bind(&default_target_json)
-    .bind(&execution_mode_json)
-    .bind(display_x)
-    .bind(display_y)
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("create_cue: {}", e))?;
-
-    get_cue(access, &id).await
-}
-
-pub async fn update_cue(
-    access: &mut VenueAccess<'_, Write>,
-    input: UpdateCueInput,
-) -> Result<Cue, String> {
-    let existing = get_cue(access, &input.id).await?;
-    let args_json = to_json(&input.args.unwrap_or(existing.args))?;
-    let z_index = input.z_index.unwrap_or(existing.z_index);
-    let blend_mode_str = to_json(&input.blend_mode.unwrap_or(existing.blend_mode))?
-        .trim_matches('"')
-        .to_string();
-    let default_target_json = to_json(&input.default_target.unwrap_or(existing.default_target))?;
-    let execution_mode_json = to_json(&input.execution_mode.unwrap_or(existing.execution_mode))?;
-    let display_x = input.display_x.unwrap_or(existing.display_x);
-    let display_y = input.display_y.unwrap_or(existing.display_y);
-
-    sqlx::query(
-        "UPDATE cues SET name = ?, pattern_id = ?, args_json = ?, z_index = ?, blend_mode = ?,
-                         default_target_json = ?, execution_mode_json = ?, display_x = ?, display_y = ?
-         WHERE id = ? AND venue_id = ?",
-    )
-    .bind(input.name.unwrap_or(existing.name))
-    .bind(input.pattern_id.unwrap_or(existing.pattern_id))
-    .bind(&args_json)
-    .bind(z_index)
-    .bind(&blend_mode_str)
-    .bind(&default_target_json)
-    .bind(&execution_mode_json)
-    .bind(display_x)
-    .bind(display_y)
-    .bind(&input.id)
-    .bind(access.venue_id().to_owned())
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("update_cue: {}", e))?;
-
-    get_cue(access, &input.id).await
-}
-
-pub async fn delete_cue(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    let venue_id = access.venue_id().to_owned();
-    let deleted = deletes::delete_where(
-        access.connection(),
-        "cues",
-        "id = ? AND venue_id = ?",
-        &[id, &venue_id],
-    )
-    .await
-    .map_err(|e| format!("delete_cue: {}", e))?;
-    Ok(deleted as u64)
 }
 
 // ============================================================================

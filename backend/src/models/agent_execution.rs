@@ -8,7 +8,6 @@
 //! bookkeeping (execution id, binding revision, kernel generation) stays in Rust.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// One executed cell.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -85,11 +84,6 @@ pub struct PythonScopeInput {
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
-    pub pattern_id: Option<String>,
-    pub implementation_id: Option<String>,
     /// `[start_s, end_s]` in absolute track seconds.
     pub window: Option<(f64, f64)>,
-    /// The editor's live (possibly unsaved) graph — the one piece of scope only
-    /// the host knows.
-    pub graph_definition: Option<Value>,
 }

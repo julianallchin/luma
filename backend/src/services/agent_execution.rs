@@ -1,7 +1,7 @@
 //! `run_python_cell` — the service that joins every piece of the executor.
 //!
 //! One call: resolve the thread, assemble a fresh binding revision from the
-//! current scope (plus the thread's latest graph run), install it in the thread's
+//! current scope, install it in the thread's
 //! kernel, run the code, and project the outcome onto the notebook-native
 //! [`PythonCellResult`] (design §15).
 //!
@@ -21,10 +21,7 @@ use sqlx::SqlitePool;
 
 use crate::agent::transcript::Role;
 use crate::agent_execution::artifacts::{ArtifactEncoding, ArtifactKind};
-use crate::agent_execution::bindings::providers::{
-    assemble_bindings, BindingScope, GraphRunContribution,
-};
-use crate::agent_execution::graph_runs::GraphRunStore;
+use crate::agent_execution::bindings::providers::{assemble_bindings, BindingScope};
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::agent_execution::venue_host::VenueHost;
@@ -35,7 +32,7 @@ use crate::agent_execution::workspace::{
 use crate::agent_execution::CellHost;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
-use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute, ThreadRoute};
+use crate::models::agent_threads::{AgentThread, ThreadRoute};
 use crate::storage::StorageRoot;
 
 /// How many bytes of PNG one cell may hand back to the model. Figures past the
@@ -124,10 +121,7 @@ async fn resolve_scope(
                 score_id: None,
                 track_editable: false,
                 track_document: None,
-                pattern_id: None,
-                implementation_id: None,
                 window: None,
-                graph_definition: None,
             },
             track: None,
             track_edit: None,
@@ -144,20 +138,17 @@ async fn resolve_scope(
                     score_id: None,
                     track_editable: false,
                     track_document: None,
-                    pattern_id: None,
-                    implementation_id: None,
                     window: requested.window,
-                    graph_definition: None,
                 },
                 track: None,
                 track_edit: None,
             })
         }
-        ThreadRoute::Authored(AuthoredThreadRoute::Track {
+        ThreadRoute::Track {
             track_id,
             venue_id,
             score_id,
-        }) => {
+        } => {
             if crate::database::local::tracks::get_track_by_id(pool, track_id)
                 .await?
                 .is_none()
@@ -197,10 +188,7 @@ async fn resolve_scope(
                     score_id: Some(score_id.to_string()),
                     track_editable: track_edit.is_some(),
                     track_document: None,
-                    pattern_id: None,
-                    implementation_id: None,
                     window: requested.window,
-                    graph_definition: None,
                 },
                 track: Some(TrackScope {
                     score_id: score_id.to_string(),
@@ -208,49 +196,6 @@ async fn resolve_scope(
                     venue_id: venue_id.to_string(),
                 }),
                 track_edit,
-            })
-        }
-        ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
-            pattern_id,
-            implementation_id,
-        }) => {
-            assert_pinned("pattern", requested.pattern_id.as_deref(), Some(pattern_id))?;
-            assert_pinned(
-                "implementation",
-                requested.implementation_id.as_deref(),
-                Some(implementation_id),
-            )?;
-            crate::services::graph_documents::load_visible_graph_document(
-                pool,
-                pattern_id,
-                requested.venue_id.as_deref(),
-                Some(implementation_id),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            if let Some(track_id) = requested.track_id.as_deref() {
-                if crate::database::local::tracks::get_track_by_id(pool, track_id)
-                    .await?
-                    .is_none()
-                {
-                    return Err("requested track is not available".into());
-                }
-            }
-            Ok(ResolvedScope {
-                bindings: BindingScope {
-                    agent_kind: thread.agent_kind.clone(),
-                    track_id: requested.track_id,
-                    venue_id: requested.venue_id,
-                    score_id: requested.score_id,
-                    track_editable: false,
-                    track_document: None,
-                    pattern_id: Some(pattern_id.to_string()),
-                    implementation_id: Some(implementation_id.to_string()),
-                    window: requested.window,
-                    graph_definition: requested.graph_definition,
-                },
-                track: None,
-                track_edit: None,
             })
         }
     }
@@ -279,7 +224,6 @@ pub async fn run_python_cell_inner(
     storage: &StorageRoot,
     resource_root: &Path,
     service: &PythonWorkspaceService,
-    graph_runs: &GraphRunStore,
     thread_id: String,
     code: String,
     requested_scope: PythonScopeInput,
@@ -349,9 +293,6 @@ pub async fn run_python_cell_inner(
         return Err("editable Python cells require a durable turn message".into());
     }
     let scope = resolved.bindings;
-    let graph_run = graph_runs
-        .latest(&execution_id)
-        .map(GraphRunContribution::new);
     let workspace = service.workspace_for_cell(&lease)?;
 
     // Assembly is async (it reads the database) and holds the workspace's
@@ -359,15 +300,7 @@ pub async fn run_python_cell_inner(
     let manifest = {
         let store = workspace.store();
         let mut store = store.lock().await;
-        assemble_bindings(
-            pool,
-            storage,
-            resource_root,
-            &scope,
-            graph_run.as_ref(),
-            &mut store,
-        )
-        .await?
+        assemble_bindings(pool, storage, resource_root, &scope, &mut store).await?
     };
 
     let workspace_for_cell = Arc::clone(&workspace);
