@@ -196,7 +196,7 @@ The shared native/headless dispatcher exposes `get_pattern_node_library` and
   "venueId": "venue UUID",
   "trackId": "track UUID",
   "definition": "chase",
-  "targets": [{"expression": "pixel_bars", "subset": {"fraction": 0.5}}],
+  "targets": [{"expression": "pixel_bars"}],
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
   "seed": 42,
@@ -206,9 +206,9 @@ The shared native/headless dispatcher exposes `get_pattern_node_library` and
 
 Times and clipStart are track seconds; exposed durations are beats. The response
 contains resolved cells, musical beat positions, and `UniverseState` frames.
-Each target is a mapping group; overlapping targets are rejected. Subsets count
-heads after geometry expansion. Missing fixture definitions are reported rather
-than replaced by invented single-head geometry. Preview retains venue and track
+Each target is a mapping group; overlapping targets are rejected. Missing
+fixture definitions are reported rather than replaced by invented single-head
+geometry. Preview retains venue and track
 read authorization and does not change the active scene or drive hardware.
 An optional `library` supplies custom graph definitions using the same contracts.
 

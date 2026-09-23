@@ -39,7 +39,7 @@ use gpui::{
     KeyDownEvent, RenderImage, ScrollHandle, SharedString, Subscription, Window,
 };
 use luma_lib::models::node_graph::PatternArgDef;
-use luma_lib::models::selection::{Selection, Subset};
+use luma_lib::models::selection::Selection;
 use luma_lib::services::groups::{or_expression, or_terms};
 use luma_lib::stage_render::{Continuity, Sequence};
 use luma_ui::dialog::morph::{self, MorphSize};
@@ -48,7 +48,6 @@ use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
 use crate::shell::Overlay;
-use crate::track_editor::SUBSETS;
 use crate::Luma;
 
 /// The card. Wide enough for a landscape frame beside a column of group names,
@@ -94,11 +93,9 @@ pub(crate) struct FixturePicker {
     /// applied as itself — closing a dialog must not rewrite an expression
     /// nobody edited.
     touched: bool,
-    subset: Subset,
     /// The row under the pointer. The picture previews that group *alone*, so
     /// the answer to "what is this one?" costs no clicks.
     hovered: Option<SharedString>,
-    subset_open: bool,
     preview: Preview,
     apply_focus: FocusHandle,
     cancel_focus: FocusHandle,
@@ -218,9 +215,7 @@ impl Luma {
                 .then(|| SharedString::from(selection.expression.clone())),
             groups,
             touched: false,
-            subset: selection.subset,
             hovered: None,
-            subset_open: false,
             preview: Preview::default(),
             apply_focus: cx.focus_handle().tab_stop(true),
             cancel_focus: cx.focus_handle().tab_stop(true),
@@ -282,7 +277,7 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.open_mut() else {
             return;
         };
-        let wanted = Selection::new(state.wanted()).with_subset(state.subset);
+        let wanted = Selection::new(state.wanted());
         let generation = state.generation;
         if state.preview.inflight.is_some() || state.preview.attempted.as_ref() == Some(&wanted) {
             return;
@@ -333,7 +328,7 @@ impl Luma {
                     return;
                 }
                 state.preview.inflight = None;
-                if Selection::new(state.wanted()).with_subset(state.subset) != wanted {
+                if Selection::new(state.wanted()) != wanted {
                     cx.notify();
                     return;
                 }
@@ -356,10 +351,9 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.as_open() else {
             return;
         };
-        let (def, expression, subset) = (state.def.clone(), state.expression(), state.subset);
+        let (def, expression) = (state.def.clone(), state.expression());
         self.arg_selection(&def.id.clone(), &def, cx, |selection| {
             selection.expression = expression;
-            selection.subset = subset;
         });
         self.close_overlay(cx);
     }
@@ -463,7 +457,7 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
                 .min_h_0()
                 .flex()
                 .flex_row()
-                .child(rows(state, app, window))
+                .child(rows(state, app))
                 .child(preview(state, app)),
         )
         .child(footer(state))
@@ -580,7 +574,7 @@ fn preview(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
 }
 
 /// One row per venue group.
-fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
+fn rows(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
     let filtered = state.filtered();
     let list = if filtered.is_empty() {
         let message = if state.groups.is_empty() {
@@ -615,8 +609,6 @@ fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl Into
                 .agent_node(Role::Input, "Search groups…"),
         )
         .child(float::viewport().child(list))
-        .child(float::divider())
-        .child(how_many(state, app, window))
 }
 
 fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyElement {
@@ -681,45 +673,6 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
             .agent_node(Role::Checkbox, group.clone()),
         )
         .into_any_element()
-}
-
-/// The subset ladder, spelled exactly as the strip's cell spells it.
-fn how_many(state: &FixturePicker, app: &Entity<Luma>, _window: &Window) -> impl IntoElement {
-    let labels: Vec<&str> = SUBSETS.iter().map(|(label, _)| *label).collect();
-    let toggle = app.clone();
-    let pick = app.clone();
-    div()
-        .flex_none()
-        .h(px(44.0))
-        .px(px(10.0))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(10.0))
-        .child(float::label("Use"))
-        .child(luma_ui::arg::select::luma_arg_select(
-            "fixture-picker:subset",
-            &crate::track_editor::subset_label(state.subset),
-            &labels,
-            state.subset_open,
-            move |_, cx| {
-                toggle.update(cx, |this, cx| {
-                    if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
-                        state.subset_open = !state.subset_open;
-                        cx.notify();
-                    }
-                });
-            },
-            move |picked, _, cx| {
-                pick.update(cx, |this, cx| {
-                    if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
-                        state.subset_open = false;
-                        state.subset = SUBSETS[picked].1;
-                        cx.notify();
-                    }
-                });
-            },
-        ))
 }
 
 /// The key legend, and — after the spacer, where `add_tracks` puts its import

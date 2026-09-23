@@ -2,10 +2,9 @@
 //! does not change the user's active score, transport, or hardware output.
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
-use crate::models::selection::{Selection, Subset};
+use crate::models::selection::Selection;
 use crate::models::universe::{PrimitiveState, UniverseState};
 use luma_patterns::{standard_library, Cell, Frame, PreparedGraph};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -143,7 +142,7 @@ pub(crate) async fn preview(
     })
 }
 /// Resolve the authored head domain once, shared by saved-score playback and
-/// previews. Subsets are applied after expanding fixture housings into heads.
+/// previews.
 pub(crate) async fn resolve_cells(
     access: &mut impl AuthorizedVenue,
     fixtures_root: &Path,
@@ -154,18 +153,13 @@ pub(crate) async fn resolve_cells(
     let mut seen = BTreeSet::new();
     for target in targets {
         target.validate().map_err(|error| error.to_string())?;
-        let whole = Selection {
-            expression: target.expression.clone(),
-            subset: Subset::All,
-        };
         let primitives = crate::eval::context::resolve_selection_primitives_with_access(
             access,
             fixtures_root,
-            &whole,
+            target,
             seed,
         )
         .await?;
-        let primitives = select_heads(primitives, target.subset, seed);
         for (id, position) in primitives {
             if !seen.insert(id.clone()) {
                 return Err(format!(
@@ -183,39 +177,6 @@ pub(crate) async fn resolve_cells(
     Ok(cells)
 }
 
-fn select_heads(
-    mut heads: Vec<(String, [f32; 3])>,
-    subset: Subset,
-    seed: u64,
-) -> Vec<(String, [f32; 3])> {
-    let keep = subset.keep(heads.len());
-    if keep == heads.len() {
-        return heads;
-    }
-    let mut rank: Vec<_> = heads
-        .iter()
-        .enumerate()
-        .map(|(index, (id, _))| {
-            let mut hash = Sha256::new();
-            hash.update(seed.to_le_bytes());
-            hash.update(id.as_bytes());
-            (hash.finalize(), index)
-        })
-        .collect();
-    rank.sort();
-    let selected: BTreeSet<_> = rank
-        .into_iter()
-        .take(keep)
-        .map(|(_, index)| index)
-        .collect();
-    let mut index = 0;
-    heads.retain(|_| {
-        let keep = selected.contains(&index);
-        index += 1;
-        keep
-    });
-    heads
-}
 fn universe(lighting: BTreeMap<String, luma_patterns::FixtureOutput>) -> UniverseState {
     UniverseState {
         primitives: lighting
@@ -238,22 +199,6 @@ fn universe(lighting: BTreeMap<String, luma_patterns::FixtureOutput>) -> Univers
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn subsets_count_heads_not_housings() {
-        let heads: Vec<_> = (0..16)
-            .map(|n| (format!("one-bar:{n}"), [0.0, 0.0, n as f32]))
-            .collect();
-        let selected = select_heads(heads.clone(), Subset::Count(4), 10);
-        assert_eq!(selected.len(), 4);
-        let mut reversed = heads;
-        reversed.reverse();
-        let set =
-            |v: Vec<(String, [f32; 3])>| v.into_iter().map(|(id, _)| id).collect::<BTreeSet<_>>();
-        assert_eq!(
-            set(selected),
-            set(select_heads(reversed, Subset::Count(4), 10))
-        );
-    }
     #[test]
     fn color_and_dimmer_do_not_apply_coverage_twice() {
         let state = universe(BTreeMap::from([(

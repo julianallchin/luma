@@ -4,7 +4,7 @@
 //! debounced history and persistence path.
 
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
-use luma_lib::models::selection::{Selection, Subset};
+use luma_lib::models::selection::Selection;
 use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{luma_hsv_picker, ColorArg, ColorArgEditor, ColorArgEvent, Hsv};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
@@ -32,36 +32,6 @@ const EXPR_W: f32 = FIELD_W - 62.;
 
 /// The trailing edge a burst of live arg edits is committed on.
 const ARG_FLUSH: Duration = Duration::from_millis(250);
-
-/// The subset select's rows: how much of the expression's match to light.
-///
-/// A closed ladder, not a number field: the shares a lighting desk actually
-/// asks for are halves and thirds. A value
-/// authored elsewhere (Python, an agent) that is not on the ladder still shows,
-/// via [`subset_label`]; picking then snaps to a rung.
-pub(crate) const SUBSETS: [(&str, Subset); 7] = [
-    ("All", Subset::All),
-    ("1/2", Subset::Fraction(0.5)),
-    ("1/3", Subset::Fraction(1. / 3.)),
-    ("1/4", Subset::Fraction(0.25)),
-    ("1", Subset::Count(1)),
-    ("2", Subset::Count(2)),
-    ("3", Subset::Count(3)),
-];
-
-/// What the subset cell shows. Off-ladder values keep their own reading —
-/// a percentage for a share, a bare number for a count — so an agent's
-/// `subset=0.7` is legible rather than silently displayed as "All".
-pub(crate) fn subset_label(subset: Subset) -> SharedString {
-    if let Some((label, _)) = SUBSETS.iter().find(|(_, rung)| *rung == subset) {
-        return (*label).into();
-    }
-    match subset {
-        Subset::All => "All".into(),
-        Subset::Fraction(f) => format!("{}%", (f * 100.).round()).into(),
-        Subset::Count(c) => c.to_string().into(),
-    }
-}
 
 // -- state --------------------------------------------------------------------
 
@@ -136,8 +106,6 @@ enum Groups {
 enum Menu {
     Choice(usize),
     Blend,
-    /// The subset select of the selection cell at this index.
-    Subset(usize),
     /// The HSV plate for the selected swatch/stop of the cell at this index.
     Swatch(usize),
     /// The plain-or-source menu of the form input at this index.
@@ -1057,9 +1025,9 @@ impl Luma {
     }
 
     /// A selection arg edit: apply `edit` to the whole stored selection, then
-    /// ride the fast path. The cell's controls — expression, space, subset —
-    /// commit independently, and each writes the whole value back, so editing
-    /// one can never drop what the others hold.
+    /// ride the fast path. The cell's controls — the expression field and
+    /// the fixture picker — commit independently, and each writes the whole
+    /// value back.
     pub(crate) fn arg_selection(
         &mut self,
         arg_id: &str,
@@ -1358,7 +1326,7 @@ fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
     )
 }
 
-/// One arg's row (or two — a selection arg carries its subset select).
+/// One arg's row.
 fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Vec<AnyElement> {
     let name = cell.def.name.as_str();
     let one = |control: Div| vec![named(name, control)];
@@ -1414,38 +1382,6 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         Widget::Seed(entity) => one(div().child(entity.clone())),
         Widget::Signal(entity) => one(div().child(entity.clone())),
         Widget::Selection(entity) => {
-            let selection = selection_from_wire(&cell.synced);
-
-            let subset_labels: Vec<&str> = SUBSETS.iter().map(|(label, _)| *label).collect();
-            let toggle = app.clone();
-            let pick = app.clone();
-            let def = cell.def.clone();
-            let amount = luma_arg_select(
-                format!("{name}:subset"),
-                &subset_label(selection.subset),
-                &subset_labels,
-                menu_visibility(state, Menu::Subset(index)),
-                move |_, cx| {
-                    toggle.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| {
-                            editor.sheet.open = match editor.sheet.open {
-                                Some(Menu::Subset(at)) if at == index => None,
-                                _ => Some(Menu::Subset(index)),
-                            };
-                        });
-                    });
-                },
-                move |picked, _, cx| {
-                    let def = def.clone();
-                    pick.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| editor.sheet.open = None);
-                        this.arg_selection(&def.id, &def, cx, |selection| {
-                            selection.subset = SUBSETS[picked].1;
-                        });
-                    });
-                },
-            );
-
             // The field stays the power user's spelling; the chip beside it
             // opens the picture. Both write the same value through
             // `arg_selection`, so neither is a second way to say it.
@@ -1460,19 +1396,13 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 })
                 .agent_node(Role::Button, "Pick fixtures");
 
-            vec![
-                named(
-                    name,
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(entity.clone())
-                        .child(pick_chip),
-                ),
-                named("How many", amount),
-            ]
+            one(div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .child(entity.clone())
+                .child(pick_chip))
         }
         Widget::Palette { selected, hsv } => {
             let colors = palette_from_wire(&cell.synced, &cell.def.default_value);

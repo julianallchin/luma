@@ -49,8 +49,7 @@ static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), FixtureGeometry>>> =
 
 /// Read the [`Selection`] a graph scopes to, if any. Two forms:
 ///   - Static: the value lives on a Selection-type input surfaced onto a node's
-///     `params`, or as a flat `tagExpression`/`tag_expr` param (expression only —
-///     a flat param has no subset).
+///     `params`, or as a flat `tagExpression`/`tag_expr` param.
 ///   - Arg-wired: the selection is a pattern arg, flowing over an edge from the
 ///     `pattern_args` node into a node's selection input — the value lives only
 ///     in `args` (annotation/cue overrides + pattern defaults), keyed by the
