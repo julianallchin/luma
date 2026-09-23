@@ -2248,7 +2248,8 @@ impl Luma {
         picker::open(self, cx);
     }
 
-    /// A double-click on a clip opens its pattern's graph.
+    /// A double-click on a clip opens its pattern's graph. A form clip has no
+    /// graph of its own, so the gesture selects it, which brings up its inputs.
     ///
     /// The hit test is the whole lane row, not the header band: this is the
     /// one clip gesture that is not a drag, so there is nothing for the inert
@@ -2276,6 +2277,11 @@ impl Luma {
             track: state.track_id.to_string(),
             venue: state.venue_id.clone(),
         };
+        if luma_patterns::is_form(&clip.pattern) {
+            let id = clip.id.clone();
+            self.with_track_editor(cx, |editor| editor.selected = vec![id]);
+            return;
+        }
         let id = clip.id.to_string();
         self.commit_clips(cx);
         self.open_score_graph(owner, id, cx);

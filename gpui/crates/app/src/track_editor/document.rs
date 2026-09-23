@@ -48,30 +48,33 @@ impl GraphState {
 /// call every stored copy changed, and each sync event would reinstall the
 /// score — rebuilding every preview and dropping the undo history.
 fn same_document(ours: &p::Score, stored: &p::Score) -> bool {
-    fn close(a: &serde_json::Value, b: &serde_json::Value) -> bool {
-        use serde_json::Value;
-        match (a, b) {
-            (Value::Number(a), Value::Number(b)) => match (a.as_f64(), b.as_f64()) {
-                (Some(x), Some(y)) if a.is_f64() || b.is_f64() => {
-                    (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.)
-                }
-                _ => a == b,
-            },
-            (Value::Array(a), Value::Array(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(a, b)| close(a, b))
-            }
-            (Value::Object(a), Value::Object(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(key, a)| b.get(key).is_some_and(|b| close(a, b)))
-            }
-            _ => a == b,
-        }
-    }
     ours == stored
         || match (serde_json::to_value(ours), serde_json::to_value(stored)) {
             (Ok(a), Ok(b)) => close(&a, &b),
             _ => false,
         }
+}
+
+/// Equal JSON, up to the float noise storage adds.
+pub(super) fn close(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => match (a.as_f64(), b.as_f64()) {
+            (Some(x), Some(y)) if a.is_f64() || b.is_f64() => {
+                (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.)
+            }
+            _ => a == b,
+        },
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| close(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| close(a, b)))
+        }
+        _ => a == b,
+    }
 }
 
 /// A shipped form's definition. `standard_library()` hands back a copy of all
@@ -246,11 +249,21 @@ impl Editor {
             arg_type: PatternArgType::Selection,
             default_value: p::Selection::all().to_value(),
         }];
-        for (id, input) in &definition.inputs {
+        // A form lists its inputs in its own order, under the engine's names.
+        let order = p::input_order(id);
+        let mut entries: Vec<_> = definition.inputs.iter().collect();
+        if let Some(order) = order {
+            entries.sort_by_key(|(key, _)| order.iter().position(|at| at == key));
+        }
+        for (id, input) in entries {
             let Some(arg_type) = luma_lib::node_graph::lighting::arg_type(input.value_type) else {
                 continue;
             };
-            let name = luma_lib::node_graph::lighting::input_label(input);
+            let name = if order.is_some() {
+                input.name.clone()
+            } else {
+                luma_lib::node_graph::lighting::input_label(input)
+            };
             inputs.push(PatternArgDef {
                 id: id.clone(),
                 name,
