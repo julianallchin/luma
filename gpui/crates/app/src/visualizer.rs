@@ -469,6 +469,9 @@ pub(crate) struct Visualizer {
     /// re-composites instead of tearing the stage down.
     subject: Option<Lit>,
     graph_preview: Option<crate::graph::preview::View>,
+    /// A preset the track editor's browser is playing in place of the score,
+    /// while the pointer is over its tile.
+    audition: Option<crate::track_editor::Audition>,
     /// The score whose composite has actually *landed* on the render engine.
     ///
     /// Distinct from [`Self::subject`], which is what this stage has asked
@@ -1086,6 +1089,7 @@ impl Visualizer {
             subject,
             lit: None,
             graph_preview: None,
+            audition: None,
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
             camera: opening_camera(
@@ -2755,6 +2759,7 @@ struct StageSubject {
     /// The score that lights the rig, when one does.
     lit: Option<Lit>,
     graph_preview: Option<crate::graph::preview::View>,
+    audition: Option<crate::track_editor::Audition>,
 }
 
 /// The score a stage is lit by.
@@ -2822,11 +2827,16 @@ impl Luma {
             Some(Body::Graph(editor)) => editor.preview_view(),
             _ => None,
         };
+        let audition = match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.audition(),
+            _ => None,
+        };
         Some(StageSubject {
             venue_id,
             venue_name: name,
             lit,
             graph_preview,
+            audition,
         })
     }
 
@@ -2846,6 +2856,7 @@ impl Luma {
             venue_name,
             lit: subject,
             graph_preview,
+            audition,
         }) = self.stage_subject()
         else {
             // Dropping the state is what un-mounts the viewport, and
@@ -2893,6 +2904,7 @@ impl Luma {
         }
         if let Some(state) = visualizer {
             state.graph_preview = graph_preview;
+            state.audition = audition;
         }
     }
 
@@ -3076,6 +3088,7 @@ pub(crate) fn visualizer(
                 .as_ref()
                 .map(|view| crate::graph::preview::controls(view, app, library)),
         )
+        .children(state.audition.as_ref().map(audition_badge))
         .agent_node(
             Role::Card,
             state.lit.as_ref().map_or_else(
@@ -3372,6 +3385,30 @@ fn overlay_toolbar(
     )
 }
 
+/// What says the stage is playing a hovered preset, not the score: the
+/// preset's name on the toolbar's surface, at the top of the stage.
+fn audition_badge(audition: &crate::track_editor::Audition) -> AnyElement {
+    let label: gpui::SharedString = format!("Preview · {}", audition.name).into();
+    div()
+        .absolute()
+        .top(px(12.))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(
+            luma_ui::float::popover_card()
+                .px(px(10.))
+                .py(px(4.))
+                .text_size(px(12.))
+                .text_color(ladder::foreground())
+                .child(label.clone())
+                .map(luma_ui::float::frosted_card),
+        )
+        .agent_node(Role::Text, label)
+        .into_any_element()
+}
+
 /// One 60 Hz frame — the graph's hairline, and the bound a clean frame sits
 /// under.
 const FRAME_BUDGET_MS: f32 = 1_000.0 / 60.0;
@@ -3623,7 +3660,17 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             }
         }
     } else {
-        None
+        // A hovered preset plays alone in place of the score. A failed
+        // sample shows the score, as if nothing were hovered.
+        state.audition.as_ref().and_then(|audition| {
+            let sampled = std::time::Instant::now();
+            let (time, universe) = audition.sample().ok()?;
+            Some((
+                time,
+                Some(universe),
+                sampled.elapsed().as_secs_f32() * 1_000.0,
+            ))
+        })
     };
     // A frame that failed drew nothing and left its reason behind; adopt it
     // before deciding what this frame shows.
@@ -4857,6 +4904,7 @@ mod orbit_selection_tests {
             subject: None,
             lit: None,
             graph_preview: None,
+            audition: None,
             gpu_enabled: false,
             status: Status::Loading,
             camera,
