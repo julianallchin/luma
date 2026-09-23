@@ -197,7 +197,7 @@ fn put_statements_bind_one_parameter_per_column() {
     }
 }
 
-/// The four boolean columns cannot be cast; a cast would turn `true` into 0.
+/// The boolean columns cannot be cast; a cast would turn `true` into 0.
 #[test]
 fn boolean_columns_match_rather_than_cast() {
     for column in BOOLEAN_COLUMNS {
@@ -400,16 +400,13 @@ fn is_reference(column: &str) -> bool {
 
 /// References that are optional and that this fixture leaves empty: a root
 /// message has no parent, an empty transcript has no head, an unforked thread
-/// has no origin, and `pattern_categories` is local-only so nothing here
-/// creates one to point at.
+/// has no origin.
 const NULLABLE_REFERENCES: &[&str] = &[
     "parent_message_id",
     "head_message_id",
     "forked_from_thread_id",
     "forked_at_message_id",
     "parent_thread_id",
-    "forked_from_id",
-    "category_id",
     "implementation_id",
     "subject_id",
 ];

@@ -12,6 +12,9 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20260918000000_cued_patterns.sql`
 - `20260920000000_track_media_read_row_model.sql`
 - `20260921000000_venue_haze.sql`
+- `20260923100000_drop_cues_and_pattern_library.sql` — after the clip-forms
+  change set is applied and after the sync rules below no longer name
+  `patterns`, `implementations` or `cues`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.
