@@ -935,6 +935,17 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn wgpu_device(&self) -> Option<crate::WgpuDevice> {
         None
     }
+    /// See [`crate::Window::hdr_output`].
+    // LUMA LOCAL EDIT: not upstream. `gpui_wgpu` implements HDR10 output;
+    // every other compositor presents SDR.
+    // TODO(macOS): EDR through `CAMetalLayer.wantsExtendedDynamicRangeContent`
+    // with the same contract (UI at SDR white, the viewport above it).
+    fn hdr_output(&self) -> Option<crate::HdrOutput> {
+        None
+    }
+    /// See [`crate::Window::set_hdr_output_allowed`].
+    // LUMA LOCAL EDIT: not upstream.
+    fn set_hdr_output_allowed(&self, _allowed: bool) {}
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 

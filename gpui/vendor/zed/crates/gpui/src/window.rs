@@ -6180,6 +6180,25 @@ impl Window {
         self.platform_window.gpu_specs()
     }
 
+    /// The luminance range this window presents in, when it presents HDR.
+    ///
+    /// `None` means the window presents SDR: the platform, the display or the
+    /// preference (see [`Self::set_hdr_output_allowed`]) does not allow HDR.
+    /// Content drawn for an HDR window keeps colour value 1.0 at SDR white and
+    /// may go up to [`crate::HdrOutput::headroom`] times brighter.
+    // LUMA LOCAL EDIT: not upstream.
+    pub fn hdr_output(&self) -> Option<crate::HdrOutput> {
+        self.platform_window.hdr_output()
+    }
+
+    /// Allow or forbid HDR output for this window. Allowed is the default,
+    /// and it has an effect only where the display accepts HDR. The change
+    /// applies from the next frame; request one with [`Self::refresh`].
+    // LUMA LOCAL EDIT: not upstream.
+    pub fn set_hdr_output_allowed(&self, allowed: bool) {
+        self.platform_window.set_hdr_output_allowed(allowed);
+    }
+
     /// Perform titlebar double-click action.
     /// This is macOS specific.
     pub fn titlebar_double_click(&self) {

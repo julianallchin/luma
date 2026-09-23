@@ -373,6 +373,32 @@ pub struct WgpuDevice {
     pub lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// The luminance range of a window that presents high-dynamic-range output.
+///
+/// A window in this mode shows a colour value of 1.0 at `sdr_white_nits`,
+/// which is where the display shows every SDR window, so user-interface
+/// colours look the same as they do in SDR. Values above 1.0 are brighter
+/// than SDR white, up to `peak_nits`.
+///
+/// See [`Window::hdr_output`].
+// LUMA LOCAL EDIT: not upstream.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdrOutput {
+    /// Luminance of SDR white (colour value 1.0), in cd/m².
+    pub sdr_white_nits: f32,
+    /// Highest luminance the display shows, in cd/m².
+    pub peak_nits: f32,
+}
+
+impl HdrOutput {
+    /// How far above SDR white the display goes, as a multiple of SDR white.
+    /// Never less than 1.
+    #[must_use]
+    pub fn headroom(self) -> f32 {
+        (self.peak_nits / self.sdr_white_nits).max(1.0)
+    }
+}
+
 /// Information about the GPU GPUI is running on.
 #[derive(Default, Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct GpuSpecs {
