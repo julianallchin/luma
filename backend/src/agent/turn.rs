@@ -173,7 +173,7 @@ impl Turn {
                 .map_err(AgentError::Invalid)?;
         let authored = matches!(
             detail.thread.route().map_err(AgentError::Invalid)?,
-            ThreadRoute::Authored(_)
+            ThreadRoute::Track { .. }
         );
         let scope = python_scope(&detail.thread);
         let system = format!(
@@ -844,10 +844,7 @@ fn python_scope(thread: &AgentThread) -> PythonScopeInput {
         track_id: subject("track"),
         venue_id: thread.venue_id.clone(),
         score_id: thread.score_id.clone(),
-        pattern_id: subject("pattern"),
-        implementation_id: thread.implementation_id.clone(),
         window: None,
-        graph_definition: None,
     }
 }
 

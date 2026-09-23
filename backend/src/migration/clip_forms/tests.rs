@@ -550,3 +550,71 @@ fn a_bass_strobe_gate_becomes_an_audio_threshold() {
     let under = under(&converted);
     assert!(matches!(under.inputs["alpha"], Value::Audio(_)));
 }
+
+#[test]
+fn old_mappings_become_form_axes() {
+    let axis_of = |mapping: Json, host: Host| {
+        let mut nodes = chase("events", mapping, curve(json!([[0.0, 1.0], [1.0, 1.0]])));
+        nodes["events"] = beat_trigger(2.0, false, 0.0);
+        let converted = run(&score(colored(nodes, wire("chase", "mask"))), &host).unwrap();
+        let Value::Mapping(axis) = &converted.clip.inputs["axis"] else {
+            panic!()
+        };
+        let Value::Envelope(path) = &converted.clip.inputs["path"] else {
+            panic!()
+        };
+        (axis.clone(), path.points[0][1], converted.notes)
+    };
+
+    let (axis, _, notes) = axis_of(
+        json!({"source": {"kind": "radial"}, "per_group": true, "reverse": false}),
+        Host::default(),
+    );
+    assert_eq!(axis.source, MappingSource::Radial);
+    assert!(!axis.per_group);
+    assert_eq!(axis.span, Span::Group);
+    assert_eq!(axis.plane, Some(AxisPlane::UpDown));
+    assert!(notes
+        .iter()
+        .any(|n| n == "center: extent middle → centroid"));
+
+    // A solved circle whose heads are unknown stays a solved circle.
+    let circle =
+        json!({"source": {"kind": "circle", "origin": 0.25}, "per_group": false, "reverse": false});
+    let (axis, _, notes) = axis_of(circle.clone(), Host::default());
+    assert_eq!(axis.source, MappingSource::Circle { origin: 0.25 });
+    assert!(notes
+        .iter()
+        .any(|n| n == "solved circle kept: its heads are unknown"));
+
+    // On a ring the angle around the centroid reads the heads like the
+    // fitted circle, turned: the path takes the turn.
+    let ring: Vec<Cell> = (0..8)
+        .map(|n| {
+            let angle = std::f64::consts::TAU * f64::from(n) / 8.0;
+            let p = [2.0 + angle.cos(), 3.0 + angle.sin(), 1.0];
+            Cell {
+                id: format!("ring{n}:0"),
+                group: "ring".into(),
+                world: p,
+                uvz: p,
+            }
+        })
+        .collect();
+    let (axis, _, notes) = axis_of(
+        circle,
+        Host {
+            cells: ring,
+            ..Host::default()
+        },
+    );
+    eprintln!("{notes:?}");
+    assert_eq!(axis.source, MappingSource::Angle);
+    assert_eq!(axis.plane, Some(AxisPlane::Auto));
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "solved circle → angle around the best-fit plane"),
+        "{notes:?}"
+    );
+}

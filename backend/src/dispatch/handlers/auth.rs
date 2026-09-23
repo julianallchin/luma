@@ -216,7 +216,6 @@ pub async fn set_session_item(
     let state = &services.state_db;
     let db = &services.db;
     let workspaces = &services.workspaces;
-    let graph_runs = &services.graph_runs;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let controller = &services.controller;
@@ -280,7 +279,6 @@ pub async fn set_session_item(
         // racing in after process-global caches are cleared.
         crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
-        graph_runs.clear();
         host_audio.unload();
         render_engine.reset_for_identity_switch();
         if let Err(error) = controller.disconnect() {
@@ -441,7 +439,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let db = &services.db;
     let state = &services.state_db;
     let workspaces = &services.workspaces;
-    let graph_runs = &services.graph_runs;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let controller = &services.controller;
@@ -491,7 +488,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     // that write fence through the reset prevents new host-audio/render/device
     // effects from completing after prior-principal capabilities are cleared.
     let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
-    graph_runs.clear();
     host_audio.unload();
     render_engine.reset_for_identity_switch();
     controller.disconnect()?;
@@ -569,25 +565,16 @@ async fn wipe_signed_in_projection(
     // projection, and they survive logout. Remove only catalog leaves nothing
     // else depends on; another cached principal and guest state are never
     // touched.
-    for statement in [
-        "DELETE FROM patterns
-         WHERE uid = ?
-           AND NOT EXISTS(SELECT 1 FROM cues cue
-                          WHERE cue.pattern_id = patterns.id)
-           AND NOT EXISTS(SELECT 1 FROM venue_implementation_overrides override
-                          WHERE override.pattern_id = patterns.id)",
-        "DELETE FROM pattern_categories WHERE uid = ?",
+    sqlx::query(
         "DELETE FROM tracks
          WHERE uid = ?
            AND NOT EXISTS(SELECT 1 FROM scores score
                           WHERE score.track_id = tracks.id)",
-    ] {
-        sqlx::query(statement)
-            .bind(principal)
-            .execute(&mut **transaction)
-            .await
-            .map_err(|error| format!("Failed to remove signed-in catalog projection: {error}"))?;
-    }
+    )
+    .bind(principal)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to remove signed-in catalog projection: {error}"))?;
     sqlx::query(
         "UPDATE auth_write_admission SET maintenance = 0
          WHERE singleton = 1 AND maintenance = 1 AND accepting = 0",
@@ -604,8 +591,8 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     /// Signing out removes the catalog leaves nothing else depends on, and
-    /// leaves everything that is still referenced — a pattern a cue plays, a
-    /// track a score annotates — exactly where it is.
+    /// leaves everything that is still referenced — a track a score
+    /// annotates — exactly where it is.
     #[tokio::test]
     async fn sign_out_keeps_what_the_library_still_refers_to() {
         let directory = tempfile::tempdir().unwrap();
@@ -628,29 +615,19 @@ mod tests {
             "INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')",
             "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('t', 'alice', 'h', '/t')",
             "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('s', 'alice', 't', 'ven')",
-            "INSERT INTO patterns (id, uid, name) VALUES ('kept', 'alice', 'Kept')",
-            "INSERT INTO patterns (id, uid, name) VALUES ('loose', 'alice', 'Loose')",
-            "INSERT INTO cues (id, uid, venue_id, name, pattern_id)
-             VALUES ('c', 'alice', 'ven', 'Cue', 'kept')",
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('loose', 'alice', 'l', '/l')",
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }
 
         wipe_database_pool(&pool, "alice").await.unwrap();
 
-        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM patterns ORDER BY id")
+        // A track a score still annotates is not a leaf.
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM tracks ORDER BY id")
             .fetch_all(&pool)
             .await
             .unwrap();
-        assert_eq!(remaining, ["kept"]);
-        // A track a score still annotates is not a leaf.
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(remaining, ["t"]);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venues")
                 .fetch_one(&pool)

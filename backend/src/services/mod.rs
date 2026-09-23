@@ -21,7 +21,6 @@ pub mod distribute;
 pub(crate) mod drafts;
 pub mod fixture_create;
 pub mod fixtures;
-pub mod graph_documents;
 pub mod graph_scores;
 pub mod group_derivation;
 pub mod groups;

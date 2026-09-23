@@ -2,7 +2,6 @@
 
 use thiserror::Error;
 
-use crate::services::graph_documents::GraphDocumentError;
 use crate::services::patch::PatchError;
 
 /// Why a command did not produce a result.
@@ -81,25 +80,6 @@ impl From<PatchError> for CommandError {
         match error {
             PatchError::OutOfRange { .. } | PatchError::Collision { .. } => Self::Invalid(message),
             PatchError::Database(_) => Self::Internal(message),
-        }
-    }
-}
-
-impl From<GraphDocumentError> for CommandError {
-    fn from(error: GraphDocumentError) -> Self {
-        let message = error.to_string();
-        match error {
-            GraphDocumentError::Conflict {
-                expected_revision,
-                current_revision,
-            } => Self::Conflict {
-                expected: Some(expected_revision),
-                found: Some(current_revision),
-                message,
-            },
-            GraphDocumentError::Invalid { .. } => Self::Invalid(message),
-            GraphDocumentError::Scope { .. } => Self::Unauthorized(message),
-            GraphDocumentError::Storage { .. } => Self::Internal(message),
         }
     }
 }

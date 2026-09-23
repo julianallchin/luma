@@ -41,11 +41,6 @@ async fn migrate_app_db_at(app_dir: &Path) -> Result<std::path::PathBuf, String>
             )
         })?;
 
-    // Some relational graph payloads predate the current canonical document
-    // format. Upgrade those explicit legacy shapes before migrations install
-    // admission guards and before authored-state root import.
-    super::legacy_graph_upgrade::upgrade_legacy_graph_json(&migrate_pool).await?;
-
     sqlx::migrate!("./migrations")
         .run(&migrate_pool)
         .await

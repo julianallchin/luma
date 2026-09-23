@@ -18,14 +18,12 @@
 
 pub mod audio;
 pub mod features;
-pub mod graph;
-pub mod patterns;
+pub mod nodes;
 pub mod track;
 pub mod venue;
 
 use std::path::Path;
 
-use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::agent_execution::artifacts::ArtifactStore;
@@ -37,20 +35,16 @@ use crate::agent_execution::bindings::manifest::{
 use crate::models::tracks::TrackSummary;
 use crate::storage::StorageRoot;
 
-pub use graph::GraphRunContribution;
-
 /// Why a track-derived branch is missing when the thread has no track at all.
 pub const NO_TRACK: &str = "no track is open";
 /// Why a venue-derived branch is missing when the thread has no venue.
 pub const NO_VENUE: &str = "no venue is open";
 
 /// What the agent is looking at, resolved by the command/adapter layer.
-///
-/// Deliberately free of UI types: `graph_definition` is the editor's *unsaved*
-/// buffer, the one piece of scope that only the host knows.
+/// Deliberately free of UI types.
 #[derive(Debug, Clone, Default)]
 pub struct BindingScope {
-    /// `"track_copilot"` | `"pattern_graph"` | `"venue_rig"`.
+    /// `"track_copilot"` | `"venue_rig"`.
     pub agent_kind: String,
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
@@ -62,12 +56,8 @@ pub struct BindingScope {
     /// present, `luma.track` reads this document instead of the live relational
     /// projection while all other track/audio/features data remains shared.
     pub track_document: Option<luma_patterns::Score>,
-    pub pattern_id: Option<String>,
-    pub implementation_id: Option<String>,
     /// Window of interest in absolute track seconds.
     pub window: Option<(f64, f64)>,
-    /// The host's graph currently in the editor (Graph-shaped JSON).
-    pub graph_definition: Option<Value>,
 }
 
 impl BindingScope {
@@ -80,8 +70,6 @@ impl BindingScope {
             track_id: self.track_id.clone(),
             venue_id: self.venue_id.clone(),
             score_id: self.score_id.clone(),
-            pattern_id: self.pattern_id.clone(),
-            implementation_id: self.implementation_id.clone(),
             window: self
                 .window
                 .map(|(start_s, end_s)| AnalysisWindow { start_s, end_s }),
@@ -115,9 +103,7 @@ impl ProviderCtx<'_> {
 
 /// Assemble every branch of the `luma` namespace for one scope.
 ///
-/// `graph_run` is the caller's latest evaluation, if any — the provider decides
-/// whether it is still compatible with `scope` (design §11.3) rather than
-/// trusting the caller. `store` must be rooted at the thread's workspace: every
+/// `store` must be rooted at the thread's workspace: every
 /// artifact this writes lands under `<workspace>/inputs/`.
 ///
 /// `luma.meta` and `luma.window` are **not** emitted here — the Python worker
@@ -127,7 +113,6 @@ pub async fn assemble_bindings(
     storage: &StorageRoot,
     resource_root: &Path,
     scope: &BindingScope,
-    graph_run: Option<&GraphRunContribution>,
     store: &mut ArtifactStore,
 ) -> Result<BindingManifest, String> {
     let agent_kind = scope.agent_kind()?;
@@ -152,8 +137,7 @@ pub async fn assemble_bindings(
     audio::provide(&mut builder, &ctx, store).await?;
     features::provide(&mut builder, &ctx, store).await?;
     venue::provide(&mut builder, &ctx, store).await?;
-    patterns::provide(&mut builder, &ctx).await?;
-    graph::provide(&mut builder, &ctx, store, graph_run)?;
+    nodes::provide(&mut builder)?;
 
     builder.build().map_err(String::from)
 }

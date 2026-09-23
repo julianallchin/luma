@@ -6,9 +6,8 @@
 //! {
 //!   "schema_version": 1,
 //!   "revision": "r-<uuid>",
-//!   "agent_kind": "track_copilot" | "pattern_graph",
+//!   "agent_kind": "track_copilot" | "venue_rig",
 //!   "scope": { "track_id": ..., "venue_id": ..., "score_id": ...,
-//!              "pattern_id": ..., "implementation_id": ...,
 //!              "window": {"start_s":..,"end_s":..} | null },
 //!   "root": <BindingValue>,
 //!   "artifacts": { "<artifact_id>": <ArtifactDescriptor> }
@@ -106,8 +105,7 @@ impl std::fmt::Display for ArtifactId {
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     TrackCopilot,
-    PatternGraph,
-    /// A venue route without an authored score or graph.
+    /// A venue route without an authored score.
     VenueRig,
 }
 
@@ -116,7 +114,6 @@ impl AgentKind {
     pub fn as_str(self) -> &'static str {
         match self {
             AgentKind::TrackCopilot => "track_copilot",
-            AgentKind::PatternGraph => "pattern_graph",
             AgentKind::VenueRig => "venue_rig",
         }
     }
@@ -127,7 +124,6 @@ impl AgentKind {
     pub fn parse(value: &str) -> std::result::Result<Self, String> {
         match value {
             "track_copilot" => Ok(AgentKind::TrackCopilot),
-            "pattern_graph" => Ok(AgentKind::PatternGraph),
             "venue_rig" => Ok(AgentKind::VenueRig),
             other => Err(format!("unknown agent kind '{other}'")),
         }
@@ -148,8 +144,6 @@ pub struct AnalysisScope {
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
-    pub pattern_id: Option<String>,
-    pub implementation_id: Option<String>,
     pub window: Option<AnalysisWindow>,
 }
 
@@ -1050,8 +1044,6 @@ mod tests {
                 track_id: Some("t-1".into()),
                 venue_id: None,
                 score_id: None,
-                pattern_id: None,
-                implementation_id: None,
                 window: Some(AnalysisWindow {
                     start_s: 0.0,
                     end_s: 30.0,
@@ -1063,7 +1055,7 @@ mod tests {
 
         let expected = concat!(
             r#"{"schema_version":1,"revision":"r-0000","agent_kind":"track_copilot","#,
-            r#""scope":{"track_id":"t-1","venue_id":null,"score_id":null,"pattern_id":null,"implementation_id":null,"#,
+            r#""scope":{"track_id":"t-1","venue_id":null,"score_id":null,"#,
             r#""window":{"start_s":0.0,"end_s":30.0}},"#,
             r#""root":{"features":{"#,
             r#""beats":{"$kind":"tensor","artifact_id":"a-beats","dtype":"f32","shape":[2],"#,
@@ -1127,7 +1119,7 @@ mod tests {
         let manifest = BindingManifest {
             schema_version: SCHEMA_VERSION,
             revision: BindingRevision::new(),
-            agent_kind: AgentKind::PatternGraph,
+            agent_kind: AgentKind::VenueRig,
             scope: AnalysisScope::default(),
             root: BindingValue::Record(root),
             artifacts,
@@ -1140,7 +1132,7 @@ mod tests {
 
     #[test]
     fn schema_version_is_checked_on_load() {
-        let json = r#"{"schema_version":99,"revision":"r-1","agent_kind":"track_copilot","scope":{"track_id":null,"venue_id":null,"score_id":null,"pattern_id":null,"window":null},"root":{},"artifacts":{}}"#;
+        let json = r#"{"schema_version":99,"revision":"r-1","agent_kind":"track_copilot","scope":{"track_id":null,"venue_id":null,"score_id":null,"window":null},"root":{},"artifacts":{}}"#;
         let e = BindingManifest::from_json(json).unwrap_err();
         assert!(e.message().contains("schema_version"), "{e}");
     }

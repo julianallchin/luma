@@ -11,9 +11,7 @@ use std::time::Instant;
 use serde::Deserialize;
 
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
-use crate::eval::composite::composite_frame;
-use crate::eval::{eval, Arena, Plan, Scene, Scope};
-use crate::models::node_graph::BlendMode;
+use crate::eval::{Arena, Scene, Scope};
 use crate::models::universe::{PrimitiveState, UniverseState};
 
 /// Sample a [`Scene`] at a single absolute time → one [`UniverseState`]. The
@@ -26,12 +24,6 @@ fn sample_scene(scene: &Scene, t: f32, scratch: &mut Arena) -> UniverseState {
         .unwrap_or_default()
 }
 
-/// Sample a single compiled cue [`Plan`] at one time → one [`UniverseState`].
-#[inline]
-fn sample_plan(plan: &Plan, t: f32, scratch: &mut Arena) -> UniverseState {
-    eval(plan, &[t], scratch).pop().unwrap_or_default()
-}
-
 /// Per-deck render input from the Perform page.
 #[derive(Deserialize, Clone, Debug)]
 pub struct PerformDeckInput {
@@ -40,46 +32,9 @@ pub struct PerformDeckInput {
     pub volume: f32, // effective volume = fader * crossfader weight
 }
 
-/// deck_id reserved for the always-running simulated deck (no real track required).
-pub const SIM_DECK_ID: u8 = 99;
-/// Duration of the simulated deck's virtual track in seconds.
-/// 120 BPM / 4/4 → 0.5s per beat → 2s per bar → 600s = 5 bars × 60 (10 minutes).
-const SIM_DECK_DURATION: f32 = 600.0;
-
 // ============================================================================
-// Manual Layer State — live cue state driven by MIDI
+// Manual Layer State — live controller state driven by MIDI
 // ============================================================================
-
-/// A cue that has been triggered (latched or flashed) by the LD.
-#[derive(Clone, Debug)]
-pub struct CueInstance {
-    pub resolved_target: ResolvedTarget,
-}
-
-#[derive(Clone, Debug)]
-pub enum ResolvedTarget {
-    All,
-    Groups(Vec<String>),
-}
-
-/// Per-group intensity + active cues.
-#[derive(Default, Clone, Debug)]
-pub struct ManualGroupState {
-    pub intensity: f32,
-    /// Latched (toggle-on) cue instances
-    pub active_cues: HashMap<String, CueInstance>,
-    /// Held (flash) cue instances
-    pub flash_cues: HashMap<String, CueInstance>,
-}
-
-impl ManualGroupState {
-    pub fn new() -> Self {
-        Self {
-            intensity: 1.0,
-            ..Default::default()
-        }
-    }
-}
 
 /// Live LD state — modified by MIDI callback, read by 60fps render loop.
 #[derive(Clone, Debug)]
@@ -88,14 +43,10 @@ pub struct ManualLayerState {
     pub active: bool,
     /// Modifier names currently held (used for target resolution)
     pub held_modifiers: HashSet<String>,
-    /// binding_id → press Instant, used for TapToggleHoldFlash timing
-    pub tap_timestamps: HashMap<String, Instant>,
-    /// Master intensity multiplier (0.0–1.0)
+    /// Master intensity (0.0–1.0). Reported to the host; no output reads it.
     pub master_intensity: f32,
-    /// Per-group state. Key = group_id.
-    pub per_group: HashMap<String, ManualGroupState>,
-    /// State for Target::All cues (not group-targeted)
-    pub global: ManualGroupState,
+    /// Per-group intensity (0.0–1.0). Key = group_id.
+    pub per_group: HashMap<String, f32>,
 }
 
 impl Default for ManualLayerState {
@@ -103,47 +54,10 @@ impl Default for ManualLayerState {
         Self {
             active: false,
             held_modifiers: HashSet::new(),
-            tap_timestamps: HashMap::new(),
             master_intensity: 1.0,
             per_group: HashMap::new(),
-            global: ManualGroupState::new(),
         }
     }
-}
-
-impl ManualLayerState {
-    /// True if any cue (active or flash) is queued, regardless of the `active` flag.
-    pub fn has_any_cues(&self) -> bool {
-        !self.global.active_cues.is_empty()
-            || !self.global.flash_cues.is_empty()
-            || self
-                .per_group
-                .values()
-                .any(|gs| !gs.active_cues.is_empty() || !gs.flash_cues.is_empty())
-    }
-}
-
-// ============================================================================
-// Compiled cue buffer
-// ============================================================================
-
-#[derive(Clone, Debug)]
-pub enum CompiledCueMode {
-    Loop,
-    TrackTime,
-}
-
-/// A compiled cue ready for evaluation in the render loop. The cue's pattern is
-/// compiled to an eval [`Plan`] and sampled at the deck time each frame (seek-
-/// safe — any time is a valid first frame, so loop/track-time are just different
-/// `t` arguments, no precomputed buffer).
-#[derive(Clone)]
-pub struct CompiledCue {
-    pub plan: Plan,
-    pub execution_mode: CompiledCueMode,
-    /// z_index from the Cue definition (copied here so render loop doesn't need DB)
-    pub z_index: i8,
-    pub blend_mode: BlendMode,
 }
 
 // ============================================================================
@@ -198,14 +112,11 @@ pub(crate) struct RenderEngineInner {
     identify: Option<IdentifyState>,
 
     // --- Live controller layer ---
-    /// Compiled cue buffers. Key = (deck_id, cue_id).
-    pub cue_buffers: HashMap<(u8, String), CompiledCue>,
     /// Live LD state (modified by MIDI callback thread)
-    pub manual_layer: ManualLayerState,
-    /// group_id → [fixture_id, ...]. Built at cue-compile time. Used for target filtering.
-    pub group_fixture_map: HashMap<String, Vec<String>>,
-    /// Wall-clock start for the always-running simulated deck (deck_id=99).
-    simulated_deck_start: Instant,
+    manual_layer: ManualLayerState,
+    /// group_id → [fixture_id, ...]. Built on mapping reload. Used for
+    /// per-group intensity.
+    group_fixture_map: HashMap<String, Vec<String>>,
     /// Reusable eval scratch arena, held across frames so the hot path stays warm.
     scratch: Arena,
 }
@@ -220,10 +131,8 @@ impl Default for RenderEngine {
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
                 identify: None,
-                cue_buffers: HashMap::new(),
                 manual_layer: ManualLayerState::default(),
                 group_fixture_map: HashMap::new(),
-                simulated_deck_start: Instant::now(),
                 scratch: Arena::default(),
             })),
         }
@@ -238,10 +147,8 @@ impl RenderEngine {
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
         guard.identify = None;
-        guard.cue_buffers.clear();
         guard.manual_layer = ManualLayerState::default();
         guard.group_fixture_map.clear();
-        guard.simulated_deck_start = Instant::now();
         guard.scratch = Arena::default();
     }
 
@@ -280,10 +187,7 @@ impl RenderEngine {
             }
             guard.identify = None;
         }
-        if !guard.perform_deck_states.is_empty()
-            || guard.manual_layer.active
-            || guard.manual_layer.has_any_cues()
-        {
+        if !guard.perform_deck_states.is_empty() || guard.manual_layer.active {
             return Some(render_perform_mix(&mut guard));
         }
         let inner = &mut *guard;
@@ -345,8 +249,6 @@ impl RenderEngine {
             .pending_scenes
             .retain(|target, _| *target == SceneTarget::Active);
         guard.perform_deck_states.clear();
-        // Clear cue buffers for all decks; keep manual_layer state
-        guard.cue_buffers.clear();
     }
 
     /// Targets are member keys: `"fid"` (whole fixture) or `"fid:N"` (one head).
@@ -362,20 +264,6 @@ impl RenderEngine {
     }
 
     // --- MIDI live layer methods ---
-
-    /// Store a compiled cue buffer for a deck.
-    pub fn set_cue_buffer(&self, deck_id: u8, cue_id: &str, compiled: CompiledCue) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard
-            .cue_buffers
-            .insert((deck_id, cue_id.to_string()), compiled);
-    }
-
-    /// Remove cue buffers for a single cue across all decks.
-    pub fn remove_cue_buffers(&self, cue_id: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.cue_buffers.retain(|(_, id), _| id != cue_id);
-    }
 
     /// Update the group→fixture map used for target filtering.
     pub fn set_group_fixture_map(&self, map: HashMap<String, Vec<String>>) {
@@ -398,156 +286,9 @@ impl RenderEngine {
                 guard
                     .manual_layer
                     .per_group
-                    .entry(gid)
-                    .or_insert_with(ManualGroupState::new)
-                    .intensity = intensity.clamp(0.0, 1.0);
+                    .insert(gid, intensity.clamp(0.0, 1.0));
             }
         }
-    }
-
-    /// Latch a cue on (toggle). Also enforces radio-button exclusivity at same z_index.
-    pub fn latch_cue_on(&self, cue_id: &str, resolved_target: ResolvedTarget, z_index: i8) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-
-        // Collect cue IDs at the same z_index from cue_buffers FIRST (avoids borrow conflict).
-        let cue_ids_at_z: HashSet<String> = guard
-            .cue_buffers
-            .iter()
-            .filter(|(_, c)| c.z_index == z_index)
-            .map(|((_, cid), _)| cid.clone())
-            .collect();
-
-        // Enforce radio-button exclusivity: remove other active cues at same z_index.
-        guard
-            .manual_layer
-            .global
-            .active_cues
-            .retain(|id, _| id == cue_id || !cue_ids_at_z.contains(id));
-        for gs in guard.manual_layer.per_group.values_mut() {
-            gs.active_cues
-                .retain(|id, _| id == cue_id || !cue_ids_at_z.contains(id));
-        }
-
-        let instance = CueInstance {
-            resolved_target: resolved_target.clone(),
-        };
-
-        match &resolved_target {
-            ResolvedTarget::All => {
-                guard
-                    .manual_layer
-                    .global
-                    .active_cues
-                    .insert(cue_id.to_string(), instance);
-            }
-            ResolvedTarget::Groups(groups) => {
-                for gid in groups {
-                    guard
-                        .manual_layer
-                        .per_group
-                        .entry(gid.clone())
-                        .or_insert_with(ManualGroupState::new)
-                        .active_cues
-                        .insert(cue_id.to_string(), instance.clone());
-                }
-            }
-        }
-    }
-
-    /// Latch a cue off.
-    pub fn latch_cue_off(&self, cue_id: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.global.active_cues.remove(cue_id);
-        for gs in guard.manual_layer.per_group.values_mut() {
-            gs.active_cues.remove(cue_id);
-        }
-    }
-
-    /// Toggle a cue's latch state. Returns the new state (true = on).
-    pub fn toggle_cue(&self, cue_id: &str, resolved_target: ResolvedTarget, z_index: i8) -> bool {
-        let is_on = {
-            let guard = self.inner.lock().expect("render engine poisoned");
-            guard.manual_layer.global.active_cues.contains_key(cue_id)
-                || guard
-                    .manual_layer
-                    .per_group
-                    .values()
-                    .any(|gs| gs.active_cues.contains_key(cue_id))
-        };
-        if is_on {
-            self.latch_cue_off(cue_id);
-            false
-        } else {
-            self.latch_cue_on(cue_id, resolved_target, z_index);
-            true
-        }
-    }
-
-    /// Start a flash (held momentary).
-    pub fn flash_cue_on(&self, cue_id: &str, resolved_target: ResolvedTarget) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        let instance = CueInstance {
-            resolved_target: resolved_target.clone(),
-        };
-        match &resolved_target {
-            ResolvedTarget::All => {
-                guard
-                    .manual_layer
-                    .global
-                    .flash_cues
-                    .insert(cue_id.to_string(), instance);
-            }
-            ResolvedTarget::Groups(groups) => {
-                for gid in groups {
-                    guard
-                        .manual_layer
-                        .per_group
-                        .entry(gid.clone())
-                        .or_insert_with(ManualGroupState::new)
-                        .flash_cues
-                        .insert(cue_id.to_string(), instance.clone());
-                }
-            }
-        }
-    }
-
-    /// Clear all active and flash cues (blackout).
-    pub fn clear_all_cues(&self) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.global.active_cues.clear();
-        guard.manual_layer.global.flash_cues.clear();
-        for gs in guard.manual_layer.per_group.values_mut() {
-            gs.active_cues.clear();
-            gs.flash_cues.clear();
-        }
-    }
-
-    /// End a flash.
-    pub fn flash_cue_off(&self, cue_id: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard.manual_layer.global.flash_cues.remove(cue_id);
-        for gs in guard.manual_layer.per_group.values_mut() {
-            gs.flash_cues.remove(cue_id);
-        }
-    }
-
-    /// Record a tap timestamp for TapToggleHoldFlash.
-    pub fn record_tap(&self, binding_id: &str) {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard
-            .manual_layer
-            .tap_timestamps
-            .insert(binding_id.to_string(), Instant::now());
-    }
-
-    /// Return elapsed ms since tap, removing the entry.
-    pub fn consume_tap_elapsed_ms(&self, binding_id: &str) -> Option<u64> {
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        guard
-            .manual_layer
-            .tap_timestamps
-            .remove(binding_id)
-            .map(|t| t.elapsed().as_millis() as u64)
     }
 
     /// Hold modifier pressed.
@@ -566,41 +307,14 @@ impl RenderEngine {
     pub fn get_manual_state_snapshot(&self) -> crate::models::midi::ControllerState {
         let guard = self.inner.lock().expect("render engine poisoned");
         let ml = &guard.manual_layer;
-
-        let mut active_ids: Vec<String> = ml.global.active_cues.keys().cloned().collect();
-        let mut flash_ids: Vec<String> = ml.global.flash_cues.keys().cloned().collect();
-        for gs in ml.per_group.values() {
-            for id in gs.active_cues.keys() {
-                if !active_ids.contains(id) {
-                    active_ids.push(id.clone());
-                }
-            }
-            for id in gs.flash_cues.keys() {
-                if !flash_ids.contains(id) {
-                    flash_ids.push(id.clone());
-                }
-            }
-        }
-
-        let group_intensities = ml
-            .per_group
-            .iter()
-            .map(|(gid, gs)| (gid.clone(), gs.intensity))
-            .collect();
+        let group_intensities = ml.per_group.clone();
 
         crate::models::midi::ControllerState {
             active: ml.active,
             master_intensity: ml.master_intensity,
-            active_cue_ids: active_ids,
-            flash_cue_ids: flash_ids,
             held_modifiers: ml.held_modifiers.iter().cloned().collect(),
             group_intensities,
         }
-    }
-
-    /// Expose inner Arc so MidiManager can share state without cloning.
-    pub(crate) fn inner_arc(&self) -> Arc<Mutex<RenderEngineInner>> {
-        self.inner.clone()
     }
 }
 
@@ -608,171 +322,24 @@ impl RenderEngine {
 // Perform mix
 // ============================================================================
 
-/// A cue instance queued for compositing this frame (no compiled ref — resolved via deck blend).
-struct ActiveCueEntry<'a> {
-    cue_id: &'a str,
-    resolved_target: &'a ResolvedTarget,
-    intensity: f32,
-}
-
-/// Render each deck's layer at its current time and blend by volume.
-/// Also composites the manual live layer on top when active.
+/// Render each deck's layer at its current time and blend by volume, then dim
+/// the controller's groups by their intensity.
 fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
-    // Build effective deck states: real decks + simulated deck when no real decks are up.
-    let sim_time = guard.simulated_deck_start.elapsed().as_secs_f32() % SIM_DECK_DURATION;
-    // Sim deck always contributes — it has no score layer in perform_layers
-    // so score_mix ignores it, but its cue buffers must stay reachable for MIDI.
-    let sim_vol: f32 = 1.0;
-    let mut effective_states: Vec<PerformDeckInput> = guard.perform_deck_states.clone();
-    if sim_vol > 0.0 {
-        effective_states.push(PerformDeckInput {
-            deck_id: SIM_DECK_ID,
-            time: sim_time,
-            volume: sim_vol,
-        });
-    }
+    let mut universe = score_mix(
+        &guard.perform_layers,
+        &guard.perform_deck_states,
+        &mut guard.scratch,
+    );
 
-    // Step 1: score base (weighted average by deck volume)
-    let mut universe = score_mix(&guard.perform_layers, &effective_states, &mut guard.scratch);
-
-    // Step 2: collect all active + flash cue instances
-    let master = guard.manual_layer.master_intensity;
-    let mut entries: Vec<ActiveCueEntry> = Vec::new();
-
-    for (cue_id, instance) in guard
-        .manual_layer
-        .global
-        .active_cues
-        .iter()
-        .chain(guard.manual_layer.global.flash_cues.iter())
-    {
-        entries.push(ActiveCueEntry {
-            cue_id,
-            resolved_target: &instance.resolved_target,
-            intensity: master,
-        });
-    }
-
-    for (_, gs) in &guard.manual_layer.per_group {
-        let group_intensity = gs.intensity * master;
-        for (cue_id, instance) in gs.active_cues.iter().chain(gs.flash_cues.iter()) {
-            if !entries.iter().any(|e| e.cue_id == cue_id.as_str()) {
-                entries.push(ActiveCueEntry {
-                    cue_id,
-                    resolved_target: &instance.resolved_target,
-                    intensity: group_intensity,
-                });
-            }
-        }
-    }
-
-    if entries.is_empty() {
-        return universe;
-    }
-
-    // Step 4: collect per-deck layers for each active cue, sorted by z_index.
-    // Uses channel-selective compositing (same logic as the track-editor compositor)
-    // so partial-channel cues (apply_strobe, apply_dimmer, etc.) only affect the
-    // channels they actually set — other channels pass through from the base.
-    struct CueCompositeEntry<'a> {
-        z_index: i8,
-        blend_mode: BlendMode,
-        resolved_target: &'a ResolvedTarget,
-        intensity: f32,
-        /// (cue plan, deck_time, deck_volume) for each deck that has this cue compiled
-        deck_plans: Vec<(&'a Plan, f32, f32)>,
-    }
-
-    let group_fixture_map = &guard.group_fixture_map;
-    let cue_buffers = &guard.cue_buffers;
-
-    let mut cue_entries: Vec<CueCompositeEntry> = entries
-        .iter()
-        .filter_map(|e| {
-            let mut deck_plans = Vec::new();
-            let mut blend_mode = BlendMode::Replace;
-            let mut z_index = 0i8;
-            for ds in &effective_states {
-                if ds.volume <= 0.0 {
-                    continue;
-                }
-                if let Some(compiled) = cue_buffers.get(&(ds.deck_id, e.cue_id.to_string())) {
-                    deck_plans.push((&compiled.plan, ds.time, ds.volume));
-                    blend_mode = compiled.blend_mode;
-                    z_index = compiled.z_index;
-                }
-            }
-            if deck_plans.is_empty() {
-                None
-            } else {
-                Some(CueCompositeEntry {
-                    z_index,
-                    blend_mode,
-                    resolved_target: e.resolved_target,
-                    intensity: e.intensity,
-                    deck_plans,
-                })
-            }
-        })
-        .collect();
-
-    if cue_entries.is_empty() {
-        return universe;
-    }
-
-    // Step 5: sort by z_index ascending (Painter's Algorithm)
-    cue_entries.sort_by_key(|e| e.z_index);
-
-    // Step 6: eval + composite each cue (channel-selective via the plan's
-    // OutputBinding set-mask), weighted across the decks that hold it.
-    let scratch = &mut guard.scratch;
-    for entry in &cue_entries {
-        let allowed: Option<HashSet<&str>> = match entry.resolved_target {
-            ResolvedTarget::All => None,
-            ResolvedTarget::Groups(groups) => Some(
-                groups
-                    .iter()
-                    .flat_map(|gid| {
-                        group_fixture_map
-                            .get(gid)
-                            .map(|v| v.iter().map(|s| s.as_str()))
-                            .into_iter()
-                            .flatten()
-                    })
-                    .collect(),
-            ),
-        };
-
-        let total_vol: f32 = entry.deck_plans.iter().map(|&(_, _, v)| v).sum();
-        for &(plan, time, vol) in &entry.deck_plans {
-            let weight = if total_vol > 0.0 {
-                vol / total_vol
-            } else {
-                1.0
-            };
-            let effective_intensity = entry.intensity * weight;
-            let frame = sample_plan(plan, time, scratch);
-            composite_frame(
-                &mut universe,
-                &frame,
-                &plan.outputs,
-                entry.blend_mode,
-                effective_intensity,
-                allowed.as_ref(),
-            );
-        }
-    }
-
-    // Apply per-group intensity as a post-composite dimming pass.
-    // This lets CC faders act as group dimmers regardless of how cues target fixtures.
-    for (group_id, gs) in &guard.manual_layer.per_group {
-        if (gs.intensity - 1.0).abs() < 0.001 {
+    // Apply per-group intensity as a post-composite dimming pass, so CC faders
+    // act as group dimmers.
+    for (group_id, intensity) in &guard.manual_layer.per_group {
+        if (intensity - 1.0).abs() < 0.001 {
             continue; // full intensity — skip
         }
         let Some(fixture_ids) = guard.group_fixture_map.get(group_id) else {
             continue;
         };
-        let scale = gs.intensity;
         for (key, prim) in &mut universe.primitives {
             let fixture_id = if let Some(c) = key.find(':') {
                 &key[..c]
@@ -784,7 +351,7 @@ fn render_perform_mix(guard: &mut RenderEngineInner) -> UniverseState {
                 .iter()
                 .any(|m| m == fixture_id || m == key.as_str())
             {
-                prim.dimmer = (prim.dimmer * scale).clamp(0.0, 1.0);
+                prim.dimmer = (prim.dimmer * intensity).clamp(0.0, 1.0);
             }
         }
     }

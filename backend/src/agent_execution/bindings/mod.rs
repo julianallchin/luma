@@ -10,4 +10,4 @@ pub use manifest::{
     AgentKind, AnalysisScope, AnalysisWindow, ArtifactId, AxisSpec, BindingManifest,
     BindingRevision, BindingValue, Coordinates, DType, Provenance, TensorRef, SCHEMA_VERSION,
 };
-pub use providers::{assemble_bindings, BindingScope, GraphRunContribution};
+pub use providers::{assemble_bindings, BindingScope};

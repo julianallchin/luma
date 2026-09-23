@@ -25,8 +25,6 @@ pub mod groups;
 pub mod host_audio;
 pub mod midi;
 pub mod mixer;
-pub mod node_graph;
-pub mod patterns;
 pub mod perform;
 pub mod rekordbox;
 pub mod render_engine;

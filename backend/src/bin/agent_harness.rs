@@ -6,7 +6,7 @@
 //! rendering commands does not start a model turn.
 //!
 //! ```text
-//! ->  {"id": 1, "cmd": "list_patterns", "args": {}}
+//! ->  {"id": 1, "cmd": "list_venues", "args": {}}
 //! <-  {"id": 1, "ok": [ ... ]}
 //! <-  {"id": 1, "err": "message"}
 //! ```

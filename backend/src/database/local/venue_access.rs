@@ -15,7 +15,6 @@ pub enum VenueResource<'a> {
     Group(&'a str),
     GroupMember(&'a str),
     StagePiece(&'a str),
-    Cue(&'a str),
     MidiModifier(&'a str),
     MidiBinding(&'a str),
     Score(&'a str),
@@ -219,7 +218,6 @@ async fn resolve_venue_id(
             id,
         ),
         VenueResource::StagePiece(id) => ("SELECT venue_id FROM stage_pieces WHERE id = ?", id),
-        VenueResource::Cue(id) => ("SELECT venue_id FROM cues WHERE id = ?", id),
         VenueResource::MidiModifier(id) => ("SELECT venue_id FROM midi_modifiers WHERE id = ?", id),
         VenueResource::MidiBinding(id) => ("SELECT venue_id FROM midi_bindings WHERE id = ?", id),
         VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
@@ -295,7 +293,13 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let tables = venue_owned_tables(&mut connection).await.unwrap();
 
-        for owned in ["fixtures", "stage_pieces", "venue_nodes", "scores", "cues"] {
+        for owned in [
+            "fixtures",
+            "stage_pieces",
+            "venue_nodes",
+            "scores",
+            "midi_bindings",
+        ] {
             assert!(
                 tables.iter().any(|t| t == owned),
                 "{owned} carries a venue_id and is venue content: {tables:?}"
@@ -344,8 +348,6 @@ mod tests {
                 VALUES ('shared-group', 'alice', 'shared', 'shared_group');
              INSERT INTO fixture_group_members (id, uid, fixture_id, group_id)
                 VALUES ('shared-member', 'alice', 'shared-fixture', 'shared-group');
-             INSERT INTO cues (id, uid, venue_id, name, pattern_id)
-                VALUES ('shared-cue', 'alice', 'shared', 'Shared cue', 'pattern');
              INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
                 VALUES ('shared-modifier', 'alice', 'shared', 'Shift', '{}');
              INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label)
@@ -429,11 +431,6 @@ mod tests {
                 .is_err()
         );
         assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Cue("shared-cue"))
-                .await
-                .is_err()
-        );
-        assert!(
             VenueAccess::<Write>::write(&pool, VenueResource::MidiModifier("shared-modifier"),)
                 .await
                 .is_err()
@@ -479,7 +476,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Cue("shared-cue"))
+            VenueAccess::<Write>::write(&pool, VenueResource::MidiModifier("shared-modifier"))
                 .await
                 .is_ok()
         );

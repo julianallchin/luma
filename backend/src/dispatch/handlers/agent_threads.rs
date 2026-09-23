@@ -61,9 +61,8 @@ pub async fn agent_thread_append_messages(
     }
 }
 
-/// Delete the thread once its child authored workspaces, its Python workspace,
-/// and its published graph runs have been retired. Revision history remains
-/// restorable.
+/// Delete the thread once its child authored workspaces and its Python
+/// workspace have been retired. Revision history remains restorable.
 pub async fn agent_thread_delete(
     services: &AppServices,
     thread_id: String,
@@ -72,10 +71,8 @@ pub async fn agent_thread_delete(
     let children = db::delete_thread(&services.db.0, &thread_id, owner_user_id.as_deref()).await?;
     for child in children {
         services.workspaces.retire_thread(&child).await?;
-        services.graph_runs.forget(&child);
     }
     services.workspaces.retire_thread(&thread_id).await?;
-    services.graph_runs.forget(&thread_id);
     Ok(())
 }
 

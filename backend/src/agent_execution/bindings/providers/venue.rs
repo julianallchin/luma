@@ -11,8 +11,6 @@
 //! `luma.venue.attributes` is deliberately absent: `ResidentContext.attributes`
 //! is never populated, so advertising it would be a promise of zeros.
 
-use std::collections::HashMap;
-
 use serde::Serialize;
 
 use super::{inline, put_f32, unavailable, ProviderCtx, NO_VENUE};
@@ -393,15 +391,7 @@ async fn positions(
 ) -> Result<(), String> {
     // The `all` selection: no nodes, no edges, no args ⇒ the whole venue in the
     // evaluator's own order.
-    let resolved = resolve_primitive_ids_with_access(
-        access,
-        ctx.resource_root,
-        &[],
-        &[],
-        &HashMap::new(),
-        None,
-    )
-    .await;
+    let resolved = resolve_primitive_ids_with_access(access, ctx.resource_root).await;
 
     if resolved.is_empty() {
         for path in ["venue.positions", "venue.uv"] {

@@ -38,7 +38,6 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
             ("drafts", "score_id"),
         ],
     ),
-    ("patterns", &[("implementations", "pattern_id")]),
 ];
 
 /// Delete every row of `table` matching `where_sql`, and answer how many.

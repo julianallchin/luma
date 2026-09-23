@@ -8,7 +8,7 @@ Manifest shape (C1, abridged):
     {
       "schema_version": 1,
       "revision": "r-<uuid>",
-      "agent_kind": "track_copilot" | "pattern_graph",
+      "agent_kind": "track_copilot" | "venue_rig",
       "scope": {"track_id":..., "window": {"start_s":..,"end_s":..} | null, ...},
       "root": <BindingValue>,
       "artifacts": {"<id>": {"kind","encoding","rel_path","byte_len",...}}
@@ -896,7 +896,7 @@ def build_namespace(
     }
 
     # A track thread gets one semantic object over the same manifest values and
-    # artifact store. Graph threads retain the plain identity record: they have
+    # artifact store. Venue threads retain the plain identity record: they have
     # no score to transact against.
     track_values = items.get("track")
     if manifest.get("agent_kind") == "track_copilot" and isinstance(
@@ -912,7 +912,7 @@ def build_namespace(
             )
 
     # The room is a binding record plus one capability: a camera over it. Every
-    # thread with a venue in scope gets it, track and graph alike — looking at a
+    # thread with a venue in scope gets it, track and venue alike — looking at a
     # room is not an authored-track privilege.
     venue_values = items.get("venue")
     if isinstance(venue_values, LumaRecord):

@@ -20,6 +20,7 @@ use luma_patterns::{
     is_form, presets, standard_library, AudioLevel, BlendMode, Boundary, Clip, ColorStop, Drum,
     Envelope, EnvelopeCurve, EventTimes, Events, FormPreset, Gradient, Score, Value,
 };
+use luma_patterns::{AxisPlane, Cell, MappingSource, MappingSpec, Span};
 use std::collections::BTreeMap;
 
 /// Track data the removed sources read.
@@ -31,6 +32,27 @@ pub struct Host {
     pub chords: Vec<(f64, f64, Option<u8>)>,
     /// Heads the clip's selection resolves to.
     pub heads: usize,
+    /// Those heads, for axes that change their reading; empty when unknown.
+    pub cells: Vec<Cell>,
+}
+
+/// The heads a clip's selection resolves to on its score's venue, as the
+/// scene builder resolves them.
+pub async fn clip_cells(
+    pool: &sqlx::SqlitePool,
+    fixtures_root: &std::path::Path,
+    score_id: &str,
+    clip: &Clip,
+) -> Result<Vec<Cell>, String> {
+    use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id)).await?;
+    crate::services::composable_patterns::resolve_cells(
+        &mut access,
+        fixtures_root,
+        std::slice::from_ref(&clip.selection),
+        clip.selection_seed.unwrap_or(clip.seed),
+    )
+    .await
 }
 
 /// A proposed form clip.
@@ -106,10 +128,28 @@ pub fn convert(
         .get(id)
         .ok_or_else(|| format!("unknown clip {id}"))?;
     if is_form(&clip.graph) {
+        // Axes saved before spans and planes: a radial or angle axis needs a
+        // plane, and `per_group` is the group span.
+        let mut clip = clip.clone();
+        let mut notes = Vec::new();
+        for value in clip.inputs.values_mut() {
+            let Value::Mapping(mapping) = value else {
+                continue;
+            };
+            if std::mem::replace(&mut mapping.per_group, false) {
+                mapping.span = Span::Group;
+            }
+            if matches!(mapping.source, MappingSource::Radial | MappingSource::Angle)
+                && mapping.plane.is_none()
+            {
+                mapping.plane = Some(AxisPlane::UpDown);
+                notes.push("center: extent middle → centroid".to_owned());
+            }
+        }
         return Ok(Proposal::Form(Box::new(Converted {
-            clip: clip.clone(),
+            clip,
             look: "already a form".into(),
-            notes: Vec::new(),
+            notes,
             boundaries: Vec::new(),
             layers: Vec::new(),
         })));
@@ -477,6 +517,13 @@ impl<'a> Build<'a> {
                     self.note("a color times a gradient: the color is dropped");
                 }
                 let mut form = preset("Gradient");
+                let mut mapping = mapping;
+                if std::mem::replace(&mut mapping.reverse, false) {
+                    return Err("a reversed gradient axis".into());
+                }
+                if self.axis(&mut mapping) != (1.0, 0.0) {
+                    return Err("a gradient around a solved circle".into());
+                }
                 set(&mut form, "colors", Value::Gradient(colors));
                 set(&mut form, "axis", Value::Mapping(mapping));
                 let alpha = self.alpha(&parts);
@@ -627,11 +674,7 @@ impl<'a> Build<'a> {
                 self.note("the old stroke stayed at its end until the next event");
             }
         }
-        let fixed = self.fixed;
-        self.fixed |= stroke.keep_start;
-        let every = self.every(&stroke.trigger, travel);
-        self.fixed = fixed;
-        let every = every?;
+        let every = self.every(&stroke.trigger, travel)?;
         // Put the stroke center in unreversed coordinates: reverse maps x to
         // 1 − x, and turns which end of the stroke leads.
         let mut axis = stroke.mapping.clone();
@@ -640,6 +683,8 @@ impl<'a> Build<'a> {
         if reversed {
             (a, b) = (1.0 - a, -b);
         }
+        let (sign, offset) = self.axis(&mut axis);
+        (a, b) = (sign * a + offset, sign * b);
         // The form runs a gliding stroke on an open axis from fully off one
         // end to fully off the other; undo that for the old centers.
         let width = stroke.width;
@@ -670,7 +715,7 @@ impl<'a> Build<'a> {
         }
         // The form turns an asymmetric shape with the direction of travel;
         // the old graphs kept it facing the mapping's own direction.
-        let facing = if reversed { -1 } else { 1 };
+        let facing = (if reversed { -1 } else { 1 }) * sign as i8;
         let shape = match curves::direction(&path) {
             0 if !curves::symmetric(&stroke.shape) => {
                 self.note("an asymmetric shape now turns with a bouncing path");
@@ -679,6 +724,10 @@ impl<'a> Build<'a> {
             0 => stroke.shape.clone(),
             direction if direction == facing => stroke.shape.clone(),
             _ => curves::mirror(&stroke.shape),
+        };
+        let shape = match &stroke.line {
+            Some((line_width, profile)) => self.line_shape(*line_width, profile),
+            None => shape,
         };
         if width > luma_patterns::MAX_WIDTH {
             self.note(format!(
@@ -728,6 +777,112 @@ impl<'a> Build<'a> {
         };
         set(&mut form, "alpha", alpha);
         Ok(form)
+    }
+
+    /// A line `width` wide through the center, turning around front–back,
+    /// lights a head at distance `r` and angle `φ` from the line by
+    /// `profile(r · sin(φ) / width + ½)`, dark outside 0–1. Read on the angle
+    /// axis as one stroke a whole turn wide, that is a shape over the turn.
+    /// It depends on `r`, so it is exact when the shape is the same for every
+    /// head, as on a ring or when the line covers every head.
+    fn line_shape(&mut self, width: f64, profile: &Envelope) -> Envelope {
+        let shape_at = |r: f64| -> Vec<f64> {
+            (0..=128)
+                .map(|i| {
+                    let x = f64::from(i) / 128.0;
+                    let phase = r * (std::f64::consts::TAU * (x - 0.5)).sin() / width + 0.5;
+                    if width > 0.0 && phase > 0.0 && phase < 1.0 {
+                        profile.sample(phase)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        };
+        let cells = &self.host.cells;
+        let radii: Vec<f64> = if cells.is_empty() {
+            vec![0.0]
+        } else {
+            let mean =
+                |axis: usize| cells.iter().map(|c| c.uvz[axis]).sum::<f64>() / cells.len() as f64;
+            let (u, z) = (mean(0), mean(2));
+            cells
+                .iter()
+                .map(|c| (c.uvz[0] - u).hypot(c.uvz[2] - z))
+                .collect()
+        };
+        if cells.is_empty() {
+            self.note(
+                "a turning line read without the heads: its shape assumes they sit at the center",
+            );
+        }
+        let shapes: Vec<Vec<f64>> = radii.iter().map(|r| shape_at(*r)).collect();
+        let mean = radii.iter().sum::<f64>() / radii.len() as f64;
+        let chosen = shape_at(mean);
+        let spread = shapes
+            .iter()
+            .flat_map(|shape| shape.iter().zip(&chosen).map(|(a, b)| (a - b).abs()))
+            .fold(0.0, f64::max);
+        if spread > 1e-9 {
+            self.note(format!(
+                "a turning line: heads at other distances from the center differ by up to {spread:.3}"
+            ));
+        }
+        let points: Vec<[f64; 2]> = chosen
+            .iter()
+            .enumerate()
+            .map(|(i, v)| [i as f64 / 128.0, *v])
+            .collect();
+        if chosen.iter().all(|v| (v - chosen[0]).abs() < 1e-12) {
+            return Envelope::linear(vec![[0.0, chosen[0]], [1.0, chosen[0]]]);
+        }
+        Envelope::linear(points)
+    }
+
+    /// Turn an old mapping into a form axis: `per_group` is the group span,
+    /// and radial and angle name a plane. The old readings were in the stage
+    /// U/V plane around the middle of the extent (around up–down); forms
+    /// measure around the centroid. A solved circle becomes an angle around
+    /// the best-fit plane. Returns `(sign, offset)`: an unreversed old axis
+    /// coordinate `x` is `sign · x + offset` on the new axis.
+    fn axis(&mut self, mapping: &mut MappingSpec) -> (f64, f64) {
+        let old = mapping.clone();
+        if std::mem::replace(&mut mapping.per_group, false) {
+            mapping.span = Span::Group;
+        }
+        match mapping.source {
+            MappingSource::Radial | MappingSource::Angle if mapping.plane.is_none() => {
+                mapping.plane = Some(AxisPlane::UpDown);
+                self.note("center: extent middle → centroid");
+                (1.0, 0.0)
+            }
+            MappingSource::Circle { .. } => {
+                let mut angle = mapping.clone();
+                angle.source = MappingSource::Angle;
+                angle.plane = Some(AxisPlane::Auto);
+                match turn_between(&old, &angle, &self.host.cells) {
+                    Some((sign, offset, error)) if error <= 1e-6 => {
+                        *mapping = angle;
+                        self.note("solved circle → angle around the best-fit plane");
+                        (sign, offset)
+                    }
+                    // The angle around the centroid does not read the heads
+                    // in the same order and spacing as the fitted circle:
+                    // keep the circle, which a form axis still accepts.
+                    Some((_, _, error)) => {
+                        self.note(format!(
+                            "solved circle kept: an angle axis would move heads up to {error:.3} turns"
+                        ));
+                        (1.0, 0.0)
+                    }
+                    None => {
+                        self.note("solved circle kept: its heads are unknown");
+                        (1.0, 0.0)
+                    }
+                }
+            }
+            _ => (1.0, 0.0),
+        }
     }
 
     /// The shutter of a strobe. The strobe form writes only the strobe
@@ -1078,6 +1233,50 @@ impl<'a> Build<'a> {
         );
         Ok((sparkle, "constant with a subset".into()))
     }
+}
+
+/// The turn that takes `old`'s reading of `cells` to `new`'s: `sign` and
+/// `offset` with new ≈ sign · old + offset (in turns), fitted over the
+/// heads, and the largest miss. `None` when either does not resolve.
+fn turn_between(old: &MappingSpec, new: &MappingSpec, cells: &[Cell]) -> Option<(f64, f64, f64)> {
+    if cells.is_empty() {
+        return None;
+    }
+    let mut unreversed = old.clone();
+    unreversed.reverse = false;
+    let before = unreversed.resolve(cells).ok()?;
+    let after = new.resolve(cells).ok()?;
+    let after: BTreeMap<&str, f64> = after
+        .coordinates
+        .iter()
+        .map(|c| (c.cell.as_str(), c.position))
+        .collect();
+    let pairs: Vec<(f64, f64)> = before
+        .coordinates
+        .iter()
+        .filter_map(|c| Some((c.position, *after.get(c.cell.as_str())?)))
+        .collect();
+    if pairs.is_empty() {
+        return None;
+    }
+    eprintln!("PAIRS {pairs:?}");
+    let wrap = |x: f64| (x + 0.5).rem_euclid(1.0) - 0.5;
+    [1.0, -1.0]
+        .into_iter()
+        .map(|sign| {
+            // Circular mean of the differences.
+            let (sin, cos) = pairs.iter().fold((0.0, 0.0), |(s, c), (x, y)| {
+                let angle = (y - sign * x) * std::f64::consts::TAU;
+                (s + angle.sin(), c + angle.cos())
+            });
+            let offset = (sin.atan2(cos) / std::f64::consts::TAU).rem_euclid(1.0);
+            let error = pairs
+                .iter()
+                .map(|(x, y)| wrap(y - sign * x - offset).abs())
+                .fold(0.0, f64::max);
+            (sign, offset, error)
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
 }
 
 /// Full-saturation hue from 0 to 1 turn in 64 stops.

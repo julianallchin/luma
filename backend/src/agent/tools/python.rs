@@ -91,7 +91,6 @@ impl Tool for PythonTool {
             &ctx.services().storage,
             &ctx.services().fixtures_root,
             &ctx.services().workspaces,
-            &ctx.services().graph_runs,
             ctx.thread_id.to_string(),
             args.code,
             ctx.scope.clone(),

@@ -255,38 +255,3 @@ pub async fn render_composite_deck(
         .finish_scene_update(update, crate::eval::Scene::new(annotations));
     Ok(())
 }
-
-/// Compile MIDI cues for a deck whose track has no match in the library.
-///
-/// The deck's live BPM and beat-in-bar stand in for a real beat grid, so
-/// beat-reactive cues stay in phase with music Luma has never analyzed.
-/// `beat_number` is 1-indexed (1–4 in 4/4); `position_secs` is the playback
-/// position at the moment the track was loaded.
-#[allow(clippy::too_many_arguments)]
-pub async fn render_composite_deck_unmatched(
-    services: &AppServices,
-    deck_id: u8,
-    bpm: f64,
-    beat_number: u8,
-    position_secs: f64,
-    duration_secs: f64,
-    venue_id: String,
-) -> Result<(), CommandError> {
-    let pool = &services.db.0;
-    let _access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
-    Ok(
-        crate::controller_compositor::compile_cues_for_unmatched_deck(
-            pool,
-            &services.storage,
-            Some(services.fixtures_root.clone()),
-            &services.render_engine,
-            deck_id,
-            bpm as f32,
-            beat_number,
-            position_secs as f32,
-            duration_secs as f32,
-            &venue_id,
-        )
-        .await?,
-    )
-}

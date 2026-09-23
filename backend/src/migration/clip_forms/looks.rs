@@ -51,8 +51,9 @@ pub(super) struct Stroke {
     pub single: bool,
     /// A fade over each event's life, multiplied into the stroke.
     pub fade: Option<Envelope>,
-    /// Events before the clip are not the old look's: the start stays.
-    pub keep_start: bool,
+    /// A line through the center that turns: its width and profile. The
+    /// stroke's shape is then worked out from the heads' distances.
+    pub line: Option<(f64, Envelope)>,
     pub notes: Vec<String>,
 }
 
@@ -611,7 +612,7 @@ impl<'a> Parser<'a> {
             wrap,
             single: false,
             fade: None,
-            keep_start: false,
+            line: None,
             notes: Vec::new(),
         })
     }
@@ -658,7 +659,7 @@ impl<'a> Parser<'a> {
                     wrap,
                     single: false,
                     fade: None,
-                    keep_start: false,
+                    line: None,
                     notes: Vec::new(),
                 })
             }
@@ -670,13 +671,13 @@ impl<'a> Parser<'a> {
     fn motion_stroke(&self, offset: &str, width: f64, shape: Envelope) -> Found<Stroke> {
         let (motion, _) = self.source(offset, "b")?;
         let (field, _) = self.source(offset, "a")?;
-        let mut notes = Vec::new();
+        let notes = Vec::new();
         let mapping = match self.node(&field)?.definition.as_str() {
             "mapped_position" => self.mapping(&field, "mapping")?,
             "normalize_field/signals"
                 if self.upstream(&field, "radial_distance/signals").is_some() =>
             {
-                notes.push("radial center: selection centroid → extent middle".into());
+                // The distance in the U/V plane from the centroid.
                 MappingSpec {
                     source: MappingSource::Radial,
                     per_group: false,
@@ -708,7 +709,7 @@ impl<'a> Parser<'a> {
             wrap: false,
             single: true,
             fade: None,
-            keep_start: false,
+            line: None,
             notes,
         })
     }
@@ -784,7 +785,7 @@ impl<'a> Parser<'a> {
             wrap: true,
             single: false,
             fade: None,
-            keep_start: false,
+            line: None,
             notes,
         })
     }
@@ -814,7 +815,7 @@ impl<'a> Parser<'a> {
             wrap: false,
             single: false,
             fade: Some(self.envelope(id, "fade")?),
-            keep_start: false,
+            line: None,
             notes: vec![
                 "ripple: rings start at the rig center, not at a random head".into(),
                 format!("ripple: rings reach the rig edge, not {reach} m"),
@@ -832,15 +833,15 @@ impl<'a> Parser<'a> {
         let repeat = self.number(&rhythm, "repeat")?;
         Ok(Stroke {
             trigger: Trigger::Periodic {
-                repeat: repeat / 2.0,
+                repeat,
                 grid_aligned: self.boolean(&rhythm, "grid_aligned")?,
                 delay: self.number(&rhythm, "delay")?,
             },
             travel: repeat,
             path: Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]]),
             center: (0.0, 1.0),
-            width: 0.5,
-            shape,
+            width: 1.0,
+            shape: shape.clone(),
             mapping: MappingSpec {
                 source: MappingSource::Angle,
                 per_group: false,
@@ -852,13 +853,8 @@ impl<'a> Parser<'a> {
             wrap: true,
             single: false,
             fade: None,
-            keep_start: true,
-            notes: vec![
-                format!(
-                    "a line {width} wide turning in the u–z plane → two strokes half a turn apart on the angle axis (u–v plane)"
-                ),
-                "the first half turn misses the stroke that began before the clip".into(),
-            ],
+            line: Some((width, shape)),
+            notes: Vec::new(),
         })
     }
 
@@ -967,7 +963,7 @@ impl<'a> Parser<'a> {
             wrap: false,
             single: false,
             fade: None,
-            keep_start: false,
+            line: None,
             notes: Vec::new(),
         })
     }

@@ -107,16 +107,14 @@ use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::midi::{
-    ControllerState, ControllerStatus, CreateBindingInput, CreateCueInput, CreateModifierInput,
-    Cue, MidiBinding, ModifierDef, Target, UpdateBindingInput, UpdateCueInput,
+    ControllerState, ControllerStatus, CreateBindingInput, CreateModifierInput, MidiBinding,
+    ModifierDef, UpdateBindingInput,
 };
 use crate::models::mixer::{MixerMapping, MixerStatus};
-use crate::models::node_graph::{
-    BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
-};
+use crate::models::node_graph::BeatGrid;
 use crate::models::patch::ArtNetNode;
 use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput};
-use crate::models::patterns::{AnnotationPreview, PatternSummary};
+use crate::models::patterns::AnnotationPreview;
 use crate::models::perform::PerformTrackMatch;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
@@ -132,7 +130,6 @@ use crate::models::waveforms::TrackWaveform;
 
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::render_engine::PerformDeckInput;
-use crate::services::graph_documents::{GraphDocument, GraphEditResult};
 use crate::services::group_derivation::FixtureRole;
 use crate::settings::AppSettings;
 pub use handlers::scores::prepare_score_clip_preview;
@@ -142,50 +139,8 @@ use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use prodjlink::DiscoveredDevice;
 
 commands! {
-    node_graph::get_node_types() -> Vec<NodeTypeDef>;
-    node_graph::run_graph(
-        graph: Graph,
-        context: GraphContext,
-        include_mel_specs: Option<bool>,
-        agent_thread_id: Option<String>,
-        agent_execution_id: Option<String>,
-        drive_live_preview: Option<bool>,
-    ) -> RunResult;
-    node_graph::preview_pattern(
-        pattern_id: String,
-        track_id: String,
-        venue_id: String,
-        start_time: f32,
-        end_time: f32,
-        beat_grid: Option<BeatGrid>,
-        fps: f32,
-    ) -> Vec<UniverseState>;
-
     composable_patterns::get_pattern_node_library() -> Value;
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
-
-    patterns::list_patterns() -> Vec<PatternSummary>;
-    patterns::create_pattern(
-        request_id: String,
-        name: String,
-        description: Option<String>,
-    ) -> PatternSummary;
-    patterns::get_pattern_graph_document(
-        id: String,
-        implementation_id: Option<String>,
-    ) -> GraphDocument;
-    patterns::get_pattern_score_template(id: String, venue_id: String) -> luma_patterns::Score;
-    patterns::get_pattern_args(
-        id: String,
-        venue_id: Option<String>,
-        implementation_id: Option<String>,
-    ) -> Vec<PatternArgDef>;
-    patterns::save_pattern_graph_document(
-        id: String,
-        implementation_id: String,
-        base_revision: String,
-        graph: Graph,
-    ) -> GraphEditResult;
 
     agent_threads::agent_thread_list(
         agent_kind: Option<String>,
@@ -413,10 +368,6 @@ commands! {
     venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
     venues::set_venue_haze(venue_id: String, haze: VenueHaze) -> ();
 
-    midi::midi_list_cues(venue_id: String) -> Vec<Cue>;
-    midi::midi_create_cue(input: CreateCueInput) -> Cue;
-    midi::midi_update_cue(input: UpdateCueInput) -> Cue;
-    midi::midi_delete_cue(id: String) -> ();
     midi::midi_list_modifiers(venue_id: String) -> Vec<ModifierDef>;
     midi::midi_create_modifier(input: CreateModifierInput) -> ModifierDef;
     midi::midi_delete_modifier(id: String) -> ();
@@ -425,13 +376,6 @@ commands! {
     midi::midi_update_binding(input: UpdateBindingInput) -> MidiBinding;
     midi::midi_delete_binding(id: String) -> ();
     midi::midi_reload_mapping(venue_id: String) -> ();
-    midi::midi_compile_cues_for_deck(
-        deck_id: u8,
-        track_id: String,
-        venue_id: String,
-    ) -> ();
-    midi::midi_fire_cue(cue_id: String, target_override: Option<Target>) -> ();
-    midi::midi_release_cue(cue_id: String) -> ();
 
     controller::controller_connect(port_name: String, venue_id: String) -> ();
     controller::controller_disconnect(venue_id: String) -> ();
@@ -482,14 +426,6 @@ commands! {
     perform::render_composite_deck(
         deck_id: u8,
         track_id: String,
-        venue_id: String,
-    ) -> ();
-    perform::render_composite_deck_unmatched(
-        deck_id: u8,
-        bpm: f64,
-        beat_number: u8,
-        position_secs: f64,
-        duration_secs: f64,
         venue_id: String,
     ) -> ();
 
@@ -628,7 +564,6 @@ mod tests {
 
     #[test]
     fn background_import_commands_are_dispatched() {
-        assert!(dispatched().contains(&"get_node_types"));
         for command in [
             "import_tracks",
             "reprocess_track",

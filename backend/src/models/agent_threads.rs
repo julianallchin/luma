@@ -15,9 +15,9 @@ pub struct AgentThread {
     /// other synced table's owner column; the wire name stays `ownerUserId`.
     #[sqlx(rename = "uid")]
     pub owner_user_id: Option<String>,
-    /// 'track_copilot' | 'pattern_graph'
+    /// 'track_copilot' | 'venue_rig'
     pub agent_kind: String,
-    /// 'track' | 'pattern' | null
+    /// 'track' | 'venue' | null
     pub subject_kind: Option<String>,
     pub subject_id: Option<String>,
     /// The exact graph implementation this conversation may author. Required
@@ -212,33 +212,24 @@ pub enum AgentThreadAppendOutcome {
 /// resolution share one invariant instead of accepting a partially routed
 /// thread and hoping later initialization can compensate it.
 ///
-/// Two of the three routes revise an *authored document*; a venue thread
+/// A track thread revises an *authored document*, the score; a venue thread
 /// revises the room's relational rig, which has no revision history of its own.
 /// Which of the two a thread is, is the enum's answer rather than each
 /// caller's guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThreadRoute<'a> {
     Unbound,
-    Authored(AuthoredThreadRoute<'a>),
-    /// The room itself: fixtures, stage pieces and their poses. No track, no
-    /// score, no authored document — so no assistant row of such a thread
-    /// carries a prepared authored turn.
-    Venue {
-        venue_id: &'a str,
-    },
-}
-
-/// The two authored-document routes an agent thread may own.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AuthoredThreadRoute<'a> {
+    /// One track's score in one venue.
     Track {
         track_id: &'a str,
         venue_id: &'a str,
         score_id: &'a str,
     },
-    Pattern {
-        pattern_id: &'a str,
-        implementation_id: &'a str,
+    /// The room itself: fixtures, stage pieces and their poses. No track, no
+    /// score, no authored document — so no assistant row of such a thread
+    /// carries a prepared authored turn.
+    Venue {
+        venue_id: &'a str,
     },
 }
 
@@ -292,27 +283,11 @@ fn route<'a>(
             Some(venue_id),
             Some(score_id),
         ) if !track_id.is_empty() && !venue_id.is_empty() && !score_id.is_empty() => {
-            Ok(ThreadRoute::Authored(AuthoredThreadRoute::Track {
+            Ok(ThreadRoute::Track {
                 track_id,
                 venue_id,
                 score_id,
-            }))
-        }
-        (
-            "pattern_graph",
-            Some("pattern"),
-            Some(pattern_id),
-            Some(implementation_id),
-            venue_id,
-            None,
-        ) if !pattern_id.is_empty()
-            && !implementation_id.is_empty()
-            && venue_id.is_none_or(|value| !value.is_empty()) =>
-        {
-            Ok(ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
-                pattern_id,
-                implementation_id,
-            }))
+            })
         }
         ("venue_rig", Some("venue"), Some(venue_id), None, Some(subject_venue), None)
             if !venue_id.is_empty() && subject_venue == venue_id =>
@@ -322,10 +297,6 @@ fn route<'a>(
         ("unbound", None, None, None, None, None) => Ok(ThreadRoute::Unbound),
         ("track_copilot", ..) => Err(
             "track agent thread requires non-empty track, venue, and score IDs and no graph implementation"
-                .into(),
-        ),
-        ("pattern_graph", ..) => Err(
-            "pattern agent thread requires non-empty pattern and implementation IDs and no score ID"
                 .into(),
         ),
         ("venue_rig", ..) => Err(

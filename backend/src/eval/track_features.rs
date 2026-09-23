@@ -13,76 +13,6 @@ pub(crate) struct TrackFeatures {
     harmony: Option<Vec<(f64, f64, Option<u8>)>>,
 }
 impl TrackFeatures {
-    /// Adapt already resident host data to the same source used by score playback.
-    pub(crate) fn from_resident(
-        ctx: &super::ResidentContext,
-        clock: p::BeatTimeline,
-        requests: &[FeatureRequest],
-    ) -> Result<Arc<Self>, String> {
-        let raw_times = |values: &[f32]| {
-            p::EventTimes::new(values.iter().copied().map(f64::from).collect::<Vec<_>>())
-        };
-        let beat_times = |values: &[f32]| -> p::Result<p::EventTimes> {
-            p::EventTimes::new(
-                values
-                    .iter()
-                    .map(|v| clock.beat_at(f64::from(*v)))
-                    .collect::<p::Result<Vec<_>>>()?,
-            )
-        };
-        let (beats, downbeats, bpm) = ctx
-            .beat_grid
-            .as_ref()
-            .map(|grid| (grid.beats.as_slice(), grid.downbeats.as_slice(), grid.bpm))
-            .unwrap_or((&[], &[], 120.));
-        let timing = p::TrackTiming::new(
-            clock.clone(),
-            raw_times(beats).map_err(|e| e.to_string())?,
-            raw_times(downbeats).map_err(|e| e.to_string())?,
-            f64::from(bpm),
-        )
-        .map_err(|e| e.to_string())?;
-        let mut result = Self {
-            clock: clock.clone(),
-            timing: Arc::new(timing),
-            audio: AudioSources::resident(ctx),
-            onsets: BTreeMap::new(),
-            harmony: None,
-        };
-        for request in requests {
-            match request {
-                FeatureRequest::Spectrum { source, .. } | FeatureRequest::Band { source, .. } => {
-                    result.audio.prepare(source)?;
-                }
-                FeatureRequest::Onsets(drum) => {
-                    let values = ctx
-                        .drum_onsets
-                        .get(drum.name())
-                        .ok_or_else(|| format!("{} onsets were not prepared", drum.name()))?;
-                    result
-                        .onsets
-                        .insert(*drum, beat_times(values).map_err(|e| e.to_string())?);
-                }
-                FeatureRequest::Harmony => {
-                    result.harmony = Some(
-                        ctx.chord_sections
-                            .iter()
-                            .map(|(a, b, pitch)| {
-                                Ok((
-                                    clock.beat_at(f64::from(*a))?,
-                                    clock.beat_at(f64::from(*b))?,
-                                    *pitch,
-                                ))
-                            })
-                            .collect::<p::Result<Vec<_>>>()
-                            .map_err(|e| e.to_string())?,
-                    );
-                }
-                FeatureRequest::Timing => {}
-            }
-        }
-        Ok(Arc::new(result))
-    }
     pub(crate) fn inspection_sources(&self) -> AudioSources {
         self.audio.clone()
     }
@@ -95,26 +25,6 @@ pub(crate) struct AudioSources {
     processed: Vec<(p::AudioInput, super::ResidentAudio)>,
 }
 impl AudioSources {
-    pub(crate) fn resident(ctx: &super::ResidentContext) -> Self {
-        let mut raw = BTreeMap::new();
-        if let Some(audio) = &ctx.audio {
-            raw.insert(p::AudioSource::Mix, audio.clone());
-        }
-        for source in [
-            p::AudioSource::Bass,
-            p::AudioSource::Drums,
-            p::AudioSource::Vocals,
-            p::AudioSource::Other,
-        ] {
-            if let Some(audio) = ctx.stems.get(source.name()) {
-                raw.insert(source, audio.clone());
-            }
-        }
-        Self {
-            raw,
-            processed: vec![],
-        }
-    }
     pub(crate) fn prepare(&mut self, source: &p::AudioInput) -> Result<(), String> {
         source.validate().map_err(|e| e.to_string())?;
         let audio = self

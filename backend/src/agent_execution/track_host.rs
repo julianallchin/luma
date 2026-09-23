@@ -5,7 +5,6 @@
 //! state, every candidate goes through the transaction service, and previews
 //! use the production compositor. The worker protocol remains domain-free.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -105,16 +104,8 @@ impl TrackHost {
         start: f64,
         end: f64,
     ) -> Result<Value, HostCallError> {
-        let resolved = resolve_primitive_ids(
-            &self.pool,
-            &self.scope.venue_id,
-            &self.resource_root,
-            &[],
-            &[],
-            &HashMap::new(),
-            None,
-        )
-        .await;
+        let resolved =
+            resolve_primitive_ids(&self.pool, &self.scope.venue_id, &self.resource_root).await;
         let light_ids: Vec<String> = resolved.into_iter().map(|(id, _)| id).collect();
         if light_ids.is_empty() {
             return Err(HostCallError::new(

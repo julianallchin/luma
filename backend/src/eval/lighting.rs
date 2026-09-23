@@ -1,5 +1,5 @@
 //! Canonical graph preparation and fixture/diagnostic output adapters.
-use super::{Arena, OutputBinding, Plan, ResidentContext, ViewTap};
+use super::{Arena, OutputBinding, Plan, ViewTap};
 use crate::models::node_graph::Signal;
 use crate::models::universe::{PrimitiveState, UniverseState};
 use luma_patterns as p;
@@ -24,12 +24,12 @@ pub struct Inspection {
     pub values: BTreeMap<String, p::EvaluatedValue>,
     pub spectrograms: BTreeMap<String, Result<Arc<crate::audio::melspec::Spectrogram>, String>>,
 }
-pub(crate) fn plan(
+fn plan(
     prepared: p::PreparedGraph,
     clock: p::BeatTimeline,
     ids: Vec<String>,
     output: &str,
-    ctx: ResidentContext,
+    span: (f32, f32),
 ) -> Result<Plan, String> {
     let program = Program {
         prepared,
@@ -37,7 +37,7 @@ pub(crate) fn plan(
         ids: ids.clone(),
         output: output.into(),
     };
-    let initial = program.sample(&[ctx.span.0])?;
+    let initial = program.sample(&[span.0])?;
     let writes = initial
         .get(output)
         .and_then(p::EvaluatedValue::lighting)
@@ -78,7 +78,7 @@ pub(crate) fn plan(
             strobe: writes[3],
             speed: writes[4],
         },
-        ctx,
+        span,
         views,
     })
 }
@@ -99,18 +99,7 @@ pub(crate) fn compile_clip(
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
     let ids = cells.iter().map(|c| c.id.clone()).collect();
-    plan(
-        prepared,
-        clock,
-        ids,
-        output,
-        ResidentContext {
-            seed: clip.seed,
-            span,
-            positions: cells.iter().map(|c| c.world.map(|v| v as f32)).collect(),
-            ..Default::default()
-        },
-    )
+    plan(prepared, clock, ids, output, span)
 }
 fn channel_labels(channels: p::Channels, width: usize) -> Vec<String> {
     let names: &[&str] = match channels {
@@ -352,7 +341,6 @@ impl Program {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::node_graph::BeatGrid;
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
         let score: p::Score = serde_json::from_value(serde_json::json!({
@@ -395,7 +383,7 @@ mod tests {
         let clock = p::BeatTimeline::new(vec![0., 0.5, 1., 1.5, 2.], 0.).unwrap();
         let plan = compile_clip(clip, clock, cells, program, "lighting").unwrap();
         let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
-            span: plan.ctx.span,
+            span: plan.span,
             plan: Arc::new(plan),
             z_index: 0,
             blend_mode: p::BlendMode::Replace,
@@ -472,7 +460,7 @@ mod tests {
             .prepare_clip(&base, "flash", &BTreeMap::new(), &cells)
             .unwrap();
         let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
-            span: plan.ctx.span,
+            span: plan.span,
             plan: Arc::new(plan),
             z_index: 0,
             blend_mode: clip.blend_mode,
@@ -533,153 +521,5 @@ mod tests {
         };
         assert_eq!(resolve(p::MappingSource::V), vec![0., 1., 0.]);
         assert_eq!(resolve(p::MappingSource::Z), vec![0., 0., 1.]);
-    }
-
-    #[test]
-    fn native_pattern_roundtrip_and_per_head_playback() {
-        let mut graph = crate::node_graph::lighting::pattern("dissolve_flash").unwrap();
-        graph
-            .args
-            .iter_mut()
-            .find(|a| a.id == "travel")
-            .unwrap()
-            .default_value = serde_json::json!(4.);
-        graph
-            .args
-            .iter_mut()
-            .find(|a| a.id == "repeat")
-            .unwrap()
-            .default_value = serde_json::json!(8.);
-        crate::services::graph_documents::canonicalize_graph(&graph).unwrap();
-        let semantic = crate::services::graph_documents::semantic_graph_json(&graph).unwrap();
-        let layout = crate::services::graph_documents::graph_layout_json(&graph).unwrap();
-        let graph = crate::services::graph_documents::graph_from_files(&semantic, &layout).unwrap();
-        let args = graph
-            .args
-            .iter()
-            .map(|a| (a.id.clone(), a.default_value.clone()))
-            .collect();
-        let ids: Vec<_> = (0..24).map(|i| format!("pixel-bar:{i}")).collect();
-        let ctx = ResidentContext {
-            positions: (0..24).map(|i| [0., 0., i as f32]).collect(),
-            beat_grid: Some(BeatGrid {
-                beats: (0..20).map(|i| i as f32 / 2.).collect(),
-                downbeats: vec![0., 2., 4.],
-                bpm: 120.,
-                downbeat_offset: 0.,
-                beats_per_bar: 4,
-            }),
-            span: (0., 4.),
-            ..Default::default()
-        };
-        let plan = crate::eval::compile::compile_pattern(&graph, &args, ctx, ids.clone()).unwrap();
-        let frames = crate::eval::eval(
-            &plan,
-            &[0., 1., 1.9, 2.5],
-            &mut crate::eval::Arena::default(),
-        );
-        let lit = |i: usize| {
-            ids.iter()
-                .filter(|id| {
-                    frames[i]
-                        .primitives
-                        .get(*id)
-                        .is_some_and(|v| v.dimmer > 0.01)
-                })
-                .count()
-        };
-        assert_eq!(lit(0), 24);
-        assert!(lit(1) > 0 && lit(1) < 24);
-        assert!(lit(2) < lit(1));
-        assert_eq!(lit(3), 0);
-    }
-    #[test]
-    fn attribute_only_graphs_preserve_lower_color_in_the_normal_compositor() {
-        let ids: Vec<_> = (0..8).map(|n| format!("bar:{n}")).collect();
-        for (effect, expected) in [
-            ("write_position", [false, false, true, false, false]),
-            ("write_dimmer", [true, true, false, false, false]),
-            ("write_strobe", [false, false, false, true, false]),
-            ("write_speed", [false, false, false, false, true]),
-        ] {
-            let graph = crate::node_graph::lighting::pattern(effect).unwrap();
-            let mut args: HashMap<_, _> = graph
-                .args
-                .iter()
-                .map(|arg| (arg.id.clone(), arg.default_value.clone()))
-                .collect();
-            args.insert("value".into(), serde_json::json!(0.0));
-            let context = ResidentContext {
-                positions: vec![[0.0; 3]; ids.len()],
-                beat_grid: Some(BeatGrid {
-                    beats: vec![0., 0.5, 1., 1.5, 2.],
-                    downbeats: vec![0., 2.],
-                    bpm: 120.,
-                    downbeat_offset: 0.,
-                    beats_per_bar: 4,
-                }),
-                span: (0., 2.),
-                ..Default::default()
-            };
-            let plan =
-                crate::eval::compile::compile_pattern(&graph, &args, context, ids.clone()).unwrap();
-            assert_eq!(
-                [
-                    plan.outputs.color,
-                    plan.outputs.dimmer,
-                    plan.outputs.position,
-                    plan.outputs.strobe,
-                    plan.outputs.speed
-                ],
-                expected
-            );
-            let top =
-                crate::eval::eval(&plan, &[0.5], &mut crate::eval::Arena::default()).remove(0);
-            let mut base = crate::models::universe::UniverseState {
-                primitives: ids
-                    .iter()
-                    .map(|id| {
-                        (
-                            id.clone(),
-                            crate::models::universe::PrimitiveState {
-                                color: [0.2, 0.4, 1.0],
-                                dimmer: 0.7,
-                                position: [45., 30.],
-                                strobe: 0.5,
-                                speed: 1.,
-                            },
-                        )
-                    })
-                    .collect(),
-            };
-            crate::eval::composite::composite_frame(
-                &mut base,
-                &top,
-                &plan.outputs,
-                crate::eval::BlendMode::Replace,
-                1.0,
-                None,
-            );
-            for value in base.primitives.values() {
-                assert_eq!(value.color, [0.2, 0.4, 1.0]);
-                assert_eq!(
-                    value.dimmer,
-                    if effect == "write_dimmer" { 0.0 } else { 0.7 }
-                );
-                assert_eq!(
-                    value.position,
-                    if effect == "write_position" {
-                        [0.; 2]
-                    } else {
-                        [45., 30.]
-                    }
-                );
-                assert_eq!(
-                    value.strobe,
-                    if effect == "write_strobe" { 0.0 } else { 0.5 }
-                );
-                assert_eq!(value.speed, if effect == "write_speed" { 0.0 } else { 1.0 });
-            }
-        }
     }
 }

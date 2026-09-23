@@ -307,29 +307,6 @@ def test_pcm_stereo_shape_and_sample_rate():
 
 
 @test
-def test_graph_view_axes():
-    client = shared()
-    assert (
-        ok(client.execute("luma.graph.run.views['view_signal_1'].primitive_ids"))["repr"]
-        == "['p0', 'p1', 'p2']"
-    )
-    assert (
-        ok(client.execute("luma.graph.run.views.view_signal_1.channels"))["repr"]
-        == "['dimmer', 'strobe']"
-    )
-    assert (
-        ok(client.execute(
-            "float(luma.graph.run.views['view_signal_1'].times_s[0])"
-        ))["repr"]
-        == "4.0"
-    )
-    assert (
-        ok(client.execute("sorted(luma.graph.run.views.keys())"))["repr"]
-        == "['view_signal_1']"
-    )
-
-
-@test
 def test_arrays_are_read_only():
     client = shared()
     assert (

@@ -113,53 +113,10 @@ pub(crate) async fn load_beat_grid(
         .map_err(|e| format!("Failed to load beat grid: {}", e))
 }
 
-/// Get track duration in seconds.
-pub(crate) async fn get_track_duration(
-    pool: &sqlx::SqlitePool,
-    track_id: &str,
-) -> Result<Option<f32>, String> {
-    crate::database::local::tracks::get_track_duration(pool, track_id)
-        .await
-        .map(|opt| opt.map(|v| v as f32))
-}
-
-/// Fetch pattern graph JSON.
-pub(crate) async fn fetch_pattern_graph(
-    pool: &sqlx::SqlitePool,
-    pattern_id: &str,
-    venue_id: Option<&str>,
-) -> Result<String, String> {
-    let document = resolve_pattern_graph_document(pool, pattern_id, venue_id).await?;
-    serde_json::to_string(&document.graph)
-        .map_err(|error| format!("Failed to serialize validated pattern graph: {error}"))
-}
-
-async fn resolve_pattern_graph_document(
-    pool: &sqlx::SqlitePool,
-    pattern_id: &str,
-    venue_id: Option<&str>,
-) -> Result<crate::services::graph_documents::GraphDocument, String> {
-    let implementation_id = crate::services::graph_documents::resolve_graph_implementation(
-        pool, pattern_id, venue_id, None,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    crate::services::graph_documents::load_graph_document_unscoped(
-        pool,
-        pattern_id,
-        &implementation_id,
-    )
-    .await
-    .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{fetch_pattern_graph, score_scope};
+    use super::score_scope;
     use crate::database::local::venue_access::AuthorizedVenue;
-    use crate::models::node_graph::{Graph, NodeInstance, PatternArgDef, PatternArgType};
-    use serde_json::json;
-    use std::collections::HashMap;
 
     /// Profiling instrument, not a gate: samples a real installed score across a
     /// time window and prints per-frame eval cost, so a "it lags right *here*"
@@ -311,92 +268,5 @@ mod tests {
             .unwrap();
         let unauthorized = score_scope(&pool, "score").await.err().unwrap();
         assert_eq!(unauthorized, "Venue resource not found");
-    }
-
-    #[tokio::test]
-    async fn runtime_resolves_the_venue_implementation_before_loading_graph() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE patterns (id TEXT PRIMARY KEY)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE implementations (
-                id TEXT PRIMARY KEY,
-                pattern_id TEXT NOT NULL,
-                name TEXT,
-                graph_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "CREATE TABLE venue_implementation_overrides (
-                venue_id TEXT NOT NULL,
-                pattern_id TEXT NOT NULL,
-                implementation_id TEXT NOT NULL,
-                PRIMARY KEY (venue_id, pattern_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO patterns (id) VALUES ('pattern')")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let default = Graph {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            args: Vec::new(),
-        };
-        let venue = Graph {
-            nodes: vec![NodeInstance {
-                id: "pattern_args".into(),
-                type_id: "pattern_args".into(),
-                params: HashMap::new(),
-                position_x: None,
-                position_y: None,
-            }],
-            edges: Vec::new(),
-            args: vec![PatternArgDef {
-                id: "gain".into(),
-                name: "gain".into(),
-                arg_type: PatternArgType::Scalar,
-                default_value: json!(0.5),
-            }],
-        };
-        sqlx::query(
-            "INSERT INTO implementations (id, pattern_id, name, graph_json)
-             VALUES ('default', 'pattern', NULL, ?), ('venue', 'pattern', 'venue', ?)",
-        )
-        .bind(serde_json::to_string(&default).unwrap())
-        .bind(serde_json::to_string(&venue).unwrap())
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO venue_implementation_overrides
-             (venue_id, pattern_id, implementation_id)
-             VALUES ('club', 'pattern', 'venue')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let default_loaded: Graph =
-            serde_json::from_str(&fetch_pattern_graph(&pool, "pattern", None).await.unwrap())
-                .unwrap();
-        let venue_loaded: Graph = serde_json::from_str(
-            &fetch_pattern_graph(&pool, "pattern", Some("club"))
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(default_loaded.args.is_empty());
-        assert_eq!(venue_loaded.args[0].id, "gain");
     }
 }

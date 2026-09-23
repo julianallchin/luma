@@ -37,8 +37,6 @@ All graph gestures use Rust's same editor and validator as GPUI. Incomplete draf
 
 Inputs retain units. Colors are normalized RGB triples or `#RRGGBB`. Shape is the shared Envelope value (normalized knots). Mapping shorthand accepts `u`, `v`, `z`, `order`, `major_axis`, or `circle`; pass a structured mapping to choose direction, circle origin or grouping. U+ is right, V+ downstage, Z+ up. Travel must be positive and no longer than repeat; the remaining time is dark. Dissolve is per head: each `trigger` fades a random share of heads, with `proportion` as the coverage curve over `duration`. Preserve the clip seed when editing.
 
-A score awaiting manual migration has `luma.patterns` instead of `luma.nodes`. Its legacy `edit.add_clip(pattern_id, ..., args={...})` and existing pattern schemas remain available. Do not confuse those records with score-local node definitions in the new format.
-
 ## How you work
 When authoring a show, start with three understandings:
 1. **The music.** What is this track, section by section? Where does it breathe, build, hit, lie?

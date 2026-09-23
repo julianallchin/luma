@@ -2129,7 +2129,7 @@ mod tests {
             get_current_user_id(&state_pool).await.unwrap(),
             Some("alice".to_string())
         );
-        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('p', 'alice', 'p')")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'v')")
             .execute(&app_pool)
             .await
             .unwrap();
