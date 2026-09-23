@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::float;
-use crate::node::{Instrument, Role};
+use crate::node::{AgentNode, Instrument, Role};
 use crate::text_input::TextInput;
 
 /// Parse a draft against its range. `None` is "revert": empty, unparseable,
@@ -79,7 +79,7 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     min: T,
     max: T,
     width: f32,
-    _blur: Subscription,
+    _blur: [Subscription; 2],
 }
 
 impl<T: DraftValue> EventEmitter<NumberEvent<T>> for DraftedNumber<T> {}
@@ -104,9 +104,20 @@ impl<T: DraftValue> DraftedNumber<T> {
         // dropped editor stops listening with it.
         let this = cx.entity().downgrade();
         let handle = input.focus_handle(cx);
-        let _blur = window.on_focus_out(&handle, cx, move |_, window, cx| {
+        let focus_out = window.on_focus_out(&handle, cx, move |_, window, cx| {
             this.update(cx, |editor, cx| editor.commit(window, cx)).ok();
         });
+        // A press elsewhere commits at once; focus-out may come a frame later.
+        let pressed_out = cx.subscribe_in(
+            &input,
+            window,
+            |editor, _, event: &crate::text_input::Event, window, cx| {
+                if *event == crate::text_input::Event::Blurred {
+                    editor.commit(window, cx);
+                }
+            },
+        );
+        let _blur = [focus_out, pressed_out];
         Self {
             id: id.into(),
             input,
@@ -173,14 +184,16 @@ impl<T: DraftValue> Focusable for DraftedNumber<T> {
 }
 
 impl<T: DraftValue> Render for DraftedNumber<T> {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let reading = format!("{} = {}", self.id, self.input.read(cx).text());
+        let focused = self.input.focus_handle(cx).is_focused(window);
         float::field()
             .on_key_down(cx.listener(Self::on_key_down))
             .w(px(self.width))
             .font_family(crate::fonts::MONO)
             .child(div().w_full().child(self.input.clone()))
             .agent_node(Role::Input, reading)
+            .agent_focused(focused)
     }
 }
 

@@ -371,6 +371,9 @@ pub enum Event {
     CursorMoved,
     /// The field scrolled inside itself.
     ViewportChanged,
+    /// A press elsewhere took focus from a one-line field. Sent before the
+    /// focus moves, so a host can commit on it without waiting for a frame.
+    Blurred,
 }
 
 /// A restorable point in the field's history: text plus where the caret and
@@ -1568,6 +1571,17 @@ impl Render for TextInput {
         div()
             .key_context(self.mode.key_context())
             .track_focus(&self.focus_handle)
+            // A one-line field lets go of focus on a press anywhere else, as a
+            // web input does, so its host commits on blur. The composer keeps
+            // focus while the reader works in the transcript.
+            .when(self.mode == Mode::Search, |el| {
+                el.on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                    if this.focus_handle.is_focused(window) {
+                        cx.emit(Event::Blurred);
+                        window.blur();
+                    }
+                }))
+            })
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))

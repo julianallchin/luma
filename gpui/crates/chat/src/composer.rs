@@ -312,6 +312,8 @@ impl Composer {
             | text_input::Event::ViewportChanged => cx.notify(),
             text_input::Event::Submitted => chat.send(cx),
             text_input::Event::Cancelled => chat.escape(cx),
+            // The composer keeps its focus on a press elsewhere.
+            text_input::Event::Blurred => {}
         })
         .detach();
         Self {

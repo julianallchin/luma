@@ -357,15 +357,18 @@ impl GroupExpressionEditor {
                 .text_size(px(12.))
                 .text_color(ladder::foreground_90())
                 .child(option.clone())
-                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                     // Mouse-down, not click: a click waits for the
                     // mouse-up, and by then the field has blurred and
-                    // the menu is gone.
+                    // the menu is gone. The press blurred the field on its
+                    // way in; typing goes on, so focus goes back.
                     cx.stop_propagation();
                     this.update(cx, |editor, cx| {
                         editor.apply_suggestion(&picked, cx);
                         cx.notify();
                     });
+                    let field = this.read(cx).input.focus_handle(cx);
+                    window.focus(&field, cx);
                 })
                 .agent_node(Role::Button, option.to_string());
                 menu.child(row)
