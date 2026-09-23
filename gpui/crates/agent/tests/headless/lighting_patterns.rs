@@ -5,7 +5,7 @@ use std::time::Duration;
 #[test]
 fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
     let mut harness = Fixture::new("mapping-vector-mirror", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
@@ -23,9 +23,6 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
             }
         };
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(node("row","Lane 0"),{button:"right"});
-        app.type(node("input","Search patterns…"),"chase");
-        app.frames(2); app.key("enter");
         app.click(node("card","Beat chase"));
         app.click(node("select","Up (Z+)"));
         app.click(node("button","Custom vector"));
@@ -37,6 +34,7 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
             app.frames(6,{waitMs:80});
         };
         retype("Mapping: Z","2");
+        reveal(node("select","Off"));
         app.click(node("select","Off"));
         app.click(node("button","Left–right"));
         retype("Mapping: Mirror offset","0.25");
@@ -97,16 +95,12 @@ fn edit_custom_mapping_and_mirror_without_losing_clip_values() {
 #[test]
 fn edit_gradient_stops_in_a_canonical_graph() {
     let mut harness = Fixture::new("lighting-gradient-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("gradient"))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("search",s=>s.find({role:"input",label:"Search patterns…"}));
-        const field=app.snapshot().find({role:"input",label:"Search patterns…"});
-        app.type(field,"color fade"); app.frames(2); app.key("enter");
         until("Color fade clip",s=>s.find({role:"card",label:"Color fade"}));
         const clip=app.snapshot().find({role:"card",label:"Color fade"});
         app.click(clip);
@@ -153,84 +147,14 @@ fn edit_gradient_stops_in_a_canonical_graph() {
 }
 
 #[test]
-fn insert_a_dissolve_pattern_in_the_native_score_editor() {
-    let mut harness = Fixture::new("lighting-pattern-insert", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
-        .with_rig()
-        .open(Mode::Headless);
-    let result=harness.exec(&support::script(r#"
-        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
-        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
-        const field=app.snapshot().find({role:"input",label:"Search patterns…"});
-        app.type(field,"dissolve"); app.frames(2);
-        const shown=app.snapshot().findAll({role:"row"}).map(n=>n.label);
-        app.key("enter");
-        until("Beat dissolve clip",s=>s.find({role:"card",label:"Beat dissolve"}));
-        app.click(app.snapshot().find({role:"card",label:"Beat dissolve"}));
-        const inputs=until("typed clip inputs",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Duration"))?s:undefined);
-        app.click(app.snapshot().find({role:"button",label:"Make independent"}));
-        app.frames(24,{waitMs:80});
-        ({shown,fields:inputs.findAll({role:"input"}).map(n=>n.label),errors:app.snapshot().findAll({role:"text"}).map(n=>n.label).filter(n=>n.includes("failed")||n.includes("invalid"))})
-    "#),Duration::from_secs(60));
-    assert_eq!(result.error, None, "{}", result.stdout);
-    assert!(result.result["shown"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|v| v == "Beat dissolve"));
-    assert!(
-        result.result["errors"].as_array().unwrap().is_empty(),
-        "{}",
-        result.result
-    );
-    let root = support::config_dir("lighting-pattern-insert");
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let score = support::stored_score_json(&root).await;
-            assert_eq!(score["clips"].as_object().unwrap().len(), 1);
-            assert_eq!(
-                score["definitions"].as_object().unwrap().len(),
-                2,
-                "make independent clones the clip graph"
-            );
-            let pool = sqlx::SqlitePool::connect(&format!(
-                "sqlite:{}",
-                root.join("luma.db").display()
-            ))
-            .await
-            .unwrap();
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            pool.close().await;
-            assert_eq!(
-                count, 0,
-                "native insertion never creates a separate pattern record"
-            );
-        });
-}
-
-#[test]
 fn edit_a_chase_envelope_per_clip() {
     let mut harness = Fixture::new("lighting-envelope-edit", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
-        const field=app.snapshot().find({role:"input",label:"Search patterns…"});
-        app.type(field,"chase"); app.frames(2);
-        const shown=app.snapshot().findAll({role:"row"}).map(n=>n.label);
-        app.key("enter");
         until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
         app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
         const inputs=until("typed clip inputs",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Travel time"))?s:undefined);
@@ -247,14 +171,9 @@ fn edit_a_chase_envelope_per_clip() {
         app.frames(24,{waitMs:80});
         app.click(app.snapshot().find({role:"card",label:"Beat chase"}),{count:2});
         until("rendered graph output",s=>s.find({role:"card",label:"Graph workspace"}));
-        ({shown,fields:inputs.findAll({role:"input"}).map(n=>n.label),errors:app.snapshot().findAll({role:"text"}).map(n=>n.label).filter(n=>n.includes("failed")||n.includes("invalid"))})
+        ({fields:inputs.findAll({role:"input"}).map(n=>n.label),errors:app.snapshot().findAll({role:"text"}).map(n=>n.label).filter(n=>n.includes("failed")||n.includes("invalid"))})
     "#),Duration::from_secs(60));
     assert_eq!(result.error, None, "{}", result.stdout);
-    assert!(result.result["shown"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|v| v == "Beat chase"));
     assert!(
         result.result["errors"].as_array().unwrap().is_empty(),
         "{}",
@@ -294,16 +213,12 @@ fn edit_a_chase_envelope_per_clip() {
 #[test]
 fn pressing_the_envelope_keeps_the_clip_selected() {
     let mut harness = Fixture::new("lighting-envelope-press", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .open(Mode::Headless);
     let result=harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); 
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
-        app.type(app.snapshot().find({role:"input",label:"Search patterns…"}),"chase"); app.frames(2);
-        app.key("enter");
         until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
         app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
         until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
@@ -322,7 +237,11 @@ fn pressing_the_envelope_keeps_the_clip_selected() {
     let steps = result.result["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 4, "{}", result.result);
     for step in steps {
-        assert_eq!(step[1], true, "the sheet left after `{}`: {}", step[0], result.result);
+        assert_eq!(
+            step[1], true,
+            "the sheet left after `{}`: {}",
+            step[0], result.result
+        );
     }
 }
 
@@ -331,16 +250,14 @@ fn pressing_the_envelope_keeps_the_clip_selected() {
 #[test]
 fn an_arg_edit_never_blanks_the_clip_preview() {
     let mut harness = Fixture::new("lighting-preview-steady", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .open(Mode::Headless);
-    let result=harness.exec(&support::script(r#"
+    let result = harness.exec(
+        &support::script(
+            r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
-        app.type(app.snapshot().find({role:"input",label:"Search patterns…"}),"chase"); app.frames(2);
-        app.key("enter");
         until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
         app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
         until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
@@ -356,10 +273,23 @@ fn an_arg_edit_never_blanks_the_clip_preview() {
             }
         }
         ({gaps,selection})
-    "#),Duration::from_secs(90));
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
     assert_eq!(result.error, None, "{}", result.stdout);
-    assert_eq!(result.result["gaps"], serde_json::json!([]), "the preview blanked: {}", result.result);
-    assert_eq!(result.result["selection"], serde_json::json!([]), "the clip was deselected: {}", result.result);
+    assert_eq!(
+        result.result["gaps"],
+        serde_json::json!([]),
+        "the preview blanked: {}",
+        result.result
+    );
+    assert_eq!(
+        result.result["selection"],
+        serde_json::json!([]),
+        "the clip was deselected: {}",
+        result.result
+    );
 }
 
 #[test]
@@ -369,16 +299,12 @@ fn inspect_builtin_chase_and_customize_its_composition() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-nested-graphs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .open(mode);
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
-        until("search",s=>s.find({role:"input",label:"Search patterns…"}));
-        const field=app.snapshot().find({role:"input",label:"Search patterns…"});
-        app.type(field,"chase"); app.frames(2); app.key("enter");
         until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
         const clip=app.snapshot().find({role:"card",label:"Beat chase"});
         app.click(clip);
@@ -450,16 +376,14 @@ fn compose_and_wire_outputs_in_the_native_graph_editor() {
     #[cfg(not(feature = "pixel"))]
     let mode = Mode::Headless;
     let mut harness = Fixture::new("lighting-compose-outputs", 20, vec![])
-        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_graph_score(support::recipe_score("beat_chase"))
         .with_rig()
         .window(1600., 1000.)
         .open(mode);
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
-        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
-        app.type(node("input","Search patterns…"),"chase"); app.frames(2); app.key("enter");
         app.click(node("card","Beat chase"));
         app.click(node("card","Beat chase"),{count:2});
         app.drag(node("card","Chase"),{dx:28,dy:18},{steps:5});

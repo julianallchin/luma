@@ -489,13 +489,15 @@ const SCRIPT: &str = r#"
     app.frames(20);
     settled();
     reopen();
-    const inserted = { total: total(), washes: spans("Wash") };
+    // The Wash preset places a clip of its form, "Constant color".
+    const inserted = { total: total(), washes: spans("Wash"), placed: spans("Constant color") };
 
     // The menu also has a keyboard: ArrowDown moves the active row and Enter
     // commits *that* one, so what lands is the second pattern and not the
     // first. A menu a key could open and only a pointer could answer is a menu
     // that wedges the screen.
-    const beforeKeyed = { total: total(), chosen: count(menu[1]) };
+    // The second preset is Color fade, a clip of "Color over time".
+    const beforeKeyed = { total: total(), chosen: count("Color over time") };
     fitLanes();
     app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
     app.frames(2);
@@ -505,7 +507,7 @@ const SCRIPT: &str = r#"
     app.frames(20);
     settled();
     reopen();
-    const keyed = { total: total(), chosen: count(menu[1]) };
+    const keyed = { total: total(), chosen: count("Color over time") };
 
     // And Escape puts it away without leaving the screen, which is the other
     // half of not being wedged.
@@ -1018,15 +1020,19 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         "the copy should stay at {from}s and the original move 10s back: {stayed}s and {moved}s"
     );
 
-    // 17. A right-click offers the library's patterns and commits one onto the
-    //     lane it pointed at — row 0, which opens a layer above everything.
+    // 17. A right-click offers the shipped presets, not the library's
+    //     patterns, and commits one onto the lane it pointed at — row 0,
+    //     which opens a layer above everything.
     let menu = labels(&out, "menu");
-    for (_, name, ..) in CLIPS {
-        assert!(
-            menu.contains(&name.to_string()),
-            "the insertion menu did not offer {name}: {menu:?}"
-        );
-    }
+    assert_eq!(
+        menu.get(..2),
+        Some(&["Wash".to_string(), "Color fade".to_string()][..]),
+        "the insertion menu should list the presets in order: {menu:?}"
+    );
+    assert!(
+        !menu.contains(&"Haze".to_string()),
+        "the insertion menu offered a library pattern: {menu:?}"
+    );
     let inserted = &out["inserted"];
     assert_eq!(
         inserted["total"].as_u64(),
@@ -1034,12 +1040,13 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         "the insertion menu did not add a clip: {inserted:#}"
     );
     let washes = inserted["washes"].as_array().cloned().unwrap_or_default();
+    let placed = inserted["placed"].as_array().cloned().unwrap_or_default();
     assert_eq!(
-        washes.len(),
-        2,
-        "the clip the menu inserted is not the pattern that was chosen: {inserted:#}"
+        (washes.len(), placed.len()),
+        (1, 1),
+        "the clip the menu inserted is not the preset that was chosen: {inserted:#}"
     );
-    let lanes: Vec<f64> = washes.iter().map(|clip| number(clip, "y")).collect();
+    let lanes = [number(&washes[0], "y"), number(&placed[0], "y")];
     assert!(
         (lanes[0] - lanes[1]).abs() > 79.,
         "an insertion on row 0 should open a lane of its own above the rest: {inserted:#}"

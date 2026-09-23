@@ -74,6 +74,22 @@ fn same_document(ours: &p::Score, stored: &p::Score) -> bool {
         }
 }
 
+/// A shipped form's definition. `standard_library()` hands back a copy of all
+/// of it, so the forms are read from it once.
+pub(super) fn form_definition(id: &str) -> Option<&'static p::Definition> {
+    static FORMS: std::sync::OnceLock<BTreeMap<&'static str, p::Definition>> =
+        std::sync::OnceLock::new();
+    FORMS
+        .get_or_init(|| {
+            let library = p::standard_library();
+            p::FORMS
+                .iter()
+                .map(|form| (*form, library.definitions[*form].clone()))
+                .collect()
+        })
+        .get(id)
+}
+
 pub(super) fn wire_value(value: &p::Value) -> serde_json::Value {
     luma_lib::node_graph::lighting::wire_value(value)
 }
@@ -427,7 +443,8 @@ impl Luma {
                                             stored
                                                 .clips
                                                 .get(id)
-                                                .map(|c| serde_json::to_string(c).unwrap_or_default())
+                                                .map(|c| serde_json::to_string(c)
+                                                    .unwrap_or_default())
                                                 .unwrap_or_else(|| "missing".into())
                                         )
                                     })
@@ -497,11 +514,11 @@ impl Luma {
 }
 
 impl Editor {
-    pub(super) fn insert_graph(
+    /// Place a preset as a new clip at the menu's span and lane.
+    pub(super) fn insert_preset(
         &mut self,
         menu: InsertMenu,
-        choice: &InsertChoice,
-        template: Option<&p::Score>,
+        choice: InsertChoice,
     ) -> Result<(), String> {
         let clock = self
             .beats
@@ -521,43 +538,9 @@ impl Editor {
                 }
             }
         }
-        match choice {
-            InsertChoice::Node { effect, .. } => score
-                .insert_effect(&p::standard_library(), effect, &id, start, duration)
-                .map_err(|e| e.to_string())?,
-            InsertChoice::Graph { id: graph, .. } => {
-                score.clips.insert(
-                    id.clone(),
-                    p::Clip {
-                        graph: graph.clone(),
-                        start,
-                        duration,
-                        seed: 0,
-                        selection_seed: None,
-                        selection: p::Selection::all(),
-                        z_index: z,
-                        blend_mode: p::BlendMode::Replace,
-                        inputs: BTreeMap::new(),
-                    },
-                );
-            }
-            InsertChoice::Pattern(_) => {
-                score
-                    .import_clip(
-                        &p::standard_library(),
-                        template.ok_or("Pattern template has not loaded")?,
-                        "template",
-                        &id,
-                    )
-                    .map_err(|error| error.to_string())?;
-                let clip = score
-                    .clips
-                    .get_mut(&id)
-                    .ok_or("Imported pattern has no clip")?;
-                clip.start = start;
-                clip.duration = duration;
-            }
-        }
+        score
+            .clips
+            .insert(id.clone(), choice.0.clip(start, duration));
         let clip = score.clips.get_mut(&id).unwrap();
         clip.z_index = z;
         clip.seed = uuid::Uuid::new_v4().as_u64_pair().0;

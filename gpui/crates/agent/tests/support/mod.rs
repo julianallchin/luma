@@ -134,6 +134,25 @@ pub fn score(definitions: Value, clips: Value) -> Value {
     })
 }
 
+/// A score with one clip at beats 2–6 that owns a copy of a built-in recipe.
+/// This is a clip with a graph of its own, as scores made before clip forms
+/// hold; the insertion picker now places form clips only.
+#[must_use]
+pub fn recipe_score(effect: &str) -> Value {
+    let mut document: luma_patterns::Score =
+        serde_json::from_value(score(json!({}), json!({}))).expect("an empty score");
+    document
+        .insert_effect(
+            &luma_patterns::standard_library(),
+            effect,
+            "recipe-clip",
+            2.0,
+            4.0,
+        )
+        .expect("a built-in recipe");
+    serde_json::to_value(document).expect("a serializable score")
+}
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";

@@ -1731,35 +1731,6 @@ impl Library {
         )
     }
 
-    pub fn pattern_score_template(
-        &self,
-        pattern_id: &str,
-        venue_id: &str,
-    ) -> impl Future<Output = Result<luma_patterns::Score, LibraryError>> + use<> {
-        self.call(
-            "get_pattern_score_template",
-            json!({"id": pattern_id, "venueId": venue_id}),
-        )
-    }
-
-    /// Run a graph against a resolved context and hand back everything the
-    /// run produced — the per-view signals a plot draws, and optionally the
-    /// mel spectrograms (`include_mel_specs`, expensive, wanted only when a
-    /// spectrogram node is actually on screen).
-    ///
-    /// Takes the graph by value, not by id: a live preview runs what the
-    /// editor *holds*, which is routinely ahead of what the seam has saved.
-    pub(crate) fn preview_pattern_frames(
-        &self,
-        pattern: &str,
-        track: &str,
-        venue: &str,
-        start: f64,
-        end: f64,
-    ) -> impl Future<Output = Result<Vec<UniverseState>, LibraryError>> + use<> {
-        self.call("preview_pattern", json!({"patternId":pattern,"trackId":track,"venueId":venue,"startTime":start,"endTime":end,"beatGrid":null,"fps":15.}))
-    }
-
     pub(crate) fn preview_definition_frames(
         &self,
         request: luma_lib::models::composable_patterns::ComposablePreviewRequest,
@@ -1769,6 +1740,13 @@ impl Library {
         self.call("preview_composable_pattern", json!({"request":request}))
     }
 
+    /// Run a graph against a resolved context and hand back everything the
+    /// run produced — the per-view signals a plot draws, and optionally the
+    /// mel spectrograms (`include_mel_specs`, expensive, wanted only when a
+    /// spectrogram node is actually on screen).
+    ///
+    /// Takes the graph by value, not by id: a live preview runs what the
+    /// editor *holds*, which is routinely ahead of what the seam has saved.
     pub fn run_graph(
         &self,
         graph: &Graph,
