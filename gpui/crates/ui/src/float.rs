@@ -1067,6 +1067,30 @@ pub fn anchored_above(
     hang(id, Side::Above, trigger, dismiss, content, None)
 }
 
+/// [`anchored_below`] with a short, plain entrance: a ~110 ms ease-out fade
+/// and a 4 px slide from the trigger, no spring. For a popover a person
+/// opens and closes many times in a row, like a preset grid, where the menu
+/// spring reads as slow. It closes at once.
+pub fn anchored_below_quick(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    dismiss: Dismiss,
+    content: AnyElement,
+) -> AnyElement {
+    hang_with(id, Side::Below, trigger, dismiss, content, Entrance::Quick)
+}
+
+/// How a hung card arrives.
+enum Entrance {
+    /// The menu spring, or its exit at this progress.
+    Menu(Option<f32>),
+    /// [`QUICK_ENTRANCE_MS`], eased out, no exit.
+    Quick,
+}
+
+/// The quick entrance's length.
+const QUICK_ENTRANCE_MS: u64 = 110;
+
 /// Keep an upward-opening popover mounted while its exit finishes.
 pub fn anchored_above_closing(
     id: impl Into<SharedString>,
@@ -1119,6 +1143,17 @@ fn hang(
     content: AnyElement,
     closing: Option<f32>,
 ) -> AnyElement {
+    hang_with(id, side, trigger, dismiss, content, Entrance::Menu(closing))
+}
+
+fn hang_with(
+    id: impl Into<SharedString>,
+    side: Side,
+    trigger: f32,
+    dismiss: Dismiss,
+    content: AnyElement,
+    entrance: Entrance,
+) -> AnyElement {
     let id = id.into();
     let reserved = px(trigger + MENU_GAP);
     let gap = px(MENU_GAP);
@@ -1136,11 +1171,12 @@ fn hang(
     let card = card.child(dismiss.apply(div().occlude().child(frosted_card(content))));
     origin
         .child(
-            gpui::deferred(animate_popover(
-                id,
-                gpui::anchored().anchor(anchor).child(card),
-                closing,
-            ))
+            gpui::deferred(match entrance {
+                Entrance::Menu(closing) => {
+                    animate_popover(id, gpui::anchored().anchor(anchor).child(card), closing)
+                }
+                Entrance::Quick => animate_quick(id, gpui::anchored().anchor(anchor).child(card)),
+            })
             .priority(1),
         )
         .into_any_element()
@@ -1210,6 +1246,34 @@ fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f
                 1.0 - 0.7 * amount
             })
         })
+        .into_any_element()
+}
+
+/// The quick entrance: opacity 0 → 1 and a 4 px slide toward the trigger's
+/// edge, cubic ease-out, over [`QUICK_ENTRANCE_MS`].
+fn animate_quick(id: SharedString, anchored: gpui::Anchored) -> AnyElement {
+    let displacement = std::rc::Rc::new(std::cell::Cell::new(4.0));
+    let offset = displacement.clone();
+    let anchored = anchored.resolved_offset(move |anchor| {
+        let distance = px(offset.get());
+        match anchor {
+            gpui::Anchor::BottomLeft | gpui::Anchor::BottomRight | gpui::Anchor::BottomCenter => {
+                gpui::point(px(0.0), distance)
+            }
+            _ => gpui::point(px(0.0), -distance),
+        }
+    });
+    let span = std::time::Duration::from_millis(QUICK_ENTRANCE_MS);
+    div()
+        .child(anchored)
+        .with_animation(
+            SharedString::from(format!("{id}-quick")),
+            gpui::Animation::new(span).with_easing(|t| 1.0 - (1.0 - t).powi(3)),
+            move |element, progress| {
+                displacement.set(4.0 * (1.0 - progress));
+                element.opacity(progress)
+            },
+        )
         .into_any_element()
 }
 
