@@ -320,8 +320,8 @@ fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
     }
     assert_eq!(rows, [5, 4], "{out}");
     assert!(
-        out["chip"]["width"].as_f64().unwrap() < 160.,
-        "the chip is as wide as its content: {out}"
+        out["chip"]["width"].as_f64().unwrap() > 250.,
+        "the chip spans the column like every value control: {out}"
     );
     assert!(
         cells.iter().all(|c| c["w"].as_f64().unwrap() >= 40.),
@@ -508,7 +508,7 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
         app.click(field());
         until("focused",()=>field().focused);
         app.key("secondary-a backspace");
-        app.type(field(),"0.5");
+        app.type(field(),"50");
         app.frames(4);
         const typing=field().focused;
         // A press on the sheet's own text, nowhere near the field.
@@ -524,11 +524,98 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
     let out = &result.result;
     assert_eq!(out["typing"], true, "{out}");
     assert_eq!(out["focused"], false, "{out}");
-    assert_eq!(out["after"], "Alpha = 0.5", "{out}");
+    assert_eq!(
+        out["after"], "Alpha = 50",
+        "alpha reads as a percent: {out}"
+    );
     let score = stored("clip-forms-blur");
     assert_eq!(
         score["clips"]["form-clip"]["inputs"]["alpha"],
         serde_json::json!({"type": "proportion", "value": 0.5}),
         "blur commits the typed value"
+    );
+}
+
+#[test]
+fn every_sheet_row_has_one_shape() {
+    let mut harness = Fixture::new("clip-forms-rows", 20, vec![])
+        .with_graph_score(support::preset_score("Pulse"))
+        .with_rig()
+        .window(1400., 1400.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        app.click(node("card","Sparkle"));
+        until("rows",s=>s.find({role:"row",label:"Grain"}));
+        app.frames(8,{waitMs:40});
+        const snap=app.snapshot();
+        const sheet=snap.find({role:"card",label:"Clip inputs"}).bounds;
+        const rows=snap.findAll({role:"row"}).filter(r=>r.bounds.x>=sheet.x&&r.bounds.x<sheet.x+sheet.width);
+        const inside=(r,n)=>n.bounds.y>=r.bounds.y&&n.bounds.y<r.bounds.y+r.bounds.height&&n.bounds.x>=r.bounds.x;
+        const controls=snap.findAll(n=>n.role==="select"||n.role==="input");
+        const out=rows.map(r=>{
+            const own=controls.filter(n=>inside(r,n));
+            const head=own.filter(n=>n.bounds.y<r.bounds.y+24);
+            const body=own.filter(n=>n.bounds.y>=r.bounds.y+24);
+            return {label:r.label,
+                head:head.map(n=>({label:n.label,w:n.bounds.width})),
+                body:body.map(n=>({label:n.label,w:n.bounds.width,h:n.bounds.height,y:n.bounds.y-r.bounds.y}))};
+        });
+        ({rows:out})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let rows = result.result["rows"].as_array().unwrap().clone();
+    let labels: Vec<&str> = rows.iter().map(|r| r["label"].as_str().unwrap()).collect();
+    for label in &labels {
+        let first = label.chars().next().unwrap();
+        assert!(
+            first.is_uppercase(),
+            "row labels are sentence case: {labels:?}"
+        );
+    }
+    for want in [
+        "Blend",
+        "Selection",
+        "How many",
+        "Brightness",
+        "Grain",
+        "Alpha",
+    ] {
+        assert!(labels.contains(&want), "no {want} row: {labels:?}");
+    }
+    // Mode menus in the header all have one width.
+    let modes: Vec<f64> = rows
+        .iter()
+        .flat_map(|r| r["head"].as_array().unwrap().clone())
+        .map(|c| c["w"].as_f64().unwrap())
+        .collect();
+    assert!(modes.len() >= 3, "{rows:?}");
+    assert!(
+        modes.windows(2).all(|w| (w[0] - w[1]).abs() < 1.),
+        "mode widths {modes:?}"
+    );
+    // Value controls span the column, one control height, one gap under the
+    // header.
+    let bodies: Vec<serde_json::Value> = rows
+        .iter()
+        .filter(|r| r["label"] != "Selection")
+        .flat_map(|r| r["body"].as_array().unwrap().first().cloned())
+        .collect();
+    let widths: Vec<f64> = bodies.iter().map(|c| c["w"].as_f64().unwrap()).collect();
+    assert!(bodies.len() >= 5, "{rows:?}");
+    assert!(
+        widths.windows(2).all(|w| (w[0] - w[1]).abs() < 1.),
+        "value widths {widths:?} in {rows:?}"
+    );
+    let tops: Vec<f64> = bodies.iter().map(|c| c["y"].as_f64().unwrap()).collect();
+    assert!(
+        tops.windows(2).all(|w| (w[0] - w[1]).abs() < 1.),
+        "label gaps {tops:?}"
     );
 }

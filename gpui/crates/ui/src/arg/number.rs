@@ -79,6 +79,8 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     min: T,
     max: T,
     width: f32,
+    /// A dim unit shown after the digits: "%", "beats".
+    unit: Option<&'static str>,
     _blur: [Subscription; 2],
 }
 
@@ -125,8 +127,16 @@ impl<T: DraftValue> DraftedNumber<T> {
             min,
             max,
             width,
+            unit: None,
             _blur,
         }
+    }
+
+    /// Show `unit` after the digits, inside the field.
+    #[must_use]
+    pub fn with_unit(mut self, unit: &'static str) -> Self {
+        self.unit = Some(unit);
+        self
     }
 
     #[must_use]
@@ -191,7 +201,17 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
             .on_key_down(cx.listener(Self::on_key_down))
             .w(px(self.width))
             .font_family(crate::fonts::MONO)
-            .child(div().w_full().child(self.input.clone()))
+            .gap(px(4.))
+            .child(div().flex_1().min_w_0().child(self.input.clone()))
+            .when_some(self.unit, |field, unit| {
+                field.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(crate::ladder::foreground_alpha(0.45))
+                        .child(unit),
+                )
+            })
             .agent_node(Role::Input, reading)
             .agent_focused(focused)
     }

@@ -79,6 +79,7 @@ impl GradientEditor {
         });
         let position = cx.new(|cx| {
             DraftedNumber::new("Stop position", percent(t), 0., 100., PERCENT_W, window, cx)
+                .with_unit("%")
         });
         let subscriptions = vec![
             cx.subscribe(&color, |this, _, event: &ColorArgEvent, cx| {
@@ -202,25 +203,22 @@ fn percent(value: f32) -> f64 {
 }
 
 /// Both percent fields, so they line up.
-const PERCENT_W: f32 = 50.;
+const PERCENT_W: f32 = 58.;
 
-/// A field with a dim name before it and a dim unit after it, kept on one
-/// line.
-fn labelled(name: &'static str, field: impl IntoElement, unit: &'static str) -> gpui::Div {
-    let dim = |text: &'static str| {
-        div()
-            .text_size(px(11.))
-            .text_color(crate::ladder::foreground_alpha(0.5))
-            .child(text)
-    };
+/// A field with a dim name before it, kept on one line.
+fn labelled(name: &'static str, field: impl IntoElement) -> gpui::Div {
     div()
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(4.))
-        .child(dim(name))
+        .gap(px(6.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(crate::ladder::foreground_alpha(0.5))
+                .child(name),
+        )
         .child(field)
-        .child(dim(unit))
 }
 
 impl Render for GradientEditor {
@@ -297,7 +295,7 @@ impl Render for GradientEditor {
                         .items_center()
                         .gap(px(6.))
                         .child(self.color.clone())
-                        .child(labelled("Pos", self.position.clone(), "%")),
+                        .child(labelled("Position", self.position.clone())),
                 )
             })
     }

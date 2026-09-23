@@ -191,8 +191,8 @@ fn paint(rgb: [f32; 3], alpha: f32) -> Rgba {
 /// Picker plate width; the SV square and hue strip both span it.
 const PICKER_WIDTH: f32 = 192.;
 /// The hex field fits `#RRGGBB` in the mono face with the field's inset.
-const HEX_W: f32 = 88.;
-const PERCENT_W: f32 = 50.;
+const HEX_W: f32 = 82.;
+const PERCENT_W: f32 = 58.;
 
 /// `0..=1` as a percent, to a tenth.
 fn percent(value: f32) -> f64 {
@@ -520,6 +520,7 @@ impl ColorArgEditor {
                     window,
                     cx,
                 )
+                .with_unit("%")
             });
             let subscriptions = [
                 cx.subscribe(&hex, |editor, _, event: &NumberEvent<Hex>, cx| {
@@ -657,13 +658,13 @@ impl ColorArgEditor {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            .child(fields.opacity.clone())
                             .child(
                                 div()
                                     .text_size(px(11.))
                                     .text_color(ladder::foreground_alpha(0.5))
-                                    .child("% opacity"),
-                            ),
+                                    .child("Opacity"),
+                            )
+                            .child(fields.opacity.clone()),
                     )
                 })
         });

@@ -367,7 +367,16 @@ pub(super) fn widget(
                   width: f32,
                   window: &mut Window,
                   cx: &mut Context<Luma>| {
-        cx.new(|cx| DraftedNumber::new(label, value, min, max, width, window, cx))
+        // A field named for beats says so.
+        let beats = label.ends_with(": Speed") || label.ends_with(": Beats");
+        cx.new(|cx| {
+            let field = DraftedNumber::new(label, value, min, max, width, window, cx);
+            if beats {
+                field.with_unit("beats")
+            } else {
+                field
+            }
+        })
     };
     // Each field edits one part of the stored value.
     let on_number =
@@ -730,29 +739,19 @@ fn row(
         })
         .flatten()
         .map(|relative| width_share(app, relative));
-    let promote =
-        (!slot.spec.promotable.is_empty()).then(|| promote_select(state, app, index, cell, slot));
-    div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(6.))
-        .w_full()
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .child(luma_ui::caption(name.to_string()))
-                .child(div().flex_1())
-                .children(share)
-                .children(promote),
-        )
-        .child(control)
-        .agent_node(Role::Row, name.to_string())
-        .into_any_element()
+    let promote = (!slot.spec.promotable.is_empty()).then(|| {
+        div()
+            .w(px(MODE_W))
+            .flex()
+            .flex_col()
+            .child(promote_select(state, app, index, cell, slot))
+    });
+    let accessories = share
+        .into_iter()
+        .chain(promote)
+        .map(IntoElement::into_any_element)
+        .collect();
+    sheet_row(name, accessories, control)
 }
 
 /// The menu that switches an input between a fixed value and a source.
