@@ -177,11 +177,12 @@ pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 /// painted it opaque, the coverage costs nothing at all.
 pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 
-/// Floating menus share the frosted backdrop pass with dialogs. Keep enough
-/// tint for labels while letting the blurred scene give the surface depth.
+/// Floating menus share the frosted backdrop pass with dialogs. Enough tint
+/// that a busy control under a menu (a curve, a gradient) does not read
+/// through it, while the blurred scene still gives the surface depth.
 /// Platforms without backdrop filtering retain an opaque fallback.
 pub const OVERLAY_ALPHA: f32 = if crate::dialog::BACKDROP_BLUR_SUPPORTED {
-    0.50
+    0.85
 } else {
     1.0
 };

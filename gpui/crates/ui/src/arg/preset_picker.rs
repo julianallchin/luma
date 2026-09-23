@@ -116,11 +116,13 @@ pub fn luma_preset_picker(
         .chain([CUSTOM.to_string()])
         .collect();
     let dismiss = on_toggle.clone();
+    // As wide as its row, like every value control in a sheet.
     let trigger = float::chip_plate(crate::Enabled::Yes)
+        .flex_1()
         .px(px(float::PICKER_CHIP_PAD))
         .child(thumb(value, CHIP_THUMB, true))
         .child(select::ghost_stack(
-            div().relative().flex(),
+            div().relative().flex().flex_1(),
             shown.to_string(),
             names,
             0.,
@@ -129,7 +131,6 @@ pub fn luma_preset_picker(
         .id(ElementId::Name(id.clone()))
         .on_click(move |_, window, cx| on_toggle(window, cx))
         .agent_node(Role::Select, shown.to_string());
-    // A flex row, so the chip keeps its own width in a stretching column.
     div()
         .relative()
         .flex()
@@ -199,11 +200,9 @@ pub fn luma_preset_picker(
                         .children(tiles.by_ref().take(per_row)),
                 );
             }
-            // Opaque: a value under the popover must not show through it.
             let content = float::popover_card()
                 .p(px(4.))
                 .gap(px(2.))
-                .bg(ladder::apex())
                 .children(rows)
                 .agent_node(Role::Card, "Presets")
                 .into_any_element();
