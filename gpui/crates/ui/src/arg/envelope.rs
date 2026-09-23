@@ -212,6 +212,14 @@ impl Render for EnvelopeEditor {
                                                 EnvelopeCurve::Linear => path.line_to(at(c[3])),
                                                 EnvelopeCurve::Bezier { .. } => path
                                                     .cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
+                                                EnvelopeCurve::Hold => {
+                                                    path.line_to(at([c[3][0], c[0][1]]));
+                                                    path.line_to(at(c[3]));
+                                                }
+                                                EnvelopeCurve::Step => {
+                                                    path.line_to(at([c[0][0], c[3][1]]));
+                                                    path.line_to(at(c[3]));
+                                                }
                                             }
                                         }
                                         if let Ok(path) = path.build() {

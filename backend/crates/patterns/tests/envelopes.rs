@@ -142,3 +142,25 @@ fn saved_linear_envelopes_remain_linear_and_invalid_handle_payloads_fail() {
     };
     assert!(e.validate().is_err());
 }
+
+#[test]
+fn held_and_stepped_segments_keep_one_value_and_survive_edits() {
+    let mut e = Envelope {
+        points: vec![[0., 0.2], [0.5, 0.6], [1., 1.]],
+        curves: vec![EnvelopeCurve::Hold, EnvelopeCurve::Step],
+    };
+    e.validate().unwrap();
+    for (time, expected) in [(0., 0.2), (0.49, 0.2), (0.5, 1.), (0.9, 1.), (1., 1.)] {
+        assert_eq!(e.sample(time), expected);
+    }
+    let index = e.insert_point(0.25).unwrap();
+    assert_eq!(e.points[index], [0.25, 0.2]);
+    assert_eq!(e.curves[..2], [EnvelopeCurve::Hold, EnvelopeCurve::Hold]);
+    assert_eq!(e.sample(0.4), 0.2);
+    e.remove_point(index).unwrap();
+    assert_eq!(e.curves, vec![EnvelopeCurve::Hold, EnvelopeCurve::Step]);
+    assert_eq!(
+        serde_json::to_value(&e.curves).unwrap(),
+        serde_json::json!([{"kind": "hold"}, {"kind": "step"}])
+    );
+}
