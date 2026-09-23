@@ -157,11 +157,11 @@ fn inspector_stays_above_timeline_and_pickers_accept_keyboard_input() {
         app.click(node("row","Lane 0"),{button:"right"});
         until("pattern dialog", () => node("card","Insert pattern dialog"));
         const dialog = node("card","Insert pattern dialog").bounds;
-        app.type(node("input","Search patterns…"), "Glow");
+        app.type(node("input","Search patterns…"), "Wash");
         app.frames(3);
-        const matching = app.snapshot().findAll({role:"row"}).filter(n=>n.label==="Glow").length;
+        const matching = app.snapshot().findAll({role:"row"}).filter(n=>n.label==="Wash").length;
         app.key("enter");
-        until("inserted", s => s.findAll({role:"card",label:"Glow"}).length===2);
+        until("inserted", s => s.find({role:"card",label:"Constant color"}));
         const closed = !node("card","Insert pattern dialog");
         ({before, inspector, wave, controls, filtered, dialog, matching, closed, held})
     "#), Duration::from_secs(300));

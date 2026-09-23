@@ -375,7 +375,6 @@ impl Preview {
     }
 }
 
-
 // TEMP(blink probe): remove once the preview blink is found.
 pub(crate) fn blink_probe(message: impl AsRef<str>) {
     use std::io::Write;
@@ -443,34 +442,25 @@ struct InsertMenu {
     active: usize,
 }
 
-#[derive(Clone)]
-enum InsertChoice {
-    Node { effect: String, name: String },
-    Pattern(PatternSummary),
-    Graph { id: String, name: String },
-}
+/// A shipped preset on offer in the insertion picker.
+#[derive(Clone, Copy)]
+struct InsertChoice(&'static luma_patterns::FormPreset);
 impl InsertChoice {
     fn name(&self) -> &str {
-        match self {
-            Self::Node { name, .. } | Self::Graph { name, .. } => name,
-            Self::Pattern(p) => &p.name,
-        }
+        &self.0.name
     }
     fn id(&self) -> String {
-        match self {
-            Self::Node { effect, .. } => format!("node-{effect}"),
-            Self::Pattern(p) => p.id.clone(),
-            Self::Graph { id, .. } => id.clone(),
-        }
+        self.0.name.clone()
     }
+    /// The form the preset sets, which the picker shows beside its name.
     fn origin(&self) -> &'static str {
-        match self {
-            Self::Node { .. } => "Built-in",
-            Self::Graph { .. } => "This score",
-            Self::Pattern(p) if p.score_id.is_some() => "This score",
-            Self::Pattern(_) => "Library",
-        }
+        form_name(&self.0.form)
     }
+}
+
+/// A form's display name, such as "Chase" for `color.chase@1`.
+fn form_name(form: &str) -> &'static str {
+    document::form_definition(form).map_or("", |definition| definition.name.as_str())
 }
 
 /// The selection cursor: a point in time, or a rectangle of time × lanes.
@@ -1202,7 +1192,10 @@ impl Editor {
             .map(|previous| previous.image.id);
         let annotation = row.annotation_id.clone();
         if let Some((id, preview)) = Preview::decode(row, identity) {
-            blink_probe(format!("preview installed {id} kept_identity={}", identity.is_some()));
+            blink_probe(format!(
+                "preview installed {id} kept_identity={}",
+                identity.is_some()
+            ));
             previews.insert(id, preview);
         } else {
             blink_probe(format!("preview DECODE FAILED {annotation}"));
@@ -1514,74 +1507,24 @@ impl Editor {
         self.menu_scroll.scroll_to_item(menu.active);
     }
 
-    /// The pattern `Enter` would put down, with the insertion it belongs to.
+    /// The presets the picker lists for the current query, in menu order. A
+    /// query matches a preset's name or its form's name.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
-        // The standard library never changes, and `standard_library()` hands
-        // back a copy of all of it, so its placeable nodes are listed once.
-        static NODES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
-        let nodes = NODES.get_or_init(|| {
-            luma_patterns::standard_library()
-                .definitions
-                .into_iter()
-                .filter(|(_, definition)| {
-                    // The bare Apply terminal is a node, not a pattern.
-                    definition.placeable()
-                        && definition.body
-                            != luma_patterns::Body::Primitive(luma_patterns::Primitive::Output)
-                        && definition
-                            .inputs
-                            .values()
-                            .all(|input| input.default.is_some())
-                })
-                .map(|(effect, definition)| (effect, definition.name))
-                .collect()
-        });
-        let mut choices: Vec<_> = nodes
+        luma_patterns::presets()
+            .presets
             .iter()
-            .map(|(effect, name)| InsertChoice::Node {
-                effect: effect.clone(),
-                name: name.clone(),
+            .map(InsertChoice)
+            .filter(|choice| {
+                choice.name().to_lowercase().contains(&query)
+                    || choice.origin().to_lowercase().contains(&query)
             })
-            .collect();
-        if let Some(score) = &self.graph_score {
-            if let Ok(library) = score.library() {
-                choices.extend(
-                    score
-                        .definitions
-                        .iter()
-                        .filter(|(_, definition)| {
-                            definition.playable()
-                                && definition
-                                    .inputs
-                                    .values()
-                                    .all(|input| input.default.is_some())
-                        })
-                        .map(|(id, _)| InsertChoice::Graph {
-                            id: id.clone(),
-                            name: library.display_name(id),
-                        }),
-                );
-            }
-        }
-        choices.extend(
-            self.patterns
-                .iter()
-                .filter(|pattern| {
-                    pattern.score_id.is_none()
-                        || pattern.score_id.as_deref()
-                            == self.score.as_ref().map(|score| score.id.as_str())
-                })
-                .cloned()
-                .map(InsertChoice::Pattern),
-        );
-        choices.retain(|choice| choice.name().to_lowercase().contains(&query));
-        choices
+            .collect()
     }
 
     fn menu_choice(&self) -> Option<(InsertMenu, InsertChoice)> {
         let menu = self.menu?;
-        Some((menu, self.insertion_choices().get(menu.active)?.clone()))
+        Some((menu, *self.insertion_choices().get(menu.active)?))
     }
 }
 
@@ -2234,6 +2177,8 @@ impl Luma {
         picker::open(self, cx);
     }
 
+    /// Open the picker on a library pattern's name. The picker offers
+    /// presets only, so this finds the preset of that name, if there is one.
     pub(crate) fn preview_library_pattern(
         &mut self,
         pattern: PatternSummary,
@@ -2254,14 +2199,6 @@ impl Luma {
             editor
                 .menu_search
                 .update(cx, |field, cx| field.set_text(&pattern.name, cx));
-            let index = editor
-                .insertion_choices()
-                .iter()
-                .position(|choice| matches!(choice, InsertChoice::Pattern(p) if p.id == pattern.id))
-                .unwrap_or(0);
-            if let Some(menu) = &mut editor.menu {
-                menu.active = index;
-            }
         }
         cx.notify();
     }
@@ -2415,7 +2352,7 @@ impl Luma {
         cleared
     }
 
-    /// Commit an insertion on the pattern the pointer chose.
+    /// Place the chosen preset as a new clip.
     fn insert_pattern(&mut self, menu: InsertMenu, choice: InsertChoice, cx: &mut Context<Self>) {
         if matches!(
             self.overlay.as_open(),
@@ -2423,57 +2360,9 @@ impl Luma {
         ) {
             self.close_overlay(cx);
         }
-        if let InsertChoice::Pattern(pattern) = &choice {
-            let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
-                return;
-            };
-            if !editor.writable() {
-                return;
-            }
-            let Some(score_id) = editor.score_id().map(str::to_owned) else {
-                return;
-            };
-            let target = Target::TrackEditor {
-                track: editor.track_id.clone(),
-                venue: editor.venue_id.clone(),
-            };
-            let pending = self
-                .library
-                .pattern_score_template(&pattern.id, &editor.venue_id);
-            self.with_track_editor(cx, |editor| editor.menu = None);
-            cx.spawn(async move |this, cx| {
-                let result = pending.await;
-                this.update(cx, |this, cx| {
-                    let mut inserted = false;
-                    this.edit_track_tab(&target, cx, |editor| {
-                        if editor.score_id() != Some(score_id.as_str()) || !editor.writable() {
-                            return;
-                        }
-                        match result {
-                            Ok(template) => {
-                                editor.checkpoint();
-                                match editor.insert_graph(menu, &choice, Some(&template)) {
-                                    Ok(()) => inserted = true,
-                                    Err(error) => editor.error = Some(error),
-                                }
-                                editor.abandon_checkpoint();
-                            }
-                            Err(error) => editor.error = Some(error.to_string()),
-                        }
-                    });
-                    if inserted {
-                        this.commit_graph_score_for(target.clone(), cx);
-                        this.refresh_working_scene_for(&target, cx);
-                    }
-                })
-                .ok();
-            })
-            .detach();
-            return;
-        }
         self.track_command(
             |editor| {
-                if let Err(error) = editor.insert_graph(menu, &choice, None) {
+                if let Err(error) = editor.insert_preset(menu, choice) {
                     editor.error = Some(error);
                 }
             },
@@ -2561,7 +2450,10 @@ impl Luma {
                 Cursor {
                     row: held.iter().map(|clip| clip.row).min().unwrap_or(row),
                     row_end: None,
-                    start: held.iter().map(|clip| clip.start).fold(f64::INFINITY, f64::min),
+                    start: held
+                        .iter()
+                        .map(|clip| clip.start)
+                        .fold(f64::INFINITY, f64::min),
                     end: None,
                 }
             } else {

@@ -1,4 +1,4 @@
-//! Searchable pattern insertion with an isolated, looping venue preview.
+//! Searchable preset insertion with an isolated, looping venue preview.
 //!
 //! # Hovering is instant
 //!
@@ -40,10 +40,8 @@ pub(crate) struct Picker {
     generation: uuid::Uuid,
     target: Target,
     sequence: Option<Arc<Sequence>>,
-    /// The filtered rows, and the key they were built for. Building them
-    /// copies the whole standard library, so it happens when the query or the
-    /// editor's patterns change, not on every frame.
-    choices: Option<(ChoicesKey, Arc<Vec<InsertChoice>>)>,
+    /// The filtered rows, and the query they were built for.
+    choices: Option<(String, Arc<Vec<InsertChoice>>)>,
     /// The row the preview is showing, and when it was highlighted.
     shown: Option<String>,
     shown_at: std::time::Instant,
@@ -63,24 +61,6 @@ pub(crate) struct Picker {
     firsts: VecDeque<(String, Arc<RenderImage>)>,
     error: Option<String>,
     scene_error: Option<String>,
-}
-
-#[derive(PartialEq)]
-struct ChoicesKey {
-    query: String,
-    patterns: *const Vec<PatternSummary>,
-    graphs: usize,
-}
-
-fn choices_key(editor: &Editor) -> ChoicesKey {
-    ChoicesKey {
-        query: editor.menu_query.clone(),
-        patterns: Rc::as_ptr(&editor.patterns),
-        graphs: editor
-            .graph_score
-            .as_ref()
-            .map_or(0, |score| score.definitions.len()),
-    }
 }
 
 pub(super) fn open(app: &mut Luma, cx: &mut Context<Luma>) {
@@ -208,7 +188,7 @@ pub(crate) fn tick(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) 
     if !focus.is_focused(window) {
         window.focus(&focus, cx);
     }
-    let key = choices_key(editor);
+    let key = editor.menu_query.clone();
     let rebuilt = (picker.choices.as_ref().map(|(built, _)| built) != Some(&key))
         .then(|| Arc::new(editor.insertion_choices()));
     let Some(menu) = editor.menu else {
@@ -249,7 +229,7 @@ pub(crate) fn tick(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) 
                 let id = choice.id();
                 !state.fetched.contains_key(&id) && !state.failed.contains_key(&id)
             })
-            .cloned();
+            .copied();
         if let Some(choice) = wanted {
             fetch(app, menu, choice, cx);
         }
@@ -267,63 +247,27 @@ fn fetch(app: &mut Luma, menu: InsertMenu, choice: InsertChoice, cx: &mut Contex
     let start = menu.start;
     // At most four seconds and sixty samples; the preview never drives DMX.
     let end = menu.end.min(start + 4.);
-    let pending: std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<UniverseState>, String>>>,
-    > = match &choice {
-        InsertChoice::Pattern(pattern) => {
-            let task = app.library.preview_pattern_frames(
-                &pattern.id,
-                &editor.track_id,
-                &editor.venue_id,
-                start,
-                end,
-            );
-            Box::pin(async move { task.await.map_err(|error| error.to_string()) })
-        }
-        InsertChoice::Node {
-            effect: definition, ..
-        }
-        | InsertChoice::Graph { id: definition, .. } => {
-            let library = match editor
-                .graph_score
-                .as_ref()
-                .map(|graph| graph.library())
-                .transpose()
-            {
-                Ok(library) => library,
-                Err(error) => {
-                    if let Some(Overlay::InsertPattern(state)) = app.overlay.open_mut() {
-                        state.failed.insert(id.clone(), error.to_string());
-                        if state.shown.as_ref() == Some(&id) {
-                            state.error = Some(error.to_string());
-                        }
-                    }
-                    return;
-                }
-            };
-            let count = (((end - start) * 15.).ceil() as usize).clamp(1, 60);
-            let task = app.library.preview_definition_frames(
-                luma_lib::models::composable_patterns::ComposablePreviewRequest {
-                    venue_id: editor.venue_id.clone(),
-                    track_id: editor.track_id.clone(),
-                    definition: definition.clone(),
-                    library,
-                    inputs: Default::default(),
-                    targets: vec![luma_lib::models::selection::Selection::new("all")],
-                    times: (0..count)
-                        .map(|i| start + i as f64 * (end - start) / count as f64)
-                        .collect(),
-                    clip_start: start,
-                    clip_end: menu.end,
-                    seed: 0,
-                },
-            );
-            Box::pin(async move {
-                task.await
-                    .map(|preview| preview.frames)
-                    .map_err(|error| error.to_string())
-            })
-        }
+    let count = (((end - start) * 15.).ceil() as usize).clamp(1, 60);
+    let task = app.library.preview_definition_frames(
+        luma_lib::models::composable_patterns::ComposablePreviewRequest {
+            venue_id: editor.venue_id.clone(),
+            track_id: editor.track_id.clone(),
+            definition: choice.0.form.clone(),
+            library: None,
+            inputs: choice.0.inputs.clone(),
+            targets: vec![luma_lib::models::selection::Selection::new("all")],
+            times: (0..count)
+                .map(|i| start + i as f64 * (end - start) / count as f64)
+                .collect(),
+            clip_start: start,
+            clip_end: menu.end,
+            seed: 0,
+        },
+    );
+    let pending = async move {
+        task.await
+            .map(|preview| preview.frames)
+            .map_err(|error| error.to_string())
     };
     let Some(Overlay::InsertPattern(state)) = app.overlay.open_mut() else {
         return;
@@ -488,7 +432,7 @@ pub(crate) fn render(state: &Picker, editor: &Editor, app: &Entity<Luma>) -> Any
                                     .overflow_y_scroll()
                                     .track_scroll(&editor.menu_scroll)
                                     .when(rows.is_empty(), |list| {
-                                        list.child(float::empty_row("No matching patterns"))
+                                        list.child(float::empty_row("No matching presets"))
                                     })
                                     .children(rows.iter().enumerate().map(|(index, choice)| {
                                         let choose = app.clone();

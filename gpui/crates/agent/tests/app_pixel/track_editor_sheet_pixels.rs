@@ -41,7 +41,7 @@ fn edit_focus_keeps_controls_usable_and_renders_both_picker_previews() {
         until("picker closed", () => !node("card","Fixture picker dialog"));
         app.click(node("button","Add pattern"));
         until("pattern search", () => node("input","Search patterns…"));
-        app.type(node("input","Search patterns…"),"Glow");
+        app.type(node("input","Search patterns…"),"Wash");
         until("pattern preview", () => node("card","Pattern preview"));
         app.frames(8,{waitMs:50});
         const pattern = app.screenshot();
