@@ -120,8 +120,9 @@ pub(super) enum Factor {
     /// A curve over the clip's progress.
     Curve(Envelope),
     Audio(Audio),
-    /// On only while the audio level is above a threshold.
-    Gate,
+    /// On only while the audio level is above a threshold: the band and
+    /// the threshold, when the level is a remapped band energy.
+    Gate(Option<(Audio, f64)>),
     Look(Look),
     /// A gate that the look already has: a stroke's own "active", or the
     /// presence of a chord.
@@ -407,7 +408,19 @@ impl<'a> Parser<'a> {
                 }));
             }
             ("core/greater", "mask") if self.upstream(id, "band_energy").is_some() => {
-                out.push(Factor::Gate)
+                // The old level is energy remapped between the clip's quiet
+                // and full levels, the same 0–1 scale as the audio source.
+                let band = self.upstream(id, "remap_field/signals").and_then(|remap| {
+                    let (energy, _) = self.source(&remap, "value").ok()?;
+                    Some(Audio {
+                        source: self.audio_source(&energy, "source").ok()?,
+                        low_hz: self.number(&energy, "low_hz").ok()?,
+                        high_hz: self.number(&energy, "high_hz").ok()?,
+                        floor: 1.0,
+                    })
+                });
+                let level = self.number(id, "b").ok();
+                out.push(Factor::Gate(band.zip(level)))
             }
             ("sample_gradient" | "sample_field_gradient", "color") => {
                 let gradient = match self.value(id, "gradient")? {
