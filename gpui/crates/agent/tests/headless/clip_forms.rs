@@ -1,6 +1,7 @@
 //! Form clips from the outside: the picker offers shipped presets only and
 //! places a form clip, and the sheet edits a form's inputs, including a
-//! promotion to a curve over time and back.
+//! promotion to a curve over time, a pick from the curve thumbnails, and back
+//! to a fixed value.
 
 use super::support::{self, Fixture};
 use gpui_agent::Mode;
@@ -103,9 +104,16 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
+    let mut curves: Vec<&str> = luma_patterns::presets()
+        .curves
+        .iter()
+        .map(|curve| curve.name.as_str())
+        .collect();
+    curves.sort_unstable();
     let result = harness.exec(
-        &support::script(
-            r#"
+        &(format!("const CURVES={};", serde_json::json!(curves))
+            + &support::script(
+                r#"
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         const reveal=target=>{
@@ -132,34 +140,57 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         until("comet",s=>s.find({role:"select",label:"Comet"}));
         settle();
 
-        app.click(inRow("Every","select","Plain"));
+        const modes=()=>app.snapshot().findAll({role:"button"}).map(n=>n.label);
+        app.click(inRow("Every","select","Fixed"));
+        const offered=modes().filter(l=>l==="Fixed"||l.startsWith("↗"));
         app.click(node("button","↗ Over time"));
         until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
         const promoted=!!inRow("Every","select","↗ Over time");
         settle();
 
+        // The envelope editor has buttons of its own; the popover adds one
+        // per preset.
+        const shut=modes().filter(l=>CURVES.includes(l));
         app.click(inRow("Every","select","Custom"));
+        node("button","Swell");
+        const thumbs=modes().filter(l=>CURVES.includes(l));
+        for(const l of shut) thumbs.splice(thumbs.indexOf(l),1);
+        thumbs.sort();
         app.click(node("button","Swell"));
         until("swell",s=>s.find({role:"select",label:"Swell"}));
         settle();
+        const closed=!app.snapshot().find({role:"button",label:"Swell"});
 
         app.click(inRow("Every","select","↗ Over time"));
-        app.click(node("button","Plain"));
-        until("plain again",s=>!s.find({role:"card",label:"Envelope curve"}));
+        app.click(node("button","Fixed"));
+        until("fixed again",s=>!s.find({role:"card",label:"Envelope curve"}));
+        const fixed=!!inRow("Every","select","Fixed");
         const every=app.snapshot().findAll({role:"input"}).map(n=>n.label).filter(l=>l.startsWith("Every"));
         settle();
-        ({promoted,every})
+        ({offered,promoted,thumbs,closed,fixed,every})
     "#,
-        ),
+            )),
         Duration::from_secs(90),
     );
     assert_eq!(result.error, None, "{}", result.stdout);
-    assert_eq!(result.result["promoted"], true, "{}", result.result);
+    let out = &result.result;
     assert_eq!(
-        result.result["every"],
+        out["offered"],
+        serde_json::json!(["Fixed", "↗ Over time", "↗ Stamped beats"]),
+        "every's mode menu: {out}"
+    );
+    assert_eq!(out["promoted"], true, "{out}");
+    assert_eq!(
+        out["thumbs"],
+        serde_json::json!(curves),
+        "the popover shows one thumbnail per curve preset: {out}"
+    );
+    assert_eq!(out["closed"], true, "a pick closes the popover: {out}");
+    assert_eq!(out["fixed"], true, "{out}");
+    assert_eq!(
+        out["every"],
         serde_json::json!(["Every = 0.0625"]),
-        "back to plain takes the curve's first value: {}",
-        result.result
+        "back to fixed takes the curve's first value: {out}"
     );
 
     let score = stored("clip-forms-sheet");
