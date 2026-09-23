@@ -104,11 +104,30 @@ pub fn wire_value(value: &p::Value) -> Value {
         p::Value::Color(rgb) => {
             json!({"r": rgb[0]*255., "g": rgb[1]*255., "b": rgb[2]*255., "a": 1.})
         }
+        // A clip source keeps its tag, so the wire says which source it is.
+        _ if value.source_kind().is_some() => {
+            serde_json::to_value(value).expect("serializable source")
+        }
         _ => serde_json::to_value(value).expect("serializable default")["value"].clone(),
     }
 }
 
+/// A tagged clip source on the wire, as [`wire_value`] writes it.
+fn is_source(value: &Value) -> bool {
+    value.get("value").is_some()
+        && matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("time" | "hit" | "noise" | "audio" | "events")
+        )
+}
+
 pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
+    if is_source(value) {
+        let decoded: p::Value =
+            serde_json::from_value(value.clone()).map_err(|e| format!("Invalid source: {e}"))?;
+        decoded.validate().map_err(|e| e.to_string())?;
+        return Ok(decoded);
+    }
     if let ValueType::Signal(spec) = kind {
         let decoded = if value.get("values").is_some() {
             p::Value::Signal(
