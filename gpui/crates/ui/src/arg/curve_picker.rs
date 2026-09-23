@@ -18,13 +18,20 @@ use crate::{float, glass, ladder, select, CONTROL_HEIGHT};
 /// What the trigger calls a curve that is none of the options.
 pub const CUSTOM: &str = "Custom";
 
-/// Thumbnails per row of the popover grid.
-const COLUMNS: usize = 4;
-/// A grid cell, and the curve picture inside it.
-const CELL: [f32; 2] = [52., 36.];
-const THUMB: [f32; 2] = [36., 20.];
+/// Most thumbnails in one row of the popover grid.
+const COLUMNS: usize = 5;
+/// A thumbnail's picture, and the cell that holds it and its name.
+const THUMB: [f32; 2] = [56., 36.];
+const CELL_W: f32 = 76.;
 /// The picture on the trigger.
-const CHIP_THUMB: [f32; 2] = [24., 12.];
+const CHIP_THUMB: [f32; 2] = [28., 14.];
+
+/// How many thumbnails each row holds: as few rows as [`COLUMNS`] allows,
+/// filled evenly, so 7 lay out as 4 + 3 and not 5 + 2.
+fn columns(count: usize) -> usize {
+    let rows = count.div_ceil(COLUMNS).max(1);
+    count.div_ceil(rows).max(1)
+}
 
 /// A small picture of `value`'s line, `size` wide and high.
 pub fn curve_thumb(value: &Envelope, size: [f32; 2], alpha: f32) -> impl IntoElement {
@@ -92,45 +99,74 @@ pub fn luma_curve_picker(
         .on_click(move |_, window, cx| on_toggle(window, cx))
         .agent_node(Role::Select, shown.to_string());
     let menu_id: SharedString = format!("{id}:menu").into();
+    // A flex row, so the chip keeps its own width in a stretching column.
     div()
         .relative()
+        .flex()
         .child(trigger)
         .when(open || closing.is_some_and(|t| t < 1.0), |el| {
-            let grid = div()
-                .w(px(CELL[0] * COLUMNS as f32))
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .children(options.iter().enumerate().map(|(index, (name, curve))| {
-                    let on_pick = on_pick.clone();
-                    let tip = name.clone();
-                    let chosen = current == Some(index);
-                    let cell_id: SharedString = format!("{id}:{index}").into();
-                    div()
-                        .w(px(CELL[0]))
-                        .h(px(CELL[1]))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(crate::radius::ROW))
-                        .cursor_pointer()
-                        .when(chosen, |cell| cell.bg(glass::card_selected_bg()))
-                        .when(!chosen, |cell| {
-                            cell.hover(|style| style.bg(glass::glass_hover()))
-                        })
-                        .child(curve_thumb(curve, THUMB, if chosen { 1. } else { 0.7 }))
-                        .id(ElementId::Name(cell_id))
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                        .on_click(move |_, window, cx| {
-                            if open {
-                                on_pick(index, window, cx);
-                            }
-                        })
-                        .agent_node(Role::Button, name.to_string())
-                }));
+            let per_row = columns(options.len());
+            let cell = |index: usize, name: &SharedString, curve: &Envelope| {
+                let on_pick = on_pick.clone();
+                let tip = name.clone();
+                let chosen = current == Some(index);
+                div()
+                    .w(px(CELL_W))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(4.))
+                    .p(px(6.))
+                    .rounded(px(crate::radius::ROW))
+                    .cursor_pointer()
+                    .when(chosen, |cell| {
+                        cell.bg(glass::card_selected_bg())
+                            .shadow(glass::card_selected_shadows())
+                    })
+                    .when(!chosen, |cell| {
+                        cell.hover(|style| style.bg(glass::glass_hover()))
+                    })
+                    .child(curve_thumb(curve, THUMB, if chosen { 1. } else { 0.75 }))
+                    .child(
+                        div()
+                            .w_full()
+                            .text_center()
+                            .text_size(px(11.))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_color(ladder::foreground_alpha(if chosen { 1. } else { 0.6 }))
+                            .child(name.clone()),
+                    )
+                    .id(ElementId::Name(format!("{id}:{index}").into()))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(move |_, window, cx| {
+                        if open {
+                            on_pick(index, window, cx);
+                        }
+                    })
+                    .agent_node(Role::Button, name.to_string())
+            };
+            let rows = options
+                .iter()
+                .enumerate()
+                .collect::<Vec<_>>()
+                .chunks(per_row)
+                .map(|row| {
+                    div().flex().flex_row().gap(px(2.)).children(
+                        row.iter()
+                            .map(|(index, (name, curve))| cell(*index, name, curve)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            // Opaque: a curve under the popover must not show through it.
             let content = float::popover_card()
-                .p(px(4.))
-                .child(grid)
+                .p(px(6.))
+                .gap(px(2.))
+                .bg(ladder::apex())
+                .children(rows)
+                .agent_node(Role::Card, "Curve presets")
                 .into_any_element();
             el.child(match closing {
                 Some(t) => float::anchored_below_closing(menu_id, CONTROL_HEIGHT, content, t),
@@ -147,6 +183,15 @@ pub fn luma_curve_picker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_grid_fills_its_rows_evenly() {
+        assert_eq!(columns(1), 1);
+        assert_eq!(columns(5), 5);
+        assert_eq!(columns(7), 4);
+        assert_eq!(columns(8), 4);
+        assert_eq!(columns(10), 5);
+    }
 
     #[test]
     fn the_trigger_names_the_current_option_or_custom() {
