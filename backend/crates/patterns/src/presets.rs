@@ -1,6 +1,6 @@
-//! Shipped presets: named input values of a form, and named curves for
-//! `time` and `hit` sources. The data lives in `presets.json`.
-use crate::{BlendMode, Clip, Error, Keyframes, Library, Result, Selection, Value};
+//! Shipped presets: named input values of a form, named curves for `time`
+//! and `hit` sources, and named gradients. The data lives in `presets.json`.
+use crate::{BlendMode, Clip, Error, Gradient, Keyframes, Library, Result, Selection, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -25,11 +25,20 @@ pub struct CurvePreset {
     pub curve: Keyframes,
 }
 
+/// A named gradient.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GradientPreset {
+    pub name: String,
+    pub gradient: Gradient,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Presets {
     pub presets: Vec<FormPreset>,
     pub curves: Vec<CurvePreset>,
+    pub gradients: Vec<GradientPreset>,
 }
 
 /// The shipped presets and curves, in menu order.
