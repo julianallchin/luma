@@ -28,6 +28,8 @@ fn empty_preview(annotation_id: String) -> AnnotationPreview {
 /// keep their selection order.
 pub(crate) fn head_order(clip: &p::Clip, cells: &[p::Cell]) -> HashMap<String, f64> {
     let major = p::MappingSpec {
+        span: Default::default(),
+        plane: None,
         source: p::MappingSource::MajorAxis {
             toward: [0., 0., 1.],
         },

@@ -38,6 +38,8 @@ fn inputs() -> BTreeMap<String, Value> {
     BTreeMap::from([(
         "mapping".into(),
         Value::Mapping(MappingSpec {
+            span: Default::default(),
+            plane: None,
             mirror: None,
             source: MappingSource::Z,
             per_group: false,
@@ -405,6 +407,8 @@ fn angled_wings_each_get_their_own_principal_progression() {
         })
         .collect();
     let m = MappingSpec {
+        span: Default::default(),
+        plane: None,
         mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0.0, 1.0, 0.0],
@@ -419,6 +423,8 @@ fn angled_wings_each_get_their_own_principal_progression() {
         assert!((c.position - n / 4.0).abs() < 1e-9);
     }
     let reversed = MappingSpec {
+        span: Default::default(),
+        plane: None,
         mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0.0, 1.0, 0.0],
@@ -636,6 +642,8 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
     score.clips.get_mut("local").unwrap().inputs.insert(
         "mapping".into(),
         Value::Mapping(MappingSpec {
+            span: Default::default(),
+            plane: None,
             mirror: None,
             source: MappingSource::Circle { origin: 0.25 },
             per_group: true,
@@ -780,6 +788,8 @@ fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
         })
         .collect();
     let map = MappingSpec {
+        span: Default::default(),
+        plane: None,
         mirror: None,
         source: MappingSource::MajorAxis {
             toward: [0., 0., 1.],

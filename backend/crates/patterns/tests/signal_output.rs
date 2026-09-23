@@ -143,6 +143,8 @@ fn intensity_and_rgb_compose_directly_into_an_output() {
     assert_eq!(output.values().dim(), (5, 4, 8));
     assert_eq!(output.writes(), [true, true, false, false, false]);
     let mapping = MappingSpec {
+        span: Default::default(),
+        plane: None,
         source: MappingSource::Z,
         mirror: None,
         per_group: false,

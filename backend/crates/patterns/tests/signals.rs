@@ -71,6 +71,8 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
             (
                 "mapping".into(),
                 Value::Mapping(MappingSpec {
+                    span: Default::default(),
+                    plane: None,
                     mirror: None,
                     source: MappingSource::U,
                     per_group: false,

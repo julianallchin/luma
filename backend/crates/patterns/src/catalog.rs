@@ -91,6 +91,8 @@ fn primitive_definition(p: Primitive) -> Definition {
                     "Mapping",
                     "Coordinate source, grouping, and orientation",
                     Value::Mapping(MappingSpec {
+                        span: Default::default(),
+                        plane: None,
                         mirror: None,
                         source: MappingSource::Z,
                         per_group: false,

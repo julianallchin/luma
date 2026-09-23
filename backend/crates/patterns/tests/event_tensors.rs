@@ -289,6 +289,8 @@ fn drum_trigger_wires_into_the_same_chase_and_prepared_execution_matches_batch()
                             vec![(
                                 "mapping",
                                 Value::Mapping(MappingSpec {
+                                    span: Default::default(),
+                                    plane: None,
                                     source: MappingSource::Z,
                                     mirror: None,
                                     per_group: false,
