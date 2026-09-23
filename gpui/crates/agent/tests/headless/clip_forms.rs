@@ -104,12 +104,10 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
-    let mut curves: Vec<&str> = luma_patterns::presets()
-        .curves
-        .iter()
+    let curves: Vec<&str> = luma_patterns::presets()
+        .curves_for("every")
         .map(|curve| curve.name.as_str())
         .collect();
-    curves.sort_unstable();
     let result = harness.exec(
         &(format!("const CURVES={};", serde_json::json!(curves))
             + &support::script(
@@ -148,14 +146,9 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         const promoted=!!inRow("Every","select","↗ Over time");
         settle();
 
-        // The envelope editor has buttons of its own; the popover adds one
-        // per preset.
-        const shut=modes().filter(l=>CURVES.includes(l));
         app.click(inRow("Every","select","Custom"));
         node("button","Swell");
         const thumbs=modes().filter(l=>CURVES.includes(l));
-        for(const l of shut) thumbs.splice(thumbs.indexOf(l),1);
-        thumbs.sort();
         app.click(node("button","Swell"));
         until("swell",s=>s.find({role:"select",label:"Swell"}));
         settle();
@@ -210,5 +203,115 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         clip["inputs"]["every"],
         serde_json::json!({"type": "beats", "value": 0.0625}),
         "the promotion went to a curve and came back plain"
+    );
+}
+
+#[test]
+fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
+    let mut harness = Fixture::new("clip-forms-alpha-curves", 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const reveal=target=>{
+            const p=node("card","Clip inputs").bounds, b=target.bounds;
+            if(b.y<p.y+70 || b.y+b.height>p.y+p.height-12) {
+                app.scroll({x:p.x+p.width/2,y:p.y+p.height/2},{dy:(p.y+p.height/2)-b.y,steps:5});
+                app.frames(3);
+            }
+        };
+        const inRow=(row,role,label)=>{
+            reveal(node("row",row));
+            const r=node("row",row).bounds;
+            const found=app.snapshot().findAll({role,label}).find(n=>n.bounds.y>=r.y&&n.bounds.y<r.y+r.height);
+            if(!found) throw new Error(`no ${role} ${label} in ${row}`);
+            return found;
+        };
+        const settle=()=>app.frames(16,{waitMs:60});
+        app.click(node("card","Chase"));
+        until("form inputs",s=>s.find({role:"row",label:"Alpha"}));
+        app.click(inRow("Alpha","select","Fixed"));
+        app.click(node("button","↗ Over time"));
+        until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
+        settle();
+        const editorPresets=["Hard","Soft","Triangle"].filter(l=>app.snapshot().find({role:"button",label:l}));
+        const chip=inRow("Alpha","select","Full");
+        app.click(chip);
+        const grid=node("card","Curve presets").bounds;
+        const cells=app.snapshot().findAll({role:"button"})
+            .filter(n=>n.bounds.x>=grid.x&&n.bounds.y>=grid.y&&n.bounds.x<grid.x+grid.width&&n.bounds.y<grid.y+grid.height)
+            .map(n=>({label:n.label,y:n.bounds.y,w:n.bounds.width}));
+        app.click(node("button","Fade in-out"));
+        until("picked",s=>s.find({role:"select",label:"Fade in-out"}));
+        settle();
+        const closed=!app.snapshot().find({role:"card",label:"Curve presets"});
+        ({editorPresets,grid,chip:chip.bounds,cells,closed})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    assert_eq!(
+        out["editorPresets"],
+        serde_json::json!([]),
+        "the editor drops its own presets beside the picker: {out}"
+    );
+    let alpha: Vec<&str> = luma_patterns::presets()
+        .curves_for("alpha")
+        .map(|curve| curve.name.as_str())
+        .collect();
+    // The popover lies over the editor; keep only its own thumbnails.
+    let cells: Vec<&serde_json::Value> = out["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| alpha.contains(&c["label"].as_str().unwrap()))
+        .collect();
+    let labels: Vec<&str> = cells.iter().map(|c| c["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, alpha, "alpha offers its own curves: {out}");
+    // A tidy grid: rows as full as the first, the last no longer.
+    let mut rows: Vec<usize> = Vec::new();
+    let mut last = f64::NAN;
+    for cell in &cells {
+        let y = cell["y"].as_f64().unwrap();
+        if y != last {
+            rows.push(0);
+            last = y;
+        }
+        *rows.last_mut().unwrap() += 1;
+    }
+    assert_eq!(rows, [4, 4], "{out}");
+    assert!(
+        out["chip"]["width"].as_f64().unwrap() < 160.,
+        "the chip is as wide as its content: {out}"
+    );
+    assert!(
+        cells.iter().all(|c| c["w"].as_f64().unwrap() >= 56.),
+        "{out}"
+    );
+    let (grid, chip) = (&out["grid"], &out["chip"]);
+    assert!(
+        grid["y"].as_f64().unwrap()
+            >= chip["y"].as_f64().unwrap() + chip["height"].as_f64().unwrap(),
+        "the popover hangs under the chip: {out}"
+    );
+    assert_eq!(out["closed"], true, "a pick closes the popover: {out}");
+
+    let score = stored("clip-forms-alpha-curves");
+    let fade = luma_patterns::presets()
+        .curves_for("alpha")
+        .find(|curve| curve.name == "Fade in-out")
+        .unwrap();
+    assert_eq!(
+        score["clips"]["form-clip"]["inputs"]["alpha"],
+        serde_json::json!({"type": "time", "value": fade.curve}),
+        "the pick stores the alpha curve: {}",
+        score["clips"]["form-clip"]["inputs"]["alpha"]
     );
 }

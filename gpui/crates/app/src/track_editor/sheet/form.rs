@@ -34,6 +34,7 @@ const EVERY_BEATS: f64 = 4.;
 #[derive(Clone, Copy)]
 pub(super) struct Slot {
     form: &'static str,
+    key: &'static str,
     spec: &'static p::Input,
     speed: bool,
     mode: Option<p::SourceKind>,
@@ -43,9 +44,12 @@ impl Slot {
     /// The slot for `def` when `form` is a shipped form that has it.
     pub(super) fn new(form: &str, def: &PatternArgDef, stored: &serde_json::Value) -> Option<Self> {
         let form = *p::FORMS.iter().find(|id| **id == form)?;
-        let spec = document::form_definition(form)?.inputs.get(&def.id)?;
+        let (key, spec) = document::form_definition(form)?
+            .inputs
+            .get_key_value(&def.id)?;
         Some(Self {
             form,
+            key,
             spec,
             speed: SPEEDS.contains(&def.id.as_str()),
             mode: decode(spec.value_type, stored)
@@ -61,6 +65,11 @@ impl Slot {
         } else {
             [0., 1.]
         }
+    }
+
+    /// The shipped curve presets this input offers.
+    fn curves(&self) -> impl Iterator<Item = &'static p::CurvePreset> {
+        p::presets().curves_for(self.key)
     }
 
     /// A number the input accepts: speeds stay above zero, the rest in 0–1.
@@ -390,7 +399,8 @@ pub(super) fn widget(
         }
         Some(p::Value::Time(curve) | p::Value::Hit(curve)) => {
             let hit = slot.mode == Some(p::SourceKind::Hit);
-            let entity = cx.new(|_| EnvelopeEditor::new(envelope_of(slot, &curve)));
+            let entity =
+                cx.new(|_| EnvelopeEditor::new(envelope_of(slot, &curve)).without_presets());
             let def = def.clone();
             let shape = *slot;
             subs.push(cx.subscribe(
@@ -860,9 +870,7 @@ fn choice_curves(
 /// The shipped curve presets as the input's curves, each in the envelope
 /// editor's 0–1 box.
 fn curve_options(slot: &Slot) -> Vec<(SharedString, p::Envelope)> {
-    p::presets()
-        .curves
-        .iter()
+    slot.curves()
         .map(|preset| {
             let curve = scaled(slot, &preset.curve);
             (preset.name.clone().into(), envelope_of(slot, &curve))
@@ -872,9 +880,7 @@ fn curve_options(slot: &Slot) -> Vec<(SharedString, p::Envelope)> {
 
 /// The preset `curve` equals, if any.
 fn curve_preset(slot: &Slot, curve: &p::Keyframes) -> Option<usize> {
-    p::presets()
-        .curves
-        .iter()
+    slot.curves()
         .position(|preset| same_curve(&scaled(slot, &preset.curve), curve))
 }
 
@@ -1018,7 +1024,10 @@ fn control(
                     current,
                     &curve_options(slot),
                     move |picked, this, cx| {
-                        let curve = scaled(&shape, &p::presets().curves[picked].curve);
+                        let Some(preset) = shape.curves().nth(picked) else {
+                            return;
+                        };
+                        let curve = scaled(&shape, &preset.curve);
                         this.form_edit(&def, spec, cx, |value| match value {
                             p::Value::Time(_) => Some(p::Value::Time(curve)),
                             p::Value::Hit(_) => Some(p::Value::Hit(curve)),
@@ -1210,11 +1219,11 @@ mod tests {
     fn the_curve_picker_finds_the_preset_a_curve_came_from() {
         let travel = slot("color.chase@1", "travel");
         let options = curve_options(&travel);
-        assert_eq!(options.len(), p::presets().curves.len());
+        assert_eq!(options.len(), travel.curves().count());
         assert!(options
             .iter()
             .all(|(_, envelope)| envelope.validate().is_ok()));
-        for (at, preset) in p::presets().curves.iter().enumerate() {
+        for (at, preset) in travel.curves().enumerate() {
             assert_eq!(
                 curve_preset(&travel, &scaled(&travel, &preset.curve)),
                 Some(at)
@@ -1222,6 +1231,32 @@ mod tests {
         }
         let custom = p::Keyframes::numbers(&[[0., 3.], [1., 5.]], &[]);
         assert_eq!(curve_preset(&travel, &custom), None);
+    }
+
+    #[test]
+    fn alpha_curves_match_after_a_round_trip() {
+        let alpha = slot("color.chase@1", "alpha");
+        let names: Vec<_> = alpha.curves().map(|c| c.name.as_str()).collect();
+        assert_eq!(names[0], "Full");
+        assert!(!names.contains(&"Ramp up"), "{names:?}");
+        // A fixed alpha promoted to a curve is the flat "Full" curve.
+        let p::Value::Time(flat) =
+            promote(&alpha, &p::Value::Proportion(1.), Some(p::SourceKind::Time))
+        else {
+            unreachable!()
+        };
+        assert_eq!(curve_preset(&alpha, &flat), Some(0));
+        for (at, preset) in alpha.curves().enumerate() {
+            // Stored, read back, and passed through the envelope editor.
+            let value = p::Value::Time(scaled(&alpha, &preset.curve));
+            let wire = super::document::wire_value(&value);
+            let Ok(p::Value::Time(read)) = super::decode(alpha.spec.value_type, &wire) else {
+                panic!("{} reads back", preset.name)
+            };
+            assert_eq!(curve_preset(&alpha, &read), Some(at), "{}", preset.name);
+            let edited = keyframes_of(&alpha, &envelope_of(&alpha, &read));
+            assert_eq!(curve_preset(&alpha, &edited), Some(at), "{}", preset.name);
+        }
     }
 
     #[test]
