@@ -275,6 +275,16 @@ fn color_to_wire(arg: ColorArg) -> serde_json::Value {
     })
 }
 
+/// What a scalar field multiplies the stored value by to show it: a
+/// proportion shows as a percent.
+fn shown_scale(arg_type: &PatternArgType) -> f64 {
+    if *arg_type == PatternArgType::Proportion {
+        100.
+    } else {
+        1.
+    }
+}
+
 fn scalar_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> f64 {
     value
         .as_f64()
@@ -719,9 +729,11 @@ fn plain_widget(
             | PatternArgType::Beats
             | PatternArgType::Proportion
             | PatternArgType::Position => {
-                let value = scalar_from_wire(&stored, &def.default_value);
+                // A proportion reads as a percent; beats say so.
+                let scale = shown_scale(&def.arg_type);
+                let value = scalar_from_wire(&stored, &def.default_value) * scale;
                 let entity = cx.new(|cx| {
-                    DraftedNumber::new(
+                    let field = DraftedNumber::new(
                         def.name.clone(),
                         value,
                         if matches!(
@@ -733,21 +745,26 @@ fn plain_widget(
                             -1e9
                         },
                         if def.arg_type == PatternArgType::Proportion {
-                            1.
+                            100.
                         } else {
                             1e9
                         },
                         FIELD_W,
                         window,
                         cx,
-                    )
+                    );
+                    match def.arg_type {
+                        PatternArgType::Proportion => field.with_unit("%"),
+                        PatternArgType::Beats => field.with_unit("beats"),
+                        _ => field,
+                    }
                 });
                 let arg_id = def.id.clone();
                 subs.push(cx.subscribe(
                     &entity,
                     move |this: &mut Luma, _, event: &NumberEvent, cx| {
                         let NumberEvent::Committed(value) = *event;
-                        this.arg_live(&arg_id, serde_json::json!(value), cx);
+                        this.arg_live(&arg_id, serde_json::json!(value / scale), cx);
                     },
                 ));
                 Widget::Scalar(entity)
@@ -887,7 +904,8 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
             Widget::Scalar(entity) => {
-                let value = scalar_from_wire(&stored, &cell.def.default_value);
+                let value = scalar_from_wire(&stored, &cell.def.default_value)
+                    * shown_scale(&cell.def.arg_type);
                 entity.update(cx, |field, cx| field.set_value(value, cx));
             }
             Widget::Seed(entity) => {
@@ -1202,7 +1220,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                                     .into_any_element()
                             }),
                     )
-                    .child(named("blend", blend_select(state, built, app)))
+                    .child(named("Blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
         )
@@ -1447,7 +1465,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                         .child(entity.clone())
                         .child(pick_chip),
                 ),
-                named("how many", amount),
+                named("How many", amount),
             ]
         }
         Widget::Palette { selected, hsv } => {
@@ -1473,11 +1491,51 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
     }
 }
 
+/// The width of a row's mode menu ("Fixed", "↗ Over time"…), the same on
+/// every row.
+const MODE_W: f32 = 140.;
+/// Air between a row's header line and its control.
+const LABEL_GAP: f32 = 6.;
+
 /// One labelled row, named for the agent tree.
 fn named(label: &str, control: Div) -> AnyElement {
-    arg_row(label, control)
-        .agent_node(Role::Row, label.to_string())
+    sheet_row(label, Vec::new(), control)
+}
+
+/// Every row of the sheet has one shape. A header line one control tall
+/// carries the label, sentence case, and on its right anything that changes
+/// how the value is read (a mode menu, a toggle). Under it, the value control
+/// spans the column, whatever kind it is.
+fn sheet_row(label: &str, accessories: Vec<AnyElement>, control: Div) -> AnyElement {
+    let label = sentence_case(label);
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(LABEL_GAP))
+        .child(
+            div()
+                .w_full()
+                .h(px(CONTROL_HEIGHT))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .child(luma_ui::caption(label.clone()))
+                .child(div().flex_1())
+                .children(accessories),
+        )
+        .child(div().w_full().flex().flex_col().child(control))
+        .agent_node(Role::Row, label)
         .into_any_element()
+}
+
+/// First letter up, the rest as written: "how many" reads "How many".
+fn sentence_case(label: &str) -> String {
+    let mut chars = label.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// Whether the HSV plate for the cell at `index` is up.

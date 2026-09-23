@@ -231,7 +231,7 @@ fn the_sheet_arrives_writes_batches_retargets_and_leaves() {
     //    colour) fell off the right edge of the same 1200pt window.
     let sheet = rect(&populated["sheet"]);
     let rows = populated["rows"].as_object().expect("rows");
-    for name in ["blend", "selection", "how many", "intensity", "tint"] {
+    for name in ["Blend", "Selection", "How many", "Intensity", "Tint"] {
         let row = rows
             .get(name)
             .unwrap_or_else(|| panic!("no `{name}` row: {populated:#}"));
