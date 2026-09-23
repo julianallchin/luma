@@ -166,6 +166,9 @@ impl Render for EnvelopeEditor {
         let value = self.value.clone();
         let selected = self.selected;
         let this = cx.entity();
+        let drag_view = cx.entity();
+        let dragging = self.dragging.is_some();
+        let pressed = self.before_drag.is_some();
         let curved = matches!(self.value.curve(selected), EnvelopeCurve::Bezier { .. });
         let mut handles = self
             .value
@@ -206,6 +209,34 @@ impl Render for EnvelopeEditor {
                                         this.update(cx, |this, _| this.bounds = Some(bounds));
                                     },
                                     move |bounds, _, window, _| {
+                                        // A drag follows the pointer anywhere in the
+                                        // window, clamped to the box, and ends on the
+                                        // first release anywhere.
+                                        if dragging {
+                                            let moving = drag_view.clone();
+                                            window.on_mouse_event(
+                                                move |e: &gpui::MouseMoveEvent, phase, _, cx| {
+                                                    if phase.bubble() {
+                                                        moving.update(cx, |this, cx| {
+                                                            this.move_drag(e.position, cx)
+                                                        });
+                                                    }
+                                                },
+                                            );
+                                        }
+                                        if pressed {
+                                            let release = drag_view.clone();
+                                            window.on_mouse_event(
+                                                move |e: &gpui::MouseUpEvent, phase, _, cx| {
+                                                    if phase.bubble()
+                                                        && e.button == MouseButton::Left
+                                                    {
+                                                        release
+                                                            .update(cx, |this, cx| this.commit(cx));
+                                                    }
+                                                },
+                                            );
+                                        }
                                         paint_envelope(
                                             window,
                                             bounds,
@@ -303,17 +334,6 @@ impl Render for EnvelopeEditor {
                                     cx.stop_propagation();
                                     cx.notify();
                                 }),
-                            )
-                            .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _, cx| {
-                                this.move_drag(e.position, cx)
-                            }))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| this.commit(cx)),
-                            )
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| this.commit(cx)),
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
