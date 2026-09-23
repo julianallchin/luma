@@ -22,6 +22,7 @@ pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input
         rate: Rate::Frame,
         default,
         author: None,
+        promotable: Vec::new(),
     }
 }
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {

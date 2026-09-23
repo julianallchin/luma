@@ -166,6 +166,11 @@ impl Score {
             if !definition.playable() {
                 return Err(Error("a clip graph must produce fixture output".into()));
             }
+            if crate::forms::is_form(&clip.graph) {
+                crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
+                    .map_err(|error| Error(format!("clip {id}: {error}")))?;
+                continue;
+            }
             for (key, input) in &definition.inputs {
                 if input.default.is_none() && !clip.inputs.contains_key(key) {
                     return Err(Error(format!("missing clip input {key}")));

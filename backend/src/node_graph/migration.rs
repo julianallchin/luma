@@ -86,6 +86,7 @@ pub(crate) fn typed_pattern(source: &Graph, name: &str) -> Result<p::Score, Stri
                     rate: Rate::Fixed,
                     default: Some(argument_value(&arg.arg_type, kind, &arg.default_value)?),
                     author: None,
+                    promotable: Vec::new(),
                 },
             );
         }

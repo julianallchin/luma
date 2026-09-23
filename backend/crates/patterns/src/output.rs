@@ -112,6 +112,7 @@ pub(crate) fn terminal_definition() -> crate::Definition {
         rate: Rate::Frame,
         default: Some(value),
         author: None,
+        promotable: Vec::new(),
     };
     Definition {
         name: "Apply".into(),

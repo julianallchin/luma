@@ -145,7 +145,17 @@ fn default_graphs_keep_all_time_samples_through_arithmetic_color_and_output() {
         {
             continue;
         }
-        let program = PreparedGraph::new(&library, id, &BTreeMap::new(), frame(&cells))
+        // A form clip carries every input; its defaults are a whole preset.
+        let inputs = if is_form(id) {
+            definition
+                .inputs
+                .iter()
+                .map(|(key, input)| (key.clone(), input.default.clone().unwrap()))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+        let program = PreparedGraph::new(&library, id, &inputs, frame(&cells))
             .unwrap_or_else(|e| panic!("prepare {id}: {e}"))
             .with_features(Arc::new(Analysis::default()))
             .unwrap();

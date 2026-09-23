@@ -79,6 +79,12 @@ impl PreparedGraph {
             requests: Vec::new(),
             baked: Vec::new(),
         };
+        // A form clip's sources become nodes of its own copy of the form.
+        let lowered = crate::forms::lower(library, definition, inputs)?;
+        let (root, inputs) = match &lowered {
+            Some((root, inputs)) => (root, inputs),
+            None => (&library.definitions[definition], inputs),
+        };
         let bound = inputs
             .iter()
             .map(|(key, value)| {
@@ -88,7 +94,7 @@ impl PreparedGraph {
                 ))
             })
             .collect::<Result<_>>()?;
-        prepared.outputs = prepared.lower(library, definition, bound)?;
+        prepared.outputs = prepared.lower_definition(library, definition, root, bound)?;
         // A nested definition may offer several independent outputs. Only the
         // connected ones belong to this program, including during preparation.
         let live = prepared.live_steps(prepared.steps.len(), &[], prepared.outputs.values());
@@ -265,9 +271,17 @@ impl PreparedGraph {
         &mut self,
         library: &Library,
         id: &str,
+        inputs: BTreeMap<String, Source>,
+    ) -> Result<BTreeMap<String, Source>> {
+        self.lower_definition(library, id, &library.definitions[id], inputs)
+    }
+    fn lower_definition(
+        &mut self,
+        library: &Library,
+        id: &str,
+        definition: &crate::Definition,
         mut inputs: BTreeMap<String, Source>,
     ) -> Result<BTreeMap<String, Source>> {
-        let definition = &library.definitions[id];
         for name in inputs.keys() {
             if !definition.inputs.contains_key(name) {
                 return Err(Error(format!("{id}: unknown input {name}")));

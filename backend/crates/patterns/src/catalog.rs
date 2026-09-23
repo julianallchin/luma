@@ -15,12 +15,16 @@ fn input(
         rate,
         default,
         author: None,
+        promotable: Vec::new(),
     }
 }
 fn field(name: &str, description: &str, value: Value, rate: Rate) -> Input {
     input(name, description, value.value_type(), rate, Some(value))
 }
 fn primitive_definition(p: Primitive) -> Definition {
+    if let Some(definition) = crate::forms::ops::definition(p) {
+        return definition;
+    }
     if let Some(definition) = crate::point_fields::definition(p) {
         return definition;
     }
@@ -430,6 +434,10 @@ pub fn standard_library() -> Library {
                 ("core/grid_events", Primitive::GridEvents),
                 ("core/event_window", Primitive::EventWindow),
                 ("core/event_ages", Primitive::EventAges),
+                ("core/event_life", Primitive::EventLife),
+                ("core/odometer", Primitive::Odometer),
+                ("core/curve", Primitive::SampleCurve),
+                ("core/random_share", Primitive::RandomShare),
                 ("core/event_spacing", Primitive::EventSpacing),
                 ("core/thin_events", Primitive::ThinEvents),
                 ("random_subset", Primitive::RandomEventTargets),
@@ -452,6 +460,9 @@ pub fn standard_library() -> Library {
                 ("fixture_geometry", Primitive::WorldGeometry),
             ] {
                 library.definitions.insert(id.into(), primitive(op));
+            }
+            for (id, form) in crate::forms::definitions() {
+                library.definitions.insert(id.into(), form);
             }
             library
         })

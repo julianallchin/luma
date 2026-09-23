@@ -199,6 +199,7 @@ pub(crate) fn definition() -> Definition {
         rate: Rate::Fixed,
         default: Some(value),
         author: None,
+        promotable: Vec::new(),
     };
     Definition {
         name: "Random subset".into(),
