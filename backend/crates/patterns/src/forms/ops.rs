@@ -453,10 +453,7 @@ fn event_life(
     ])
 }
 
-/// The fixture part of a head identity (`fixture:head`).
-fn fixture_of(id: &str) -> &str {
-    id.rsplit_once(':').map_or(id, |(fixture, _)| fixture)
-}
+use crate::mapping::fixture_of;
 
 /// The grain of each head. Grain 0 is the whole fixture. Grain N groups N
 /// heads of one fixture in head order; 1 is each head alone.

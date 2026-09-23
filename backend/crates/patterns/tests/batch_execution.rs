@@ -442,6 +442,8 @@ fn animated_chase_width_and_envelope_are_sampled_on_the_time_axis() {
         &BTreeMap::from([(
             "mapping".into(),
             Value::Mapping(MappingSpec {
+                span: Default::default(),
+                plane: None,
                 source: MappingSource::U,
                 mirror: None,
                 per_group: false,

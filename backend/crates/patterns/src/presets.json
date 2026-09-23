@@ -47,7 +47,7 @@
     }},
     {"name": "Ripple", "form": "color.chase@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "per_group": false, "reverse": false}},
+      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}},
       "boundary": {"type": "boundary", "value": "clip"},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
       "every": {"type": "beats", "value": 2.0},
@@ -59,7 +59,7 @@
     }},
     {"name": "Spin", "form": "color.chase@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "angle"}, "per_group": false, "reverse": false}},
+      "axis": {"type": "mapping", "value": {"source": {"kind": "angle"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}},
       "boundary": {"type": "boundary", "value": "wrap"},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
       "every": {"type": "beats", "value": 2.0},

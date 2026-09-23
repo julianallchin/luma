@@ -517,6 +517,8 @@ mod tests {
             .collect();
         let resolve = |source| {
             p::MappingSpec {
+                span: Default::default(),
+                plane: None,
                 mirror: None,
                 source,
                 per_group: false,

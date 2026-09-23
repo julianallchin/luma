@@ -341,8 +341,13 @@ pub fn palette_steps(count: usize) -> Envelope {
     }
 }
 
+/// An axis over the whole selection. Radial and angle read in the best-fit
+/// plane around the centroid.
 fn axis(source: MappingSource) -> Value {
+    let round = matches!(source, MappingSource::Radial | MappingSource::Angle);
     Value::Mapping(MappingSpec {
+        span: Default::default(),
+        plane: round.then_some(crate::AxisPlane::Auto),
         source,
         per_group: false,
         reverse: false,
@@ -956,6 +961,17 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
             if mapping.reverse {
                 return Err(Error(
                     "an axis has no reverse; choose a backward path".into(),
+                ));
+            }
+            if mapping.per_group {
+                return Err(Error(
+                    "an axis has no per_group; choose the group span".into(),
+                ));
+            }
+            let round = matches!(mapping.source, MappingSource::Radial | MappingSource::Angle);
+            if round != mapping.plane.is_some() {
+                return Err(Error(
+                    "radial and angle axes need a plane; other axes have none".into(),
                 ));
             }
         }

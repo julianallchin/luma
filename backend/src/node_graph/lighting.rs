@@ -23,6 +23,8 @@ mod mapping_tests {
             },
         ] {
             let value = p::Value::Mapping(p::MappingSpec {
+                span: Default::default(),
+                plane: None,
                 mirror: Some(p::MirrorPlane {
                     normal: [1., 0., 1.],
                     offset: 0.25,
@@ -189,9 +191,7 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
                     let alpha = stop
                         .get("alpha")
                         .and_then(Value::as_f64)
-                        .unwrap_or_else(|| {
-                            super::migration::values::parse_color(&stop["color"])[3] as f64
-                        });
+                        .unwrap_or_else(|| color_alpha(&stop["color"]));
                     Ok(json!({"t":stop["t"], "color":color, "alpha":alpha}))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -201,6 +201,8 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
             let source = p::MappingSource::from_key(value.as_str().unwrap())
                 .map_err(|error| error.to_string())?;
             return Ok(p::Value::Mapping(p::MappingSpec {
+                span: Default::default(),
+                plane: None,
                 mirror: None,
                 source,
                 per_group: false,
@@ -706,4 +708,19 @@ pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
         edges,
         args: Vec::new(),
     })
+}
+
+/// The alpha of a stop color: the `aa` byte of `"#rrggbbaa"` or the `a` field
+/// (0–1) of an `{r,g,b,a}` object. Opaque when neither says otherwise.
+fn color_alpha(color: &Value) -> f64 {
+    if let Some(hex) = color.as_str() {
+        let hex = hex.trim_start_matches('#');
+        return match hex.get(6..8) {
+            Some(byte) if hex.is_ascii() => {
+                f64::from(u8::from_str_radix(byte, 16).unwrap_or(0)) / 255.
+            }
+            _ => 1.,
+        };
+    }
+    color.get("a").and_then(Value::as_f64).unwrap_or(1.)
 }

@@ -156,7 +156,38 @@ Strokes travel across the heads. Each event starts one stroke.
 
 - **axis** is `order`, `x`, `y`, `z`, `radial`, `angle` or a custom
   `vector(u, v, z)`, with an optional `mirror`. Axis has no `reverse`; path
-  owns direction.
+  owns direction. Every axis (chase, `color.space`) also has:
+  - **Spans**: `selection` (default: one axis 0–1 across the whole
+    selection), `fixture` (each fixture, the head id before its last `:`,
+    gets its own axis 0–1, so a chase runs along every pixel bar or LED ring
+    at once) or `group` (each group of the selection expression gets its own
+    axis, so `left_truss | right_truss` chases along both trusses in
+    parallel). Path, mirror, width and shape apply within each span. Stored
+    as `"span": "fixture"`; `selection` is left out. The old `per_group` flag
+    is the group span; a form axis stores `per_group: false`.
+  - **Plane** (radial and angle only, required for them): `Auto` (default),
+    `Around up–down`, `Around front–back`, `Around left–right` or
+    `Custom axis` (a U, V, Z normal, like mirror's custom plane). Stored as
+    `"plane": {"kind": "auto"}`, `up_down`, `front_back`, `left_right` or
+    `{"kind": "custom", "normal": [u, v, z]}`. Angle 0 and its direction:
+    around up–down, from stage right (U+) toward downstage (V+); around
+    front–back, from stage right toward up (Z+); around left–right, from
+    downstage toward up. A custom normal takes angle 0 from the fixed plane
+    whose axis it is closest to (ties: up–down, front–back, left–right),
+    projected onto its plane, and turns by the right-hand rule around the
+    normal as given.
+  - **Auto rule.** The normal is the direction of least spread of the heads
+    in the span (the plane holds their two largest spread directions). Heads
+    on one line or one spot use around up–down. The normal then takes its
+    sign and its angle 0 from the fixed plane it is closest to, as above. So
+    a flat floor ring reads exactly like around up–down, a ring facing the
+    audience exactly like around front–back, and a slightly tilted rig keeps
+    the same angle 0 and direction. A rig near 45° between two fixed planes
+    can change reading when it tilts across the middle.
+  - **Center.** Radial and angle measure from the centroid (mean head
+    position) of the span, in its plane. With the fixture span, each
+    fixture turns around its own center. Radial is the distance within the
+    plane, scaled 0–1 over the span.
 - **every** is beats, or a list of stamped event times in beats from the clip
   start. No `delay` and no `grid_aligned`: to shift, move the clip.
 - **Strokes on the axis at once** = `travel / every`. Strokes overlap when
@@ -190,7 +221,8 @@ Strokes travel across the heads. Each event starts one stroke.
 
 The default axis is `x`.
 
-Presets: Chase, Wave (soft, width abs 100%), Ripple (radial), Spin (angle), Bounce (bounce),
+Presets: Chase, Wave (soft, width abs 100%), Ripple (radial, plane Auto),
+Spin (angle, plane Auto), Bounce (bounce),
 Alternating sides (x, `steps(2)`, travel = every, width abs 50%, hard),
 Stepped chase (`steps(N)`, width abs 1/N).
 

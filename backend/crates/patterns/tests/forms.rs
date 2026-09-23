@@ -857,6 +857,8 @@ fn radial_and_angle_axes_need_no_solved_circle() {
         })
         .collect();
     let spec = |source| MappingSpec {
+        span: Default::default(),
+        plane: None,
         source,
         per_group: false,
         reverse: false,
@@ -1036,4 +1038,41 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
     };
     set(&mut inputs, "alpha", Value::Time(high));
     assert!(prepare(&form, &inputs).is_err());
+}
+
+#[test]
+fn a_fixture_span_chases_every_bar_at_once() {
+    let (form, mut inputs) = preset("Chase");
+    let Value::Mapping(mut axis) = inputs["axis"].clone() else {
+        panic!("axis")
+    };
+    axis.span = Span::Fixture;
+    set(&mut inputs, "axis", Value::Mapping(axis));
+    let mut lit = 0;
+    for step in 0..20 {
+        let beat = f64::from(step) * 0.1 + 0.05;
+        let values = render(&form, &inputs, beat);
+        // Heads 0–3 are the left bar, 4–7 the right bar.
+        assert_eq!(values[..4], values[4..], "{beat}");
+        lit += values.iter().filter(|v| **v > 0.0).count();
+    }
+    assert!(lit > 0);
+}
+
+#[test]
+fn round_axes_need_a_plane_and_axes_have_no_per_group() {
+    let (form, inputs) = preset("Ripple");
+    let Value::Mapping(axis) = inputs["axis"].clone() else {
+        panic!("axis")
+    };
+    assert_eq!(axis.plane, Some(AxisPlane::Auto));
+    let mut flat = axis.clone();
+    flat.plane = None;
+    let mut grouped = axis.clone();
+    grouped.per_group = true;
+    for wrong in [flat, grouped] {
+        let mut bad = inputs.clone();
+        set(&mut bad, "axis", Value::Mapping(wrong));
+        assert!(prepare(&form, &bad).is_err());
+    }
 }
