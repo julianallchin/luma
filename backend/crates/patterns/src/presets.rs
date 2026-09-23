@@ -19,6 +19,9 @@ pub struct FormPreset {
 #[serde(deny_unknown_fields)]
 pub struct CurvePreset {
     pub name: String,
+    /// The input key this curve is made for. `None` is the general set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
     pub curve: Keyframes,
 }
 
@@ -41,11 +44,24 @@ impl Presets {
     pub fn preset(&self, name: &str) -> Option<&FormPreset> {
         self.presets.iter().find(|preset| preset.name == name)
     }
+    /// The general curve called `name`.
     pub fn curve(&self, name: &str) -> Option<&Keyframes> {
         self.curves
             .iter()
-            .find(|curve| curve.name == name)
+            .find(|curve| curve.input.is_none() && curve.name == name)
             .map(|curve| &curve.curve)
+    }
+    /// The curves offered for `input`: its own set where it has one, the
+    /// general set otherwise. In menu order.
+    pub fn curves_for<'a>(&'a self, input: &'a str) -> impl Iterator<Item = &'a CurvePreset> {
+        let own = self
+            .curves
+            .iter()
+            .any(|curve| curve.input.as_deref() == Some(input));
+        let wanted = own.then_some(input);
+        self.curves
+            .iter()
+            .filter(move |curve| curve.input.as_deref() == wanted)
     }
 }
 
