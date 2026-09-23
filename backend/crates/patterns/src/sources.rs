@@ -17,14 +17,33 @@ pub enum SourceKind {
 
 /// How a keyframe curve moves from one point to the next. `hold` keeps the
 /// start value for the whole segment; `step` takes the end value at once.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// `bezier` is a cubic through the two points with two handles, as in an
+/// `Envelope`: each handle is `[progress, value]` in the curve's own units,
+/// with progress ordered between the segment's points. It stores as
+/// `{"bezier": {"control1": [x, y], "control2": [x, y]}}`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Segment {
     Hold,
     #[default]
     Linear,
-    Ease,
     Step,
+    Bezier {
+        control1: [f64; 2],
+        control2: [f64; 2],
+    },
+}
+
+impl Segment {
+    /// The smooth ease between `a` and `b`: handles a third of the way along
+    /// at the start and end values. It draws `3t² − 2t³`.
+    pub fn ease(a: [f64; 2], b: [f64; 2]) -> Self {
+        let third = (b[0] - a[0]) / 3.0;
+        Self::Bezier {
+            control1: [a[0] + third, a[1]],
+            control2: [a[0] + 2.0 * third, b[1]],
+        }
+    }
 }
 
 /// One keyframe value: a number in the input's own unit, or a color.
@@ -87,17 +106,41 @@ impl Keyframes {
                 self.points.len() - 1
             )));
         }
+        for (i, segment) in self.segments.iter().enumerate() {
+            let Segment::Bezier { control1, control2 } = segment else {
+                continue;
+            };
+            let (x0, x1) = (self.points[i].0, self.points[i + 1].0);
+            if color
+                || control1.iter().chain(control2).any(|v| !v.is_finite())
+                || control1[0] < x0
+                || control1[0] > control2[0]
+                || control2[0] > x1
+            {
+                return Err(Error(format!(
+                    "curve segment {i}: Bézier handles need finite values, x ordered between the points, and a number curve"
+                )));
+            }
+        }
         Ok(())
     }
     pub fn is_color(&self) -> bool {
         matches!(self.points.first(), Some((_, Key::Color(_))))
     }
-    /// Every channel value, for range checks.
+    /// Every channel value and Bézier handle value, for range checks. A
+    /// Bézier stays within its points and handles, so these bound the curve.
     pub fn values(&self) -> impl Iterator<Item = f64> + '_ {
-        self.points.iter().flat_map(|(_, key)| match key {
-            Key::Number(v) => vec![*v],
-            Key::Color(rgb) => rgb.to_vec(),
-        })
+        let handles = self.segments.iter().flat_map(|segment| match segment {
+            Segment::Bezier { control1, control2 } => vec![control1[1], control2[1]],
+            _ => Vec::new(),
+        });
+        self.points
+            .iter()
+            .flat_map(|(_, key)| match key {
+                Key::Number(v) => vec![*v],
+                Key::Color(rgb) => rgb.to_vec(),
+            })
+            .chain(handles)
     }
     /// The value at `progress`, one entry per channel.
     pub fn sample(&self, progress: f64) -> [f64; 3] {
@@ -123,7 +166,13 @@ impl Keyframes {
             Segment::Hold => 0.0,
             Segment::Step => 1.0,
             Segment::Linear => t,
-            Segment::Ease => t * t * (3.0 - 2.0 * t),
+            // The same evaluation as an Envelope's Bézier segment.
+            Segment::Bezier { control1, control2 } => {
+                let controls = [[x0, a[0]], control1, control2, [x1, b[0]]];
+                let at =
+                    crate::envelope::at(controls, crate::envelope::parameter(controls, progress));
+                return [at[1]; 3];
+            }
         };
         std::array::from_fn(|ch| a[ch] + (b[ch] - a[ch]) * t)
     }

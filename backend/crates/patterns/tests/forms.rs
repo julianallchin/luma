@@ -471,7 +471,16 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
     set(
         &mut inputs,
         "travel",
-        Value::Time(curve(&[[0.0, 2.0], [0.5, 1.0], [1.0, 3.0]], Segment::Ease)),
+        Value::Time(Keyframes::numbers(
+            &[[0.0, 2.0], [0.5, 1.0], [1.0, 3.0]],
+            &[
+                Segment::ease([0.0, 2.0], [0.5, 1.0]),
+                Segment::Bezier {
+                    control1: [0.6, 1.0],
+                    control2: [0.9, 2.5],
+                },
+            ],
+        )),
     );
     let program = prepare(&form, &inputs).unwrap();
     let beats: Vec<f64> = (0..160).map(|step| START + f64::from(step) * 0.1).collect();
@@ -709,7 +718,7 @@ fn sources_are_tagged_values_in_stored_clips() {
     );
     for json in [
         serde_json::json!({"type": "hit", "value": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}}),
-        serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["ease"]}}),
+        serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["hold"]}}),
         serde_json::json!({"type": "noise", "value": {"speed": 4.0, "range": [0.2, 1.0]}}),
         serde_json::json!({"type": "audio", "value": {"from_hz": 40.0, "to_hz": 100.0, "floor": 0.3}}),
         serde_json::json!({"type": "events", "value": {"source": "beats", "times": [0.0, 1.5, 3.0]}}),
@@ -857,4 +866,75 @@ fn stepped_color_curves_show_each_palette_stop_without_blending() {
             "{label}"
         );
     }
+}
+
+#[test]
+fn bezier_sources_play_exactly_what_the_envelope_draws() {
+    // Handles off the thirds: not a standard ease.
+    let control1 = [0.1, 0.9];
+    let control2 = [0.35, 0.05];
+    let drawn = Envelope {
+        points: vec![[0.0, 0.2], [0.5, 0.6], [1.0, 1.0]],
+        curves: vec![
+            EnvelopeCurve::Bezier { control1, control2 },
+            EnvelopeCurve::Linear,
+        ],
+    };
+    let stored: Value = serde_json::from_value(serde_json::json!({
+        "type": "time",
+        "value": {
+            "points": [[0.0, 0.2], [0.5, 0.6], [1.0, 1.0]],
+            "segments": [{"bezier": {"control1": control1, "control2": control2}}, "linear"]
+        }
+    }))
+    .unwrap();
+    let Value::Time(curve) = &stored else {
+        unreachable!()
+    };
+    curve.validate().unwrap();
+    for i in 0..=200 {
+        let x = f64::from(i) / 200.0;
+        assert_eq!(curve.sample(x)[0], drawn.sample(x), "{x}");
+    }
+    // The ease shorthand is the smoothstep it names.
+    let ease = Keyframes::numbers(
+        &[[0.0, 0.0], [1.0, 1.0]],
+        &[Segment::ease([0.0, 0.0], [1.0, 1.0])],
+    );
+    for x in [0.1, 0.25, 0.5, 0.8] {
+        assert!((ease.sample(x)[0] - x * x * (3.0 - 2.0 * x)).abs() < 1e-9);
+    }
+    // Played as a clip's alpha, it is the same curve.
+    let (form, mut inputs) = preset("Wash");
+    set(&mut inputs, "alpha", stored.clone());
+    for beat in [1.0, 3.0, 5.5, 12.0] {
+        let expected = drawn.sample(beat / 16.0);
+        for value in render(&form, &inputs, beat) {
+            assert!((value - expected).abs() < 1e-12, "{beat}");
+        }
+    }
+    // Handles out of order, or out of range for a proportion, are refused.
+    let bad = Keyframes {
+        points: curve.points.clone(),
+        segments: vec![
+            Segment::Bezier {
+                control1: [0.4, 0.5],
+                control2: [0.2, 0.5],
+            },
+            Segment::Linear,
+        ],
+    };
+    assert!(bad.validate().is_err());
+    let high = Keyframes {
+        points: curve.points.clone(),
+        segments: vec![
+            Segment::Bezier {
+                control1: [0.1, 1.5],
+                control2: [0.2, 0.5],
+            },
+            Segment::Linear,
+        ],
+    };
+    set(&mut inputs, "alpha", Value::Time(high));
+    assert!(prepare(&form, &inputs).is_err());
 }

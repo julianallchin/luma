@@ -166,19 +166,35 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
     }
 }
 
+/// `segment` with its Bézier handle values passed through `value`.
+fn handles_mapped(segment: p::Segment, value: impl Fn(f64) -> f64) -> p::Segment {
+    match segment {
+        p::Segment::Bezier { control1, control2 } => p::Segment::Bezier {
+            control1: [control1[0], value(control1[1])],
+            control2: [control2[0], value(control2[1])],
+        },
+        other => other,
+    }
+}
+
 /// A named curve preset (values 0–1) scaled to the input's range.
 fn scaled(slot: &Slot, curve: &p::Keyframes) -> p::Keyframes {
     let [low, high] = slot.range();
+    let value = |v: f64| slot.fit(low + v * (high - low));
     p::Keyframes {
         points: curve
             .points
             .iter()
             .map(|(x, key)| match key {
-                p::Key::Number(v) => (*x, p::Key::Number(slot.fit(low + v * (high - low)))),
+                p::Key::Number(v) => (*x, p::Key::Number(value(*v))),
                 p::Key::Color(rgb) => (*x, p::Key::Color(*rgb)),
             })
             .collect(),
-        segments: curve.segments.clone(),
+        segments: curve
+            .segments
+            .iter()
+            .map(|segment| handles_mapped(*segment, value))
+            .collect(),
     }
 }
 
@@ -189,8 +205,25 @@ fn same_curve(a: &p::Keyframes, b: &p::Keyframes) -> bool {
         segments.resize(curve.points.len().saturating_sub(1), p::Segment::Linear);
         segments
     };
+    let same_segment = |a: &p::Segment, b: &p::Segment| match (a, b) {
+        (
+            p::Segment::Bezier { control1, control2 },
+            p::Segment::Bezier {
+                control1: other1,
+                control2: other2,
+            },
+        ) => control1
+            .iter()
+            .chain(control2)
+            .zip(other1.iter().chain(other2))
+            .all(|(a, b)| close(*a, *b)),
+        (a, b) => a == b,
+    };
     a.points.len() == b.points.len()
-        && segments(a) == segments(b)
+        && segments(a)
+            .iter()
+            .zip(&segments(b))
+            .all(|(a, b)| same_segment(a, b))
         && a.points.iter().zip(&b.points).all(|((ax, ak), (bx, bk))| {
             close(*ax, *bx)
                 && match (ak, bk) {
@@ -219,22 +252,18 @@ fn envelope_of(slot: &Slot, curve: &p::Keyframes) -> p::Envelope {
             [*x, ((value - low) / (high - low)).clamp(0., 1.)]
         })
         .collect();
-    let mut curves: Vec<p::EnvelopeCurve> = points
-        .windows(2)
-        .enumerate()
+    let boxed = |[x, v]: [f64; 2]| [x, ((v - low) / (high - low)).clamp(0., 1.)];
+    let mut curves: Vec<p::EnvelopeCurve> = (0..points.len().saturating_sub(1))
         .map(
-            |(i, pair)| match curve.segments.get(i).copied().unwrap_or_default() {
+            |i| match curve.segments.get(i).copied().unwrap_or_default() {
                 p::Segment::Linear => p::EnvelopeCurve::Linear,
                 p::Segment::Hold => p::EnvelopeCurve::Hold,
                 p::Segment::Step => p::EnvelopeCurve::Step,
-                // A cubic with its handles at the thirds is the engine's ease.
-                p::Segment::Ease => {
-                    let (a, b) = (pair[0], pair[1]);
-                    p::EnvelopeCurve::Bezier {
-                        control1: [a[0] + (b[0] - a[0]) / 3., a[1]],
-                        control2: [a[0] + 2. * (b[0] - a[0]) / 3., b[1]],
-                    }
-                }
+                // The same handles, in the box's 0–1 values.
+                p::Segment::Bezier { control1, control2 } => p::EnvelopeCurve::Bezier {
+                    control1: boxed(control1),
+                    control2: boxed(control2),
+                },
             },
         )
         .collect();
@@ -254,22 +283,26 @@ fn envelope_of(slot: &Slot, curve: &p::Keyframes) -> p::Envelope {
     }
 }
 
-/// The envelope editor's box back as a curve in the input's unit. A handle
-/// curve is stored as the engine's ease.
+/// The envelope editor's box back as a curve in the input's unit. A Bézier
+/// keeps its handles, so what is drawn is what plays.
 fn keyframes_of(slot: &Slot, envelope: &p::Envelope) -> p::Keyframes {
     let [low, high] = slot.range();
+    let value = |y: f64| slot.fit(low + y * (high - low));
     p::Keyframes {
         points: envelope
             .points
             .iter()
-            .map(|[x, y]| (*x, p::Key::Number(slot.fit(low + y * (high - low)))))
+            .map(|[x, y]| (*x, p::Key::Number(value(*y))))
             .collect(),
         segments: envelope
             .curves
             .iter()
-            .map(|curve| match curve {
+            .map(|curve| match *curve {
                 p::EnvelopeCurve::Linear => p::Segment::Linear,
-                p::EnvelopeCurve::Bezier { .. } => p::Segment::Ease,
+                p::EnvelopeCurve::Bezier { control1, control2 } => p::Segment::Bezier {
+                    control1: [control1[0], value(control1[1])],
+                    control2: [control2[0], value(control2[1])],
+                },
                 p::EnvelopeCurve::Hold => p::Segment::Hold,
                 p::EnvelopeCurve::Step => p::Segment::Step,
             })
@@ -1274,7 +1307,7 @@ mod tests {
         let every = slot("color.chase@1", "every");
         let curve = p::Keyframes::numbers(
             &[[0., 2.], [0.5, 4.], [1., 0.5]],
-            &[p::Segment::Hold, p::Segment::Ease],
+            &[p::Segment::Hold, p::Segment::ease([0.5, 4.], [1., 0.5])],
         );
         let envelope = envelope_of(&every, &curve);
         assert!(envelope.validate().is_ok());
@@ -1288,6 +1321,64 @@ mod tests {
             envelope_of(&alpha, &short).points,
             vec![[0., 0.5], [0.25, 0.5], [1., 0.5]]
         );
+    }
+
+    #[test]
+    fn drawn_handles_are_stored_and_read_back_as_drawn() {
+        // Handles far from any standard ease, on alpha (0–1) and on a speed.
+        let drawn = p::Envelope {
+            points: vec![[0., 0.1], [0.4, 0.9], [1., 0.3]],
+            curves: vec![
+                p::EnvelopeCurve::Bezier {
+                    control1: [0.05, 0.8],
+                    control2: [0.3, 0.2],
+                },
+                p::EnvelopeCurve::Bezier {
+                    control1: [0.9, 1.],
+                    control2: [0.95, 0.],
+                },
+            ],
+        };
+        let alpha = slot("color.chase@1", "alpha");
+        let stored = keyframes_of(&alpha, &drawn);
+        assert_eq!(
+            stored.segments[0],
+            p::Segment::Bezier {
+                control1: [0.05, 0.8],
+                control2: [0.3, 0.2]
+            }
+        );
+        // Stored, read back, and shown again: the same handles.
+        let wire = super::document::wire_value(&p::Value::Time(stored.clone()));
+        let Ok(p::Value::Time(read)) = super::decode(alpha.spec.value_type, &wire) else {
+            panic!("reads back")
+        };
+        assert_eq!(read, stored);
+        assert_eq!(envelope_of(&alpha, &read), drawn);
+        // What plays is what the editor draws.
+        for i in 0..=40 {
+            let x = f64::from(i) / 40.;
+            assert!((read.sample(x)[0] - drawn.sample(x)).abs() < 1e-12, "{x}");
+        }
+        let travel = slot("color.chase@1", "travel");
+        let beats = keyframes_of(&travel, &drawn);
+        let back = envelope_of(&travel, &beats);
+        for (a, b) in back.curves.iter().zip(&drawn.curves) {
+            let (
+                p::EnvelopeCurve::Bezier { control1, control2 },
+                p::EnvelopeCurve::Bezier {
+                    control1: c1,
+                    control2: c2,
+                },
+            ) = (a, b)
+            else {
+                panic!("{a:?}")
+            };
+            for (a, b) in control1.iter().chain(control2).zip(c1.iter().chain(c2)) {
+                // A handle at 0 beats stays at the least speed.
+                assert!((a - b).abs() < 1e-2, "{a} {b}");
+            }
+        }
     }
 
     #[test]
