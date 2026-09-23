@@ -358,6 +358,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         rate: Rate::Fixed,
         default: Some(value),
         author: None,
+        promotable: Vec::new(),
     };
     let signal = |unit| {
         ValueType::Signal(SignalType {

@@ -76,9 +76,8 @@ fn all_builtins_validate_and_numerical_effects_get_explicit_terminals() {
                 .all(|p| p.value_type != ValueType::Lighting),
             "{id}"
         );
-        if id != "output" {
-            assert!(!definition.playable(), "{id}");
-        }
+        // Output and the clip forms are the only complete clip graphs.
+        assert_eq!(definition.playable(), id == "output" || is_form(id), "{id}");
     }
     assert!(matches!(lib.definitions["pill"].body, Body::Graph(_)));
     assert!(matches!(

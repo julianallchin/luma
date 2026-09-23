@@ -25,6 +25,11 @@ pub enum ValueType {
     Field,
     Mask,
     Lighting,
+    /// Clip input sources; see `sources`.
+    Time,
+    Hit,
+    Noise,
+    Audio,
 }
 impl std::fmt::Display for ValueType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,6 +140,12 @@ pub enum Value {
     Field(BTreeMap<String, f64>),
     Mask(BTreeMap<String, f64>),
     Lighting(BTreeMap<String, crate::FixtureOutput>),
+    /// One curve over the whole clip.
+    Time(crate::Keyframes),
+    /// One curve over the life of each event.
+    Hit(crate::Keyframes),
+    Noise(crate::NoiseSource),
+    Audio(crate::AudioLevel),
 }
 impl Value {
     pub fn value_type(&self) -> ValueType {
@@ -169,7 +180,22 @@ impl Value {
             Self::Field(_) => ValueType::Field,
             Self::Mask(_) => ValueType::Mask,
             Self::Lighting(_) => ValueType::Lighting,
+            Self::Time(_) => ValueType::Time,
+            Self::Hit(_) => ValueType::Hit,
+            Self::Noise(_) => ValueType::Noise,
+            Self::Audio(_) => ValueType::Audio,
         }
+    }
+    /// The source kind of a non-plain form input value.
+    pub fn source_kind(&self) -> Option<crate::SourceKind> {
+        Some(match self {
+            Self::Time(_) => crate::SourceKind::Time,
+            Self::Hit(_) => crate::SourceKind::Hit,
+            Self::Noise(_) => crate::SourceKind::Noise,
+            Self::Audio(_) => crate::SourceKind::Audio,
+            Self::Events(_) => crate::SourceKind::Events,
+            _ => return None,
+        })
     }
     pub fn validate(&self) -> Result<()> {
         let valid = match self {
@@ -192,6 +218,9 @@ impl Value {
                 true
             }
             Self::Envelope(e) => return e.validate(),
+            Self::Time(curve) | Self::Hit(curve) => return curve.validate(),
+            Self::Noise(noise) => return noise.validate(),
+            Self::Audio(audio) => return audio.validate(),
             Self::Mapping(m) => return m.validate(),
             Self::Events(events) => return events.validate(),
             Self::Coordinates(m) => return m.validate(),

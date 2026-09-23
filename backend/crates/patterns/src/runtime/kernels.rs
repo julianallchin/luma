@@ -122,6 +122,10 @@ pub(crate) fn run(
         | Primitive::EventSpacing
         | Primitive::ThinEvents => crate::event_timing::run(op, inputs, outputs, batch),
         Primitive::Output => lighting(LightingSignal::terminal(inputs, fixtures)?),
+        Primitive::Odometer
+        | Primitive::EventLife
+        | Primitive::SampleCurve
+        | Primitive::RandomShare => crate::forms::ops::run(op, inputs, outputs, batch),
         Primitive::ChannelCount => numeric(
             "value",
             Signal::scalar(signal("value").channels().count() as f64, Unit::Number)?,

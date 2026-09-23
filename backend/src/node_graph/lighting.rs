@@ -85,6 +85,8 @@ pub fn port_type(kind: ValueType) -> PortType {
         ValueType::Envelope => PortType::Envelope,
         ValueType::Mask => PortType::Signal,
         ValueType::Lighting => PortType::Lighting,
+        // Clip sources; they drive numerical values.
+        ValueType::Time | ValueType::Hit | ValueType::Noise | ValueType::Audio => PortType::Signal,
     }
 }
 

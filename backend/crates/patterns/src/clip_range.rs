@@ -27,6 +27,7 @@ pub(crate) fn definition() -> Definition {
                     optional: false,
                     default: Some(Value::Number(1024.)),
                     author: None,
+                    promotable: Vec::new(),
                 },
             ),
         ]),

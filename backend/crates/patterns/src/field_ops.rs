@@ -42,6 +42,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         rate: Rate::Frame,
         default: None,
         author: None,
+        promotable: Vec::new(),
     };
     let (name, inputs, output, kind) = match op {
         Primitive::JoinChannels => (
@@ -67,6 +68,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         rate: Rate::Fixed,
                         default: Some(Value::Number(0.)),
                         author: None,
+                        promotable: Vec::new(),
                     },
                 ),
             ],
@@ -148,6 +150,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         rate: Rate::Frame,
                         default: Some(Value::Number(0.0)),
                         author: None,
+                        promotable: Vec::new(),
                     },
                 ),
             ],
@@ -202,6 +205,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     rate: Rate::Frame,
                     default: Some(Value::Number(0.0)),
                     author: None,
+                    promotable: Vec::new(),
                 },
             )],
             "value",

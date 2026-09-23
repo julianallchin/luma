@@ -25,6 +25,9 @@ pub struct Input {
     /// own editor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<Author>,
+    /// Sources a form input accepts besides a plain value. Empty elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promotable: Vec<crate::SourceKind>,
 }
 
 /// A named literal offered by a control.
@@ -380,6 +383,10 @@ pub enum Primitive {
     AddLighting,
     Envelope,
     SoftEdges,
+    Odometer,
+    EventLife,
+    SampleCurve,
+    RandomShare,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {
@@ -403,6 +410,8 @@ impl Primitive {
         matches!(
             self,
             Self::Rhythm
+                | Self::Odometer
+                | Self::EventLife
                 | Self::ClipTime
                 | Self::EventAges
                 | Self::TrackTime

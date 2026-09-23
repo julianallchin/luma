@@ -505,6 +505,7 @@ fn input(name: &str, kind: ValueType, default: Option<Value>) -> Input {
         rate: Rate::Frame,
         default,
         author: None,
+        promotable: Vec::new(),
     }
 }
 fn number(v: f64) -> B {
