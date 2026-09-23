@@ -121,7 +121,6 @@ changes.
 | `⌘1`…`⌘9` | select tab | shell |
 | `⌘⇧V` | `ToggleVisualizer` | shell |
 | `⌘,` | `OpenSettings` | shell |
-| `⌘P` | `OpenPatterns` | shell |
 | `Escape` | dismiss the top overlay | overlays and dialogs |
 
 `⌘W` under `Workspace` is a scoped binding, not a runtime branch. gpui resolves

@@ -27,8 +27,7 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   triggers spell the concatenation themselves because a generated column is not
   reliably readable from a trigger.
 - Postgres row-level security decides who may read and write a row. Owner or
-  venue member for venue content, owner for private content, everyone for
-  verified library patterns. The app validates before it writes. The server
+  venue member for venue content, owner for private content. The app validates before it writes. The server
   does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
   uploads only the columns a local write changed (`PATCH`).
@@ -40,8 +39,7 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   parent; an immediate check would reject the whole checkpoint, forever.
   Deferring only fixes the order. A parent the sync rules never ship is
   refused at the commit and refused again on every retry, so a rule that
-  reaches a child reaches its parent too: the tracks behind a shared score,
-  the patterns behind a venue's cues.
+  reaches a child reaches its parent too: the tracks behind a shared score.
 - Sign-in is required to write. Every synced row has an owner, and there is no
   signed-out owner: `AppServices::require_session` refuses the command and the
   shell shows the sign-in screen. Reading a library already on this machine
@@ -79,8 +77,12 @@ token. A stale candidate simply overwrites the rows it touches.
 The old row format (`track_scores` with `pattern_id`) is gone. The cutover
 migration copied its rows into the local-only table `legacy_scores_backup`.
 
-`patterns`, `implementations` and `cues` stay for live MIDI cues. They sync as
-plain rows with `graph_json` as one column.
+Migration `20260923100000_drop_cues_and_pattern_library.sql` (local and
+Supabase) drops the pattern library and MIDI cues: `patterns`,
+`implementations`, `cues`, `pattern_categories`, `venue_implementation_overrides`,
+`scores_pending_cutover`, `legacy_scores_backup` and the `auth_visible_patterns`
+view. It also deletes MIDI bindings whose action fired a cue or a blackout.
+Clips play score-local definitions only.
 
 ## History
 
@@ -132,14 +134,13 @@ venues, venue_members, fixtures, fixture_groups, fixture_group_members,
 venue_nodes, venue_edges, venue_node_params, venue_constraints, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
-clips, score_definitions, patterns, implementations, cues, midi_modifiers,
+clips, score_definitions, midi_modifiers,
 midi_bindings, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts, changes.
 
 Local only: settings, universe_outputs, preprocessing_failures,
-track_waveforms, track_mert, fixture_group_overrides, pattern_categories,
-venue_implementation_overrides, agent_thread_runs, agent_thread_usage,
-stage_pieces, sync_rejections, auth_write_admission, legacy_scores_backup, the
+track_waveforms, track_mert, fixture_group_overrides, agent_thread_runs,
+agent_thread_usage, stage_pieces, sync_rejections, auth_write_admission, the
 auth session, and the columns `venues.controller_port`, `venues.mixer_port`,
 `venues.mixer_mapping_json`, `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
@@ -172,9 +173,9 @@ venue between devices. Only the three hardware-port columns above are local.
   publication. `supabase/migrations/20260916000000_stage_child_venue_id.sql`
   adds `venue_id` to `venue_edges`, `venue_node_params`, `venue_constraints`
   and `fixture_group_members` so the sync rules can filter on it in one hop.
-  `supabase/migrations/20260918000000_cued_patterns.sql` lets a venue member
-  read the patterns that venue's cues play. All three are required on the
-  server.
+  `supabase/migrations/20260923100000_drop_cues_and_pattern_library.sql`
+  drops `patterns`, `implementations` and `cues` and their read functions.
+  All three are required on the server.
 - `deploy/sync-rules.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
   a parameter query and may return at most a thousand rows, so every one of
   them counts venues, scores or shared tracks — never their children.

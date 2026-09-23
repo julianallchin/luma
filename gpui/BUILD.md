@@ -4,10 +4,9 @@
 
 - **Rust 1.97.1.** `gpui/rust-toolchain.toml` pins it. From the repository
   root, pass `+1.97.1` to cargo.
-- **Git LFS.** The n2n drum-onset weights (`backend/python/n2n/weights.pt`) and
-  the backend golden fixtures (`backend/tests/golden/`) are LFS files. The hooks
-  in `.githooks/` call `git-lfs` and stop if it is missing. Enable them with
-  `git config core.hooksPath .githooks`.
+- **Git LFS.** The n2n drum-onset weights (`backend/python/n2n/weights.pt`) are
+  an LFS file. The hooks in `.githooks/` call `git-lfs` and stop if it is
+  missing. Enable them with `git config core.hooksPath .githooks`.
 - **Submodules.** Run `git submodule update --init --recursive`. The chord
   analysis worker needs `backend/python/consonance-ACE`.
 - **Network on the first build.** `backend/build.rs` downloads a standalone

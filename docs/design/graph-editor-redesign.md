@@ -67,9 +67,7 @@ architecture is in [graph-editor-interaction.md](graph-editor-interaction.md).
   node at that point.
 - Edges can be selected and deleted. Undo and redo cover every gesture.
 - The toolbar has `100%` and `Fit`. The shell has Expand / Show chat.
-- Search lists built-in nodes, score-local graphs and saved library patterns.
-  A library pattern is inserted as an independent copy (`Score::import_clip`).
-  The library source is not changed.
+- Search lists built-in nodes and score-local graphs.
 
 ## Preview
 
@@ -82,10 +80,8 @@ architecture is in [graph-editor-interaction.md](graph-editor-interaction.md).
 
 ## Saved data
 
-Older graph vocabularies convert to canonical graphs when a score loads
-(`backend/crates/patterns/src/migration.rs`, `backend/src/node_graph/migration/`).
-Frozen cases in `backend/src/node_graph/migration/fixtures/` compare each
-conversion with captures from the old evaluator.
+Older score documents convert to the current version when a score loads
+(`backend/crates/patterns/src/migration.rs`).
 
 ## Known limits
 
