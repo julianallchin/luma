@@ -22,14 +22,18 @@ fn graph_palettes_keep_empty_defaults_and_overrides_through_editing_and_undo() {
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue");nav.track("Aurora");nav.expand();nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
-        const opacity=()=>{until("Stop opacity",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")));return app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop opacity = "));};
-        const expect=v=>{const actual=Number(opacity().label.split(" = ")[1]);if(Math.abs(actual-v)>1e-6)throw new Error("opacity "+actual+" != "+v);};
+        // Opacity lives in the stop's color picker: open it to read or type, then close it.
+        const plate=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop color opacity = "));
+        const shut=()=>{if(plate()){app.click(node("button","Stop color swatch"));until("picker closed",()=>!plate());}};
+        const opacity=()=>{if(!plate())app.click(node("button","Stop color swatch"));until("Stop opacity",()=>plate());return plate();};
+        const expect=v=>{const actual=Number(opacity().label.split(" = ")[1]);shut();if(Math.abs(actual-v)>1e-6)throw new Error("opacity "+actual+" != "+v);};
+        const set=v=>{app.click(opacity());app.key("secondary-a backspace");app.type(opacity(),String(v));app.key("enter");shut();};
         const removeStop=()=>app.click(app.snapshot().findAll({role:"slider"}).find(n=>n.label.startsWith("graph-gradient:stop:")),{button:"right"});
-        const empty=()=>{node("text","No colors");if(app.snapshot().findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")))throw new Error("empty palette still edits a synthetic stop");};
+        const empty=()=>{node("text","No colors");if(app.snapshot().find({role:"button",label:"Stop color swatch"}))throw new Error("empty palette still edits a synthetic stop");};
         app.click(node("card","Empty colors"));expect(25);
         app.click(node("card","Empty colors"),{count:2});app.click(node("card","Palette"));empty();
         app.click(node("button","Add gradient color"));expect(100);
-        app.click(opacity());app.key("secondary-a backspace");app.type(opacity(),"40");app.key("enter");expect(40);
+        set(40);expect(40);
         removeStop();empty();
         app.click(node("card","Palette"));app.key("secondary-z");expect(40);
         app.key("secondary-shift-z");empty();app.key("secondary-z");expect(40);

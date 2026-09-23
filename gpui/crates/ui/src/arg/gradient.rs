@@ -311,6 +311,8 @@ pub fn luma_gradient_stops(
     div()
         .id(ElementId::Name(format!("{id}:bar").into()))
         .w_full()
+        // Half a marker of air each side, so an end marker is whole.
+        .px(px(MARKER / 2.))
         .flex()
         .flex_col()
         .gap(px(2.))
@@ -329,14 +331,14 @@ pub fn luma_gradient_stops(
             }
             let index = drag.index;
             let (b, at) = (event.bounds, event.event.position);
-            let width = f32::from(b.size.width);
+            let width = f32::from(b.size.width) - MARKER;
             if width <= 0. {
                 return;
             }
             let off = at.y < b.top() - px(DETACH) || at.y > b.bottom() + px(DETACH);
             on_drag(GradientEvent::Detach { index, off }, window, cx);
             if !off {
-                let t = (f32::from(at.x - b.left()) / width).clamp(0., 1.);
+                let t = ((f32::from(at.x - b.left()) - MARKER / 2.) / width).clamp(0., 1.);
                 on_drag(GradientEvent::Move { index, t }, window, cx);
             }
         })

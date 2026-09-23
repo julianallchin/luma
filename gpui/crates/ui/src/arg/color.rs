@@ -24,14 +24,15 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, linear_color_stop, linear_gradient, px, App, Context, Div, ElementId, EventEmitter, Hsla,
-    Rgba, SharedString, Window,
+    div, linear_color_stop, linear_gradient, px, App, Context, Div, ElementId, Entity,
+    EventEmitter, Focusable, Hsla, Rgba, SharedString, Subscription, Window,
 };
 
 use crate::drag::DragGhost;
 use crate::ladder;
 use crate::node::{AgentNode, Instrument, Role};
 
+use super::number::{DraftValue, DraftedNumber, NumberEvent};
 use super::select::luma_arg_select;
 use super::{drag_fraction, OwnedDrag};
 use crate::CONTROL_HEIGHT;
@@ -189,6 +190,14 @@ fn paint(rgb: [f32; 3], alpha: f32) -> Rgba {
 
 /// Picker plate width; the SV square and hue strip both span it.
 const PICKER_WIDTH: f32 = 192.;
+/// The hex field fits `#RRGGBB` in the mono face with the field's inset.
+const HEX_W: f32 = 88.;
+const PERCENT_W: f32 = 50.;
+
+/// `0..=1` as a percent, to a tenth.
+fn percent(value: f32) -> f64 {
+    (f64::from(value) * 1000.).round() / 10.
+}
 const SV_HEIGHT: f32 = 112.;
 const HUE_HEIGHT: f32 = 12.;
 
@@ -380,10 +389,47 @@ fn hue_strip(
 // -- the editor entity -------------------------------------------------------
 
 /// What the editor tells its host: the arg changed, by any path — mode picked,
-/// SV dragged, hue dragged, mix slid.
+/// SV dragged, hue dragged, hex typed, mix slid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ColorArgEvent {
     Changed(ColorArg),
+}
+
+/// The opacity typed in the picker, `0..=1`. Only an editor built
+/// [`ColorArgEditor::with_opacity`] sends it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorOpacity(pub f32);
+
+/// A color typed as hex: `#rrggbb`, `rrggbb` or `#rgb`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hex(pub [u8; 3]);
+impl Hex {
+    /// The nearest 8-bit color.
+    pub fn of_rgb(rgb: [f32; 3]) -> Self {
+        let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+        Self(rgb.map(byte))
+    }
+}
+impl std::fmt::Display for Hex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [r, g, b] = self.0;
+        write!(f, "#{r:02X}{g:02X}{b:02X}")
+    }
+}
+impl DraftValue for Hex {
+    fn clamp_value(self, _: Self, _: Self) -> Self {
+        self
+    }
+    fn parse(draft: &str, _: Self, _: Self) -> Option<Self> {
+        let digits = draft.trim().trim_start_matches('#');
+        let digits: String = match digits.len() {
+            3 => digits.chars().flat_map(|c| [c, c]).collect(),
+            6 => digits.to_string(),
+            _ => return None,
+        };
+        let byte = |at: usize| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok();
+        Some(Self([byte(0)?, byte(2)?, byte(4)?]))
+    }
 }
 
 /// The tri-mode cell: mode selector beside a swatch, and — while open — the
@@ -398,9 +444,20 @@ pub struct ColorArgEditor {
     hsv: Hsv,
     mode_menu_open: bool,
     picker_open: bool,
+    /// The opacity the picker edits, for a host that has one.
+    opacity: Option<f32>,
+    /// The picker's typed fields, made on first render: hex, and opacity in %.
+    fields: Option<Fields>,
+}
+
+struct Fields {
+    hex: Entity<DraftedNumber<Hex>>,
+    opacity: Entity<DraftedNumber>,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<ColorArgEvent> for ColorArgEditor {}
+impl EventEmitter<ColorOpacity> for ColorArgEditor {}
 
 impl ColorArgEditor {
     pub fn new(id: impl Into<SharedString>, value: ColorArg, _: &mut Context<Self>) -> Self {
@@ -411,6 +468,99 @@ impl ColorArgEditor {
             hsv: Hsv::from_rgb(value.rgb),
             mode_menu_open: false,
             picker_open: false,
+            opacity: None,
+            fields: None,
+        }
+    }
+
+    /// The picker also edits an opacity, sent as [`ColorOpacity`].
+    #[must_use]
+    pub fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = Some(opacity);
+        self
+    }
+
+    /// Stop editing an opacity.
+    pub fn without_opacity(&mut self, cx: &mut Context<Self>) {
+        self.opacity = None;
+        cx.notify();
+    }
+
+    /// A host-side write of the opacity.
+    pub fn set_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
+        if self.opacity.is_some() && self.opacity != Some(opacity) {
+            self.opacity = Some(opacity);
+            cx.notify();
+        }
+    }
+
+    /// The typed fields, made once, and kept showing the value unless one is
+    /// being typed in.
+    fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fields.is_none() {
+            let id = self.id.clone();
+            let hex = cx.new(|cx| {
+                DraftedNumber::new(
+                    format!("{id} hex"),
+                    Hex::of_rgb(self.value.rgb),
+                    Hex([0; 3]),
+                    Hex([255; 3]),
+                    HEX_W,
+                    window,
+                    cx,
+                )
+            });
+            let opacity = cx.new(|cx| {
+                DraftedNumber::new(
+                    format!("{id} opacity"),
+                    percent(self.opacity.unwrap_or(1.)),
+                    0.,
+                    100.,
+                    PERCENT_W,
+                    window,
+                    cx,
+                )
+            });
+            let subscriptions = [
+                cx.subscribe(&hex, |editor, _, event: &NumberEvent<Hex>, cx| {
+                    let NumberEvent::Committed(Hex(bytes)) = *event;
+                    let rgb = bytes.map(|v| f32::from(v) / 255.);
+                    editor.hsv = Hsv::from_rgb(rgb);
+                    let value = ColorArg {
+                        rgb,
+                        ..editor.value
+                    };
+                    editor.commit(value, cx);
+                }),
+                cx.subscribe(&opacity, |editor, _, event: &NumberEvent, cx| {
+                    let NumberEvent::Committed(amount) = *event;
+                    let amount = (amount / 100.) as f32;
+                    editor.opacity = Some(amount);
+                    cx.emit(ColorOpacity(amount));
+                    cx.notify();
+                }),
+            ];
+            self.fields = Some(Fields {
+                hex,
+                opacity,
+                _subscriptions: subscriptions,
+            });
+        }
+        let Some(fields) = &self.fields else {
+            return;
+        };
+        let hex = Hex::of_rgb(self.value.rgb);
+        if fields.hex.read(cx).value() != hex && !fields.hex.focus_handle(cx).is_focused(window) {
+            fields.hex.update(cx, |field, cx| field.set_value(hex, cx));
+        }
+        if let Some(opacity) = self.opacity.map(percent) {
+            if fields.opacity.read(cx).value() != opacity
+                && !fields.opacity.focus_handle(cx).is_focused(window)
+            {
+                fields
+                    .opacity
+                    .update(cx, |field, cx| field.set_value(opacity, cx));
+            }
         }
     }
 
@@ -494,10 +644,34 @@ impl ColorArgEditor {
         });
         // The plate is a float, so it wears the float tier's card — the
         // instrument styling stays on the controls inside it.
+        let fields = self.fields.as_ref().map(|fields| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .w(px(PICKER_WIDTH))
+                .child(fields.hex.clone())
+                .when(self.opacity.is_some(), |row| {
+                    row.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(fields.opacity.clone())
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(ladder::foreground_alpha(0.5))
+                                    .child("% opacity"),
+                            ),
+                    )
+                })
+        });
         let plate = crate::float::popover_card()
             .gap(px(6.))
             .p(px(8.))
-            .child(picker);
+            .child(picker)
+            .children(fields);
         if let ColorMode::Mix(amount) = mode {
             let this = cx.entity();
             plate.child(crate::luma_slider(
@@ -523,7 +697,8 @@ impl ColorArgEditor {
 }
 
 impl Render for ColorArgEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_fields(window, cx);
         let toggle = cx.entity();
         let pick = cx.entity();
         let id = format!("{}:mode", self.id);
@@ -571,6 +746,17 @@ impl Render for ColorArgEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_parses_and_prints() {
+        let parse = |s| Hex::parse(s, Hex([0; 3]), Hex([255; 3]));
+        assert_eq!(parse("#FF8000"), Some(Hex([255, 128, 0])));
+        assert_eq!(parse("ff8000"), Some(Hex([255, 128, 0])));
+        assert_eq!(parse("#f80"), Some(Hex([255, 136, 0])));
+        assert_eq!(parse("#ff80"), None);
+        assert_eq!(parse("zzzzzz"), None);
+        assert_eq!(Hex([255, 128, 0]).to_string(), "#FF8000");
+    }
 
     /// The wire's three regimes, decoded: the boundaries belong to the pure
     /// modes and everything strictly between is a mix carrying its alpha.

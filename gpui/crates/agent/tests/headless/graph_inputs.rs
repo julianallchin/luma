@@ -21,12 +21,15 @@ fn gradient_inputs_preserve_opacity_through_native_edits_undo_and_clip_overrides
     let result = harness.exec(&support::script(r#"
         nav.venue("Test Venue");nav.track("Aurora");nav.expand();nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
-        const opacity=()=>{until("Stop opacity",s=>s.findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")));return app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop opacity = "));};
-        const expect=v=>{const actual=Number(opacity().label.split(" = ")[1]);if(Math.abs(actual-v)>1e-6)throw new Error("opacity "+actual+" != "+v);};
-        const set=v=>{app.click(opacity());app.key("secondary-a backspace");app.type(opacity(),String(v));app.key("enter");};
+        // Opacity lives in the stop's color picker: open it to read or type, then close it.
+        const plate=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop color opacity = "));
+        const shut=()=>{if(plate()){app.click(node("button","Stop color swatch"));until("picker closed",()=>!plate());}};
+        const opacity=()=>{if(!plate())app.click(node("button","Stop color swatch"));until("Stop opacity",()=>plate());return plate();};
+        const expect=v=>{const actual=Number(opacity().label.split(" = ")[1]);shut();if(Math.abs(actual-v)>1e-6)throw new Error("opacity "+actual+" != "+v);};
+        const set=v=>{app.click(opacity());app.key("secondary-a backspace");app.type(opacity(),String(v));app.key("enter");shut();};
         app.click(node("card","Opacity ribbon"));app.click(node("card","Opacity ribbon"),{count:2});
         app.click(node("card","Mix palette"));node("button","Edit Input Palette");
-        if(app.snapshot().findAll({role:"input"}).some(n=>n.label.startsWith("Stop opacity = ")))throw new Error("connected gradient remained editable on its consumer");
+        if(app.snapshot().find({role:"button",label:"Stop color swatch"}))throw new Error("connected gradient remained editable on its consumer");
         app.click(node("button","Edit Input Palette"));expect(20);
         app.click(node("slider","graph-gradient:stop:1 = 1"));expect(80);
         app.click(node("slider","graph-gradient:stop:0 = 0"));set(40);expect(40);

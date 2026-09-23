@@ -2,12 +2,14 @@
 //! the host receives only the ordered color stops.
 //!
 //! One compact layout: a preset chip, the bar with a marker per stop, and one
-//! row for the selected stop — its swatch, hex, position and opacity.
+//! row for the selected stop: its swatch, whose picker holds hex and opacity,
+//! and its position.
 use super::{
-    color::{ColorArg, ColorArgEditor, ColorArgEvent},
+    color::{ColorArg, ColorArgEditor, ColorArgEvent, ColorOpacity},
     gradient::{luma_gradient_stops, Gradient, GradientEvent, GradientStop},
-    number::{DraftValue, DraftedNumber, NumberEvent},
+    number::{DraftedNumber, NumberEvent},
     preset_picker::{luma_preset_picker, Thumb},
+    select::MenuVisibility,
 };
 use crate::node::{Instrument, Role};
 use gpui::prelude::*;
@@ -19,46 +21,13 @@ pub struct GradientEditor {
     selected: usize,
     /// The stop being dragged off the bar, if any.
     detached: Option<usize>,
-    presets_open: bool,
+    presets: MenuVisibility,
     alpha: bool,
     color: Entity<ColorArgEditor>,
-    hex: Entity<DraftedNumber<Hex>>,
     position: Entity<DraftedNumber>,
-    opacity: Entity<DraftedNumber>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<GradientChanged> for GradientEditor {}
-
-/// A color typed as hex: `#rrggbb`, `rrggbb` or `#rgb`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Hex(pub [u8; 3]);
-impl Hex {
-    fn of(color: Rgba) -> Self {
-        let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
-        Self([byte(color.r), byte(color.g), byte(color.b)])
-    }
-}
-impl std::fmt::Display for Hex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let [r, g, b] = self.0;
-        write!(f, "#{r:02X}{g:02X}{b:02X}")
-    }
-}
-impl DraftValue for Hex {
-    fn clamp_value(self, _: Self, _: Self) -> Self {
-        self
-    }
-    fn parse(draft: &str, _: Self, _: Self) -> Option<Self> {
-        let digits = draft.trim().trim_start_matches('#');
-        let digits: String = match digits.len() {
-            3 => digits.chars().flat_map(|c| [c, c]).collect(),
-            6 => digits.to_string(),
-            _ => return None,
-        };
-        let byte = |at: usize| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok();
-        Some(Self([byte(0)?, byte(2)?, byte(4)?]))
-    }
-}
 
 /// The shipped gradients, as the editor's value type.
 fn presets() -> Vec<(SharedString, Gradient)> {
@@ -104,38 +73,22 @@ impl GradientEditor {
             .map_or(gpui::white().into(), |stop| stop.color);
         let t = value.stops().first().map_or(0., |stop| stop.t);
         let color = cx.new(|cx| {
-            ColorArgEditor::new("Stop color", ColorArg::decode([c.r, c.g, c.b], 1.), cx).rgb_only()
+            ColorArgEditor::new("Stop color", ColorArg::decode([c.r, c.g, c.b], 1.), cx)
+                .rgb_only()
+                .with_opacity(c.a)
         });
-        let hex = cx.new(|cx| {
-            DraftedNumber::new(
-                "Stop hex",
-                Hex::of(c),
-                Hex([0; 3]),
-                Hex([255; 3]),
-                76.,
-                window,
-                cx,
-            )
+        let position = cx.new(|cx| {
+            DraftedNumber::new("Stop position", percent(t), 0., 100., PERCENT_W, window, cx)
         });
-        let position =
-            cx.new(|cx| DraftedNumber::new("Stop position", percent(t), 0., 100., 48., window, cx));
-        let opacity = cx
-            .new(|cx| DraftedNumber::new("Stop opacity", percent(c.a), 0., 100., 48., window, cx));
         let subscriptions = vec![
             cx.subscribe(&color, |this, _, event: &ColorArgEvent, cx| {
                 let ColorArgEvent::Changed(color) = event;
                 let [r, g, b] = color.rgb;
                 this.edit_color(cx, |c| Rgba { r, g, b, a: c.a });
             }),
-            cx.subscribe(&hex, |this, _, event: &NumberEvent<Hex>, cx| {
-                let NumberEvent::Committed(Hex([r, g, b])) = *event;
-                let channel = |v: u8| f32::from(v) / 255.;
-                this.edit_color(cx, |c| Rgba {
-                    r: channel(r),
-                    g: channel(g),
-                    b: channel(b),
-                    a: c.a,
-                });
+            cx.subscribe(&color, |this, _, event: &ColorOpacity, cx| {
+                let ColorOpacity(alpha) = *event;
+                this.edit_color(cx, |c| Rgba { a: alpha, ..c });
             }),
             cx.subscribe(&position, |this, _, event: &NumberEvent, cx| {
                 let NumberEvent::Committed(at) = *event;
@@ -145,31 +98,23 @@ impl GradientEditor {
                 this.value.move_stop(this.selected, (at / 100.) as f32);
                 this.changed(cx);
             }),
-            cx.subscribe(&opacity, |this, _, event: &NumberEvent, cx| {
-                let NumberEvent::Committed(alpha) = *event;
-                this.edit_color(cx, |c| Rgba {
-                    a: (alpha / 100.) as f32,
-                    ..c
-                });
-            }),
         ];
         Self {
             value,
             selected: 0,
             detached: None,
-            presets_open: false,
+            presets: MenuVisibility::Closed,
             alpha: true,
             color,
-            hex,
             position,
-            opacity,
             _subscriptions: subscriptions,
         }
     }
     /// The editor without the opacity field, for a host that stores colors
     /// without opacity.
-    pub fn without_alpha(mut self) -> Self {
+    pub fn without_alpha(mut self, cx: &mut Context<Self>) -> Self {
         self.alpha = false;
+        self.color.update(cx, |color, cx| color.without_opacity(cx));
         self
     }
     pub fn set_value(&mut self, value: Gradient, cx: &mut Context<Self>) {
@@ -200,11 +145,14 @@ impl GradientEditor {
         self.color.update(cx, |color, cx| {
             color.set_value(ColorArg::decode([c.r, c.g, c.b], 1.), cx)
         });
-        self.hex.update(cx, |hex, cx| hex.set_value(Hex::of(c), cx));
+        let alpha = self.alpha;
+        self.color.update(cx, |color, cx| {
+            if alpha {
+                color.set_opacity(c.a, cx);
+            }
+        });
         self.position
             .update(cx, |field, cx| field.set_value(percent(stop.t), cx));
-        self.opacity
-            .update(cx, |field, cx| field.set_value(percent(c.a), cx));
     }
     fn on_stops(&mut self, event: GradientEvent, cx: &mut Context<Self>) {
         let count = self.value.stops().len();
@@ -253,18 +201,33 @@ fn percent(value: f32) -> f64 {
     (f64::from(value) * 1000.).round() / 10.
 }
 
-/// A field with a dim unit after it.
-fn with_unit(field: impl IntoElement, unit: &'static str) -> gpui::Div {
-    div().flex().items_center().gap(px(3.)).child(field).child(
+/// Both percent fields, so they line up.
+const PERCENT_W: f32 = 50.;
+
+/// A field with a dim name before it and a dim unit after it, kept on one
+/// line.
+fn labelled(name: &'static str, field: impl IntoElement, unit: &'static str) -> gpui::Div {
+    let dim = |text: &'static str| {
         div()
             .text_size(px(11.))
-            .text_color(crate::ladder::foreground_alpha(0.45))
-            .child(unit),
-    )
+            .text_color(crate::ladder::foreground_alpha(0.5))
+            .child(text)
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.))
+        .child(dim(name))
+        .child(field)
+        .child(dim(unit))
 }
 
 impl Render for GradientEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.presets.tick_close(crate::motion::reduced_motion(cx)) {
+            window.request_animation_frame();
+        }
         let stops = cx.entity();
         let toggle = cx.entity();
         let pick = cx.entity();
@@ -280,16 +243,16 @@ impl Render for GradientEditor {
             current,
             &options,
             false,
-            self.presets_open,
+            self.presets,
             move |_, cx| {
                 toggle.update(cx, |this, cx| {
-                    this.presets_open = !this.presets_open;
+                    this.presets.toggle();
                     cx.notify();
                 })
             },
             move |picked, _, cx| {
                 pick.update(cx, |this, cx| {
-                    this.presets_open = false;
+                    this.presets.close();
                     if let Some((_, gradient)) = picked.and_then(|at| presets.get(at)) {
                         this.value = gradient.clone();
                         this.selected = 0;
@@ -334,11 +297,7 @@ impl Render for GradientEditor {
                         .items_center()
                         .gap(px(6.))
                         .child(self.color.clone())
-                        .child(self.hex.clone())
-                        .child(with_unit(self.position.clone(), "%"))
-                        .when(self.alpha, |row| {
-                            row.child(with_unit(self.opacity.clone(), "% opacity"))
-                        }),
+                        .child(labelled("Pos", self.position.clone(), "%")),
                 )
             })
     }
@@ -347,17 +306,6 @@ impl Render for GradientEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_parses_and_prints() {
-        let parse = |s| Hex::parse(s, Hex([0; 3]), Hex([255; 3]));
-        assert_eq!(parse("#FF8000"), Some(Hex([255, 128, 0])));
-        assert_eq!(parse("ff8000"), Some(Hex([255, 128, 0])));
-        assert_eq!(parse("#f80"), Some(Hex([255, 136, 0])));
-        assert_eq!(parse("#ff80"), None);
-        assert_eq!(parse("zzzzzz"), None);
-        assert_eq!(Hex([255, 128, 0]).to_string(), "#FF8000");
-    }
 
     #[test]
     fn a_preset_is_found_again() {
