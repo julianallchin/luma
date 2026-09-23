@@ -116,7 +116,7 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
 }
 
 #[test]
-fn a_row_dragged_onto_the_timeline_lands_there() {
+fn a_row_dragged_onto_the_timeline_shows_where_it_lands_and_lands_there() {
     let name = "preset-browser-drag";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
@@ -131,16 +131,45 @@ fn a_row_dragged_onto_the_timeline_lands_there() {
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
         const lane=node("row","Lane 0").bounds;
         const tile=node("row","Ripple");
-        app.drag(tile,{dx:lane.x+lane.width/2-(tile.bounds.x+tile.bounds.width/2),dy:lane.y+lane.height/2-(tile.bounds.y+tile.bounds.height/2)},{steps:12});
+        const ghosts=()=>app.painted().flatMap(s=>s.findAll({role:"card",label:"Ripple drop preview"}));
+        // Carried off the timeline and let go: nothing lands.
+        const search=node("input","Search presets…");
+        app.drag(tile,{dx:0,dy:search.bounds.y+search.bounds.height/2-(tile.bounds.y+tile.bounds.height/2)},{steps:6,restale:"match"});
+        app.frames(2);
+        const cancelled={ghost:!!app.snapshot().find({role:"card",label:"Ripple drop preview"}),
+                         browser:!!app.snapshot().find({role:"card",label:"Presets"})};
+        const from=node("row","Ripple");
+        app.drag(from,{dx:lane.x+lane.width/2-(from.bounds.x+from.bounds.width/2),dy:lane.y+lane.height/2-(from.bounds.y+from.bounds.height/2)},{steps:12,restale:"match"});
+        // While over the lane, the timeline drew the clip it would make.
+        const seen=ghosts().map(n=>n.bounds);
         until("clip inputs",s=>s.find({role:"card",label:"Clip inputs"}));
+        const after=!!app.snapshot().find({role:"card",label:"Ripple drop preview"});
         // The placed clip is written after a round trip.
         app.frames(8,{waitMs:80});
-        true
+        ({cancelled,seen,after,lane})
     "#,
         ),
         Duration::from_secs(90),
     );
     assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    assert_eq!(
+        out["cancelled"],
+        serde_json::json!({"ghost": false, "browser": true}),
+        "a drag let go off the timeline places nothing: {out}"
+    );
+    let seen = out["seen"].as_array().unwrap();
+    assert!(
+        !seen.is_empty(),
+        "no drop preview while over the lane: {out}"
+    );
+    let last = seen.last().unwrap();
+    let lane_y = out["lane"]["y"].as_f64().unwrap();
+    assert!(
+        (last["y"].as_f64().unwrap() - lane_y).abs() < 4.,
+        "the drop preview sits in the lane under the pointer: {out}"
+    );
+    assert_eq!(out["after"], false, "the drop preview goes on drop: {out}");
     let score = stored(name);
     let clips = score["clips"].as_object().unwrap();
     assert_eq!(clips.len(), 1, "{score}");

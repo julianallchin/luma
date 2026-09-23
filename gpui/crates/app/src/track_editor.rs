@@ -3536,6 +3536,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
         cursor: state.cursor,
         loop_region: state.loop_region,
         menu: state.menu,
+        ghost: state.drop_ghost().map(Rc::new),
     };
     let registered = scene.clone();
     // Over an alpha line, the cursor says what a drag does. A drag keeps it
@@ -3549,11 +3550,19 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let app = app.clone();
     let resized = app.clone();
     let dropped = app.clone();
+    let carried = app.clone();
 
     div()
         .flex_1()
         .overflow_hidden()
-        // A preset carried from the browser lands where it is let go.
+        // A preset carried from the browser shows where it would land while
+        // it is over the timeline, and lands there when it is let go.
+        .on_drag_move(move |event: &DragMoveEvent<sheet::PresetDrag>, _, cx| {
+            let at = event.event.position;
+            let over = event.bounds.contains(&at).then_some(at);
+            let drag = *event.drag(cx);
+            carried.update(cx, |this, cx| this.carry_preset(&drag, over, cx));
+        })
         .on_drop(move |drag: &sheet::PresetDrag, window, cx| {
             let at = window.mouse_position();
             dropped.update(cx, |this, cx| this.drop_preset(drag, at, cx));
@@ -3600,6 +3609,8 @@ struct Scene {
     cursor: Option<Cursor>,
     loop_region: Option<(f64, f64)>,
     menu: Option<InsertMenu>,
+    /// A preset carried over the timeline from the browser.
+    ghost: Option<Rc<sheet::DropGhost>>,
 }
 
 impl Scene {
@@ -3740,6 +3751,16 @@ fn register(scene: &Scene, canvas: Bounds<Pixels>, window: &mut Window, cx: &mut
                         cx,
                     );
                 }
+            }
+            // A carried preset is evidence of where a drop would land.
+            if let Some(ghost) = &scene.ghost {
+                agent_paint_node(
+                    Role::Card,
+                    format!("{} drop preview", ghost.clip.label),
+                    ghost_box(canvas, layout, scene, ghost),
+                    window,
+                    cx,
+                );
             }
             // The cursor is a control in the sense that matters here: it is
             // where the next edit lands, and nothing else on the canvas
@@ -3954,6 +3975,9 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
                 }
                 if let Some(menu) = scene.menu {
                     paint_insertion(bounds, layout, menu, scene.view, window);
+                }
+                if let Some(ghost) = &scene.ghost {
+                    paint_ghost(bounds, layout, scene, ghost, window, cx);
                 }
             },
         );
@@ -4196,6 +4220,66 @@ fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
             ladder::border(),
         ));
     }
+}
+
+/// Where a carried preset would sit: in its lane, or across the boundary
+/// where it would open a new one.
+fn ghost_box(
+    canvas: Bounds<Pixels>,
+    layout: Layout,
+    scene: &Scene,
+    ghost: &sheet::DropGhost,
+) -> Bounds<Pixels> {
+    let mut box_ = scene.clip_box(canvas, &ghost.clip);
+    if ghost.insert {
+        box_.origin.y -= px(layout.lane / 2.);
+    }
+    box_
+}
+
+/// A carried preset, drawn as the clip it would make, with its strip.
+fn paint_ghost(
+    canvas: Bounds<Pixels>,
+    layout: Layout,
+    scene: &Scene,
+    ghost: &sheet::DropGhost,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if ghost.insert {
+        let menu = InsertMenu {
+            start: ghost.clip.start,
+            end: ghost.clip.end,
+            row: ghost.clip.row,
+            insert: true,
+            active: 0,
+        };
+        paint_insertion(canvas, layout, menu, scene.view, window);
+    }
+    let previews = RefCell::new(
+        ghost
+            .strip
+            .as_ref()
+            .map(|image| {
+                (
+                    ghost.clip.id.clone(),
+                    Preview {
+                        image: Arc::clone(image),
+                        published: true,
+                    },
+                )
+            })
+            .into_iter()
+            .collect(),
+    );
+    paint_clip(
+        ghost_box(canvas, layout, scene, ghost),
+        &ghost.clip,
+        &previews,
+        true,
+        window,
+        cx,
+    );
 }
 
 /// One clip: an opaque header plate over a translucent body — the heatmap
