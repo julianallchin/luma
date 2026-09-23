@@ -124,7 +124,7 @@ fn an_empty_panel_offers_the_ways_to_open_a_tab() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    for expected in ["Patterns", "Track editor"] {
+    for expected in ["Track editor"] {
         assert!(
             labels.contains(&expected),
             "the empty panel did not offer {expected:?}: {labels:?}"

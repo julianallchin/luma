@@ -22,14 +22,10 @@ use serde_json::Value;
 use super::support::{self, Clip, Fixture};
 
 fn harness(name: &'static str) -> Harness {
-    Fixture::new(
-        name,
-        20,
-        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0).lit()],
-    )
-    .with_rig()
-    .window(1400., 900.)
-    .open(Mode::Headless)
+    Fixture::new(name, 20, vec![Clip::new("pat-glow", "Glow", 2.0, 5.0)])
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Headless)
 }
 
 fn exec(harness: &mut Harness, script: &str) -> Value {
@@ -938,7 +934,7 @@ fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
     let mut harness = Fixture::new(
         "venue-builder-empty",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0)],
     )
     .window(1400., 900.)
     .open(Mode::Headless);

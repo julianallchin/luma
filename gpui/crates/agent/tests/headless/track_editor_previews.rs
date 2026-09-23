@@ -33,7 +33,7 @@ fn harness() -> Harness {
     Fixture::new(
         "track-editor-previews",
         TRACK_SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0.5, 4.5).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0.5, 4.5)],
     )
     .with_rig()
     // The size its pixel sibling uses. At the default size the toolbar wraps

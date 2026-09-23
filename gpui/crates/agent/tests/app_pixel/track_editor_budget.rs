@@ -345,7 +345,6 @@ fn a_sidebar_slide_costs_the_timeline_no_cliff_over_holding_still() {
                     start + CLIP_SECONDS,
                 )
                 .lane(lane)
-                .lit()
             })
         })
         .collect();

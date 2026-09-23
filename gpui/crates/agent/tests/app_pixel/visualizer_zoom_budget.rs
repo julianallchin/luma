@@ -34,7 +34,7 @@ fn harness() -> Harness {
     Fixture::new(
         "visualizer-zoom-budget",
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS)).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
     )
     .with_rig_of(RIG)
     .window(2560.0, 1440.0)

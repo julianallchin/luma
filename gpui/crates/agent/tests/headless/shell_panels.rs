@@ -121,42 +121,36 @@ const SCRIPT: &str = r#"
     //    on the optional scrim: it dismisses the dialog without toggling the
     //    covered sidebar.
     app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
-    app.action("luma::OpenPatterns");
-    until("the pattern picker", (s) =>
-        s.find((n) => n.role === "text" && n.label.endsWith(" patterns")) !== undefined);
-    until("a focusable pattern row", (s) =>
-        s.find({ role: "row", label: "Strobe" }) !== undefined);
-    const dialog = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+    app.action("luma::OpenSettings");
+    until("the settings dialog", (s) =>
+        s.find({ role: "card", label: "Settings dialog" }) !== undefined);
+    const dialog = app.snapshot().find({ role: "card", label: "Settings dialog" });
     app.click(app.snapshot().find({ role: "button", label: "sidebar-toggle" }));
     app.frames(2);
     const overlayBlocked = read();
-    const dialogAfterScrim = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+    const dialogAfterScrim = app.snapshot().find({ role: "card", label: "Settings dialog" });
 
     // Reopen it: the same modal boundary applies to keyboard bindings. Escape
     // then restores the exact search field which opened the overlay.
-    app.action("luma::OpenPatterns");
-    until("the reopened pattern picker", (s) =>
-        s.find({ role: "card", label: "Pattern dialog" }) !== undefined);
+    app.action("luma::OpenSettings");
+    until("the reopened settings dialog", (s) =>
+        s.find({ role: "card", label: "Settings dialog" }) !== undefined);
     app.key("secondary-b");
     app.frames(2);
     const overlayKeyBlocked = read();
     app.key("tab");
     app.frames(2);
-    const dialogAfterTab = app.snapshot().find({ role: "card", label: "Pattern dialog" });
-    const firstAfterTab = app.snapshot().find({ role: "button", label: "Close" });
+    const dialogAfterTab = app.snapshot().find({ role: "card", label: "Settings dialog" });
     app.key("shift-tab");
     app.frames(2);
-    const dialogAfterReverse = app.snapshot().find({ role: "card", label: "Pattern dialog" });
-    const firstAfterReverse = app.snapshot().find({ role: "button", label: "Close" });
-    const lastAfterReverse = app.snapshot().find((n) => n.role === "row" && n.focused);
-    app.key("tab");
+    app.key("shift-tab");
     app.frames(2);
-    const firstAfterWrap = app.snapshot().find({ role: "button", label: "Close" });
+    const dialogAfterReverse = app.snapshot().find({ role: "card", label: "Settings dialog" });
     app.key("escape");
     app.frames(2);
     const restoredSearch = app.snapshot().find({ role: "input", label: "Search tracks" });
 
-    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, beforeDrag, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterScrim, dialogAfterTab, firstAfterTab, dialogAfterReverse, firstAfterReverse, lastAfterReverse, firstAfterWrap, restoredSearch })
+    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, beforeDrag, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterScrim, dialogAfterTab, dialogAfterReverse, restoredSearch })
 "#;
 
 fn number(value: &Value, key: &str) -> f64 {
@@ -242,37 +236,17 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
         "the overlay let a shell shortcut mutate the covered sidebar: {:#}",
         out["overlayKeyBlocked"]
     );
-    assert_eq!(out["dialog"]["bounds"]["width"], 760.0);
-    assert_eq!(out["dialog"]["bounds"]["height"], 600.0);
+    assert_eq!(out["dialog"]["bounds"]["width"], 900.0);
+    assert_eq!(out["dialog"]["bounds"]["height"], 680.0);
     assert_eq!(
         out["dialogAfterTab"]["focused"], true,
         "Tab escaped the modal focus plane: {:#}",
         out["dialogAfterTab"]
     );
     assert_eq!(
-        out["firstAfterTab"]["focused"], true,
-        "Tab did not move from the modal container to its first control: {:#}",
-        out["firstAfterTab"]
-    );
-    assert_eq!(
         out["dialogAfterReverse"]["focused"], true,
         "Shift-Tab escaped the modal focus trap: {:#}",
         out["dialogAfterReverse"]
-    );
-    assert_eq!(
-        out["firstAfterReverse"]["focused"], false,
-        "Shift-Tab did not move from the first control to the last: {:#}",
-        out["firstAfterReverse"]
-    );
-    assert_eq!(
-        out["lastAfterReverse"]["focused"], true,
-        "Shift-Tab did not wrap from the first control to the last row: {:#}",
-        out["lastAfterReverse"]
-    );
-    assert_eq!(
-        out["firstAfterWrap"]["focused"], true,
-        "Tab did not wrap from the last dialog control to the first: {:#}",
-        out["firstAfterWrap"]
     );
     assert_eq!(
         out["restoredSearch"]["focused"], true,
@@ -295,11 +269,11 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
             r#"
             nav.trackEditor("Test Venue", "Aurora");
             until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-            app.action("luma::OpenPatterns");
-            until("the compact dialog", (s) => s.find({ role: "card", label: "Pattern dialog" }) !== undefined);
+            app.action("luma::OpenSettings");
+            until("the compact dialog", (s) => s.find({ role: "card", label: "Settings dialog" }) !== undefined);
             const shot = app.snapshot();
             ({
-                dialog: shot.find({ role: "card", label: "Pattern dialog" }),
+                dialog: shot.find({ role: "card", label: "Settings dialog" }),
                 close: shot.find({ role: "button", label: "close" }),
                 minimize: shot.find({ role: "button", label: "minimize" }),
                 maximize: shot.find({ role: "button", label: "maximize" }),

@@ -81,12 +81,12 @@ fn production_root_layers_a_compact_frosted_dialog_below_live_window_controls() 
                 app.snapshot().find({ role: "input", label: "Search tracks" }));
             const base = app.screenshot().path;
 
-            app.action("luma::OpenPatterns");
-            until("pattern dialog", () =>
-                app.snapshot().find({ role: "card", label: "Pattern dialog" }));
+            app.action("luma::OpenSettings");
+            until("settings dialog", () =>
+                app.snapshot().find({ role: "card", label: "Settings dialog" }));
             app.frames(2);
             const shot = app.snapshot();
-            const card = shot.find({ role: "card", label: "Pattern dialog" });
+            const card = shot.find({ role: "card", label: "Settings dialog" });
             const close = shot.find({ role: "button", label: "close" });
             const minimize = shot.find({ role: "button", label: "minimize" });
             const maximize = shot.find({ role: "button", label: "maximize" });
@@ -136,10 +136,10 @@ fn production_root_layers_a_compact_frosted_dialog_below_live_window_controls() 
     }
 
     let base_path = preserve(out["base"].as_str().unwrap(), "dialog-host-base.png");
-    let overlay_path = preserve(out["overlay"].as_str().unwrap(), "dialog-host-patterns.png");
+    let overlay_path = preserve(out["overlay"].as_str().unwrap(), "dialog-host-settings.png");
     let card_path = preserve(
         out["cardShot"].as_str().unwrap(),
-        "dialog-host-pattern-card.png",
+        "dialog-host-settings-card.png",
     );
     let changed = differing_fraction(&pixels(base_path), &pixels(overlay_path));
     assert!(

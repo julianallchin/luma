@@ -9,7 +9,7 @@ fn fullscreen_restores_selection_layout_and_keeps_transport_running() {
     let mut harness = Fixture::new(
         "visualizer-fullscreen",
         60,
-        vec![Clip::new("pat-glow", "Glow", 2., 50.).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2., 50.)],
     )
     .with_rig()
     .window(1400., 900.)

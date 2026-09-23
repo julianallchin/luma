@@ -123,12 +123,6 @@ async fn seed(config_dir: &Path) {
         )
         .await;
     }
-    run(
-        pool,
-        "INSERT INTO patterns (id, uid, name) VALUES ('pattern', ?, 'Strobe')",
-        [session::PRINCIPAL],
-    )
-    .await;
 
     // `created_at` is the browser's sort key, so the fixture sets it rather
     // than letting every row share one CURRENT_TIMESTAMP: the named tracks are

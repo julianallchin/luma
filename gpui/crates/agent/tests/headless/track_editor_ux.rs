@@ -1020,7 +1020,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         "the copy should stay at {from}s and the original move 10s back: {stayed}s and {moved}s"
     );
 
-    // 17. A right-click offers the shipped presets, not the library's
+    // 17. A right-click offers the shipped presets, not the score's own
     //     patterns, and commits one onto the lane it pointed at — row 0,
     //     which opens a layer above everything.
     let menu = labels(&out, "menu");
@@ -1031,7 +1031,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     );
     assert!(
         !menu.contains(&"Haze".to_string()),
-        "the insertion menu offered a library pattern: {menu:?}"
+        "the insertion menu offered a score pattern: {menu:?}"
     );
     let inserted = &out["inserted"];
     assert_eq!(

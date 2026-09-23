@@ -35,7 +35,7 @@ fn harness() -> Harness {
     Fixture::new(
         "sidebar-toggle-budget",
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS)).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
     )
     .with_rig_of(RIG)
     // The whole subject is the *slide*. The suite snaps motion by default so a

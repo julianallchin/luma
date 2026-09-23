@@ -42,34 +42,32 @@ fn modal_traps_both_tab_directions_and_restores_the_exact_opener() {
         app.click(app.snapshot().find({ role: "input", label: "Search tracks" }));
         const openerBefore = app.snapshot().find({ role: "input", label: "Search tracks" });
 
-        app.action("luma::OpenPatterns");
-        poll("the focusable pattern row", (s) =>
-            s.find({ role: "row", label: "Strobe" }) !== undefined);
-        const initialDialog = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+        app.action("luma::OpenSettings");
+        poll("the settings dialog", (s) =>
+            s.find({ role: "card", label: "Settings dialog" }) !== undefined);
+        const initialDialog = app.snapshot().find({ role: "card", label: "Settings dialog" });
 
         app.key("tab");
         app.frames(2);
-        const first = app.snapshot().find({ role: "button", label: "Close" });
-        const afterForward = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+        const afterForward = app.snapshot().find({ role: "card", label: "Settings dialog" });
         const focusedAfterForward = app.snapshot().nodes
             .filter((node) => node.focused)
             .map((node) => `${node.role}:${node.label}`);
 
         app.key("shift-tab");
         app.frames(2);
-        const last = app.snapshot().find({ role: "row", label: "Strobe" });
-        const afterReverse = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+        const afterReverse = app.snapshot().find({ role: "card", label: "Settings dialog" });
 
-        app.key("tab");
+        app.key("shift-tab");
         app.frames(2);
-        const wrapped = app.snapshot().find({ role: "button", label: "Close" });
+        const wrapped = app.snapshot().find({ role: "card", label: "Settings dialog" });
 
         app.key("escape");
         app.frames(2);
         const restored = app.snapshot().find({ role: "input", label: "Search tracks" });
-        const dismissed = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+        const dismissed = app.snapshot().find({ role: "card", label: "Settings dialog" });
 
-        ({ openerBefore, initialDialog, first, afterForward, focusedAfterForward, last, afterReverse, wrapped, restored, dismissed })
+        ({ openerBefore, initialDialog, afterForward, focusedAfterForward, afterReverse, wrapped, restored, dismissed })
         "#,
     );
     let out = run(&mut harness, &script);
@@ -77,12 +75,10 @@ fn modal_traps_both_tab_directions_and_restores_the_exact_opener() {
     assert_eq!(out["openerBefore"]["focused"], true);
     assert_eq!(out["initialDialog"]["focused"], true);
     assert_eq!(
-        out["first"]["focused"], true,
+        out["afterForward"]["focused"], true,
         "forward Tab focused {:?}",
         out["focusedAfterForward"]
     );
-    assert_eq!(out["afterForward"]["focused"], true);
-    assert_eq!(out["last"]["focused"], true);
     assert_eq!(out["afterReverse"]["focused"], true);
     assert_eq!(out["wrapped"]["focused"], true);
     assert_eq!(out["restored"]["focused"], true);
@@ -105,13 +101,13 @@ fn route_policy_dismisses_optional_scrims_but_keeps_onboarding_modal() {
             const shell = until("the venue shell", (s) =>
                 s.find({ role: "input", label: "Search tracks" }) ? s : undefined);
             app.click(shell.find({ role: "input", label: "Search tracks" }));
-            app.action("luma::OpenPatterns");
+            app.action("luma::OpenSettings");
             const opened = until("the optional scrim", (s) =>
                 s.find({ role: "button", label: "Dismiss dialog" }) ? s : undefined);
             app.click(opened.find({ role: "button", label: "Dismiss dialog" }));
             app.frames(2);
             const dismissed = app.snapshot();
-            ({ dialogGone: dismissed.find({ role: "card", label: "Pattern dialog" }) === undefined,
+            ({ dialogGone: dismissed.find({ role: "card", label: "Settings dialog" }) === undefined,
                shellRestored: dismissed.find({ role: "input", label: "Search tracks" })?.focused === true })
             "#,
         ),

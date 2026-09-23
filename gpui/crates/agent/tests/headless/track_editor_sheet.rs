@@ -42,12 +42,12 @@ fn harness() -> Harness {
         "track-editor-sheet",
         TRACK_SECONDS,
         vec![
-            Clip::new("pat-glow", "Glow", 2.0, 5.0).lit(),
-            Clip::new("pat-glow", "Glow", 8.0, 11.0).lit(),
+            Clip::new("pat-glow", "Glow", 2.0, 5.0),
+            Clip::new("pat-glow", "Glow", 8.0, 11.0),
             // Early on the timeline on purpose: the sheet overlays the
             // right of the canvas, and a clip a test has to click cannot
             // live under it.
-            Clip::new("pat-wash", "Wash", 4.0, 7.0).lit().lane(1),
+            Clip::new("pat-wash", "Wash", 4.0, 7.0).lane(1),
         ],
     )
     .open(Mode::Headless)

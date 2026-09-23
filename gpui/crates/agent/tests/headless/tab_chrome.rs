@@ -22,7 +22,6 @@ fn fixture(name: &'static str) -> Fixture {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
-    .with_typed_patterns("chase")
     .with_rig()
 }
 
@@ -33,7 +32,7 @@ const SCRIPT: &str = r#"
         const shot = app.snapshot();
         return {
             shot,
-            choices: ["Patterns", "Track editor"]
+            choices: ["Track editor"]
                 .map((label) => shot.find({ role: "button", label })),
             // The venue is a sidebar place now, never a tab.
             venue: shot.find({ role: "button", label: "Venue" }) !== undefined,
@@ -46,7 +45,7 @@ const SCRIPT: &str = r#"
 
     const first = menu();
     // Opening the selected track is a reveal, not a duplicate.
-    app.click(first.choices[1]);
+    app.click(first.choices[0]);
     app.frames(2);
     const trackChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Aurora" }).length;
 
@@ -54,9 +53,9 @@ const SCRIPT: &str = r#"
     until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }) !== undefined);
     const second = menu();
     app.click(second.choices[0]);
-    until("library browser",s=>s.find({role:"row",label:"Strobe"}));
-    nav.dismiss();
-    app.click(app.snapshot().find({role:"button",label:"Strobe"}));
+    app.frames(2);
+    // Opening the pattern again reveals its tab rather than adding one.
+    nav.pattern("Strobe");
     app.frames(2);
     const patternChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Strobe" }).length;
 
@@ -112,8 +111,8 @@ fn menu_prerequisites_idempotent_opens_and_close_gestures_share_one_path() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    assert_eq!(out["firstEnabled"], serde_json::json!([true, true]));
-    assert_eq!(out["secondEnabled"], serde_json::json!([true, true]));
+    assert_eq!(out["firstEnabled"], serde_json::json!([true]));
+    assert_eq!(out["secondEnabled"], serde_json::json!([true]));
     assert_eq!(
         out["venueOffered"], false,
         "the + menu still offers the venue"
@@ -158,7 +157,7 @@ fn new_tab_opens_the_panel_and_its_menu_together() {
             app.frames(12, { waitMs: 40 });
             const settled = app.snapshot();
             ({
-                opened: menu.find({ role: "button", label: "Patterns" }) !== undefined,
+                opened: menu.find({ role: "button", label: "Track editor" }) !== undefined,
                 stillUp: settled.find({ role: "card", label: "New tab menu" }) !== undefined,
                 strip: settled.find({ role: "card", label: "Tab strip" }) !== undefined,
             })

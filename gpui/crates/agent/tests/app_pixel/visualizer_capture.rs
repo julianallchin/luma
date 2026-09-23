@@ -74,7 +74,7 @@ fn capture() {
     let mut harness = Fixture::new(
         "visualizer-capture",
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS)).lit()],
+        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
     )
     .with_rig()
     .open(Mode::Pixel);

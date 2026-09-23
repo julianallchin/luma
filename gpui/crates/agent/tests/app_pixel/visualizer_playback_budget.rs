@@ -59,7 +59,6 @@ fn harness() -> Harness {
                     0.,
                     f64::from(SECONDS),
                 )
-                .lit()
                 .lane(lane as i64)
             })
             .collect(),

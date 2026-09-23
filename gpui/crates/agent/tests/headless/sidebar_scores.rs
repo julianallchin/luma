@@ -33,7 +33,7 @@ fn harness() -> Harness {
     Fixture::new(
         "sidebar-scores",
         TRACK_SECONDS,
-        vec![Clip::new("pat-glow", "Glow", 1.0, 4.0).lit()],
+        vec![Clip::new("pat-glow", "Glow", 1.0, 4.0)],
     )
     .with_extra_scores(EXTRA_SCORES)
     .open(Mode::Headless)

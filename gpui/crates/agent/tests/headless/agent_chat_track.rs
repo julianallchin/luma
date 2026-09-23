@@ -10,7 +10,7 @@ fn a_track_keeps_its_chat_until_an_explicit_new_or_history_choice() {
     let mut app = support::Fixture::new(
         "sticky-chat",
         4,
-        vec![support::Clip::new("pattern-strobe", "Strobe", 0.5, 2.0).lit()],
+        vec![support::Clip::new("pattern-strobe", "Strobe", 0.5, 2.0)],
     )
     .with_seeded_threads()
     .with_rig()

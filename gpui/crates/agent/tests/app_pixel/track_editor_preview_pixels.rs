@@ -36,11 +36,9 @@ fn harness() -> Harness {
         "track-editor-preview-pixels",
         TRACK_SECONDS,
         vec![
-            Clip::new("pattern-pulse", "Pulse", 0.5, 4.5).lit(),
-            Clip::new("pattern-sweep", "Sweep", 5.0, 7.5).lit(),
-            Clip::new("pattern-strobe", "Strobe", 1.5, 6.0)
-                .lit()
-                .lane(1),
+            Clip::new("pattern-pulse", "Pulse", 0.5, 4.5),
+            Clip::new("pattern-sweep", "Sweep", 5.0, 7.5),
+            Clip::new("pattern-strobe", "Strobe", 1.5, 6.0).lane(1),
         ],
     )
     .with_rig()

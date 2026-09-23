@@ -113,7 +113,6 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
-    .with_typed_patterns("chase")
     .with_rig()
     .with_motion()
     .with_motion_scale(10.0)
@@ -141,7 +140,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             const menuState = until("new tab menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
             const menu = menuState.find({ role: "card", label: "New tab menu" });
-            const menuRows = ["Venue", "Patterns", "Track editor"]
+            const menuRows = ["Track editor"]
                 .map((label) => menuState.find({ role: "button", label }));
             const menuAnimatedFull = app.screenshot().path;
             const menuAnimatedCrop = app.screenshot({ node: menu }).path;
@@ -237,7 +236,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         assert!(number(&row["bounds"], "width") > 200.0);
         assert!(number(&row["bounds"], "height") >= 38.0);
     }
-    assert_eq!(out["menuRows"][1]["enabled"], true);
+    assert_eq!(out["menuRows"][0]["enabled"], true);
     assert!(number(&out["strip"], "x") >= 0.0);
     assert!(number(&out["strip"], "x") + number(&out["strip"], "width") <= 1280.0);
 
@@ -350,7 +349,6 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
-    .with_typed_patterns("chase")
     .with_rig()
     .window(420.0, 480.0)
     .open(Mode::Pixel);
@@ -394,7 +392,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             app.click(compactPlus);
             const shot = until("compact menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
-            const rows = ["Venue", "Patterns", "Track editor"]
+            const rows = ["Track editor"]
                 .map((label) => shot.find({ role: "button", label }));
             const labels = new Set([
                 "Aurora", "Strobe", "Test Venue", "Close Aurora", "Close Strobe",
@@ -461,7 +459,7 @@ fn empty_workspace_action_rows_are_visible() {
         until("empty workspace", s => s.find({ role: "card", label: "Empty panel" }) !== undefined);
         app.frames(4);
         ({ shot: app.screenshot().path,
-           rows: ["Venue", "Patterns", "Track editor"].map(label =>
+           rows: ["Track editor"].map(label =>
              app.snapshot().find({ role: "button", label }).bounds) })
     "#,
         ),

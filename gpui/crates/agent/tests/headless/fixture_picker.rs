@@ -28,7 +28,7 @@ fn harness() -> Harness {
     Fixture::new(
         "fixture-picker",
         20,
-        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0).lit()],
+        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0)],
     )
     .with_rig()
     .window(1400., 900.)
