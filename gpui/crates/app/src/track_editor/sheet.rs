@@ -183,8 +183,12 @@ enum Widget {
         hsv: Hsv,
     },
     Gradient(Entity<GradientEditor>),
-    /// A form input's named choices. The row reads the stored value.
-    Preset(&'static [luma_patterns::Preset]),
+    /// A form input's named choices. The row reads the stored value. A
+    /// choice of curves also holds the editor for a custom curve.
+    Preset(
+        &'static [luma_patterns::Preset],
+        Option<Entity<luma_ui::arg::envelope::EnvelopeEditor>>,
+    ),
     /// Sparkle's grain: a head, a fixture, or a clump; holds the clump size.
     Grain(Entity<DraftedNumber>),
     /// `every` of a color over time: once, or a period in beats.
@@ -829,7 +833,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
                 entity.update(cx, |editor, cx| editor.set_value(points, cx));
             }
             Widget::Choice(_)
-            | Widget::Preset(_)
+            | Widget::Preset(..)
             | Widget::Grain(_)
             | Widget::Every(_)
             | Widget::Noise(_)
@@ -1417,7 +1421,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         }
         Widget::Gradient(entity) => one(div().child(entity.clone())),
         // Form rows draw these themselves.
-        Widget::Preset(_)
+        Widget::Preset(..)
         | Widget::Grain(_)
         | Widget::Every(_)
         | Widget::Noise(_)

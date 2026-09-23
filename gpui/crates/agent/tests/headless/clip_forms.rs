@@ -137,6 +137,15 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         app.click(node("button","Comet"));
         until("comet",s=>s.find({role:"select",label:"Comet"}));
         settle();
+        const shapeEditorHidden=!app.snapshot().find({role:"card",label:"Envelope curve"});
+        app.click(inRow("Shape","select","Comet"));
+        app.click(node("button","Custom"));
+        until("shape editor",s=>s.find({role:"card",label:"Envelope curve"}));
+        const shapeEditor=!!inRow("Shape","select","Comet");
+        app.click(inRow("Shape","select","Comet"));
+        app.click(node("button","Comet"));
+        until("shape editor hidden",s=>!s.find({role:"card",label:"Envelope curve"}));
+        settle();
 
         const modes=()=>app.snapshot().findAll({role:"button"}).map(n=>n.label);
         app.click(inRow("Every","select","Fixed"));
@@ -153,14 +162,15 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         until("swell",s=>s.find({role:"select",label:"Swell"}));
         settle();
         const closed=!app.snapshot().find({role:"button",label:"Swell"});
+        const presetHidesEditor=!app.snapshot().find({role:"card",label:"Envelope curve"});
 
         app.click(inRow("Every","select","↗ Over time"));
         app.click(node("button","Fixed"));
-        until("fixed again",s=>!s.find({role:"card",label:"Envelope curve"}));
+        until("fixed again",s=>s.find({role:"select",label:"Fixed"}));
         const fixed=!!inRow("Every","select","Fixed");
         const every=app.snapshot().findAll({role:"input"}).map(n=>n.label).filter(l=>l.startsWith("Every"));
         settle();
-        ({offered,promoted,thumbs,closed,fixed,every})
+        ({shapeEditorHidden,shapeEditor,offered,promoted,thumbs,closed,presetHidesEditor,fixed,every})
     "#,
             )),
         Duration::from_secs(90),
@@ -179,6 +189,12 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
         "the popover shows one thumbnail per curve preset: {out}"
     );
     assert_eq!(out["closed"], true, "a pick closes the popover: {out}");
+    assert_eq!(out["shapeEditorHidden"], true, "{out}");
+    assert_eq!(
+        out["shapeEditor"], true,
+        "Custom opens the shape's editor: {out}"
+    );
+    assert_eq!(out["presetHidesEditor"], true, "{out}");
     assert_eq!(out["fixed"], true, "{out}");
     assert_eq!(
         out["every"],
@@ -207,7 +223,7 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
 }
 
 #[test]
-fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
+fn alpha_offers_its_own_curves_and_custom_opens_the_editor() {
     let mut harness = Fixture::new("clip-forms-alpha-curves", 20, vec![])
         .with_graph_score(support::preset_score("Chase"))
         .with_rig()
@@ -237,26 +253,38 @@ fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
         until("form inputs",s=>s.find({role:"row",label:"Alpha"}));
         app.click(inRow("Alpha","select","Fixed"));
         app.click(node("button","↗ Over time"));
+        until("full",s=>s.find({role:"select",label:"Full"}));
+        settle();
+        // A preset keeps the editor out of the way.
+        const hidden=!app.snapshot().find({role:"card",label:"Envelope curve"});
+        app.click(inRow("Alpha","select","Full"));
+        app.click(node("button","Custom"));
         until("curve editor",s=>s.find({role:"card",label:"Envelope curve"}));
         settle();
         const editorPresets=["Hard","Soft","Triangle"].filter(l=>app.snapshot().find({role:"button",label:l}));
         const chip=inRow("Alpha","select","Full");
         app.click(chip);
-        const grid=node("card","Curve presets").bounds;
+        const grid=node("card","Presets").bounds;
         const cells=app.snapshot().findAll({role:"button"})
             .filter(n=>n.bounds.x>=grid.x&&n.bounds.y>=grid.y&&n.bounds.x<grid.x+grid.width&&n.bounds.y<grid.y+grid.height)
             .map(n=>({label:n.label,y:n.bounds.y,w:n.bounds.width}));
         app.click(node("button","Fade in-out"));
         until("picked",s=>s.find({role:"select",label:"Fade in-out"}));
         settle();
-        const closed=!app.snapshot().find({role:"card",label:"Curve presets"});
-        ({editorPresets,grid,chip:chip.bounds,cells,closed})
+        const closed=!app.snapshot().find({role:"card",label:"Presets"});
+        const editorGone=!app.snapshot().find({role:"card",label:"Envelope curve"});
+        ({hidden,editorPresets,grid,chip:chip.bounds,cells,closed,editorGone})
     "#,
         ),
         Duration::from_secs(90),
     );
     assert_eq!(result.error, None, "{}", result.stdout);
     let out = &result.result;
+    assert_eq!(out["hidden"], true, "a preset hides the editor: {out}");
+    assert_eq!(
+        out["editorGone"], true,
+        "picking a preset hides it again: {out}"
+    );
     assert_eq!(
         out["editorPresets"],
         serde_json::json!([]),
@@ -265,6 +293,7 @@ fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
     let alpha: Vec<&str> = luma_patterns::presets()
         .curves_for("alpha")
         .map(|curve| curve.name.as_str())
+        .chain(["Custom"])
         .collect();
     // The popover lies over the editor; keep only its own thumbnails.
     let cells: Vec<&serde_json::Value> = out["cells"]
@@ -274,7 +303,10 @@ fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
         .filter(|c| alpha.contains(&c["label"].as_str().unwrap()))
         .collect();
     let labels: Vec<&str> = cells.iter().map(|c| c["label"].as_str().unwrap()).collect();
-    assert_eq!(labels, alpha, "alpha offers its own curves: {out}");
+    assert_eq!(
+        labels, alpha,
+        "alpha offers its own curves, then Custom: {out}"
+    );
     // A tidy grid: rows as full as the first, the last no longer.
     let mut rows: Vec<usize> = Vec::new();
     let mut last = f64::NAN;
@@ -286,13 +318,13 @@ fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
         }
         *rows.last_mut().unwrap() += 1;
     }
-    assert_eq!(rows, [4, 4], "{out}");
+    assert_eq!(rows, [5, 4], "{out}");
     assert!(
         out["chip"]["width"].as_f64().unwrap() < 160.,
         "the chip is as wide as its content: {out}"
     );
     assert!(
-        cells.iter().all(|c| c["w"].as_f64().unwrap() >= 56.),
+        cells.iter().all(|c| c["w"].as_f64().unwrap() >= 40.),
         "{out}"
     );
     let (grid, chip) = (&out["grid"], &out["chip"]);
@@ -314,4 +346,74 @@ fn alpha_offers_its_own_curves_in_a_tidy_grid_under_the_chip() {
         "the pick stores the alpha curve: {}",
         score["clips"]["form-clip"]["inputs"]["alpha"]
     );
+}
+
+#[test]
+fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
+    let mut harness = Fixture::new("clip-forms-gradient", 20, vec![])
+        .with_graph_score(support::preset_score("Color fade"))
+        .with_rig()
+        .window(1400., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r##"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const stops=()=>app.snapshot().findAll({role:"slider"}).filter(n=>n.label.startsWith("graph-gradient:stop:"));
+        const hex=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop hex = "));
+        const settle=()=>app.frames(16,{waitMs:60});
+        app.click(node("card","Color over time"));
+        until("gradient",s=>s.find({role:"card",label:"graph-gradient bar"}));
+        const before=stops().length;
+        app.click(node("card","graph-gradient bar"));
+        until("added",()=>stops().length===before+1);
+        settle();
+        const added=stops().length;
+        const firstHex=hex().label;
+        app.drag(stops()[1],{dx:0,dy:90},{steps:6});
+        until("dragged off",()=>stops().length===before);
+        settle();
+        const removed=stops().length;
+        app.click(hex());app.key("secondary-a backspace");app.type(hex(),"#00ff00");app.key("enter");
+        until("hex",()=>hex().label==="Stop hex = #00FF00");
+        settle();
+        app.click(node("select","Custom"));
+        app.click(node("button","Fire"));
+        until("fire",s=>s.find({role:"select",label:"Fire"}));
+        settle();
+        ({before,added,firstHex,removed})
+    "##,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    assert_eq!(out["before"], 2, "{out}");
+    assert_eq!(out["added"], 3, "a click on the bar adds a stop: {out}");
+    assert_eq!(out["removed"], 2, "a stop dragged off goes: {out}");
+    // The new stop is selected and carries the bar's color there.
+    assert_eq!(out["firstHex"], "Stop hex = #9964A2", "{out}");
+
+    let score = stored("clip-forms-gradient");
+    let fire = luma_patterns::presets()
+        .gradients
+        .iter()
+        .find(|preset| preset.name == "Fire")
+        .unwrap();
+    let colors: luma_patterns::Value =
+        serde_json::from_value(score["clips"]["form-clip"]["inputs"]["colors"].clone()).unwrap();
+    let luma_patterns::Value::Gradient(colors) = colors else {
+        panic!("{colors:?}")
+    };
+    assert_eq!(colors.stops.len(), fire.gradient.stops.len());
+    for (a, b) in colors.stops.iter().zip(&fire.gradient.stops) {
+        assert!(
+            (a.t - b.t).abs() < 1e-4
+                && a.color
+                    .iter()
+                    .zip(b.color)
+                    .all(|(x, y)| (x - y).abs() < 3e-3)
+        );
+    }
 }
