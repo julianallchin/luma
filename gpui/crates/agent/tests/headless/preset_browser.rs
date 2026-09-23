@@ -1,7 +1,8 @@
 //! The preset browser from the outside: with no clip selected the inspector
-//! lists the shipped presets by form; the search filters them; a click and a
-//! drag place a form clip; hovering a tile plays the preset on the stage and
-//! leaving it gives the stage back, with the score untouched.
+//! lists the shipped presets by form, one row each with a strip; the search
+//! filters them; a click and a drag place a form clip; hovering a row plays
+//! the preset on the stage and leaving it gives the stage back, with the
+//! score untouched.
 
 use super::support::{self, Fixture};
 use gpui_agent::Mode;
@@ -47,12 +48,12 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
         const inspector=!!app.snapshot().find({role:"card",label:"Clip inputs"});
         const width=node("card","Presets").bounds.width;
         const captions=inBrowser("text");
-        const tiles=inBrowser("button");
+        const tiles=inBrowser("row");
         // Each tile shows the preset's strip on this rig once it renders.
         until("thumbnails",s=>s.find({role:"card",label:"Wash thumbnail"})&&s.find({role:"card",label:"Chase thumbnail"}));
         app.type(node("input","Search presets…"),"chase"); app.frames(2);
-        const filtered=inBrowser("button");
-        app.click(node("button","Bounce"));
+        const filtered=inBrowser("row");
+        app.click(node("row","Bounce"));
         until("clip inputs",s=>s.find({role:"card",label:"Clip inputs"}));
         const browserGone=!app.snapshot().find({role:"card",label:"Presets"});
         app.click(node("card","Waveform"));
@@ -115,7 +116,7 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
 }
 
 #[test]
-fn a_tile_dragged_onto_the_timeline_lands_there() {
+fn a_row_dragged_onto_the_timeline_lands_there() {
     let name = "preset-browser-drag";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
@@ -129,9 +130,11 @@ fn a_tile_dragged_onto_the_timeline_lands_there() {
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         until("waveform",s=>s.find({role:"card",label:"Waveform"}));
         const lane=node("row","Lane 0").bounds;
-        const tile=node("button","Ripple");
+        const tile=node("row","Ripple");
         app.drag(tile,{dx:lane.x+lane.width/2-(tile.bounds.x+tile.bounds.width/2),dy:lane.y+lane.height/2-(tile.bounds.y+tile.bounds.height/2)},{steps:12});
         until("clip inputs",s=>s.find({role:"card",label:"Clip inputs"}));
+        // The placed clip is written after a round trip.
+        app.frames(8,{waitMs:80});
         true
     "#,
         ),
@@ -155,7 +158,7 @@ fn a_tile_dragged_onto_the_timeline_lands_there() {
 }
 
 #[test]
-fn hovering_a_tile_plays_it_on_the_stage_until_the_pointer_leaves() {
+fn hovering_a_row_plays_it_on_the_stage_until_the_pointer_leaves() {
     let name = "preset-browser-hover";
     let mut harness = Fixture::new(name, 20, vec![])
         .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
@@ -172,7 +175,7 @@ fn hovering_a_tile_plays_it_on_the_stage_until_the_pointer_leaves() {
         node("card","Stage");
         const before=!!badge(app.snapshot());
         // A wheel of nothing moves the pointer onto a control and leaves it there.
-        app.scroll(node("button","Gradient"),{dy:0});
+        app.scroll(node("row","Gradient"),{dy:0});
         until("the stage plays the preset",s=>badge(s));
         app.scroll(node("input","Search presets…"),{dy:0});
         app.frames(1);

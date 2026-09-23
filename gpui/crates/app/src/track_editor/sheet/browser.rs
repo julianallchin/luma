@@ -1,8 +1,11 @@
 //! The preset browser: what the inspector shows while no clip is selected.
 //!
-//! The shipped presets, grouped by form, each a tile with a picture of the
-//! preset on this rig: the timeline's clip strip (time across, heads down
-//! along the form's axis), rendered once per preset and target selection.
+//! The shipped presets, grouped by form, one row each: the name, and a
+//! strip of the preset (time across, heads down along the form's axis). The
+//! strip is the timeline's clip strip on this rig, rendered once per preset
+//! and target selection. Until that lands, or when there is no score to
+//! render it against, the row shows the same strip on a stand-in rig, a
+//! straight line of heads that needs no venue or score.
 //!
 //! A click places the preset at the playhead on the selected lane; a drag
 //! places it where it is dropped. Both go through the picker's insertion
@@ -27,12 +30,9 @@ const THUMB_BEATS: f64 = 8.;
 const AUDITION_BEATS: f64 = 8.;
 /// Bars a placed preset lasts.
 const PLACE_BARS: usize = 4;
-/// Tiles in one row.
-const COLUMNS: usize = 2;
-const TILE_GAP: f32 = 4.;
-const TILE_PAD: f32 = 4.;
-const TILE_W: f32 = (FIELD_W - TILE_GAP * (COLUMNS as f32 - 1.)) / COLUMNS as f32;
-const THUMB_H: f32 = 32.;
+/// A preset's row, and the strip at its right.
+const ROW_H: f32 = 40.;
+const STRIP: [f32; 2] = [112., 24.];
 /// Prepared audition programs kept, newest last.
 const PREPARED: usize = 8;
 
@@ -45,6 +45,9 @@ pub(crate) struct State {
     thumbs: HashMap<(String, String), Thumbnail>,
     /// A thumbnail is being rendered. One at a time.
     thumbing: bool,
+    /// Every preset's strip on the stand-in rig, by name, once rendered.
+    stand_ins: Option<Rc<HashMap<String, Arc<RenderImage>>>>,
+    stand_ins_asked: bool,
     /// The preset under the pointer.
     hovered: Option<String>,
     /// Prepared single-clip programs, newest last.
@@ -119,7 +122,47 @@ pub(super) fn sync(editor: &mut Editor, cx: &mut Context<Luma>) {
         .get_or_insert_with(|| cx.new(|cx| TextInput::search("Search presets…", cx)))
         .clone();
     editor.sheet.browser.query = search.read(cx).text().to_string();
+    fetch_stand_ins(editor, cx);
     fetch_thumbnail(editor, cx);
+}
+
+/// Render every preset's strip on the stand-in rig, once, off the UI thread.
+fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
+    if std::mem::replace(&mut editor.sheet.browser.stand_ins_asked, true) {
+        return;
+    }
+    let target = target(editor);
+    cx.spawn(async move |this, cx| {
+        let strips = cx
+            .background_executor()
+            .spawn(async move {
+                luma_patterns::presets()
+                    .presets
+                    .iter()
+                    .filter_map(|preset| {
+                        let row =
+                            luma_lib::services::graph_scores::stand_in_strip(preset, THUMB_BEATS)
+                                .ok()?;
+                        Some((preset.name.clone(), Arc::new(baked(&row)?)))
+                    })
+                    .collect::<HashMap<_, _>>()
+            })
+            .await;
+        this.update(cx, |this, cx| {
+            this.edit_track_tab(&target, cx, |editor| {
+                editor.sheet.browser.stand_ins = Some(Rc::new(strips));
+            });
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// A strip baked for painting, or `None` for one that is not
+/// `width * height` of RGBA.
+fn baked(row: &AnnotationPreview) -> Option<RenderImage> {
+    (row.width > 0 && row.height > 0 && row.pixels.len() == (row.width * row.height * 4) as usize)
+        .then(|| bake(row.width, row.height, &row.pixels))
 }
 
 /// Called while a clip is selected: the browser is gone, and so is anything
@@ -247,15 +290,9 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
             this.edit_track_tab(&target, cx, |editor| {
                 let browser = &mut editor.sheet.browser;
                 browser.thumbing = false;
-                let thumb = match result {
-                    Ok(row)
-                        if row.width > 0
-                            && row.height > 0
-                            && row.pixels.len() == (row.width * row.height * 4) as usize =>
-                    {
-                        Thumbnail::Ready(Arc::new(bake(row.width, row.height, &row.pixels)))
-                    }
-                    _ => Thumbnail::Failed,
+                let thumb = match result.ok().as_ref().and_then(baked) {
+                    Some(image) => Thumbnail::Ready(Arc::new(image)),
+                    None => Thumbnail::Failed,
                 };
                 browser.thumbs.insert(key, thumb);
             });
@@ -401,7 +438,7 @@ impl Render for PresetDrag {
 
 // -- rendering ----------------------------------------------------------------
 
-/// The browser's content: the search, then the tiles by form.
+/// The browser's content: the search, then a row per preset under its form.
 pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
     let pad = px(luma_ui::sheet::PAD);
     let browser = &state.sheet.browser;
@@ -415,53 +452,47 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .child(
             div()
                 .flex_none()
-                .px(pad)
-                .pt(pad)
-                .pb(px(12.))
+                .p(px(10.))
                 .children(browser.search.clone())
                 .agent_node(Role::Input, "Search presets…"),
         )
         .child(luma_ui::float::divider())
         .child(
             luma_ui::float::viewport().child(
-                div()
+                luma_ui::float::list()
                     .id("preset-browser")
-                    .size_full()
                     .overflow_y_scroll()
-                    .px(pad)
-                    .pt(px(12.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(ROW_GAP))
                     .when(groups.is_empty(), |list| {
                         list.child(float::empty_row("No matching presets"))
                     })
                     .children(groups.into_iter().map(|(form, presets)| {
-                        let tiles: Vec<AnyElement> = presets
-                            .into_iter()
-                            .map(|preset| {
-                                let thumb = browser
-                                    .thumbs
-                                    .get(&(preset.name.clone(), selection.clone()));
-                                tile(preset, thumb, app)
-                            })
-                            .collect();
-                        let mut rows = Vec::new();
-                        let mut tiles = tiles.into_iter().peekable();
-                        while tiles.peek().is_some() {
-                            rows.push(
-                                div()
-                                    .flex()
-                                    .gap(px(TILE_GAP))
-                                    .children(tiles.by_ref().take(COLUMNS)),
-                            );
-                        }
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(4.))
-                            .child(luma_ui::caption(form))
-                            .children(rows)
+                            .gap(px(2.))
+                            .pb(px(8.))
+                            .child(
+                                div()
+                                    .h(px(CONTROL_HEIGHT))
+                                    .px(px(float::ROW_INSET))
+                                    .flex()
+                                    .items_center()
+                                    .child(luma_ui::caption(form)),
+                            )
+                            .children(presets.into_iter().map(|preset| {
+                                let strip = match browser
+                                    .thumbs
+                                    .get(&(preset.name.clone(), selection.clone()))
+                                {
+                                    Some(Thumbnail::Ready(image)) => Some(Arc::clone(image)),
+                                    _ => browser
+                                        .stand_ins
+                                        .as_ref()
+                                        .and_then(|strips| strips.get(&preset.name))
+                                        .cloned(),
+                                };
+                                row(preset, strip, app)
+                            }))
                     }))
                     .child(div().h(pad).flex_none()),
             ),
@@ -469,91 +500,89 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-fn tile(preset: &'static FormPreset, thumb: Option<&Thumbnail>, app: &Entity<Luma>) -> AnyElement {
+fn row(
+    preset: &'static FormPreset,
+    strip: Option<Arc<RenderImage>>,
+    app: &Entity<Luma>,
+) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
-    let tip = name.clone();
+    let key = format!("preset-row-{}", preset.name);
     let hover = app.clone();
     let place = app.clone();
+    // The row's own hover is its fade; the stage preview listens on a
+    // wrapper, as the insert picker's rows do.
     div()
-        .id(SharedString::from(format!("preset-tile-{}", preset.name)))
-        .w(px(TILE_W))
+        .id(SharedString::from(format!("{key}-hover")))
+        .w_full()
         .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .p(px(TILE_PAD))
-        .rounded(px(luma_ui::radius::ROW))
-        .cursor_pointer()
-        .hover(|style| style.bg(luma_ui::glass::glass_hover()))
-        .child(thumbnail(&preset.name, thumb))
-        .child(
-            div()
-                .w_full()
-                .text_size(px(12.))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_color(ladder::foreground_alpha(0.8))
-                .child(name.clone()),
-        )
-        .tooltip(move |window, cx| {
-            gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-        })
         .on_hover(move |over, _, cx| {
             let over = *over;
             hover.update(cx, |this, cx| this.hover_preset(preset, over, cx));
         })
-        .on_click(move |_, _, cx| {
-            place.update(cx, |this, cx| this.place_preset(preset, cx));
-        })
-        .on_drag(PresetDrag(preset), move |_, _, _, cx| {
-            cx.stop_propagation();
-            cx.new(|_| PresetDrag(preset))
-        })
-        .agent_node(Role::Button, name)
+        .child(
+            float::menu_row(float::RowState::Rest, key.clone())
+                .h(px(ROW_H))
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(name.clone()),
+                )
+                .child(thumbnail(&preset.name, strip))
+                .id(SharedString::from(key))
+                .on_click(move |_, _, cx| {
+                    place.update(cx, |this, cx| this.place_preset(preset, cx));
+                })
+                .on_drag(PresetDrag(preset), move |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| PresetDrag(preset))
+                })
+                .agent_node(Role::Row, name),
+        )
         .into_any_element()
 }
 
-/// A tile's picture: the preset's strip on this rig, or an empty frame while
-/// it renders.
-fn thumbnail(name: &str, thumb: Option<&Thumbnail>) -> Div {
+/// A row's strip: on the real rig, else on the stand-in rig, else a flat
+/// frame for the moment the stand-ins take to render.
+fn thumbnail(name: &str, strip: Option<Arc<RenderImage>>) -> Div {
     let frame = div()
-        .w_full()
-        .h(px(THUMB_H))
+        .w(px(STRIP[0]))
+        .h(px(STRIP[1]))
         .flex_none()
         .rounded(px(3.))
         .overflow_hidden()
         .border_1()
         .border_color(luma_ui::glass::hairline(0.12))
-        .bg(luma_ui::glass::ink(0.03));
-    match thumb {
-        Some(Thumbnail::Ready(image)) => {
-            let image = Arc::clone(image);
-            let label = format!("{name} thumbnail");
-            frame.child(
-                canvas(
-                    move |bounds, window, cx| {
-                        agent_paint_node(Role::Card, label.clone(), bounds, window, cx);
-                    },
-                    move |bounds, _, window, _| {
-                        // Frame 1 is the opaque one — see `bake`.
-                        window
-                            .paint_image(
-                                bounds,
-                                bounds,
-                                Corners::all(px(2.)),
-                                Arc::clone(&image),
-                                1,
-                                false,
-                            )
-                            .ok();
-                    },
-                )
-                .size_full(),
-            )
-        }
-        Some(Thumbnail::Failed) | None => frame,
-    }
+        .bg(luma_ui::glass::ink(0.06));
+    let Some(image) = strip else {
+        return frame;
+    };
+    let label = format!("{name} thumbnail");
+    frame.child(
+        canvas(
+            move |bounds, window, cx| {
+                agent_paint_node(Role::Card, label.clone(), bounds, window, cx);
+            },
+            move |bounds, _, window, _| {
+                // Frame 1 is the opaque one — see `bake`.
+                window
+                    .paint_image(
+                        bounds,
+                        bounds,
+                        Corners::all(px(2.)),
+                        Arc::clone(&image),
+                        1,
+                        false,
+                    )
+                    .ok();
+            },
+        )
+        .size_full(),
+    )
 }
 
 #[cfg(test)]
