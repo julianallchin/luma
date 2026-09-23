@@ -28,6 +28,7 @@
 //! existing status and label inks, and nothing here mints a grey.
 
 pub mod color;
+pub mod curve_picker;
 pub mod envelope;
 pub mod expression;
 pub mod gradient;
