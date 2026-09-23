@@ -713,6 +713,7 @@ fn noise_and_audio_sources_stay_in_their_range() {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 0.3,
+            threshold: 0.0,
         }),
     );
     let program = prepare(&form, &inputs).unwrap();
@@ -734,22 +735,61 @@ fn noise_and_audio_sources_stay_in_their_range() {
     assert!(values.iter().any(|v| (*v - 1.0).abs() < 1e-2));
     assert!(values.iter().any(|v| (*v - 0.3).abs() < 1e-2));
 
-    // A bad range or floor is rejected.
+    // With a threshold, energy below it gives 0, under the floor too;
+    // energy at or above it gives floor + (1 - floor) × energy.
+    set(
+        &mut inputs,
+        "alpha",
+        Value::Audio(AudioLevel {
+            from_hz: 55.0,
+            to_hz: 130.0,
+            floor: 0.3,
+            threshold: 0.5,
+        }),
+    );
+    let gated = prepare(&form, &inputs)
+        .unwrap()
+        .with_features(Arc::new(Mix))
+        .unwrap();
+    let mut off = 0;
+    for (step, open) in values.iter().enumerate() {
+        let result = gated.evaluate(START + step as f64 * 0.25).unwrap();
+        let v = lighting(&result["lighting"])["left:0"].dimmer.unwrap();
+        // The open level v = 0.3 + 0.7 e, so e ≥ 0.5 means v ≥ 0.65.
+        if *open >= 0.65 + 1e-9 {
+            assert!((v - open).abs() < 1e-9, "{step}: {v} vs {open}");
+        } else if *open < 0.65 - 1e-9 {
+            assert_eq!(v, 0.0, "{step}: {open}");
+            off += 1;
+        }
+    }
+    assert!(off > 0 && off < values.len(), "{off}");
+
+    // A bad range, floor or threshold is rejected.
     for bad in [
         AudioLevel {
             from_hz: 130.0,
             to_hz: 55.0,
             floor: 0.3,
+            threshold: 0.0,
         },
         AudioLevel {
             from_hz: 10.0,
             to_hz: 55.0,
             floor: 0.3,
+            threshold: 0.0,
         },
         AudioLevel {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 1.5,
+            threshold: 0.0,
+        },
+        AudioLevel {
+            from_hz: 55.0,
+            to_hz: 130.0,
+            floor: 0.3,
+            threshold: 1.5,
         },
     ] {
         set(&mut inputs, "alpha", Value::Audio(bad));

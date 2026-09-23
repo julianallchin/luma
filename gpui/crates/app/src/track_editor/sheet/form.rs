@@ -170,6 +170,7 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
                 from_hz: first.from_hz,
                 to_hz: first.to_hz,
                 floor: 0.,
+                threshold: 0.,
             })
         }
         Some(p::SourceKind::Events) => p::Value::Events(p::Events::Beats {
@@ -538,18 +539,22 @@ pub(super) fn widget(
             };
             let from = hz(format!("{name}: From"), audio.from_hz, window, cx);
             let to = hz(format!("{name}: To"), audio.to_hz, window, cx);
-            let floor = cx.new(|cx| {
-                DraftedNumber::new(
-                    format!("{name}: Floor"),
-                    audio.floor * 100.,
-                    0.,
-                    100.,
-                    FIELD_W,
-                    window,
-                    cx,
-                )
-                .with_unit("%")
-            });
+            let percent = |label: &str, value: f64, window: &mut Window, cx: &mut Context<Luma>| {
+                cx.new(|cx| {
+                    DraftedNumber::new(
+                        format!("{name}: {label}"),
+                        value * 100.,
+                        0.,
+                        100.,
+                        FIELD_W,
+                        window,
+                        cx,
+                    )
+                    .with_unit("%")
+                })
+            };
+            let floor = percent("Floor", audio.floor, window, cx);
+            let threshold = percent("Threshold", audio.threshold, window, cx);
             // A range that would cross is not stored.
             subs.push(on_number(&from, cx, |value, v| {
                 if let p::Value::Audio(audio) = value {
@@ -566,7 +571,12 @@ pub(super) fn widget(
                     audio.floor = (v / 100.).clamp(0., 1.);
                 }
             }));
-            Widget::Audio([from, to, floor])
+            subs.push(on_number(&threshold, cx, |value, v| {
+                if let p::Value::Audio(audio) = value {
+                    audio.threshold = (v / 100.).clamp(0., 1.);
+                }
+            }));
+            Widget::Audio([from, to, floor, threshold])
         }
         Some(p::Value::Events(p::Events::Beats { times })) => {
             let text = format_beats(times.as_slice());
@@ -709,10 +719,11 @@ pub(super) fn resync(
             low.update(cx, |field, cx| field.set_value(noise.range[0], cx));
             high.update(cx, |field, cx| field.set_value(noise.range[1], cx));
         }
-        (Widget::Audio([from, to, floor]), Some(p::Value::Audio(audio))) => {
+        (Widget::Audio([from, to, floor, threshold]), Some(p::Value::Audio(audio))) => {
             from.update(cx, |field, cx| field.set_value(audio.from_hz, cx));
             to.update(cx, |field, cx| field.set_value(audio.to_hz, cx));
             floor.update(cx, |field, cx| field.set_value(audio.floor * 100., cx));
+            threshold.update(cx, |field, cx| field.set_value(audio.threshold * 100., cx));
         }
         (Widget::Stamps(field), Some(value)) => {
             let times = stamped(&value).unwrap_or_default().to_vec();
@@ -1192,7 +1203,7 @@ fn control(
         Widget::Noise([speed, low, high]) => column()
             .child(arg_row("Speed (beats)", speed.clone()))
             .child(arg_row("Range", range_row(low, high))),
-        Widget::Audio([from, to, floor]) => {
+        Widget::Audio([from, to, floor, threshold]) => {
             // Named ranges only fill the two frequency fields.
             let named = &p::presets().frequencies;
             let mut labels: Vec<&str> = named.iter().map(|f| f.name.as_str()).collect();
@@ -1231,6 +1242,8 @@ fn control(
                 ))
                 .child(arg_row("Range", range_row(from, to)))
                 .child(arg_row("Floor", floor.clone()))
+                // Energy below the threshold gives 0; 0% is no gate.
+                .child(arg_row("Threshold", threshold.clone()))
         }
         Widget::Stamps(field) => {
             let times = value.as_ref().and_then(stamped).unwrap_or_default();
@@ -1326,7 +1339,8 @@ mod tests {
             p::Value::Audio(p::AudioLevel {
                 from_hz: 40.,
                 to_hz: 100.,
-                floor: 0.
+                floor: 0.,
+                threshold: 0.,
             })
         );
     }

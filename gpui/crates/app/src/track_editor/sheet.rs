@@ -172,7 +172,7 @@ enum Widget {
     /// A noise source: speed, then the low and high of its range.
     Noise([Entity<DraftedNumber>; 3]),
     /// An audio source: from and to in Hz, then the floor in percent.
-    Audio([Entity<DraftedNumber>; 3]),
+    Audio([Entity<DraftedNumber>; 4]),
     /// A list of stamped beats.
     Stamps(Entity<luma_ui::text_input::TextInput>),
 }

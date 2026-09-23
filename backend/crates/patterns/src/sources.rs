@@ -188,13 +188,21 @@ pub struct NoiseSource {
 }
 
 /// The energy of a frequency range of the track's full mix. The energy is
-/// scaled over the clip: its quietest moment gives `floor`, its loudest 1.
+/// scaled over the clip to 0–1. Below `threshold` the level is 0; at or
+/// above it the level is `floor + (1 − floor) × energy`. Threshold 0 is no
+/// gate.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioLevel {
     pub from_hz: f64,
     pub to_hz: f64,
     pub floor: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub threshold: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl NoiseSource {
@@ -219,6 +227,9 @@ impl AudioLevel {
         }
         if !(0.0..=1.0).contains(&self.floor) {
             return Err(Error("an audio floor must be in 0..1".into()));
+        }
+        if !(0.0..=1.0).contains(&self.threshold) {
+            return Err(Error("an audio threshold must be in 0..1".into()));
         }
         Ok(())
     }
