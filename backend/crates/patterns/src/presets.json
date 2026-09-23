@@ -183,6 +183,14 @@
     {"name": "Fade in", "curve": {"points": [[0, 0], [1, 1]], "segments": ["ease"]}},
     {"name": "Fade out", "curve": {"points": [[0, 1], [1, 0]], "segments": ["ease"]}},
     {"name": "Hold then drop", "curve": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}},
-    {"name": "Spike", "curve": {"points": [[0, 0], [0.15, 1], [1, 0]], "segments": ["linear", "linear"]}}
+    {"name": "Spike", "curve": {"points": [[0, 0], [0.15, 1], [1, 0]], "segments": ["linear", "linear"]}},
+    {"name": "Full", "input": "alpha", "curve": {"points": [[0, 1], [1, 1]], "segments": ["linear"]}},
+    {"name": "Fade in", "input": "alpha", "curve": {"points": [[0, 0], [1, 1]], "segments": ["ease"]}},
+    {"name": "Fade out", "input": "alpha", "curve": {"points": [[0, 1], [1, 0]], "segments": ["ease"]}},
+    {"name": "Fade in-out", "input": "alpha", "curve": {"points": [[0, 0], [0.15, 1], [0.85, 1], [1, 0]], "segments": ["linear", "linear", "linear"]}},
+    {"name": "Swell", "input": "alpha", "curve": {"points": [[0, 0], [0.8, 1], [1, 0]], "segments": ["ease", "ease"]}},
+    {"name": "Breathe", "input": "alpha", "curve": {"points": [[0, 0], [0.5, 1], [1, 0]], "segments": ["ease", "ease"]}},
+    {"name": "Cut in", "input": "alpha", "curve": {"points": [[0, 0], [0.5, 1], [1, 1]], "segments": ["hold", "linear"]}},
+    {"name": "Cut out", "input": "alpha", "curve": {"points": [[0, 1], [0.5, 0], [1, 0]], "segments": ["hold", "linear"]}}
   ]
 }

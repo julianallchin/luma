@@ -121,19 +121,42 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
             .fold(0.0, f64::max);
         assert!(bright > 0.1, "{name} never lights");
     }
-    for name in [
-        "Ramp up",
-        "Ramp down",
-        "Swell",
-        "Fade in",
-        "Fade out",
-        "Hold then drop",
-        "Spike",
-    ] {
-        let curve = shipped.curve(name).unwrap_or_else(|| panic!("{name}"));
+    for preset in &shipped.curves {
+        let (name, curve) = (&preset.name, &preset.curve);
         curve.validate().unwrap();
         assert!(curve.values().all(|v| (0.0..=1.0).contains(&v)), "{name}");
     }
+    let names = |input| {
+        shipped
+            .curves_for(input)
+            .map(|curve| curve.name.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names("alpha"),
+        [
+            "Full",
+            "Fade in",
+            "Fade out",
+            "Fade in-out",
+            "Swell",
+            "Breathe",
+            "Cut in",
+            "Cut out"
+        ]
+    );
+    assert_eq!(
+        names("travel"),
+        [
+            "Ramp up",
+            "Ramp down",
+            "Swell",
+            "Fade in",
+            "Fade out",
+            "Hold then drop",
+            "Spike"
+        ]
+    );
 }
 
 #[test]
