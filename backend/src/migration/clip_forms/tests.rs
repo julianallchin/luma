@@ -578,14 +578,15 @@ fn old_mappings_become_form_axes() {
         .iter()
         .any(|n| n == "center: extent middle → centroid"));
 
-    // A solved circle whose heads are unknown stays a solved circle.
+    // A solved circle whose heads are unknown still becomes an angle.
     let circle =
         json!({"source": {"kind": "circle", "origin": 0.25}, "per_group": false, "reverse": false});
     let (axis, _, notes) = axis_of(circle.clone(), Host::default());
-    assert_eq!(axis.source, MappingSource::Circle { origin: 0.25 });
+    assert_eq!(axis.source, MappingSource::Angle);
+    assert_eq!(axis.plane, Some(AxisPlane::Auto));
     assert!(notes
         .iter()
-        .any(|n| n == "solved circle kept: its heads are unknown"));
+        .any(|n| n == "solved circle → angle: its heads are unknown"));
 
     // On a ring the angle around the centroid reads the heads like the
     // fitted circle, turned: the path takes the turn.
