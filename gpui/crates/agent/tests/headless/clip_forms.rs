@@ -361,7 +361,11 @@ fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
         nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
         const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
         const stops=()=>app.snapshot().findAll({role:"slider"}).filter(n=>n.label.startsWith("graph-gradient:stop:"));
-        const hex=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop hex = "));
+        const hex=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop color hex = "));
+        const opacity=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Stop color opacity = "));
+        const swatch=()=>node("button","Stop color swatch");
+        const open=()=>{if(!hex())app.click(swatch());until("picker",()=>hex());};
+        const shut=()=>{if(hex()){app.click(swatch());until("picker closed",()=>!hex());}};
         const settle=()=>app.frames(16,{waitMs:60});
         app.click(node("card","Color over time"));
         until("gradient",s=>s.find({role:"card",label:"graph-gradient bar"}));
@@ -370,19 +374,24 @@ fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
         until("added",()=>stops().length===before+1);
         settle();
         const added=stops().length;
-        const firstHex=hex().label;
+        const row=!hex()&&!opacity();
+        open();
+        const firstHex=hex().label, firstOpacity=opacity().label;
+        shut();
         app.drag(stops()[1],{dx:0,dy:90},{steps:6});
         until("dragged off",()=>stops().length===before);
         settle();
         const removed=stops().length;
+        open();
         app.click(hex());app.key("secondary-a backspace");app.type(hex(),"#00ff00");app.key("enter");
-        until("hex",()=>hex().label==="Stop hex = #00FF00");
+        until("hex",()=>hex().label==="Stop color hex = #00FF00");
+        shut();
         settle();
         app.click(node("select","Custom"));
         app.click(node("button","Fire"));
         until("fire",s=>s.find({role:"select",label:"Fire"}));
         settle();
-        ({before,added,firstHex,removed})
+        ({before,added,row,firstHex,firstOpacity,removed})
     "##,
         ),
         Duration::from_secs(90),
@@ -393,7 +402,12 @@ fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
     assert_eq!(out["added"], 3, "a click on the bar adds a stop: {out}");
     assert_eq!(out["removed"], 2, "a stop dragged off goes: {out}");
     // The new stop is selected and carries the bar's color there.
-    assert_eq!(out["firstHex"], "Stop hex = #9964A2", "{out}");
+    assert_eq!(out["firstHex"], "Stop color hex = #9964A2", "{out}");
+    assert_eq!(
+        out["row"], true,
+        "hex and opacity live in the picker: {out}"
+    );
+    assert_eq!(out["firstOpacity"], "Stop color opacity = 100", "{out}");
 
     let score = stored("clip-forms-gradient");
     let fire = luma_patterns::presets()
@@ -474,4 +488,47 @@ fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
     // The end point keeps its x and follows the pointer to the bottom.
     assert_eq!(last[0].as_f64(), Some(1.0), "{alpha}");
     assert_eq!(last[1].as_f64(), Some(0.0), "{alpha}");
+}
+
+#[test]
+fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
+    let mut harness = Fixture::new("clip-forms-blur", 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const field=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Alpha = "));
+        app.click(node("card","Chase"));
+        until("alpha",()=>field());
+        app.click(field());
+        until("focused",()=>field().focused);
+        app.key("secondary-a backspace");
+        app.type(field(),"0.5");
+        app.frames(4);
+        const typing=field().focused;
+        // A press on the sheet's own text, nowhere near the field.
+        app.click(node("text","Form"));
+        until("blurred",()=>!field().focused);
+        app.frames(16,{waitMs:60});
+        ({typing,after:field().label,focused:field().focused})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    assert_eq!(out["typing"], true, "{out}");
+    assert_eq!(out["focused"], false, "{out}");
+    assert_eq!(out["after"], "Alpha = 0.5", "{out}");
+    let score = stored("clip-forms-blur");
+    assert_eq!(
+        score["clips"]["form-clip"]["inputs"]["alpha"],
+        serde_json::json!({"type": "proportion", "value": 0.5}),
+        "blur commits the typed value"
+    );
 }
