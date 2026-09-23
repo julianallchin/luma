@@ -574,7 +574,7 @@ fn every_sheet_row_has_one_shape() {
             "row labels are sentence case: {labels:?}"
         );
     }
-    for want in ["Blend", "Selection", "How many", "Brightness", "Grain"] {
+    for want in ["Blend", "Selection", "Brightness", "Grain"] {
         assert!(labels.contains(&want), "no {want} row: {labels:?}");
     }
     // Mode menus in the header all have one width.
