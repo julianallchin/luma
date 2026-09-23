@@ -75,7 +75,18 @@ fn score(nodes: Json) -> Score {
 }
 
 fn run(score: &Score, host: &Host) -> Result<Converted, String> {
-    convert(score, "clip", &json!({"expression": "all"}), host)
+    match convert(score, "clip", &json!({"expression": "all"}), host)? {
+        Proposal::Form(converted) => Ok(*converted),
+        Proposal::Delete { reason } => Err(format!("delete: {reason}")),
+    }
+}
+
+/// The one layer under the converted clip.
+fn under(converted: &Converted) -> &Clip {
+    match converted.layers.as_slice() {
+        [layer] if !layer.above => &layer.clip,
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Eight heads in a row along stage X.
@@ -118,6 +129,7 @@ fn light(library: &Library, clip: &Clip, beat: f64) -> Vec<[f64; 3]> {
 }
 
 /// The largest difference over the old clip, sampled every 1/32 beat.
+/// Layers over the clip must be white and multiply.
 fn difference(score: &Score, converted: &Converted) -> f64 {
     let old = &score.clips["clip"];
     let before = score.library(&standard_library()).unwrap();
@@ -126,7 +138,14 @@ fn difference(score: &Score, converted: &Converted) -> f64 {
         .map(|i| START + i as f64 / 32.0 + 0.003)
         .flat_map(|beat| {
             let a = light(&before, old, beat);
-            let b = light(&after, &converted.clip, beat);
+            let mut b = light(&after, &converted.clip, beat);
+            for layer in &converted.layers {
+                assert!(layer.above && layer.clip.blend_mode == BlendMode::Multiply);
+                for (head, top) in b.iter_mut().zip(light(&after, &layer.clip, beat)) {
+                    assert!(top.iter().all(|v| (v - top[0]).abs() < 1e-9), "white");
+                    head.iter_mut().for_each(|c| *c *= top[0]);
+                }
+            }
             a.into_iter()
                 .zip(b)
                 .flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs()))
@@ -373,7 +392,7 @@ fn a_pulse_times_a_clip_curve_moves_the_curve_to_alpha() {
 }
 
 #[test]
-fn two_moving_looks_in_one_product_match_no_rule() {
+fn a_pulse_times_a_chase_becomes_a_chase_under_a_multiply_pulse() {
     let mut nodes = json!({
         "events": beat_trigger(1.0, false, 0.0),
         "pulse": {"definition": "pulse", "inputs": {
@@ -394,8 +413,89 @@ fn two_moving_looks_in_one_product_match_no_rule() {
         nodes[key] = node.clone();
     }
     let score = score(colored(nodes, wire("both", "mask")));
-    let error = run(&score, &Host::default()).unwrap_err();
-    assert_eq!(error, "two looks multiplied: pulse × chase");
+    let converted = run(&score, &Host::default()).unwrap();
+    assert_eq!(converted.look, "chase × pulse (layered)");
+    assert_eq!(converted.clip.graph, "color.chase@1");
+    assert_eq!(converted.clip.blend_mode, BlendMode::Replace);
+    assert_eq!(
+        converted.clip.inputs["color"],
+        Value::Color([1.0, 0.5, 0.25])
+    );
+    let [layer] = converted.layers.as_slice() else {
+        panic!("{:?}", converted.layers)
+    };
+    assert!(layer.above);
+    assert_eq!(layer.clip.graph, "color.sparkle@1");
+    assert_eq!(layer.clip.blend_mode, BlendMode::Multiply);
+    assert_eq!(layer.clip.inputs["color"], Value::Color([1.0; 3]));
+    assert_eq!(
+        (layer.clip.start, layer.clip.duration),
+        (converted.clip.start, converted.clip.duration)
+    );
+    assert!(difference(&score, &converted) < 2e-6);
+}
+
+#[test]
+fn layers_share_the_earliest_start_and_keep_their_events() {
+    // Snare hits drive the chase; a pulse on the beat grid multiplies it.
+    // The hit at 7.5 is still lit at the clip start, so both layers start
+    // there; the grid pulse keeps its phase as stamps.
+    let mut nodes = json!({
+        "beat": beat_trigger(1.0, true, 0.0),
+        "snare": {"definition": "drum_trigger", "inputs": {"drum": value("drum", json!("snare"))}},
+        "pulse": {"definition": "pulse", "inputs": {
+            "trigger": wire("beat", "trigger"),
+            "duration": beats(0.25),
+            "shape": curve(json!([[0.0, 1.0], [1.0, 1.0]])),
+        }},
+        "both": {"definition": "multiply_mask", "inputs": {"a": wire("pulse", "mask"), "b": wire("chase", "mask")}},
+    });
+    for (key, node) in chase(
+        "snare",
+        json!({"source": {"kind": "u"}, "per_group": false, "reverse": false}),
+        curve(json!([[0.0, 1.0], [1.0, 1.0]])),
+    )
+    .as_object()
+    .unwrap()
+    {
+        nodes[key] = node.clone();
+    }
+    let score = score(colored(nodes, wire("both", "mask")));
+    let host = Host {
+        onsets: BTreeMap::from([(Drum::Snare, vec![7.5, 12.0])]),
+        ..Host::default()
+    };
+    let converted = run(&score, &host).unwrap();
+    let [layer] = converted.layers.as_slice() else {
+        panic!()
+    };
+    assert_eq!(converted.clip.start, 7.5);
+    assert_eq!(layer.clip.start, 7.5);
+    let Value::Events(Events::Beats { times }) = &converted.clip.inputs["every"] else {
+        panic!()
+    };
+    assert_eq!(times.as_slice(), &[0.0, 4.5]);
+    let Value::Events(Events::Beats { times }) = &layer.clip.inputs["every"] else {
+        panic!("{:?}", layer.clip.inputs["every"])
+    };
+    assert_eq!(&times.as_slice()[..3], &[0.5, 1.5, 2.5]);
+}
+
+#[test]
+fn an_aim_clip_is_deleted() {
+    let mut nodes = colored(json!({}), value("proportion", json!(1.0)));
+    nodes["output"]["inputs"]["pan"] = value("degrees", json!(10.0));
+    let score = score(nodes);
+    let proposal = convert(
+        &score,
+        "clip",
+        &json!({"expression": "all"}),
+        &Host::default(),
+    );
+    assert!(
+        matches!(proposal, Ok(Proposal::Delete { .. })),
+        "{proposal:?}"
+    );
 }
 
 #[test]
@@ -406,7 +506,7 @@ fn a_colored_strobe_becomes_a_color_layer_under_a_strobe() {
     assert_eq!(converted.clip.graph, "strobe.constant@1");
     assert_eq!(converted.clip.inputs["rate"], Value::Proportion(0.9));
     assert_eq!(converted.clip.inputs["alpha"], Value::Proportion(1.0));
-    let under = converted.under.expect("a color layer");
+    let under = under(&converted);
     assert_eq!(under.graph, "color.constant@1");
     assert_eq!(under.inputs["color"], Value::Color([1.0, 0.5, 0.25]));
     assert_eq!(under.inputs["alpha"], Value::Proportion(0.5));
@@ -447,6 +547,6 @@ fn a_bass_strobe_gate_becomes_an_audio_threshold() {
             threshold: 0.36,
         })
     );
-    let under = converted.under.expect("a color layer");
+    let under = under(&converted);
     assert!(matches!(under.inputs["alpha"], Value::Audio(_)));
 }

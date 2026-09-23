@@ -17,8 +17,8 @@ mod tests;
 
 use looks::{Audio, Factor, Look, Parser, Stroke, Trigger};
 use luma_patterns::{
-    is_form, presets, standard_library, AudioLevel, Boundary, Clip, ColorStop, Drum, Envelope,
-    EnvelopeCurve, EventTimes, Events, FormPreset, Gradient, Score, Value,
+    is_form, presets, standard_library, AudioLevel, BlendMode, Boundary, Clip, ColorStop, Drum,
+    Envelope, EnvelopeCurve, EventTimes, Events, FormPreset, Gradient, Score, Value,
 };
 use std::collections::BTreeMap;
 
@@ -43,10 +43,53 @@ pub struct Converted {
     pub notes: Vec<String>,
     /// Absolute beats where the output changes, for a render check.
     pub boundaries: Vec<f64>,
-    /// A color layer under `clip`, with the same timing. A strobe form only
-    /// writes the shutter, so a colored strobe becomes this color layer and
-    /// a strobe layer above it.
-    pub under: Option<Clip>,
+    /// New clips with the same timing and selection as `clip`, each with its
+    /// own blend mode. A strobe form only writes the shutter, so a colored
+    /// strobe is a color layer under a strobe; two moving looks multiplied
+    /// are a layer in `multiply` over the other.
+    pub layers: Vec<Layer>,
+}
+
+/// A clip beside the converted clip.
+#[derive(Clone, Debug)]
+pub struct Layer {
+    pub clip: Clip,
+    /// Over the converted clip; otherwise under it. Layers on one side are
+    /// in order, lowest first.
+    pub above: bool,
+}
+
+impl Converted {
+    /// Every clip lowest first: the layers under, the clip, the layers over.
+    /// The first index is the converted clip's.
+    pub fn stack(&self) -> (usize, Vec<&Clip>) {
+        let under: Vec<&Clip> = self
+            .layers
+            .iter()
+            .filter(|layer| !layer.above)
+            .map(|layer| &layer.clip)
+            .collect();
+        let index = under.len();
+        let mut stack = under;
+        stack.push(&self.clip);
+        stack.extend(
+            self.layers
+                .iter()
+                .filter(|layer| layer.above)
+                .map(|layer| &layer.clip),
+        );
+        (index, stack)
+    }
+}
+
+/// What becomes of a stored clip.
+#[derive(Clone, Debug)]
+pub enum Proposal {
+    Form(Box<Converted>),
+    /// The clip is removed, for `reason`.
+    Delete {
+        reason: String,
+    },
 }
 
 /// Convert clip `id` of `score`. `selection` is the stored selection JSON,
@@ -57,72 +100,89 @@ pub fn convert(
     id: &str,
     selection: &serde_json::Value,
     host: &Host,
-) -> Result<Converted, String> {
+) -> Result<Proposal, String> {
     let clip = score
         .clips
         .get(id)
         .ok_or_else(|| format!("unknown clip {id}"))?;
     if is_form(&clip.graph) {
-        return Ok(Converted {
+        return Ok(Proposal::Form(Box::new(Converted {
             clip: clip.clone(),
             look: "already a form".into(),
             notes: Vec::new(),
             boundaries: Vec::new(),
-            under: None,
-        });
+            layers: Vec::new(),
+        })));
     }
     let library = score
         .library(&standard_library())
         .map_err(|e| e.to_string())?;
     let parsed = Parser::new(score, &clip.graph, &clip.inputs, &library)?.parse()?;
     if parsed.aims {
-        return Err("pan and tilt: aim forms are a later spec".into());
+        return Ok(Proposal::Delete {
+            reason: "pan and tilt: aim clips are removed (aim forms are a later spec)".into(),
+        });
     }
     let mut build = Build::new(clip, host);
-    let (form, look, under) = match (parsed.color, parsed.strobe) {
-        (color, Some(strobe)) => {
-            let under = match color {
-                Some(color) => {
-                    let (form, look) = build.color(Parts::of(color)?)?;
-                    Some(build.subset(selection, form, look)?)
+    // Forms lowest first, with the index of the one that keeps the clip's
+    // row; `true` marks a multiply layer.
+    let (forms, main, look): (Vec<(FormPreset, bool)>, usize, String) =
+        match (parsed.color, parsed.strobe) {
+            (color, Some(strobe)) => {
+                let mut forms = Vec::new();
+                let mut under = None;
+                if let Some(color) = color {
+                    let (layers, look) = build.light(Parts::of(color)?, selection)?;
+                    forms = layers;
+                    under = Some(look);
                 }
-                None => None,
-            };
-            let (form, look) = build.strobe(Parts::of(strobe)?)?;
-            let look = match &under {
-                Some((_, color)) => format!("{look} over {color}"),
-                None => look,
-            };
-            (form, look, under.map(|(form, _)| form))
-        }
-        (Some(color), None) => {
-            let (form, look) = build.color(Parts::of(color)?)?;
-            let (form, look) = build.subset(selection, form, look)?;
-            (form, look, None)
-        }
-        (None, None) => return Err("the graph writes no light".into()),
-    };
+                let (form, look) = build.strobe(Parts::of(strobe)?)?;
+                let look = match under {
+                    Some(color) => format!("{look} over {color}"),
+                    None => look,
+                };
+                let main = forms.len();
+                forms.push((form, false));
+                (forms, main, look)
+            }
+            (Some(color), None) => {
+                let (forms, look) = build.light(Parts::of(color)?, selection)?;
+                (forms, 0, look)
+            }
+            (None, None) => return Err("the graph writes no light".into()),
+        };
     let library = standard_library();
-    let place = |form: &FormPreset, base: &Clip| -> Result<Clip, String> {
+    let mut clips = Vec::new();
+    for (form, multiply) in &forms {
         form.validate(&library)
             .map_err(|e| format!("the converted clip is invalid: {e}"))?;
-        let mut clip = base.clone();
+        let mut clip = build.clip.clone();
         clip.graph = form.form.clone();
         clip.inputs = form.inputs.clone();
-        Ok(clip)
-    };
-    let clip = place(&form, &build.clip)?;
-    let under = under.map(|form| place(&form, &build.clip)).transpose()?;
+        if *multiply {
+            clip.blend_mode = BlendMode::Multiply;
+        }
+        clips.push(clip);
+    }
+    let layers = clips
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != main)
+        .map(|(index, clip)| Layer {
+            clip: clip.clone(),
+            above: index > main,
+        })
+        .collect();
     build.boundaries.retain(|b| b.is_finite());
     build.boundaries.sort_by(f64::total_cmp);
     build.boundaries.dedup();
-    Ok(Converted {
-        clip,
+    Ok(Proposal::Form(Box::new(Converted {
+        clip: clips.swap_remove(main),
         look,
         notes: build.notes,
         boundaries: build.boundaries,
-        under,
-    })
+        layers,
+    })))
 }
 
 /// Form clips saved by a draft build store `audio(band, range)`. Rewrite
@@ -175,8 +235,11 @@ struct Parts {
     /// The band and threshold of the gate, when they are known.
     gate: Option<(Audio, f64)>,
     look: Option<Look>,
+    /// A second look multiplied in; it becomes a layer of its own.
+    second: Option<Look>,
     /// The look's own gate was multiplied in.
     implied: bool,
+    notes: Vec<String>,
 }
 
 impl Parts {
@@ -189,7 +252,9 @@ impl Parts {
             gated: false,
             gate: None,
             look: None,
+            second: None,
             implied: false,
+            notes: Vec::new(),
         };
         for factor in factors {
             match factor {
@@ -213,15 +278,15 @@ impl Parts {
                     parts.gate = gate;
                 }
                 Factor::Implied => parts.implied = true,
+                Factor::Note(note) => parts.notes.push(note),
                 Factor::Look(look) => {
-                    if let Some(first) = &parts.look {
-                        return Err(format!(
-                            "two looks multiplied: {} × {}",
-                            first.name(),
-                            look.name()
-                        ));
+                    if parts.look.is_none() {
+                        parts.look = Some(look);
+                    } else if parts.second.is_none() {
+                        parts.second = Some(look);
+                    } else {
+                        return Err("three looks multiplied".into());
                     }
-                    parts.look = Some(look);
                 }
             }
         }
@@ -230,8 +295,47 @@ impl Parts {
     fn white(&self) -> bool {
         self.color.iter().all(|v| (v - 1.0).abs() < 1e-12)
     }
+
+    /// Two looks: the one that keeps the color, the level and the curves,
+    /// and a plain white one to multiply over it. A look that colors comes
+    /// first, then a stroke, then the first look read.
+    fn split(mut self) -> (Self, Self) {
+        let rank = |look: &Look| {
+            if look.colored() {
+                2
+            } else if matches!(look, Look::Stroke(_)) {
+                1
+            } else {
+                0
+            }
+        };
+        let (first, second) = (self.look.take(), self.second.take());
+        let (Some(first), Some(second)) = (first, second) else {
+            unreachable!("split needs two looks");
+        };
+        let (main, over) = if rank(&second) > rank(&first) {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        let over = Self {
+            color: [1.0; 3],
+            scalar: 1.0,
+            curves: Vec::new(),
+            audio: None,
+            gated: false,
+            gate: None,
+            look: Some(over),
+            second: None,
+            implied: self.implied,
+            notes: Vec::new(),
+        };
+        self.look = Some(main);
+        (self, over)
+    }
 }
 
+#[derive(Clone)]
 struct Build<'a> {
     clip: Clip,
     host: &'a Host,
@@ -240,6 +344,9 @@ struct Build<'a> {
     original: (f64, f64),
     notes: Vec<String>,
     boundaries: Vec<f64>,
+    /// The start may no longer move: the clip is one of two layers whose
+    /// start is already set. Events keep their old times.
+    fixed: bool,
 }
 
 fn preset(name: &str) -> FormPreset {
@@ -264,6 +371,7 @@ impl<'a> Build<'a> {
             original: (clip.start, clip.duration),
             notes: Vec::new(),
             boundaries: Vec::new(),
+            fixed: false,
         }
     }
     fn note(&mut self, note: impl Into<String>) {
@@ -278,6 +386,51 @@ impl<'a> Build<'a> {
 
     // -----------------------------------------------------------------------
     // Light
+
+    /// The forms for a color product, lowest first; `true` marks a layer
+    /// that multiplies. Two looks become two layers with one start: the
+    /// earliest start either look asks for.
+    fn light(
+        &mut self,
+        parts: Parts,
+        selection: &serde_json::Value,
+    ) -> Result<(Vec<(FormPreset, bool)>, String), String> {
+        for note in &parts.notes {
+            self.note(note.clone());
+        }
+        if parts.second.is_none() {
+            let (form, look) = self.color(parts)?;
+            let (form, look) = self.subset(selection, form, look)?;
+            return Ok((vec![(form, false)], look));
+        }
+        let (main, over) = parts.split();
+        let wants = |parts: &Parts| -> Result<f64, String> {
+            let mut probe = self.clone();
+            probe.color(parts.clone())?;
+            Ok(probe.clip.start)
+        };
+        let start = wants(&main)?.min(wants(&over)?);
+        if (start - self.clip.start).abs() > 1e-9 {
+            self.note(format!(
+                "start moved {:+.4} beats: the earliest start of the two layers",
+                start - self.clip.start
+            ));
+            self.move_start(start);
+        }
+        self.fixed = true;
+        let (base, below) = self.color(main)?;
+        let (top, above) = self.color(over)?;
+        self.note(format!(
+            "{above} is a white multiply layer over the {below}; it also darkens clips under it"
+        ));
+        if selection.get("subset").is_some() {
+            self.note("subset dropped from a layered clip");
+        }
+        Ok((
+            vec![(base, false), (top, true)],
+            format!("{below} × {above} (layered)"),
+        ))
+    }
 
     fn color(&mut self, parts: Parts) -> Result<(FormPreset, String), String> {
         let Some(look) = parts.look.clone() else {
@@ -308,6 +461,28 @@ impl<'a> Build<'a> {
                 set(&mut form, "curve", Value::Envelope(curve));
                 form
             }
+            Look::ColorTime {
+                colors,
+                curve,
+                every,
+            } => {
+                let mut form = self.color_time(&parts, "Rainbow");
+                set(&mut form, "colors", Value::Gradient(colors));
+                set(&mut form, "curve", Value::Envelope(curve));
+                set(&mut form, "every", Value::Beats(every));
+                form
+            }
+            Look::Space { colors, mapping } => {
+                if !parts.white() {
+                    self.note("a color times a gradient: the color is dropped");
+                }
+                let mut form = preset("Gradient");
+                set(&mut form, "colors", Value::Gradient(colors));
+                set(&mut form, "axis", Value::Mapping(mapping));
+                let alpha = self.alpha(&parts);
+                set(&mut form, "alpha", alpha);
+                form
+            }
             Look::Pulse {
                 trigger,
                 duration,
@@ -331,6 +506,11 @@ impl<'a> Build<'a> {
                 if softness > 0.0 {
                     self.note(format!("dissolve softness {softness} dropped"));
                 }
+                let duration = if trigger == Trigger::Clip {
+                    self.clip.duration
+                } else {
+                    duration
+                };
                 let every = self.every(&trigger, duration)?;
                 let mut form = self.sparkle(&parts, every, duration);
                 let coverage = self.hit(&coverage);
@@ -447,7 +627,11 @@ impl<'a> Build<'a> {
                 self.note("the old stroke stayed at its end until the next event");
             }
         }
-        let every = self.every(&stroke.trigger, travel)?;
+        let fixed = self.fixed;
+        self.fixed |= stroke.keep_start;
+        let every = self.every(&stroke.trigger, travel);
+        self.fixed = fixed;
+        let every = every?;
         // Put the stroke center in unreversed coordinates: reverse maps x to
         // 1 − x, and turns which end of the stroke leads.
         let mut axis = stroke.mapping.clone();
@@ -524,7 +708,24 @@ impl<'a> Build<'a> {
                 Boundary::Clip
             }),
         );
-        let alpha = self.alpha(parts);
+        // A fade over each event's life is a hit curve on alpha.
+        let alpha = match &stroke.fade {
+            Some(fade) if parts.curves.is_empty() && parts.audio.is_none() => {
+                if !(0.0..=1.0).contains(&parts.scalar) {
+                    self.note(format!("level {} clamped to 0–1", parts.scalar));
+                }
+                let (curve, exact) = curves::keyframes(fade, parts.scalar.clamp(0.0, 1.0));
+                if !exact {
+                    self.note("a Bézier curve sampled into straight pieces");
+                }
+                Value::Hit(curve)
+            }
+            Some(_) => {
+                self.note("the fade over each event is dropped; alpha keeps the clip's level");
+                self.alpha(parts)
+            }
+            None => self.alpha(parts),
+        };
         set(&mut form, "alpha", alpha);
         Ok(form)
     }
@@ -655,7 +856,11 @@ impl<'a> Build<'a> {
                     .copied()
                     .filter(|t| *t < start && *t + life > start + 1e-9)
                     .collect();
-                self.lit_before(&lit);
+                if self.fixed {
+                    self.lit_lost(&lit);
+                } else {
+                    self.lit_before(&lit);
+                }
                 let start = self.clip.start;
                 let stamps: Vec<f64> = onsets
                     .iter()
@@ -676,14 +881,33 @@ impl<'a> Build<'a> {
                 if repeat <= 0.0 || !repeat.is_finite() {
                     return Err(format!("repeat {repeat}"));
                 }
-                let origin = if grid_aligned { 0.0 } else { start } + delay;
+                // The old events count from the old start, wherever the clip starts now.
+                let origin = if grid_aligned { 0.0 } else { self.original.0 } + delay;
                 let first = origin + ((start - origin) / repeat - 1e-9).ceil() * repeat;
                 let mut lit: Vec<f64> = (1..=64)
                     .map(|k| first - f64::from(k) * repeat)
                     .take_while(|at| at + life > start + 1e-9)
                     .collect();
                 lit.reverse();
-                if self.lit_before(&lit) {
+                if self.fixed {
+                    self.lit_lost(&lit);
+                    if (first - start).abs() > 1e-9 {
+                        // Events keep their phase as stamps from the start.
+                        let stamps: Vec<f64> = (0..)
+                            .map(|k| first + f64::from(k) * repeat)
+                            .take_while(|at| *at < end)
+                            .take(4096)
+                            .map(|at| at - start)
+                            .collect();
+                        self.note("events kept at their old phase as stamps");
+                        for at in stamps.iter().take(32) {
+                            self.boundaries.extend([start + at, start + at + life]);
+                        }
+                        return Ok(Value::Events(Events::Beats {
+                            times: EventTimes::new(stamps).map_err(|e| e.to_string())?,
+                        }));
+                    }
+                } else if self.lit_before(&lit) {
                     // The clip now starts on the event before it.
                 } else if first >= end - 1e-3 {
                     self.note("no event starts inside the clip");
@@ -724,6 +948,13 @@ impl<'a> Build<'a> {
         ));
         self.move_start(event);
         true
+    }
+
+    /// The start is fixed; the light of events before it is lost.
+    fn lit_lost(&mut self, lit: &[f64]) {
+        if !lit.is_empty() {
+            self.note("an event before the clip is still lit at its start");
+        }
     }
 
     /// Start the clip at `beat`, keeping its end. Curves over the clip keep
