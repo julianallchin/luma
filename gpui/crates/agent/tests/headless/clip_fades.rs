@@ -80,7 +80,9 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
         const start=handle.bounds.x+handle.bounds.width/2-card.x;
         app.drag(handle,{dx:card.width/4,dy:0},{steps:6});
         settle();
-        ({start, handles:app.snapshot().findAll({role:"slider"}).map(n=>n.label).filter(l=>l.startsWith("Chase "))})
+        until("form inputs",s=>s.find({role:"row",label:"Travel"}));
+        ({start, handles:app.snapshot().findAll({role:"slider"}).map(n=>n.label).filter(l=>l.startsWith("Chase ")),
+          rows:app.snapshot().findAll({role:"row"}).map(n=>n.label)})
     "#,
         ),
     );
@@ -98,6 +100,14 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
         .filter_map(Value::as_str)
         .collect();
     assert!(handles.contains(&"Chase fade in bend"), "{out}");
+    assert!(
+        !out["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row == "Alpha"),
+        "the sheet has no Alpha row: {out}"
+    );
 
     // Bend the fade up: it eases.
     run(
@@ -113,14 +123,14 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
     let bent = alpha(NAME, "form-clip");
     assert_eq!(bent["value"]["segments"][0], "ease", "{bent}");
 
-    // Pull the level line halfway down.
+    // Pull the hold of the line halfway down.
     run(
         &mut harness,
         then(
             r#"
         const lane=app.snapshot().findAll({role:"row"}).find(n=>n.label==="Lane 1").bounds;
         const travel=lane.height-2-18-6;
-        app.drag(node("slider","Chase alpha"),{dx:0,dy:travel/2},{steps:6});
+        app.drag(node("slider","Chase alpha 2"),{dx:0,dy:travel/2},{steps:6});
         settle();
         ({travel})
     "#,
@@ -146,12 +156,14 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
     );
     assert_eq!(alpha(NAME, "form-clip"), bent, "undo restores the level");
 
-    // Drag the fade back out past the clip edge: alpha is Fixed again.
+    // Drag the fade back to the clip's edge: alpha is Fixed again.
     run(
         &mut harness,
         then(
             r#"
-        app.drag(node("slider","Chase fade in"),{dx:-400,dy:0},{steps:8});
+        const edge=node("card","Chase").bounds.x;
+        const handle=node("slider","Chase fade in");
+        app.drag(handle,{dx:edge-(handle.bounds.x+handle.bounds.width/2),dy:0},{steps:8});
         settle();
         ({})
     "#,
@@ -301,4 +313,85 @@ fn a_resize_keeps_the_fade_lengths() {
     let clip = &score["clips"]["form-clip"];
     assert!(close(clip["duration"].as_f64().unwrap(), 4.), "{clip}");
     assert!(close(points(&clip["inputs"]["alpha"])[1].0, 0.25), "{clip}");
+}
+
+#[test]
+fn a_segment_of_the_line_moves_up_and_down() {
+    const NAME: &str = "clip-fades-segments";
+    let mut harness = Fixture::new(NAME, 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Headless);
+    const TRAVEL: &str = r#"
+        const lane=app.snapshot().findAll({role:"row"}).find(n=>n.label==="Lane 1").bounds;
+        const travel=lane.height-2-18-6;
+    "#;
+    // A fixed alpha is one segment. Dragged below the clip it stops at 0.
+    run(
+        &mut harness,
+        opened(&format!(
+            r#"{TRAVEL}
+        // To the window's bottom edge, below the clip.
+        const line=node("slider","Chase alpha 1");
+        app.drag(line,{{dx:0,dy:899-(line.bounds.y+line.bounds.height/2)}},{{steps:8}});
+        settle();
+        ({{}})
+    "#
+        )),
+    );
+    assert_eq!(
+        alpha(NAME, "form-clip"),
+        json!({"type": "proportion", "value": 0.0})
+    );
+    // Back up to half, then a fade-in over the first quarter.
+    run(
+        &mut harness,
+        then(&format!(
+            r#"{TRAVEL}
+        app.drag(node("slider","Chase alpha 1"),{{dx:0,dy:-travel/2}},{{steps:6}});
+        settle();
+        const card=node("card","Chase").bounds;
+        app.drag(node("slider","Chase fade in"),{{dx:card.width/4,dy:0}},{{steps:6}});
+        settle();
+        ({{}})
+    "#
+        )),
+    );
+    let faded = points(&alpha(NAME, "form-clip"));
+    assert!(
+        close(faded[0].1, 0.) && close(faded[1].0, 0.25) && close(faded[1].1, 0.5),
+        "{faded:?}"
+    );
+    // Lift the ramp a quarter: both of its points move, and the line is a
+    // custom curve with no fade handles.
+    let out = run(
+        &mut harness,
+        then(&format!(
+            r#"{TRAVEL}
+        app.drag(node("slider","Chase alpha 1"),{{dx:0,dy:-travel/4}},{{steps:6}});
+        settle();
+        ({{sliders:app.snapshot().findAll({{role:"slider"}}).map(n=>n.label).filter(l=>l.startsWith("Chase "))}})
+    "#
+        )),
+    );
+    let lifted = points(&alpha(NAME, "form-clip"));
+    assert!(
+        close(lifted[0].1, 0.25) && close(lifted[1].1, 0.75) && close(lifted[2].1, 0.5),
+        "{lifted:?}"
+    );
+    let sliders = out["sliders"].to_string();
+    assert!(!sliders.contains("fade in"), "{sliders}");
+    assert!(sliders.contains("Chase alpha 2"), "{sliders}");
+
+    // One undo takes the lift back.
+    run(
+        &mut harness,
+        then(r#"app.key("secondary-z"); settle(); ({})"#),
+    );
+    let undone = points(&alpha(NAME, "form-clip"));
+    assert!(
+        close(undone[0].1, 0.) && close(undone[1].1, 0.5),
+        "{undone:?}"
+    );
 }
