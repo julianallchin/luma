@@ -682,6 +682,8 @@ impl<'a> Parser<'a> {
                     per_group: false,
                     reverse: false,
                     mirror: None,
+                    span: Default::default(),
+                    plane: Some(luma_patterns::AxisPlane::UpDown),
                 }
             }
             other => return Err(format!("a stroke along {other}")),
@@ -806,6 +808,8 @@ impl<'a> Parser<'a> {
                 per_group: false,
                 reverse: false,
                 mirror: None,
+                span: Default::default(),
+                plane: Some(luma_patterns::AxisPlane::UpDown),
             },
             wrap: false,
             single: false,
@@ -842,6 +846,8 @@ impl<'a> Parser<'a> {
                 per_group: false,
                 reverse: false,
                 mirror: None,
+                span: Default::default(),
+                plane: Some(luma_patterns::AxisPlane::FrontBack),
             },
             wrap: true,
             single: false,
