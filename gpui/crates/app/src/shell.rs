@@ -34,8 +34,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patch, patterns,
-    settings, stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patch, settings,
+    stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -67,8 +67,6 @@ pub(crate) enum Overlay {
     /// morph, two text fields and their subscriptions, and an enum is as large
     /// as its largest variant — every overlay slot in the app would pay for it.
     Venues(Box<welcome::VenuePicker>),
-    /// The library browser. Picking a row previews a copy for score insertion.
-    Patterns(patterns::Patterns),
     Settings(settings::Settings),
     AddTracks(Box<add_tracks::AddTracks>),
     /// Every conversation in the room. Boxed for the same reason the others
@@ -100,7 +98,6 @@ impl Overlay {
         match self {
             Self::ChatHistory(_) => keymap::context::CHAT_HISTORY,
             Self::Venues { .. } => keymap::context::VENUES,
-            Self::Patterns(_) => keymap::context::PATTERNS,
             Self::Settings(_) => keymap::context::SETTINGS,
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
@@ -1038,7 +1035,6 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
         let enabled = availability.enabled();
         let label = choice.label();
         let icon = match choice {
-            tab_chrome::NewTabChoice::Pattern => luma_ui::icons::IconName::Network,
             tab_chrome::NewTabChoice::Track => luma_ui::icons::IconName::Play,
         };
         let button = luma_ui::button("", enabled.into())
@@ -1225,25 +1221,6 @@ fn overlay_layer(
     // (`morph::fixed_card`); the shell does not describe a dialog's box.
     let (card, label) = match overlay {
         Overlay::Venues(state) => (welcome::render(state, entity, window, cx), "Venue dialog"),
-        Overlay::Patterns(state) => {
-            let body = patterns::patterns(
-                state,
-                entity,
-                &app.dialog_first_focus,
-                app.dialog_first_focus.is_focused(window),
-                &app.dialog_last_focus,
-                app.dialog_last_focus.is_focused(window),
-                app.graph_track_context().is_some(),
-            );
-            (
-                morph::fixed_card(
-                    "Pattern dialog",
-                    MorphSize::new(760.0, 600.0),
-                    body.into_any_element(),
-                ),
-                "Pattern dialog",
-            )
-        }
         Overlay::Settings(state) => (
             morph::fixed_card(
                 "Settings dialog",

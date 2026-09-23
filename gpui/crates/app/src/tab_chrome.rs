@@ -437,16 +437,14 @@ fn progress(started: Instant, now: Instant) -> f32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
-    Pattern,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 2] = [Self::Pattern, Self::Track];
+    pub(crate) const ALL: [Self; 1] = [Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Pattern => "Patterns",
             Self::Track => "Track editor",
         }
     }
@@ -456,10 +454,6 @@ impl NewTabChoice {
 pub(crate) struct NewTabPrerequisites {
     pub(crate) venue: Option<String>,
     pub(crate) track: Option<String>,
-    /// The track a graph tab would be evaluated against, resolved from the
-    /// tab strip (`Luma::graph_track_context`). The graph editor cannot open
-    /// without one — §6/§9 ruling 1 of the graph-editor design doc.
-    pub(crate) graph_track: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,14 +468,11 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 2] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 1] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
-            NewTabChoice::Pattern if prerequisites.graph_track.is_none() => {
-                Some(crate::graph::NO_TRACK_REASON)
-            }
             _ => None,
         };
         ChoiceAvailability { choice, reason }
@@ -499,7 +490,6 @@ impl Luma {
                 .as_ref()
                 .map(|state| state.venue_id().to_string()),
             track: self.selected_track().map(str::to_string),
-            graph_track: self.graph_track_context().map(|context| context.track),
         }
     }
 
@@ -557,7 +547,6 @@ impl Luma {
     ) {
         self.tab_chrome.menu_open = false;
         match choice {
-            NewTabChoice::Pattern => self.show_patterns(cx),
             NewTabChoice::Track => {
                 if let Some(track) = self.selected_track().map(str::to_string) {
                     self.open_track(&track, cx);
@@ -739,10 +728,6 @@ mod tests {
         };
         let none = NewTabPrerequisites::default();
         assert_eq!(
-            reason(&none, NewTabChoice::Pattern),
-            Some("Open a track to edit patterns")
-        );
-        assert_eq!(
             reason(&none, NewTabChoice::Track),
             Some("Select a venue first")
         );
@@ -756,18 +741,9 @@ mod tests {
             Some("Select a track first")
         );
 
-        // An open track supplies the context for browsing pattern templates.
-        let track_open = NewTabPrerequisites {
-            venue: Some("v".into()),
-            graph_track: Some("t".into()),
-            ..Default::default()
-        };
-        assert_eq!(reason(&track_open, NewTabChoice::Pattern), None);
-
         let all = menu_choices(&NewTabPrerequisites {
             venue: Some("v".into()),
             track: Some("t".into()),
-            graph_track: Some("t".into()),
         });
         assert!(all.into_iter().all(ChoiceAvailability::enabled));
     }

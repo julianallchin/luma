@@ -89,7 +89,7 @@ use luma_ui::{float, ladder, paint};
 
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
-use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
+use luma_lib::models::patterns::AnnotationPreview;
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;
 
@@ -162,9 +162,6 @@ pub struct Editor {
     /// whole list at once.
     clips: Rc<[Clip]>,
     graph_score: Option<document::GraphState>,
-    /// Every pattern in the library, by id: the clip labels, and what a
-    /// right-click offers to insert.
-    patterns: Rc<Vec<PatternSummary>>,
     /// Heatmap previews by clip id, shared with the frame — the resample
     /// cache inside each entry is written at paint time, which is why the map
     /// sits behind the same interior-mutability arrangement as
@@ -1199,24 +1196,6 @@ impl Editor {
         }
     }
 
-    /// Re-derive every clip's label from the patterns list.
-    ///
-    /// A label is a function of that list, and the list arrives on its own
-    /// schedule — a score opened before it landed resolves every clip to
-    /// `Pattern <uuid>` and, without this, never comes back. Relabelling
-    /// rather than re-resolving because the working copy may hold edits the
-    /// stored list has never seen; only the *name* is derived.
-    fn relabel(&mut self) {
-        let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
-        for clip in &mut clips {
-            clip.label = self
-                .graph_label(&clip.pattern)
-                .map(Into::into)
-                .unwrap_or_else(|| label_of(&clip.pattern, &self.patterns));
-        }
-        self.clips = clips.into();
-    }
-
     /// Clear both the selection and the cursor: what a press on anything that
     /// is not a clip does.
     fn deselect(&mut self) {
@@ -1647,19 +1626,6 @@ fn lane_count(clips: &[Clip]) -> usize {
         .max(1)
 }
 
-/// What a clip is called: its pattern's name, or the id spelled out for a
-/// pattern the list does not have.
-fn label_of(pattern_id: &str, patterns: &[PatternSummary]) -> SharedString {
-    patterns
-        .iter()
-        .find(|pattern| pattern.id == pattern_id)
-        .map_or_else(
-            || format!("Pattern {pattern_id}"),
-            |pattern| pattern.name.clone(),
-        )
-        .into()
-}
-
 // -- navigation, gestures and writes ------------------------------------------
 //
 // These hang off `Luma` because opening a track is five `Library` calls plus a
@@ -1708,7 +1674,6 @@ impl Luma {
         let beats = self.library.track_beats(track_id);
         let validation = self.library.track_beat_validation(track_id);
         let scores = self.library.scores_across_venues(track_id);
-        let patterns = self.library.patterns();
 
         let menu_search =
             cx.new(|cx| luma_ui::text_input::TextInput::search("Search patterns…", cx));
@@ -1746,7 +1711,6 @@ impl Luma {
             beat_validation_error: None,
             clips: Vec::new().into(),
             graph_score: None,
-            patterns: Rc::new(Vec::new()),
             previews: Rc::new(RefCell::new(HashMap::new())),
             preview_inflight: HashSet::new(),
             preview_errors: HashMap::new(),
@@ -1795,10 +1759,7 @@ impl Luma {
             let waveform = waveform.await;
             let beats = beats.await;
             let validation = validation.await;
-            let patterns = patterns.await;
             let scores = scores.await;
-
-            let patterns = patterns.unwrap_or_default();
 
             this.update(cx, |this, cx| {
                 let user = this.library.user_id();
@@ -1848,11 +1809,6 @@ impl Luma {
                         Ok(_) => {}
                         Err(error) => editor.error = Some(error.to_string()),
                     }
-                    editor.patterns = Rc::new(patterns);
-                    // The score may already be on the timeline: opening one
-                    // from the sidebar's scores level gets there before this
-                    // load does, and its clips resolved against an empty list.
-                    editor.relabel();
                 });
                 if let Some(score) = open {
                     this.load_score(target.clone(), score, cx);
@@ -2205,32 +2161,6 @@ impl Luma {
             editor.menu_scroll.scroll_to_item(0);
         });
         picker::open(self, cx);
-    }
-
-    /// Open the picker on a library pattern's name. The picker offers
-    /// presets only, so this finds the preset of that name, if there is one.
-    pub(crate) fn preview_library_pattern(
-        &mut self,
-        pattern: PatternSummary,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(context) = self.graph_track_context() else {
-            return;
-        };
-        let target = Target::TrackEditor {
-            track: context.track,
-            venue: context.venue,
-        };
-        self.workspace.select(&target);
-        self.close_overlay(cx);
-        self.add_pattern(cx);
-        if let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() {
-            editor.menu_query = pattern.name.clone();
-            editor
-                .menu_search
-                .update(cx, |field, cx| field.set_text(&pattern.name, cx));
-        }
-        cx.notify();
     }
 
     /// A right-click: work out where a clip would go and offer the patterns.

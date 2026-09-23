@@ -48,7 +48,6 @@ mod history;
 mod keymap;
 mod library;
 mod patch;
-mod patterns;
 mod picker_preview;
 mod settings;
 mod shell;
@@ -516,7 +515,6 @@ impl Render for Luma {
                 this.leave_scores(cx);
             }))
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
-            .on_action(cx.listener(|this, _: &keymap::OpenPatterns, _, cx| this.show_patterns(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleVisualizer, _, cx| this.toggle_visualizer(cx)),
             )

@@ -45,10 +45,9 @@ const ARG_FLUSH: Duration = Duration::from_millis(250);
 pub(crate) struct State {
     /// The venue's group names, for the expression editor's autocomplete.
     groups: Groups,
-    /// Arg definitions per pattern id, venue-resolved, cached for the life of
-    /// the editor.
+    /// Arg definitions per pattern id, read off the score's library, cached
+    /// for the life of the editor.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
-    defs_inflight: HashSet<String>,
     /// Controls and readings for the current selection.
     built: Option<Built>,
     /// The preset browser, shown while no clip is selected.
@@ -73,7 +72,6 @@ impl Default for State {
         Self {
             groups: Groups::NotAsked,
             defs: HashMap::new(),
-            defs_inflight: HashSet::new(),
             built: None,
             browser: browser::State::default(),
             open: None,
@@ -409,7 +407,7 @@ fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
 pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     tick_menus(&mut editor.sheet, window, cx);
     ensure_groups(editor, cx);
-    ensure_defs(editor, cx);
+    ensure_defs(editor);
     let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
         editor.sheet.open = None;
         editor.sheet.built = None;
@@ -505,51 +503,23 @@ fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
 }
 
 /// Ask for the selected pattern's arg defs, once per pattern.
-fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
+fn ensure_defs(editor: &mut Editor) {
     let Some(pattern) = shared_pattern(editor) else {
         return;
     };
     let key = pattern.to_string();
-    if editor.sheet.defs.contains_key(&key) || editor.sheet.defs_inflight.contains(&key) {
+    if editor.sheet.defs.contains_key(&key) {
         return;
     }
-    if editor.graph_score.is_some() {
-        if let Some(defs) = editor.graph_input_defs(&key) {
-            // A form clip's alpha is edited on the timeline, as its alpha line.
-            let form = luma_patterns::is_form(&key);
-            let defs: Rc<[PatternArgDef]> = defs
-                .into_iter()
-                .filter(|def| !form || def.id != super::fades::ALPHA)
-                .collect();
-            editor.sheet.defs.insert(key, defs);
-        }
-        return;
+    if let Some(defs) = editor.graph_input_defs(&key) {
+        // A form clip's alpha is edited on the timeline, as its alpha line.
+        let form = luma_patterns::is_form(&key);
+        let defs: Rc<[PatternArgDef]> = defs
+            .into_iter()
+            .filter(|def| !form || def.id != super::fades::ALPHA)
+            .collect();
+        editor.sheet.defs.insert(key, defs);
     }
-    editor.sheet.defs_inflight.insert(key.clone());
-    let venue = editor.venue_id.clone();
-    cx.spawn(async move |this, cx| {
-        let Ok(pending) = this.update(cx, |this, _| this.library.pattern_args(&key, &venue)) else {
-            return;
-        };
-        let rows = pending.await;
-        this.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                editor.sheet.defs_inflight.remove(&key);
-                if editor.venue_id != venue {
-                    return;
-                }
-                // A pattern with no graph behind it answers with an error;
-                // that is a pattern with no args, and asking again would only
-                // fail again.
-                editor
-                    .sheet
-                    .defs
-                    .insert(key.clone(), rows.unwrap_or_default().into());
-            });
-        })
-        .ok();
-    })
-    .detach();
 }
 
 /// Build the widget entities for one subject and wire their events into the
@@ -1147,16 +1117,8 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .child(luma_ui::caption(
                     if is_form(built) {
                         "Form"
-                    } else if state.graph_score.is_some()
-                        || built
-                            .pattern
-                            .as_ref()
-                            .and_then(|id| state.patterns.iter().find(|p| p.id == id.as_ref()))
-                            .is_some_and(|p| p.score_id.is_some())
-                    {
-                        "Pattern · this score"
                     } else {
-                        "Pattern · library"
+                        "Pattern · this score"
                     }
                     .to_string(),
                 ))
