@@ -1,5 +1,6 @@
 //! Shipped presets: named input values of a form, named curves for `time`
-//! and `hit` sources, and named gradients. The data lives in `presets.json`.
+//! and `hit` sources, named gradients, and named frequency ranges for
+//! `audio` sources. The data lives in `presets.json`.
 use crate::{BlendMode, Clip, Error, Gradient, Keyframes, Library, Result, Selection, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -39,6 +40,17 @@ pub struct Presets {
     pub presets: Vec<FormPreset>,
     pub curves: Vec<CurvePreset>,
     pub gradients: Vec<GradientPreset>,
+    pub frequencies: Vec<FrequencyPreset>,
+}
+
+/// A named frequency range of the full mix for an `audio` source. Picking
+/// one only fills `from_hz` and `to_hz`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrequencyPreset {
+    pub name: String,
+    pub from_hz: f64,
+    pub to_hz: f64,
 }
 
 /// The shipped presets and curves, in menu order.

@@ -138,33 +138,14 @@ pub struct NoiseSource {
     pub range: [f64; 2],
 }
 
-/// A band of the track's full mix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Band {
-    Low,
-    Mid,
-    High,
-    Full,
-}
-impl Band {
-    pub fn hz(self) -> (f64, f64) {
-        match self {
-            Self::Low => (20.0, 250.0),
-            Self::Mid => (250.0, 4000.0),
-            Self::High => (4000.0, 16000.0),
-            Self::Full => (20.0, 16000.0),
-        }
-    }
-}
-
-/// The energy of one band of the full mix, scaled over the clip so its
-/// quietest moment maps to `range[0]` and its loudest to `range[1]`.
+/// The energy of a frequency range of the track's full mix. The energy is
+/// scaled over the clip: its quietest moment gives `floor`, its loudest 1.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioLevel {
-    pub band: Band,
-    pub range: [f64; 2],
+    pub from_hz: f64,
+    pub to_hz: f64,
+    pub floor: f64,
 }
 
 impl NoiseSource {
@@ -176,8 +157,21 @@ impl NoiseSource {
     }
 }
 impl AudioLevel {
+    pub const MIN_HZ: f64 = 20.0;
+    pub const MAX_HZ: f64 = 20000.0;
     pub fn validate(&self) -> Result<()> {
-        range(self.range)
+        if !(Self::MIN_HZ..=Self::MAX_HZ).contains(&self.from_hz)
+            || !(Self::MIN_HZ..=Self::MAX_HZ).contains(&self.to_hz)
+            || self.from_hz >= self.to_hz
+        {
+            return Err(Error(
+                "an audio range needs 20 ≤ from < to ≤ 20,000 Hz".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.floor) {
+            return Err(Error("an audio floor must be in 0..1".into()));
+        }
+        Ok(())
     }
 }
 fn range(range: [f64; 2]) -> Result<()> {
