@@ -2,12 +2,10 @@
 //!
 //! An empty workspace used to be a second, silent reason to hide the panel —
 //! so the surface that offers the first tab was withheld until a tab existed.
-//! `Patch` has no sidebar path (a track or a pattern is opened by
-//! clicking one; a room is not), which made it unreachable outright: the `+`
-//! lives in the panel, and the panel was not there.
 //!
 //! What is asserted is the way out of that state, by both routes a user has:
-//! the toggle in the window's corner, and ⌘T.
+//! the toggle in the window's corner, and ⌘T. The venue page is not a tab:
+//! the sidebar's Venue row opens it, and the panel's offer does not.
 
 #![cfg(feature = "app")]
 
@@ -38,20 +36,20 @@ fn fixture(name: &'static str) -> Fixture {
 /// it. `nav.venue` stops exactly there.
 const OPEN_VENUE: &str = r#"
     nav.venue("Test Venue");
-    until("the track list", (s) => s.find({ role: "input", label: "Search tracks\u2026" }) !== undefined);
+    until("the track list", (s) => s.find({ role: "input", label: "Search tracks" }) !== undefined);
 "#;
 
 const READ: &str = r#"
     function read() {
         const shot = app.snapshot();
         const empty = shot.find({ role: "card", label: "Empty panel" });
-        const universe = shot.find({ role: "button", label: "Venue" });
+        const venue = shot.find({ role: "card", label: "Test Venue Venue" });
         const panel = shot.find({ role: "button", label: "panel-toggle" });
         const add = shot.find({ role: "button", label: "new-tab" });
         return {
             empty: empty === undefined ? null : empty.bounds.width,
-            universe: universe === undefined ? null : universe.bounds.width,
-            universeEnabled: universe === undefined ? null : universe.enabled,
+            venue: venue === undefined ? null : venue.bounds.width,
+            strip: shot.find({ role: "card", label: "Tab strip" }) !== undefined,
             panelEnabled: panel === undefined ? null : panel.enabled,
             add: add === undefined ? null : add.bounds.x,
         };
@@ -59,7 +57,7 @@ const READ: &str = r#"
 "#;
 
 #[test]
-fn an_empty_panel_offers_the_three_ways_to_open_a_tab() {
+fn an_empty_panel_offers_the_ways_to_open_a_tab() {
     let mut harness = harness("empty-panel-offers");
     let result = harness.exec(
         &support::script(&format!(
@@ -118,34 +116,30 @@ fn an_empty_panel_offers_the_three_ways_to_open_a_tab() {
         out["reopened"]
     );
 
-    // All three choices, by their canonical labels — the same list the `+`
-    // menu offers, so the two presentations cannot drift.
+    // Every choice, by its canonical label — the same list the `+` menu
+    // offers, so the two presentations cannot drift.
     let labels: Vec<&str> = out["landedLabels"]
         .as_array()
         .expect("an array of labels")
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    for expected in ["Venue", "Patterns", "Track editor"] {
+    for expected in ["Patterns", "Track editor"] {
         assert!(
             labels.contains(&expected),
             "the empty panel did not offer {expected:?}: {labels:?}"
         );
     }
+    assert!(
+        !labels.contains(&"Venue"),
+        "the empty panel offered the venue as a tab: {labels:?}"
+    );
 
     // And exactly one offer: no `+` while the empty state is up, or "no tabs,
     // want a tab" would have two answers.
     assert!(
         out["landed"]["add"].is_null(),
         "the add control appeared beside the empty state: {:#}",
-        out["landed"]
-    );
-
-    // A venue is selected, so the room itself can always be opened.
-    assert_eq!(
-        out["landed"]["universeEnabled"].as_bool(),
-        Some(true),
-        "Patch was not offered with a venue selected: {:#}",
         out["landed"]
     );
 }
@@ -161,11 +155,8 @@ fn closing_the_last_tab_springs_closed_and_reopens_empty() {
             const n = app.snapshot().find({ role: "slider", label: "Workspace width" });
             return n === undefined ? null : n.bounds.x;
         }
-        nav.venue("Test Venue");
-        app.action("luma::NewTab");
-        until("empty panel", s => s.find({ role: "button", label: "Venue" }) !== undefined);
-        app.click(app.snapshot().find({ role: "button", label: "Venue" }));
-        until("venue tab", s => s.nodes.some(n => n.role === "button" && n.label.startsWith("Close ")));
+        nav.trackEditor("Test Venue", "Aurora");
+        until("track tab", s => s.nodes.some(n => n.role === "button" && n.label.startsWith("Close ")));
         app.frames(20, { waitMs: 40 });
         const opened = seam();
         app.action("luma::CloseTab");
@@ -208,7 +199,7 @@ fn closing_the_last_tab_springs_closed_and_reopens_empty() {
 }
 
 #[test]
-fn new_tab_reaches_universe_setup_with_no_tabs_open() {
+fn new_tab_with_no_tabs_reaches_the_empty_panel_and_the_venue_row_opens_the_room() {
     let mut harness = harness("empty-panel-new-tab");
     let result = harness.exec(
         &support::script(&format!(
@@ -219,15 +210,14 @@ fn new_tab_reaches_universe_setup_with_no_tabs_open() {
 
             // The regression: ⌘T with an empty workspace produced nothing at
             // all — no menu (the strip that anchors it was not shown) and no
-            // panel. It must now land somewhere that can open a room.
+            // panel. It must now land on the panel's offer.
+            app.action("luma::ToggleWorkspace");
+            app.frames(4);
             app.action("luma::NewTab");
             app.frames(4);
             const afterNewTab = read();
 
-            app.click(app.snapshot().find({{ role: "button", label: "Venue" }}));
-            until("the universe tab", (s) =>
-                s.find({{ role: "button", label: "panel-toggle" }}) !== undefined &&
-                s.find({{ role: "card", label: "Empty panel" }}) === undefined);
+            nav.venuePage("Test Venue");
             app.frames(4);
             const opened = read();
             const tabs = app.snapshot().nodes
@@ -242,21 +232,26 @@ fn new_tab_reaches_universe_setup_with_no_tabs_open() {
     let out: Value = result.result;
 
     assert!(
-        !out["afterNewTab"]["universe"].is_null(),
+        !out["afterNewTab"]["empty"].is_null(),
         "⌘T with no tabs open reached nothing that can open one: {:#}",
         out["afterNewTab"]
     );
 
-    // Opening it replaces the empty state with the tab — the panel stops
-    // offering a first tab once it has one.
+    // The venue page replaces the empty state, and it is a place, not a tab:
+    // no strip, no chip, nothing to close.
     assert!(
-        out["opened"]["empty"].is_null(),
-        "the empty state outlived the tab it opened: {:#}",
+        out["opened"]["empty"].is_null() && !out["opened"]["venue"].is_null(),
+        "the Venue row did not open the venue page: {:#}",
+        out["opened"]
+    );
+    assert_eq!(
+        out["opened"]["strip"], false,
+        "the venue page drew a tab strip: {:#}",
         out["opened"]
     );
     assert!(
-        !out["tabs"].as_array().expect("an array").is_empty(),
-        "no tab was opened: {:#}",
+        out["tabs"].as_array().expect("an array").is_empty(),
+        "the venue page opened as a closable tab: {:#}",
         out["tabs"]
     );
 }

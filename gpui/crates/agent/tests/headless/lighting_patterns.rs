@@ -288,6 +288,80 @@ fn edit_a_chase_envelope_per_clip() {
         });
 }
 
+/// Pressing the envelope — the curve itself, an anchor, or a drag on either —
+/// edits the curve and keeps the clip selected. The sheet *is* the selection,
+/// so a press that leaks to the timeline would send it away.
+#[test]
+fn pressing_the_envelope_keeps_the_clip_selected() {
+    let mut harness = Fixture::new("lighting-envelope-press", 20, vec![])
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_rig()
+        .open(Mode::Headless);
+    let result=harness.exec(&support::script(r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); 
+        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
+        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
+        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
+        app.type(app.snapshot().find({role:"input",label:"Search patterns…"}),"chase"); app.frames(2);
+        app.key("enter");
+        until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
+        app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
+        until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
+        const open=()=>app.snapshot().find({role:"card",label:"Clip inputs"})!==undefined
+            && app.snapshot().find({role:"card",label:"Envelope curve"})!==undefined;
+        const steps=[];
+        const curve=()=>app.snapshot().find({role:"card",label:"Envelope curve"});
+        app.click(curve()); app.frames(6,{waitMs:40}); steps.push(["press curve",open()]);
+        const anchor=()=>app.snapshot().find({role:"slider",label:"Envelope anchor 2"});
+        if(anchor()){ app.click(anchor()); app.frames(6,{waitMs:40}); steps.push(["press anchor",open()]); }
+        if(anchor()){ app.drag(anchor(),{dx:-10,dy:10},{steps:6}); app.frames(12,{waitMs:80}); steps.push(["drag anchor",open()]); }
+        if(curve()){ app.drag(curve(),{dx:10,dy:-10},{steps:6}); app.frames(12,{waitMs:80}); steps.push(["drag curve",open()]); }
+        ({steps})
+    "#),Duration::from_secs(60));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let steps = result.result["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 4, "{}", result.result);
+    for step in steps {
+        assert_eq!(step[1], true, "the sheet left after `{}`: {}", step[0], result.result);
+    }
+}
+
+/// An arg edit re-renders the clip's preview in place: the old picture stays
+/// up until the new one lands, so the clip never shows bare.
+#[test]
+fn an_arg_edit_never_blanks_the_clip_preview() {
+    let mut harness = Fixture::new("lighting-preview-steady", 20, vec![])
+        .with_graph_score(serde_json::json!({"version":7,"definitions":{},"clips":{}}))
+        .with_rig()
+        .open(Mode::Headless);
+    let result=harness.exec(&support::script(r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
+        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
+        until("lighting search",s=>s.find({role:"input",label:"Search patterns…"}));
+        app.type(app.snapshot().find({role:"input",label:"Search patterns…"}),"chase"); app.frames(2);
+        app.key("enter");
+        until("Chase clip",s=>s.find({role:"card",label:"Beat chase"}));
+        app.click(app.snapshot().find({role:"card",label:"Beat chase"}));
+        until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
+        until("preview",s=>s.find({role:"card",label:"Beat chase preview"}));
+        const gaps=[]; const selection=[];
+        for (const preset of ["Ramp down","Ramp up","Triangle"]) {
+            app.click(app.snapshot().find({role:"button",label:preset}));
+            for (let i=0;i<60;i++) {
+                app.frames(1,{waitMs:20});
+                const s=app.snapshot();
+                if (!s.find({role:"card",label:"Beat chase preview"})) gaps.push(preset+"@"+i);
+                if (!s.find({role:"card",label:"Clip inputs"})) selection.push(preset+"@"+i);
+            }
+        }
+        ({gaps,selection})
+    "#),Duration::from_secs(90));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    assert_eq!(result.result["gaps"], serde_json::json!([]), "the preview blanked: {}", result.result);
+    assert_eq!(result.result["selection"], serde_json::json!([]), "the clip was deselected: {}", result.result);
+}
+
 #[test]
 fn inspect_builtin_chase_and_customize_its_composition() {
     #[cfg(feature = "pixel")]

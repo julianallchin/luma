@@ -68,7 +68,7 @@ globalThis.nav = {
 		until("the scores level", (s) =>
 			s.find({ role: "card", label: "Scores level" }) !== undefined
 				&& s.find({ role: "button", label: "New score" }) !== undefined
-				&& s.find({ role: "input", label: "Search tracks…" }) === undefined);
+				&& s.find({ role: "input", label: "Search tracks" }) === undefined);
 	},
 
 	// A track's timeline, which is now two gestures: into the track's scores,
@@ -94,7 +94,7 @@ globalThis.nav = {
 		nav.step("the way back to the track list", "button", "Back to tracks");
 		until("the track list again", (s) =>
 			s.find({ role: "card", label: "Scores level" }) === undefined
-				&& s.find({ role: "input", label: "Search tracks…" }) !== undefined
+				&& s.find({ role: "input", label: "Search tracks" }) !== undefined
 				&& s.find({ role: "row", label: name }) !== undefined);
 	},
 
@@ -142,17 +142,19 @@ globalThis.nav = {
 		until("the score graph", s => s.find({role:"card",label:"Graph workspace"}));
 	},
 
-	// The venue's patch tab, via the `+` menu. The one tab that names a room
-	// without naming a score, which is what a test wants when it needs the
-	// stage pane up over an *unlit* rig — a track editor would composite one.
+	// The venue page, through the sidebar's Venue row. The one page that
+	// names a room without naming a score, which is what a test wants when it
+	// needs the stage pane up over an *unlit* rig — a track editor would
+	// composite one.
 	patch(venue) {
 		nav.venue(venue);
-		// The `+` lives only in the workspace panel's band now, so it is not on
-		// screen until something is open there. `luma::NewTab` is the path
-		// chrome.rs documents as surviving a closed panel.
-		app.action("luma::NewTab");
-		nav.step("the venue choice", "button", "Venue");
-		until("the patch tab", (s) =>
+		nav.venuePage(venue);
+	},
+
+	// The Venue row, from a sidebar that is already on `venue`.
+	venuePage(venue) {
+		nav.step("the Venue row", "toggle", "Venue");
+		until("the venue page", (s) =>
 			s.find({ role: "card", label: `${venue} Venue` }) !== undefined,
 		);
 	},

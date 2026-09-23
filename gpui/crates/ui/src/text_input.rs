@@ -393,6 +393,9 @@ enum EditKind {
 pub struct TextInput {
     mode: Mode,
     style: Style,
+    /// The glyph size. [`TEXT_SIZE`] unless a host sets a smaller one to
+    /// match the controls beside the field.
+    text_size: f32,
     /// Content height past which the field scrolls inside itself instead of
     /// growing. Owned here rather than passed per-frame so the measured layout
     /// and the plate around it cannot disagree about where growth stops.
@@ -473,6 +476,7 @@ impl TextInput {
         Self {
             mode,
             style: Style::default(),
+            text_size: TEXT_SIZE,
             max_content_height,
             // A text field is a control, so its handle joins the tab ring. A
             // field reachable only by click strands a keyboard user in
@@ -549,6 +553,15 @@ impl TextInput {
             return;
         }
         self.style = style;
+        cx.notify();
+    }
+
+    /// Draw the text at `size` instead of [`TEXT_SIZE`].
+    pub fn set_text_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if self.text_size == size {
+            return;
+        }
+        self.text_size = size;
         cx.notify();
     }
 
@@ -1596,7 +1609,7 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .w_full()
-            .text_size(px(TEXT_SIZE))
+            .text_size(px(self.text_size))
             .line_height(px(LINE_HEIGHT))
             .text_color(color)
             .child(TextElement {

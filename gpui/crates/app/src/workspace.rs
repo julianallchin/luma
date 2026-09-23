@@ -24,20 +24,32 @@
 //! Switching away parks a set; it does not tear it down. That is the shell's
 //! "nothing is destroyed to show something else" rule, one level up: closing a
 //! tab still runs `Luma::teardown`, and switching subjects still runs nothing.
-//! The two gestures that *do* hand bodies back are the two where the subject
-//! itself went away — see [`ParkedTabs::retain`] and
-//! [`ParkedTabs::close_where`].
+//! The gesture that *does* hand bodies back is the one where the subject
+//! itself went away — see [`ParkedTabs::retain`].
+//!
+//! # The venue is a place, not a tab
+//!
+//! The sidebar's Venue row picks the room itself. Its scope holds exactly one
+//! body, the patch page, and the shell draws that body with no strip.
 
 use std::collections::HashMap;
 
 use crate::tabs::{Tabs, Target};
 use crate::Body;
 
-/// Whose tab strip is on screen.
+/// What the sidebar has picked: one track, or the venue itself.
 ///
-/// A track when one is picked, else the room itself — which is what makes the
-/// strip reachable before any track is chosen, and is where a patch tab opened
-/// from an empty sidebar lands.
+/// One value rather than a track and a flag, so "a track is picked while the
+/// venue page is up" cannot be stated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Pick {
+    Track(String),
+    Venue,
+}
+
+/// Whose tab set is on screen.
+///
+/// A picked track's tabs, or the venue page when the Venue row is picked.
 ///
 /// **The venue is part of the key even for a track.** A track id alone would
 /// identify the scope perfectly well, but then "drop everything belonging to
@@ -166,31 +178,24 @@ impl<B> ParkedTabs<B> {
         }
         dropped
     }
-
-    /// Close every tab answering `doomed`, in every scope including the live
-    /// one, and hand their states back.
-    ///
-    /// Separate from [`Self::retain`] because it is a different question: that
-    /// one drops whole subjects, this one drops one *kind of view* wherever it
-    /// is parked. A patch tab for a room you have left is the case — the room
-    /// still exists and its track scopes are still worth remembering, but a
-    /// view of that room's rig is not.
-    pub(crate) fn close_where(
-        &mut self,
-        live: &mut Tabs<B>,
-        doomed: impl Fn(&Target) -> bool,
-    ) -> Vec<B> {
-        let mut dropped = live.close_where(&doomed);
-        for tabs in self.parked.values_mut() {
-            dropped.extend(tabs.close_where(&doomed));
-        }
-        dropped
-    }
 }
 
 impl crate::Luma {
-    /// Whose tab strip belongs on screen this frame: the picked track, else
-    /// the room, else nothing.
+    /// The picked track, when a track rather than the venue is picked.
+    pub(crate) fn selected_track(&self) -> Option<&str> {
+        match &self.picked {
+            Some(Pick::Track(track)) => Some(track),
+            Some(Pick::Venue) | None => None,
+        }
+    }
+
+    /// Whether the venue page is up: the Venue row is picked.
+    pub(crate) fn venue_mode(&self) -> bool {
+        matches!(self.picked, Some(Pick::Venue))
+    }
+
+    /// Whose tab set belongs on screen this frame: the picked track, else
+    /// the venue page, else nothing.
     ///
     /// Read from the *sidebar* rather than from the tabs, and that direction
     /// matters: the strip is a consequence of what is picked, so deriving it
@@ -199,12 +204,12 @@ impl crate::Luma {
     pub(crate) fn tab_scope(&self) -> Option<TabScope> {
         let browser = self.sidebar.as_ref()?;
         let venue = browser.venue_id().to_string();
-        Some(match &self.selected_track {
-            Some(track) => TabScope::Track {
+        Some(match self.picked.as_ref()? {
+            Pick::Track(track) => TabScope::Track {
                 track: track.clone(),
                 venue,
             },
-            None => TabScope::Venue { venue },
+            Pick::Venue => TabScope::Venue { venue },
         })
     }
 
@@ -214,7 +219,7 @@ impl crate::Luma {
     /// is a field assignment, and a gesture that forgot to ask would leave one
     /// track's tabs on screen while the sidebar says another is picked. Every
     /// gesture that changes the subject therefore only has to set
-    /// `selected_track`, which is what it was already doing.
+    /// `picked`.
     pub(crate) fn sync_workspace_scope(&mut self, cx: &mut gpui::Context<Self>) {
         let scope = self.tab_scope();
         if scope != self.parked.current {
@@ -283,12 +288,6 @@ mod tests {
         }
     }
 
-    fn patch(venue: &str) -> Target {
-        Target::Patch {
-            venue: venue.to_string(),
-        }
-    }
-
     fn targets(tabs: &Tabs<&str>) -> Vec<Target> {
         tabs.iter().map(|tab| tab.target.clone()).collect()
     }
@@ -329,7 +328,7 @@ mod tests {
         let mut live: Tabs<&str> = Tabs::default();
         parked.focus(Some(track_scope("a", "room")), &mut live);
         live.open(editor("a", "room"), || "editor");
-        live.open(patch("room"), || "patch");
+        live.open(editor("b", "room"), || "other");
         live.select(&editor("a", "room"));
 
         parked.focus(Some(track_scope("b", "room")), &mut live);
@@ -396,26 +395,6 @@ mod tests {
             !parked.focus(None, &mut live),
             "the vanished subject is still the current scope"
         );
-    }
-
-    #[test]
-    fn leaving_a_room_drops_its_patch_wherever_it_was_parked() {
-        let mut parked: ParkedTabs<&str> = ParkedTabs::default();
-        let mut live: Tabs<&str> = Tabs::default();
-        parked.focus(Some(track_scope("a", "old")), &mut live);
-        live.open(editor("a", "old"), || "old editor");
-        live.open(patch("old"), || "old patch");
-        parked.focus(Some(track_scope("b", "new")), &mut live);
-        live.open(patch("new"), || "new patch");
-
-        let dropped = parked.close_where(&mut live, |target| {
-            target.venue().is_some_and(|owner| owner != "new")
-        });
-        assert_eq!(dropped, vec!["old patch"]);
-
-        // The room's track work is remembered, not thrown away.
-        parked.focus(Some(track_scope("a", "old")), &mut live);
-        assert_eq!(targets(&live), vec![editor("a", "old")]);
     }
 
     #[test]

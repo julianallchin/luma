@@ -112,13 +112,12 @@ const SCRIPT: &str = r#"
         return out;
     }
 
-    /** Wait until every queued write has landed, or say it never did. */
+    /** Wait until every queued write has landed. */
     function settled() {
-        for (let i = 0; i < 60; i++) {
-            if (!status().includes("Saving")) return true;
-            app.frames(1, { waitMs: 40 });
-        }
-        throw new Error("a write never left the editor");
+        // The editor shows no save state; outwait the arg debounce and the
+        // write's round trip.
+        app.frames(20, { waitMs: 40 });
+        return true;
     }
 
     function playhead() {

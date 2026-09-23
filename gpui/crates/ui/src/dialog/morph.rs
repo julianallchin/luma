@@ -13,8 +13,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, Pixels, SharedString, Window, px,
+    px, AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, SharedString, Window,
 };
 
 use crate::motion::{self, SURFACE};
@@ -107,7 +107,11 @@ pub type TransitionEvaluator = fn(LayerRole, f32) -> LayerPose;
 
 #[derive(Clone, Copy)]
 pub enum MorphTransition {
-    Right,
+    /// Going deeper: the new page comes in from the right and the old one
+    /// leaves to the left.
+    Forward,
+    /// Going back: the reverse of [`Self::Forward`].
+    Back,
     Scale,
     CrossFade,
     Custom(TransitionEvaluator),
@@ -116,7 +120,8 @@ pub enum MorphTransition {
 impl std::fmt::Debug for MorphTransition {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Right => formatter.write_str("Right"),
+            Self::Forward => formatter.write_str("Forward"),
+            Self::Back => formatter.write_str("Back"),
             Self::Scale => formatter.write_str("Scale"),
             Self::CrossFade => formatter.write_str("CrossFade"),
             Self::Custom(_) => formatter.write_str("Custom(..)"),
@@ -129,20 +134,29 @@ impl MorphTransition {
     pub fn pose(self, role: LayerRole, progress: f32) -> LayerPose {
         let progress = progress.clamp(0.0, 1.0);
         match self {
-            Self::Right => match role {
-                LayerRole::Outgoing => LayerPose {
-                    x: 16.0 * progress,
-                    opacity: 1.0 - progress,
-                    blur: 16.0 * progress,
-                    scale: 1.0,
-                },
-                LayerRole::Incoming => LayerPose {
-                    x: -16.0 * (1.0 - progress),
-                    opacity: progress,
-                    blur: 16.0 * (1.0 - progress),
-                    scale: 1.0,
-                },
-            },
+            Self::Forward | Self::Back => {
+                // The new page always arrives from the side it travels
+                // toward; `sign` only picks which side that is.
+                let sign = if matches!(self, Self::Forward) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                match role {
+                    LayerRole::Outgoing => LayerPose {
+                        x: -sign * 16.0 * progress,
+                        opacity: 1.0 - progress,
+                        blur: 16.0 * progress,
+                        scale: 1.0,
+                    },
+                    LayerRole::Incoming => LayerPose {
+                        x: sign * 16.0 * (1.0 - progress),
+                        opacity: progress,
+                        blur: 16.0 * (1.0 - progress),
+                        scale: 1.0,
+                    },
+                }
+            }
             Self::Scale => match role {
                 LayerRole::Outgoing => LayerPose {
                     opacity: 1.0 - progress,
@@ -167,6 +181,20 @@ impl MorphTransition {
     }
 }
 
+/// The slide for arriving at a route: [`MorphTransition::Forward`] into a
+/// child page, [`MorphTransition::Back`] into the root.
+///
+/// The dialogs that use this have two levels, so the route alone gives the
+/// direction.
+#[must_use]
+pub fn direction(child: bool) -> MorphTransition {
+    if child {
+        MorphTransition::Forward
+    } else {
+        MorphTransition::Back
+    }
+}
+
 /// Child-owned route metadata; content itself remains outside the reducer.
 #[derive(Clone, Debug)]
 pub struct RouteDescriptor<K> {
@@ -181,7 +209,7 @@ impl<K> RouteDescriptor<K> {
         Self {
             key,
             size: RouteSize::Exact(MorphSize::new(width, height)),
-            transition: MorphTransition::Right,
+            transition: MorphTransition::Forward,
         }
     }
 
@@ -190,7 +218,7 @@ impl<K> RouteDescriptor<K> {
         Self {
             key,
             size: RouteSize::Intrinsic { maximum },
-            transition: MorphTransition::Right,
+            transition: MorphTransition::Forward,
         }
     }
 
@@ -844,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn right_pins_start_mid_and_end_on_both_axes_and_poses() {
+    fn forward_pins_start_mid_and_end_on_both_axes_and_poses() {
         let start = Instant::now();
         let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
         assert_eq!(
@@ -861,7 +889,7 @@ mod tests {
         assert_eq!(opening.layers[0].size, MorphSize::new(400.0, 240.0));
         assert_eq!(opening.layers[1].size, MorphSize::new(600.0, 440.0));
         assert_eq!(opening.layers[0].pose, LayerPose::REST);
-        assert_eq!(opening.layers[1].pose.x, -16.0);
+        assert_eq!(opening.layers[1].pose.x, 16.0);
         assert_eq!(opening.layers[1].pose.opacity, 0.0);
         assert_eq!(opening.layers[1].pose.blur, 16.0);
 
@@ -869,8 +897,8 @@ mod tests {
         // The shared spring has covered 96.233% of the distance at half-time.
         assert!((middle.size.width - 592.466).abs() < 0.01);
         assert!((middle.size.height - 432.466).abs() < 0.01);
-        assert!((middle.layers[0].pose.x - 15.397).abs() < 0.01);
-        assert!((middle.layers[1].pose.x - -0.603).abs() < 0.01);
+        assert!((middle.layers[0].pose.x - -15.397).abs() < 0.01);
+        assert!((middle.layers[1].pose.x - 0.603).abs() < 0.01);
         assert_eq!(middle.layers[0].size, MorphSize::new(400.0, 240.0));
         assert_eq!(middle.layers[1].size, MorphSize::new(600.0, 440.0));
 
@@ -1241,7 +1269,7 @@ mod tests {
                     assert_eq!(opening.layers[1].pose.x, -8.0);
                     assert_eq!(opening.layers[0].pose.opacity, 1.0);
                 }
-                MorphTransition::Right => unreachable!(),
+                MorphTransition::Forward | MorphTransition::Back => unreachable!(),
             }
             let done = settled(start);
             assert!(!dialog.tick(done, false));

@@ -63,7 +63,8 @@ pub(crate) enum Target {
         score: String,
         graph: String,
     },
-    /// One venue's stage, fixture inventory and groups. Singleton per venue.
+    /// One venue's stage, fixture inventory and groups. Singleton per venue,
+    /// and the only body of the venue page — it never sits in a track's strip.
     Patch {
         venue: String,
     },
@@ -92,21 +93,6 @@ impl Target {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
             Self::ScoreGraph { score, graph } => format!("score-graph:{score}:{graph}"),
             Self::Patch { venue } => format!("patch:{venue}"),
-        }
-    }
-
-    /// The venue this tab **dies with**, when it dies with one.
-    ///
-    /// A track editor does not: its score names a venue, but the tab is about
-    /// the track, and closing somebody's open timeline because they glanced at
-    /// another room would be the shell throwing work away — which is the thing
-    /// this redesign exists to stop. Only the patch is a view *of* a venue.
-    /// This is the spec's open question 2, answered in the type rather than at
-    /// the call site that asks.
-    pub(crate) fn venue(&self) -> Option<&str> {
-        match self {
-            Self::Patch { venue } => Some(venue),
-            Self::TrackEditor { .. } | Self::ScoreGraph { .. } => None,
         }
     }
 }
@@ -189,21 +175,6 @@ impl<B> Tabs<B> {
     /// unrepresentable afterwards.
     pub(crate) fn into_bodies(self) -> Vec<B> {
         self.open.into_iter().map(|tab| tab.body).collect()
-    }
-
-    /// Close every tab whose target answers `doomed`, handing back their states
-    /// in strip order so the caller tears each one down.
-    pub(crate) fn close_where(&mut self, doomed: impl Fn(&Target) -> bool) -> Vec<B> {
-        let condemned: Vec<Target> = self
-            .open
-            .iter()
-            .filter(|tab| doomed(&tab.target))
-            .map(|tab| tab.target.clone())
-            .collect();
-        condemned
-            .iter()
-            .filter_map(|target| self.close(target))
-            .collect()
     }
 
     /// Make `target` the visible tab. A target that is not open is ignored —
@@ -427,32 +398,6 @@ mod tests {
         assert_eq!(tabs.active(), Some(&track("a")));
         assert_eq!(tabs.iter().count(), 1);
     }
-
-    #[test]
-    fn leaving_a_venue_closes_only_that_venues_rig_tabs() {
-        let mut tabs: Tabs<&str> = Tabs::default();
-        tabs.open(track("a"), || "editor");
-        tabs.open(
-            Target::Patch {
-                venue: "aurora".to_string(),
-            },
-            || "aurora patch",
-        );
-        tabs.open(
-            Target::Patch {
-                venue: "glasshouse".to_string(),
-            },
-            || "glasshouse patch",
-        );
-
-        let dropped = tabs.close_where(|target| target.venue() == Some("aurora"));
-        assert_eq!(dropped, vec!["aurora patch"]);
-        assert_eq!(tabs.iter().count(), 2);
-    }
-
-    /// The two venue questions must not collapse into one: a track editor is
-    /// *about* a venue (so the stage above it shows that room) and still
-    /// survives leaving it.
 
     #[test]
     fn element_keys_are_unique_per_target() {

@@ -267,7 +267,7 @@ fn script(pattern: &str, anchor: Option<&str>) -> String {
         {{
             const arrival = until("the venue picker or the shell", (s) =>
                 (s.find({{ role: "card", label: "Test Venue" }})
-                    || s.find({{ role: "input", label: "Search tracks…" }})) ? s : undefined);
+                    || s.find({{ role: "input", label: "Search tracks" }})) ? s : undefined);
             if (arrival.find({{ role: "card", label: "Test Venue" }})) {{
                 nav.venue("Test Venue");
             }}

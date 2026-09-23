@@ -20,9 +20,11 @@ use gpui_agent::{Harness, Mode};
 use serde_json::Value;
 use support::{Clip, Fixture};
 
-fn harness() -> Harness {
+/// `name` is per-test: the fixture keys its seeded library directory by it,
+/// and two harnesses on one name race for the same SQLite file.
+fn harness(name: &'static str) -> Harness {
     Fixture::new(
-        "workspace-scope",
+        name,
         20,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
@@ -40,13 +42,11 @@ const SCRIPT: &str = r#"
             .findAll({ role: "button" })
             .map((node) => node.label)
             .filter((label) => label === "Aurora" || label === "Zulu"
-                || label === "Strobe" || label === "Test Venue Patch");
+                || label === "Strobe");
     }
 
     nav.venue("Test Venue");
-    // Zulu has no scores in this room, and the sidebar opens filtered to the
-    // ones that do. This test is about two tracks, so widen it to the library.
-    nav.step("the in-venue filter", "toggle", "In Venue");
+    // Zulu has no scores in this room; the sidebar lists it anyway.
     until("both tracks", (s) => s.find({ role: "row", label: "Zulu" }) !== undefined);
 
     nav.track("Aurora");
@@ -76,7 +76,7 @@ const SCRIPT: &str = r#"
 
 #[test]
 fn each_track_keeps_its_own_tabs() {
-    let mut harness = harness();
+    let mut harness = harness("workspace-scope");
     let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
@@ -122,5 +122,63 @@ fn each_track_keeps_its_own_tabs() {
     assert!(
         !back.contains(&"Zulu".to_string()),
         "Zulu's editor followed the eye back to Aurora: {back:?}"
+    );
+}
+
+/// The sidebar's Venue row is a place, not a tab. Picking it hides the thread
+/// and the strip and shows the venue page. Picking a track brings that
+/// track's strip and the thread back as they were.
+#[test]
+fn the_venue_row_takes_the_workspace_and_a_track_gives_it_back() {
+    let mut harness = harness("workspace-scope-venue");
+    let result = harness.exec(
+        &support::script(
+            r#"
+            function state() {
+                const s = app.snapshot();
+                return {
+                    page: s.find({ role: "card", label: "Test Venue Venue" }) !== undefined,
+                    strip: s.find({ role: "card", label: "Tab strip" }) !== undefined,
+                    thread: s.findAll({ role: "text" }).some((n) => n.label === "Luma"),
+                    aurora: s.find({ role: "button", label: "Aurora" }) !== undefined,
+                };
+            }
+            nav.trackEditor("Test Venue", "Aurora");
+            until("Aurora's timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+            const track = state();
+
+            nav.venuePage("Test Venue");
+            until("the thread collapsed", (s) =>
+                !s.findAll({ role: "text" }).some((n) => n.label === "Luma"));
+            const venue = state();
+
+            nav.step("Aurora again", "row", "Aurora");
+            until("Aurora's strip", (s) => s.find({ role: "button", label: "Aurora" }) !== undefined);
+            until("the thread back", (s) => s.findAll({ role: "text" }).some((n) => n.label === "Luma"));
+            const back = state();
+            ({ track, venue, back })
+        "#,
+        ),
+        Duration::from_secs(300),
+    );
+    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
+    let out: Value = result.result;
+    let on = |key: &str, field: &str| out[key][field].as_bool().unwrap_or_default();
+
+    assert!(
+        on("track", "thread") && on("track", "strip") && on("track", "aurora"),
+        "{out:#}"
+    );
+    assert!(
+        on("venue", "page"),
+        "the Venue row did not open the venue page: {out:#}"
+    );
+    assert!(
+        !on("venue", "strip") && !on("venue", "thread") && !on("venue", "aurora"),
+        "the venue page kept the strip, the thread or the track's tabs: {out:#}"
+    );
+    assert!(
+        on("back", "thread") && on("back", "strip") && on("back", "aurora") && !on("back", "page"),
+        "picking the track did not give back its strip and the thread: {out:#}"
     );
 }

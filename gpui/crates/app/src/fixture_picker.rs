@@ -54,24 +54,19 @@ use crate::Luma;
 /// The card. Wide enough for a landscape frame beside a column of group names,
 /// tall enough for a dozen rows without the list becoming the whole dialog.
 const CARD_SIZE: MorphSize = MorphSize::new(880.0, 540.0);
-/// The frame's box inside the card. The renderer is asked for exactly
-/// [`PREVIEW_PIXELS`] and the result is painted into this, so a retina and a
-/// non-retina machine get the same picture and the same render cost.
+/// The frame's box inside the card. The renderer is asked for this box at the
+/// window's scale factor, so the frame fills it exactly and costs no more GPU
+/// time than the pixels shown.
 ///
-/// The height is the card minus its two bands, taken from the bands
-/// themselves — a number written here would be a second opinion about how tall
-/// a footer is, and the footer's height is a consequence of its padding.
+/// The height is the card minus its two bands and the label row, taken from
+/// the bands themselves — a number written here would be a second opinion
+/// about how tall a footer is, and the footer's height is a consequence of its
+/// padding.
 const PREVIEW_W: f32 = 520.0;
-const PREVIEW_H: f32 = CARD_SIZE.height - float::HEADER_HEIGHT - float::FOOTER_HEIGHT;
-/// What the offscreen renderer is asked for, in pixels: the box at 2x.
-///
-/// Fixed rather than derived from the window's scale factor — every distinct
-/// size costs the renderer a full reallocation, and a preview that reallocated
-/// when the dialog moved between displays would pay for a picture nobody asked
-/// to change. Derived from the box rather than written out so the camera's fit,
-/// which is a function of the aspect ratio, cannot disagree with the box the
-/// frame is painted into.
-const PREVIEW_PIXELS: (u32, u32) = ((PREVIEW_W * 2.0) as u32, (PREVIEW_H * 2.0) as u32);
+/// The label row above the frame, fixed so the frame's box is known.
+const PREVIEW_LABEL_H: f32 = 44.0;
+const PREVIEW_H: f32 =
+    CARD_SIZE.height - float::HEADER_HEIGHT - float::FOOTER_HEIGHT - PREVIEW_LABEL_H;
 /// A group row.
 const ROW_HEIGHT: f32 = 26.0;
 
@@ -249,15 +244,17 @@ impl Luma {
             Some(Overlay::FixturePicker(state)) => state.generation,
             _ => return,
         };
+        // Drawn at the size it is shown: the box at the window's scale.
+        let pixels = crate::picker_preview::pixels(PREVIEW_W, PREVIEW_H, self.scale_factor);
         cx.spawn(async move |this, cx| {
             let loaded = rig.await;
             let installed = match loaded {
                 Err(error) => Err(error.to_string()),
                 Ok(rig) => {
                     cx.background_executor()
-                        .spawn(async move {
-                            crate::picker_preview::install(&rig, settings, PREVIEW_PIXELS)
-                        })
+                        .spawn(
+                            async move { crate::picker_preview::install(&rig, settings, pixels) },
+                        )
                         .await
                 }
             };
@@ -310,10 +307,13 @@ impl Luma {
                     // thread's reply, so it may not run on the UI thread.
                     cx.background_executor()
                         .spawn(async move {
+                            // The live budget, not the goldens': the preview
+                            // shares the GPU with the window, and 16 subframes
+                            // froze it for about 300 ms on every hovered row.
                             sequence.frame(
                                 Some(&state),
                                 0.0,
-                                luma_render::DEFAULT_SUBFRAMES,
+                                luma_render::LIVE_SUBFRAMES,
                                 Continuity::Cut,
                             )
                         })
@@ -547,8 +547,10 @@ fn preview(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
         .child(
             div()
                 .flex_none()
-                .p(px(10.))
+                .h(px(PREVIEW_LABEL_H))
+                .px(px(10.))
                 .flex()
+                .items_center()
                 .justify_between()
                 .child(
                     div()

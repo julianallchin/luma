@@ -608,7 +608,11 @@ fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> D
         )
         // While the shared element is in flight it *is* this row; drawing both
         // would be two of the same track on one column.
-        .child(track_face(&scores.track, true).when(flying, |row| row.opacity(0.)))
+        .child(
+            div()
+                .px(px(PAD_X))
+                .child(track_face(&scores.track, true).when(flying, |row| row.opacity(0.))),
+        )
 }
 
 /// This venue's scores, the way to mint another, and the other venues' as
@@ -622,7 +626,7 @@ fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity
         .overflow_hidden()
         .flex()
         .flex_col()
-        .px(px(PAD_X - float::ROW_INSET))
+        .px(px(PAD_X))
         .pt(px(6.))
         .gap(px(2.))
         .children(scores.error.clone().map(float::error_row))

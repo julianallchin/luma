@@ -61,6 +61,7 @@ pub(crate) enum Route {
 impl Route {
     fn descriptor(&self) -> RouteDescriptor<Self> {
         RouteDescriptor::exact(self.clone(), CARD_SIZE.width, CARD_SIZE.height)
+            .with_transition(morph::direction(self.parent().is_some()))
     }
 
     /// Where "back" goes from here — `None` at the root.

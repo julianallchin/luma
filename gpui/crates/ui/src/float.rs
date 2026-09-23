@@ -919,6 +919,9 @@ const SCRUB_FILL: f32 = 0.07;
 /// The surface a floating *menu* is drawn on — smaller and one corner-step
 /// tighter than a dialog card, because it hangs off a control rather than
 /// standing on its own.
+///
+/// It sets its own text colour. A menu is often a child of its trigger, and a
+/// light chip would otherwise give the menu its dark ink.
 pub fn popover_card() -> Div {
     div()
         .flex()
@@ -930,6 +933,7 @@ pub fn popover_card() -> Div {
         .border_color(glass::hairline(0.10))
         .bg(glass::overlay())
         .text_size(px(13.0))
+        .text_color(ladder::foreground())
         .overflow_hidden()
 }
 

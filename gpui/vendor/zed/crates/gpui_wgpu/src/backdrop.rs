@@ -426,7 +426,7 @@ pub(crate) fn batch_first_order(scene: &Scene, batch: &PrimitiveBatch) -> u32 {
 mod tests {
     use super::*;
     use anyhow::{Context, Result};
-    use gpui::{Bounds, ContentMask, Corners, ScaledPixels, point, size};
+    use gpui::{point, size, Bounds, ContentMask, Corners, ScaledPixels};
 
     fn blur(rect: [f32; 4], sigma: f32) -> BackdropBlur {
         BackdropBlur {

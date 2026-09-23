@@ -1,4 +1,5 @@
-//! Search and select this account’s conversations without moving editor tabs.
+//! Search and select the open score's conversations without moving editor
+//! tabs.
 
 use std::collections::HashMap;
 
@@ -165,8 +166,13 @@ impl Luma {
     pub(crate) fn show_chat_history(&mut self, cx: &mut Context<Self>) {
         self.chat_history_generation = self.chat_history_generation.wrapping_add(1);
         let generation = self.chat_history_generation;
+        // The history button lives on an attached panel, so a score is open
+        // whenever this runs.
+        let Some(subject) = crate::agent::chat_subject(self) else {
+            return;
+        };
         let state = ChatHistory::loading(generation, cx);
-        let pending = self.library.agent().history();
+        let pending = self.library.agent().history(subject);
         self.overlay.open(Overlay::ChatHistory(Box::new(state)));
         cx.notify();
         cx.spawn(async move |this, cx| {

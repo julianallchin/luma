@@ -272,13 +272,24 @@ impl WgpuContext {
         // not — it wants the WebGPU defaults, which every desktop adapter
         // meets. Ask for them when the adapter can give them, and fall back
         // to what the compositor alone needs when it cannot.
+        //
+        // The renderer also needs the adapter's storage-buffer limits, as
+        // `luma_render::device` asks for its own device. The scene pass binds
+        // more than the default eight storage buffers per stage.
         #[cfg(not(target_family = "wasm"))]
         let required_limits = {
             let wanted = wgpu::Limits::default()
                 .using_resolution(adapter.limits())
                 .using_alignment(adapter.limits());
             if wanted.check_limits(&adapter.limits()) {
-                wanted
+                let limits = adapter.limits();
+                wgpu::Limits {
+                    max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+                    max_buffer_size: limits.max_buffer_size,
+                    max_storage_buffers_per_shader_stage: limits
+                        .max_storage_buffers_per_shader_stage,
+                    ..wanted
+                }
             } else {
                 wgpu::Limits::downlevel_defaults()
                     .using_resolution(adapter.limits())

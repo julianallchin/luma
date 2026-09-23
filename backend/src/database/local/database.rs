@@ -17,8 +17,12 @@ pub struct Db(pub SqlitePool);
 /// and that connection is closed before anything else opens the file. Returns
 /// where the database is.
 async fn migrate_app_db_at(app_dir: &Path) -> Result<std::path::PathBuf, String> {
-    std::fs::create_dir_all(app_dir)
-        .map_err(|error| format!("Failed to create app config dir {}: {error}", app_dir.display()))?;
+    std::fs::create_dir_all(app_dir).map_err(|error| {
+        format!(
+            "Failed to create app config dir {}: {error}",
+            app_dir.display()
+        )
+    })?;
     let db_path = app_dir.join("luma.db");
     let migrate_pool = SqlitePoolOptions::new()
         .max_connections(1)

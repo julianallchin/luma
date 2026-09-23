@@ -14,6 +14,7 @@
 //! ```text
 //! AgentChat                  one thread, one composer
 //!  ├ agent      Agent        the loop, on the reactor its database needs
+//!  ├ subject    Option<..>   the score whose chats this panel shows
 //!  ├ scope      Option<..>   the open conversation’s subject
 //!  ├ transcript Transcript   luma_lib's type, held — never mirrored
 //!  ├ rows       Vec<Row>     render state beside it, one per message
@@ -23,9 +24,9 @@
 //!  └ turn       TurnState    Idle | Streaming { _task, since, steer }
 //! ```
 //!
-//! The open thread is independent of the editor tabs. The host supplies a
-//! context for each turn; only an explicit new/open action
-//! replaces an attached thread.
+//! A chat belongs to one score. The host names the open score, and the panel
+//! opens that score's most recently updated chat. Other editor tabs do not
+//! change the thread: they only supply a context for each turn.
 //!
 //! # Streaming
 //!
@@ -137,15 +138,16 @@ impl Agent {
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
-    /// This account's conversations, newest first, with their
+    /// One score's conversations, most recently updated first, with their
     /// transcripts read for the picker's summaries and grep.
     pub fn history(
         &self,
+        scope: ThreadScope,
     ) -> impl std::future::Future<Output = Result<luma_lib::agent::History, String>> + use<> {
         let service = self.service.clone();
         let task = self
             .runtime
-            .spawn(async move { service.history().await.map_err(|e| e.to_string()) });
+            .spawn(async move { service.history(&scope).await.map_err(|e| e.to_string()) });
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
@@ -310,6 +312,9 @@ enum TurnState {
 
 pub struct AgentChat {
     agent: Agent,
+    /// The score whose chats this panel shows. `None` is the unattached
+    /// panel: no score is open, so there is nothing to chat about.
+    subject: Option<ThreadScope>,
     /// Initial resource metadata, retained when creating a chat with no editor open.
     scope: Option<ThreadScope>,
     /// Editor context captured by the next turn; never changes conversation identity.
@@ -403,6 +408,7 @@ impl AgentChat {
     pub fn new(agent: Agent, scope: Option<ThreadScope>, cx: &mut Context<Self>) -> Self {
         let chat = Self {
             agent,
+            subject: scope.clone(),
             scope: scope.clone(),
             editor_context: scope.clone(),
             conversation: Conversation::Idle,
@@ -1013,12 +1019,12 @@ impl AgentChat {
         .detach();
     }
 
-    /// Start a fresh conversation with the current editor as its initial metadata.
+    /// Start a fresh conversation on the same score.
     ///
     /// Always creates: "new chat" is a statement, and resolving would hand back
     /// the existing conversation whenever there was one.
     pub fn new_thread(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.editor_context.clone().or_else(|| self.scope.clone()) else {
+        let Some(scope) = self.subject.clone().or_else(|| self.scope.clone()) else {
             return;
         };
         self.cancel(cx);
@@ -1116,17 +1122,42 @@ impl AgentChat {
         matches!(self.conversation, Conversation::Open(_))
     }
 
+    /// Whether the panel has a conversation to show: an open score, or the
+    /// thread a reader was opened on.
+    fn attached(&self) -> bool {
+        self.subject.is_some() || self.scope.is_some()
+    }
+
     /// Update the next turn's context without replacing the open thread,
-    /// its draft, or a running turn. An unattached panel may resolve once.
+    /// its draft, or a running turn.
     pub fn set_editor_context(&mut self, scope: Option<ThreadScope>, cx: &mut Context<Self>) {
         if self.editor_context == scope {
             return;
         }
-        self.editor_context = scope.clone();
-        if matches!(self.conversation, Conversation::Idle) {
-            if let Some(scope) = scope {
-                self.scope = Some(scope.clone());
-                self.load(scope, cx);
+        self.editor_context = scope;
+        cx.notify();
+    }
+
+    /// Show `subject`'s most recently updated chat, or unattach.
+    ///
+    /// A different score is a different set of chats, so a running turn is
+    /// cancelled, as it is when the reader opens another chat. The draft
+    /// stays in the composer.
+    pub fn set_subject(&mut self, subject: Option<ThreadScope>, cx: &mut Context<Self>) {
+        if self.subject == subject {
+            return;
+        }
+        self.cancel(cx);
+        self.subject = subject.clone();
+        match subject {
+            Some(subject) => self.load(subject, cx),
+            None => {
+                // Any read still in flight belongs to the score that was left.
+                self.reads += 1;
+                self.conversation = Conversation::Idle;
+                self.scope = None;
+                self.error = None;
+                self.seat(Transcript::default(), cx);
             }
         }
         cx.notify();
@@ -1433,7 +1464,7 @@ impl AgentChat {
         //
         // A read-only child starts with an id and learns its scope from the
         // thread read, so it must show the loading plate while that arrives.
-        let attached = self.scope.is_some();
+        let attached = self.attached();
         if !attached && !self.read_only {
             let unattached = cx.entity();
             return self
@@ -1821,7 +1852,7 @@ impl AgentChat {
             // The two ways out of the conversation you are in: back to an
             // older one, or on to a new one. Only shown on an attached panel —
             // a thread supplies the header while editor context seeds new chats.
-            .children(self.scope.is_some().then(|| {
+            .children(self.attached().then(|| {
                 let rewind = chat.clone();
                 let fresh = chat.clone();
                 div()
@@ -1949,12 +1980,12 @@ struct Opening {
 }
 
 impl Opening {
-    /// The panel over a screen that names no subject. It offers no prompts
-    /// because it has no thread to send one into: what it owes the reader is
-    /// the way *out* of this state, which is the blurb.
+    /// The panel with no score open. It offers no prompts because it has
+    /// no thread to send one into: what it owes the reader is the way *out*
+    /// of this state, which is the headline.
     const UNATTACHED: Self = Self {
-        headline: "Nothing to work on yet",
-        blurb: UNATTACHED_BLURB,
+        headline: UNATTACHED_HEADLINE,
+        blurb: "Each score keeps its own chats.",
         hint: None,
         prompts: &[],
     };
@@ -1972,7 +2003,7 @@ impl Opening {
 }
 
 /// What a conversation that has not started asks the reader. Public for the
-/// same reason [`UNATTACHED_BLURB`] is: it is what a test asserting the empty
+/// same reason [`UNATTACHED_HEADLINE`] is: it is what a test asserting the empty
 /// state never flashes over a loading thread looks for, and a test spelling
 /// the copy itself would pass while the shipped words said something else.
 pub const OPENING_HEADLINE: &str = "Where do you want to start?";
@@ -1980,8 +2011,7 @@ pub const OPENING_HEADLINE: &str = "Where do you want to start?";
 /// The way out of an unattached panel, in the panel's own words. Public
 /// because it is what the exit gate looks for: a test that spelled the promise
 /// itself would pass while the shipped copy said something else.
-pub const UNATTACHED_BLURB: &str =
-    "Open a venue, a pattern's graph, or a track's timeline, and the chat attaches to it.";
+pub const UNATTACHED_HEADLINE: &str = "Pick a track to chat";
 
 /// A conversation that has not started: a mark, a headline, what the agent can
 /// do, and the prompts that fill the composer.

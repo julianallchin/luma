@@ -12,6 +12,19 @@ use luma_ui::{
 use std::{collections::BTreeMap, sync::Arc};
 static PREVIEW_IMAGE_ID: std::sync::OnceLock<ImageId> = std::sync::OnceLock::new();
 
+/// The render size for a preview box of `width` × `height` logical pixels on
+/// a display with `scale` device pixels per logical pixel.
+///
+/// The frame is drawn at the size it is shown. A larger frame costs GPU time
+/// the window shares, and a smaller one is soft.
+pub(crate) fn pixels(width: f32, height: f32, scale: f32) -> (u32, u32) {
+    let scale = scale.max(1.0);
+    (
+        (width * scale).round().max(1.0) as u32,
+        (height * scale).round().max(1.0) as u32,
+    )
+}
+
 pub(crate) fn install(
     rig: &crate::library::Rig,
     settings: Option<luma_render::scene_desc::RenderSettings>,
@@ -80,9 +93,12 @@ pub(crate) fn image(
                     // New pixels under a fixed identity, so the atlas has to be
                     // told — see `PREVIEW_IMAGE_ID`.
                     window.update_image(&image).ok();
+                    // Cover, not fit: the frame fills its box edge to edge,
+                    // and a small difference in shape is cropped rather than
+                    // shown as bars.
                     let pixels = image.size(0);
                     let scale = (f32::from(bounds.size.width) / (pixels.width.0 as f32))
-                        .min(f32::from(bounds.size.height) / (pixels.height.0 as f32));
+                        .max(f32::from(bounds.size.height) / (pixels.height.0 as f32));
                     let size = gpui::size(
                         px((pixels.width.0 as f32) * scale),
                         px((pixels.height.0 as f32) * scale),
@@ -91,10 +107,11 @@ pub(crate) fn image(
                         bounds.center() - gpui::point(size.width / 2., size.height / 2.),
                         size,
                     );
+                    // The box clips; `fitted` is where the whole frame lies.
                     window
                         .paint_image(
-                            fitted,
                             bounds,
+                            fitted,
                             Corners::default(),
                             Arc::clone(&image),
                             0,

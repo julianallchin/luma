@@ -519,7 +519,7 @@ pub const PICK_VENUE: &str = r#"
         {
             const arrival = until("the venue picker or the shell", (s) =>
                 (s.find({ role: "card", label: "Studio A" })
-                    || s.find({ role: "input", label: "Search tracks…" })) ? s : undefined);
+                    || s.find({ role: "input", label: "Search tracks" })) ? s : undefined);
             if (arrival.find({ role: "card", label: "Studio A" })) {
                 nav.venue("Studio A");
             }

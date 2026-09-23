@@ -755,8 +755,7 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
         app.key("escape");
         nav.closeTab();
         nav.closeTab();
-        app.action("luma::NewTab");
-        nav.step("venue again", "button", "Venue");
+        nav.venuePage("Test Venue");
         until("loaded room", s => s.find({role:"toggle",label:"Frame stats"}));
         nav.step("reopened settings", "toggle", "Render settings");
         until("saved sun", s => sun() !== undefined);
@@ -913,9 +912,7 @@ fn view_settings_persist_per_device_and_per_venue() {
 
         app.key("escape");
         until("settings closed", s => !s.find({role:"card",label:"Render settings"}));
-        nav.closeTab();
-        app.action("luma::NewTab");
-        nav.step("venue again", "button", "Venue");
+        nav.venuePage("Test Venue");
         until("loaded room", s => s.find({role:"toggle",label:"Frame stats"}));
         openView();
         app.frames(4);

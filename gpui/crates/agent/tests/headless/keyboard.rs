@@ -218,7 +218,7 @@ fn keys_and_actions_route_to_the_focused_screen_and_a_text_field_keeps_its_own()
         out["typed"]
     );
     assert_eq!(
-        out["cleared"]["search"]["label"], "Search tracks…",
+        out["cleared"]["search"]["label"], "Search tracks",
         "escape in the search field did not clear the query: {:#}",
         out["cleared"]
     );

@@ -701,19 +701,13 @@ impl AgentService {
         serde_json::from_value(value).map_err(|error| AgentError::Storage(error.to_string()))
     }
 
-    /// This principal's live conversations and searchable transcripts.
-    pub async fn history(&self) -> Result<History, AgentError> {
+    /// The live conversations `scope` names, with their searchable
+    /// transcripts. A chat belongs to one score, so this is all the picker
+    /// lists.
+    pub async fn history(&self, scope: &ThreadScope) -> Result<History, AgentError> {
         let pool = &self.services.db().0;
         let principal = self.principal().await?;
-        let threads = crate::database::local::agent_threads::list_threads(
-            pool,
-            None,
-            None,
-            None,
-            principal.as_deref(),
-        )
-        .await
-        .map_err(AgentError::Storage)?;
+        let threads = self.list_threads(scope).await?;
         let messages = crate::database::local::agent_threads::list_history_messages(
             pool,
             principal.as_deref(),
@@ -770,10 +764,8 @@ impl AgentService {
         })
     }
 
-    /// The newest thread matching `scope`, creating one if none exists.
-    ///
-    /// "Newest matching wins" is ambient; the thread picker is where a better
-    /// rule belongs.
+    /// The most recently updated thread matching `scope`, creating one if
+    /// none exists. For a track scope that is the score's last used chat.
     ///
     /// # Errors
     ///

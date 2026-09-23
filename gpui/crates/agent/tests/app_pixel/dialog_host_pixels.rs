@@ -78,7 +78,7 @@ fn production_root_layers_a_compact_frosted_dialog_below_live_window_controls() 
             r#"
             nav.venue("Test Venue");
             until("track browser", () =>
-                app.snapshot().find({ role: "input", label: "Search tracks…" }));
+                app.snapshot().find({ role: "input", label: "Search tracks" }));
             const base = app.screenshot().path;
 
             app.action("luma::OpenPatterns");

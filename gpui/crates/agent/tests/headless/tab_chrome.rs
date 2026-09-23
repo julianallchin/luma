@@ -33,8 +33,10 @@ const SCRIPT: &str = r#"
         const shot = app.snapshot();
         return {
             shot,
-            choices: ["Venue", "Patterns", "Track editor"]
+            choices: ["Patterns", "Track editor"]
                 .map((label) => shot.find({ role: "button", label })),
+            // The venue is a sidebar place now, never a tab.
+            venue: shot.find({ role: "button", label: "Venue" }) !== undefined,
             reasons: shot.findAll({ role: "text" }).map((node) => node.label),
         };
     }
@@ -44,26 +46,20 @@ const SCRIPT: &str = r#"
 
     const first = menu();
     // Opening the selected track is a reveal, not a duplicate.
-    app.click(first.choices[2]);
+    app.click(first.choices[1]);
     app.frames(2);
     const trackChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Aurora" }).length;
 
     nav.pattern("Strobe");
     until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }) !== undefined);
     const second = menu();
-    app.click(second.choices[1]);
+    app.click(second.choices[0]);
     until("library browser",s=>s.find({role:"row",label:"Strobe"}));
     nav.dismiss();
     app.click(app.snapshot().find({role:"button",label:"Strobe"}));
     app.frames(2);
     const patternChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Strobe" }).length;
 
-    const third = menu();
-    app.click(third.choices[0]);
-    until("the universe tab", (s) =>
-        s.find({ role: "card", label: "Test Venue Venue" }) !== undefined);
-    app.action("luma::CloseTab");
-    app.frames(2);
 
     // Middle click routes through the same close path as the keyboard.
     app.click(app.snapshot().find({ role: "button", label: "Strobe" }), { button: "middle" });
@@ -72,6 +68,7 @@ const SCRIPT: &str = r#"
 
     ({
         firstEnabled: first.choices.map((node) => node.enabled),
+        venueOffered: first.venue || second.venue,
         firstReasons: first.reasons,
         secondEnabled: second.choices.map((node) => node.enabled),
         trackChipsAfterReveal,
@@ -93,13 +90,13 @@ fn workspace_expands_and_restores_chat_through_visible_controls() {
         nav.pattern("Strobe");
         const canvas=()=>app.snapshot().find({role:"card",label:"Graph workspace"}).bounds.width;
         const initial=canvas();
-        nav.step("expand editor", "button", "Expand");
+        nav.step("hide chat", "button", "Hide chat");
         until("expanded editor",s=>s.find({role:"button",label:"Show chat"})
             && !s.find({role:"card",label:"Conversation"}));
-        if(canvas()<=initial+200)throw new Error("Expand did not give the graph room");
+        if(canvas()<=initial+200)throw new Error("Hide chat did not give the graph room");
         nav.step("restore chat", "button", "Show chat");
         until("chat restored",s=>s.find({role:"card",label:"Conversation"})
-            && s.find({role:"button",label:"Expand"}));
+            && s.find({role:"button",label:"Hide chat"}));
         if(Math.abs(canvas()-initial)>2)throw new Error("Show chat did not restore the split");
     "#,
         ),
@@ -115,8 +112,12 @@ fn menu_prerequisites_idempotent_opens_and_close_gestures_share_one_path() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    assert_eq!(out["firstEnabled"], serde_json::json!([true, true, true]));
-    assert_eq!(out["secondEnabled"], serde_json::json!([true, true, true]));
+    assert_eq!(out["firstEnabled"], serde_json::json!([true, true]));
+    assert_eq!(out["secondEnabled"], serde_json::json!([true, true]));
+    assert_eq!(
+        out["venueOffered"], false,
+        "the + menu still offers the venue"
+    );
     assert_eq!(out["trackChipsAfterReveal"], 1);
     assert_eq!(out["patternChipsAfterReveal"], 1);
     let final_buttons = out["finalButtons"].as_array().unwrap();
@@ -157,7 +158,7 @@ fn new_tab_opens_the_panel_and_its_menu_together() {
             app.frames(12, { waitMs: 40 });
             const settled = app.snapshot();
             ({
-                opened: menu.find({ role: "button", label: "Venue" }) !== undefined,
+                opened: menu.find({ role: "button", label: "Patterns" }) !== undefined,
                 stillUp: settled.find({ role: "card", label: "New tab menu" }) !== undefined,
                 strip: settled.find({ role: "card", label: "Tab strip" }) !== undefined,
             })
