@@ -22,8 +22,9 @@ pub struct Clip {
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
-    /// Historical clips used independent random draws for selecting heads and
-    /// animating them. New clips use `seed` for both unless explicitly supplied.
+    /// Historical clips used independent random draws for resolving the
+    /// selection (which side an `^` takes) and animating it. New clips use
+    /// `seed` for both unless explicitly supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_seed: Option<u64>,
     /// Group expression resolved by the host; never physical fixture ids.

@@ -113,10 +113,6 @@ mod trace;
 mod waveform;
 mod zoom_motion;
 
-/// The subset ladder and its reading, shared with the fixture picker so the
-/// two surfaces cannot offer different rungs.
-pub(crate) use sheet::{subset_label, SUBSETS};
-
 // -- state --------------------------------------------------------------------
 
 /// The screen's whole state: the track it is showing, everything the seam

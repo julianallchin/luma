@@ -23,7 +23,7 @@ use crate::models::fixtures::{FixtureDefinition, Mode, PatchedFixture};
 use crate::models::groups::{
     normalize_group_name, FixtureGroupNode, GroupTreeNode, GroupedFixtureNode, HeadNode,
 };
-use crate::models::selection::{Selection, Subset};
+use crate::models::selection::Selection;
 use crate::services::group_derivation::{
     self, DerivedTree, FixtureIdentity, FixtureRole, ManualGroup, VenueFacts,
 };
@@ -666,83 +666,17 @@ pub struct ResolvedFixture {
     pub heads: Option<Vec<usize>>,
 }
 
-/// Deterministically keep `subset.keep(n)` of `n` units, as ascending indices.
-///
-/// Shuffle-then-truncate rather than repeated sampling: the drawn set depends
-/// only on the seed and `n`, and sorting afterwards restores venue order so the
-/// caller never sees the shuffle.
-fn pick(n: usize, subset: Subset, rng: &mut StdRng) -> Vec<usize> {
-    let keep = subset.keep(n);
-    if keep == n {
-        return (0..n).collect();
-    }
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.shuffle(rng);
-    indices.truncate(keep);
-    indices.sort_unstable();
-    indices
-}
-
-/// Narrow a matched head set to the selection's subset.
-///
-/// Whole fixtures are the unit whenever the match is one: a half of six whole
-/// fixtures is three fixtures lit end to end, not three heads scattered across
-/// six bars. Only a head-partial match (some fixture matched on some of its
-/// heads) falls back to picking heads, because there is no whole fixture to pick.
-fn narrow(selected: HeadSet, head_counts: &[usize], subset: Subset, rng: &mut StdRng) -> HeadSet {
-    if subset.is_all() || selected.is_empty() {
-        return selected;
-    }
-
-    // Matched fixtures in venue order, each with its matched heads.
-    let mut matched: Vec<(usize, Vec<usize>)> = Vec::new();
-    for (fi, &head_count) in head_counts.iter().enumerate() {
-        let heads: Vec<usize> = (0..head_count)
-            .filter(|&h| selected.contains(&(fi, h)))
-            .collect();
-        if !heads.is_empty() {
-            matched.push((fi, heads));
-        }
-    }
-
-    let head_partial = matched
-        .iter()
-        .any(|(fi, heads)| heads.len() != head_counts[*fi]);
-
-    if head_partial {
-        let heads: Vec<(usize, usize)> = matched
-            .iter()
-            .flat_map(|(fi, heads)| heads.iter().map(move |&h| (*fi, h)))
-            .collect();
-        pick(heads.len(), subset, rng)
-            .into_iter()
-            .map(|at| heads[at])
-            .collect()
-    } else {
-        pick(matched.len(), subset, rng)
-            .into_iter()
-            .flat_map(|at| {
-                let (fi, heads) = &matched[at];
-                heads.iter().map(move |&h| (*fi, h))
-            })
-            .collect()
-    }
-}
-
 /// Resolve a selection to matching fixtures/heads, in venue fixture order.
 ///
 /// # Determinism
 ///
 /// `rng_seed` decides every random choice the resolution makes — which side an
-/// `^` takes, and which fixtures a [`Subset`] keeps — so one seed always lights
-/// the same rig. Callers own that contract: the eval pre-pass seeds from the
+/// `^` takes — so one seed always lights the same rig. Callers own that contract: the eval pre-pass seeds from the
 /// selection node's id *and the clip it belongs to*
 /// ([`crate::eval::context::seed_for`]), so one clip renders the same lights on
-/// every run while the same pattern placed twice draws two different halves —
+/// every run while the same pattern placed twice can draw two different sides —
 /// hold a motion for a phrase, then mix it up. The IPC preview passes a fixed
-/// seed so the picker does not flicker between calls. The subset draw runs
-/// *after* the expression, on the same rng, so adding a subset to a selection
-/// cannot change which side an `^` took.
+/// seed so the picker does not flicker between calls.
 pub async fn resolve_selection_expression_with_path(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
@@ -756,14 +690,12 @@ pub async fn resolve_selection_expression_with_path(
         return Ok(vec![]);
     }
 
-    let mut rng = StdRng::seed_from_u64(rng_seed);
-
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-        // The whole venue is whole fixtures, so the subset picks at that level.
-        return Ok(pick(cached.fixtures.len(), selection.subset, &mut rng)
-            .into_iter()
-            .map(|at| ResolvedFixture {
-                fixture: cached.fixtures[at].clone(),
+        return Ok(cached
+            .fixtures
+            .iter()
+            .map(|fixture| ResolvedFixture {
+                fixture: fixture.clone(),
                 heads: None,
             })
             .collect());
@@ -779,19 +711,9 @@ pub async fn resolve_selection_expression_with_path(
     let mut ctx = EvalContext {
         fixtures: &cached.fixture_info,
         all_heads,
-        rng,
+        rng: StdRng::seed_from_u64(rng_seed),
     };
     let selected = eval_expr(&expr, &mut ctx)?;
-    let selected = if selection.subset.is_all() {
-        selected
-    } else {
-        let head_counts: Vec<usize> = cached
-            .fixture_info
-            .iter()
-            .map(|info| info.head_count)
-            .collect();
-        narrow(selected, &head_counts, selection.subset, &mut ctx.rng)
-    };
 
     let mut result = Vec::new();
     for (fi, info) in cached.fixture_info.iter().enumerate() {
@@ -1154,9 +1076,7 @@ pub fn role_with_path(resource_path: &Path, fixture: &PatchedFixture) -> Fixture
 
 #[cfg(test)]
 mod tests {
-    use super::{narrow, or_expression, or_terms, venue_cache_key, HeadSet};
-    use crate::models::selection::Subset;
-    use rand::{rngs::StdRng, SeedableRng};
+    use super::{or_expression, or_terms, venue_cache_key};
     use std::path::Path;
 
     #[test]
@@ -1177,94 +1097,21 @@ mod tests {
         assert!(super::validate_selection_names("empty |", &tree).is_err());
     }
 
-    /// `n` fixtures of `heads` heads each, all matched.
-    fn whole(n: usize, heads: usize) -> (HeadSet, Vec<usize>) {
-        let set = (0..n)
-            .flat_map(|f| (0..heads).map(move |h| (f, h)))
-            .collect();
-        (set, vec![heads; n])
-    }
-
-    fn run(set: HeadSet, counts: &[usize], subset: Subset, seed: u64) -> Vec<(usize, usize)> {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut out: Vec<(usize, usize)> =
-            narrow(set, counts, subset, &mut rng).into_iter().collect();
-        out.sort_unstable();
-        out
-    }
-
-    /// The default, and the shape of every selection stored before `subset`
-    /// existed: nothing is dropped.
+    /// The point of a per-clip seed: place one pattern twice and the two clips
+    /// draw independently, while either clip on its own draws the same way on
+    /// every run.
     #[test]
-    fn all_keeps_everything() {
-        let (set, counts) = whole(5, 2);
-        assert_eq!(run(set, &counts, Subset::All, 7).len(), 10);
-    }
-
-    /// One seed, one rig. This is the contract clips rely on to render the same
-    /// lights on every run.
-    #[test]
-    fn the_same_seed_picks_the_same_lights() {
-        let (set, counts) = whole(8, 1);
-        let a = run(set.clone(), &counts, Subset::Fraction(0.5), 42);
-        let b = run(set.clone(), &counts, Subset::Fraction(0.5), 42);
-        let c = run(set, &counts, Subset::Fraction(0.5), 43);
-        assert_eq!(a, b);
-        assert_eq!(a.len(), 4);
-        assert_ne!(a, c, "a different seed re-rolls");
-    }
-
-    /// A half of whole fixtures is whole fixtures — never half of every bar.
-    #[test]
-    fn whole_fixtures_are_picked_whole() {
-        let (set, counts) = whole(6, 4);
-        let kept = run(set, &counts, Subset::Fraction(0.5), 9);
-        assert_eq!(kept.len(), 12, "3 of 6 fixtures, 4 heads each");
-        let mut fixtures: Vec<usize> = kept.iter().map(|&(f, _)| f).collect();
-        fixtures.dedup();
-        assert_eq!(fixtures.len(), 3);
-        for f in fixtures {
-            assert_eq!(kept.iter().filter(|&&(fi, _)| fi == f).count(), 4);
-        }
-    }
-
-    /// With no whole fixture to pick, heads are the unit.
-    #[test]
-    fn a_head_partial_match_falls_back_to_heads() {
-        // Fixture 0 matched on 3 of its 4 heads; fixture 1 matched whole.
-        let set: HeadSet = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
-            .into_iter()
-            .collect();
-        let kept = run(set, &[4, 2], Subset::Count(2), 3);
-        assert_eq!(kept.len(), 2);
-    }
-
-    #[test]
-    fn count_clamps_and_fraction_never_empties_the_set() {
-        let (set, counts) = whole(3, 1);
-        assert_eq!(run(set.clone(), &counts, Subset::Count(99), 1).len(), 3);
-        assert_eq!(run(set.clone(), &counts, Subset::Count(2), 1).len(), 2);
-        assert_eq!(run(set, &counts, Subset::Fraction(0.01), 1).len(), 1);
-    }
-
-    /// The point of a per-clip seed: place one pattern twice over the same
-    /// group and the two clips light different halves, while either clip on its
-    /// own lights the same half every run.
-    #[test]
-    fn two_clips_of_one_pattern_draw_different_halves() {
+    fn two_clips_of_one_pattern_draw_independently() {
         use crate::eval::context::seed_for;
 
-        let draw = |clip: &str| {
-            let (set, counts) = whole(8, 1);
-            run(
-                set,
-                &counts,
-                Subset::Fraction(0.5),
-                seed_for(Some(clip), "select-1"),
-            )
-        };
-        assert_eq!(draw("clip-a"), draw("clip-a"), "one clip is stable");
-        assert_ne!(draw("clip-a"), draw("clip-b"));
+        assert_eq!(
+            seed_for(Some("clip-a"), "select-1"),
+            seed_for(Some("clip-a"), "select-1")
+        );
+        assert_ne!(
+            seed_for(Some("clip-a"), "select-1"),
+            seed_for(Some("clip-b"), "select-1")
+        );
 
         // And the node still matters: two selection nodes in one clip draw
         // independently, so an `^` inside a clip is not forced to agree.
@@ -1279,11 +1126,6 @@ mod tests {
             "select-1".hash(&mut h);
             h.finish()
         });
-    }
-
-    #[test]
-    fn an_empty_match_stays_empty() {
-        assert!(run(HeadSet::new(), &[2, 2], Subset::Fraction(0.5), 1).is_empty());
     }
 
     /// The bug this key exists to prevent: two libraries holding a venue of the
