@@ -145,7 +145,7 @@ Strokes travel across the heads. Each event starts one stroke.
 | axis | axis | — | Which way the heads are ordered |
 | every | beats, or event list | T | Time between strokes |
 | travel | beats | T | Time for one stroke to cross the whole axis |
-| width | proportion + rel/abs | T H | Stroke size |
+| width | number 0–4 + rel/abs | T H | Stroke size |
 | shape | shape preset or curve | — | Brightness across the stroke |
 | path | path preset or curve | — | Where the stroke is over its life |
 | alpha | proportion | T H N A | |
@@ -164,14 +164,15 @@ Strokes travel across the heads. Each event starts one stroke.
   the time from first light to fully gone. A stroke is dark at the start and
   at the end of its life. Stepped paths (`steps(N)`, or any path with `hold`
   or `step` segments) keep their exact positions, and `wrap` has no overrun.
-- **width** `abs` is a share of the axis. `rel` is relative to the gap
-  between strokes. Let `g = every / travel` (per stroke, when `every` or
-  `travel` change). With overrun, stroke centers are `(1 + w) × g` apart, so
-  strokes just touch at rel 100% when `w = g / (1 − g)`. Absolute width is
-  `r g / (1 − r g)`, with `r g` capped at 1/2: at most a stroke as wide as
-  the axis. When `every ≥ travel` a stroke has left before the next one
-  enters, so rel 100% gives that full-axis stroke. Without overrun, absolute
-  width is `r g`, capped at 1.
+- **width** `abs` is a share of the axis, from 0 to 4. Above 1 a stroke is
+  wider than the axis: a soft wide stroke keeps part of the rig lit through
+  its whole life. `rel` is relative to the gap between strokes. Let
+  `g = every / travel` (per stroke, when `every` or `travel` change). With
+  overrun, stroke centers are `(1 + w) × g` apart, so strokes just touch at
+  rel 100% when `w = g / (1 − g)`. Absolute width is `r g / (1 − r g)`, with
+  `r g` capped at 4/5: at most a stroke four axes wide. When `every ≥ travel`
+  a stroke has left before the next one enters, so rel 100% gives that widest
+  stroke. Without overrun, absolute width is `r g`, capped at 4.
 - In storage, `width` holds the share and a separate boolean input
   `width_relative` holds rel (true) or abs (false).
 - **shape** presets: hard, soft, comet, reverse comet, spike. No preset has
@@ -186,7 +187,7 @@ Strokes travel across the heads. Each event starts one stroke.
 
 The default axis is `x`.
 
-Presets: Chase, Wave (soft), Ripple (radial), Spin (angle), Bounce (bounce),
+Presets: Chase, Wave (soft, width abs 100%), Ripple (radial), Spin (angle), Bounce (bounce),
 Alternating sides (x, `steps(2)`, travel = every, width abs 50%, hard),
 Stepped chase (`steps(N)`, width abs 1/N).
 
@@ -234,7 +235,10 @@ Presets: Drift, Atmosphere, Aurora.
 
 ### `strobe.constant@1`
 
-Fixture shutter strobe.
+Fixture shutter strobe. The form writes only the strobe channel, never color
+or dimmer, so it strobes whatever the layers under it light. The written rate
+is `rate × alpha`; at alpha 0 the strobe stops. A colored strobe is two
+layers: a color form, and a strobe layer above it.
 
 | Input | Type | Promotable |
 |---|---|---|
@@ -269,8 +273,9 @@ case to keep; the migration does not finish until the report is empty.
 | Noise wash, aurora, Atmosphere (~50) | `color.noise` |
 | Rainbow (13) | `color.time`, Rainbow |
 | Strobe output, strobe burst (~73) | `strobe.constant` |
+| A colored strobe (Bass strobe) | a color layer (the color product, as for a color clip) under `strobe.constant` |
 | A form × a curve over the clip (Tidal wave, Bounce, Gather, Bloom, drop1…, ~110) | the form, with the curve moved to `alpha = time[...]` |
-| Bass follow, Bass pulse, Bass strobe (~165) | the form, with `alpha` or `rate` = `audio(low, ...)` |
+| Bass follow, Bass pulse, Bass strobe (~165) | the form, with `alpha` = `audio(low, ...)`; for Bass strobe on the color layer |
 
 Conversions of removed inputs:
 
