@@ -6,7 +6,9 @@
 //! bytes in the caller's [`Channels`] order, or left in memory a compositor
 //! addresses directly. That choice is the frame's [`Destination`], and it is
 //! the only thing about a frame this module lets a caller vary that is not
-//! about the picture.
+//! about the picture. The one exception is a compositor that presents HDR:
+//! its frame comes out half-float linear, with highlights above SDR white
+//! (see [`DisplayRange`]).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -17,6 +19,8 @@ use std::time::{Duration, Instant};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::util::DeviceExt;
+
+use crate::viewport::DisplayRange;
 
 use crate::assets::Image;
 use crate::atmosphere::{AtmosphereCache, AtmospherePipelines};
@@ -783,6 +787,9 @@ struct CompositeUniform {
     medium: crate::medium::Uniform,
     camera_pos: [f32; 4],
     outdoor_sun: [f32; 4],
+    /// x: display headroom, the brightest output as a multiple of SDR white.
+    /// Read only by the [`Channels::Hdr`] pipeline.
+    display: [f32; 4],
 }
 
 #[repr(C)]
@@ -808,18 +815,22 @@ impl Transport {
     const EXTINCTION: f32 = 0.06;
 }
 
-/// Byte order a readback is written in.
+/// The output texture's format: the byte order a readback is written in, or
+/// half-float for a compositor that presents HDR.
 ///
 /// This is the *output texture's* format, not a post-processing step: the
 /// composite pass writes straight into the order the caller asked for, so the
 /// readback is a row memcpy either way. Swizzling on the CPU instead cost about
 /// a millisecond per megapixel, for a choice the sampler makes for free.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Channels {
     /// What a PNG wants.
     Rgba,
     /// What `gpui::RenderImage` wants.
     Bgra,
+    /// Linear light for an HDR compositor: 1.0 is SDR white and highlights
+    /// go above it. Only ever a shared target, never read back as an image.
+    Hdr,
 }
 
 /// Who reads a finished frame, which is what decides where it is written.
@@ -827,22 +838,51 @@ pub(crate) enum Channels {
 /// This is not a quality or a format switch — both destinations run the same
 /// passes and produce the same picture. It decides only whether the frame is
 /// staged for the CPU or left in memory the window compositor can address, and
-/// therefore whether a copy is encoded at all.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// therefore whether a copy is encoded at all. The exception is a compositor
+/// that presents HDR, which receives the same picture with its highlights
+/// kept above SDR white.
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Destination {
     /// The caller, as bytes in this order. An export, a golden, a video frame.
     Bytes(Channels),
-    /// The window compositor, in place. Falls back to `Bytes(Bgra)` on a
-    /// platform or adapter with no shareable memory, so a caller asking for
-    /// this never has to know whether it got it.
-    Compositor,
+    /// The window compositor, in place, for a display in this range. Falls
+    /// back to `Bytes(Bgra)` (SDR) on a platform or adapter with no shareable
+    /// memory, so a caller asking for this never has to know whether it got
+    /// it.
+    Compositor(DisplayRange),
 }
 
 impl Destination {
+    /// The format a shared target is allocated in.
     fn channels(self) -> Channels {
         match self {
             Self::Bytes(channels) => channels,
-            Self::Compositor => Channels::Bgra,
+            Self::Compositor(DisplayRange::Sdr) => Channels::Bgra,
+            Self::Compositor(DisplayRange::Hdr { .. }) => Channels::Hdr,
+        }
+    }
+
+    /// The format a staged target is allocated in: a readback is always
+    /// 8-bit, so an HDR frame that could not be shared falls back to SDR.
+    fn staged_channels(self) -> Channels {
+        match self.channels() {
+            Channels::Hdr => Channels::Bgra,
+            channels => channels,
+        }
+    }
+
+    /// Whether `other` can reuse this destination's targets. The headroom is
+    /// a uniform, not a target property, so a new one reallocates nothing.
+    fn same_targets(self, other: Self) -> bool {
+        matches!(self, Self::Compositor(_)) == matches!(other, Self::Compositor(_))
+            && self.channels() == other.channels()
+    }
+
+    /// The headroom the composite pass maps highlights into; 1 in SDR.
+    fn headroom(self) -> f32 {
+        match self {
+            Self::Compositor(DisplayRange::Hdr { headroom }) => headroom.max(1.0),
+            _ => 1.0,
         }
     }
 }
@@ -1079,11 +1119,22 @@ pub struct ShadowStats {
 }
 
 impl Channels {
-    fn format(self) -> wgpu::TextureFormat {
+    const ALL: [Self; 3] = [Self::Rgba, Self::Bgra, Self::Hdr];
+
+    pub(crate) fn format(self) -> wgpu::TextureFormat {
         match self {
             Self::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
             Self::Bgra => wgpu::TextureFormat::Bgra8UnormSrgb,
+            Self::Hdr => wgpu::TextureFormat::Rgba16Float,
         }
+    }
+
+    /// The channels an output texture of `format` was allocated for.
+    fn of(format: wgpu::TextureFormat) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|channels| channels.format() == format)
+            .expect("every output texture is allocated from a `Channels`")
     }
 
     /// Slot in [`Renderer::composite_pipelines`].
@@ -1091,6 +1142,7 @@ impl Channels {
         match self {
             Self::Rgba => 0,
             Self::Bgra => 1,
+            Self::Hdr => 2,
         }
     }
 }
@@ -1808,6 +1860,13 @@ impl PresentationTarget {
             Self::Shared(shared) => shared.view(),
         }
     }
+
+    /// The format this target was allocated in, which is what the passes
+    /// that write it must target. It can differ from what was asked for: an
+    /// HDR frame with no shareable memory is staged as SDR.
+    fn channels(&self) -> Channels {
+        Channels::of(self.view().texture().format())
+    }
 }
 
 /// How one submission's pixels reach its caller, resolved when the frame is
@@ -2081,14 +2140,14 @@ pub struct Gpu {
     fog_grid_read_layout: wgpu::BindGroupLayout,
     temporal_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`Channels::index`]: the same pass, targeting each output
-    /// format.
-    composite_pipelines: [wgpu::RenderPipeline; 2],
+    /// format. The [`Channels::Hdr`] one keeps highlights above SDR white.
+    composite_pipelines: [wgpu::RenderPipeline; 3],
     grid_pipeline: wgpu::RenderPipeline,
     compass_pipeline: wgpu::RenderPipeline,
     cable_pipeline: wgpu::RenderPipeline,
-    /// Indexed by [`overlay_pipeline_index`]: the two output formats crossed
-    /// with two topologies and two depth behaviours.
-    overlay_pipelines: [wgpu::RenderPipeline; 8],
+    /// Indexed by [`overlay_pipeline_index`]: the three output formats
+    /// crossed with two topologies and two depth behaviours.
+    overlay_pipelines: [wgpu::RenderPipeline; 12],
     hard_shadow_sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
     /// A 1x1 depth array bound where a pass has no real shadow map to offer.
@@ -3878,7 +3937,7 @@ impl Gpu {
                 ],
                 immediate_size: 0,
             });
-        let composite_pipelines = [Channels::Rgba, Channels::Bgra].map(|channels| {
+        let composite_pipelines = Channels::ALL.map(|channels| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("composite"),
                 layout: Some(&composite_pipeline_layout),
@@ -3892,7 +3951,14 @@ impl Gpu {
                     module: &composite_module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(channels.format().into())],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: if channels == Channels::Hdr {
+                            &[("HDR_OUTPUT", 1.0)]
+                        } else {
+                            &[]
+                        },
+                        ..Default::default()
+                    },
                 }),
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
@@ -4023,11 +4089,7 @@ impl Gpu {
             }],
         };
         let overlay_pipelines = std::array::from_fn(|i| {
-            let channels = if i < 4 {
-                Channels::Rgba
-            } else {
-                Channels::Bgra
-            };
+            let channels = Channels::ALL[i / 4];
             let variant = i % 4;
             let lines = variant & 1 == 1;
             let free = variant & 2 == 2;
@@ -4441,10 +4503,10 @@ impl Renderer {
         let stale = self.targets.as_ref().is_none_or(|t| {
             t.width != width
                 || t.height != height
-                || t.destination != destination
+                || !t.destination.same_targets(destination)
                 || (t.haze_width, t.haze_height) != haze
         });
-        let channels = destination.channels();
+        let channels = destination.staged_channels();
         if stale {
             self.haze_history_valid = false;
             self.haze_history_key = None;
@@ -4469,8 +4531,10 @@ impl Renderer {
             };
             let bytes_per_row = (width * 4).div_ceil(256) * 256;
             let presentations = std::array::from_fn(|_| {
-                if destination == Destination::Compositor {
-                    if let Some(shared) = crate::share::Shared::new(&self.gpu, width, height) {
+                if matches!(destination, Destination::Compositor(_)) {
+                    if let Some(shared) =
+                        crate::share::Shared::new(&self.gpu, width, height, destination.channels())
+                    {
                         return PresentationTarget::Shared(shared);
                     }
                 }
@@ -4747,7 +4811,7 @@ impl Renderer {
             width.max(1),
             height.max(1),
             subframes,
-            Destination::Compositor,
+            Destination::Compositor(DisplayRange::Sdr),
             0,
             true,
             true,
@@ -5145,6 +5209,7 @@ impl Renderer {
         width: u32,
         height: u32,
         subframes: u32,
+        range: DisplayRange,
         slot: usize,
         measure: bool,
         queued: Duration,
@@ -5154,7 +5219,7 @@ impl Renderer {
             width,
             height,
             subframes,
-            Destination::Compositor,
+            Destination::Compositor(range),
             slot,
             true,
             measure,
@@ -5192,7 +5257,6 @@ impl Renderer {
         );
         self.haze_work_counts_valid = false;
         self.fog_blocks_valid = false;
-        let channels = destination.channels();
         let started = Instant::now();
         // Created before the first upload rather than before the first pass:
         // every `storage` upload records a staging-belt copy into this
@@ -5896,6 +5960,7 @@ impl Renderer {
             fog_candidates,
             haze_history,
             output_view,
+            channels,
             finish,
             bytes_per_row,
         ) = {
@@ -5932,6 +5997,7 @@ impl Renderer {
                 t.fog.candidates.clone(),
                 t.haze_history.clone(),
                 presentation.view().clone(),
+                presentation.channels(),
                 finish,
                 t.bytes_per_row,
             )
@@ -7716,6 +7782,7 @@ impl Renderer {
                     Transport::PHASE_G,
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
+                display: [destination.headroom(), 0.0, 0.0, 0.0],
             };
             let composite_buf = self.storage(
                 &mut encoder,
@@ -9107,7 +9174,8 @@ const ADD: wgpu::BlendComponent = wgpu::BlendComponent {
 };
 
 /// Slot of the overlay's pipeline in [`Renderer::overlay_pipelines`]: bit 0 is
-/// line topology, bit 1 is [`OverlayDepth::Free`], bit 2 is BGRA output.
+/// line topology, bit 1 is [`OverlayDepth::Free`], bits 2 and up are the
+/// output's [`Channels::index`].
 fn overlay_pipeline_index(overlay: &Overlay, channels: Channels) -> usize {
     usize::from(overlay.lines)
         | (usize::from(overlay.depth == OverlayDepth::Free) << 1)
@@ -9512,7 +9580,9 @@ mod tests {
             let timing = renderer.profile_live_surface(&frame, size[0], size[1], 2)?;
             assert!(timing.gpu_total_ms.is_finite() && timing.gpu_total_ms > 0.0);
             let targets = renderer.targets.as_ref().expect("rendered targets");
-            assert!(targets.destination == super::Destination::Compositor);
+            assert!(
+                targets.destination == super::Destination::Compositor(super::DisplayRange::Sdr)
+            );
             assert_eq!([targets.width, targets.height], size);
             #[cfg(target_os = "macos")]
             assert!(matches!(
@@ -9527,7 +9597,7 @@ mod tests {
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 512);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 240);
-        assert_eq!(std::mem::size_of::<CompositeUniform>(), 208);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 224);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 64);
         assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 80);
@@ -12384,6 +12454,7 @@ mod tests {
         match channels {
             Channels::Rgba => [pixels[offset], pixels[offset + 1], pixels[offset + 2]],
             Channels::Bgra => [pixels[offset + 2], pixels[offset + 1], pixels[offset]],
+            Channels::Hdr => unreachable!("an HDR frame is never read back as bytes"),
         }
     }
 }
