@@ -259,3 +259,46 @@ fn a_clip_with_its_own_graph_has_no_alpha_line() {
         "{out}"
     );
 }
+
+#[test]
+fn a_resize_keeps_the_fade_lengths() {
+    const NAME: &str = "clip-fades-resize";
+    let mut harness = Fixture::new(NAME, 20, vec![])
+        .with_graph_score(support::preset_score("Chase"))
+        .with_rig()
+        .window(1400., 900.)
+        .open(Mode::Headless);
+    // A one-beat fade-in on the four-beat clip, then the clip's end pulled out
+    // four beats further.
+    run(
+        &mut harness,
+        opened(
+            r#"
+        const beat=node("card","Chase").bounds.width/4;
+        app.drag(node("slider","Chase fade in"),{dx:beat,dy:0},{steps:6});
+        settle();
+        app.drag(node("slider","Chase end"),{dx:4*beat,dy:0},{steps:8});
+        settle();
+        ({})
+    "#,
+        ),
+    );
+    let score = stored(NAME);
+    let clip = &score["clips"]["form-clip"];
+    assert!(close(clip["duration"].as_f64().unwrap(), 8.), "{clip}");
+    let curve = points(&clip["inputs"]["alpha"]);
+    assert!(
+        close(curve[1].0, 0.125) && close(curve[1].1, 1.),
+        "the fade stays one beat long: {curve:?}"
+    );
+
+    // One undo takes back the resize and the refit together.
+    run(
+        &mut harness,
+        then(r#"app.key("secondary-z"); settle(); ({})"#),
+    );
+    let score = stored(NAME);
+    let clip = &score["clips"]["form-clip"];
+    assert!(close(clip["duration"].as_f64().unwrap(), 4.), "{clip}");
+    assert!(close(points(&clip["inputs"]["alpha"])[1].0, 0.25), "{clip}");
+}

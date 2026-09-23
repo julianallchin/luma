@@ -205,9 +205,13 @@ pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
 /// Write `value` as `clip`'s alpha in the working copy. `false` when it is
 /// already stored, so an idle drag records no edit.
 pub(super) fn store(clips: &mut [Clip], id: &str, value: &p::Value) -> bool {
-    let Some(clip) = clips.iter_mut().find(|clip| clip.id.as_ref() == id) else {
-        return false;
-    };
+    clips
+        .iter_mut()
+        .find(|clip| clip.id.as_ref() == id)
+        .is_some_and(|clip| set(clip, value))
+}
+
+fn set(clip: &mut Clip, value: &p::Value) -> bool {
     let wire = document::wire_value(value);
     if clip.args.get(ALPHA) == Some(&wire) {
         return false;
@@ -219,6 +223,30 @@ pub(super) fn store(clips: &mut [Clip], id: &str, value: &p::Value) -> bool {
         other => *other = serde_json::json!({ ALPHA: wire }),
     }
     true
+}
+
+/// `clip`'s fade shape when it has a fade. A custom curve has none.
+pub(super) fn faded(clip: &Clip) -> Option<Fades> {
+    match alpha(clip)? {
+        Alpha::Fades(fades) if fades.fade_in > EPSILON || fades.fade_out > EPSILON => Some(fades),
+        _ => None,
+    }
+}
+
+/// After a resize, give `clip` the fades it had over `length` seconds, at
+/// the same lengths in time: a DAW's fades do not stretch with the clip.
+/// They shrink to fit when the clip gets too short, the fade-in first.
+pub(super) fn refit(clip: &mut Clip, fades: Fades, length: f64) {
+    let now = (clip.end - clip.start).max(EPSILON);
+    let (fade_in, fade_out) = (fades.fade_in * length, fades.fade_out * length);
+    let refit = Fades {
+        fade_in: 0.,
+        fade_out: 0.,
+        ..fades
+    }
+    .with_fade_in(fade_in / now)
+    .with_fade_out(fade_out / now);
+    set(clip, &refit.value());
 }
 
 /// Which part of the alpha line a press took hold of.

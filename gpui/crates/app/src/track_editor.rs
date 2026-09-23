@@ -743,6 +743,8 @@ struct Initial {
     /// The lane it was in, 1-based as [`lanes`] resolves them — which is what
     /// [`row_to_z`] expects.
     row: usize,
+    /// Its fades when it has any, so a resize can keep their lengths.
+    fades: Option<fades::Fades>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1003,6 +1005,9 @@ impl Editor {
                         clip.end = moved;
                     }
                 }
+            }
+            if let (Drag::Resize(_), Some(faded)) = (drag, was.fades) {
+                fades::refit(clip, faded, was.end - was.start);
             }
         }
         self.replace_clips(clips);
@@ -2531,6 +2536,7 @@ impl Luma {
                     start: clip.start,
                     end: clip.end,
                     row: clip.row,
+                    fades: fades::faded(clip),
                 })
                 .collect();
             editor.gesture = Some(Gesture::Clips {
