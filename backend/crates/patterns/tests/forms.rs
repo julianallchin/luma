@@ -126,6 +126,10 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
         curve.validate().unwrap();
         assert!(curve.values().all(|v| (0.0..=1.0).contains(&v)), "{name}");
     }
+    for preset in &shipped.gradients {
+        preset.gradient.validate().unwrap();
+        assert!(preset.gradient.stops.len() >= 2, "{}", preset.name);
+    }
     let names = |input| {
         shipped
             .curves_for(input)
