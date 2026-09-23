@@ -23,6 +23,40 @@ pub fn is_form(id: &str) -> bool {
     FORMS.contains(&id)
 }
 
+/// A form's inputs in the order an editor shows them. The definition keeps
+/// its inputs in a map, so the order lives here.
+pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
+    Some(match id {
+        "color.constant@1" => &["color", "alpha"],
+        "color.time@1" => &["colors", "curve", "every", "alpha"],
+        "color.space@1" => &["colors", "axis", "alpha"],
+        "color.chase@1" => &[
+            "color",
+            "axis",
+            "every",
+            "travel",
+            "width",
+            "width_relative",
+            "shape",
+            "path",
+            "alpha",
+            "boundary",
+        ],
+        "color.sparkle@1" => &[
+            "color",
+            "every",
+            "duration",
+            "coverage",
+            "brightness",
+            "grain",
+            "alpha",
+        ],
+        "color.noise@1" => &["color", "speed", "scale", "contrast", "alpha"],
+        "strobe.constant@1" => &["rate", "alpha"],
+        _ => return None,
+    })
+}
+
 /// Inputs that set a speed. A `time` source on one of them is summed over
 /// the clip like an odometer instead of read frame by frame.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];

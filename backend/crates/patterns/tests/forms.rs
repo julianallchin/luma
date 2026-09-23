@@ -137,6 +137,23 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
 }
 
 #[test]
+fn input_order_names_every_input_of_each_form_once() {
+    let library = standard_library();
+    for form in FORMS {
+        let order = input_order(form).expect(form);
+        let mut sorted: Vec<&str> = order.to_vec();
+        sorted.sort_unstable();
+        let keys: Vec<&str> = library.definitions[form]
+            .inputs
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(sorted, keys, "{form}");
+    }
+    assert!(input_order("chase").is_none());
+}
+
+#[test]
 fn form_inputs_must_be_complete_known_and_promotable() {
     let (form, inputs) = preset("Chase");
     let mut missing = inputs.clone();
