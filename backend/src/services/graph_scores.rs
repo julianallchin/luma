@@ -18,8 +18,16 @@ pub(crate) async fn prepare_scene(
     Ok(
         prepare_scene_data(access, fixtures_root, storage, track_id, score, false)
             .await?
-            .0,
+            .scene,
     )
+}
+
+/// A compiled scene, the track features it reads, and the cells each clip
+/// lights.
+struct SceneData {
+    scene: crate::eval::Scene,
+    features: Option<std::sync::Arc<crate::eval::track_features::TrackFeatures>>,
+    cells: std::collections::BTreeMap<String, Vec<luma_patterns::Cell>>,
 }
 
 async fn prepare_scene_data(
@@ -29,13 +37,7 @@ async fn prepare_scene_data(
     track_id: &str,
     score: &Score,
     include_empty: bool,
-) -> Result<
-    (
-        crate::eval::Scene,
-        Option<std::sync::Arc<crate::eval::track_features::TrackFeatures>>,
-    ),
-    String,
-> {
+) -> Result<SceneData, String> {
     let migrated;
     let score = if score.version() != Score::VERSION {
         migrated = luma_patterns::migration::upgrade(score).map_err(|error| error.to_string())?;
@@ -47,7 +49,11 @@ async fn prepare_scene_data(
         .validate(&standard_library())
         .map_err(|error| error.to_string())?;
     if score.clips.is_empty() {
-        return Ok((crate::eval::Scene::default(), None));
+        return Ok(SceneData {
+            scene: crate::eval::Scene::default(),
+            features: None,
+            cells: Default::default(),
+        });
     }
     let grid =
         crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
@@ -58,6 +64,7 @@ async fn prepare_scene_data(
         .library(&standard_library())
         .map_err(|error| error.to_string())?;
     let mut compiled = Vec::new();
+    let mut clip_cells = std::collections::BTreeMap::new();
     let mut prepared_clips = Vec::new();
     let mut requests = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
@@ -121,6 +128,7 @@ async fn prepare_scene_data(
         let output = library.definitions[&clip.graph]
             .lighting_output()
             .ok_or("clip graph must produce fixture output")?;
+        clip_cells.insert(id.clone(), cells.clone());
         let plan =
             crate::eval::lighting::compile_clip(clip, clock.clone(), cells, prepared, output)
                 .map_err(|error| format!("clip {id}: {error}"))?;
@@ -131,7 +139,11 @@ async fn prepare_scene_data(
             blend_mode: clip.blend_mode,
         });
     }
-    Ok((crate::eval::Scene::new(compiled), features))
+    Ok(SceneData {
+        scene: crate::eval::Scene::new(compiled),
+        features,
+        cells: clip_cells,
+    })
 }
 
 /// An isolated, seekable clip program. It never installs a scene on the output
@@ -151,14 +163,34 @@ pub(crate) async fn prepare_clip_preview(
     score: &Score,
     clip_id: &str,
 ) -> Result<ClipPreview, String> {
+    Ok(
+        prepare_single_clip(access, fixtures_root, storage, track_id, score, clip_id)
+            .await?
+            .0,
+    )
+}
+
+/// [`prepare_clip_preview`], and the cells the clip lights.
+async fn prepare_single_clip(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    fixtures_root: &std::path::Path,
+    storage: &crate::storage::StorageRoot,
+    track_id: &str,
+    score: &Score,
+    clip_id: &str,
+) -> Result<(ClipPreview, Vec<luma_patterns::Cell>), String> {
     let clip = score
         .clips
         .get(clip_id)
         .ok_or_else(|| format!("unknown clip {clip_id}"))?;
     let mut single = score.clone();
     single.clips.retain(|id, _| id == clip_id);
-    let (scene, features) =
-        prepare_scene_data(access, fixtures_root, storage, track_id, &single, true).await?;
+    let SceneData {
+        scene,
+        features,
+        mut cells,
+    } = prepare_scene_data(access, fixtures_root, storage, track_id, &single, true).await?;
+    let cells = cells.remove(clip_id).unwrap_or_default();
     let span = if let Some(annotation) = scene.annotations.first() {
         annotation.span
     } else {
@@ -219,11 +251,14 @@ pub(crate) async fn prepare_clip_preview(
             data.spectrograms.insert(name.clone(), result);
         }
     }
-    Ok(ClipPreview {
-        scene,
-        span,
-        inspection,
-    })
+    Ok((
+        ClipPreview {
+            scene,
+            span,
+            inspection,
+        },
+        cells,
+    ))
 }
 
 pub(crate) async fn preview_clip(
@@ -238,9 +273,20 @@ pub(crate) async fn preview_clip(
         .clips
         .get(clip_id)
         .ok_or_else(|| format!("unknown clip {clip_id}"))?;
+    let (ClipPreview { scene, span, .. }, cells) =
+        prepare_single_clip(access, fixtures_root, storage, track_id, score, clip_id).await?;
+    strip(clip_id, clip, &scene, span, &cells)
+}
+
+/// Sample a single-clip scene across its span into the timeline's strip.
+fn strip(
+    clip_id: &str,
+    clip: &luma_patterns::Clip,
+    scene: &crate::eval::Scene,
+    span: (f32, f32),
+    cells: &[luma_patterns::Cell],
+) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
-    let ClipPreview { scene, span, .. } =
-        prepare_clip_preview(access, fixtures_root, storage, track_id, score, clip_id).await?;
     let mut frames = Vec::new();
     if let Some(annotation) = scene.annotations.first() {
         if (annotation.plan.primitive_ids.len()).saturating_mul(width) > 1_000_000 {
@@ -255,11 +301,117 @@ pub(crate) async fn preview_clip(
             &mut crate::eval::Arena::default(),
         )?;
     }
+    // A form clip's strip orders heads along a line through the rig; a clip
+    // with its own graph keeps the brightness order it always had.
+    let order = luma_patterns::is_form(&clip.graph)
+        .then(|| crate::annotation_preview::head_order(clip, cells));
     Ok(crate::annotation_preview::render_preview(
         clip_id.to_owned(),
         &frames,
-        None,
-        span.0,
-        span.1,
+        order.as_ref(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The strip of a shipped preset over `heads` heads in a row along U,
+    /// shuffled so selection order says nothing about where a head is.
+    fn preset_strip(preset: &str, heads: usize) -> crate::models::patterns::AnnotationPreview {
+        let mut cells: Vec<luma_patterns::Cell> = (0..heads)
+            .map(|i| {
+                let u = i as f64 / (heads - 1) as f64;
+                luma_patterns::Cell {
+                    id: format!("head-{i:02}"),
+                    group: "row".into(),
+                    world: [u, 0., 2.],
+                    uvz: [u, 0., 1.],
+                }
+            })
+            .collect();
+        cells.reverse();
+        cells.swap(1, heads / 2);
+        let clip = luma_patterns::presets()
+            .preset(preset)
+            .expect("a shipped preset")
+            .clip(0.0, 4.0);
+        // 120 BPM: a beat every half second.
+        let clock = luma_patterns::BeatTimeline::new((0..64).map(|i| i as f64 * 0.5).collect(), 0.)
+            .unwrap();
+        let library = standard_library();
+        let prepared = luma_patterns::PreparedGraph::new(
+            &library,
+            &clip.graph,
+            &clip.inputs,
+            luma_patterns::Frame {
+                cells: &cells,
+                features: None,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .unwrap();
+        let output = library.definitions[&clip.graph].lighting_output().unwrap();
+        let plan =
+            crate::eval::lighting::compile_clip(&clip, clock, cells.clone(), prepared, output)
+                .unwrap();
+        let span = plan.ctx.span;
+        let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
+            span,
+            plan: std::sync::Arc::new(plan),
+            z_index: 0,
+            blend_mode: clip.blend_mode,
+        }]);
+        strip("clip", &clip, &scene, span, &cells).unwrap()
+    }
+
+    /// The row with the most light in each column, or `None` for a dark one.
+    fn brightest(preview: &crate::models::patterns::AnnotationPreview) -> Vec<Option<u32>> {
+        (0..preview.width)
+            .map(|col| {
+                let at = |row: u32| {
+                    let i = ((row * preview.width + col) * 4) as usize;
+                    preview.pixels[i..i + 3]
+                        .iter()
+                        .map(|v| u32::from(*v))
+                        .sum::<u32>()
+                };
+                (0..preview.height)
+                    .max_by_key(|row| at(*row))
+                    .filter(|row| at(*row) > 0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_chase_strip_is_a_diagonal() {
+        let preview = preset_strip("Chase", 48);
+        assert_eq!((preview.width, preview.height), (64, 32));
+        // One stroke crosses the rig over the first two beats: 32 columns.
+        let rows: Vec<u32> = brightest(&preview)[..32]
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        assert!(rows.len() > 16, "{rows:?}");
+        assert!(rows.windows(2).all(|pair| pair[1] >= pair[0]), "{rows:?}");
+        assert!(rows.last().unwrap() - rows[0] >= 24, "{rows:?}");
+    }
+
+    #[test]
+    fn a_gradient_strip_is_bands_constant_over_time() {
+        let preview = preset_strip("Gradient", 48);
+        let pixel = |row: u32, col: u32| {
+            let i = ((row * preview.width + col) * 4) as usize;
+            preview.pixels[i..i + 3].to_vec()
+        };
+        for row in 0..preview.height {
+            assert_eq!(pixel(row, 0), pixel(row, preview.width - 1), "row {row}");
+        }
+        // Magenta at one end of the rig, blue at the other.
+        assert!(pixel(0, 0)[0] > 200 && pixel(preview.height - 1, 0)[2] > 200);
+    }
 }
