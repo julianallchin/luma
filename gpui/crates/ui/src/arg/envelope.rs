@@ -24,6 +24,9 @@ pub struct EnvelopeEditor {
     dragging: Option<Drag>,
     before_drag: Option<Envelope>,
     error: Option<String>,
+    /// Whether the editor offers its own preset buttons. A host with a
+    /// curve picker turns them off.
+    presets: bool,
 }
 impl EventEmitter<EnvelopeChanged> for EnvelopeEditor {}
 impl EnvelopeEditor {
@@ -39,7 +42,13 @@ impl EnvelopeEditor {
             dragging: None,
             before_drag: None,
             error: None,
+            presets: true,
         }
+    }
+    /// The editor without its preset buttons, for a host that offers its own.
+    pub fn without_presets(mut self) -> Self {
+        self.presets = false;
+        self
     }
     pub fn set_value(&mut self, value: Envelope, cx: &mut Context<Self>) {
         assert!(
@@ -331,51 +340,66 @@ impl Render for EnvelopeEditor {
                     ),
             )
             .child(
-                div().flex().gap(px(4.)).children(
-                    [("Straight", false), ("Curve", true)]
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(crate::float::segmented().children(
+                        [("Straight", false), ("Curve", true)].map(|(label, mode)| {
+                            crate::float::segment(
+                                label,
+                                curved == mode,
+                                format!("envelope-{label}"),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| this.choose_curve(mode, cx)),
+                            )
+                            .agent_node(Role::Button, format!("Envelope {label}"))
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(11.))
+                            .text_color(ladder::foreground_alpha(0.4))
+                            .child("Double-click adds a point · right-click removes"),
+                    ),
+            )
+            .children(self.error.as_ref().map(|error| {
+                div()
+                    .text_size(px(11.))
+                    .text_color(ladder::foreground_alpha(0.6))
+                    .child(error.clone())
+            }))
+            .when(self.presets, |el| {
+                el.child(
+                    div().flex().flex_wrap().gap(px(4.)).children(
+                        [
+                            ("Hard", Envelope::soft_edges(0.)),
+                            ("Soft", soft_preset()),
+                            ("Triangle", Envelope::soft_edges(1.)),
+                            ("Ramp up", Envelope::linear(vec![[0., 0.], [1., 1.]])),
+                            ("Ramp down", Envelope::linear(vec![[0., 1.], [1., 0.]])),
+                        ]
                         .into_iter()
-                        .map(|(label, mode)| {
+                        .map(|(label, value)| {
                             crate::button(label, crate::Enabled::Yes)
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| this.choose_curve(mode, cx)),
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.set_value(value.clone(), cx);
+                                        this.selected = 0;
+                                        cx.emit(EnvelopeChanged(this.value.clone()));
+                                    }),
                                 )
-                                .agent_node(Role::Button, format!("Envelope {label}"))
+                                .agent_node(Role::Button, label)
                         }),
-                ),
-            )
-            .child(div().text_size(px(11.)).child(
-                "Drag points or handles · Double-click to add · Right-click a point to remove",
-            ))
-            .children(
-                self.error
-                    .as_ref()
-                    .map(|error| div().text_size(px(11.)).child(error.clone())),
-            )
-            .child(
-                div().flex().flex_wrap().gap(px(4.)).children(
-                    [
-                        ("Hard", Envelope::soft_edges(0.)),
-                        ("Soft", soft_preset()),
-                        ("Triangle", Envelope::soft_edges(1.)),
-                        ("Ramp up", Envelope::linear(vec![[0., 0.], [1., 1.]])),
-                        ("Ramp down", Envelope::linear(vec![[0., 1.], [1., 0.]])),
-                    ]
-                    .into_iter()
-                    .map(|(label, value)| {
-                        crate::button(label, crate::Enabled::Yes)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.set_value(value.clone(), cx);
-                                    this.selected = 0;
-                                    cx.emit(EnvelopeChanged(this.value.clone()));
-                                }),
-                            )
-                            .agent_node(Role::Button, label)
-                    }),
-                ),
-            )
+                    ),
+                )
+            })
     }
 }
 /// `p`, in the envelope's 0–1 box with y up, as a point in `bounds`.
