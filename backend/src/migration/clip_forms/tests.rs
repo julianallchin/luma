@@ -592,12 +592,18 @@ fn old_mappings_become_form_axes() {
     let ring: Vec<Cell> = (0..8)
         .map(|n| {
             let angle = std::f64::consts::TAU * f64::from(n) / 8.0;
-            let p = [2.0 + angle.cos(), 3.0 + angle.sin(), 1.0];
+            // Wide enough for the circle fit's 2.5 inlier distance, and not
+            // quite flat, which the fit needs.
+            let world = [
+                20.0 + 10.0 * angle.cos(),
+                30.0 + 10.0 * angle.sin(),
+                1.0 + 0.01 * f64::from(n % 3),
+            ];
             Cell {
                 id: format!("ring{n}:0"),
                 group: "ring".into(),
-                world: p,
-                uvz: p,
+                world,
+                uvz: Cell::stage_coordinates(world),
             }
         })
         .collect();
@@ -608,7 +614,6 @@ fn old_mappings_become_form_axes() {
             ..Host::default()
         },
     );
-    eprintln!("{notes:?}");
     assert_eq!(axis.source, MappingSource::Angle);
     assert_eq!(axis.plane, Some(AxisPlane::Auto));
     assert!(
