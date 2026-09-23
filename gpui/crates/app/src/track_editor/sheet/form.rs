@@ -640,6 +640,25 @@ pub(super) fn widget(
                 }));
                 return Widget::Every(entity);
             }
+            if let Some(p::Value::Mapping(mapping)) = &value {
+                let normal = plane_normal(mapping);
+                let third = (FIELD_W - 16.) / 3.;
+                let [u, v, z] = std::array::from_fn(|axis| {
+                    number(
+                        format!("{name}: Plane {}", ["U", "V", "Z"][axis]),
+                        normal[axis],
+                        -1e9,
+                        1e9,
+                        third,
+                        window,
+                        cx,
+                    )
+                });
+                subs.push(on_number(&u, cx, |value, n| set_normal(value, 0, n)));
+                subs.push(on_number(&v, cx, |value, n| set_normal(value, 1, n)));
+                subs.push(on_number(&z, cx, |value, n| set_normal(value, 2, n)));
+                return Widget::Axis([u, v, z]);
+            }
             if let Some(p::Author::Choice { options, .. }) = &spec.author {
                 // A choice of curves edits a custom curve in the envelope editor.
                 let editor = envelope_options(options).map(|curves| {
@@ -747,6 +766,11 @@ pub(super) fn resync(
             }
         }
         (Widget::Preset(..), _) => {}
+        (Widget::Axis(fields), Some(p::Value::Mapping(mapping))) => {
+            for (field, n) in fields.iter().zip(plane_normal(&mapping)) {
+                field.update(cx, |field, cx| field.set_value(n, cx));
+            }
+        }
         _ => return false,
     }
     true
@@ -912,18 +936,182 @@ fn width_share(app: &Entity<Luma>, relative: &Cell) -> Div {
 
 /// Opens or closes this row's `Menu::Choice`.
 fn choice_toggle(app: &Entity<Luma>, index: usize) -> impl Fn(&mut Window, &mut App) + Clone {
+    menu_toggle(app, Menu::Choice(index))
+}
+
+/// Opens `menu`, or closes it when it is open.
+fn menu_toggle(app: &Entity<Luma>, menu: Menu) -> impl Fn(&mut Window, &mut App) + Clone {
     let app = app.clone();
     move |_, cx| {
         app.update(cx, |this, cx| {
             this.with_track_editor(cx, |editor| {
-                editor.sheet.open = if editor.sheet.open == Some(Menu::Choice(index)) {
+                editor.sheet.open = if editor.sheet.open == Some(menu) {
                     None
                 } else {
-                    Some(Menu::Choice(index))
+                    Some(menu)
                 };
             });
         });
     }
+}
+
+/// A select that opens under `menu`.
+fn menu_select(
+    state: &Editor,
+    app: &Entity<Luma>,
+    menu: Menu,
+    id: String,
+    current: &str,
+    labels: &[&str],
+    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
+) -> Div {
+    luma_arg_select(
+        id,
+        current,
+        labels,
+        menu_visibility(state, menu),
+        menu_toggle(app, menu),
+        choice_pick(app, on_pick),
+    )
+}
+
+/// The axis the custom plane turns around, or the default one to start from.
+fn plane_normal(mapping: &p::MappingSpec) -> [f64; 3] {
+    match &mapping.plane {
+        Some(p::AxisPlane::Custom { normal }) => *normal,
+        _ => [0., -1., 0.],
+    }
+}
+
+fn set_normal(value: &mut p::Value, axis: usize, n: f64) {
+    if let p::Value::Mapping(mapping) = value {
+        if let Some(p::AxisPlane::Custom { normal }) = &mut mapping.plane {
+            normal[axis] = n;
+        }
+    }
+}
+
+/// The axis row: which way, what one axis spans and, for radial and angle,
+/// the plane.
+#[allow(clippy::too_many_arguments)]
+fn axis_control(
+    state: &Editor,
+    app: &Entity<Luma>,
+    index: usize,
+    name: &str,
+    def: PatternArgDef,
+    spec: &'static p::Input,
+    mapping: p::MappingSpec,
+    normal: &[Entity<DraftedNumber>; 3],
+) -> Div {
+    let Some(p::Author::Choice { options, .. }) = &spec.author else {
+        return div();
+    };
+    let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+    let current = options.iter().position(
+        |option| matches!(&option.value, p::Value::Mapping(preset) if preset.source == mapping.source),
+    );
+    let edit =
+        move |this: &mut Luma, cx: &mut Context<Luma>, change: &dyn Fn(&mut p::MappingSpec)| {
+            this.form_edit(&def, spec, cx, |value| match value {
+                p::Value::Mapping(mapping) => {
+                    let mut mapping = mapping.clone();
+                    change(&mut mapping);
+                    Some(p::Value::Mapping(mapping))
+                }
+                _ => None,
+            });
+        };
+    let edit = Rc::new(edit);
+    let pick_axis = edit.clone();
+    let pick_span = edit.clone();
+    let pick_plane = edit;
+    let round = mapping.plane.is_some();
+    let plane = mapping.plane.as_ref().map_or(0, p::AxisPlane::index);
+    let spans: Vec<&str> = p::Span::OPTIONS.iter().map(|(_, label)| *label).collect();
+    let span = p::Span::OPTIONS
+        .iter()
+        .position(|(span, _)| *span == mapping.span)
+        .unwrap_or(0);
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(menu_select(
+            state,
+            app,
+            Menu::Choice(index),
+            name.to_string(),
+            current.map_or("Custom", |at| labels[at]),
+            &labels,
+            move |picked, this, cx| {
+                let p::Value::Mapping(preset) = &options[picked].value else {
+                    return;
+                };
+                // A new direction keeps the spans; radial and angle keep
+                // their plane, Auto when they had none.
+                pick_axis(this, cx, &|mapping| {
+                    mapping.source = preset.source.clone();
+                    mapping.plane = match (&preset.plane, &mapping.plane) {
+                        (None, _) => None,
+                        (Some(_), Some(kept)) => Some(kept.clone()),
+                        (Some(plane), None) => Some(plane.clone()),
+                    };
+                });
+            },
+        ))
+        .child(arg_row(
+            "Spans",
+            menu_select(
+                state,
+                app,
+                Menu::Span(index),
+                format!("{name}: Spans"),
+                spans[span],
+                &spans,
+                move |picked, this, cx| {
+                    let span = p::Span::OPTIONS[picked].0;
+                    pick_span(this, cx, &|mapping| mapping.span = span);
+                },
+            ),
+        ))
+        .when(round, |el| {
+            el.child(arg_row(
+                "Plane",
+                menu_select(
+                    state,
+                    app,
+                    Menu::Plane(index),
+                    format!("{name}: Plane"),
+                    p::AxisPlane::OPTIONS[plane],
+                    &p::AxisPlane::OPTIONS,
+                    move |picked, this, cx| {
+                        pick_plane(this, cx, &|mapping| {
+                            let normal = plane_normal(mapping);
+                            mapping.plane = Some(match picked {
+                                1 => p::AxisPlane::UpDown,
+                                2 => p::AxisPlane::FrontBack,
+                                3 => p::AxisPlane::LeftRight,
+                                4 => p::AxisPlane::Custom { normal },
+                                _ => p::AxisPlane::Auto,
+                            });
+                        });
+                    },
+                ),
+            ))
+        })
+        .when(plane == 4, |el| {
+            el.child(arg_row(
+                "Axis · U, V, Z",
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .children(normal.iter().cloned()),
+            ))
+        })
 }
 
 /// Closes the open menu, then runs `on_pick` with the picked index.
@@ -1056,6 +1244,12 @@ fn control(
     let value = decode(spec.value_type, &cell.synced).ok();
     let column = || div().w_full().flex().flex_col().gap(px(6.));
     Some(match &cell.widget {
+        Widget::Axis(normal) => {
+            let Some(p::Value::Mapping(mapping)) = value.or_else(|| spec.default.clone()) else {
+                return None;
+            };
+            axis_control(state, app, index, name, def, spec, mapping, normal)
+        }
         Widget::Preset(options, editor) => {
             let options: &'static [p::Preset] = options;
             let current = options.iter().position(|option| {

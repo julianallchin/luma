@@ -112,6 +112,10 @@ enum Menu {
     Swatch(usize),
     /// The plain-or-source menu of the form input at this index.
     Source(usize),
+    /// The spans menu of the axis at this index.
+    Span(usize),
+    /// The plane menu of the axis at this index.
+    Plane(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every
@@ -175,6 +179,9 @@ enum Widget {
     Audio([Entity<DraftedNumber>; 4]),
     /// A list of stamped beats.
     Stamps(Entity<luma_ui::text_input::TextInput>),
+    /// A form's axis: its presets, spans and plane; holds the custom plane
+    /// axis U, V, Z.
+    Axis([Entity<DraftedNumber>; 3]),
 }
 
 // -- wire codecs --------------------------------------------------------------
@@ -875,6 +882,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
             | Widget::Every(_)
             | Widget::Noise(_)
             | Widget::Audio(_)
+            | Widget::Axis(_)
             | Widget::Stamps(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
@@ -1421,6 +1429,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         | Widget::Every(_)
         | Widget::Noise(_)
         | Widget::Audio(_)
+        | Widget::Axis(_)
         | Widget::Stamps(_) => Vec::new(),
     }
 }
