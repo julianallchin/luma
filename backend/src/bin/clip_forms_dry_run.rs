@@ -105,9 +105,11 @@ async fn main() -> Result<(), String> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
+            // Immutable: SQLite neither locks the copy nor adds WAL files.
             SqliteConnectOptions::new()
                 .filename(&args.database)
-                .read_only(true),
+                .read_only(true)
+                .immutable(true),
         )
         .await
         .map_err(|e| format!("cannot open {} read-only: {e}", args.database.display()))?;
