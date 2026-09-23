@@ -109,7 +109,7 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
         "the sheet has no Alpha row: {out}"
     );
 
-    // Bend the fade up: it eases.
+    // Bend the fade up: it becomes a Bézier above the straight line.
     run(
         &mut harness,
         then(
@@ -121,7 +121,13 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
         ),
     );
     let bent = alpha(NAME, "form-clip");
-    assert_eq!(bent["value"]["segments"][0], "ease", "{bent}");
+    let bend = &bent["value"]["segments"][0]["bezier"];
+    let (start, end) = (points(&bent)[0], points(&bent)[1]);
+    let straight = start.1 + (end.1 - start.1) / 3.;
+    assert!(
+        bend["control1"][1].as_f64().unwrap() > straight + 1e-3,
+        "{bent}"
+    );
 
     // Pull the hold of the line halfway down.
     run(
@@ -142,7 +148,10 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
         close(curve[1].1, 0.5) && close(curve[2].1, 0.5),
         "{lowered}"
     );
-    assert_eq!(lowered["value"]["segments"][0], "ease", "{lowered}");
+    assert!(
+        lowered["value"]["segments"][0].get("bezier").is_some(),
+        "the bend stays: {lowered}"
+    );
 
     // Undo takes the level back.
     run(

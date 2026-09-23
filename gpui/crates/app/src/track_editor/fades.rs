@@ -30,21 +30,88 @@ const BEND_MIN: f32 = 16.;
 const BODY_MIN: f32 = 12.;
 /// A clip narrower than this has no handles.
 const WIDTH_MIN: f32 = 24.;
-/// How far a bend handle moves before the fade changes shape.
-const BEND_STEP: f32 = 6.;
 /// Fade lengths and levels closer than this count as equal.
 const EPSILON: f64 = 1e-9;
 
+/// The shape of one fade: its two Bézier handles inside the fade. `x` is a
+/// share of the fade's length; `y` is alpha as a share of the level, so the
+/// shape keeps when the fade or the level changes. A straight fade has its
+/// handles on the line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Bend {
+    pub control1: [f64; 2],
+    pub control2: [f64; 2],
+}
+
+impl Bend {
+    /// A straight fade from share `from` of the level to share `to`.
+    fn straight(from: f64, to: f64) -> Self {
+        Self {
+            control1: [1. / 3., from + (to - from) / 3.],
+            control2: [2. / 3., from + 2. * (to - from) / 3.],
+        }
+    }
+    fn is_straight(self, from: f64, to: f64) -> bool {
+        let line = Self::straight(from, to);
+        let near = |a: [f64; 2], b: [f64; 2]| {
+            (a[0] - b[0]).abs() <= EPSILON && (a[1] - b[1]).abs() <= EPSILON
+        };
+        near(self.control1, line.control1) && near(self.control2, line.control2)
+    }
+    /// Both handles raised by `by`, a share of the level, kept where alpha
+    /// stays within 0–1.
+    fn raised(self, by: f64, level: f64) -> Self {
+        let top = if level > EPSILON { 1. / level } else { 1. };
+        let lift = |[x, y]: [f64; 2]| [x, (y + by).clamp(0., top)];
+        Self {
+            control1: lift(self.control1),
+            control2: lift(self.control2),
+        }
+    }
+    /// The segment from `a` to `b` in the curve's own units.
+    fn segment(self, a: [f64; 2], b: [f64; 2], level: f64, from: f64, to: f64) -> p::Segment {
+        if self.is_straight(from, to) {
+            return p::Segment::Linear;
+        }
+        let at = |[x, y]: [f64; 2]| [a[0] + (b[0] - a[0]) * x, y * level];
+        p::Segment::Bezier {
+            control1: at(self.control1),
+            control2: at(self.control2),
+        }
+    }
+    /// The shape of `segment` from `a` to `b`; `None` for a hold or a step.
+    fn of(
+        segment: p::Segment,
+        a: (f64, f64),
+        b: (f64, f64),
+        level: f64,
+        from: f64,
+        to: f64,
+    ) -> Option<Self> {
+        match segment {
+            p::Segment::Linear => Some(Self::straight(from, to)),
+            p::Segment::Bezier { control1, control2 } if level > EPSILON && b.0 > a.0 => {
+                let share = |[x, y]: [f64; 2]| [(x - a.0) / (b.0 - a.0), y / level];
+                Some(Self {
+                    control1: share(control1),
+                    control2: share(control2),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 /// A simple fade shape: rise from 0 to `level`, hold, fall back to 0.
-/// Fade lengths are shares of the clip, 0–1, and never sum past 1. A fade is
-/// straight, or eased (the engine's `ease` segment).
+/// Fade lengths are shares of the clip, 0–1, and never sum past 1. Each fade
+/// has a [`Bend`]: straight, or a Bézier curve.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Fades {
     pub level: f64,
     pub fade_in: f64,
     pub fade_out: f64,
-    pub ease_in: bool,
-    pub ease_out: bool,
+    pub bend_in: Bend,
+    pub bend_out: Bend,
 }
 
 impl Fades {
@@ -53,8 +120,8 @@ impl Fades {
             level: level.clamp(0., 1.),
             fade_in: 0.,
             fade_out: 0.,
-            ease_in: false,
-            ease_out: false,
+            bend_in: Bend::straight(0., 1.),
+            bend_out: Bend::straight(1., 0.),
         }
     }
 
@@ -72,25 +139,30 @@ impl Fades {
             })
             .collect();
         let segment = |i: usize| curve.segments.get(i).copied().unwrap_or_default();
-        let ramp = |i: usize| matches!(segment(i), p::Segment::Linear | p::Segment::Ease);
         let zero = |v: f64| v.abs() <= EPSILON;
         let last = points.len() - 1;
         let (mut first, mut end) = (0, last);
         let mut fades = Self::flat(points[0].1);
-        if last >= 1 && zero(points[0].0) && zero(points[0].1) && points[1].1 > EPSILON && ramp(0) {
-            fades.fade_in = points[1].0;
-            fades.ease_in = segment(0) == p::Segment::Ease;
-            first = 1;
+        if last >= 1 && zero(points[0].0) && zero(points[0].1) && points[1].1 > EPSILON {
+            if let Some(bend) = Bend::of(segment(0), points[0], points[1], points[1].1, 0., 1.) {
+                fades.fade_in = points[1].0;
+                fades.bend_in = bend;
+                first = 1;
+            }
         }
         if end > first
             && (points[end].0 - 1.).abs() <= EPSILON
             && zero(points[end].1)
             && points[end - 1].1 > EPSILON
-            && ramp(end - 1)
         {
-            fades.fade_out = 1. - points[end - 1].0;
-            fades.ease_out = segment(end - 1) == p::Segment::Ease;
-            end -= 1;
+            let top = points[end - 1].1;
+            if let Some(bend) =
+                Bend::of(segment(end - 1), points[end - 1], points[end], top, 1., 0.)
+            {
+                fades.fade_out = 1. - points[end - 1].0;
+                fades.bend_out = bend;
+                end -= 1;
+            }
         }
         let level = points[first].1;
         if !(0. ..=1.).contains(&level)
@@ -113,19 +185,15 @@ impl Fades {
         if fade_in <= EPSILON && fade_out <= EPSILON {
             return p::Value::Proportion(level);
         }
-        let shape = |ease: bool| {
-            if ease {
-                p::Segment::Ease
-            } else {
-                p::Segment::Linear
-            }
-        };
         let mut points = Vec::with_capacity(4);
         let mut segments = Vec::with_capacity(3);
         if fade_in > EPSILON {
             points.push([0., 0.]);
             points.push([fade_in, level]);
-            segments.push(shape(self.ease_in));
+            segments.push(
+                self.bend_in
+                    .segment([0., 0.], [fade_in, level], level, 0., 1.),
+            );
         } else {
             points.push([0., level]);
         }
@@ -135,8 +203,9 @@ impl Fades {
                 points.push([hold, level]);
                 segments.push(p::Segment::Linear);
             }
+            let top = *points.last().unwrap();
             points.push([1., 0.]);
-            segments.push(shape(self.ease_out));
+            segments.push(self.bend_out.segment(top, [1., 0.], level, 1., 0.));
         } else if points.last().unwrap()[0] < 1. - EPSILON {
             points.push([1., level]);
             segments.push(p::Segment::Linear);
@@ -343,19 +412,27 @@ fn handles(frame: Frame, fades: Fades) -> Vec<(Part, Point<f32>)> {
         return Vec::new();
     }
     let top = frame.y(fades.level);
-    let middle = frame.y(fades.level / 2.);
+    // A bend handle sits on the line, halfway along its fade.
+    let curve = match fades.value() {
+        p::Value::Time(curve) => Some(curve),
+        _ => None,
+    };
+    let on_line = |x: f64| {
+        frame.y(curve
+            .as_ref()
+            .map_or(fades.level / 2., |curve| curve.sample(x)[0]))
+    };
     let mut handles = vec![
         (Part::FadeIn, point(frame.x(fades.fade_in), top)),
         (Part::FadeOut, point(frame.x(1. - fades.fade_out), top)),
     ];
     if fades.fade_in as f32 * frame.width >= BEND_MIN {
-        handles.push((Part::BendIn, point(frame.x(fades.fade_in / 2.), middle)));
+        let x = fades.fade_in / 2.;
+        handles.push((Part::BendIn, point(frame.x(x), on_line(x))));
     }
     if fades.fade_out as f32 * frame.width >= BEND_MIN {
-        handles.push((
-            Part::BendOut,
-            point(frame.x(1. - fades.fade_out / 2.), middle),
-        ));
+        let x = 1. - fades.fade_out / 2.;
+        handles.push((Part::BendOut, point(frame.x(x), on_line(x))));
     }
     handles
 }
@@ -412,7 +489,9 @@ pub(super) fn hit(box_: Bounds<Pixels>, clip: &Clip, at: Point<Pixels>) -> Optio
 pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height: f32) -> p::Value {
     match (grab.part, grab.fades) {
         (Part::Segment(index), _) => lift(&grab.curve, index, f64::from(rise / height.max(1.))),
-        (part, Some(fades)) => dragged(part, fades, span, time, rise).value(),
+        (part, Some(fades)) => {
+            dragged(part, fades, span, time, f64::from(rise / height.max(1.))).value()
+        }
         (_, None) => p::Value::Time(grab.curve.clone()),
     }
 }
@@ -420,11 +499,36 @@ pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height:
 /// `curve` with segment `index` moved up by `by`: both of its points, each
 /// kept in 0–1. A line that is a fade shape again is stored as one.
 pub(super) fn lift(curve: &p::Keyframes, index: usize, by: f64) -> p::Value {
+    let before = curve.clone();
     let mut curve = curve.clone();
     for (_, key) in curve.points.iter_mut().skip(index).take(2) {
         if let p::Key::Number(value) = key {
             *value = (*value + by).clamp(0., 1.);
         }
+    }
+    // A Bézier keeps its shape between its moved ends: its handles move
+    // with them.
+    let number = |curve: &p::Keyframes, i: usize| match curve.points[i].1 {
+        p::Key::Number(v) => v,
+        p::Key::Color(_) => 0.,
+    };
+    let after = curve.clone();
+    for (i, segment) in curve.segments.iter_mut().enumerate() {
+        let p::Segment::Bezier { control1, control2 } = segment else {
+            continue;
+        };
+        let (a, b) = (number(&before, i), number(&before, i + 1));
+        let (a2, b2) = (number(&after, i), number(&after, i + 1));
+        let map = |y: f64| {
+            if (b - a).abs() > EPSILON {
+                a2 + (y - a) * (b2 - a2) / (b - a)
+            } else {
+                y + (a2 - a + b2 - b) / 2.
+            }
+            .clamp(0., 1.)
+        };
+        control1[1] = map(control1[1]);
+        control2[1] = map(control2[1]);
     }
     match Fades::of_curve(&curve) {
         Some(fades) => fades.value(),
@@ -434,34 +538,28 @@ pub(super) fn lift(curve: &p::Keyframes, index: usize, by: f64) -> p::Value {
 
 /// A drag of a fade handle, from `fades` as they were at the press. `time`
 /// is the pointer's time, snapped; `rise` is how far the pointer went up, in
-/// pixels.
-pub(super) fn dragged(part: Part, fades: Fades, span: (f64, f64), time: f64, rise: f32) -> Fades {
+/// alpha. A bend follows the pointer: the middle of a cubic moves 3/4 of
+/// what its two handles move.
+pub(super) fn dragged(part: Part, fades: Fades, span: (f64, f64), time: f64, rise: f64) -> Fades {
     let length = (span.1 - span.0).max(EPSILON);
     match part {
         Part::FadeIn => fades.with_fade_in((time - span.0) / length),
         Part::FadeOut => fades.with_fade_out((span.1 - time) / length),
-        Part::BendIn | Part::BendOut => {
-            let ease = if rise >= BEND_STEP {
-                true
-            } else if rise <= -BEND_STEP {
-                false
-            } else if part == Part::BendIn {
-                fades.ease_in
-            } else {
-                fades.ease_out
-            };
+        Part::BendIn | Part::BendOut if fades.level > EPSILON => {
+            let by = rise / fades.level / 0.75;
             if part == Part::BendIn {
                 Fades {
-                    ease_in: ease,
+                    bend_in: fades.bend_in.raised(by, fades.level),
                     ..fades
                 }
             } else {
                 Fades {
-                    ease_out: ease,
+                    bend_out: fades.bend_out.raised(by, fades.level),
                     ..fades
                 }
             }
         }
+        Part::BendIn | Part::BendOut => fades,
         Part::Segment(_) => fades,
     }
 }
@@ -564,7 +662,7 @@ pub(super) fn paint(box_: Bounds<Pixels>, clip: &Clip, selected: bool, window: &
 /// The line's points across the clip, left to right.
 fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
     // Every key, and each side of it, so holds and steps keep their corners;
-    // and enough even samples between them for eases to read as curves.
+    // and enough even samples between them for bends to read as curves.
     let mut xs: Vec<f64> = match alpha {
         Alpha::Fades(fades) => match fades.value() {
             p::Value::Time(curve) => curve.points.iter().map(|(x, _)| *x).collect(),
@@ -767,7 +865,7 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::{dragged, lift, Fades, Part};
+    use super::{dragged, lift, Bend, Fades, Part};
     use luma_patterns as p;
 
     fn curve(value: p::Value) -> p::Keyframes {
@@ -796,30 +894,47 @@ mod tests {
         assert_eq!(Fades::of_curve(&curve), Some(fades));
     }
 
+    /// The smooth ease: handles at the thirds, at the end values.
+    fn eased() -> Bend {
+        Bend {
+            control1: [1. / 3., 0.],
+            control2: [2. / 3., 1.],
+        }
+    }
+
+    fn same(a: Fades, b: Fades) -> bool {
+        let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
+        let bend = |a: Bend, b: Bend| {
+            a.control1
+                .iter()
+                .chain(&a.control2)
+                .zip(b.control1.iter().chain(&b.control2))
+                .all(|(x, y)| near(*x, *y))
+        };
+        near(a.level, b.level)
+            && near(a.fade_in, b.fade_in)
+            && near(a.fade_out, b.fade_out)
+            && bend(a.bend_in, b.bend_in)
+            && bend(a.bend_out, b.bend_out)
+    }
+
     #[test]
-    fn both_fades_with_eases_round_trip() {
+    fn both_fades_with_bends_round_trip() {
         let fades = Fades {
-            ease_in: true,
-            ease_out: false,
+            bend_in: eased(),
             ..Fades::flat(1.).with_fade_in(0.2).with_fade_out(0.3)
         };
         let curve = curve(fades.value());
         assert_eq!(curve.points.len(), 4);
+        assert!(matches!(curve.segments[0], p::Segment::Bezier { .. }));
         assert_eq!(
-            curve.segments,
-            vec![p::Segment::Ease, p::Segment::Linear, p::Segment::Linear]
+            curve.segments[1..],
+            [p::Segment::Linear, p::Segment::Linear]
         );
         assert!((curve.sample(0.1)[0] - 0.5).abs() < 1e-9);
         assert!((curve.sample(0.85)[0] - 0.5).abs() < 1e-9);
         let back = Fades::of_curve(&curve).unwrap();
-        assert!((back.fade_out - 0.3).abs() < 1e-12);
-        assert_eq!(
-            Fades {
-                fade_out: 0.3,
-                ..back
-            },
-            fades
-        );
+        assert!(same(back, fades), "{back:?}");
     }
 
     #[test]
@@ -835,14 +950,15 @@ mod tests {
         let ramp = p::Keyframes::numbers(&[[0., 0.], [1., 1.]], &[]);
         let fades = Fades::of_curve(&ramp).unwrap();
         assert_eq!((fades.fade_in, fades.fade_out, fades.level), (1., 0., 1.));
-        let swell = p::Keyframes::numbers(
-            &[[0., 0.], [0.5, 1.], [1., 0.]],
-            &[p::Segment::Ease, p::Segment::Ease],
-        );
-        let fades = Fades::of_curve(&swell).unwrap();
+        let swell = p::presets().curve("Swell").unwrap();
+        let fades = Fades::of_curve(swell).unwrap();
         assert_eq!((fades.fade_in, fades.fade_out), (0.5, 0.5));
-        assert!(fades.ease_in && fades.ease_out);
-        assert_eq!(fades.value(), p::Value::Time(swell));
+        assert!(same(fades, Fades::of_curve(&curve(fades.value())).unwrap()));
+        let back = curve(fades.value());
+        for i in 0..=20 {
+            let x = f64::from(i) / 20.;
+            assert!((back.sample(x)[0] - swell.sample(x)[0]).abs() < 1e-9, "{x}");
+        }
     }
 
     #[test]
@@ -871,8 +987,29 @@ mod tests {
             dragged(Part::FadeIn, fade_in, span, 10., 0.).value(),
             p::Value::Proportion(1.)
         );
-        assert!(dragged(Part::BendIn, fade_in, span, 0., 10.).ease_in);
-        assert!(!dragged(Part::BendIn, fade_in, span, 0., 3.).ease_in);
+        // A partial bend: the middle of the fade follows the pointer up.
+        let middle = |fades: Fades| curve(fades.value()).sample(fades.fade_in / 2.)[0];
+        let bent = dragged(Part::BendIn, fade_in, span, 0., 0.1);
+        assert!(
+            (middle(bent) - (middle(fade_in) + 0.1)).abs() < 1e-3,
+            "{}",
+            middle(bent)
+        );
+        assert!(matches!(
+            curve(bent.value()).segments[0],
+            p::Segment::Bezier { .. }
+        ));
+        assert!(same(Fades::of_curve(&curve(bent.value())).unwrap(), bent));
+        // Down past straight it bends the other way, and back is straight.
+        let sagging = dragged(Part::BendIn, bent, span, 0., -0.2);
+        assert!(middle(sagging) < middle(fade_in));
+        let straight = dragged(Part::BendIn, bent, span, 0., -0.1);
+        assert_eq!(curve(straight.value()).segments[0], p::Segment::Linear);
+        // Handles stay within 0–1: a hard pull stops at the top.
+        let hard = dragged(Part::BendIn, fade_in, span, 0., 5.);
+        assert!(curve(hard.value())
+            .values()
+            .all(|v| (0. ..=1.).contains(&v)));
     }
 
     #[test]
@@ -884,6 +1021,14 @@ mod tests {
         let fade = curve(Fades::flat(1.).with_fade_in(0.25).value());
         let lowered = Fades::flat(0.5).with_fade_in(0.25).value();
         assert_eq!(lift(&fade, 1, -0.5), lowered);
+        // A bent fade keeps its bend when the level moves.
+        let bent = Fades {
+            bend_in: eased(),
+            ..Fades::flat(1.).with_fade_in(0.25)
+        };
+        let lowered_bent = lift(&curve(bent.value()), 1, -0.5);
+        let back = Fades::of_curve(&curve(lowered_bent)).unwrap();
+        assert!(same(back, Fades { level: 0.5, ..bent }), "{back:?}");
         // The ramp lifts off zero: a custom curve, each point kept in 0–1.
         assert_eq!(
             lift(&curve(lowered), 0, 0.75),

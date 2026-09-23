@@ -7,59 +7,29 @@ use luma_patterns::{Envelope, EnvelopeCurve, Key, Keyframes, Segment};
 /// Keyframes hold at most this many points.
 const MAX_POINTS: usize = 256;
 
-/// `envelope` with every value times `scale`, as keyframes. `false` when a
-/// Bézier segment had to be approximated by straight pieces.
+/// `envelope` with every value and handle times `scale`, as keyframes. Each
+/// segment keeps its kind, a Bézier its handles, so the curve is exact.
 pub(crate) fn keyframes(envelope: &Envelope, scale: f64) -> (Keyframes, bool) {
-    // Straight pieces per Bézier segment that has no keyframe equivalent,
-    // sharing what the other anchors leave of the point budget.
-    let curved = (0..envelope.points.len() - 1)
-        .filter(|i| matches!(envelope.curve(*i), EnvelopeCurve::Bezier { .. }))
-        .count()
-        .max(1);
-    let pieces = ((MAX_POINTS - envelope.points.len()) / curved).max(2);
-    let mut points = vec![(envelope.points[0][0], envelope.points[0][1] * scale)];
-    let mut segments = Vec::new();
-    let mut exact = true;
-    for (i, pair) in envelope.points.windows(2).enumerate() {
-        let (a, b) = (pair[0], pair[1]);
-        match envelope.curve(i) {
-            EnvelopeCurve::Linear => segments.push(Segment::Linear),
-            EnvelopeCurve::Hold => segments.push(Segment::Hold),
-            EnvelopeCurve::Step => segments.push(Segment::Step),
-            EnvelopeCurve::Bezier { control1, control2 } if is_ease(a, b, control1, control2) => {
-                segments.push(Segment::Ease)
-            }
-            EnvelopeCurve::Bezier { .. } => {
-                exact = false;
-                for piece in 1..pieces {
-                    let x = a[0] + (b[0] - a[0]) * piece as f64 / pieces as f64;
-                    points.push((x, envelope.sample(x) * scale));
-                    segments.push(Segment::Linear);
-                }
-                segments.push(Segment::Linear);
-            }
-        }
-        points.push((b[0], b[1] * scale));
-    }
+    let scaled = |p: [f64; 2]| [p[0], p[1] * scale];
     let curve = Keyframes {
-        points: points
-            .into_iter()
-            .map(|(x, y)| (x, Key::Number(y)))
+        points: envelope
+            .points
+            .iter()
+            .map(|p| (p[0], Key::Number(p[1] * scale)))
             .collect(),
-        segments,
+        segments: (0..envelope.points.len() - 1)
+            .map(|i| match envelope.curve(i) {
+                EnvelopeCurve::Linear => Segment::Linear,
+                EnvelopeCurve::Hold => Segment::Hold,
+                EnvelopeCurve::Step => Segment::Step,
+                EnvelopeCurve::Bezier { control1, control2 } => Segment::Bezier {
+                    control1: scaled(control1),
+                    control2: scaled(control2),
+                },
+            })
+            .collect(),
     };
-    if curve.points.len() > MAX_POINTS {
-        return (resample(|x| curve.sample(x)[0], &[]), false);
-    }
-    (curve, exact)
-}
-
-/// A cubic Bézier whose handles sit a third of the way along x at the start
-/// and end values is the smoothstep that an `ease` segment draws.
-fn is_ease(a: [f64; 2], b: [f64; 2], control1: [f64; 2], control2: [f64; 2]) -> bool {
-    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).abs() < 1e-9 && (p[1] - q[1]).abs() < 1e-9;
-    let third = (b[0] - a[0]) / 3.0;
-    near(control1, [a[0] + third, a[1]]) && near(control2, [a[0] + 2.0 * third, b[1]])
+    (curve, true)
 }
 
 /// A straight-line curve through `sample` at the `breaks` and evenly between
@@ -185,11 +155,19 @@ pub(crate) fn constant(envelope: &Envelope) -> Option<f64> {
 
 /// `curve` read from progress `from` to 1, stretched over 0–1. A negative
 /// `from` starts earlier: the curve holds its first value until then. It is
-/// exact for linear, hold and step segments; `false` when the cut falls
-/// inside an eased segment, which is then approximated.
+/// exact for linear, hold, step and Bézier segments; `false` when the cut
+/// falls inside a Bézier segment, which is then approximated.
 pub(crate) fn crop(curve: &Keyframes, from: f64) -> (Keyframes, bool) {
     let span = 1.0 - from;
     let at = |x: f64| (x - from) / span;
+    // A Bézier's handles move along x with its points.
+    let moved = |segment: Segment| match segment {
+        Segment::Bezier { control1, control2 } => Segment::Bezier {
+            control1: [at(control1[0]), control1[1]],
+            control2: [at(control2[0]), control2[1]],
+        },
+        other => other,
+    };
     if from.abs() < 1e-12 {
         return (curve.clone(), true);
     }
@@ -198,7 +176,8 @@ pub(crate) fn crop(curve: &Keyframes, from: f64) -> (Keyframes, bool) {
         points.extend(curve.points.iter().map(|(x, key)| (at(*x), *key)));
         let mut segments = vec![Segment::Hold];
         segments.extend(
-            (0..curve.points.len() - 1).map(|i| curve.segments.get(i).copied().unwrap_or_default()),
+            (0..curve.points.len() - 1)
+                .map(|i| moved(curve.segments.get(i).copied().unwrap_or_default())),
         );
         return (Keyframes { points, segments }, true);
     }
@@ -210,7 +189,7 @@ pub(crate) fn crop(curve: &Keyframes, from: f64) -> (Keyframes, bool) {
     }
     // The segment the cut falls in, if any, keeps its kind from the cut on.
     let inside = cut.checked_sub(1).map(segment);
-    if inside == Some(Segment::Ease) {
+    if matches!(inside, Some(Segment::Bezier { .. })) {
         return (resample(|x| curve.sample(from + x * span)[0], &[]), false);
     }
     let start = match (inside, cut) {
@@ -223,7 +202,7 @@ pub(crate) fn crop(curve: &Keyframes, from: f64) -> (Keyframes, bool) {
     for (i, (x, key)) in curve.points.iter().enumerate().skip(cut) {
         points.push((at(*x), *key));
         if i + 1 < curve.points.len() {
-            segments.push(segment(i));
+            segments.push(moved(segment(i)));
         }
     }
     (Keyframes { points, segments }, true)
@@ -256,24 +235,41 @@ mod tests {
     }
 
     #[test]
-    fn an_ease_bezier_becomes_an_ease_segment() {
-        let eased = envelope(
-            &[[0.0, 0.0], [0.6, 1.0]],
-            &[EnvelopeCurve::Bezier {
-                control1: [0.2, 0.0],
-                control2: [0.4, 1.0],
-            }],
+    fn a_bezier_keeps_its_handles_and_samples_the_same() {
+        let drawn = envelope(
+            &[[0.0, 0.0], [0.6, 1.0], [1.0, 1.0]],
+            &[
+                EnvelopeCurve::Bezier {
+                    control1: [0.1, 0.7],
+                    control2: [0.5, 0.2],
+                },
+                EnvelopeCurve::Linear,
+            ],
         );
-        let (curve, exact) = keyframes(
-            &Envelope {
-                points: vec![[0.0, 0.0], [0.6, 1.0], [1.0, 1.0]],
-                curves: vec![eased.curves[0], EnvelopeCurve::Linear],
-            },
-            0.5,
-        );
+        let (curve, exact) = keyframes(&drawn, 0.5);
         assert!(exact);
-        assert_eq!(curve.segments, vec![Segment::Ease, Segment::Linear]);
-        assert!((curve.sample(0.3)[0] - 0.25).abs() < 1e-9);
+        assert_eq!(
+            curve.segments[0],
+            Segment::Bezier {
+                control1: [0.1, 0.35],
+                control2: [0.5, 0.1]
+            }
+        );
+        for i in 0..=50 {
+            let x = f64::from(i) / 50.0;
+            assert!(
+                (curve.sample(x)[0] - drawn.sample(x) * 0.5).abs() < 1e-12,
+                "{x}"
+            );
+        }
+        // Cropped where the Bézier has ended, it keeps its values.
+        let (late, exact) = crop(&curve, -0.25);
+        assert!(exact);
+        late.validate().unwrap();
+        for x in [0.3, 0.5, 0.9] {
+            let old = curve.sample(-0.25 + x * 1.25)[0];
+            assert!((late.sample(x)[0] - old).abs() < 1e-9, "{x}");
+        }
     }
 
     #[test]

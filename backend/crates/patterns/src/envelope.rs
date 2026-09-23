@@ -283,14 +283,14 @@ fn normalized(p: [f64; 2]) -> bool {
 fn lerp(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
     [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
 }
-fn at([a, b, c, d]: [[f64; 2]; 4], t: f64) -> [f64; 2] {
+pub(crate) fn at([a, b, c, d]: [[f64; 2]; 4], t: f64) -> [f64; 2] {
     lerp(
         lerp(lerp(a, b, t), lerp(b, c, t), t),
         lerp(lerp(b, c, t), lerp(c, d, t), t),
         t,
     )
 }
-fn parameter(controls: [[f64; 2]; 4], x: f64) -> f64 {
+pub(crate) fn parameter(controls: [[f64; 2]; 4], x: f64) -> f64 {
     if x <= controls[0][0] {
         return 0.;
     }

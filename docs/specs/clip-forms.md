@@ -66,7 +66,12 @@ source is one level deep: a source's own settings are plain values.
 | `audio(from_hz, to_hz, floor)` | Energy of one frequency range of the track's mix |
 
 - `time[...]` and `hit[...]` are keyframes over progress 0–1. Segments are
-  `hold`, `linear`, `ease` or `step`. Common curves are presets: ramp up, ramp
+  `hold`, `linear`, `step` or `bezier`. A `bezier` segment stores its two
+  handles as `[progress, value]` in the curve's own units, like an envelope's
+  Bézier, and plays exactly as drawn:
+  `{"bezier": {"control1": [0.2, 0.9], "control2": [0.4, 0.1]}}`. A smooth
+  ease is a Bézier with its handles a third of the way along, at the end
+  values. Common curves are presets: ramp up, ramp
   down, swell, fade in, fade out, hold then drop.
 - `audio` reads the full mix only. No stems, no drum events, no harmony.
   `from_hz` and `to_hz` set the frequency range (20–20,000 Hz, from < to).
