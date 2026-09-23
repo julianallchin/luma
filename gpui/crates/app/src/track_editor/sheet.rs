@@ -25,7 +25,7 @@ mod browser;
 mod form;
 
 pub(crate) use browser::Audition;
-pub(super) use browser::PresetDrag;
+pub(super) use browser::{DropGhost, PresetDrag};
 
 /// Air between one arg row and the next, and between the sheet's bands.
 const ROW_GAP: f32 = 14.;

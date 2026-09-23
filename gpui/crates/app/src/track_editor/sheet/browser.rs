@@ -24,8 +24,9 @@ use super::*;
 
 /// The id of the one clip in a thumbnail or audition score.
 const CLIP_ID: &str = "preset";
-/// Beats a thumbnail shows.
-const THUMB_BEATS: f64 = 8.;
+/// Beats a thumbnail shows: as long as a placed preset, so the strip a drag
+/// carries onto the timeline is the clip it will make.
+const THUMB_BEATS: f64 = 16.;
 /// Beats the stage loops while a tile is hovered: two bars.
 const AUDITION_BEATS: f64 = 8.;
 /// Bars a placed preset lasts.
@@ -52,6 +53,8 @@ pub(crate) struct State {
     hovered: Option<String>,
     /// Prepared single-clip programs, newest last.
     prepared: VecDeque<(Key, Arc<ClipPreview>)>,
+    /// Where a preset carried over the timeline would land.
+    drop: Option<(&'static FormPreset, InsertMenu)>,
     /// What the stage plays instead of the score.
     audition: Option<Audition>,
 }
@@ -122,6 +125,10 @@ pub(super) fn sync(editor: &mut Editor, cx: &mut Context<Luma>) {
         .get_or_insert_with(|| cx.new(|cx| TextInput::search("Search presets…", cx)))
         .clone();
     editor.sheet.browser.query = search.read(cx).text().to_string();
+    // A drag let go anywhere but the timeline places nothing.
+    if !cx.has_active_drag() {
+        editor.sheet.browser.drop = None;
+    }
     fetch_stand_ins(editor, cx);
     fetch_thumbnail(editor, cx);
 }
@@ -171,6 +178,68 @@ pub(super) fn leave(editor: &mut Editor) {
     let browser = &mut editor.sheet.browser;
     browser.hovered = None;
     browser.audition = None;
+    browser.drop = None;
+}
+
+/// A preset carried over the timeline, drawn where and as it would land.
+pub(in crate::track_editor) struct DropGhost {
+    pub(in crate::track_editor) clip: Clip,
+    pub(in crate::track_editor) strip: Option<Arc<RenderImage>>,
+    /// It would open a new lane at the boundary above `clip.row`.
+    pub(in crate::track_editor) insert: bool,
+}
+
+impl Editor {
+    /// What a drop of the carried preset would place, if one is over the
+    /// timeline.
+    pub(in crate::track_editor) fn drop_ghost(&self) -> Option<DropGhost> {
+        let (preset, menu) = self.sheet.browser.drop?;
+        Some(DropGhost {
+            clip: Clip {
+                id: "drop-ghost".into(),
+                pattern: preset.form.clone().into(),
+                label: preset.name.clone().into(),
+                color: ladder::pattern(&preset.form),
+                start: menu.start,
+                end: menu.end,
+                row: menu.row,
+                z: 0,
+                blend: BlendMode::Replace,
+                args: serde_json::Value::Object(
+                    preset
+                        .inputs
+                        .iter()
+                        .map(|(key, value)| {
+                            (key.clone(), super::super::document::wire_value(value))
+                        })
+                        .collect(),
+                ),
+                core: None,
+            },
+            strip: strip(
+                &self.sheet.browser,
+                preset,
+                &target_selection(self).expression,
+            ),
+            insert: menu.insert,
+        })
+    }
+}
+
+/// A preset's strip: on the real rig when it has rendered for `selection`,
+/// else on the stand-in rig.
+fn strip(browser: &State, preset: &FormPreset, selection: &str) -> Option<Arc<RenderImage>> {
+    match browser
+        .thumbs
+        .get(&(preset.name.clone(), selection.to_owned()))
+    {
+        Some(Thumbnail::Ready(image)) => Some(Arc::clone(image)),
+        _ => browser
+            .stand_ins
+            .as_ref()
+            .and_then(|strips| strips.get(&preset.name))
+            .cloned(),
+    }
 }
 
 /// The presets matching the query, in shipped order. A query matches a
@@ -423,16 +492,69 @@ impl Luma {
             .then(|| lane_selection(editor, menu.row, menu.start))
             .flatten()
             .unwrap_or_else(luma_patterns::Selection::all);
+        if let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() {
+            editor.sheet.browser.drop = None;
+        }
         self.insert_pattern(menu, InsertChoice(drag.0), selection, cx);
     }
 }
 
 /// What a tile drag carries.
+#[derive(Clone, Copy)]
 pub(in crate::track_editor) struct PresetDrag(&'static FormPreset);
 
-impl Render for PresetDrag {
+/// What follows the pointer during a drag: the preset's strip and name.
+struct Carried {
+    name: SharedString,
+    strip: Option<Arc<RenderImage>>,
+}
+
+impl Render for Carried {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        float::chip().child(self.0.name.clone())
+        float::frosted_card(
+            float::popover_card()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .p(px(6.))
+                .text_size(px(13.))
+                .text_color(ladder::foreground())
+                .child(thumbnail(&self.name, self.strip.clone()))
+                .child(self.name.clone()),
+        )
+    }
+}
+
+impl Luma {
+    /// The carried preset moved: over the timeline, it would land at `at`;
+    /// anywhere else (`None`), it would not land at all.
+    pub(in crate::track_editor) fn carry_preset(
+        &mut self,
+        drag: &PresetDrag,
+        at: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        let drop = at
+            .and_then(|at| editor.insertion_at(at, PLACE_BARS))
+            .map(|menu| (drag.0, menu));
+        let same = match (&drop, &editor.sheet.browser.drop) {
+            (Some((a, m)), Some((b, n))) => {
+                std::ptr::eq(*a, *b)
+                    && m.start == n.start
+                    && m.end == n.end
+                    && m.row == n.row
+                    && m.insert == n.insert
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            editor.sheet.browser.drop = drop;
+            cx.notify();
+        }
     }
 }
 
@@ -479,20 +601,11 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
                                     .items_center()
                                     .child(luma_ui::caption(form)),
                             )
-                            .children(presets.into_iter().map(|preset| {
-                                let strip = match browser
-                                    .thumbs
-                                    .get(&(preset.name.clone(), selection.clone()))
-                                {
-                                    Some(Thumbnail::Ready(image)) => Some(Arc::clone(image)),
-                                    _ => browser
-                                        .stand_ins
-                                        .as_ref()
-                                        .and_then(|strips| strips.get(&preset.name))
-                                        .cloned(),
-                                };
-                                row(preset, strip, app)
-                            }))
+                            .children(
+                                presets.into_iter().map(|preset| {
+                                    row(preset, strip(browser, preset, &selection), app)
+                                }),
+                            )
                     }))
                     .child(div().h(pad).flex_none()),
             ),
@@ -507,6 +620,7 @@ fn row(
 ) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
     let key = format!("preset-row-{}", preset.name);
+    let carried = strip.clone();
     let hover = app.clone();
     let place = app.clone();
     // The row's own hover is its fade; the stage preview listens on a
@@ -539,7 +653,11 @@ fn row(
                 })
                 .on_drag(PresetDrag(preset), move |_, _, _, cx| {
                     cx.stop_propagation();
-                    cx.new(|_| PresetDrag(preset))
+                    let strip = carried.clone();
+                    cx.new(|_| Carried {
+                        name: preset.name.clone().into(),
+                        strip,
+                    })
                 })
                 .agent_node(Role::Row, name),
         )
