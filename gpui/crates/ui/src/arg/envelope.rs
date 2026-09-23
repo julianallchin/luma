@@ -5,8 +5,8 @@ use crate::{
 };
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, point, px, Bounds, Context, EventEmitter, MouseButton, PathBuilder, Pixels, Point,
-    Window,
+    canvas, div, point, px, Background, Bounds, Context, EventEmitter, MouseButton, PathBuilder,
+    Pixels, Point, Window,
 };
 use luma_patterns::{Envelope, EnvelopeCurve};
 
@@ -197,35 +197,15 @@ impl Render for EnvelopeEditor {
                                         this.update(cx, |this, _| this.bounds = Some(bounds));
                                     },
                                     move |bounds, _, window, _| {
-                                        let at = |p: [f64; 2]| {
-                                            point(
-                                                bounds.origin.x + bounds.size.width * p[0] as f32,
-                                                bounds.origin.y
-                                                    + bounds.size.height * (1. - p[1]) as f32,
-                                            )
-                                        };
-                                        let mut path = PathBuilder::stroke(px(1.5));
-                                        path.move_to(at(value.points[0]));
-                                        for i in 0..value.points.len() - 1 {
-                                            let c = value.controls(i);
-                                            match value.curve(i) {
-                                                EnvelopeCurve::Linear => path.line_to(at(c[3])),
-                                                EnvelopeCurve::Bezier { .. } => path
-                                                    .cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
-                                                EnvelopeCurve::Hold => {
-                                                    path.line_to(at([c[3][0], c[0][1]]));
-                                                    path.line_to(at(c[3]));
-                                                }
-                                                EnvelopeCurve::Step => {
-                                                    path.line_to(at([c[0][0], c[3][1]]));
-                                                    path.line_to(at(c[3]));
-                                                }
-                                            }
-                                        }
-                                        if let Ok(path) = path.build() {
-                                            window.paint_path(path, ladder::foreground());
-                                        }
+                                        paint_envelope(
+                                            window,
+                                            bounds,
+                                            &value,
+                                            px(1.5),
+                                            ladder::foreground(),
+                                        );
                                         if curved {
+                                            let at = |p| at(bounds, p);
                                             let c = value.controls(selected);
                                             let mut lines = PathBuilder::stroke(px(1.));
                                             lines.move_to(at(c[0]));
@@ -398,6 +378,46 @@ impl Render for EnvelopeEditor {
             )
     }
 }
+/// `p`, in the envelope's 0–1 box with y up, as a point in `bounds`.
+fn at(bounds: Bounds<Pixels>, p: [f64; 2]) -> Point<Pixels> {
+    point(
+        bounds.origin.x + bounds.size.width * p[0] as f32,
+        bounds.origin.y + bounds.size.height * (1. - p[1]) as f32,
+    )
+}
+
+/// Stroke `value`'s line across `bounds`. The editor and the curve picker's
+/// thumbnails draw the same line.
+pub(crate) fn paint_envelope(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    value: &Envelope,
+    width: Pixels,
+    color: impl Into<Background>,
+) {
+    let at = |p| at(bounds, p);
+    let mut path = PathBuilder::stroke(width);
+    path.move_to(at(value.points[0]));
+    for i in 0..value.points.len() - 1 {
+        let c = value.controls(i);
+        match value.curve(i) {
+            EnvelopeCurve::Linear => path.line_to(at(c[3])),
+            EnvelopeCurve::Bezier { .. } => path.cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
+            EnvelopeCurve::Hold => {
+                path.line_to(at([c[3][0], c[0][1]]));
+                path.line_to(at(c[3]));
+            }
+            EnvelopeCurve::Step => {
+                path.line_to(at([c[0][0], c[3][1]]));
+                path.line_to(at(c[3]));
+            }
+        }
+    }
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
+}
+
 fn soft_preset() -> Envelope {
     Envelope {
         points: vec![[0., 0.], [0.2, 1.], [0.8, 1.], [1., 0.]],
