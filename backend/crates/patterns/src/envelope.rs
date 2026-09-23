@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 /// One segment between anchors. Bézier handles use the envelope's normalized
 /// coordinates, just like anchors; x is ordered and y stays within 0..1.
+/// `Hold` keeps the start value for the whole segment; `Step` takes the end
+/// value from the start of the segment.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnvelopeCurve {
@@ -12,6 +14,8 @@ pub enum EnvelopeCurve {
         control1: [f64; 2],
         control2: [f64; 2],
     },
+    Hold,
+    Step,
 }
 
 /// Authored anchors and curves. The consumer supplies time or spatial meaning.
@@ -105,8 +109,8 @@ impl Envelope {
         let a = self.points[segment];
         let b = self.points[segment + 1];
         let (c, d) = match self.curve(segment) {
-            EnvelopeCurve::Linear => (lerp(a, b, 1. / 3.), lerp(a, b, 2. / 3.)),
             EnvelopeCurve::Bezier { control1, control2 } => (control1, control2),
+            _ => (lerp(a, b, 1. / 3.), lerp(a, b, 2. / 3.)),
         };
         [a, c, d, b]
     }
@@ -122,16 +126,16 @@ impl Envelope {
             .points
             .partition_point(|p| p[0] <= progress)
             .saturating_sub(1);
+        let a = self.points[i];
+        let b = self.points[i + 1];
         match self.curve(i) {
-            EnvelopeCurve::Linear => {
-                let a = self.points[i];
-                let b = self.points[i + 1];
-                lerp(a, b, (progress - a[0]) / (b[0] - a[0]))[1]
-            }
+            EnvelopeCurve::Linear => lerp(a, b, (progress - a[0]) / (b[0] - a[0]))[1],
             EnvelopeCurve::Bezier { .. } => {
                 let controls = self.controls(i);
                 at(controls, parameter(controls, progress))[1]
             }
+            EnvelopeCurve::Hold => a[1],
+            EnvelopeCurve::Step => b[1],
         }
     }
 
@@ -201,17 +205,25 @@ impl Envelope {
         let mut next = self.clone();
         let [a, b, c, d] = self.controls(i);
         let t = match self.curve(i) {
-            EnvelopeCurve::Linear => (x - a[0]) / (d[0] - a[0]),
-            _ => parameter([a, b, c, d], x),
+            EnvelopeCurve::Bezier { .. } => parameter([a, b, c, d], x),
+            _ => (x - a[0]) / (d[0] - a[0]),
         };
         let (ab, bc, cd) = (lerp(a, b, t), lerp(b, c, t), lerp(c, d, t));
         let (abc, bcd) = (lerp(ab, bc, t), lerp(bc, cd, t));
-        next.points.insert(i + 1, lerp(abc, bcd, t));
+        // A held or stepped segment keeps its value on both sides of the cut.
+        let point = match self.curve(i) {
+            EnvelopeCurve::Hold => [x, a[1]],
+            EnvelopeCurve::Step => [x, d[1]],
+            _ => lerp(abc, bcd, t),
+        };
+        next.points.insert(i + 1, point);
         next.curves
             .resize(self.points.len() - 1, EnvelopeCurve::Linear);
         let (left, right) = match self.curve(i) {
-            EnvelopeCurve::Linear => (EnvelopeCurve::Linear, EnvelopeCurve::Linear),
-            _ => (
+            curve @ (EnvelopeCurve::Linear | EnvelopeCurve::Hold | EnvelopeCurve::Step) => {
+                (curve, curve)
+            }
+            EnvelopeCurve::Bezier { .. } => (
                 EnvelopeCurve::Bezier {
                     control1: ab,
                     control2: abc,
@@ -236,15 +248,16 @@ impl Envelope {
             return Err(Error("envelope endpoints cannot be removed".into()));
         }
         let mut next = self.clone();
-        let merged = if self.curve(index - 1) == EnvelopeCurve::Linear
-            && self.curve(index) == EnvelopeCurve::Linear
-        {
-            EnvelopeCurve::Linear
-        } else {
-            EnvelopeCurve::Bezier {
+        let merged = match (self.curve(index - 1), self.curve(index)) {
+            (left, right) if left == right && !matches!(left, EnvelopeCurve::Bezier { .. }) => left,
+            (
+                EnvelopeCurve::Linear | EnvelopeCurve::Bezier { .. },
+                EnvelopeCurve::Linear | EnvelopeCurve::Bezier { .. },
+            ) => EnvelopeCurve::Bezier {
                 control1: self.controls(index - 1)[1],
                 control2: self.controls(index)[2],
-            }
+            },
+            _ => EnvelopeCurve::Linear,
         };
         next.points.remove(index);
         next.curves
