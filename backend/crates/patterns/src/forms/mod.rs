@@ -111,6 +111,9 @@ fn input(
         promotable: promotable.to_vec(),
     }
 }
+/// The most degrees of phase an aim's spread puts across the axis: four
+/// cycles, either way.
+pub const MAX_SPREAD: f64 = 1440.0;
 /// The widest chase stroke, in axis lengths.
 pub const MAX_WIDTH: f64 = 4.0;
 
@@ -383,6 +386,7 @@ pub fn axis_presets() -> Vec<(&'static str, Value)> {
         ("Z", axis(MappingSource::Z)),
         ("Radial", axis(MappingSource::Radial)),
         ("Angle", axis(MappingSource::Angle)),
+        ("Random", axis(MappingSource::Random)),
     ]
 }
 fn axis_input(default: MappingSource) -> Input {
@@ -1133,12 +1137,16 @@ fn aim() -> Definition {
             ),
             (
                 "spread",
-                input(
-                    "Spread",
-                    "Share of a cycle the wobble travels across the heads; 0 = all together",
-                    Value::Proportion(0.0),
-                    Rate::Frame,
-                    &[Time],
+                number(
+                    input(
+                        "Spread",
+                        "Degrees of phase the wobble travels across the heads; 360 = one cycle, 0 = all together",
+                        Value::Number(0.0),
+                        Rate::Frame,
+                        &[Time],
+                    ),
+                    -MAX_SPREAD,
+                    MAX_SPREAD,
                 ),
             ),
             (
@@ -1206,9 +1214,16 @@ pub(crate) fn check_inputs(
     Ok(())
 }
 
-/// A plain direction has a direction, and a shape or a fan per hit needs
-/// hits: `every` above 0.
+/// A plain direction has a direction, a shape or a fan per hit needs
+/// hits (`every` above 0), and spread is degrees, not a share of a cycle.
 fn check_aim(id: &str, inputs: &BTreeMap<String, Value>) -> Result<()> {
+    if let Some(Value::Proportion(share)) = inputs.get("spread") {
+        return Err(Error(format!(
+            "{id}.spread: spread is now degrees of phase (360° = one cycle across the axis), \
+             not a share of a cycle; store {{\"type\": \"number\", \"value\": {}}}",
+            share * 360.0
+        )));
+    }
     if let Some(Value::Vector(direction)) = inputs.get("direction") {
         if direction.iter().all(|v| v.abs() < 1e-9) {
             return Err(Error(format!(

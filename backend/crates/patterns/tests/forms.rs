@@ -1023,12 +1023,12 @@ fn radial_and_angle_axes_need_no_solved_circle() {
         reverse: false,
         mirror: None,
     };
-    let angle = spec(MappingSource::Angle).resolve(&ring).unwrap();
+    let angle = spec(MappingSource::Angle).resolve(&ring, 0).unwrap();
     for (n, coordinate) in angle.coordinates.iter().enumerate() {
         assert!((coordinate.position - n as f64 / 8.0).abs() < 1e-9);
         assert!(coordinate.closed);
     }
-    let radial = spec(MappingSource::Radial).resolve(&ring).unwrap();
+    let radial = spec(MappingSource::Radial).resolve(&ring, 0).unwrap();
     for (n, coordinate) in radial.coordinates.iter().enumerate() {
         assert!((coordinate.position - if n % 2 == 0 { 0.0 } else { 1.0 }).abs() < 1e-9);
     }
@@ -1253,4 +1253,83 @@ fn round_axes_need_a_plane_and_axes_have_no_per_group() {
         set(&mut bad, "axis", Value::Mapping(wrong));
         assert!(prepare(&form, &bad).is_err());
     }
+}
+
+/// A mirror on an order axis runs the chase from the middle out to both
+/// ends: the two halves are mirror images.
+#[test]
+fn a_mirror_on_order_chases_from_the_middle() {
+    let (form, mut inputs) = preset("Chase");
+    set(
+        &mut inputs,
+        "axis",
+        Value::Mapping(MappingSpec {
+            source: MappingSource::Order,
+            per_group: false,
+            reverse: false,
+            mirror: Some(MirrorPlane {
+                normal: [1.0, 0.0, 0.0],
+                offset: 0.0,
+            }),
+            span: Span::Selection,
+            plane: None,
+        }),
+    );
+    let mut first = None;
+    for step in 0..40 {
+        let beat = f64::from(step) * 0.1 + 0.05;
+        let values = render(&form, &inputs, beat);
+        let mirrored: Vec<f64> = values.iter().rev().copied().collect();
+        assert_eq!(values, mirrored, "{beat}");
+        if first.is_none() && values.iter().any(|v| *v > 0.0) {
+            first = Some(values);
+        }
+    }
+    // The stroke enters in the middle: heads 3 and 4 light before the ends.
+    let first = first.expect("the chase lights");
+    assert!(first[3] > 0.0 && first[0] == 0.0, "{first:?}");
+}
+
+/// A random axis chases every head once per stroke, in a shuffled order
+/// that stays the same from stroke to stroke.
+#[test]
+fn a_random_axis_chases_each_head_once_in_a_stable_order() {
+    let (form, mut inputs) = preset("Chase");
+    set(
+        &mut inputs,
+        "axis",
+        axis_presets()
+            .into_iter()
+            .find(|(name, _)| *name == "Random")
+            .unwrap()
+            .1,
+    );
+    set(&mut inputs, "width", Value::Number(0.05));
+    set(&mut inputs, "width_relative", Value::Boolean(false));
+    // The beat at which each head is brightest, for two strokes.
+    let every = match inputs["every"] {
+        Value::Beats(every) => every,
+        _ => panic!("every"),
+    };
+    let peaks = |from: f64| {
+        let mut best = vec![(0.0, f64::NEG_INFINITY); 8];
+        for step in 0..400 {
+            let beat = from + every * f64::from(step) / 400.0;
+            for (head, value) in render(&form, &inputs, beat).into_iter().enumerate() {
+                if value > best[head].1 {
+                    best[head] = (beat - from, value);
+                }
+            }
+        }
+        best
+    };
+    let (one, two) = (peaks(0.0), peaks(every));
+    let order = |peaks: &[(f64, f64)]| {
+        let mut heads: Vec<usize> = (0..8).collect();
+        heads.sort_by(|a, b| peaks[*a].0.total_cmp(&peaks[*b].0));
+        heads
+    };
+    assert!(one.iter().all(|(_, value)| *value > 0.5));
+    assert_eq!(order(&one), order(&two));
+    assert_ne!(order(&one), (0..8).collect::<Vec<_>>());
 }

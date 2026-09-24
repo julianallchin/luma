@@ -19,7 +19,7 @@ fn positions(source: MappingSource, cells: &[Cell], reverse: bool, per_group: bo
         reverse,
         per_group,
     }
-    .resolve(cells)
+    .resolve(cells, 0)
     .expect("valid geometry")
     .coordinates
     .into_iter()
@@ -107,7 +107,7 @@ fn invalid_directions_fail_before_mapping_or_saving() {
             per_group: false,
         };
         assert!(mapping.validate().is_err());
-        assert!(mapping.resolve(&[]).is_err());
+        assert!(mapping.resolve(&[], 0).is_err());
     }
 }
 
@@ -152,7 +152,9 @@ fn mirror_plane_is_independent_of_diagonal_travel_direction() {
         reverse: false,
         per_group: false,
     };
-    let resolved = mapping.resolve(&cells).expect("diagonal mirrored mapping");
+    let resolved = mapping
+        .resolve(&cells, 0)
+        .expect("diagonal mirrored mapping");
     close(
         &resolved
             .coordinates
@@ -184,7 +186,7 @@ fn mirror_offset_moves_the_plane_without_changing_the_direction() {
         reverse: false,
         per_group: false,
     };
-    let resolved = mapping.resolve(&cells).expect("offset mirror");
+    let resolved = mapping.resolve(&cells, 0).expect("offset mirror");
     close(
         &resolved
             .coordinates
@@ -196,11 +198,11 @@ fn mirror_offset_moves_the_plane_without_changing_the_direction() {
 }
 
 #[test]
-fn plane_mirror_rejects_nonspatial_order_and_invalid_planes() {
+fn mirror_rejects_radial_angle_random_and_invalid_planes() {
     let mut mapping = MappingSpec {
         span: Default::default(),
         plane: None,
-        source: MappingSource::Order,
+        source: MappingSource::Random,
         mirror: Some(MirrorPlane {
             normal: [1., 0., 0.],
             offset: 0.,
@@ -209,6 +211,14 @@ fn plane_mirror_rejects_nonspatial_order_and_invalid_planes() {
         per_group: false,
     };
     assert!(mapping.validate().is_err());
+    mapping.plane = Some(AxisPlane::Auto);
+    for source in [MappingSource::Radial, MappingSource::Angle] {
+        mapping.source = source;
+        assert!(mapping.validate().is_err());
+    }
+    mapping.plane = None;
+    mapping.source = MappingSource::Order;
+    assert!(mapping.validate().is_ok());
     mapping.source = MappingSource::U;
     for plane in [
         MirrorPlane {
@@ -225,6 +235,109 @@ fn plane_mirror_rejects_nonspatial_order_and_invalid_planes() {
     }
 }
 
+/// A mirror on selection order folds the coordinate from the middle,
+/// `c → |2c − 1|`, whatever the plane, within each span.
+#[test]
+fn a_mirror_on_order_folds_from_the_middle() {
+    let folded = |count: usize, span: Span| {
+        let cells: Vec<Cell> = (0..count)
+            .map(|n| cell(&format!("bar{}:{n}", n % 2), "rig", [0., n as f64, 0.]))
+            .collect();
+        MappingSpec {
+            span,
+            plane: None,
+            source: MappingSource::Order,
+            mirror: Some(MirrorPlane {
+                normal: [0., 0., 1.],
+                offset: 3.,
+            }),
+            reverse: false,
+            per_group: false,
+        }
+        .resolve(&cells, 0)
+        .unwrap()
+        .coordinates
+        .into_iter()
+        .map(|c| (c.cell, c.position))
+        .collect::<BTreeMap<_, _>>()
+    };
+    let five = folded(5, Span::Selection);
+    close(
+        &(0..5)
+            .map(|n| five[&format!("bar{}:{n}", n % 2)])
+            .collect::<Vec<_>>(),
+        &[1., 0.5, 0., 0.5, 1.],
+    );
+    let four = folded(4, Span::Selection);
+    close(
+        &(0..4)
+            .map(|n| four[&format!("bar{}:{n}", n % 2)])
+            .collect::<Vec<_>>(),
+        &[1., 1. / 3., 1. / 3., 1.],
+    );
+    // Each fixture folds on its own: bar0 holds heads 0, 2, 4 and bar1 1, 3.
+    let spans = folded(5, Span::Fixture);
+    close(
+        &["bar0:0", "bar0:2", "bar0:4", "bar1:1", "bar1:3"].map(|id| spans[id]),
+        &[1., 0., 1., 1., 1.],
+    );
+}
+
+/// A random axis gives each span the evenly spaced coordinates in a
+/// shuffled order, the same for the same seed.
+#[test]
+fn a_random_axis_is_a_seeded_permutation_of_even_steps_per_span() {
+    let cells: Vec<Cell> = (0..16)
+        .map(|n| {
+            let bar = if n < 8 { "a" } else { "b" };
+            cell(&format!("{bar}:{}", n % 8), "rig", [n as f64, 0., 0.])
+        })
+        .collect();
+    let random = |span: Span, seed: u64| {
+        MappingSpec {
+            span,
+            plane: None,
+            source: MappingSource::Random,
+            mirror: None,
+            reverse: false,
+            per_group: false,
+        }
+        .resolve(&cells, seed)
+        .unwrap()
+        .coordinates
+        .into_iter()
+        .map(|c| (c.cell, c.position))
+        .collect::<BTreeMap<_, _>>()
+    };
+    let steps = |count: usize| {
+        (0..count)
+            .map(|i| i as f64 / (count - 1) as f64)
+            .collect::<Vec<_>>()
+    };
+    let sorted = |values: Vec<f64>| {
+        let mut values = values;
+        values.sort_by(f64::total_cmp);
+        values
+    };
+    let whole = random(Span::Selection, 7);
+    close(&sorted(whole.values().copied().collect()), &steps(16));
+    let bars = random(Span::Fixture, 7);
+    for bar in ["a", "b"] {
+        let values = bars
+            .iter()
+            .filter(|(id, _)| id.starts_with(bar))
+            .map(|(_, v)| *v)
+            .collect();
+        close(&sorted(values), &steps(8));
+    }
+    // The same seed gives the same order; the order is not the head order,
+    // and another seed gives another order.
+    assert_eq!(random(Span::Selection, 7), whole);
+    let in_order: Vec<f64> = cells.iter().map(|c| whole[&c.id]).collect();
+    assert_ne!(in_order, steps(16));
+    assert_ne!(random(Span::Selection, 8), whole);
+}
+
 fn by_id(
     source: MappingSource,
     span: Span,
@@ -239,7 +352,7 @@ fn by_id(
         span,
         plane,
     }
-    .resolve(cells)
+    .resolve(cells, 0)
     .expect("valid geometry")
     .coordinates
     .into_iter()
@@ -292,7 +405,7 @@ fn a_group_span_gives_each_group_its_own_axis() {
         span: Span::Fixture,
         plane: None,
     };
-    assert!(both.resolve(&cells).is_err());
+    assert!(both.resolve(&cells, 0).is_err());
 }
 
 #[test]
@@ -378,10 +491,10 @@ fn radial_and_angle_center_on_the_centroid() {
         per_group: false,
         reverse: false,
     };
-    assert!(unplaned.resolve(&cells).is_err());
+    assert!(unplaned.resolve(&cells, 0).is_err());
     unplaned.source = MappingSource::U;
     unplaned.plane = Some(AxisPlane::Auto);
-    assert!(unplaned.resolve(&cells).is_err());
+    assert!(unplaned.resolve(&cells, 0).is_err());
     // Angle around the centroid: a and c sit on opposite sides.
     let angle = by_id(
         MappingSource::Angle,

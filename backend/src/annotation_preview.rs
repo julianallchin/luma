@@ -38,10 +38,10 @@ pub(crate) fn head_order(clip: &p::Clip, cells: &[p::Cell]) -> HashMap<String, f
         mirror: None,
     };
     let axis = match clip.inputs.get("axis") {
-        Some(p::Value::Mapping(spec)) => spec.resolve(cells).ok(),
+        Some(p::Value::Mapping(spec)) => spec.resolve(cells, clip.seed).ok(),
         _ => None,
     };
-    match axis.or_else(|| major.resolve(cells).ok()) {
+    match axis.or_else(|| major.resolve(cells, clip.seed).ok()) {
         Some(mapping) => mapping
             .coordinates
             .into_iter()

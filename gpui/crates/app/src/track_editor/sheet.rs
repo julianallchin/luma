@@ -113,6 +113,8 @@ enum Menu {
     Span(usize),
     /// The plane menu of the axis at this index.
     Plane(usize),
+    /// The mirror menu of the axis at this index.
+    Mirror(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every

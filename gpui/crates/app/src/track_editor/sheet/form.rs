@@ -100,11 +100,11 @@ impl Slot {
     }
 
     /// The unit a number field of this input shows: beats for a speed,
-    /// degrees for an aim's fan and size.
+    /// degrees for an aim's fan, size and spread.
     fn unit(&self) -> Option<&'static str> {
         if self.speed {
             Some("beats")
-        } else if self.form == "aim@1" && matches!(self.key, "fan" | "size") {
+        } else if self.form == "aim@1" && matches!(self.key, "fan" | "size" | "spread") {
             Some("°")
         } else {
             None
@@ -1152,8 +1152,36 @@ fn set_normal(value: &mut p::Value, axis: usize, n: f64) {
     }
 }
 
-/// The axis row: which way, what one axis spans and, for radial and angle,
-/// the plane.
+/// The mirror choices of an axis from `source`, and the one `mirror` is.
+/// Selection order has one: from the middle. A spatial axis offers the
+/// fixed planes, and a stored plane that is none of them reads Custom.
+fn mirror_choices(
+    source: &p::MappingSource,
+    mirror: Option<&p::MirrorPlane>,
+) -> (Vec<&'static str>, &'static str) {
+    const OFF: &str = "Off";
+    if matches!(source, p::MappingSource::Order) {
+        const MIDDLE: &str = "From the middle";
+        return (
+            vec![OFF, MIDDLE],
+            if mirror.is_some() { MIDDLE } else { OFF },
+        );
+    }
+    let labels = std::iter::once(OFF)
+        .chain(p::MirrorPlane::FIXED.iter().map(|(label, _)| *label))
+        .collect();
+    let current = match mirror {
+        None => OFF,
+        Some(plane) => p::MirrorPlane::FIXED
+            .iter()
+            .find(|(_, normal)| plane.offset == 0. && plane.normal == *normal)
+            .map_or("Custom", |(label, _)| *label),
+    };
+    (labels, current)
+}
+
+/// The axis row: which way, what one axis spans, the mirror where the axis
+/// takes one and, for radial and angle, the plane.
 #[allow(clippy::too_many_arguments)]
 fn axis_control(
     state: &Editor,
@@ -1186,7 +1214,10 @@ fn axis_control(
     let edit = Rc::new(edit);
     let pick_axis = edit.clone();
     let pick_span = edit.clone();
+    let pick_mirror = edit.clone();
     let pick_plane = edit;
+    let mirrors = mapping.source.takes_mirror();
+    let (mirror_labels, mirror) = mirror_choices(&mapping.source, mapping.mirror.as_ref());
     let round = mapping.plane.is_some();
     let plane = mapping.plane.as_ref().map_or(0, p::AxisPlane::index);
     let spans: Vec<&str> = p::Span::OPTIONS.iter().map(|(_, label)| *label).collect();
@@ -1210,10 +1241,14 @@ fn axis_control(
                 let p::Value::Mapping(preset) = &options[picked].value else {
                     return;
                 };
-                // A new direction keeps the spans; radial and angle keep
-                // their plane, Auto when they had none.
+                // A new direction keeps the spans and, where it takes one,
+                // the mirror; radial and angle keep their plane, Auto when
+                // they had none.
                 pick_axis(this, cx, &|mapping| {
                     mapping.source = preset.source.clone();
+                    if !mapping.source.takes_mirror() {
+                        mapping.mirror = None;
+                    }
                     mapping.plane = match (&preset.plane, &mapping.plane) {
                         (None, _) => None,
                         (Some(_), Some(kept)) => Some(kept.clone()),
@@ -1237,6 +1272,27 @@ fn axis_control(
                 },
             ),
         ))
+        .when(mirrors, |el| {
+            el.child(arg_row(
+                "Mirror",
+                menu_select(
+                    state,
+                    app,
+                    Menu::Mirror(index),
+                    format!("{name}: Mirror"),
+                    mirror,
+                    &mirror_labels,
+                    move |picked, this, cx| {
+                        // Order ignores the plane; it stores left–right.
+                        let normal = picked.checked_sub(1).map(|at| p::MirrorPlane::FIXED[at].1);
+                        pick_mirror(this, cx, &|mapping| {
+                            mapping.mirror =
+                                normal.map(|normal| p::MirrorPlane { normal, offset: 0. });
+                        });
+                    },
+                ),
+            ))
+        })
         .when(round, |el| {
             el.child(arg_row(
                 "Plane",

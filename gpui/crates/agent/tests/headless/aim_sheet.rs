@@ -136,3 +136,81 @@ fn an_aim_sheet_shows_the_rows_its_base_and_motion_use() {
         "a hidden input keeps its value"
     );
 }
+
+/// The axis rows offer a mirror: selection order folds from the middle. A
+/// random axis has no middle, so picking Random hides the Mirror row and
+/// drops the mirror. Spread shows in degrees.
+#[test]
+fn an_aim_axis_offers_a_mirror_and_a_random_order() {
+    let name = "aim-axis-mirror";
+    let mut harness = Fixture::new(name, 20, vec![])
+        .with_graph_score(support::score(serde_json::json!({})))
+        .with_rig()
+        .window(1400., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const inSheet=role=>{
+            const p=node("card","Clip inputs").bounds;
+            const inside=n=>n.bounds.x>=p.x&&n.bounds.x<p.x+p.width;
+            return app.snapshot().findAll({role}).filter(inside).map(n=>n.label);
+        };
+        const settle=()=>app.frames(16,{waitMs:60});
+        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
+        app.type(node("input","Search presets…"),"aim"); app.frames(2);
+        app.click(node("row","Wave"));
+        until("aim inputs",s=>s.find({role:"row",label:"Motion"}));
+        settle();
+        const before=inSheet("text");
+        const values=inSheet("slider").concat(inSheet("input"), inSheet("text"));
+        app.click(node("select","Off"));
+        until("mirror menu",s=>s.find({role:"button",label:"From the middle"}));
+        const mirrors=app.snapshot().findAll({role:"button"}).map(n=>n.label)
+            .filter(l=>l==="Off"||l==="From the middle"||l.startsWith("Left–right"));
+        app.click(node("button","From the middle"));
+        until("mirrored",s=>s.find({role:"select",label:"From the middle"}));
+        settle();
+        app.click(node("select","Order"));
+        until("axis menu",s=>s.find({role:"button",label:"Random"}));
+        app.click(node("button","Random"));
+        until("random",s=>s.find({role:"select",label:"Random"}));
+        settle();
+        const after=inSheet("text");
+        ({before,values,mirrors,after})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    assert!(
+        labels(&out["before"]).contains(&"Mirror"),
+        "an order axis has a Mirror row: {out}"
+    );
+    assert_eq!(
+        labels(&out["mirrors"]),
+        ["Off", "From the middle"],
+        "order mirrors from the middle only: {out}"
+    );
+    assert!(
+        labels(&out["values"]).iter().any(|l| l.contains("216")),
+        "Wave's spread is 216 degrees: {out}"
+    );
+    assert!(
+        !labels(&out["after"]).contains(&"Mirror"),
+        "a random axis has no Mirror row: {out}"
+    );
+
+    let score = stored(name);
+    let clip = score["clips"].as_object().unwrap().values().next().unwrap();
+    let axis = &clip["inputs"]["axis"]["value"];
+    assert_eq!(axis["source"]["kind"], "random", "{clip}");
+    assert!(axis.get("mirror").is_none(), "Random drops the mirror: {clip}");
+    assert_eq!(
+        clip["inputs"]["spread"],
+        serde_json::json!({"type": "number", "value": 216.0})
+    );
+}
