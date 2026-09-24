@@ -86,7 +86,7 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
     let tiles = labels(&out["tiles"]);
     assert_eq!(
         tiles[..4],
-        ["Wash", "Color fade", "Rainbow", "Gradient"],
+        ["Wash", "Pulse", "Color fade", "Rainbow"],
         "{out}"
     );
     let filtered = labels(&out["filtered"]);

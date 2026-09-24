@@ -61,7 +61,14 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         Primitive::EventLife => (
             "Event life",
             vec![
-                ("every", beats("Every", "Beats between events", 4.0)),
+                (
+                    "every",
+                    beats(
+                        "Every",
+                        "Beats between events; zero means one event over the clip",
+                        4.0,
+                    ),
+                ),
                 (
                     "every_curve",
                     curve("Every curve", "Beats between events, over the clip"),
@@ -79,7 +86,14 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         )
                     },
                 ),
-                ("life", beats("Life", "Beats one event lasts", 2.0)),
+                (
+                    "life",
+                    beats(
+                        "Life",
+                        "Beats one event lasts; zero means the whole clip",
+                        2.0,
+                    ),
+                ),
                 (
                     "life_curve",
                     curve("Life curve", "Beats one event lasts, over the clip"),
@@ -214,16 +228,10 @@ pub(crate) fn run(
     };
     match op {
         Primitive::Odometer => {
-            let period = inputs["period"].fixed_scalar()?;
-            let period = if period == 0.0 {
-                frame.clip_duration
-            } else {
-                period
-            };
             let pace = Pace::new(
                 frame.clip_start,
                 frame.clip_duration,
-                period,
+                whole_clip(inputs["period"].fixed_scalar()?, frame.clip_duration),
                 keyframes(inputs, "period_curve"),
             )?;
             let turns: Vec<_> = batch.times.iter().map(|b| pace.turns(*b)).collect();
@@ -247,14 +255,14 @@ pub(crate) fn run(
                 None => Schedule::Paced(Pace::new(
                     origin,
                     span,
-                    inputs["every"].fixed_scalar()?,
+                    whole_clip(inputs["every"].fixed_scalar()?, span),
                     keyframes(inputs, "every_curve"),
                 )?),
             };
             let life = Pace::new(
                 origin,
                 span,
-                inputs["life"].fixed_scalar()?,
+                whole_clip(inputs["life"].fixed_scalar()?, span),
                 keyframes(inputs, "life_curve"),
             )?;
             event_life(batch.times, &schedule, &life)?
@@ -350,6 +358,15 @@ pub(crate) fn run(
             )?]))
         }
         _ => unreachable!("form primitive"),
+    }
+}
+
+/// A period of zero beats lasts the whole clip.
+fn whole_clip(period: f64, clip_duration: f64) -> f64 {
+    if period == 0.0 {
+        clip_duration
+    } else {
+        period
     }
 }
 
