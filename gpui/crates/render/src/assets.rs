@@ -96,6 +96,9 @@ pub struct Primitive {
     pub indices: Arc<[u32]>,
     /// Material shared by every triangle here.
     pub material: Material,
+    /// The glTF material's name, which [`crate::materials`] matches a
+    /// preset against.
+    pub material_name: Option<String>,
     /// Index into [`Glb::images`] of the `baseColorTexture`, if any. A resource
     /// reference, so it lives beside the material constants rather than in
     /// them: the frame re-indexes it into its own image table.
@@ -234,7 +237,8 @@ impl Library {
     /// Fails if the file is missing or is not a readable glTF binary.
     pub fn get(&mut self, rel: &str) -> anyhow::Result<&Glb> {
         if !self.loaded.contains_key(rel) {
-            let glb = load(&self.root.join(rel))?;
+            let mut glb = load(&self.root.join(rel))?;
+            crate::materials::apply(rel, &mut glb);
             self.loaded.insert(rel.to_string(), glb);
         }
         Ok(&self.loaded[rel])
@@ -502,6 +506,7 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
         emissive_image: material
             .emissive_texture()
             .map(|t| t.texture().source().index()),
+        material_name: material.name().map(str::to_owned),
         material: Material {
             base_color: Vec4::from(base).truncate(),
             metallic: pbr.metallic_factor(),

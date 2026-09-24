@@ -46,7 +46,7 @@
 
 use glam::Vec3;
 
-use crate::assets::{Material, Vertex};
+use crate::assets::Vertex;
 use crate::frame::MeshData;
 
 /// Chord centre-to-centre spacing, both across and vertically. The number the
@@ -150,17 +150,6 @@ const TUBE_SIDES: usize = 12;
 /// authored number can be wrong; clamping keeps [`Truss::new`] total instead of
 /// letting a stray value allocate for a two-hundred-metre lattice.
 const MAX_PANELS: f32 = 400.0;
-
-/// Mill-finish aluminium, matching the imported truss meshes' own material.
-pub const ALUMINIUM: Material = Material {
-    base_color: Vec3::new(0.7, 0.7, 0.72),
-    metallic: 1.0,
-    roughness: 0.4,
-    emissive: Vec3::ZERO,
-    normal_scale: 1.0,
-    occlusion_strength: 1.0,
-    flat_shading: false,
-};
 
 /// One straight tube of the lattice, in truss-local space.
 ///
