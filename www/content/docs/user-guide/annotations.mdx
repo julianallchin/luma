@@ -19,22 +19,22 @@ A score that another user wrote opens in read-only mode. You can view it, but yo
 2. The picker shows a looping preview of the pattern on the current venue.
 3. Choose a pattern. Luma adds it to the timeline as a clip.
 
-Double-click a clip to open its graph in a graph tab. See [Define Patterns](/docs/user-guide/patterns).
+See [Forms and Presets](/docs/user-guide/patterns).
 
 ## Clip Properties
 
 | Property | Description |
 |----------|-------------|
-| **Graph** | The graph definition that the clip plays. It is a built-in definition or a definition stored in the score. |
+| **Form** | The form that the clip plays. |
 | **Start** | Where the clip begins, in beats. |
 | **Duration** | How long the clip lasts, in beats. |
 | **Z index** | The stacking order. A clip with a higher z index is placed above a clip with a lower z index. |
 | **Blend mode** | How the clip combines with the clips below it. The default is `replace`. |
 | **Selection** | A [selection expression](/docs/user-guide/groups-and-tags#selection-expressions). The default is `all`. |
-| **Inputs** | Values for the graph's inputs, such as color, width or repeat. |
-| **Seed** | The seed for random choices in the graph. |
+| **Inputs** | A value for every input of the form, such as color, width or every. |
+| **Seed** | The seed for random choices in the form. |
 
-The clip inspector shows the blend mode and the graph's inputs. It sorts known inputs under the headings **Shape**, **Space**, **Timing** and **Appearance**.
+The clip inspector shows the blend mode and the form's inputs. It sorts known inputs under the headings **Shape**, **Space**, **Timing** and **Appearance**.
 
 **Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to write a union such as `front_wash | back_movers`. The dialog cannot write `&`, `~` or `^`. If the current expression uses them, the dialog shows it as read-only text.
 

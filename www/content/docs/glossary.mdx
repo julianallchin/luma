@@ -17,8 +17,7 @@ Library                                  Venue
 |   |-- Drum onsets
 |   '-- Bar classifications, genres
 '-- Scores (one track + one venue)
-    |-- Clips (graph, start, duration, z index, blend mode, selection, inputs, seed)
-    '-- Score definitions (score-local graphs)
+    '-- Clips (form, start, duration, z index, blend mode, selection, inputs, seed)
 ```
 
 ## Venue
@@ -55,11 +54,11 @@ The light show for one track in one venue. A score is stored as rows: one `score
 
 ## Clip
 
-One placement of a graph on a score's timeline. A clip has a start and a duration in beats, a z index, a blend mode, a selection expression, input values and a seed.
+One placement of a form on a score's timeline. A clip has a start and a duration in beats, a z index, a blend mode, a selection expression, input values and a seed.
 
 ## Graph Definition
 
-A node graph with named inputs and outputs. A definition is either a primitive (a kernel in Rust) or a graph of other definitions. The standard library holds the built-in definitions. A score can also hold its own definitions.
+A node graph with named inputs and outputs. A definition is either a primitive (a kernel in Rust) or a graph of other definitions. The standard library holds the built-in definitions. A clip plays one of its forms.
 
 ## Standard Library
 

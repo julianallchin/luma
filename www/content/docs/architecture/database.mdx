@@ -66,13 +66,14 @@ columns of synced tables are also local, such as `tracks.file_path` and
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
 | `clips` | id, uid, score_id, graph, start, duration, seed, selection_seed, selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
 
-A clip id and a definition id are `score_id:key`. Loading a score reads the
-three tables into a `luma_patterns::Score`. Saving a score compares it with the
+A clip id is `score_id:key`. Loading a score reads the two tables into a
+`luma_patterns::Score`. Saving a score compares it with the
 rows and writes only the rows that changed (`backend/src/database/local/scores/rows.rs`).
 
-Clips play only score-local definitions. There is no shared pattern library.
-Migration `20260923100000_drop_cues_and_pattern_library.sql` dropped the old
-`patterns`, `implementations`, `cues` and `pattern_categories` tables.
+A clip's `graph` names a shipped form, such as `color.chase@1`. Migration
+`20260923100000_drop_cues_and_pattern_library.sql` dropped the old `patterns`,
+`implementations`, `cues` and `pattern_categories` tables. Migration
+`20260923200000_drop_score_definitions.sql` dropped `score_definitions`.
 
 ## Change log
 
