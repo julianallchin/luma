@@ -66,7 +66,9 @@ impl Score {
             crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
                 .map_err(|error| Error(format!("clip {id}: {error}")))?;
             // Aim always blends toward the aim under it by alpha.
-            if clip.graph == "aim@1" && clip.blend_mode != crate::BlendMode::Replace {
+            if crate::forms::replace_only(&clip.graph)
+                && clip.blend_mode != crate::BlendMode::Replace
+            {
                 return Err(Error(format!(
                     "clip {id}: an aim clip blends with replace only"
                 )));

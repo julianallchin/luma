@@ -24,6 +24,12 @@ pub fn is_form(id: &str) -> bool {
     FORMS.contains(&id)
 }
 
+/// Whether clips of form `id` blend with `replace` only. An aim clip always
+/// blends toward the aim under it by alpha.
+pub fn replace_only(id: &str) -> bool {
+    id == "aim@1"
+}
+
 /// A form's inputs in the order an editor shows them. The definition keeps
 /// its inputs in a map, so the order lives here.
 pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
@@ -945,19 +951,15 @@ fn strobe() -> Definition {
 /// The resting aim of `aim@1` and its presets: 40° down toward downstage.
 pub const REST: [f64; 3] = [0.0, 0.766, -0.643];
 
-/// The options of a named choice, with the stored name as label.
-fn named(names: &[&str]) -> Vec<(String, Value)> {
-    names
-        .iter()
-        .map(|name| (name.replace('_', " "), Value::Choice((*name).into())))
-        .collect()
-}
-fn named_choice(mut input: Input, names: &[&str]) -> Input {
-    let options = named(names);
+/// A choice of named options: the stored name and its label, in menu order.
+fn named_choice(mut input: Input, names: &[(&str, &str)]) -> Input {
     input.author = Some(Author::Choice {
-        options: options
-            .into_iter()
-            .map(|(label, value)| Preset { label, value })
+        options: names
+            .iter()
+            .map(|(name, label)| Preset {
+                label: (*label).into(),
+                value: Value::Choice((*name).into()),
+            })
             .collect(),
         custom: false,
     });
@@ -1044,7 +1046,7 @@ fn aim() -> Definition {
                         Rate::Fixed,
                         &[],
                     ),
-                    &["direction", "point"],
+                    &[("direction", "Direction"), ("point", "Point")],
                 ),
             ),
             (
@@ -1100,7 +1102,7 @@ fn aim() -> Definition {
                         Rate::Fixed,
                         &[],
                     ),
-                    &["none", "shape", "noise"],
+                    &[("none", "None"), ("shape", "Shape"), ("noise", "Noise")],
                 ),
             ),
             (
@@ -1113,7 +1115,12 @@ fn aim() -> Definition {
                         Rate::Fixed,
                         &[],
                     ),
-                    &["swing_left_right", "swing_up_down", "circle", "figure_8"],
+                    &[
+                        ("swing_left_right", "Swing left–right"),
+                        ("swing_up_down", "Swing up–down"),
+                        ("circle", "Circle"),
+                        ("figure_8", "Figure-8"),
+                    ],
                 ),
             ),
             (
