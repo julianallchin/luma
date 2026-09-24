@@ -108,6 +108,6 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 ## Documentation
 
 - [User Guide](https://luma.show/docs/user-guide/why-luma) — Why Luma exists, venues, groups & tags, patterns, annotations, performing
-- [Node Reference](https://luma.show/docs/node-reference) — Pattern graph nodes, one generated page per category: audio, color, effects, masks, math, output, space, time and events, recipes
+- [Node Reference](https://luma.show/docs/node-reference) — Pattern graph nodes, one generated page per category: audio, aim, color, forms, masks, math, output, space, time and events
 - [Architecture](https://luma.show/docs/architecture/overview) — Node graph engine, compositor, DMX pipeline, fixture system, selection system, database, import pipeline, design decisions
 - [Glossary](https://luma.show/docs/glossary) — Canonical terms used throughout the codebase

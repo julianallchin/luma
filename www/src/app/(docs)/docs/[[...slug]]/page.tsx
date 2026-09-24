@@ -6,7 +6,6 @@ import {
 	DocsTitle,
 } from "fumadocs-ui/page";
 import { notFound } from "next/navigation";
-import { NodeGraph } from "@/components/node-graph";
 import { source } from "@/lib/source";
 
 export default async function Page(props: {
@@ -23,7 +22,7 @@ export default async function Page(props: {
 			<DocsTitle>{page.data.title}</DocsTitle>
 			<DocsDescription>{page.data.description}</DocsDescription>
 			<DocsBody>
-				<MDX components={{ ...defaultMdxComponents, NodeGraph }} />
+				<MDX components={defaultMdxComponents} />
 			</DocsBody>
 		</DocsPage>
 	);

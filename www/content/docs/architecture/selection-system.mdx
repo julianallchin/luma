@@ -93,22 +93,3 @@ File: `backend/src/node_graph/geometry.rs`, function `rig_uv`.
 
 The agent venue tools use `rig_uv`
 (`backend/src/agent_execution/bindings/providers/venue.rs`).
-
-## Circle fitting
-
-File: `backend/crates/patterns/src/circle_fit.rs`
-
-`fit_circle_3d` fits a circle to three or more 3D points. The `circle` mapping
-source and the `core/fit_circle` node use it.
-
-1. **Centroid**: the mean of the points.
-2. **Plane**: PCA on the covariance matrix. Power iteration (20 steps) with
-   deflation gives the two main axes.
-3. **Projection**: each point is projected onto the plane.
-4. **RANSAC**: 100 iterations. Each iteration fits a circle through 3 random
-   points and counts inliers within 2.5 units. It stops early when 90% of the
-   points are inliers. The pseudo-random seed is fixed, so the result is
-   repeatable.
-5. **Refinement**: a Kåsa fit on the inliers.
-6. **Angles**: `atan2` of each projected point around the center, normalized
-   to 0–1 and offset so that 0 is at the top.

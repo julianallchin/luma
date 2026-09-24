@@ -11,17 +11,14 @@ cells, the track data and the times.
 ## Scores
 
 A score is the document that one editor edits. The type is
-`luma_patterns::Score` in `score.rs`. It has three parts:
-
-- `version`: the document version.
-- `definitions`: graphs that belong to this score, keyed by id.
-- `clips`: placed graphs on the track timeline, keyed by id.
+`luma_patterns::Score` in `score.rs`. It holds `clips`: placed forms on the
+track timeline, keyed by id.
 
 A `Clip` has these fields:
 
 | Field | Meaning |
 |-------|---------|
-| `graph` | A score-local definition id or a standard library id |
+| `graph` | The form the clip plays, with its version, for example `color.chase@1` |
 | `start` | Start position, in beats |
 | `duration` | Length, in beats |
 | `seed` | Seed for random choices |
@@ -29,7 +26,7 @@ A `Clip` has these fields:
 | `selection` | Group expression |
 | `z_index` | Layer order |
 | `blend_mode` | How the clip combines with the layers below it |
-| `inputs` | Values for the graph inputs |
+| `inputs` | A value for every input of the form |
 
 In the database a score is rows in `scores` and `clips`.
 See [Database](/docs/architecture/database).
@@ -54,7 +51,8 @@ frame. A `fixed` input cannot. An input can also name an authoring control:
 number, choice, toggle, color, curve or gradient.
 
 `standard_library()` in `catalog.rs` builds the built-in library. It reads the
-recipe graphs from `recipes.json` and adds the primitives. See the
+recipe graphs from `recipes.json`, adds the primitives and adds the forms from
+`forms::definitions`. See the
 [Node Reference](/docs/node-reference) for every node.
 
 ## Signals
@@ -82,10 +80,9 @@ Arithmetic checks units:
 - Multiply by a `number` or `proportion` keeps the other unit.
 - Divide two equal units gives a `number`.
 - Add, subtract, minimum and maximum need equal units, or one `number`.
-- Square root and power need `number` or `proportion` values.
 
 Other values are structured, not numerical: envelopes, gradients, mappings,
-coordinates, boundaries, audio sources, drums, events, seeds and lighting.
+coordinates, boundaries, choices, clip sources and lighting.
 
 ## Validation
 
@@ -141,8 +138,6 @@ color is normalized by that value (`FixtureOutput::from_rgb` in `output.rs`).
   a `Scene` for the compositor. It uses the venue geometry, the group
   selections and the beat grid of one authorized read. It converts each clip
   span from beats to seconds with `BeatTimeline::seconds_at`.
-- `luma_patterns::migration::upgrade`: brings an older score document to the
-  current version.
 
 See [Compositor](/docs/architecture/compositor) for how clips combine, and
 [Selection System](/docs/architecture/selection-system) for how cells are
