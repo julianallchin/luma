@@ -1,89 +1,70 @@
 ---
 name: composing-patterns
-description: How to build a new effect as a graph and place it as a clip, in the fewest calls. The working order, a complete audio-reactive example, how to measure the result as numbers, and the API rules that cost the most retries. Read before composing any graph that is not a single built-in node.
+description: How to choose forms and place them as clips, in the fewest calls. The working order, a complete audio-reactive example, how to measure the result as numbers, and the API rules that cost the most retries. Read before placing clips.
 ---
 # Composing patterns
 
-A pattern is a graph. A clip places one graph on one selection for one time
-range. Build the graph once, check it, place it, measure it, apply. Most of
-the time goes to discovery. Spend it on the three or four nodes you need, not
-the whole library.
+A clip plays one form on one selection for one time range. Layers combine
+clips by blend mode. Pick the form, set its inputs, check, place, measure,
+apply. There are no custom graphs.
 
 ## The working order
 
 1. **Read the rig.** `luma.venue.describe()` for the shape, `luma.venue.groups()`
    for the exact group names. Use those names as written. Never build a name
    from a fixture label.
-2. **Read the node cards.** Load the `node-cards` skill. It lists every node
-   with inputs, units and outputs. Use `luma.track.definition("band_mask")`
-   only when a card is not enough.
-3. **Build the graph** with `edit.graph()` and `graph.node(...)`. End with an
-   `output` node and `graph.output(...)`. See the example below.
-4. **Check** with `edit.check()`. It takes no arguments.
-5. **Place** with `edit.add_clip(graph, seconds=(0, duration), selection="name")`.
+2. **Read the form cards.** Load the `node-cards` skill. It lists every form
+   with its inputs, sources and presets.
+3. **Set the inputs.** Start from the form's defaults and change what the look
+   needs. A clip needs every input of its form.
+4. **Place** with `edit.add_clip(form, seconds=(0, duration), selection="name", inputs=inputs)`.
+5. **Check** with `edit.check()`. It takes no arguments.
 6. **Measure** with `edit.window(...)`. Read the numbers before you look at a
    picture.
 7. **Look once** with `luma.venue.render(edit=edit, only=clip, t=...)`.
 8. **Apply** with `edit.apply()`, then tell the user what the room will feel like.
 
-## A complete example: audio level as a height meter
+## A complete example: a kick-driven chase over a wash
 
-This graph lights each head when the mix level is above that head's height.
-Low heads are green, high heads are red.
+A dim blue wash, with a white chase above it whose brightness follows the kick.
 
 ```python
 edit = luma.track.edit()
-graph = edit.graph()
 
-# 0..1 level from the mix. Gain scales the band energy before the shape.
-level = graph.node("band_mask", source="mix", low_hz=30.0, high_hz=16000.0,
-                   gain=12.0, shape=[[0.0, 0.0], [1.0, 1.0]])
+def defaults(form):
+    return {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
 
-# 0..1 position of each head along Z, lowest head 0, highest head 1.
-pos = graph.node("mapped_position",
-                 mapping={"source": {"kind": "z"}, "per_group": False, "reverse": False})
+wash = defaults("color.constant@1")
+wash.update(color="#1030ff", alpha=.3)
+edit.add_clip("color.constant@1", seconds=(0.0, luma.track.duration_s),
+              selection="all", inputs=wash)
 
-# 1 where level > position, else 0.
-lit = graph.node("core/greater", a=level.output("mask"), b=pos.output("value"), tolerance=0.0)
-
-# Color by height.
-color = graph.node("spatial_gradient",
-                   mapping={"source": {"kind": "z"}, "per_group": False, "reverse": False},
-                   gradient={"stops": [{"t": 0.0, "color": [0.05, 0.85, 0.12]},
-                                       {"t": 0.85, "color": [0.95, 0.78, 0.05]},
-                                       {"t": 1.0, "color": [1.0, 0.04, 0.04]}]})
-
-lit_color = graph.node("core/multiply", a=color.output("color"), b=lit.output("mask"))
-final = graph.node("output", color=lit_color.output("value"))
-graph.expose(level, "gain")
-graph.output(final.output("lighting"))
-
+chase = defaults("color.chase@1")
+chase.update(axis="z", every=1, travel=2, width=.3,
+             alpha={"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.2}})
+clip = edit.add_clip("color.chase@1", seconds=(0.0, luma.track.duration_s),
+                     selection="led_bars_vertical", inputs=chase, blend="screen")
 edit.check()
-clip = edit.add_clip(graph, seconds=(0.0, luma.track.duration_s),
-                     selection="led_bars_vertical", inputs={"gain": 12.0})
 ```
 
 ## Rules that cost the most retries
 
-- **A graph must end in `output`.** Wire the final color, dimmer or position into
-  `graph.node("output", ...)` and declare it with
-  `graph.output(final.output("lighting"))`. A graph without this fails check
-  with "must produce fixture output".
+- **Every input, every time.** `add_clip` needs a value for every input of the
+  form. Start from `luma.track.definition(form)["inputs"]` defaults.
 - **`edit.check()` takes no arguments.** So do `edit.diff()` and `edit.apply()`.
 - **`luma.track.document` is a property.** Do not call it.
 - **Python calls need `purpose`.** The tool rejects a cell without it.
 - **Selection is a group expression.** Operators: `&` and, `|` or, `^` xor,
   `~` not, `>` fallback, parentheses. `"all"` is the whole venue. Names are
   lower case with underscores, exactly as `luma.venue.groups()` prints them.
-- **Position mappings normalize over the clip's whole selection.** `per_group`
-  has no effect inside one clip, because a clip has one selection. To normalize
-  height within each tower, place one clip per tower group. Loop over the
-  group names and add each clip in the same edit.
-- **Mapping shorthand.** `mapping="z"` is the same as
-  `{"source": {"kind": "z"}, "per_group": False, "reverse": False}`. Kinds are
-  `u`, `v`, `z`, `order`, `major_axis`, `circle`, `vector`.
-- **Inputs keep units.** Masks and proportions are 0..1. Colors are RGB triples
-  in 0..1 or `#RRGGBB`. Shapes are envelopes: a list of `[x, y]` knots in 0..1.
+- **Axis spans.** An axis normalizes over the clip's whole selection. Set
+  `"span": "fixture"` or `"span": "group"` in the axis value to give each
+  fixture or group its own axis in one clip.
+- **Axis shorthand.** `axis="z"` is the same as
+  `{"source": {"kind": "z"}, "per_group": False, "reverse": False}`. Radial
+  and angle also need `"plane"`; the shorthand gives the Auto plane.
+- **Inputs keep units.** Proportions are 0..1. Colors are RGB triples in 0..1
+  or `#RRGGBB`. Curves are envelopes: a list of `[x, y]` knots in 0..1.
 - **Preserve the seed** when you update a clip.
 
 ## Measure before you look
@@ -113,9 +94,9 @@ Then render once at the loudest second to confirm the look.
 ## Calibrating a level
 
 Find a loud second and a quiet second from `luma.audio.mix` RMS. Sweep the
-exposed gain and measure the lit fraction at both. Pick the gain where the
-quiet section shows a little and the loud section reaches the top some of the
-time, not all of the time. Set it with `edit.update_clip(clip, inputs={"gain": g})`.
+`floor` and `threshold` of an audio source and measure the lit fraction at
+both. Pick the values where the quiet section shows a little and the loud section reaches the top some of the
+time, not all of the time. Set it with `edit.update_clip(clip, inputs={"alpha": source})`.
 
 ## Batches
 

@@ -11,7 +11,7 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
 - Every synced table has an `id`, a `uid` (the owner), `created_at` and
   `updated_at`. In Postgres `id` is `text primary key` and `uid` is
   `uuid not null`. Locally the shape is looser: `uid` is `NOT NULL` only on
-  `clips`, `score_definitions`, `drafts`, `changes` and `venue_members`
+  `clips`, `drafts`, `changes` and `venue_members`
   (`scores.uid` is deliberately nullable), and
   `agent_thread_messages.updated_at` and
   `agent_thread_transcript_heads.created_at` are nullable with no default, so
@@ -59,7 +59,6 @@ A score is rows.
 |---|---|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
 | `clips` | id, uid, score_id, graph, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
-| `score_definitions` | id, uid, score_id, definition_json, created_at, updated_at |
 
 A clip key and a definition key are unique inside their score, not across the
 library — two scores may each have a `flash`. Sync addresses every row by one
@@ -134,7 +133,7 @@ venues, venue_members, fixtures, fixture_groups, fixture_group_members,
 venue_nodes, venue_edges, venue_node_params, venue_constraints, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
-clips, score_definitions, midi_modifiers,
+clips, midi_modifiers,
 midi_bindings, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts, changes.
 

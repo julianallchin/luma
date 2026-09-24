@@ -48,7 +48,7 @@ The list is `SYNCED_TABLES` in `backend/src/sync/schema.rs`:
 | Venues | `venues`, `venue_members`, `venue_nodes`, `venue_edges`, `venue_node_params`, `venue_constraints` |
 | Fixtures and groups | `fixtures`, `fixture_groups`, `fixture_group_members` |
 | Tracks | `tracks`, `track_beats`, `track_roots`, `track_stems`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, `track_beat_validations` |
-| Scores | `scores`, `clips`, `score_definitions`, `drafts` |
+| Scores | `scores`, `clips`, `drafts` |
 | MIDI | `midi_modifiers`, `midi_bindings` |
 | Agents | `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` |
 | History | `changes` |
@@ -65,7 +65,6 @@ columns of synced tables are also local, such as `tracks.file_path` and
 |-------|---------|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
 | `clips` | id, uid, score_id, graph, start, duration, seed, selection_seed, selection_json, z_index, blend_mode, inputs_json, created_at, updated_at |
-| `score_definitions` | id, uid, score_id, definition_json, created_at, updated_at |
 
 A clip id and a definition id are `score_id:key`. Loading a score reads the
 three tables into a `luma_patterns::Score`. Saving a score compares it with the

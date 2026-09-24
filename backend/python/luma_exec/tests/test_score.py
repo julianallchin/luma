@@ -59,7 +59,7 @@ class ScoreTests(unittest.TestCase):
     def test_new_clips_get_nonoverlapping_layers_unless_explicitly_chosen(self):
         track = self.track()
         edit = track.edit()
-        graph = edit.graph(node="chase", id="effect")
+        graph = "color.chase@1"
         first = edit.add_clip(graph, id="first", beats=(0, 4))
         second = edit.add_clip(graph, id="second", beats=(2, 6))
         adjacent = edit.add_clip(graph, id="adjacent", beats=(6, 8))
@@ -71,7 +71,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(saved["explicit"]["z_index"], 0)
 
     def track(self):
-        nodes = {"chase": {"name": "Chase", "inputs": {
+        nodes = {"color.chase@1": {"name": "Chase", "inputs": {
             key: {"name": key, "description": "", "value_type": kind, "rate": "frame", "default": {"type": kind, "value": default}}
             for key, kind, default in [("width", "proportion", .25), ("color", "color", [1., 1., 1.])]
         }, "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
@@ -79,18 +79,11 @@ class ScoreTests(unittest.TestCase):
         self.calls = []
         def call(method, payload):
             self.calls.append((method, copy.deepcopy(payload)))
-            if method == "track.graph_instance":
-                child = copy.deepcopy((nodes | payload["candidate"]["definitions"])[payload["definition"]])
-                child["body"] = {"kind": "graph", "body": {
-                    "nodes": {"effect": {"definition": payload["definition"], "inputs": {key: {"source": "input", "input": key} for key in child["inputs"]}}},
-                    "outputs": {key: {"source": "connection", "node": "effect", "output": key} for key in child["outputs"]},
-                }}
-                return child
             if method == "track.score_apply":
                 return {"revision": "next", "score": payload["candidate"]}
             return {"ok": True}
         return GraphTrack({"id": "track", "title": "Test", "revision": "base", "editable": True,
-                           "beat_origin_s": 1.5, "document": {"definitions": {}, "clips": {}}},
+                           "beat_origin_s": 1.5, "document": {"clips": {}}},
                           nodes=nodes, features={"beats": [1., 1.5, 2., 3., 4.], "downbeats": [1.5, 5.]}, host_call=call)
 
     def test_manifest_refresh_keeps_live_track_and_revokes_departed_scope(self):
@@ -111,7 +104,7 @@ class ScoreTests(unittest.TestCase):
         first = reconcile_facades(cached_first, None)
         held = first.track
         edit, stale = held.edit(), held.edit()
-        graph = edit.graph(node="chase", id="effect")
+        graph = "color.chase@1"
         edit.add_clip(graph, id="clip", beats=(0, 1))
         second = reconcile_facades(load("score-a", "manifest-2"), first)
         self.assertIs(second.track, held)
@@ -143,26 +136,26 @@ class ScoreTests(unittest.TestCase):
         import tempfile
         track = self.track()
         workspace = Path(tempfile.mkdtemp(prefix="luma-undo-"))
-        def snapshot(revision, definitions):
+        def snapshot(revision, clips):
             values = copy.deepcopy(track._values)
             values["revision"] = revision
-            values["document"]["definitions"] = definitions
+            values["document"]["clips"] = clips
             return build_namespace({"schema_version": 1, "revision": revision,
                 "agent_kind": "track_copilot", "scope": {"score_id": "score"},
                 "root": {"track": values, "nodes": track._nodes}}, workspace,
                 host_call=track._host_call)
         cached_a = snapshot("a", {})
-        cached_b = snapshot("b", {"other": track._nodes["chase"]})
+        cached_b = snapshot("b", {"other": {"graph": "color.chase@1", "start": 0, "duration": 4, "seed": 0}})
         live_a = reconcile_facades(cached_a, None)
         old_edit = live_a.track.edit()
         live_b = reconcile_facades(cached_b, live_a)
         self.assertIs(live_b.track, live_a.track)
         self.assertEqual(live_b.track.revision, "b")
-        self.assertIn("other", live_b.track.document["definitions"])
+        self.assertIn("other", live_b.track.document["clips"])
         undone = reconcile_facades(cached_a, live_b)
         self.assertIs(undone.track, live_b.track)
         self.assertEqual(undone.track.revision, "a")
-        self.assertEqual(dict(undone.track.document["definitions"]), {})
+        self.assertEqual(dict(undone.track.document["clips"]), {})
         self.assertEqual(cached_a.track.revision, "a")
         self.assertEqual(cached_b.track.revision, "b")
         self.assertEqual(old_edit.base_revision, "a")
@@ -177,7 +170,7 @@ class ScoreTests(unittest.TestCase):
     def test_edits_and_windows_pin_their_revision_and_do_not_mutate_the_track(self):
         track = self.track()
         edit, stale = track.edit(), track.edit()
-        graph = edit.graph(node="chase", id="local")
+        graph = "color.chase@1"
         edit.add_clip(graph, id="clip", beats=(0, 4), inputs={"width": .8})
         window = edit.window(beats=(0, 4))
         self.assertEqual(len(track.clips), 0)
@@ -185,7 +178,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(stale.base_revision, "base")
         self.assertEqual(window._revision, "base")
         self.assertEqual(len(track.clips), 1)
-        self.assertEqual(track.document["clips"]["clip"]["graph"], "local")
+        self.assertEqual(track.document["clips"]["clip"]["graph"], "color.chase@1")
         with self.assertRaises(TypeError):
             track.document["clips"]["extra"] = {}
         with self.assertRaises(AttributeError):
@@ -194,12 +187,12 @@ class ScoreTests(unittest.TestCase):
     def test_override_reset_sets_selection_and_source_is_independent(self):
         track = self.track()
         edit = track.edit()
-        graph = edit.graph(node="chase", id="local")
+        graph = "color.chase@1"
         clip = edit.add_clip(graph, id="clip", beats=(0, 4), inputs={"width": .8})
         edit.update_clip(clip, selection="bars", inputs={"width": None})
         value = edit.candidate["clips"]["clip"]
         self.assertEqual(value["selection"], {"expression": "bars"})
-        self.assertNotIn("width", value["inputs"])
+        self.assertEqual(value["inputs"]["width"], {"type": "proportion", "value": .25})
         candidate = edit.candidate
         candidate["clips"].clear()
         self.assertEqual(len(edit.clips), 1)
@@ -218,14 +211,14 @@ class ScoreTests(unittest.TestCase):
     def test_isolated_preview_preserves_clip_timing_and_the_complete_draft(self):
         track = self.track()
         edit = track.edit()
-        graph = edit.graph(node="chase", id="effect")
+        graph = "color.chase@1"
         first = edit.add_clip(graph, id="first", beats=(1, 4), selection="front")
         edit.add_clip(graph, id="second", beats=(2, 5), selection="rear", blend="add", z=1)
         original = edit.candidate
         preview = edit._preview(first)
         self.assertEqual(preview["candidate"]["clips"], {"first": original["clips"]["first"]})
         self.assertEqual(preview["baseRevision"], edit.base_revision)
-        preview["candidate"]["definitions"].clear()
+        preview["candidate"]["clips"].clear()
         self.assertEqual(edit.candidate, original)
         self.assertEqual(len(track.clips), 0)
         self.assertEqual(edit._preview()["candidate"], original)
