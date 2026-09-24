@@ -305,7 +305,11 @@ are not changed; they have their own shadows.
   geometry changes, with the fixture maps' caster key. A pixel marches 8
   azimuths × 12 radii. Standing geometry raises the horizon; an overhang hides
   a band of elevations. The rest is weighted by the cosine lobe and scales the
-  sky part of the probe irradiance.
+  sky part of the probe irradiance. The point is lifted one texel plus 2 cm
+  along its normal before the march; after that the height compares use a
+  5 mm margin that counts a wall touching an overhang as under it. (A 2 cm
+  margin the other way lit the top of every beam under a deck as open sky.)
+  A surface facing straight down has no sky lobe and gets zero.
 - **Ground bounce (outdoors).** The probe's lower hemisphere is split off as
   `E(-Z) (1 - n.z) / 2`. It is scaled by the sun and sky visibility of the
   ground under the point. That comes from a map at twice the field texel
@@ -436,3 +440,12 @@ under 0.05% of pixels, at wide washes' hot cores and silhouettes. The
 `truss-shadow-near` transport case measures RMSE 3.5 with wide routing
 against 0.9 without: a truss member across the lens leaves a one-pixel halo.
 `volumetric_transport` now measures routing separately from the integrator.
+The cascade depth bias is in metres along the light, `0.002 + texel / 2`, not
+a fixed 0.0015 in NDC. The cascade depth range runs 25 m past each side of the
+view slice, so the NDC bias was 10–30 cm of light leak. The sun lit beam sides
+deep under a deck, with a stepped edge where the leak ran out, and props on a
+table had no sun shadow under them. The sky-visibility work made this visible,
+because it darkened everything else under the deck. Limit: in the second
+cascade (from 12 m, about 4 cm texels), the 3×3 filter still lets a little sun
+into the first 10 cm under a flat occluder (sun visibility 0.23 at 5 cm under a
+plate from 14 m, 40° sun).
