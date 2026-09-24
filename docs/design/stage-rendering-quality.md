@@ -345,3 +345,36 @@ elevation: `0.002 + (r + 1.5) · texel · sin θ`. At high sun this removed the
 acne bands on lit walls (shadow factor 0.6–0.95 before, 1.0 after). Sun
 cascades are keyed by every opaque draw they rasterise, including fixture
 bodies, so a moved head no longer leaves its old sun shadow.
+
+## Camera look: exposure, tone curve, glare
+
+Status: implemented 2026-09-23 on `agent/bright`, awaiting sign-off.
+
+`RenderSettings::look` (`scene_desc::Look`) holds the tone curve, the
+exposure and the glare. `Look::NEUTRAL` (fixed exposure, AgX, no glare) keeps
+the single composite pass, so every tracked image is unchanged: the 19
+contract frames render byte-identical to the commit before this work. The
+live stage defaults to `Look::STAGE` and persists the look as the device
+setting `stage_look`. Any other look runs `post.rs`:
+
+- **Lens glow.** A camera-facing disc at each lit cone's apex, depth-tested
+  with 0.5 m of slack for the housing. Full brightness within half the beam
+  half-angle of the axis, gone at 1.5 times it (three quarters of the beam
+  angle), 2% from the side.
+- **Metering.** 128-bin log histogram of a quarter of the pixels,
+  centre-weighted. The mean of the 60th–98th percentile of lit pixels is
+  exposed to 0.5; the result is clamped to [-2.5, +1] EV before the
+  compensation is added. Near-black pixels are not metered and a frame with
+  almost nothing lit holds the previous exposure. Adaptation: 3 /s closing,
+  1.2 /s opening; a standalone capture snaps.
+- **Glare.** Exposed light above 2× diffuse white, down a six-level
+  dual-filter pyramid from half resolution and back up; three lines of three
+  7-tap Kawase streak passes at quarter resolution. Added after the tone
+  curve, saturating at the display's white.
+- **Tone curves.** AgX (three's), AgX with Blender's Punchy look (default),
+  and Narkowicz's ACES fit. HDR expansion above the 0.6 knee applies to each.
+
+Cost, 1920×1080, RTX 5090, Get Lucky at Gasworks (140 cones), min of three
+100-frame p50s, another GPU process running (so indicative only): neutral
+5.137 ms; tonemap chain +0.02 ms; metering +0.02 ms; bloom +0.10 ms; full
+stage look with lens glow and star +0.19 ms.
