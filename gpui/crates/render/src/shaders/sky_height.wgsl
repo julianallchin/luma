@@ -31,6 +31,8 @@ const HALF_PI: f32 = 1.5707963;
 const TAU: f32 = 6.2831853;
 // Bottom of an empty column: no overhang anywhere above the ground.
 const NO_SLAB: f32 = 1.0e9;
+// Height margin for slab compares on a receiver that is already lifted.
+const SLAB_EPSILON: f32 = 0.005;
 
 @group(0) @binding(0) var<uniform> height: HeightParams;
 @group(0) @binding(1) var heights: texture_2d<f32>;
@@ -76,13 +78,18 @@ fn lobe(a: f32, b: f32, low: f32, high: f32) -> f32 {
 /// edge, or to the zenith when the point is under it. Bands are summed, not
 /// merged, so two overhangs that overlap in one direction count twice; the
 /// sum is clamped to the whole lobe.
+///
+/// `p` is already off its own surface (the caller lifts it along the
+/// normal), so the height compares only absorb depth rounding, and they lean
+/// toward "under": a wall that meets an overhang is covered right up to it.
+/// A margin the other way counted the top few centimetres of every beam
+/// under a deck as open sky, a bright band that stepped with the texels.
 fn sky_visibility(p: vec3<f32>, n: vec3<f32>, rotation: f32) -> f32 {
-    let bias = height.march.z;
+    let bias = SLAB_EPSILON;
     let own = slab_at(p.xy);
-    let covered = own.y > p.z + bias && own.y < NO_SLAB;
+    let covered = own.y > p.z - bias && own.y < NO_SLAB;
     var visible = 0.0;
     var total = 0.0;
-    var open_sum = 0.0;
     for (var i = 0u; i < SKY_AZIMUTHS; i = i + 1u) {
         let phi = (f32(i) + rotation) * (TAU / f32(SKY_AZIMUTHS));
         let d = vec2<f32>(cos(phi), sin(phi));
@@ -95,22 +102,20 @@ fn sky_visibility(p: vec3<f32>, n: vec3<f32>, rotation: f32) -> f32 {
         var run_top = HALF_PI;
         var run_bottom = HALF_PI;
         var bands = 0.0;
-        var band_open = 0.0;
         var r = height.march.x * pow(height.march.y, rotation - 0.5);
         for (var s = 0u; s < SKY_STEPS; s = s + 1u) {
             let slab = slab_at(p.xy + d * r);
-            let overhang = slab.y > p.z + bias && slab.y < NO_SLAB;
+            let overhang = slab.y > p.z - bias && slab.y < NO_SLAB;
             if overhang {
                 let top = atan2(slab.x - p.z, r);
                 if !in_run {
                     run_top = top;
                 }
                 in_run = true;
-                run_bottom = atan2(slab.y - p.z, r);
+                run_bottom = atan2(max(slab.y - p.z, 0.0), r);
             } else {
                 if in_run {
                     bands += lobe(a, n.z, run_bottom, run_top);
-                    band_open += max(run_top - run_bottom, 0.0);
                     in_run = false;
                 }
                 if slab.x > p.z + bias {
@@ -121,13 +126,15 @@ fn sky_visibility(p: vec3<f32>, n: vec3<f32>, rotation: f32) -> f32 {
         }
         if in_run {
             bands += lobe(a, n.z, run_bottom, run_top);
-            band_open += max(run_top - run_bottom, 0.0);
         }
         total += full;
         visible += max(full - lobe(a, n.z, 0.0, low) - bands, 0.0);
-        open_sum += max(HALF_PI - low - band_open, 0.0) / HALF_PI;
     }
-    // A receiver facing straight down has no upper-hemisphere lobe; its sky
-    // term is zero anyway, so return the unweighted opening.
-    return select(open_sum / f32(SKY_AZIMUTHS), saturate(visible / total), total > 1e-4);
+    // A receiver facing (nearly) straight down has almost no upper-hemisphere
+    // lobe and no sky term to scale. The floor on `total` takes its value
+    // smoothly to zero there: a ratio of two tiny numbers is noise, and the
+    // unweighted opening this used to return lit a bright line along every
+    // crease under a deck once the denoiser spread it onto the wall beside
+    // it. An open floor's `total` is 4, so the floor never touches it.
+    return saturate(visible / max(total, 0.02));
 }
