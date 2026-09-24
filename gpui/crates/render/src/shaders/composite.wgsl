@@ -202,11 +202,12 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(scene * medium + haze, 1.0);
     }
     let display = display_transform(scene * medium + haze);
-    if HDR_OUTPUT {
-        // A half-float target has no 8-bit steps to break up.
-        return vec4<f32>(display, 1.0);
-    }
-    return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
+    // HDR dithers too. Its half-float target has no steps of its own, but
+    // the compositor's 10-bit PQ swapchain and an 8-bit capture of the frame
+    // do: without noise, a dim beam edge over the sky crosses them as a
+    // staircase of flat runs. Below the knee the HDR frame is the SDR frame,
+    // noise included. An 8-bit target clamps at zero anyway.
+    return vec4<f32>(max(display + sky_dither(display, frag.xy), vec3<f32>(0.0)), 1.0);
 }
 
 /// One least-significant bit of triangular noise, under a sky only.
