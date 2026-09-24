@@ -371,15 +371,69 @@ setting `stage_look`. Any other look runs `post.rs`:
   compensation is added. Near-black pixels are not metered and a frame with
   almost nothing lit holds the previous exposure. Adaptation: 3 /s closing,
   1.2 /s opening; a standalone capture snaps.
-- **Glare.** Exposed light above 2× diffuse white, down a six-level
-  dual-filter pyramid from half resolution and back up, each coarser level
-  weighted 0.7× the one above (a long faint tail). On top, by glare style:
-  *Iris* (default) and *Eye* draw a diffraction pattern at every visible
-  lens, computed at startup by FFT of a nine-blade iris or of a pupil with
-  ciliary fibres and particles (Ritschel et al. 2009, static), averaged over
-  12 wavelengths per channel so the Airy rings wash out and the rays remain;
-  *Star* draws three lines of Kawase streaks; *Bloom* adds nothing. Added
-  after the tone curve, saturating at the display's white.
+- **Glare** (reworked 2026-09-24 on `agent/glare-real`). Exposed light above
+  2× diffuse white (soft knee) is area-averaged into a padded FFT grid and
+  convolved with a glare kernel by FFT (`post_glare.wgsl`, wgpu compute), as
+  Unreal's convolution bloom does. The whole frame is convolved, so an
+  extended or oddly shaped bright area glares as its shape does (Ritschel et
+  al. 2009); there is no sprite per lens and no bloom pyramid. The grid is
+  1024 × 512 at High and 512 × 256 at Low; the frame fills at most half of
+  each side (455 × 256 texels for 16:9 at High, about 4 px each at 1080p and
+  5.6 px at 1440p), so the kernel reaches across the whole frame without the
+  cyclic convolution folding it back. 1024 complex texels is also the most
+  one row transform holds in the default 16 KiB of workgroup memory. Both
+  inputs are real, so rows keep only their non-negative frequencies; red and
+  green share one complex transform. A frame is three dispatches (hot pixels
+  + row FFT, column FFT × kernel spectrum × inverse column FFT, inverse row
+  FFT into the glare texture). The kernel's spectrum is built again only when
+  the style, the diffraction amount, or the grid's focal length or padding
+  (field of view, aspect) change by more than 1%: 15 ms of CPU on 32 cores,
+  about 85 ms on one, plus two dispatches.
+
+  The kernel (`psf.rs`) is energy per texel as a fraction of the source's
+  light, converted from angle by the camera's field of view:
+  - **Veil.** Vos's glare spread function (Vos 1984, as used by Spencer et
+    al. 1995 and Yoshida et al. 2008), normalised in closed form over 30°:
+    `0.384·2.61e6·exp(−(θ/0.02)²) + 0.478·20.91/(θ+0.02)³ + 0.138·72.37/(θ+0.02)²`.
+    Its 1/θ² tail reaches across the frame. About 26% of a source's light
+    lands outside its own texel at High, 1080p, 50°. Bloom and eye use it
+    whole; iris and star use a tenth of it, a camera's veiling glare being a
+    few percent (ISO 9358) with the same wide additive shape (Qian et al.,
+    CVPR 2026).
+  - **Aperture pattern** (iris, eye, star). |F{A·exp(iφ)}|² baked once at
+    startup on a background thread: a 512² FFT per 40 nm band (8 bands, each
+    with its own defocus phase, 0.15 waves at the rim), resampled at 4
+    wavelengths each, 32 from 395 to 705 nm, weighted into linear sRGB by the
+    CIE 1931 observer (Wyman et al. 2013 fit, negative lobes clipped). After
+    Wu et al., "How to Train Neural Networks for Flare Removal" (ICCV 2021),
+    the lens carries seeded dust (N(30, 5²) dots, radius 0.4–2.5% of the
+    pupil, opacity U(0, 1)) and scratches (N(30, 5²) polylines of U(1, 16)
+    segments, opacity U(0, 1)); the eye has a quarter as many beside its
+    ciliary fibres and particles. Iris: nine rounded blades; star: six
+    straight blades; eye: a round pupil. The 3 × 3 samples around frequency
+    zero (the Airy core, a thousandth of a degree in a real lens, a tenth
+    here) are cleared: that light stays with the source. What is left is
+    16–20% of the light, the scratch streaks reaching ±25°.
+  - **No ring.** There is no core fade and no `r / CORE` lift. The centre
+    texel, the source's own, takes its four neighbours' mean, so the glare
+    neither doubles the source nor dips under it. The kernel fades to zero
+    only near the grid's padding and the pattern only near its own edge, both
+    far out on the tail. The tonemap reads the glare through a cubic
+    B-spline, smooth to the second derivative.
+
+  `strength` scales the glare and `GLARE_GAIN` (10) stands in for the range
+  the scene lacks: a lens here is about 60× diffuse white where a real lamp
+  is thousands. `star` weights the pattern; 0.5 is physical. The Kawase star
+  streaks are gone: star is now a hexagonal aperture's six diffraction rays.
+  Added after the tone curve, saturating at the display's white.
+
+  Bake: 85 ms on 32 cores (190 ms on 4, 650 ms on 1), off the startup
+  thread; the first frame with glare waits for it. GPU cost, RTX 5090 /
+  Vulkan, Get Lucky at Gasworks at 146 s, min of five alternating 150-frame
+  p50s, against glare off: 1920×1080 +0.11 ms (the old pyramid and sprites
+  +0.03–0.05); 2560×1440 +0.12–0.13 ms (old +0.03–0.12); Low +0.05 ms (old
+  +0.08). The cost is set by the grid, not the frame, apart from the
+  hot-pixel average.
 - **Tone curves.** AgX (three's), AgX with Blender's Punchy look (default),
   and Narkowicz's ACES fit. HDR expansion above the 0.6 knee applies to each.
 
@@ -388,9 +442,9 @@ Cost, 1920×1080, RTX 5090, Get Lucky at Gasworks (140 cones), min of three
 5.137 ms; tonemap chain +0.02 ms; metering +0.02 ms; bloom +0.10 ms; full
 stage look with lens glow and star +0.19 ms.
 
-Glare styles, same setup at 146 s with 162 cones, no other GPU load, min of
-three 100-frame p50s: neutral 8.381 ms; bloom +0.07; iris +0.12; eye +0.14;
-star +0.11.
+Glare styles before the 2026-09-24 rework, same setup at 146 s with 162
+cones, no other GPU load, min of three 100-frame p50s: neutral 8.381 ms;
+bloom +0.07; iris +0.12; eye +0.14; star +0.11.
 
 `profile-volumetrics --catalogue` now renders at the venue's own haze
 density (as the stage does). Every measurement above was taken at a fixed
