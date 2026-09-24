@@ -10,9 +10,8 @@
 //!   minting a second view of one thing ([`Tabs::open`] is idempotent),
 //! - the patch page is a singleton per venue for free, since there is only one
 //!   `Patch { venue }` value per venue,
-//! - "the graph agent edited a pattern, surface its tab" is a call with no
-//!   question attached — whether the tab already existed is not the caller's
-//!   problem.
+//! - "surface this track's tab" is a call with no question attached —
+//!   whether the tab already existed is not the caller's problem.
 //!
 //! A second identity (a `TabId` beside the target) would be a second key that
 //! could disagree with the first, which is exactly the drift the shell
@@ -55,19 +54,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
     /// One track's timeline, against the named venue's score for it.
-    TrackEditor {
-        track: String,
-        venue: String,
-    },
-    ScoreGraph {
-        score: String,
-        graph: String,
-    },
+    TrackEditor { track: String, venue: String },
     /// One venue's stage, fixture inventory and groups. Singleton per venue,
     /// and the only body of the venue page — it never sits in a track's strip.
-    Patch {
-        venue: String,
-    },
+    Patch { venue: String },
 }
 
 impl Target {
@@ -78,7 +68,6 @@ impl Target {
     pub(crate) fn key_context(&self) -> &'static str {
         match self {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
-            Self::ScoreGraph { .. } => crate::keymap::context::GRAPH,
             Self::Patch { .. } => crate::keymap::context::PATCH,
         }
     }
@@ -91,7 +80,6 @@ impl Target {
     pub(crate) fn element_key(&self) -> String {
         match self {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
-            Self::ScoreGraph { score, graph } => format!("score-graph:{score}:{graph}"),
             Self::Patch { venue } => format!("patch:{venue}"),
         }
     }
@@ -264,13 +252,6 @@ mod tests {
         }
     }
 
-    fn graph(pattern: &str) -> Target {
-        Target::ScoreGraph {
-            score: "score".into(),
-            graph: pattern.to_string(),
-        }
-    }
-
     fn targets<B>(tabs: &Tabs<B>) -> Vec<Target> {
         tabs.iter().map(|tab| tab.target.clone()).collect()
     }
@@ -291,17 +272,6 @@ mod tests {
 
         assert_eq!(targets(&tabs), vec![track("a"), track("b")]);
         assert_eq!(tabs.active(), Some(&track("a")));
-    }
-
-    #[test]
-    fn two_patterns_are_two_tabs_and_one_pattern_is_one() {
-        let mut tabs: Tabs<&str> = Tabs::default();
-        tabs.open(graph("pulse"), || "one");
-        tabs.open(graph("wash"), || "two");
-        tabs.open(graph("pulse"), || {
-            panic!("an open pattern must not be rebuilt")
-        });
-        assert_eq!(tabs.iter().count(), 2);
     }
 
     #[test]
@@ -404,7 +374,6 @@ mod tests {
         let keys = [
             track("a").element_key(),
             track("b").element_key(),
-            graph("p").element_key(),
             Target::Patch {
                 venue: "v".to_string(),
             }
@@ -418,7 +387,6 @@ mod tests {
     fn every_target_declares_a_distinct_key_context() {
         let contexts = [
             track("a").key_context(),
-            graph("p").key_context(),
             Target::Patch {
                 venue: "v".to_string(),
             }

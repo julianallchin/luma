@@ -189,7 +189,7 @@ fn fade_bend_and_level_handles_write_the_clip_alpha() {
 fn moving_a_clip_over_the_end_of_another_crosses_them() {
     const NAME: &str = "clip-fades-crossfade";
     let mut document: luma_patterns::Score =
-        serde_json::from_value(support::score(json!({}), json!({}))).unwrap();
+        serde_json::from_value(support::score(json!({}))).unwrap();
     let presets = luma_patterns::presets();
     document.clips.insert(
         "first".into(),
@@ -256,29 +256,6 @@ fn moving_a_clip_over_the_end_of_another_crosses_them() {
             "{clip}"
         );
     }
-}
-
-#[test]
-fn a_clip_with_its_own_graph_has_no_alpha_line() {
-    const NAME: &str = "clip-fades-recipe";
-    let mut harness = Fixture::new(NAME, 20, vec![])
-        .with_graph_score(support::recipe_score("beat_chase"))
-        .with_rig()
-        .open(Mode::Headless);
-    let out = run(
-        &mut harness,
-        opened(
-            r#"
-        node("card","Beat chase");
-        ({sliders:app.snapshot().findAll({role:"slider"}).map(n=>n.label).filter(l=>l.startsWith("Beat chase "))})
-    "#,
-        ),
-    );
-    assert_eq!(
-        out["sliders"],
-        json!(["Beat chase start", "Beat chase end"]),
-        "{out}"
-    );
 }
 
 #[test]

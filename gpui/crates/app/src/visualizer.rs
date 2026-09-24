@@ -468,7 +468,6 @@ pub(crate) struct Visualizer {
     /// [`Self::venue_id`] so moving between scores — of one track or of two —
     /// re-composites instead of tearing the stage down.
     subject: Option<Lit>,
-    graph_preview: Option<crate::graph::preview::View>,
     /// A preset the track editor's browser is playing in place of the score,
     /// while the pointer is over its tile.
     audition: Option<crate::track_editor::Audition>,
@@ -1088,7 +1087,6 @@ impl Visualizer {
             venue_name,
             subject,
             lit: None,
-            graph_preview: None,
             audition: None,
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
@@ -2758,7 +2756,6 @@ struct StageSubject {
     venue_name: String,
     /// The score that lights the rig, when one does.
     lit: Option<Lit>,
-    graph_preview: Option<crate::graph::preview::View>,
     audition: Option<crate::track_editor::Audition>,
 }
 
@@ -2784,10 +2781,9 @@ impl Luma {
     ///
     /// **The room comes from the scope, not from the visible tab.** Now that
     /// the strip belongs to the picked track, the scope already names the room
-    /// every tab in that strip is being worked on against — so clicking from a
-    /// timeline to a pattern graph in the same strip leaves the stage exactly
-    /// where it was, rather than tearing it down because the tab that happened
-    /// to be showing named no venue. Only the *lighting* still asks the tab,
+    /// every tab in that strip is being worked on against — so switching tabs
+    /// in the same strip leaves the stage exactly where it was. Only the
+    /// *lighting* still asks the tab,
     /// because only a track editor knows a `(track, venue)` to composite.
     fn stage_subject(&self) -> Option<StageSubject> {
         // A hidden pane and a hidden workspace are the same fact to the stage:
@@ -2813,7 +2809,7 @@ impl Luma {
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
-            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Patch(_)) | None => None,
+            Some(Body::TrackEditor(_) | Body::Patch(_)) | None => None,
         };
         let name = self
             .sidebar
@@ -2823,10 +2819,6 @@ impl Luma {
                 || venue_id.clone(),
                 |browser| browser.venue_name().to_string(),
             );
-        let graph_preview = match self.workspace.active_body() {
-            Some(Body::Graph(editor)) => editor.preview_view(),
-            _ => None,
-        };
         let audition = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.audition(),
             _ => None,
@@ -2835,7 +2827,6 @@ impl Luma {
             venue_id,
             venue_name: name,
             lit,
-            graph_preview,
             audition,
         })
     }
@@ -2855,31 +2846,17 @@ impl Luma {
             venue_id,
             venue_name,
             lit: subject,
-            graph_preview,
             audition,
         }) = self.stage_subject()
         else {
             // Dropping the state is what un-mounts the viewport, and
             // un-mounting is what stops its continuous redraw — see the
             // rendering note on [`visualizer`].
-            if let Some(state) = self.visualizer.take() {
-                if let Some(view) = state.graph_preview {
-                    self.stop_graph_preview(&view.target, cx);
-                }
+            if self.visualizer.take().is_some() {
                 cx.notify();
             }
             return;
         };
-        let previous_preview = self
-            .visualizer
-            .as_ref()
-            .and_then(|state| state.graph_preview.as_ref())
-            .map(|view| view.target.clone());
-        if let Some(previous) = previous_preview
-            .filter(|target| graph_preview.as_ref().map(|view| &view.target) != Some(target))
-        {
-            self.stop_graph_preview(&previous, cx);
-        }
         // Split the borrow: both arms read the library and mutate the stage,
         // and the two fields are disjoint. The same split `shell::active_tab`
         // takes for the same reason.
@@ -2903,7 +2880,6 @@ impl Luma {
             }
         }
         if let Some(state) = visualizer {
-            state.graph_preview = graph_preview;
             state.audition = audition;
         }
     }
@@ -3081,12 +3057,6 @@ pub(crate) fn visualizer(
                                 .child(luma_ui::float::frosted_card(card))
                         })
                 })),
-        )
-        .children(
-            state
-                .graph_preview
-                .as_ref()
-                .map(|view| crate::graph::preview::controls(view, app, library)),
         )
         .children(state.audition.as_ref().map(audition_badge))
         .agent_node(
@@ -3642,36 +3612,17 @@ fn frame_graph(intervals: Vec<f32>) -> impl IntoElement {
 
 /// The viewport itself, or the reason there isn't one.
 fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyElement {
-    // Graph evaluation and its errors remain available when GPU rendering is
-    // disabled. Keep one sample for the eventual stage draw.
-    let graph_sample = if let Some(view) = &state.graph_preview {
-        let time = view.time(library);
+    // A hovered preset plays alone in place of the score. A failed sample
+    // shows the score, as if nothing were hovered.
+    let graph_sample = state.audition.as_ref().and_then(|audition| {
         let sampled = std::time::Instant::now();
-        match view.sample(time) {
-            Ok(universe) => Some((
-                time,
-                Some(universe),
-                sampled.elapsed().as_secs_f32() * 1_000.0,
-            )),
-            Err(error) => {
-                return plate(error)
-                    .agent_node(Role::Card, "Stage")
-                    .into_any_element();
-            }
-        }
-    } else {
-        // A hovered preset plays alone in place of the score. A failed
-        // sample shows the score, as if nothing were hovered.
-        state.audition.as_ref().and_then(|audition| {
-            let sampled = std::time::Instant::now();
-            let (time, universe) = audition.sample().ok()?;
-            Some((
-                time,
-                Some(universe),
-                sampled.elapsed().as_secs_f32() * 1_000.0,
-            ))
-        })
-    };
+        let (time, universe) = audition.sample().ok()?;
+        Some((
+            time,
+            Some(universe),
+            sampled.elapsed().as_secs_f32() * 1_000.0,
+        ))
+    });
     // A frame that failed drew nothing and left its reason behind; adopt it
     // before deciding what this frame shows.
     if let Some(error) = state.stage.borrow_mut().error.take() {
@@ -4903,7 +4854,6 @@ mod orbit_selection_tests {
             venue_name: "Venue".into(),
             subject: None,
             lit: None,
-            graph_preview: None,
             audition: None,
             gpu_enabled: false,
             status: Status::Loading,

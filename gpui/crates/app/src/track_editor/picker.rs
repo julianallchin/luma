@@ -253,7 +253,6 @@ fn fetch(app: &mut Luma, menu: InsertMenu, choice: InsertChoice, cx: &mut Contex
             venue_id: editor.venue_id.clone(),
             track_id: editor.track_id.clone(),
             definition: choice.0.form.clone(),
-            library: None,
             inputs: choice.0.inputs.clone(),
             targets: vec![luma_lib::models::selection::Selection::new("all")],
             times: (0..count)

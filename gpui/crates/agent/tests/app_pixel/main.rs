@@ -18,8 +18,6 @@ mod chrome_anchors_pixels;
 mod dialog_host_pixels;
 mod fixture_picker_pixels;
 mod gauntlet_chat;
-mod graph_budget;
-mod graph_editor_pixels;
 mod sidebar_scores_pixels;
 mod sidebar_toggle_budget;
 mod signin_pixels;

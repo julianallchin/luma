@@ -1459,7 +1459,6 @@ fn control(
         Widget::Color(entity) => div().child(entity.clone()),
         Widget::Scalar(entity) => div().child(entity.clone()),
         Widget::Gradient(entity) => div().child(entity.clone()),
-        Widget::Mapping(entity) => div().child(entity.clone()),
         _ => return None,
     })
 }

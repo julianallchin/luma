@@ -528,7 +528,6 @@ impl Luma {
     /// Logical teardown, shared by every close gesture.
     ///
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
-        self.close_score_graph_tabs(target, None, cx);
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
             if self.workspace.is_empty() {
@@ -562,9 +561,9 @@ mod tests {
     use super::*;
 
     fn target(name: &str) -> Target {
-        Target::ScoreGraph {
-            score: "score".into(),
-            graph: name.into(),
+        Target::TrackEditor {
+            track: name.into(),
+            venue: "venue".into(),
         }
     }
 

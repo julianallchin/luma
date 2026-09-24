@@ -28,15 +28,6 @@ mod dialog_escape;
 mod dialog_focus;
 mod empty_panel;
 mod fixture_picker;
-mod graph;
-mod graph_history;
-mod graph_inputs;
-mod graph_inspection;
-mod graph_interactions;
-mod graph_output;
-mod graph_palettes;
-mod graph_preview;
-mod graph_spectrogram;
 mod keyboard;
 mod library_foundation;
 mod pointer_ownership;
@@ -66,7 +57,5 @@ mod venues;
 mod visualizer_fullscreen;
 mod visualizer_score;
 mod workspace_scope;
-
-mod lighting_patterns;
 
 mod sync_status;

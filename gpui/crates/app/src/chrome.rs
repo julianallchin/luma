@@ -780,7 +780,6 @@ fn chip(
 fn kind_icon(target: &Target) -> IconName {
     match target {
         Target::TrackEditor { .. } => IconName::Play,
-        Target::ScoreGraph { .. } => IconName::Network,
         Target::Patch { .. } => IconName::Cpu,
     }
 }

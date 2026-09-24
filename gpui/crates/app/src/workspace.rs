@@ -35,7 +35,6 @@
 use std::collections::HashMap;
 
 use crate::tabs::{Tabs, Target};
-use crate::Body;
 
 /// What the sidebar has picked: one track, or the venue itself.
 ///
@@ -235,9 +234,7 @@ impl crate::Luma {
             .iter()
             .find(|tab| matches!(tab.target, Target::TrackEditor { .. }))
             .map(|tab| tab.target.clone());
-        if matches!(self.workspace.active_body(), Some(Body::Graph(_))) {
-            self.park_track_audio(cx);
-        } else if let Some(target) = track {
+        if let Some(target) = track {
             self.activate_track_audio(&target, cx);
         }
         self.refresh_agent_tabs(cx);

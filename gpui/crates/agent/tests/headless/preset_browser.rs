@@ -29,7 +29,7 @@ fn labels(value: &serde_json::Value) -> Vec<&str> {
 fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
     let name = "preset-browser-click";
     let mut harness = Fixture::new(name, 20, vec![])
-        .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
+        .with_graph_score(support::score(serde_json::json!({})))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -119,7 +119,7 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
 fn a_row_dragged_onto_the_timeline_shows_where_it_lands_and_lands_there() {
     let name = "preset-browser-drag";
     let mut harness = Fixture::new(name, 20, vec![])
-        .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
+        .with_graph_score(support::score(serde_json::json!({})))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -190,7 +190,7 @@ fn a_row_dragged_onto_the_timeline_shows_where_it_lands_and_lands_there() {
 fn hovering_a_row_plays_it_on_the_stage_until_the_pointer_leaves() {
     let name = "preset-browser-hover";
     let mut harness = Fixture::new(name, 20, vec![])
-        .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
+        .with_graph_score(support::score(serde_json::json!({})))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);

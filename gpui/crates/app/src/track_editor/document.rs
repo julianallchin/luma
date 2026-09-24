@@ -1,45 +1,11 @@
-//! The canonical graph score behind the native timeline. Seconds are a view of
-//! its beat positions; graphs and clips are always saved in one document.
+//! The canonical score behind the native timeline. Seconds are a view of its
+//! beat positions.
 use super::*;
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
 use luma_patterns as p;
 use std::collections::BTreeMap;
 
 pub(super) const SELECTION_INPUT: &str = "@clip/selection";
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct GraphDraft {
-    pub base: p::Score,
-    pub candidate: p::Score,
-    pub error: String,
-}
-
-pub(super) struct GraphState {
-    /// The document as the seam last confirmed it — what a save is compared
-    /// against, so an unchanged score writes nothing.
-    pub base: p::Score,
-    pub definitions: Rc<BTreeMap<String, p::Definition>>,
-    pub composited_definitions: Rc<BTreeMap<String, p::Definition>>,
-    pub drafts: Rc<BTreeMap<String, GraphDraft>>,
-}
-
-impl GraphState {
-    pub fn new(score: p::Score) -> Self {
-        let definitions = Rc::new(score.definitions.clone());
-        Self {
-            base: score,
-            composited_definitions: definitions.clone(),
-            definitions,
-            drafts: Rc::default(),
-        }
-    }
-
-    pub fn library(&self) -> p::Result<p::Library> {
-        let mut score = p::Score::default();
-        score.definitions = (*self.definitions).clone();
-        score.library(&p::standard_library())
-    }
-}
 
 /// Is `stored` the document `ours` wrote, as far as storage can tell?
 ///
@@ -108,9 +74,7 @@ pub(super) fn resolve_document(
         .ok_or("Waiting for the track's beat grid")?
         .timeline()
         .map_err(|error| error.to_string())?;
-    let library = score
-        .library(&p::standard_library())
-        .map_err(|error| error.to_string())?;
+    let library = p::standard_library();
     let mut clips = score
         .clips
         .iter()
@@ -154,7 +118,7 @@ impl Editor {
         let crate::library::ScoreContents { score, beats } = contents;
         self.clips = resolve_document(&score, beats.as_ref())?;
         self.beats = beats.map(Rc::new);
-        self.graph_score = Some(GraphState::new(score));
+        self.graph_score = Some(score);
         self.sheet.invalidate_defs();
         self.previews.borrow_mut().clear();
         self.preview_errors.clear();
@@ -163,12 +127,8 @@ impl Editor {
     }
 
     pub(crate) fn graph_candidate(&self) -> Result<p::Score, String> {
-        let graph = self.graph_score.as_ref().ok_or("no score is open")?;
-        // Keep the document version through native edits. Starting from the
-        // current default would downgrade an upgraded score on its first save.
-        let mut score = graph.base.clone();
-        score.clips.clear();
-        score.definitions = (*graph.definitions).clone();
+        self.graph_score.as_ref().ok_or("no score is open")?;
+        let mut score = p::Score::default();
         if self.clips.is_empty() {
             return Ok(score);
         }
@@ -177,9 +137,6 @@ impl Editor {
             .as_ref()
             .ok_or("Waiting for the track's beat grid")?
             .timeline()
-            .map_err(|error| error.to_string())?;
-        let library = score
-            .library(&p::standard_library())
             .map_err(|error| error.to_string())?;
         for clip in self.clips.iter() {
             let mut authored = clip.core.clone().ok_or("clip has no authored body")?;
@@ -208,10 +165,7 @@ impl Editor {
             authored.graph = clip.pattern.to_string();
             authored.z_index = clip.z;
             authored.blend_mode = clip.blend;
-            let definition = library
-                .definitions
-                .get(&authored.graph)
-                .ok_or("clip graph is missing")?;
+            let definition = form_definition(&authored.graph).ok_or("clip graph is not a form")?;
             authored.inputs = clip
                 .args
                 .as_object()
@@ -236,13 +190,8 @@ impl Editor {
         Ok(score)
     }
 
-    pub(crate) fn graph_label(&self, id: &str) -> Option<String> {
-        Some(self.graph_score.as_ref()?.library().ok()?.display_name(id))
-    }
-
     pub(super) fn graph_input_defs(&self, id: &str) -> Option<Vec<PatternArgDef>> {
-        let library = self.graph_score.as_ref()?.library().ok()?;
-        let definition = library.definitions.get(id)?;
+        let definition = form_definition(id)?;
         let mut inputs = vec![PatternArgDef {
             id: SELECTION_INPUT.into(),
             name: "Selection".into(),
@@ -283,41 +232,14 @@ impl Editor {
     /// Install a locally edited document without replacing the saved base.
     pub(super) fn edit_graph_score(&mut self, score: p::Score) -> Result<(), String> {
         let clips = resolve_document(&score, self.beats.as_deref())?;
-        let state = self.graph_score.as_mut().ok_or("no score is open")?;
-        state.definitions = Rc::new(score.definitions);
-        self.sheet.invalidate_defs();
+        self.graph_score.as_ref().ok_or("no score is open")?;
         self.replace_clips(clips.to_vec());
         Ok(())
     }
 }
 
 impl Luma {
-    pub(super) fn make_clips_independent(&mut self, cx: &mut Context<Self>) {
-        self.track_command(
-            |editor| {
-                let result = (|| {
-                    let mut score = editor.graph_candidate()?;
-                    for id in &editor.selected {
-                        score
-                            .make_independent(
-                                &p::standard_library(),
-                                id,
-                                &uuid::Uuid::new_v4().to_string(),
-                            )
-                            .map_err(|error| error.to_string())?;
-                    }
-                    editor.edit_graph_score(score)
-                })();
-                if let Err(error) = result {
-                    editor.error = Some(error);
-                }
-            },
-            cx,
-        );
-    }
-
     pub(crate) fn commit_graph_score_for(&mut self, target: Target, cx: &mut Context<Self>) {
-        self.sync_score_graph_tabs(&target, cx);
         let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(&target) else {
             return;
         };
@@ -336,9 +258,8 @@ impl Luma {
                 return;
             }
         };
-        let graph = editor.graph_score.as_ref().unwrap();
         editor.dirty = false;
-        if candidate == graph.base {
+        if Some(&candidate) == editor.graph_score.as_ref() {
             return;
         }
         let pending = self.library.apply_score_document(&score_id, &candidate);
@@ -356,28 +277,22 @@ impl Luma {
                     }
                     editor.saving = false;
                     editor.writes += 1;
-                    let Some(graph) = editor.graph_score.as_mut() else {
+                    let Some(base) = editor.graph_score.as_mut() else {
                         return;
                     };
                     match result {
                         Ok(()) => {
-                            let definitions_changed = !p::definitions_have_same_computation(
-                                &graph.base.definitions,
-                                &candidate.definitions,
-                            );
                             previews = candidate
                                 .clips
                                 .iter()
-                                .filter(|(id, clip)| {
-                                    definitions_changed || graph.base.clips.get(*id) != Some(*clip)
-                                })
+                                .filter(|(id, clip)| base.clips.get(*id) != Some(*clip))
                                 .map(|(id, _)| SharedString::from(id.clone()))
                                 .collect();
                             editor
                                 .previews
                                 .borrow_mut()
                                 .retain(|id, _| candidate.clips.contains_key(id.as_ref()));
-                            graph.base = candidate;
+                            *base = candidate;
                         }
                         Err(error) => editor.error = Some(error.to_string()),
                     }
@@ -433,36 +348,20 @@ impl Luma {
                             if editor
                                 .graph_score
                                 .as_ref()
-                                .is_some_and(|graph| same_document(&graph.base, &contents.score))
+                                .is_some_and(|base| same_document(base, &contents.score))
                             {
                                 return;
                             }
                             // Installing a read initializes its scene baseline. Keep
                             // the actual installed baseline so the rig recompiles
-                            // changed clips and definition-only agent edits.
+                            // changed clips.
                             let composited = editor.composited.clone();
-                            let definitions = editor
-                                .graph_score
-                                .as_ref()
-                                .map(|graph| graph.composited_definitions.clone());
-                            let drafts = editor
-                                .graph_score
-                                .as_ref()
-                                .map(|graph| graph.drafts.clone());
                             if let Err(error) = editor.install_contents(contents) {
                                 editor.error = Some(error);
                                 return;
                             }
                             changed = true;
                             editor.composited = composited;
-                            if let (Some(graph), Some(definitions)) =
-                                (editor.graph_score.as_mut(), definitions)
-                            {
-                                graph.composited_definitions = definitions;
-                            }
-                            if let (Some(graph), Some(drafts)) = (&mut editor.graph_score, drafts) {
-                                graph.drafts = drafts;
-                            }
                             editor.history = History::default();
                             // A clip that is still there stays selected: the
                             // sheet is the selection, and a remote edit to
@@ -541,73 +440,8 @@ impl Editor {
     }
 }
 
-impl Editor {
-    pub(crate) fn graph_draft(&self, root: &str) -> Option<&GraphDraft> {
-        self.graph_score.as_ref()?.drafts.get(root)
-    }
-
-    /// Drafts participate in the same undo stack as published graph/timeline
-    /// edits, while the persisted score remains the last playable document.
-    pub(crate) fn record_graph_draft(
-        &mut self,
-        root: &str,
-        draft: GraphDraft,
-    ) -> Result<(), String> {
-        if !self.writable() {
-            return Err("This score is read only".into());
-        }
-        if self.graph_score.is_none() {
-            return Err("No score is open".into());
-        }
-        self.checkpoint();
-        Rc::make_mut(&mut self.graph_score.as_mut().unwrap().drafts).insert(root.to_owned(), draft);
-        Ok(())
-    }
-
-    pub(crate) fn publish_graph_edit(&mut self, score: p::Score) -> Result<(), String> {
-        self.publish_graph_gesture(score, None)
-    }
-
-    pub(crate) fn publish_graph_gesture(
-        &mut self,
-        score: p::Score,
-        completed_root: Option<&str>,
-    ) -> Result<(), String> {
-        if !self.writable() {
-            return Err("This score is read only".into());
-        }
-        if self.graph_candidate()? == score
-            && completed_root
-                .and_then(|root| self.graph_draft(root))
-                .is_none()
-        {
-            return Ok(());
-        }
-        self.checkpoint();
-        if let Err(error) = self.edit_graph_score(score) {
-            self.abandon_checkpoint();
-            return Err(error);
-        }
-        if let (Some(graph), Some(root)) = (&mut self.graph_score, completed_root) {
-            Rc::make_mut(&mut graph.drafts).remove(root);
-        }
-        Ok(())
-    }
-    pub(crate) fn step_graph_history(&mut self, forward: bool) -> bool {
-        if !self.writable() {
-            return false;
-        }
-        if forward {
-            self.redo()
-        } else {
-            self.undo()
-        }
-    }
-}
-
 impl Luma {
     pub(crate) fn refresh_working_scene_for(&mut self, target: &Target, cx: &mut Context<Self>) {
-        self.sync_score_graph_tabs(target, cx);
         if let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) {
             super::sync_composite(editor, cx);
         }
@@ -623,7 +457,7 @@ mod tests {
 
     fn score(clip: serde_json::Value) -> p::Score {
         serde_json::from_value(serde_json::json!({
-            "definitions": {}, "clips": { "c": clip }
+            "clips": { "c": clip }
         }))
         .unwrap()
     }

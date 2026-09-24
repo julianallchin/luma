@@ -18,7 +18,7 @@ fn stored(name: &str) -> serde_json::Value {
 #[test]
 fn the_picker_lists_presets_and_places_a_form_clip() {
     let mut harness = Fixture::new("clip-forms-picker", 20, vec![])
-        .with_graph_score(support::score(serde_json::json!({}), serde_json::json!({})))
+        .with_graph_score(support::score(serde_json::json!({})))
         .with_rig()
         .open(Mode::Headless);
     let result = harness.exec(
@@ -41,7 +41,6 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
         app.click(node("card","Chase"),{count:2});
         app.frames(12,{waitMs:40});
         ({offered,shown,inputs,
-          graph:!!app.snapshot().find({role:"card",label:"Graph workspace"}),
           sheet:!!app.snapshot().find({role:"card",label:"Clip inputs"})})
     "#,
         ),
@@ -85,14 +84,12 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
             .any(|v| v == "Alpha"),
         "alpha is edited on the timeline, not in the sheet: {out}"
     );
-    assert_eq!(out["graph"], false, "a form clip opens no graph tab: {out}");
     assert_eq!(
         out["sheet"], true,
         "a double-click keeps the inputs up: {out}"
     );
 
     let score = stored("clip-forms-picker");
-    assert!(score["definitions"].as_object().unwrap().is_empty());
     let clips = score["clips"].as_object().unwrap();
     assert_eq!(clips.len(), 1);
     let clip = clips.values().next().unwrap();

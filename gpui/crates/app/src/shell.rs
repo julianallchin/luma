@@ -34,8 +34,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patch, settings,
-    stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, confirm, fixture_picker, keymap, patch, settings, stage,
+    subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -116,7 +116,6 @@ impl Overlay {
 /// body is the state showing it.
 pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
-    Graph(Box<graph::Editor>),
     Patch(Box<patch::Patch>),
 }
 
@@ -125,7 +124,6 @@ impl Body {
     pub(crate) fn title(&self) -> SharedString {
         match self {
             Self::TrackEditor(state) => state.track_name().to_string().into(),
-            Self::Graph(state) => state.pattern_name().to_string().into(),
             Self::Patch(state) => state.venue_name().to_string().into(),
         }
     }
@@ -282,7 +280,6 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(editor) => self.stop_graph_preview(&editor.target(), cx),
             Body::Patch(_) => {}
         }
     }
@@ -1192,7 +1189,6 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         Body::TrackEditor(state) => {
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
-        Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
         Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
     };
     div()

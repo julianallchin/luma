@@ -20,9 +20,8 @@
 //! 6. **A mixed selection offers no args**, and clearing the selection brings
 //!    the preset browser back.
 //!
-//! The clips are lit (`Clip::lit`) because arg definitions live on a
-//! pattern's *graph document*, and only the lit path authors one; two clips
-//! share one pattern key, which the fixture now mints once.
+//! Every fixture clip plays the Wash preset, so each has the inputs of its
+//! form.
 
 #![cfg(feature = "app")]
 

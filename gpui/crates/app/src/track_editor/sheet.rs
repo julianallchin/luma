@@ -12,7 +12,6 @@ use luma_ui::arg::color::{luma_hsv_picker, ColorArg, ColorArgEditor, ColorArgEve
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
 use luma_ui::arg::gradient::{Gradient, GradientStop};
 use luma_ui::arg::gradient_editor::{GradientChanged, GradientEditor};
-use luma_ui::arg::mapping::{MappingChanged, MappingEditor};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::palette::{luma_palette_row, PaletteEvent};
 use luma_ui::arg::select::{luma_arg_select, MenuVisibility};
@@ -146,7 +145,6 @@ struct Cell {
 
 enum Widget {
     Seed(Entity<DraftedNumber<u64>>),
-    Mapping(Entity<MappingEditor>),
     Invalid(String),
     Envelope(Entity<luma_ui::arg::envelope::EnvelopeEditor>),
     Choice(Vec<luma_lib::models::node_graph::ParamOption>),
@@ -183,41 +181,6 @@ enum Widget {
 }
 
 // -- wire codecs --------------------------------------------------------------
-
-fn mapping_value(value: &serde_json::Value) -> Result<luma_patterns::MappingSpec, String> {
-    match luma_lib::node_graph::lighting::decode(luma_patterns::ValueType::Mapping, value)? {
-        luma_patterns::Value::Mapping(mapping) => Ok(mapping),
-        _ => Err("Expected a mapping".into()),
-    }
-}
-
-fn mapping_widget(
-    definition: &PatternArgDef,
-    stored: &serde_json::Value,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-    subscriptions: &mut Vec<Subscription>,
-) -> Widget {
-    let value = match mapping_value(stored) {
-        Ok(value) => value,
-        Err(error) => return Widget::Invalid(error),
-    };
-    let field =
-        cx.new(|cx| MappingEditor::new(definition.name.clone(), value, FIELD_W, window, cx));
-    let input = definition.id.clone();
-    subscriptions.push(
-        cx.subscribe(&field, move |this, _, event: &MappingChanged, cx| {
-            this.arg_live(
-                &input,
-                luma_lib::node_graph::lighting::wire_value(&luma_patterns::Value::Mapping(
-                    event.0.clone(),
-                )),
-                cx,
-            );
-        }),
-    );
-    Widget::Mapping(field)
-}
 
 //
 // The sheet's serialization edge: everything below speaks the widget kit's
@@ -672,7 +635,8 @@ fn plain_widget(
                 ));
                 Widget::Color(entity)
             }
-            PatternArgType::Mapping => mapping_widget(def, &stored, window, cx, subs),
+            // A form's axis is its own widget; a mapping here did not decode.
+            PatternArgType::Mapping => Widget::Invalid("Unreadable axis".into()),
             PatternArgType::Boundary
             | PatternArgType::Boolean
             | PatternArgType::AudioSource
@@ -830,18 +794,8 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
                 continue;
             }
         }
-        if cell.def.arg_type == PatternArgType::Mapping {
-            match (&cell.widget, mapping_value(&stored)) {
-                (Widget::Mapping(entity), Ok(value)) => {
-                    entity.update(cx, |field, cx| field.set_value(value, cx));
-                }
-                _ => cell.widget = mapping_widget(&cell.def, &stored, window, cx, &mut built._subs),
-            }
-            cell.synced = stored;
-            continue;
-        }
         match &mut cell.widget {
-            Widget::Mapping(_) | Widget::Invalid(_) => {}
+            Widget::Invalid(_) => {}
             Widget::Envelope(entity) => {
                 let points = envelope_value(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(points, cx));
@@ -1114,14 +1068,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .px(pad)
                 .pt(pad)
                 .pb(px(12.))
-                .child(luma_ui::caption(
-                    if is_form(built) {
-                        "Form"
-                    } else {
-                        "Pattern · this score"
-                    }
-                    .to_string(),
-                ))
+                .child(luma_ui::caption("Form".to_string()))
                 .child(
                     div()
                         .w_full()
@@ -1146,32 +1093,11 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
-                    .children(
-                        state
-                            .graph_score
-                            .as_ref()
-                            .filter(|_| !is_form(built))
-                            .map(|_| {
-                                let app = app.clone();
-                                luma_ui::button("Make independent", Enabled::Yes)
-                                    .id("make-clip-independent")
-                                    .on_click(move |_, _, cx| {
-                                        app.update(cx, |this, cx| this.make_clips_independent(cx));
-                                    })
-                                    .agent_node(Role::Button, "Make independent")
-                                    .into_any_element()
-                            }),
-                    )
                     .child(named("Blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
         )
         .into_any_element()
-}
-
-/// Whether the selection is of one form. A form clip has no graph of its own.
-fn is_form(built: &Built) -> bool {
-    built.pattern.as_deref().is_some_and(luma_patterns::is_form)
 }
 
 /// The pattern's own schema, or the one line that says why there is none.
@@ -1186,80 +1112,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     match &built.pattern {
         None => note("Mixed patterns"),
         Some(_) if built.cells.is_empty() => note("No exposed inputs"),
-        Some(id) if luma_patterns::is_form(id) => form::rows(state, built, app),
-        Some(_) => {
-            let typed = built
-                .cells
-                .iter()
-                .any(|cell| cell.def.arg_type == PatternArgType::Mapping);
-            if !typed {
-                return built
-                    .cells
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(index, cell)| arg_rows(state, app, index, cell))
-                    .collect();
-            }
-            let mut rows = Vec::new();
-            for (title, ids) in [
-                ("Shape", &["width", "shape", "softness"][..]),
-                (
-                    "Space",
-                    &["selection", "mapping", "boundary", "start", "end"][..],
-                ),
-                (
-                    "Timing",
-                    &["travel", "repeat", "grid_aligned", "reseed"][..],
-                ),
-                ("Appearance", &["color", "brightness"][..]),
-            ] {
-                let cells: Vec<_> = ids
-                    .iter()
-                    .filter_map(|id| {
-                        built
-                            .cells
-                            .iter()
-                            .enumerate()
-                            .find(|(_, cell)| cell.def.id == *id)
-                    })
-                    .collect();
-                if cells.is_empty() {
-                    continue;
-                }
-                rows.push(
-                    div()
-                        .pt(px(8.))
-                        .child(luma_ui::caption(title.to_string()))
-                        .agent_node(Role::Text, title.to_string())
-                        .into_any_element(),
-                );
-                for (index, cell) in cells {
-                    rows.extend(arg_rows(state, app, index, cell));
-                }
-            }
-            for (index, cell) in built.cells.iter().enumerate().filter(|(_, cell)| {
-                ![
-                    "width",
-                    "shape",
-                    "softness",
-                    "selection",
-                    "mapping",
-                    "boundary",
-                    "start",
-                    "end",
-                    "travel",
-                    "repeat",
-                    "grid_aligned",
-                    "reseed",
-                    "color",
-                    "brightness",
-                ]
-                .contains(&cell.def.id.as_str())
-            }) {
-                rows.extend(arg_rows(state, app, index, cell));
-            }
-            rows
-        }
+        Some(_) => form::rows(state, built, app),
     }
 }
 
@@ -1299,7 +1152,6 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
     let name = cell.def.name.as_str();
     let one = |control: Div| vec![named(name, control)];
     match &cell.widget {
-        Widget::Mapping(entity) => one(div().child(entity.clone())),
         Widget::Invalid(error) => one(div().text_color(ladder::danger()).child(error.clone())),
         Widget::Choice(options) => {
             let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();

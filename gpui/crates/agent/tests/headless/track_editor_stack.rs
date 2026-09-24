@@ -184,14 +184,10 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
             ))
             .await
             .unwrap();
-            // A clip names a score-local definition, and the definition's
-            // name is what the timeline labelled it by.
+            // A clip's key is `pattern-<name>`, after the score id.
             let layers: std::collections::BTreeMap<String, i64> =
                 sqlx::query_as::<_, (String, i64)>(
-                    "SELECT json_extract(definition.definition_json, '$.name'), clip.z_index
-                 FROM clips clip
-                 JOIN score_definitions definition
-                   ON definition.id = clip.score_id || ':' || clip.graph",
+                    "SELECT substr(id, instr(id, ':pattern-') + 9), z_index FROM clips",
                 )
                 .fetch_all(&pool)
                 .await
@@ -200,10 +196,10 @@ fn a_group_dragged_up_takes_one_lane_each_however_many_moves_it_took() {
                 .collect();
             assert_eq!(
                 (
-                    layers["Alpha"],
-                    layers["Bravo"],
-                    layers["Charlie"],
-                    layers["Cap"]
+                    layers["alpha"],
+                    layers["bravo"],
+                    layers["charlie"],
+                    layers["cap"]
                 ),
                 (1, 1, 3, 2)
             );

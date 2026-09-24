@@ -99,7 +99,6 @@ use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
 mod document;
-pub(crate) use document::GraphDraft;
 mod fades;
 mod lanes;
 use lanes::assign_rows;
@@ -161,7 +160,7 @@ pub struct Editor {
     /// [`Luma::commit_clips`] is the only thing that writes, and it writes the
     /// whole list at once.
     clips: Rc<[Clip]>,
-    graph_score: Option<document::GraphState>,
+    graph_score: Option<luma_patterns::Score>,
     /// Heatmap previews by clip id, shared with the frame — the resample
     /// cache inside each entry is written at paint time, which is why the map
     /// sits behind the same interior-mutability arrangement as
@@ -401,8 +400,6 @@ struct Clipboard {
 #[derive(Clone)]
 struct Snapshot {
     clips: Rc<[Clip]>,
-    definitions: Option<Rc<std::collections::BTreeMap<String, luma_patterns::Definition>>>,
-    graph_drafts: Rc<std::collections::BTreeMap<String, document::GraphDraft>>,
     selected: Vec<SharedString>,
     cursor: Option<Cursor>,
 }
@@ -1015,15 +1012,6 @@ impl Editor {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             clips: Rc::clone(&self.clips),
-            definitions: self
-                .graph_score
-                .as_ref()
-                .map(|graph| graph.definitions.clone()),
-            graph_drafts: self
-                .graph_score
-                .as_ref()
-                .map(|graph| graph.drafts.clone())
-                .unwrap_or_default(),
             selected: self.selected.clone(),
             cursor: self.cursor,
         }
@@ -1043,24 +1031,8 @@ impl Editor {
     /// the question "did anything run".
     fn abandon_checkpoint(&mut self) {
         let clips = Rc::clone(&self.clips);
-        let definitions = self
-            .graph_score
-            .as_ref()
-            .map(|score| score.definitions.clone());
-        let drafts = self
-            .graph_score
-            .as_ref()
-            .map(|graph| graph.drafts.clone())
-            .unwrap_or_default();
-        self.history.abandon_if(|was| {
-            Rc::ptr_eq(&was.clips, &clips)
-                && *was.graph_drafts == *drafts
-                && match (&was.definitions, &definitions) {
-                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        });
+        self.history
+            .abandon_if(|was| Rc::ptr_eq(&was.clips, &clips));
     }
 
     /// Step back, or forward. `false` when there is nowhere to go.
@@ -1085,11 +1057,6 @@ impl Editor {
     fn restore(&mut self, snapshot: Snapshot) {
         self.selected = snapshot.selected;
         self.cursor = snapshot.cursor;
-        if let (Some(graph), Some(definitions)) = (&mut self.graph_score, snapshot.definitions) {
-            graph.definitions = definitions;
-            graph.drafts = snapshot.graph_drafts;
-            self.sheet.invalidate_defs();
-        }
         self.replace_clips(snapshot.clips.to_vec());
     }
 
@@ -1854,7 +1821,6 @@ impl Luma {
         };
         let pending = self.library.score_contents(&score.id, track);
         let score_id = score.id.clone();
-        self.close_score_graph_tabs(&target, Some(&score_id), cx);
         self.edit_track_tab(&target, cx, |editor| rebase(editor, Some(score)));
         cx.spawn(async move |this, cx| {
             let contents = pending.await;
@@ -1917,7 +1883,6 @@ impl Luma {
         if !showing {
             return;
         }
-        self.close_score_graph_tabs(target, None, cx);
         self.edit_track_tab(target, cx, |editor| rebase(editor, None));
     }
 
@@ -2178,8 +2143,7 @@ impl Luma {
         picker::open(self, cx);
     }
 
-    /// A double-click on a clip opens its pattern's graph. A form clip has no
-    /// graph of its own, so the gesture selects it, which brings up its inputs.
+    /// A double-click on a clip selects it, which brings up its inputs.
     ///
     /// The hit test is the whole lane row, not the header band: this is the
     /// one clip gesture that is not a drag, so there is nothing for the inert
@@ -2203,18 +2167,8 @@ impl Luma {
         }) else {
             return;
         };
-        let owner = Target::TrackEditor {
-            track: state.track_id.to_string(),
-            venue: state.venue_id.clone(),
-        };
-        if luma_patterns::is_form(&clip.pattern) {
-            let id = clip.id.clone();
-            self.with_track_editor(cx, |editor| editor.selected = vec![id]);
-            return;
-        }
-        let id = clip.id.to_string();
-        self.commit_clips(cx);
-        self.open_score_graph(owner, id, cx);
+        let id = clip.id.clone();
+        self.with_track_editor(cx, |editor| editor.selected = vec![id]);
     }
 
     /// `ArrowUp` / `ArrowDown` in the insertion menu. A no-op with no menu
@@ -2984,13 +2938,7 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(last) = editor.composited.as_ref() else {
         return;
     };
-    let definitions_changed = editor.graph_score.as_ref().is_some_and(|graph| {
-        !luma_patterns::definitions_have_same_computation(
-            &graph.definitions,
-            &graph.composited_definitions,
-        )
-    });
-    if !definitions_changed && same_scene(last, &editor.clips) {
+    if same_scene(last, &editor.clips) {
         return;
     }
     let Some(score) = editor.score.as_ref().map(|score| score.id.clone()) else {
@@ -3004,10 +2952,6 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
         }
     };
     let sent = editor.clips.clone();
-    let definitions = editor
-        .graph_score
-        .as_ref()
-        .map(|graph| graph.definitions.clone());
     let target = Target::TrackEditor {
         track: editor.track_id.to_string(),
         venue: editor.venue_id.clone(),
@@ -3029,9 +2973,6 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
                 // Remember this attempt, including a failure, so a bad input
                 // produces one useful error instead of a retry every frame.
                 editor.composited = Some(sent);
-                if let (Some(graph), Some(definitions)) = (&mut editor.graph_score, definitions) {
-                    graph.composited_definitions = definitions;
-                }
                 if let Err(error) = result {
                     editor.error = Some(format!("Playback: {error}"));
                 }
