@@ -407,12 +407,13 @@ pub struct Exposure {
 }
 
 impl Exposure {
-    /// Metered, no compensation, two stops down and one and a half up.
+    /// Metered, no compensation, two and a half stops down and one up. One
+    /// up is what keeps a dim cue dim: a dark room meters at this clamp.
     pub const STAGE: Self = Self {
         auto: true,
         ev: 0.0,
         min_ev: -2.5,
-        max_ev: 1.5,
+        max_ev: 1.0,
     };
     /// The range the exposure control offers, in stops.
     pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
@@ -443,7 +444,7 @@ impl Glare {
     pub const STAGE: Self = Self {
         strength: 1.0,
         threshold: 2.0,
-        star: 0.5,
+        star: 0.3,
     };
     /// Whether any glare is drawn.
     #[must_use]
