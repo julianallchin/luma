@@ -106,6 +106,24 @@ fn d_ggx(alpha: f32, dot_nh: f32) -> f32 {
     return RECIPROCAL_PI * a2 / (denom * denom);
 }
 
+/// Roughness widened by how fast the normal turns across the pixel
+/// (Tokuyoshi and Kaplanyan, "Improved Geometric Specular Antialiasing",
+/// 2019). A truss tube a pixel or two wide turns its normal through half a
+/// circle inside the pixel; shaded at its centre with the material's own
+/// lobe, it reflects the sun or a beam into single bright pixels that
+/// sparkle as the camera moves. The pixel's normal variance is added to the
+/// GGX α², clamped so a curved edge never becomes fully rough.
+fn specular_aa(n: vec3<f32>, roughness: f32) -> f32 {
+    // σ² = 0.25: a pixel footprint of half a pixel's standard deviation.
+    let dx = dpdx(n);
+    let dy = dpdy(n);
+    let variance = 0.25 * (dot(dx, dx) + dot(dy, dy));
+    // κ = 0.18: the most α² a pixel's curvature may add.
+    let kernel = min(2.0 * variance, 0.18);
+    let alpha2 = roughness * roughness * roughness * roughness;
+    return sqrt(sqrt(saturate(alpha2 + kernel)));
+}
+
 fn brdf_ggx(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, f0: vec3<f32>, roughness: f32) -> vec3<f32> {
     let alpha = roughness * roughness;
     let half_vector = l + v;
@@ -420,7 +438,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let mr = textureSample(metallic_roughness_map, material_sampler, in.uv);
     let metallic = inst.base_color.a * mr.b;
     // three clamps roughness to 0.0525 before squaring.
-    let roughness = max(inst.emissive.a * mr.g, 0.0525);
+    let roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
     let ao_sample = textureSample(occlusion_map, material_sampler, in.uv).r;
     let ao = mix(1.0, ao_sample, inst.flags.z);
     let diffuse_color = base_color * (1.0 - metallic);
