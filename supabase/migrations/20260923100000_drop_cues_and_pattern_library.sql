@@ -15,12 +15,13 @@ begin;
 delete from public.midi_bindings
 where action_json ~ '"type"\s*:\s*"(fireCue|blackout)"';
 
-drop function if exists public.can_read_pattern (text);
-drop function if exists public.pattern_is_cued (text);
-
 drop table if exists public.cues;
 drop table if exists public.implementations;
 drop table if exists public.patterns;
+
+-- After the tables: their row-level policies call these.
+drop function if exists public.can_read_pattern (text);
+drop function if exists public.pattern_is_cued (text);
 
 commit;
 
