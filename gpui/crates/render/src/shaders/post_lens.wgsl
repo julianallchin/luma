@@ -4,7 +4,7 @@
 // A lens seen from inside its beam is the light source itself: as bright as
 // the beam is concentrated, and far above anything lit by it. Seen from the
 // side it is a faint glow in the glass. The disc faces the camera, is
-// centred on the cone's apex, and is hidden by nearer geometry.
+// centred on the lens, and is hidden by nearer geometry.
 
 struct LensFrame {
     view_proj: mat4x4<f32>,
@@ -24,7 +24,7 @@ struct LensFrame {
 };
 
 struct Lens {
-    // xyz: apex, w: lens radius in metres.
+    // xyz: lens centre, w: lens radius in metres.
     position: vec4<f32>,
     // xyz: beam axis, w: cosine of the beam half-angle (50% point).
     direction: vec4<f32>,
@@ -121,8 +121,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if r2 >= 1.0 {
         discard;
     }
-    // Hidden behind anything nearer than the lens, less the slack a housing
-    // around its own apex needs.
+    // Hidden behind anything nearer than the lens, less the slack its own
+    // glass and bezel need.
     let scene = linear_view_depth(textureLoad(depth_tex, vec2<i32>(in.position.xy), 0));
     if scene < in.view_depth - cfg.depth.z {
         discard;

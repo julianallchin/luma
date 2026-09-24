@@ -74,6 +74,7 @@ fn frame() -> Frame {
         gobo: 0,
         gobo_rotation: 0.31,
         haze_gain: 1.0,
+        lens: luma_render::luminaire::Lens::POINT,
     }];
     frame.haze_density = 0.65;
     frame
