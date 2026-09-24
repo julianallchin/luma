@@ -769,13 +769,11 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
 
 #[test]
 fn missing_group_dialog_repairs_saved_score_selectors() {
+    let mut lost = support::preset_clip("Chase", 0., 4., 0);
+    lost["selection"] = serde_json::json!({"expression": "lost_wash"});
     let mut harness = Fixture::new("venue-missing-group", 20, Vec::new())
         .with_rig()
-        .with_graph_score(support::score(
-            serde_json::json!({ "lost": support::definition("Chase") }),
-            serde_json::json!({"a":{"graph":"lost","start":0.,"duration":4.,"seed":0,
-                                    "selection":{"expression":"lost_wash"}}}),
-        ))
+        .with_graph_score(support::score(serde_json::json!({ "a": lost })))
         .window(1500., 950.)
         .open(Mode::Headless);
     let out = run(

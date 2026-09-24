@@ -11,15 +11,7 @@ use crate::Luma;
 
 /// Working context for the next turn, independent of the conversation.
 pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
-    if let Some(scope) = current_track(app) {
-        return Some(scope);
-    }
-    if let Some(Body::Graph(editor)) = app.workspace.active_body() {
-        if let Some((track, venue, score)) = editor.score_subject() {
-            return Some(ThreadScope::track(track, venue, score));
-        }
-    }
-    None
+    current_track(app)
 }
 
 /// Whose chats the thread shows: the score the picked track's editor has
@@ -154,7 +146,6 @@ impl Luma {
                         self.reload_score_contents(target, score, cx);
                     }
                 }
-                Some(Body::Graph(_)) => {}
                 Some(Body::Patch(_)) => {
                     if let Target::Patch { venue } = &target {
                         self.reload_patch(venue.clone(), cx);

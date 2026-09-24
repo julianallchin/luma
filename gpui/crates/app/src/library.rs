@@ -1992,18 +1992,6 @@ impl Library {
         )
     }
 
-    pub(crate) fn set_preview_range(
-        &self,
-        session: u64,
-        span: (f32, f32),
-        looping: bool,
-    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call(
-            "host_set_playback_range",
-            json!({"session":session, "startSeconds":span.0, "endSeconds":span.1, "looping":looping}),
-        )
-    }
-
     /// Restore a song's transport before enabling its controls.
     pub fn restore_audio(
         &self,
@@ -2611,11 +2599,6 @@ impl Library {
     /// the same reason as [`Self::sample_universe`].
     pub fn render_time(&self) -> f32 {
         self.services.host_audio().render_time()
-    }
-
-    pub(crate) fn preview_time(&self, session: u64) -> Option<f32> {
-        let snapshot = self.services.host_audio().snapshot();
-        (snapshot.session == session).then_some(snapshot.current_time)
     }
 
     /// What the transport is doing, right now — whether it is running, and how

@@ -11,7 +11,7 @@
 //!  └ Luma      the persistent shell                  (this file + shell.rs)
 //!     ├ sidebar    the selected venue's tracks       (tracks.rs)
 //!     ├ chat       the agent thread, the centre      (luma-chat)
-//!     ├ workspace  tabs: track editor, graph, 3D     (tabs.rs + shell.rs)
+//!     ├ workspace  tabs: track editor, 3D            (tabs.rs + shell.rs)
 //!     ├ overlay    venues / patterns / settings      (shell.rs)
 //!     └ library    the only door to Luma's data
 //! ```
@@ -43,7 +43,6 @@ mod confirm;
 mod fixture_library;
 mod fixture_picker;
 mod fullscreen;
-mod graph;
 mod history;
 mod keymap;
 mod library;
@@ -156,7 +155,6 @@ pub struct Luma {
     /// [`Luma::sync_visualizer`]. `None` is both "no room to show" and the
     /// off switch for its redraw loop — see [`visualizer::visualizer`].
     pub(crate) visualizer: Option<visualizer::Visualizer>,
-    pub(crate) graph_audio: graph::preview::Audio,
     pub(crate) fullscreen: Option<fullscreen::State>,
     pub(crate) visualizer_focus: FocusHandle,
     /// Whether the stage pane is suppressed by hand. Kept apart from
@@ -264,7 +262,6 @@ impl Luma {
             expanded: false,
             scale_factor: 1.0,
             visualizer: None,
-            graph_audio: graph::preview::Audio::default(),
             fullscreen: None,
             visualizer_focus: cx.focus_handle(),
             visualizer_hidden: false,
@@ -606,50 +603,12 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::SelectTab7, _, cx| this.select_tab(6, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab8, _, cx| this.select_tab(7, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab9, _, cx| this.select_tab(8, cx)))
-            .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| {
-                if let Some(Body::Graph(editor)) = this.workspace.active_body() {
-                    this.toggle_graph_preview(&editor.target(), cx);
-                } else {
-                    this.toggle_playback(cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),
             )
             .on_action(cx.listener(|this, _: &keymap::UndoClips, _, cx| this.undo_clips(cx)))
             .on_action(cx.listener(|this, _: &keymap::RedoClips, _, cx| this.redo_clips(cx)))
-            .on_action(cx.listener(|this, _: &keymap::DeleteNodes, _, cx| this.graph_delete(cx)))
-            .on_action(
-                cx.listener(|this, _: &keymap::CommitGraphInputName, window, cx| {
-                    this.graph_input_name_key(true, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &keymap::CancelGraphInputName, window, cx| {
-                    this.graph_input_name_key(false, window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &keymap::AddGraphNode, window, cx| {
-                this.graph_add_at_cursor(window, cx)
-            }))
-            .on_action(
-                cx.listener(|this, _: &keymap::CancelGraphGesture, window, cx| {
-                    this.graph_cancel(window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &keymap::NextGraphNode, _, cx| {
-                this.graph_catalog_step(true, cx)
-            }))
-            .on_action(cx.listener(|this, _: &keymap::PrevGraphNode, _, cx| {
-                this.graph_catalog_step(false, cx)
-            }))
-            .on_action(
-                cx.listener(|this, _: &keymap::CommitGraphNode, window, cx| {
-                    this.graph_catalog_commit(window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &keymap::UndoGraph, _, cx| this.graph_undo(cx)))
-            .on_action(cx.listener(|this, _: &keymap::RedoGraph, _, cx| this.graph_redo(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleLoopRegion, _, cx| {
                     this.toggle_loop_region(cx)

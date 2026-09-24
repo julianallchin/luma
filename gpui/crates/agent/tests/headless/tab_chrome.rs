@@ -6,13 +6,9 @@ use super::support;
 
 use std::time::Duration;
 
-use gpui_agent::{Harness, Mode};
+use gpui_agent::Mode;
 use serde_json::Value;
 use support::{Clip, Fixture};
-
-fn harness() -> Harness {
-    fixture("tab-chrome").open(Mode::Headless)
-}
 
 /// `name` is per-test: the fixture keys its seeded library directory by it,
 /// and two harnesses on one name race for the same SQLite file.
@@ -23,105 +19,6 @@ fn fixture(name: &'static str) -> Fixture {
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0)],
     )
     .with_rig()
-}
-
-const SCRIPT: &str = r#"
-    function menu() {
-        app.click(app.snapshot().find({ role: "button", label: "new-tab" }));
-        app.frames(2);
-        const shot = app.snapshot();
-        return {
-            shot,
-            choices: ["Track editor"]
-                .map((label) => shot.find({ role: "button", label })),
-            // The venue is a sidebar place now, never a tab.
-            venue: shot.find({ role: "button", label: "Venue" }) !== undefined,
-            reasons: shot.findAll({ role: "text" }).map((node) => node.label),
-        };
-    }
-
-    nav.trackEditor("Test Venue", "Aurora");
-    until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-
-    const first = menu();
-    // Opening the selected track is a reveal, not a duplicate.
-    app.click(first.choices[0]);
-    app.frames(2);
-    const trackChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Aurora" }).length;
-
-    nav.pattern("Strobe");
-    until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }) !== undefined);
-    const second = menu();
-    app.click(second.choices[0]);
-    app.frames(2);
-    // Opening the pattern again reveals its tab rather than adding one.
-    nav.pattern("Strobe");
-    app.frames(2);
-    const patternChipsAfterReveal = app.snapshot().findAll({ role: "button", label: "Strobe" }).length;
-
-
-    // Middle click routes through the same close path as the keyboard.
-    app.click(app.snapshot().find({ role: "button", label: "Strobe" }), { button: "middle" });
-    app.frames(2);
-    const finalButtons = app.snapshot().findAll({ role: "button" }).map((node) => node.label);
-
-    ({
-        firstEnabled: first.choices.map((node) => node.enabled),
-        venueOffered: first.venue || second.venue,
-        firstReasons: first.reasons,
-        secondEnabled: second.choices.map((node) => node.enabled),
-        trackChipsAfterReveal,
-        patternChipsAfterReveal,
-        finalButtons,
-    })
-"#;
-
-#[test]
-fn workspace_expands_and_restores_chat_through_visible_controls() {
-    let mut harness = fixture("workspace-visible-expand")
-        .window(1600., 1000.)
-        .open(Mode::Headless);
-    let result = harness.exec(
-        &support::script(
-            r#"
-        nav.trackEditor("Test Venue", "Aurora");
-        until("score clip",s=>s.find({role:"card",label:"Strobe"}));
-        nav.pattern("Strobe");
-        const canvas=()=>app.snapshot().find({role:"card",label:"Graph workspace"}).bounds.width;
-        const initial=canvas();
-        nav.step("hide chat", "button", "Hide chat");
-        until("expanded editor",s=>s.find({role:"button",label:"Show chat"})
-            && !s.find({role:"card",label:"Conversation"}));
-        if(canvas()<=initial+200)throw new Error("Hide chat did not give the graph room");
-        nav.step("restore chat", "button", "Show chat");
-        until("chat restored",s=>s.find({role:"card",label:"Conversation"})
-            && s.find({role:"button",label:"Hide chat"}));
-        if(Math.abs(canvas()-initial)>2)throw new Error("Show chat did not restore the split");
-    "#,
-        ),
-        Duration::from_secs(60),
-    );
-    assert_eq!(result.error, None, "{}\n{}", result.stdout, result.result);
-}
-
-#[test]
-fn menu_prerequisites_idempotent_opens_and_close_gestures_share_one_path() {
-    let mut harness = harness();
-    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out: Value = result.result;
-
-    assert_eq!(out["firstEnabled"], serde_json::json!([true]));
-    assert_eq!(out["secondEnabled"], serde_json::json!([true]));
-    assert_eq!(
-        out["venueOffered"], false,
-        "the + menu still offers the venue"
-    );
-    assert_eq!(out["trackChipsAfterReveal"], 1);
-    assert_eq!(out["patternChipsAfterReveal"], 1);
-    let final_buttons = out["finalButtons"].as_array().unwrap();
-    assert!(final_buttons.iter().any(|label| label == "Aurora"));
-    assert!(!final_buttons.iter().any(|label| label == "Strobe"));
 }
 
 /// ⌘T brings the panel back and opens the menu on it — including from a shut

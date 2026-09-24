@@ -50,9 +50,6 @@ pub(crate) mod context {
 
     // Tab contexts, declared by the tab's own root *inside* `WORKSPACE`.
     pub const TRACK_EDITOR: &str = "TrackEditor";
-    pub const GRAPH: &str = "Graph";
-    pub const GRAPH_INPUT_NAME: &str = "GraphInputName";
-    pub const GRAPH_NODE_SEARCH: &str = "GraphNodeSearch";
     pub const VISUALIZER: &str = "Visualizer";
     pub const VISUALIZER_FULLSCREEN: &str = "VisualizerFullscreen";
     pub const PATCH: &str = "Patch";
@@ -177,18 +174,6 @@ actions!(
         /// Undo / redo the track editor's last edit.
         UndoClips,
         RedoClips,
-        /// Remove the graph editor's selected nodes.
-        DeleteNodes,
-        AddGraphNode,
-        CancelGraphGesture,
-        NextGraphNode,
-        PrevGraphNode,
-        CommitGraphNode,
-        CommitGraphInputName,
-        CancelGraphInputName,
-        /// Undo / redo the graph editor's last edit.
-        UndoGraph,
-        RedoGraph,
         /// Loop the track editor's cursor range, or clear the loop it already
         /// describes.
         ToggleLoopRegion,
@@ -244,10 +229,6 @@ pub(crate) fn init(cx: &mut App) {
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and
     // `secondary-c` is the clipboard the field already owns.
     let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
-    // The graph editor's bindings carry the same exclusion for the same
-    // reason: a promoted param widget (phase 3) is a text field, and `delete`
-    // is a correction there, not a command.
-    let graphing = format!("{} && !{}", context::GRAPH, context::TEXT_INPUT);
     // The sidebar's own arrows, and the same exclusion for the same reason:
     // the search field is a text field, and there the arrows are the caret's.
     let browsing = format!("{} && !{}", context::SIDEBAR, context::TEXT_INPUT);
@@ -263,28 +244,6 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("enter", CommitInsertOption, Some(context::PATTERN_INSERT)),
         KeyBinding::new("escape", DismissOverlay, Some(context::PATTERN_INSERT)),
         KeyBinding::new("space", PlayPause, Some(&editing)),
-        KeyBinding::new(
-            "enter",
-            CommitGraphInputName,
-            Some(context::GRAPH_INPUT_NAME),
-        ),
-        KeyBinding::new(
-            "escape",
-            CancelGraphInputName,
-            Some(context::GRAPH_INPUT_NAME),
-        ),
-        KeyBinding::new("space", AddGraphNode, Some(&graphing)),
-        KeyBinding::new("escape", CancelGraphGesture, Some(&graphing)),
-        KeyBinding::new("down", NextGraphNode, Some(context::GRAPH_NODE_SEARCH)),
-        KeyBinding::new("up", PrevGraphNode, Some(context::GRAPH_NODE_SEARCH)),
-        KeyBinding::new("enter", CommitGraphNode, Some(context::GRAPH_NODE_SEARCH)),
-        KeyBinding::new(
-            "escape",
-            CancelGraphGesture,
-            Some(context::GRAPH_NODE_SEARCH),
-        ),
-        KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
-        KeyBinding::new("backspace", DeleteNodes, Some(&graphing)),
         // `f` is a character a person could be typing, so it carries the same
         // text-input exclusion the space bar does.
         KeyBinding::new("f", FollowPlayhead, Some(&editing)),
@@ -339,10 +298,8 @@ pub(crate) fn init(cx: &mut App) {
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);
-    chord(&mut bindings, "z", UndoGraph, &graphing);
     chord(&mut bindings, "z", UndoStage, &staging);
     chord(&mut bindings, "shift-z", RedoStage, &staging);
-    chord(&mut bindings, "shift-z", RedoGraph, &graphing);
     chord(&mut bindings, "e", SplitClips, &editing);
     chord(&mut bindings, "c", CopyClips, &editing);
     chord(&mut bindings, "x", CutClips, &editing);

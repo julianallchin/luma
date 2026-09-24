@@ -115,17 +115,6 @@ globalThis.nav = {
 		nav.step("the settings row", "row", "Settings");
 	},
 
-	// Reveal a clip's score graph: its tab when one is open, else a
-	// double-click on the clip.
-	pattern(name) {
-		const tab = app.snapshot().find({ role: "button", label: name });
-		if (tab) { app.click(tab); return; }
-		until(`the clip ${name}`, s => s.find({role:"card",label:name}));
-		const clip = app.snapshot().find({role:"card",label:name});
-		app.click(clip, {count:2});
-		until("the score graph", s => s.find({role:"card",label:"Graph workspace"}));
-	},
-
 	// The venue page, through the sidebar's Venue row. The one page that
 	// names a room without naming a score, which is what a test wants when it
 	// needs the stage pane up over an *unlit* rig — a track editor would

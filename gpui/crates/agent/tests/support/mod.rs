@@ -24,7 +24,7 @@
 //!
 //! # Why the score goes through the seam
 //!
-//! A score is `scores`, `clips` and `score_definitions` rows, and the editor
+//! A score is `scores` and `clips` rows, and the editor
 //! only ever writes them as one whole `luma_patterns::Score` — so the fixture
 //! seeds them the same way, through `apply_score_document`.
 
@@ -91,72 +91,29 @@ pub fn seeded_prompt(index: usize) -> String {
 /// A clip is written in seconds and stored in beats.
 const BEATS_PER_SECOND: f64 = 2.0;
 
-/// One score-local definition called `name`, whose body is the smallest thing
-/// that both validates and emits light: a wash into the lighting output.
-///
-/// A clip names a definition, and the definition's name is what the editor
-/// labels the clip by — so a score document written by hand needs one of these
-/// for every graph its clips name.
+/// A whole score document from clips spelled by the caller.
 #[must_use]
-pub fn definition(name: &str) -> Value {
-    json!({
-        "name": name,
-        "inputs": {},
-        "outputs": { "lighting": { "value_type": "lighting", "rate": "frame" } },
-        "body": {
-            "kind": "graph",
-            "body": {
-                "nodes": {
-                    "wash": { "definition": "wash" },
-                    "out": {
-                        "definition": "output",
-                        "inputs": {
-                            "color": { "source": "connection", "node": "wash", "output": "color" }
-                        }
-                    }
-                },
-                "outputs": {
-                    "lighting": { "source": "connection", "node": "out", "output": "lighting" }
-                }
-            }
-        }
-    })
+pub fn score(clips: Value) -> Value {
+    json!({ "clips": clips })
 }
 
-/// A whole score document in the current format, from definitions and clips
-/// spelled by the caller.
+/// One clip of a shipped preset over `start`..`start + duration` beats, with
+/// `seed`.
 #[must_use]
-pub fn score(definitions: Value, clips: Value) -> Value {
-    json!({
-        "definitions": definitions,
-        "clips": clips,
-    })
-}
-
-/// A score with one clip at beats 2–6 that owns a copy of a built-in recipe.
-/// This is a clip with a graph of its own, as scores made before clip forms
-/// hold; the insertion picker now places form clips only.
-#[must_use]
-pub fn recipe_score(effect: &str) -> Value {
-    let mut document: luma_patterns::Score =
-        serde_json::from_value(score(json!({}), json!({}))).expect("an empty score");
-    document
-        .insert_effect(
-            &luma_patterns::standard_library(),
-            effect,
-            "recipe-clip",
-            2.0,
-            4.0,
-        )
-        .expect("a built-in recipe");
-    serde_json::to_value(document).expect("a serializable score")
+pub fn preset_clip(preset: &str, start: f64, duration: f64, seed: u64) -> Value {
+    let mut clip = luma_patterns::presets()
+        .preset(preset)
+        .expect("a shipped preset")
+        .clip(start, duration);
+    clip.seed = seed;
+    serde_json::to_value(clip).expect("a serializable clip")
 }
 
 /// A score with one clip of a shipped preset at beats 2–6.
 #[must_use]
 pub fn preset_score(preset: &str) -> Value {
     let mut document: luma_patterns::Score =
-        serde_json::from_value(score(json!({}), json!({}))).expect("an empty score");
+        serde_json::from_value(score(json!({}))).expect("an empty score");
     let preset = luma_patterns::presets()
         .preset(preset)
         .expect("a shipped preset");
@@ -173,10 +130,9 @@ pub const TRACK_NAME: &str = "Aurora";
 
 /// One clip to put on the timeline, before the editor resolves it into a lane.
 pub struct Clip {
-    /// Also the pattern's id. A clip is named in the automation tree by its
-    /// pattern, so two clips of one pattern would be two nodes under one label
-    /// and `find` would silently take the first — every clip here gets its own.
+    /// The clip's id in the score. Every clip plays the Wash preset.
     pub pattern: String,
+    /// What the test calls the clip. The editor labels a clip by its form.
     pub name: String,
     pub start: f64,
     pub end: f64,
@@ -754,28 +710,29 @@ impl Fixture {
         }
     }
 
-    /// The score document [`Fixture::clips`] describes. One definition per
-    /// clip, named after it.
+    /// The score document [`Fixture::clips`] describes: one Wash clip per
+    /// entry, keyed by its pattern.
     ///
     /// Times are beats, not seconds. [`Fixture::seed_beats`] lays a steady 120
     /// bpm grid, so a beat is half a second.
     fn timeline(&self) -> Value {
-        let mut definitions = serde_json::Map::new();
+        let wash = luma_patterns::presets()
+            .preset("Wash")
+            .expect("a shipped preset");
         let mut clips = serde_json::Map::new();
         for clip in &self.clips {
-            definitions.insert(clip.pattern.clone(), definition(&clip.name));
+            let mut placed = wash.clip(
+                clip.start * BEATS_PER_SECOND,
+                (clip.end - clip.start) * BEATS_PER_SECOND,
+            );
+            placed.seed = 0;
+            placed.z_index = clip.z_index;
             clips.insert(
                 clip.pattern.clone(),
-                json!({
-                    "graph": clip.pattern,
-                    "start": clip.start * BEATS_PER_SECOND,
-                    "duration": (clip.end - clip.start) * BEATS_PER_SECOND,
-                    "seed": 0,
-                    "z_index": clip.z_index,
-                }),
+                serde_json::to_value(placed).expect("a serializable clip"),
             );
         }
-        score(Value::Object(definitions), Value::Object(clips))
+        score(Value::Object(clips))
     }
 
     /// One track-agent conversation about `score`, with a prompt and a reply
@@ -953,7 +910,7 @@ impl Fixture {
 
 /// The score the fixture seeded, read back from its rows.
 ///
-/// A score is `scores`, `clips` and `score_definitions`; there is no document
+/// A score is `scores` and `clips`; there is no document
 /// column to read any more. Tests assert on a `luma_patterns::Score`, which is
 /// what those rows load into — so this is the one place that knows the
 /// difference, rather than eighteen copies of a `SELECT`.
@@ -961,12 +918,10 @@ pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
     let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", dir.join("luma.db").display()))
         .await
         .expect("open the fixture library");
-    let id: String = sqlx::query_scalar(
-        "SELECT score_id FROM clips UNION SELECT score_id FROM score_definitions LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("the fixture seeded a score with something in it");
+    let id: String = sqlx::query_scalar("SELECT score_id FROM clips LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("the fixture seeded a score with something in it");
     let mut connection = pool.acquire().await.expect("a connection");
     let score = luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
         .await
@@ -1180,5 +1135,3 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
-
-pub mod graph_interactions;
