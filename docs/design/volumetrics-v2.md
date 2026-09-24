@@ -1716,15 +1716,18 @@ If we ever want it exactly zero at the anchor: put the shadow view's projection 
 `P + d·û_anchor` rather than at `P`. Error is then zero at the anchor orientation and bounded by
 the hysteresis band. It costs one vector add.
 
-**Lens-sized sources (2026-09-23).** A beam now leaves a lens-sized disc. `FixtureCone.position`
-is the lens centre and `FixtureCone.lens` its radius (`luminaire::Lens`). The cone converges on a
-virtual apex `lens_radius / tan(half field)` behind the lens, so it is lens-wide at the lens plane.
-The profile, the gobo and the shadow projection are seen from that apex. The shadow near plane is
-the lens. Falloff and `range` are measured from the lens. Nothing behind the lens plane is lit.
-§7 still holds for the lens centre: it does not move under pan/tilt. The virtual apex does move,
-on the beam axis behind the lens. That is the case this section covers: the offset is along the
-ray. An apex-anchored shadow cache keys on the lens centre and derives the apex. The test is
-`frame::tests::the_lens_centre_holds_still_under_pan_and_tilt_and_the_apex_rides_the_axis`.
+**Lens-sized sources (2026-09-23).** A beam now leaves a lens-sized disc on the front of the
+head. `FixtureCone.position` is the lens centre and `FixtureCone.lens` its radius
+(`luminaire::Lens`; a per-class stand-in until spec-sheet radii arrive as
+`Physical.Lens@RadiusM`). The cone converges on a virtual apex `lens_radius / tan(half field)`
+behind the lens, so it is lens-wide at the lens plane. The profile, the gobo, the shadow
+projection and the `1/d²` falloff are measured from that apex; `range` from the lens. The shadow
+near plane is the lens. Nothing behind the lens plane is lit. The lens sits on the moving head's
+front face (or `Physical.Lens@OffsetM` past the tilt pivot), and the drawn head now turns with
+pan/tilt. So §7's still point is the tilt pivot: the lens is a fixed distance in front of it and
+the apex a fixed distance behind the lens, all on the beam axis, which is exactly §15.1. An
+apex-anchored shadow cache keys on the pivot and derives lens and apex. The test is
+`frame::tests::the_tilt_pivot_holds_still_and_lens_and_apex_ride_the_beam_axis`.
 
 ### 15.2 What the offset *does* cost
 

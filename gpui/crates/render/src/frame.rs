@@ -13,7 +13,7 @@ use crate::assets::{HdrImage, Image, Library, Material, Vertex};
 use crate::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use crate::luminaire::{
     beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
-    pixel_lens, Lens, PIXEL,
+    pixel_lens, Lens, ModelKind, PIXEL,
 };
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
@@ -89,16 +89,19 @@ pub struct MaterialTextures {
 ///
 /// The beam leaves a lens-sized disc at `position`, not a point. Its cone
 /// converges on a virtual apex behind the lens ([`Self::apex`]); the angular
-/// profile, the gobo and the shadow projection are all seen from that apex, so
-/// the beam is exactly lens-wide at the lens and the lit pool on a surface is
-/// the beam's own footprint. Distance falloff and `range` are measured from the
-/// lens, and nothing behind the lens plane is lit.
+/// profile, the gobo, the shadow projection and the inverse-square falloff are
+/// all measured from that apex, so the beam is exactly lens-wide at the lens,
+/// the lit pool on a surface is the beam's own footprint, and a lens spreads
+/// the same light rather than adding light. `range` and its taper are
+/// measured from the lens, and nothing behind the lens plane is lit.
 #[derive(Debug, Clone, Copy)]
 pub struct FixtureCone {
     /// Centre of the lens, in world space: where the beam starts.
     ///
-    /// Pan/tilt-invariant, as §7 of `docs/design/volumetrics-v2.md` needs; the
-    /// virtual apex is not (it swings on the beam axis behind this point).
+    /// On the front of the head, so it swings with pan/tilt at a fixed
+    /// distance in front of the tilt pivot on the beam axis. The pivot is what
+    /// stays still, which is what §7 of `docs/design/volumetrics-v2.md` needs
+    /// (§15.1: the offset is along the ray).
     pub position: Vec3,
     /// Cull radius from the lens, including the smoothly fading beam tail.
     pub range: f32,
@@ -498,6 +501,7 @@ pub(crate) fn housing_draws(
     def: &Definition,
     fixture_path: &str,
     base: Mat4,
+    pan_tilt: [f32; 2],
     lib: &mut Library,
     bank: &mut Bank,
     editor_object: Option<EditorObject>,
@@ -525,20 +529,7 @@ pub(crate) fn housing_draws(
     };
     let mesh_rel = format!("qlc/{}", kind.mesh());
     let glb = lib.get(&mesh_rel)?;
-    // Per-axis scale to the definition's physical dimensions, measured on
-    // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does.
-    let extents = {
-        let (lo, hi) = glb.bounds();
-        hi - lo
-    };
-    let desired = Vec3::from(def.dimensions_m());
-    let axis = |d: f32, e: f32| if e > 0.0 { d / e } else { 1.0 };
-    let scale = Vec3::new(
-        axis(desired.x, extents.x),
-        axis(desired.y, extents.y),
-        axis(desired.z, extents.z),
-    );
-    let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
+    let worlds = housing_worlds(glb, def, kind, base, pan_tilt);
     let mut draws = Vec::new();
     for (node, world) in glb.nodes.iter().zip(&worlds) {
         for &p in &node.primitives {
@@ -555,6 +546,91 @@ pub(crate) fn housing_draws(
         }
     }
     Ok(draws)
+}
+
+/// World matrices of a bundled housing mesh at `base`, scaled per axis to the
+/// definition's physical dimensions (measured on the unscaled mesh exactly as
+/// `applyPhysicalDimensionScaling` does) and, for a moving head, articulated.
+///
+/// A moving head's `arm` pans about its own vertical and its `head` tilts
+/// about the arm's horizontal, by the same `[pan, tilt]` degrees
+/// [`beam_direction`] turns into the beam axis, so the drawn head points along
+/// its beam. Each rotation is conjugated by the dimension scale
+/// (`S⁻¹ · R · S` on the node's local transform): the pivots land where the
+/// scaled mesh puts them and the head turns rigidly instead of shearing.
+fn housing_worlds(
+    glb: &crate::assets::Glb,
+    def: &Definition,
+    kind: ModelKind,
+    base: Mat4,
+    [pan, tilt]: [f32; 2],
+) -> Vec<Mat4> {
+    let extents = {
+        let (lo, hi) = glb.bounds();
+        hi - lo
+    };
+    let desired = Vec3::from(def.dimensions_m());
+    let axis = |d: f32, e: f32| if e > 0.0 { d / e } else { 1.0 };
+    let scale = Mat4::from_scale(Vec3::new(
+        axis(desired.x, extents.x),
+        axis(desired.y, extents.y),
+        axis(desired.z, extents.z),
+    ));
+    let mut overrides = HashMap::new();
+    if kind == ModelKind::MovingHead {
+        if let (Some(arm), Some(head)) = (glb.node_index("arm"), glb.node_index("head")) {
+            let unscale = scale.inverse();
+            // Three space is data space with Y and Z swapped, a reflection:
+            // data `Rz(-pan)` is three `Ry(+pan)`, data `Rx(+tilt)` is three
+            // `Rx(-tilt)` (see `fixture_kinematics`' module note).
+            let turns = [
+                (arm, Mat4::from_rotation_y(pan.to_radians())),
+                (head, Mat4::from_rotation_x(-tilt.to_radians())),
+            ];
+            for (node, turn) in turns {
+                overrides.insert(node, glb.nodes[node].local * unscale * turn * scale);
+            }
+        }
+    }
+    glb.world_matrices(base * scale, &overrides)
+}
+
+/// Where a lensed housing's beam leaves: the lens centre, in world space.
+///
+/// On a mesh with a `head` node the lens sits on the head's front face, on the
+/// beam axis through the head's pivot, so it turns with the head and never
+/// moves relative to it. A spec-sheet `Physical.Lens@OffsetM` (pivot to lens
+/// along the beam) wins over the mesh's face. A mesh with no head uses its
+/// bottom face below the origin, the mount normal side.
+fn lens_centre(
+    glb: &crate::assets::Glb,
+    worlds: &[Mat4],
+    def: &Definition,
+    base: Mat4,
+    direction: Vec3,
+) -> Vec3 {
+    let measured = def
+        .physical
+        .as_ref()
+        .and_then(|p| p.lens.as_ref())
+        .and_then(|l| l.offset_m)
+        .filter(|d| d.is_finite() && *d >= 0.0);
+    let Some(head) = glb.node_index("head") else {
+        let origin = base.transform_point3(Vec3::ZERO);
+        return measured.map_or_else(
+            || worlds[0].transform_point3(Vec3::new(0.0, glb.bounds().0.y, 0.0)),
+            |offset| origin + direction * offset,
+        );
+    };
+    let pivot = worlds[head].transform_point3(Vec3::ZERO);
+    if let Some(offset) = measured {
+        return pivot + direction * offset;
+    }
+    glb.node_bounds(head).map_or(pivot, |(lo, hi)| {
+        // Rest emission is three `-Y`: the front face is the head's lowest.
+        let centre = (lo + hi) * 0.5;
+        worlds[head].transform_point3(Vec3::new(centre.x, lo.y, centre.z))
+    })
 }
 
 /// Intern one glTF primitive's geometry and material maps, and emit the draw
@@ -839,6 +915,7 @@ pub fn build_with(
                 def,
                 &fixture.fixture_path,
                 base,
+                [0.0, 0.0],
                 lib,
                 &mut bank,
                 Some(EditorObject::Fixture(fixture.id.clone())),
@@ -932,11 +1009,13 @@ pub fn build_with(
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(1)
                 .min(MAX_FIXTURE_CONES);
+            // The lens swings with the head, within the housing: widening by
+            // the housing keeps the domain independent of pan/tilt.
             include_fixture_lighting_extent(
                 &mut fixture_lighting_domain,
                 camera_eye,
                 base.transform_point3(Vec3::ZERO),
-                cone.range,
+                cone.range + Vec3::from(def.dimensions_m()).max_element(),
             );
         }
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
@@ -947,31 +1026,16 @@ pub fn build_with(
             def,
             &fixture.fixture_path,
             base,
+            head_state.position,
             lib,
             &mut bank,
             Some(EditorObject::Fixture(fixture.id.clone())),
         )?);
         let mesh_rel = format!("qlc/{}", kind.mesh());
         let glb = lib.get(&mesh_rel)?;
-
-        // Per-axis scale to the definition's physical dimensions, measured on
-        // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does —
-        // recomputed here only to seat the face light on the scaled head.
-        let extents = {
-            let (lo, hi) = glb.bounds();
-            hi - lo
-        };
-        let desired = Vec3::from(def.dimensions_m());
-        let axis = |d: f32, e: f32| if e > 0.0 { d / e } else { 1.0 };
-        let scale = Vec3::new(
-            axis(desired.x, extents.x),
-            axis(desired.y, extents.y),
-            axis(desired.z, extents.z),
-        );
-
-        // Pan/tilt do not move the mesh here: the goldens pin `speed = 0`, and
-        // articulation is frozen when speed is zero.
-        let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
+        // The same articulated worlds the body was drawn with, to seat the
+        // face light and the lens on the drawn head.
+        let worlds = housing_worlds(glb, def, kind, base, head_state.position);
 
         if kind.emits_beam() {
             // Face light, parented to `head` when the mesh has one.
@@ -989,10 +1053,11 @@ pub fn build_with(
             continue;
         }
         let cone = potential_cone.expect("beam emitters resolve a potential cone");
+        let direction = beam_direction(Some(def), fixture.rot, Some(head_state.position));
         fixture_cones.push(FixtureCone {
-            position: base.transform_point3(Vec3::ZERO),
+            position: lens_centre(glb, &worlds, def, base, direction),
             range: cone.range,
-            direction: beam_direction(Some(def), fixture.rot, Some(head_state.position)),
+            direction,
             cos_beam: cone.cos_beam,
             color: Vec3::from(head_state.color),
             intensity: intensity * cone.gain,
@@ -1412,24 +1477,24 @@ mod tests {
         );
     }
 
-    /// §7's apex invariant, restated for a lens-sized source.
+    /// §7's apex invariant, restated for a lens on the front of the head.
     ///
-    /// §7 (`docs/design/volumetrics-v2.md`) rests on "a moving head's
-    /// light-emitting point does not move under pan/tilt". With a lens, the
-    /// emitting point is the lens centre, `FixtureCone::position`, and it still
-    /// does not move. The cone's *virtual* apex does move: it sits a fixed
-    /// distance behind the lens on the beam axis, so it swings on a sphere
-    /// about the lens as the head aims. That is the §15.1 situation (an offset
-    /// along the beam, not across it): apex, lens and every point on the axis
-    /// stay collinear, so an apex-anchored shadow cache must key on the lens
-    /// centre and treat the apex as derived.
+    /// §7 (`docs/design/volumetrics-v2.md`) rests on "the light-emitting point
+    /// does not move under pan/tilt". With the lens seated on the head's front
+    /// face, the point that holds still is the head's **tilt pivot**: the lens
+    /// sits a fixed distance in front of it on the beam axis and the virtual
+    /// apex a fixed distance behind the lens on the same axis. Pivot, apex,
+    /// lens and every point of the axis stay collinear — the §15.1 case, an
+    /// offset *along* the ray — so an apex-anchored shadow cache keys on the
+    /// pivot and derives lens and apex from the aim.
     #[test]
-    fn the_lens_centre_holds_still_under_pan_and_tilt_and_the_apex_rides_the_axis() {
+    fn the_tilt_pivot_holds_still_and_lens_and_apex_ride_the_beam_axis() {
         let definitions =
             Definitions::from([("head.qxf".into(), definition("Moving Head", "One", 1))]);
         let mut scene = scene(vec![fixture("head", "head.qxf", "One")]);
         let mut library = library();
-        let mut lens_centres = Vec::new();
+        let mut pivots = Vec::new();
+        let mut reach = Vec::new();
         for [pan, tilt] in [[0.0, 0.0], [90.0, 45.0], [-170.0, 120.0], [33.0, -80.0]] {
             scene.state.insert(
                 "head:0".into(),
@@ -1447,12 +1512,91 @@ mod tests {
                 back.normalize().dot(cone.direction) > 0.999_999,
                 "the apex is behind the lens on the beam axis"
             );
-            lens_centres.push(cone.position);
+            // The pivot the lens is seated in front of, from the same frame.
+            let def = &definitions["head.qxf"];
+            let base = Mat4::from_mat3(three_to_world_basis())
+                * three_pose_from_data(scene.fixtures[0].pos, scene.fixtures[0].rot);
+            let glb = library.get("qlc/moving_head.glb").unwrap();
+            let worlds = housing_worlds(glb, def, ModelKind::MovingHead, base, [pan, tilt]);
+            let pivot = worlds[glb.node_index("head").unwrap()].transform_point3(Vec3::ZERO);
+            let front = cone.position - pivot;
+            assert!(
+                front.normalize().dot(cone.direction) > 0.9999,
+                "lens ahead of the pivot"
+            );
+            pivots.push(pivot);
+            reach.push(front.length());
         }
         assert!(
-            lens_centres.windows(2).all(|pair| pair[0] == pair[1]),
-            "the lens centre is pan/tilt-invariant: {lens_centres:?}"
+            pivots.windows(2).all(|p| p[0].distance(p[1]) < 1e-5),
+            "the tilt pivot is pan/tilt-invariant: {pivots:?}"
         );
+        assert!(
+            reach.windows(2).all(|p| (p[0] - p[1]).abs() < 1e-5),
+            "the lens keeps its distance from the pivot: {reach:?}"
+        );
+    }
+
+    /// The drawn head points along its beam, and the lens sits on the head's
+    /// front face on that axis, at a fixed distance from the tilt pivot —
+    /// so it moves with the head and never relative to it.
+    #[test]
+    fn the_drawn_head_turns_with_its_beam_and_carries_the_lens() {
+        let mut def = definition("Moving Head", "One", 1);
+        def.physical = Some(crate::scene_desc::Physical {
+            dimensions: Some(crate::scene_desc::Dimensions {
+                width: 405.0,
+                height: 450.0,
+                depth: 330.0,
+            }),
+            layout: None,
+            lens: None,
+        });
+        let mut library = library();
+        let glb = library.get("qlc/moving_head.glb").unwrap();
+        let head = glb.node_index("head").unwrap();
+        let mut offsets = Vec::new();
+        for rot in [[0.0, 0.0, 0.0], [0.4, -0.3, 1.1]] {
+            let base = Mat4::from_mat3(three_to_world_basis())
+                * three_pose_from_data([1.0, 2.0, 5.0], rot);
+            for pan_tilt in [[0.0, 0.0], [90.0, 45.0], [-170.0, 120.0], [33.0, -80.0]] {
+                let worlds = housing_worlds(glb, &def, ModelKind::MovingHead, base, pan_tilt);
+                let beam = beam_direction(Some(&def), rot, Some(pan_tilt));
+                let facing = worlds[head].transform_vector3(Vec3::NEG_Y).normalize();
+                assert!(
+                    facing.dot(beam) > 0.9999,
+                    "head faces {facing:?}, beam {beam:?} at {pan_tilt:?} rot {rot:?}"
+                );
+                let pivot = worlds[head].transform_point3(Vec3::ZERO);
+                let lens = lens_centre(glb, &worlds, &def, base, beam);
+                let offset = lens - pivot;
+                assert!(
+                    offset.normalize().dot(beam) > 0.9999,
+                    "the lens is on the axis"
+                );
+                offsets.push(offset.length());
+            }
+        }
+        assert!(
+            offsets.windows(2).all(|p| (p[0] - p[1]).abs() < 1e-4),
+            "{offsets:?}"
+        );
+        // The front face of a 450 mm-tall head is about 0.14 m past the pivot.
+        assert!(offsets[0] > 0.1 && offsets[0] < 0.2, "{offsets:?}");
+
+        // A spec-sheet offset wins.
+        def.physical.as_mut().unwrap().lens = Some(crate::scene_desc::Lens {
+            degrees_min: 3.8,
+            degrees_max: 3.8,
+            radius_m: None,
+            offset_m: Some(0.25),
+        });
+        let base = Mat4::from_mat3(three_to_world_basis());
+        let worlds = housing_worlds(glb, &def, ModelKind::MovingHead, base, [10.0, 20.0]);
+        let beam = beam_direction(Some(&def), [0.0; 3], Some([10.0, 20.0]));
+        let pivot = worlds[head].transform_point3(Vec3::ZERO);
+        let lens = lens_centre(glb, &worlds, &def, base, beam);
+        assert!((lens - (pivot + beam * 0.25)).length() < 1e-5);
     }
 
     /// Each emitter of a multi-cell fixture carries its own small optic, not
