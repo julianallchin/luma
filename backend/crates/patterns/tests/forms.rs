@@ -589,7 +589,7 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
 #[test]
 fn sparkle_coverage_counts_heads_and_grains() {
     let (form, mut inputs) = preset("Random heads");
-    for (coverage, expected) in [(0.5, 4), (0.25, 2), (1.0, 8), (0.0, 0)] {
+    for (coverage, expected) in [(0.5, 4), (0.25, 2), (0.75, 6), (0.0, 0)] {
         set(&mut inputs, "coverage", Value::Proportion(coverage));
         let on = lit(&render(&form, &inputs, 0.5));
         assert_eq!(on.iter().filter(|on| **on).count(), expected, "{coverage}");
@@ -651,6 +651,30 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
             "{value}"
         );
     }
+}
+
+#[test]
+fn a_sparkle_on_paced_events_never_lights_every_head() {
+    let (form, mut inputs) = preset("Random heads");
+    set(&mut inputs, "coverage", Value::Proportion(1.0));
+    let error = prepare(&form, &inputs).unwrap_err();
+    assert!(error.0.contains("use a Wash"), "{error}");
+    // A curve may pass through 100%, and stamped events have no Wash.
+    set(
+        &mut inputs,
+        "coverage",
+        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Segment::Linear)),
+    );
+    prepare(&form, &inputs).unwrap();
+    set(&mut inputs, "coverage", Value::Proportion(1.0));
+    set(
+        &mut inputs,
+        "every",
+        Value::Events(Events::Beats {
+            times: EventTimes::new(vec![0.0, 1.5]).unwrap(),
+        }),
+    );
+    assert_eq!(lit(&render(&form, &inputs, 0.5)), vec![true; 8]);
 }
 
 #[test]

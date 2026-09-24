@@ -957,6 +957,16 @@ pub(crate) fn check_inputs(
             .map_err(|error| Error(format!("{id}.{name}: {error}")))?;
         check_value(name, spec, value).map_err(|error| Error(format!("{id}.{name}: {error}")))?;
     }
+    // A sparkle lights a random share. A fixed 100% on paced events is a
+    // Wash with a brightness per hit. Stamped events have no Wash yet.
+    if id == "color.sparkle@1"
+        && matches!(inputs.get("coverage"), Some(Value::Proportion(v)) if *v >= 1.0)
+        && !matches!(inputs.get("every"), Some(Value::Events(_)))
+    {
+        return Err(Error(format!(
+            "{id}.coverage: a fixed 100% lights every head; use a Wash (color.constant@1)"
+        )));
+    }
     Ok(())
 }
 
