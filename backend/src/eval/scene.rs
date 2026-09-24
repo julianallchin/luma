@@ -111,14 +111,7 @@ impl Scene {
             };
             let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
             for ((k, _), frame) in times.iter().enumerate().filter(|(_, t)| active(t)).zip(got) {
-                composite_frame(
-                    &mut frames[k],
-                    &frame,
-                    &ann.plan.outputs,
-                    ann.blend_mode,
-                    1.0,
-                    None,
-                );
+                composite_frame(&mut frames[k], &frame, &ann.plan.outputs, ann.blend_mode);
             }
         }
         Ok(frames)

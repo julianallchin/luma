@@ -31,7 +31,7 @@ mod tensor;
 mod value;
 mod value_noise;
 
-pub use blend::{blend_color, blend_value, BlendMode};
+pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
 pub use clock::*;
 pub use color::{ColorStop, Gradient};
