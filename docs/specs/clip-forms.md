@@ -61,7 +61,7 @@ source is one level deep: a source's own settings are plain values.
 |---|---|
 | plain | One value, all heads, all the time |
 | `time[...]` | One curve over the whole clip, all heads equal |
-| `hit[...]` | One curve over the life of each event (chase and sparkle only) |
+| `hit[...]` | One curve over the life of each event (chase, sparkle, and the hits of `color.constant`) |
 | `noise(speed, range)` | Smooth random wandering over time |
 | `audio(from_hz, to_hz, floor, threshold)` | Energy of one frequency range of the track's mix |
 
@@ -103,12 +103,26 @@ only.
 
 ### `color.constant@1`
 
-All selected heads one color. Preset: Wash.
+All selected heads one color, at one brightness.
 
-| Input | Type | Promotable |
-|---|---|---|
-| color | color | T |
-| alpha | proportion | T N A |
+| Input | Type | Promotable | Meaning |
+|---|---|---|---|
+| color | color | T | |
+| brightness | proportion | T H N A | Multiplies the color |
+| every | beats, or none | T | Time between hits |
+| alpha | proportion | T N A | |
+
+- **brightness** darkens this clip's light. **alpha** is how much the clip
+  covers the layers under it. A clip at brightness 50% and alpha 100% is a
+  dim light that hides what is under it; at brightness 100% and alpha 50% it
+  is a full light at half opacity.
+- **every** has the meaning of `every` on `color.time`: 0 (none, the
+  default) is one hit over the whole clip, N is a hit every N beats. Only
+  `brightness = hit[...]` reads the hits; each hit lives until the next one.
+  With a plain brightness, `every` has no effect.
+
+Presets: Wash (brightness 100%, every none), Pulse (brightness
+`hit[hold then drop]`, every 1b).
 
 ### `color.time@1`
 
@@ -122,7 +136,9 @@ A color gradient over time, all heads equal.
 | alpha | proportion | T N A |
 
 With `every` = none, the gradient plays once over the clip. With `every` = N
-beats, it repeats every N beats. `every` means "repeat period" in every form.
+beats, it repeats every N beats. `every` means "repeat period" in every form,
+and 0 beats is once over the clip in every form. On chase and sparkle, a
+`travel` or `duration` of 0 beats is the whole clip.
 Presets: Color fade (none), Rainbow (hue gradient, every 4b).
 
 ### `color.space@1`
@@ -224,7 +240,16 @@ The default axis is `x`.
 Presets: Chase, Wave (soft, width abs 100%), Ripple (radial, plane Auto),
 Spin (angle, plane Auto), Bounce (bounce),
 Alternating sides (x, `steps(2)`, travel = every, width abs 50%, hard),
-Stepped chase (`steps(N)`, width abs 1/N).
+Stepped chase (`steps(N)`, width abs 1/N),
+Grow (radial, fixture span, plane Auto, width abs 125%, hard, path 0 → 0.5,
+every and travel 0: one stroke over the clip).
+
+Grow lights each fixture from its middle out to both ends, and a lit head
+stays lit. On a straight bar, radial 0 is the middle head and 1 are both end
+heads. With overrun, the lit part is radial `[0, p × (1 + w) / 2)` at clip
+progress `p`, so with width 1 the end heads would light only at the last
+instant of the clip. Width 125% reaches both ends 8/9 of the way through the
+clip and holds all heads lit to its end.
 
 ### `color.sparkle@1`
 
@@ -235,7 +260,7 @@ Each event lights a random share of the heads.
 | color | color | T | |
 | every | beats, or event list | T | Time between events |
 | duration | beats | T | Life of one event |
-| coverage | proportion | T H N A | Share of heads lit |
+| coverage | proportion | T H N A | Share of heads lit, below 100% |
 | brightness | proportion | T H N A | Brightness of the lit heads |
 | grain | head / fixture / clump(N) | — | What one "head" is |
 | alpha | proportion | T N A | |
@@ -243,12 +268,15 @@ Each event lights a random share of the heads.
 - A new random order is drawn per event from the clip seed and stable head
   identity. It never depends on frame count.
 - Events overlap when `every < duration`; overlaps keep the maximum.
+- Sparkle is random heads only. A fixed coverage of 100% lights every head,
+  which is a Wash with a brightness per hit, so validation rejects it. A
+  sparkle with stamped events may still have 100%: the Wash has no stamped
+  hits. A curve may pass through 100% (Dissolve, Build).
 
 Presets:
 
 | Preset | coverage | brightness |
 |---|---|---|
-| Pulse | 100% | `hit[hold then drop]` |
 | Dissolve | `hit[100% → 0%]` | 100% |
 | Build | `hit[0% → 100%]` | 100% |
 | Random heads | 50% | 100% |
@@ -324,6 +352,16 @@ Conversions of removed inputs:
   gradient.
 - Stem audio: the matching band of the mix. Output changes; the report lists
   these clips.
+
+**Wash brightness (2026-09-24).** `color.constant@1` gained `brightness`
+and `every` in place, and Pulse moved from sparkle to the Wash. Stored Wash
+clips got `brightness = 1` and `every = 0`, which renders the same
+(`color × 1 × alpha`). Every sparkle with a fixed coverage of 100% and paced
+events became a Wash with the same color, brightness, every and alpha. At
+coverage 100% the grain has no effect. When `duration` equals `every` the
+hit curve is kept; when `duration < every` the curve is squeezed into the
+first `duration / every` of each hit and the rest is 0, as the sparkle was
+dark between events. Sparkles with stamped events stay sparkles.
 
 **Render check.** A dry run over a copy of the reference database renders
 every converted clip, old and new, at a fixed set of times on its real venue,

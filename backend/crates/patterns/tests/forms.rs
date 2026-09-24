@@ -92,6 +92,7 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
         "Bounce",
         "Alternating sides",
         "Stepped chase",
+        "Grow",
         "Pulse",
         "Dissolve",
         "Build",
@@ -618,11 +619,6 @@ fn sparkle_coverage_counts_heads_and_grains() {
 
 #[test]
 fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
-    let (form, inputs) = preset("Pulse");
-    assert_eq!(render(&form, &inputs, 0.25), vec![1.0; 8]);
-    for value in render(&form, &inputs, 0.75) {
-        assert!((value - 0.5).abs() < 1e-12, "{value}");
-    }
     let (form, inputs) = preset("Dissolve");
     let count = |beat| {
         lit(&render(&form, &inputs, beat))
@@ -633,10 +629,141 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
     assert_eq!(count(0.0), 8);
     assert!(count(1.0) > count(3.0));
 
-    let (form, mut inputs) = preset("Pulse");
+    let (form, mut inputs) = preset("Random heads");
+    set(
+        &mut inputs,
+        "brightness",
+        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Segment::Linear)),
+    );
     set(&mut inputs, "duration", Value::Beats(2.0));
-    // Two events overlap: the new one at full brightness wins.
-    assert_eq!(render(&form, &inputs, 1.25), vec![1.0; 8]);
+    // Two events overlap: event 0 is at 0.375 and event 1 at 0.875. A head
+    // in both sets keeps the maximum.
+    let values = render(&form, &inputs, 1.25);
+    assert!(
+        values.iter().any(|v| (v - 0.875).abs() < 1e-12),
+        "{values:?}"
+    );
+    for value in values {
+        assert!(
+            [0.0, 0.375, 0.875]
+                .iter()
+                .any(|expected| (value - expected).abs() < 1e-12),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn pulse_is_a_wash_with_a_brightness_per_hit() {
+    let (form, mut inputs) = preset("Pulse");
+    assert_eq!(form, "color.constant@1");
+    assert_eq!(render(&form, &inputs, 0.25), vec![1.0; 8]);
+    for (beat, expected) in [(0.75, 0.5), (1.25, 1.0), (1.75, 0.5), (15.9, 0.2)] {
+        for value in render(&form, &inputs, beat) {
+            assert!((value - expected).abs() < 1e-9, "{beat}: {value}");
+        }
+    }
+    // Brightness and alpha multiply.
+    set(&mut inputs, "alpha", Value::Proportion(0.5));
+    for value in render(&form, &inputs, 0.75) {
+        assert!((value - 0.25).abs() < 1e-12, "{value}");
+    }
+    // Every 0 is one hit over the whole clip of 16 beats.
+    set(&mut inputs, "alpha", Value::Proportion(1.0));
+    set(&mut inputs, "every", Value::Beats(0.0));
+    for (beat, expected) in [(0.75, 1.0), (7.9, 1.0), (12.0, 0.5)] {
+        for value in render(&form, &inputs, beat) {
+            assert!((value - expected).abs() < 1e-9, "{beat}: {value}");
+        }
+    }
+    // A time curve on every counts hits like an odometer: the first hit
+    // lasts 1 beat, then they grow longer.
+    set(
+        &mut inputs,
+        "every",
+        Value::Time(curve(&[[0.0, 1.0], [1.0, 3.0]], Segment::Linear)),
+    );
+    prepare(&form, &inputs).unwrap();
+
+    // A fixed brightness darkens the color; every then has no effect.
+    let (form, mut inputs) = preset("Wash");
+    set(&mut inputs, "brightness", Value::Proportion(0.25));
+    set(&mut inputs, "every", Value::Beats(1.0));
+    assert_eq!(render(&form, &inputs, 0.5), vec![0.25; 8]);
+    let wash = &standard_library().definitions["color.constant@1"];
+    assert_eq!(
+        wash.inputs["brightness"].promotable,
+        [
+            SourceKind::Time,
+            SourceKind::Hit,
+            SourceKind::Noise,
+            SourceKind::Audio
+        ]
+    );
+    assert_eq!(wash.inputs["every"].promotable, [SourceKind::Time]);
+}
+
+#[test]
+fn grow_lights_each_bar_from_its_middle_to_both_ends_and_holds() {
+    // Two straight bars of five heads along stage X, 10 units apart.
+    let cells: Vec<Cell> = (0..10)
+        .map(|n| Cell {
+            id: format!("{}:{}", if n < 5 { "left" } else { "right" }, n % 5),
+            group: "bar".into(),
+            world: [f64::from(n % 5) + if n < 5 { 0.0 } else { 10.0 }, 0.0, 0.0],
+            uvz: [f64::from(n % 5) + if n < 5 { 0.0 } else { 10.0 }, 0.0, 0.0],
+        })
+        .collect();
+    let (form, inputs) = preset("Grow");
+    let program = PreparedGraph::new(
+        &standard_library(),
+        &form,
+        &inputs,
+        Frame {
+            cells: &cells,
+            features: None,
+            beat: START,
+            clip_start: START,
+            clip_duration: 16.0,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    let frame = |beat: f64| -> Vec<f64> {
+        let result = program.evaluate(START + beat).unwrap();
+        let lit = lighting(&result["lighting"]);
+        cells
+            .iter()
+            .map(|cell| lit[&cell.id].dimmer.unwrap_or(0.0))
+            .collect()
+    };
+    // The first beat each head lights, sampled every 1/16 beat.
+    let mut first = [f64::INFINITY; 10];
+    let mut was = [false; 10];
+    for step in 0..256 {
+        let beat = f64::from(step) / 16.0;
+        for (head, value) in frame(beat).into_iter().enumerate() {
+            let on = value > 0.5;
+            // Once lit, a head stays lit.
+            assert!(!was[head] || on, "head {head} went dark at {beat}");
+            if on && !was[head] {
+                first[head] = beat;
+            }
+            was[head] = on;
+        }
+    }
+    for bar in [&first[..5], &first[5..]] {
+        // The middle head first, then its neighbours, then both ends.
+        assert!(bar[2] < bar[1] && bar[1] < bar[0], "{first:?}");
+        assert_eq!(bar[1], bar[3], "{first:?}");
+        assert_eq!(bar[0], bar[4], "{first:?}");
+    }
+    assert_eq!(first[..5], first[5..]);
+    assert!(first[2] < 1.0, "{first:?}");
+    // Width 1.25 reaches both ends 8/9 of the way through the clip.
+    assert!((first[0] - 128.0 / 9.0).abs() <= 1.0 / 16.0, "{first:?}");
+    // Every head is lit at the end of the clip.
+    assert_eq!(frame(15.99), vec![1.0; 10]);
 }
 
 #[test]

@@ -141,7 +141,8 @@ A missing or unknown input is an error. A score holds form clips only.
   is summed over the clip like an odometer, from a table built from the
   curve, so a sought frame equals a played frame.
 - `core/event_life`, `core/odometer`, `core/curve` and `core/random_share`
-  are the new primitives the forms use.
+  are the new primitives the forms use. A period or life of 0 beats lasts
+  the whole clip.
 - `presets()` reads `src/presets.json`: named presets (a form and every
   input value) and named curves for `time` and `hit` sources.
 

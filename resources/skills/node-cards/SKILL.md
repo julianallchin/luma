@@ -23,7 +23,8 @@ is one level deep.
 
 - `time` — one curve over the whole clip, all heads equal:
   `{"type": "time", "value": {"points": [[0, 2], [1, 0.5]], "segments": ["linear"]}}`.
-- `hit` — one curve over the life of each event (chase and sparkle only).
+- `hit` — one curve over the life of each event (chase, sparkle, and the
+  hits of `color.constant@1`).
 - `noise` — `{"type": "noise", "value": {"speed": 4, "range": [0.2, 1]}}`,
   smooth random wandering.
 - `audio` — energy of a frequency range of the mix, scaled over the clip:
@@ -48,8 +49,13 @@ the span.
 
 ## color.constant@1
 
-All selected heads one color. `color` (T), `alpha` (T N A).
-Preset: **Wash**.
+All selected heads one color. `color` (T), `brightness` (multiplies the
+color; T H N A), `every` (beats between hits; 0 is one hit over the clip; T),
+`alpha` (T N A). Only `brightness = hit[...]` reads the hits; each hit lasts
+until the next. Brightness darkens the light; alpha is how much the clip
+covers the layers under it.
+Presets: **Wash** (brightness 1, every 0), **Pulse** (brightness
+`hit[hold then drop]`, every 1).
 
 ## color.time@1
 
@@ -74,25 +80,28 @@ Strokes travel across the heads. Each event starts one stroke.
   `path` (position over the stroke's life), `boundary` (`clip` or `wrap`),
   `alpha` (T H N A).
 - Strokes on the axis at once = `travel / every`. With `clip`, a stroke enters
-  and leaves fully.
+  and leaves fully. `every` 0 is one stroke per clip; `travel` 0 is the whole
+  clip.
 
 Presets: **Chase**, **Wave** (soft, width abs 100%), **Ripple** (radial),
 **Spin** (angle), **Bounce**, **Alternating sides** (x, two steps, travel =
-every), **Stepped chase**.
+every), **Stepped chase**, **Grow** (radial, fixture span: each fixture lights
+from its middle out to both ends and stays lit; one stroke over the clip).
 
 ## color.sparkle@1
 
 Each event lights a random share of the heads.
 
 - `color` (T), `every` (beats or event list; T), `duration` (life of one
-  event; T), `coverage` (share of heads lit; T H N A), `brightness` (T H N A),
-  `grain` (what one head is), `alpha` (T N A).
+  event; T), `coverage` (share of heads lit, below 1; T H N A), `brightness`
+  (T H N A), `grain` (what one head is), `alpha` (T N A).
+- Sparkle is random heads only. A fixed coverage of 1 on paced events is
+  rejected: all heads on each hit is a `color.constant@1` Pulse.
 - A new random set per event, from the clip seed. Overlapping events keep the
   maximum.
 
 | Preset | coverage | brightness |
 |---|---|---|
-| **Pulse** | 100% | `hit[hold then drop]` |
 | **Dissolve** | `hit[100% → 0%]` | 100% |
 | **Build** | `hit[0% → 100%]` | 100% |
 | **Random heads** | 50% | 100% |

@@ -203,7 +203,7 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
     assert_eq!(out["fixed"], true, "{out}");
     assert_eq!(
         out["every"],
-        serde_json::json!(["Every = 0.0625"]),
+        serde_json::json!(["Every: Beats = 0.0625"]),
         "back to fixed takes the curve's first value: {out}"
     );
 
@@ -529,9 +529,64 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
 }
 
 #[test]
+fn the_wash_sheet_shows_brightness_and_every() {
+    let mut harness = Fixture::new("clip-forms-wash", 20, vec![])
+        .with_graph_score(support::preset_score("Pulse"))
+        .with_rig()
+        .window(1400., 1000.)
+        .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        const node=(role,label)=>{until(label,s=>s.find({role,label}));return app.snapshot().find({role,label});};
+        const rows=()=>app.snapshot().findAll({role:"row"}).map(n=>n.label);
+        app.click(node("card","Constant color"));
+        until("form inputs",s=>s.find({role:"row",label:"Brightness"}));
+        const inputs=rows();
+        const r=node("row","Brightness").bounds;
+        app.click(app.snapshot().findAll({role:"select",label:"↗ Per hit"}).find(n=>n.bounds.y>=r.y&&n.bounds.y<r.y+r.height));
+        const offered=app.snapshot().findAll({role:"button"}).map(n=>n.label).filter(l=>l==="Fixed"||l.startsWith("↗"));
+        app.key("escape");
+        app.frames(4,{waitMs:40});
+        app.click(node("button","Every Once"));
+        until("once",s=>!s.find({role:"input",label:"Every: Beats = 1"}));
+        app.frames(8,{waitMs:40});
+        ({inputs,offered})
+    "#,
+        ),
+        Duration::from_secs(90),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = &result.result;
+    let order = ["Color", "Brightness", "Every"];
+    let inputs: Vec<&str> = out["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|label| order.contains(label))
+        .collect();
+    assert_eq!(inputs, order, "the Wash shows its inputs in order: {out}");
+    assert_eq!(
+        out["offered"],
+        serde_json::json!(["Fixed", "↗ Over time", "↗ Per hit", "↗ Noise", "↗ Audio"]),
+        "brightness's mode menu: {out}"
+    );
+    let score = stored("clip-forms-wash");
+    let clip = &score["clips"]["form-clip"];
+    assert_eq!(clip["graph"], "color.constant@1");
+    assert_eq!(
+        clip["inputs"]["every"],
+        serde_json::json!({"type": "beats", "value": 0.0}),
+        "Once stores 0 beats: {out}"
+    );
+}
+
+#[test]
 fn every_sheet_row_has_one_shape() {
     let mut harness = Fixture::new("clip-forms-rows", 20, vec![])
-        .with_graph_score(support::preset_score("Pulse"))
+        .with_graph_score(support::preset_score("Shimmer"))
         .with_rig()
         .window(1400., 1400.)
         .open(Mode::Headless);

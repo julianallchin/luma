@@ -27,7 +27,7 @@ pub fn is_form(id: &str) -> bool {
 /// its inputs in a map, so the order lives here.
 pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
     Some(match id {
-        "color.constant@1" => &["color", "alpha"],
+        "color.constant@1" => &["color", "brightness", "every", "alpha"],
         "color.time@1" => &["colors", "curve", "every", "alpha"],
         "color.space@1" => &["colors", "axis", "alpha"],
         "color.chase@1" => &[
@@ -417,11 +417,38 @@ pub(crate) fn definitions() -> Vec<(&'static str, Definition)> {
 
 fn constant() -> Definition {
     let mut body = Body::default();
-    let color = body.multiply("color", i("color"), i("alpha"));
+    // One hit every `every` beats, for a brightness per hit. Zero is one hit
+    // over the whole clip.
+    body.node("clock", "core/odometer", vec![("period", i("every"))]);
+    body.node(
+        "life",
+        "core/fraction",
+        vec![("value", c("clock", "turns"))],
+    );
+    let bright = body.multiply("bright", i("brightness"), i("alpha"));
+    let color = body.multiply("color", i("color"), bright);
     body.form(
         "Constant color",
         vec![
             ("color", color_input()),
+            (
+                "brightness",
+                input(
+                    "Brightness",
+                    "Brightness of the light. Alpha is how much the clip covers the layers under it",
+                    Value::Proportion(1.0),
+                    Rate::Frame,
+                    &[Time, Hit, Noise, Audio],
+                ),
+            ),
+            (
+                "every",
+                every_input(
+                    0.0,
+                    "Beats between hits; 0 is one hit over the clip",
+                    &[Time],
+                ),
+            ),
             ("alpha", alpha_input(&[Time, Noise, Audio])),
         ],
         color,
@@ -1052,15 +1079,14 @@ pub(crate) fn lower(
             }
             Value::Time(curve) => Some(time_curve(&mut body, &key, Value::Time(curve.clone()))),
             Value::Hit(curve) => {
-                if !graph.nodes.contains_key("life") {
-                    return Err(Error(format!("{id} has no events for a hit source")));
-                }
+                let progress = hit_progress(graph)
+                    .ok_or_else(|| Error(format!("{id} has no events for a hit source")))?;
                 body.node(
                     &key("curve"),
                     "core/curve",
                     vec![
                         ("curve", Value::Time(curve.clone()).into()),
-                        ("progress", c("life", "progress")),
+                        ("progress", progress),
                     ],
                 );
                 Some(c(&key("curve"), "value"))
@@ -1150,6 +1176,17 @@ pub(crate) fn lower(
         }
     }
     Ok(Some((lowered, plain)))
+}
+
+/// Where a hit source reads the life of its event: the `life` node's
+/// progress. A form with events has an event life there; the Wash has the
+/// fraction of its hit clock.
+fn hit_progress(graph: &Graph) -> Option<Binding> {
+    match graph.nodes.get("life")?.definition.as_str() {
+        "core/event_life" => Some(c("life", "progress")),
+        "core/fraction" => Some(c("life", "value")),
+        _ => None,
+    }
 }
 
 /// Give a speed source to the clocks that read the input, in place of it.

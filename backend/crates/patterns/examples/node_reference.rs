@@ -7,12 +7,7 @@
 //! one-line summaries live in `CATEGORIES` below. The run fails when a library
 //! definition has no category, or a category names a definition that is gone.
 use luma_patterns::{standard_library, Body, Definition, Input, Library, Rate, Value};
-use std::{
-    collections::BTreeMap,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, fmt::Write as _, fs, path::PathBuf};
 
 struct Category {
     slug: &'static str,
@@ -112,7 +107,7 @@ const CATEGORIES: &[Category] = &[
         description: "The shipped clip forms. A clip plays one form.",
         intro: "Each form is a graph of the nodes on the other pages. A clip names one form and sets its inputs.",
         nodes: &[
-            ("color.constant@1", "All selected heads one color."),
+            ("color.constant@1", "All selected heads one color, at a brightness that can follow each hit."),
             ("color.time@1", "A color gradient over time, all heads equal."),
             ("color.space@1", "A gradient laid across the rig. Each head gets a fixed color from its position."),
             ("color.chase@1", "Strokes travel across the heads. Each event starts one stroke."),

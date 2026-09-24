@@ -24,7 +24,7 @@ const NOISE_SPEED: f64 = 4.;
 const STAMPS: usize = 4;
 /// The grain choices. A clump holds N heads; N is its own field.
 const GRAINS: [&str; 3] = ["Head", "Fixture", "Clump"];
-/// The two readings of `color.time`'s `every`.
+/// The two readings of a period that can be 0: once over the clip, or beats.
 const EVERY: [&str; 2] = ["Once", "Beats"];
 /// The period a switch from "Once" to "Beats" starts at.
 const EVERY_BEATS: f64 = 4.;
@@ -60,6 +60,16 @@ impl Slot {
                 .and_then(|value| value.source_kind()),
             editing: false,
         })
+    }
+
+    /// A period where the sheet offers 0 beats, once over the clip: `every`
+    /// of color over time, the Wash and the chase, and a chase's `travel`.
+    fn once(&self) -> bool {
+        match self.form {
+            "color.time@1" | "color.constant@1" => self.key == "every",
+            "color.chase@1" => matches!(self.key, "every" | "travel"),
+            _ => false,
+        }
     }
 
     /// The bounds the form gives a number input, such as a chase width.
@@ -625,7 +635,7 @@ pub(super) fn widget(
                 }));
                 return Widget::Grain(entity);
             }
-            if slot.form == "color.time@1" && def.id == "every" {
+            if slot.once() {
                 let entity = number(
                     format!("{name}: Beats"),
                     current.unwrap_or(0.),
@@ -1331,8 +1341,9 @@ fn control(
                 let app = app.clone();
                 let id = def.id.clone();
                 let chosen = (label == EVERY[0]) == once;
-                luma_ui::float::segment(label, chosen, format!("every-{label}"))
-                    .id(SharedString::from(format!("every-{label}")))
+                let key = format!("{}-{label}", def.id);
+                luma_ui::float::segment(label, chosen, key.clone())
+                    .id(SharedString::from(key))
                     .on_click(move |_, _, cx| {
                         let beats = if label == EVERY[0] { 0. } else { EVERY_BEATS };
                         if chosen {
@@ -1342,7 +1353,7 @@ fn control(
                             this.arg_live(&id, serde_json::json!(beats), cx)
                         });
                     })
-                    .agent_node(Role::Button, format!("Every {label}"))
+                    .agent_node(Role::Button, format!("{name} {label}"))
             }));
             column()
                 .child(segments)

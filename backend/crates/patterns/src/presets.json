@@ -2,7 +2,15 @@
   "presets": [
     {"name": "Wash", "form": "color.constant@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]}
+      "brightness": {"type": "proportion", "value": 1.0},
+      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
+      "every": {"type": "beats", "value": 0.0}
+    }},
+    {"name": "Pulse", "form": "color.constant@1", "inputs": {
+      "alpha": {"type": "proportion", "value": 1.0},
+      "brightness": {"type": "hit", "value": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}},
+      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
+      "every": {"type": "beats", "value": 1.0}
     }},
     {"name": "Color fade", "form": "color.time@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -105,14 +113,17 @@
       "width": {"type": "number", "value": 0.25},
       "width_relative": {"type": "boolean", "value": false}
     }},
-    {"name": "Pulse", "form": "color.sparkle@1", "inputs": {
+    {"name": "Grow", "form": "color.chase@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "hit", "value": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}},
+      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}, "span": "fixture"}},
+      "boundary": {"type": "boundary", "value": "clip"},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "coverage": {"type": "proportion", "value": 1.0},
-      "duration": {"type": "beats", "value": 1.0},
-      "every": {"type": "beats", "value": 1.0},
-      "grain": {"type": "number", "value": 1.0}
+      "every": {"type": "beats", "value": 0.0},
+      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 0.5]]}},
+      "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
+      "travel": {"type": "beats", "value": 0.0},
+      "width": {"type": "number", "value": 1.25},
+      "width_relative": {"type": "boolean", "value": false}
     }},
     {"name": "Dissolve", "form": "color.sparkle@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
