@@ -1,4 +1,4 @@
-//! The context gauge under the composer, and the card it opens.
+//! The context gauge beside the send button, and the card it opens.
 //!
 //! Two facts worth a test, and they are the two the design can get wrong
 //! silently:
@@ -19,8 +19,8 @@ use gpui_agent::Mode;
 #[path = "../support/chat.rs"]
 mod chat;
 
-/// Wide enough that the status strip is not clipped — the gauge lives at its
-/// trailing edge, and a clipped node reports zero width.
+/// Wide enough that the composer's cluster is not clipped — a clipped node
+/// reports zero width.
 const WINDOW: (f32, f32) = (1280., 900.);
 
 #[test]
@@ -32,7 +32,7 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
             {until}
             {open}
             // Nothing has been asked yet, so there is no request to report and
-            // the strip carries no gauge at all — an empty ring would be a
+            // the composer carries no gauge at all — an empty ring would be a
             // reading of zero, which is a different claim.
             const before = app.snapshot().findAll({{ role: "text" }})
                 .filter((n) => n.label.startsWith("Context"));

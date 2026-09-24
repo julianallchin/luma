@@ -1493,6 +1493,18 @@ impl AgentChat {
         });
         let error = self.error.clone();
         let this = cx.entity();
+        let gauge = self.transcript.last_request().map(|request| {
+            usage::gauge(
+                &request,
+                &this,
+                self.usage_open,
+                self.usage_closing.map(|since| {
+                    luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since)
+                }),
+                &theme,
+            )
+            .into_any_element()
+        });
         // Asked with a clock: a fade that finished while its block was off
         // screen — or while the turn was settling — must stop asking for
         // frames on its own, or the panel never idles again.
@@ -1550,6 +1562,15 @@ impl AgentChat {
         let opening_trailer = self.rows.is_empty().then_some(trailer).flatten();
         let view = cx.entity_id();
         let rows = this.clone();
+        // The footer's height as last painted. It overlays the transcript, so
+        // the list and everything pinned to the transcript's bottom clear it
+        // by this much. A change repaints (see the footer's canvas), so a lag
+        // of one frame never settles.
+        let footer = if attached && !self.read_only {
+            f32::from(self.composer_bounds.get().size.height)
+        } else {
+            0.0
+        };
         let transcript_list = list(self.list.clone(), move |ix, window, cx| {
             let held = rows.clone();
             held.update(cx, |state, cx| {
@@ -1616,7 +1637,10 @@ impl AgentChat {
                 )
             })
         })
-        .size_full();
+        .size_full()
+        // The footer floats over the list's tail, so the last row can scroll
+        // clear of it and what passes under it blurs rather than stops.
+        .pb(px(footer));
 
         let plate_bounds = self.plate_bounds.clone();
         let composer_bounds = self.composer_bounds.clone();
@@ -1691,11 +1715,12 @@ impl AgentChat {
                             let opening_trailer = opening_trailer.map(|state| {
                                 div()
                                     .absolute()
-                                    .bottom(px(theme::SPACE_LG))
+                                    .bottom(px(footer + theme::SPACE_LG))
                                     .left_0()
                                     .child(working::trailer(&state, &theme, view, cx))
                             });
-                            el.child(opening(&Opening::CHAT, Some(&this), &theme))
+                            el.pb(px(footer))
+                                .child(opening(&Opening::CHAT, Some(&this), &theme))
                                 .children(opening_trailer)
                         },
                     )
@@ -1704,22 +1729,30 @@ impl AgentChat {
                             || !self.send_motion.pending.is_empty(),
                         |el| {
                             el.child(transcript_list)
-                                .children(fade_bands())
-                                .child(self.rail(&theme))
-                                .children(adrift.then(|| jump_to_bottom(&this, &theme)))
+                                .children(fade_bands(footer))
+                                .child(self.rail(&theme).bottom(px(footer)))
+                                .children(adrift.then(|| jump_to_bottom(&this, footer, &theme)))
                         },
                     )
                     .agent_node(NodeRole::Card, "Conversation"),
             )
-            // Keep the composer and status strip on the transcript's reading column.
+            // Keep the composer on the transcript's reading column. The footer
+            // floats over the transcript's tail rather than below it, so the
+            // conversation blurs under it instead of stopping at a seam. It
+            // takes the pointer, except the wheel: a click on the composer must
+            // not reach the transcript's unpin, but the list still scrolls.
             .when(attached && !self.read_only, |el| {
                 el.child(
                     div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
                         .flex()
                         .flex_col()
                         .items_center()
-                        .flex_none()
                         .px(px(theme::CONTENT_GUTTER))
+                        .block_mouse_except_scroll()
                         .child(
                             div()
                                 .relative()
@@ -1730,7 +1763,14 @@ impl AgentChat {
                                 .child(
                                     gpui::canvas(
                                         |_, _, _| (),
-                                        move |bounds, _, _, _| composer_bounds.set(bounds),
+                                        move |bounds, _, window, _| {
+                                            if composer_bounds.get().size.height
+                                                != bounds.size.height
+                                            {
+                                                window.refresh();
+                                            }
+                                            composer_bounds.set(bounds)
+                                        },
                                     )
                                     .absolute()
                                     .size_full(),
@@ -1740,24 +1780,12 @@ impl AgentChat {
                                     &this,
                                     streaming,
                                     picker,
+                                    gauge,
                                     &theme,
                                     window,
                                     cx,
                                 ))
-                                .child(status_strip(
-                                    streaming,
-                                    error.as_deref(),
-                                    self.transcript.last_request().as_ref(),
-                                    self.usage_open,
-                                    self.usage_closing.map(|since| {
-                                        luma_ui::motion::exit_progress(
-                                            &luma_ui::motion::MENU_OUT,
-                                            since,
-                                        )
-                                    }),
-                                    &this,
-                                    &theme,
-                                ))
+                                .children(error_strip(error.as_deref(), &theme))
                                 // The subagent pill clears the full composer.
                                 .children(subagents::pill(&self.subagents, &this, &theme)),
                         ),
@@ -1923,12 +1951,21 @@ fn header_button(
 ///
 /// The top band is inset by the header's height so text dissolves *before* it
 /// can reach the header's own label, rather than crossing under it.
-fn fade_bands() -> [gpui::Div; 2] {
+///
+/// The bottom band is the fallback only. Where the backdrop blurs, the
+/// composer's frosted pill blurs what passes under it, and the text around the
+/// pill stays sharp.
+fn fade_bands(footer: f32) -> Vec<gpui::Div> {
     let ground = theme::panel_opaque();
-    [
-        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, true).top(px(0.0)),
-        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, false),
-    ]
+    let mut bands =
+        vec![luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, true).top(px(0.0))];
+    if !luma_ui::dialog::BACKDROP_BLUR_SUPPORTED {
+        bands.push(
+            luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, false)
+                .bottom(px(footer)),
+        );
+    }
+    bands
 }
 
 /// The way back down, offered only once the bottom is far enough away to be
@@ -1937,11 +1974,11 @@ fn fade_bands() -> [gpui::Div; 2] {
 /// It re-engages the *pin* rather than jumping the scroll offset: the way back
 /// is the same glide the transcript uses to follow a reply, so there is one
 /// motion toward the bottom and not two that could disagree about where it is.
-fn jump_to_bottom(chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
+fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl IntoElement {
     let pressed = chat.clone();
     div()
         .absolute()
-        .bottom(px(theme::TRANSCRIPT_FADE_BAND + theme::SPACE_SM))
+        .bottom(px(footer + theme::TRANSCRIPT_FADE_BAND + theme::SPACE_SM))
         .left_0()
         .right_0()
         .flex()
@@ -2115,54 +2152,25 @@ fn suggestion(
         .agent_node(NodeRole::Button, prompt)
 }
 
-/// The reserved strip under the transcript. Always present, so the composer
-/// does not shift the moment a turn starts.
-fn status_strip(
-    streaming: bool,
-    error: Option<&str>,
-    request: Option<&luma_lib::agent::RequestUsage>,
-    usage_open: bool,
-    usage_closing: Option<f32>,
-    chat: &Entity<AgentChat>,
-    theme: &Theme,
-) -> AnyElement {
-    let strip = div()
-        .h(px(theme::STATUS_STRIP_HEIGHT))
-        .flex_none()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(theme::SPACE_SM))
-        // Under the composer, as comet keeps it: the strip is the thread's
-        // context line, not the transcript's tail. The column is the footer's;
-        // the inset here is the strip's own, holding its text off the plate's
-        // edge above it.
-        .w_full()
-        .px(px(theme::SPACE_LG))
-        .mb(px(theme::SPACE_XS))
-        .text_size(px(11.0));
-    if let Some(error) = error {
-        return strip
+/// The error line under the composer, or nothing. Only a failure earns the
+/// space: the send hint went with the language label, and the context gauge
+/// lives in the composer's cluster.
+fn error_strip(error: Option<&str>, theme: &Theme) -> Option<AnyElement> {
+    let error = error?;
+    Some(
+        div()
+            .h(px(theme::STATUS_STRIP_HEIGHT))
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .px(px(theme::SPACE_LG))
+            .mb(px(theme::SPACE_XS))
+            .text_size(px(11.0))
             .text_color(theme.danger)
             .child(SharedString::from(error.to_string()))
             .agent_node(NodeRole::Text, error.to_string())
-            .into_any_element();
-    }
-    // No loader here: the working indicator trails the last row (see
-    // [`crate::working`]). A strip that also spun would be a second answer to
-    // "is it running?", and two answers can disagree.
-    //
-    // What the strip does drop while a turn runs is the send hint — a key
-    // legend for a field that is busy is an instruction that will not work.
-    strip
-        .text_color(theme.text_faint)
-        .child(SharedString::from("Python"))
-        .child(div().flex_1())
-        .when(!streaming, |el| el.child(SharedString::from("⏎ to send")))
-        // Trailing, past the send hint: the gauge answers a question nobody is
-        // asking yet, so it takes the far edge and the hint keeps its place.
-        .children(
-            request.map(|request| usage::gauge(request, chat, usage_open, usage_closing, theme)),
-        )
-        .into_any_element()
+            .into_any_element(),
+    )
 }
