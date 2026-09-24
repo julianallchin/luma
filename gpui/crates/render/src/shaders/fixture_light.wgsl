@@ -23,10 +23,12 @@ fn shadow_compare_reference(raw_z: f32, near: f32, far: f32, slack: f32) -> f32 
 /// A beam leaves a lens-sized disc, not a point. Its cone converges on a
 /// virtual apex `lens_distance` behind the lens centre on the beam axis, so it
 /// is exactly lens-wide at the lens plane; the part behind that plane is not
-/// beam. Light positions are lens centres, and distance falloff is measured
-/// from them; angles (profile, gobo, shadow projection) are seen from the apex.
-/// `lens_distance == 0` is a point source, and both helpers then reduce to the
-/// point-apex arithmetic bit for bit.
+/// beam. Light positions are lens centres (the range ball and its taper are
+/// measured from them); angles (profile, gobo, shadow projection) and the
+/// inverse-square falloff are measured from the apex, so a lens spreads the
+/// same light over a wider cone instead of adding light. `lens_distance == 0`
+/// is a point source, and these helpers then reduce to the point-apex
+/// arithmetic bit for bit.
 ///
 /// `q` points from the lens centre to the sample; `dist` is its length.
 /// Returns the cosine of the sample's angle off the axis as seen from the apex,
@@ -40,6 +42,13 @@ fn lens_cos_angle(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32, dist: 
         return -1.0;
     }
     return (axial + lens_distance) / max(length(q + direction * lens_distance), 1e-4);
+}
+
+/// Squared distance from the virtual apex to the sample: the inverse-square
+/// falloff's distance. `q` points from the lens centre to the sample.
+fn lens_apex_distance2(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32) -> f32 {
+    let from_apex = q + direction * lens_distance;
+    return dot(from_apex, from_apex);
 }
 
 /// `q` (lens centre to sample) re-based on the virtual apex, for the gobo:

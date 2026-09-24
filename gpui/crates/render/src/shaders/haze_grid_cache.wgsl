@@ -91,7 +91,7 @@ fn light_grid(
             let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
             radiance += tint * (rest.intensity * rest.haze_gain * haze.tuning.w
                 * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * angular * beam_range_falloff(dist, core.range) * phase * visibility
-                * exp(-light_optical_depth(li, world)) / max(d2, haze.tuning.z));
+                * exp(-light_optical_depth(li, world)) / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z));
         }
     }
     textureStore(fog_grid, vec3<i32>(cell), vec4<f32>(radiance / 256.0, 0.0));

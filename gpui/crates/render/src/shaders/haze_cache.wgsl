@@ -180,7 +180,7 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
         if QUAD_DIAG != 2u { density = haze_density_at(world); }
         let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
             * density * field
-            / max(d2, haze.tuning.z);
+            / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z);
         sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weight;
         left_field = right_field;
     }
