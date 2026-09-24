@@ -49,6 +49,7 @@ pub mod scene_desc;
 mod shadow;
 mod shadow_hierarchy;
 mod share;
+mod sky_visibility;
 pub mod truss;
 pub mod venue_tiles;
 pub mod viewport;

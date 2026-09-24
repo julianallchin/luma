@@ -138,7 +138,9 @@ impl RegionAllocator {
             .unwrap_or(self.free.len());
         self.free.insert(index, (start, length));
         // Coalesce with the neighbour after, then before.
-        if index + 1 < self.free.len() && self.free[index].0 + self.free[index].1 == self.free[index + 1].0 {
+        if index + 1 < self.free.len()
+            && self.free[index].0 + self.free[index].1 == self.free[index + 1].0
+        {
             let next = self.free.remove(index + 1);
             self.free[index].1 += next.1;
         }
@@ -328,7 +330,10 @@ impl IntervalCacheState {
                 state.written = false;
                 state.key = *key;
                 if let Some(key) = key {
-                    state.region = self.allocator.allocate(key.blocks()).map(|start| (start, key.blocks()));
+                    state.region = self
+                        .allocator
+                        .allocate(key.blocks())
+                        .map(|start| (start, key.blocks()));
                     self.reallocated += 1;
                 }
             }
@@ -373,11 +378,7 @@ impl IntervalCacheState {
 /// A light's tile rect, in full-resolution 8 px light-index tiles, mapped to
 /// the haze target's 8×4 cache blocks. Conservative: every haze pixel whose
 /// full-resolution footprint touches the rect lands in a returned block.
-pub(crate) fn block_rect(
-    tiles: [u32; 4],
-    scale: [f32; 2],
-    blocks: [u32; 2],
-) -> [u32; 4] {
+pub(crate) fn block_rect(tiles: [u32; 4], scale: [f32; 2], blocks: [u32; 2]) -> [u32; 4] {
     let [x0, y0, x1, y1] = tiles;
     let lo = |tile: u32, scale: f32, size: u32| -> u32 {
         let pixel = f64::from(tile) * 8.0 / f64::from(scale.max(1e-6));
@@ -440,16 +441,32 @@ mod tests {
     #[test]
     fn cold_start_settles_then_writes_then_reads() {
         let mut state = IntervalCacheState::new(1000);
-        let keys = vec![Some(key(1, [0, 0, 10, 10])), Some(key(2, [2, 3, 4, 5])), None];
+        let keys = vec![
+            Some(key(1, [0, 0, 10, 10])),
+            Some(key(2, [2, 3, 4, 5])),
+            None,
+        ];
         let cold = state.plan(frame(1), &keys);
-        assert_eq!(modes(&cold), [MODE_OFF, MODE_OFF, MODE_OFF], "an unsettled frame never writes");
+        assert_eq!(
+            modes(&cold),
+            [MODE_OFF, MODE_OFF, MODE_OFF],
+            "an unsettled frame never writes"
+        );
         let first = state.plan(frame(1), &keys);
         assert_eq!(modes(&first), [MODE_WRITE, MODE_WRITE, MODE_OFF]);
         assert_eq!(first[0][0], 0, "first region starts at the pool origin");
         assert_eq!(first[1][0], 100, "second region follows the first");
         assert_eq!(first[1][1], 2 | 3 << 16);
         assert_eq!(first[1][2], 4 | 5 << 16);
-        assert_eq!(state.stats(), IntervalCacheStats { read: 0, write: 2, off: 1, reallocated: 0 });
+        assert_eq!(
+            state.stats(),
+            IntervalCacheStats {
+                read: 0,
+                write: 2,
+                off: 1,
+                reallocated: 0
+            }
+        );
         let second = state.plan(frame(1), &keys);
         assert_eq!(modes(&second), [MODE_READ, MODE_READ, MODE_OFF]);
         assert_eq!(second[0][0], 0);
@@ -464,7 +481,11 @@ mod tests {
         state.plan(frame(1), &keys);
         state.plan(frame(1), &keys);
         let moved = state.plan(frame(2), &keys);
-        assert_eq!(modes(&moved), [MODE_OFF, MODE_OFF], "the moving frame traverses without writing");
+        assert_eq!(
+            modes(&moved),
+            [MODE_OFF, MODE_OFF],
+            "the moving frame traverses without writing"
+        );
         assert_eq!(state.reallocated, 0);
         let settled = state.plan(frame(2), &keys);
         assert_eq!(modes(&settled), [MODE_WRITE, MODE_WRITE]);
@@ -693,11 +714,23 @@ mod tests {
     fn block_rects_cover_the_tile_footprint() {
         // Full resolution haze: 8 px tiles are 8 px blocks, two block rows
         // per tile row.
-        assert_eq!(block_rect([3, 2, 5, 4], [1.0, 1.0], [279, 348]), [3, 4, 3, 6]);
-        assert_eq!(block_rect([0, 0, 278, 173], [1.0, 1.0], [279, 348]), [0, 0, 279, 348]);
+        assert_eq!(
+            block_rect([3, 2, 5, 4], [1.0, 1.0], [279, 348]),
+            [3, 4, 3, 6]
+        );
+        assert_eq!(
+            block_rect([0, 0, 278, 173], [1.0, 1.0], [279, 348]),
+            [0, 0, 279, 348]
+        );
         // Half-resolution haze: a 16 px full-res span is 8 haze px.
-        assert_eq!(block_rect([2, 2, 3, 3], [2.0, 2.0], [100, 100]), [1, 2, 1, 2]);
+        assert_eq!(
+            block_rect([2, 2, 3, 3], [2.0, 2.0], [100, 100]),
+            [1, 2, 1, 2]
+        );
         // Clamped to the block grid.
-        assert_eq!(block_rect([0, 0, 500, 500], [1.0, 1.0], [10, 10]), [0, 0, 10, 10]);
+        assert_eq!(
+            block_rect([0, 0, 500, 500], [1.0, 1.0], [10, 10]),
+            [0, 0, 10, 10]
+        );
     }
 }

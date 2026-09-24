@@ -256,28 +256,19 @@ fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
 /// texels, so zero collapses all taps to one hard comparison while larger
 /// values widen the penumbra without changing cascade projection or stability.
 fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
-    // `shadow-normalBias={0.01}`: push the sample along the surface normal so
-    // near-grazing faces do not shadow themselves.
+    // Normal offset, per surface. One shadow texel stores one depth for a
+    // patch of receiver; a surface tilted `theta` away from the light drifts
+    // `tan(theta)` texels of depth across it. Pushing the sample `d` along the
+    // normal moves it `d / cos(theta)` toward the light, so it clears its own
+    // texel and every PCF tap `r` texels away once
+    // `d >= (r + 1.5) * texel * sin(theta)`: the half texel of the stored
+    // centre, one more for the comparison sampler's bilinear footprint.
     //
-    // One fixed push is enough for a key light high overhead, where a shadow
-    // texel spans a few centimetres of light-space depth. A sun four degrees
-    // above the horizon crosses *metres* in the same texel, and a ground plane
-    // under it stripes itself with acne from edge to edge. The correction is
-    // the tangent of the incidence angle, which is how far along the surface a
-    // texel's depth error reaches.
-    //
-    // Faded in as the light comes down rather than applied throughout: every
-    // captured frame this renderer is held to is lit by `DirectionalLight`'s
-    // editor key, whose elevation is `z = 0.768`, and the constant they were
-    // tuned with is already right there. A bias that moved under them would be
-    // a change of contract dressed as a fix, so the ramp closes *below* that
-    // key and the tracked images cannot see it. Everything under it can: a sun
-    // at thirty degrees over a ground plane that runs to the horizon rippled
-    // the far half of every open-air frame with concentric acne, because at a
-    // tenth of this correction a hundred-and-eighty-metre cascade's texel is
-    // wider than the depth it is comparing.
-    //
-    // `dir_to_light.z` is the sun's own elevation — world Z is up.
+    // The offset follows each surface's own N.L, not the sun's elevation. A
+    // wall under a high sun is exactly as grazing as a floor under a low one,
+    // and gating on elevation left every lit wall at noon striped with acne.
+    // A receiver facing the light (floor under a high sun) gets almost no
+    // offset, which is what keeps contact shadows attached.
     let matrix = globals.light_view_proj[cascade];
     let texel = globals.params.y;
     let radius = clamp(globals.dir_color.w, 0.0, 3.0);
@@ -287,10 +278,8 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     let world_texel =
         2.0 * texel / max(length(vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x)), 1e-6);
     let cos_nl = clamp(dot(n, globals.dir_to_light.xyz), 0.0, 1.0);
-    let tangent = clamp(sqrt(1.0 - cos_nl * cos_nl) / max(cos_nl, 0.02), 1.0, 200.0);
-    let low_sun = 1.0 - smoothstep(0.40, 0.75, globals.dir_to_light.z);
-    let grazing = max(0.01, world_texel * 0.35 * tangent);
-    let biased = world + n * mix(0.01, grazing, low_sun);
+    let sin_nl = sqrt(1.0 - cos_nl * cos_nl);
+    let biased = world + n * (0.002 + (radius + 1.5) * world_texel * sin_nl);
     let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     if ndc.z > 1.0 || ndc.z < 0.0 {
@@ -357,6 +346,36 @@ fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
     let blend_width = (far - near) * globals.cascade_splits.w;
     let blend = smoothstep(far - blend_width, far, view_depth);
     return mix(current, cascade_shadow(world, n, cascade + 1u), blend);
+}
+
+struct OccludedSky {
+    irradiance: vec3<f32>,
+    // Visibility of the lit ground this point's lower hemisphere sees.
+    ground: vec3<f32>,
+};
+
+/// The sky probe's irradiance for normal `n` with the stage in the way.
+///
+/// The probe is an open sky over open, sunlit ground. Split it into the two:
+/// the ground below radiates what a downward normal receives, `E(-Z)`, and a
+/// normal sees `(1 - n.z) / 2` of it; the rest is sky. The sky part is
+/// scaled by the height field's sky visibility. The ground part is scaled by
+/// how lit the ground under this point really is: its sun visibility for the
+/// sun's share of the ground's light, its sky visibility for the rest.
+fn occluded_sky(n: vec3<f32>, open: vec3<f32>, visibility: vec4<f32>) -> OccludedSky {
+    let below = textureSampleLevel(environment_irradiance, environment_sampler,
+        environment_direction(vec3<f32>(0.0, 0.0, -1.0)), 0.0).rgb;
+    let above = textureSampleLevel(environment_irradiance, environment_sampler,
+        environment_direction(vec3<f32>(0.0, 0.0, 1.0)), 0.0).rgb;
+    let ground = below * (0.5 - 0.5 * n.z);
+    let sky = max(open - ground, vec3<f32>(0.0));
+    var sun = vec3<f32>(0.0);
+    if globals.dir_to_light.w > 0.5 {
+        sun = globals.dir_color.rgb * max(globals.dir_to_light.z, 0.0);
+    }
+    let sun_share = sun / max(sun + above * environment_params.intensity, vec3<f32>(1e-6));
+    let lit = mix(vec3<f32>(visibility.a), vec3<f32>(visibility.b), sun_share);
+    return OccludedSky(sky * visibility.g + ground * lit, lit);
 }
 
 @fragment
@@ -435,17 +454,31 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     // every fixture cone already falls off with distance, and an emissive
     // surface is its own source.
     let glow = room_glow(in.world);
-    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * ao;
+    // Ambient visibility of this pixel (`ambient_occlusion.wgsl`). It dims
+    // the fill and the probe only; direct light has its own shadows.
+    let visibility = textureLoad(ambient_visibility, vec2<i32>(in.clip.xy), 0);
+    let occlusion = ao * visibility.r;
+    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
     if environment_params.enabled > 0.5 && environment_params.intensity > 0.0 {
         let dot_nv = saturate(dot(n, v));
         let fresnel = f_schlick(f0, 1.0, dot_nv);
-        let diffuse_ibl = textureSampleLevel(
+        let reflected = reflect(-v, n);
+        var irradiance = textureSampleLevel(
             environment_irradiance,
             environment_sampler,
             environment_direction(n),
             0.0,
-        ).rgb * diffuse_color;
-        let reflected = reflect(-v, n);
+        ).rgb;
+        // Lagarde and de Rousiers 2014: occlusion of a specular lobe from the
+        // diffuse visibility, tighter for smooth surfaces.
+        let lobe = saturate(pow(dot_nv + visibility.r, exp2(-16.0 * roughness - 1.0)) - 1.0 + visibility.r);
+        var specular_visibility = vec3<f32>(lobe);
+        if globals.room_falloff.y > 0.5 {
+            let sky = occluded_sky(n, irradiance, visibility);
+            irradiance = sky.irradiance;
+            specular_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
+        }
+        let diffuse_ibl = irradiance * diffuse_color * visibility.r;
         let prefiltered = textureSampleLevel(
             environment_specular,
             environment_sampler,
@@ -458,7 +491,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             vec2<f32>(dot_nv, roughness),
             0.0,
         ).rg;
-        let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y);
+        let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y) * specular_visibility;
         out += (diffuse_ibl * (vec3<f32>(1.0) - fresnel) + specular_ibl)
             * environment_params.intensity * ao;
     }

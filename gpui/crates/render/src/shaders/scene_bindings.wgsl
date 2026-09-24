@@ -16,7 +16,8 @@ struct Globals {
     // world XY. zw: its half-extents. See `room_glow` in `scene.wgsl`.
     room: vec4<f32>,
     // x: metres past that room over which both die to nothing. Zero when
-    // nothing bounds them — outdoors, or with no house rig at all. yzw unused.
+    // nothing bounds them — outdoors, or with no house rig at all. y: 1 when
+    // the stage height field occludes the sky (`sky_visibility.rs`). zw unused.
     room_falloff: vec4<f32>,
     // xyz: direction toward the light. w: 1 when the directional light exists.
     dir_to_light: vec4<f32>,
@@ -146,3 +147,6 @@ struct FixtureShadowMatrix {
 // Per-tile surface depth split (`light_index_build.wgsl::surface_fill`):
 // the depth between the tile's two surface mask buckets, or a large sentinel.
 @group(3) @binding(14) var<storage, read> surface_splits: array<f32>;
+// Per-pixel ambient visibility (`ambient_occlusion.wgsl`): r GTAO, g sky
+// visibility, b/a sun and sky visibility of the ground below.
+@group(3) @binding(15) var ambient_visibility: texture_2d<f32>;
