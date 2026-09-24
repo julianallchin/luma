@@ -581,7 +581,13 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             if dot_nl <= 0.0 || aperture <= 0.0 {
                 continue;
             }
-            let profile = angular * aperture * distance_attenuation(distance, core.range);
+            var attenuation = distance_attenuation(distance, core.range);
+            if rest.lens_distance > 0.0 {
+                // Inverse square from the virtual apex; the taper stays on the lens.
+                attenuation *= max(distance * distance, 0.01)
+                    / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), 0.01);
+            }
+            let profile = angular * aperture * attenuation;
             let visibility = fixture_shadow_visibility(in.world, n, light_index);
             // `rest.intensity` is a 0..1 dimmer times the optic's gain, not
             // radiance; the beam gain is the absolute scale, and it is the

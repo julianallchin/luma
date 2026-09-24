@@ -614,7 +614,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         // core is its correct answer.
         let sample_world = haze.camera_pos.xyz + ray_dir * t;
         var radiance = rest.intensity * angular * taper * gobo * beam_gain
-            / max(d2, near_clamp);
+            / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), near_clamp);
         // Preserve the established shadow-off arithmetic exactly: even a
         // multiply by 1 can change half-float rounding and invalidate a
         // capture without changing the authored image.
@@ -683,7 +683,7 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
             let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
                 * haze_density_at(world) * field
-                / max(d2, haze.tuning.z);
+                / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z);
             sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
         }
         left_field = right_field;
