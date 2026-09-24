@@ -389,14 +389,13 @@ mod tests {
             serde_json::from_str::<Value>(&stored).unwrap()["expression"],
             replacement
         );
-        let logged: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM changes WHERE table_name = 'clips' AND row_id = ? || ':flash'",
-        )
-        .bind(&score)
-        .fetch_one(&services.db.0)
-        .await
-        .unwrap();
-        assert!(logged > 0, "a repair is an edit, and the log says so");
+        let authored: Option<String> =
+            sqlx::query_scalar("SELECT authored_at FROM scores WHERE id = ?")
+                .bind(&score)
+                .fetch_one(&services.db.0)
+                .await
+                .unwrap();
+        assert!(authored.is_some(), "a repair is an edit, and the score says so");
     }
     #[tokio::test]
     async fn legacy_conversion_preserves_overridden_names_and_member_sets() {

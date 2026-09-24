@@ -1,7 +1,7 @@
 //! Row replication through PowerSync, and media transfer beside it.
 //!
-//! [`schema`] names the synced tables once and [`triggers`] installs the change
-//! log and the upload queue from that list. [`connector`] talks to PowerSync
+//! [`schema`] names the synced tables once and [`triggers`] installs the upload
+//! queue from that list. [`connector`] talks to PowerSync
 //! Cloud and Supabase PostgREST; [`service`] owns the connection lifecycle.
 //! [`media`], [`files`] and [`progress`] move bytes on their own clock.
 

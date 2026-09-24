@@ -176,6 +176,9 @@ pub struct Stage<'a> {
     /// from it.
     fixtures_root: &'a Path,
     venue_id: &'a str,
+    /// Who the verbs write for when it is not the person: see
+    /// [`VenueAccess::write_as`].
+    actor: Option<&'a str>,
 }
 
 impl<'a> Stage<'a> {
@@ -185,7 +188,14 @@ impl<'a> Stage<'a> {
             pool,
             fixtures_root,
             venue_id,
+            actor: None,
         }
+    }
+
+    /// The same venue, with its writes attributed to `actor`.
+    #[must_use]
+    pub fn attributed(self, actor: Option<&'a str>) -> Self {
+        Self { actor, ..self }
     }
 
     // -- reads ----------------------------------------------------------
@@ -1112,7 +1122,10 @@ impl<'a> Stage<'a> {
 
     async fn write(&self) -> Result<VenueAccess<'a, Write>> {
         self.ensure_migrated().await?;
-        Ok(VenueAccess::<Write>::write(self.pool, VenueResource::Venue(self.venue_id)).await?)
+        Ok(
+            VenueAccess::<Write>::write_as(self.pool, VenueResource::Venue(self.venue_id), self.actor)
+                .await?,
+        )
     }
 
     async fn ensure_migrated(&self) -> Result<()> {

@@ -1,16 +1,11 @@
-//! The two trigger sets a writer connection carries: one appending to
-//! `changes`, one enqueuing uploads in `powersync_crud`.
+//! The upload-queue triggers a writer connection carries, enqueuing uploads in
+//! `powersync_crud`.
 //!
-//! Both sets are `TEMP`, so they live on the connection that created them and
-//! nowhere else. That is the distinction sync needs: a write made by this app
-//! is logged and uploaded, while a row the SDK's own connection writes is
-//! neither, because a download is not an edit anybody made. A migration
-//! connection is in the same position.
-//!
-//! A change belongs to whoever made it, not to whoever owns the row — a venue
-//! member editing the owner's clip writes a change of their own, and the server
-//! would refuse one stamped with the owner's id — so the log reads the
-//! principal off the admission gate rather than off `NEW.uid`.
+//! The set is `TEMP`, so it lives on the connection that created it and nowhere
+//! else. That is the distinction sync needs: a write made by this app is
+//! uploaded, while a row the SDK's own connection writes is not, because a
+//! download is not an edit anybody made. A migration connection is in the same
+//! position.
 //!
 //! `uid` travels in every upload entry. An RLS `with check` on an `UPDATE` is
 //! evaluated against the row as it will be, and a PATCH that never mentions
@@ -18,16 +13,28 @@
 //!
 //! An update whose only difference is `updated_at` is not a change: the
 //! schema's `*_updated_at` triggers perform their own `UPDATE`, so without the
-//! guard below every edit would log twice and upload twice.
+//! guard below every edit would upload twice.
+//!
+//! History is the server's: a Postgres trigger records every authored row
+//! change. What it cannot see is *who* on this device made one — a person or a
+//! model. So each entry carries the actor, read off [`ACTOR_TABLE`], as its
+//! metadata, and the connector sends it with the request. An empty table is the
+//! signed-in person.
 
 use sqlx::SqliteConnection;
 
-use super::schema::{logged_tables, SyncedTable, SYNCED_TABLES, TOUCH_COLUMN};
+use super::schema::{SyncedTable, SYNCED_TABLES, TOUCH_COLUMN};
 
 /// What a `*_updated_at` trigger writes, spelled the way the schema spells it.
 const TOUCH_VALUE: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
-/// Install both trigger sets on one writer connection. Call this from the app
+/// The connection-local table naming who the open transaction writes for.
+/// It holds at most one row, and only inside a transaction: [`attribute`]
+/// writes it and [`unattribute`] clears it before commit, so a rollback clears
+/// it too.
+const ACTOR_TABLE: &str = "CREATE TEMP TABLE IF NOT EXISTS luma_actor (actor TEXT NOT NULL)";
+
+/// Install the upload queue on one writer connection. Call this from the app
 /// pool's `after_connect` hook.
 ///
 /// # Errors
@@ -35,7 +42,7 @@ const TOUCH_VALUE: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /// If a trigger cannot be created — which means the table is missing, i.e. the
 /// migration and [`SYNCED_TABLES`] have drifted.
 pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
-    install_change_log(&mut *connection).await?;
+    run(&mut *connection, ACTOR_TABLE, "the actor table", "luma_actor").await?;
     for table in SYNCED_TABLES {
         for statement in upload_queue(table) {
             run(&mut *connection, &statement, "the upload queue", table.name).await?;
@@ -44,23 +51,34 @@ pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
     Ok(())
 }
 
-/// Install the change log alone, for a connection with no upload queue.
-///
-/// `powersync_crud` belongs to the sync SDK's core extension. A process that
-/// opened the database without it — a test, a tool — still wants the history,
-/// which is ordinary SQL, but has nowhere to enqueue an upload and nothing
-/// that would ever drain one.
+/// Attribute the rest of this transaction's writes to `actor` — a model id or
+/// an MCP client's label. Call inside a transaction, and call [`unattribute`]
+/// before its commit.
 ///
 /// # Errors
 ///
-/// If a trigger cannot be created.
-pub async fn install_change_log(connection: &mut SqliteConnection) -> Result<(), String> {
-    for table in logged_tables() {
-        for statement in change_log(table) {
-            run(&mut *connection, &statement, "the change log", table.name).await?;
-        }
-    }
-    Ok(())
+/// If the statement fails.
+pub async fn attribute(connection: &mut SqliteConnection, actor: &str) -> Result<(), String> {
+    run(&mut *connection, ACTOR_TABLE, "the actor table", "luma_actor").await?;
+    sqlx::query("INSERT INTO temp.luma_actor (actor) VALUES (?)")
+        .bind(actor)
+        .execute(&mut *connection)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("failed to attribute the write: {error}"))
+}
+
+/// Give the connection back to the signed-in person.
+///
+/// # Errors
+///
+/// If the statement fails.
+pub async fn unattribute(connection: &mut SqliteConnection) -> Result<(), String> {
+    sqlx::query("DELETE FROM temp.luma_actor")
+        .execute(connection)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("failed to clear the write's actor: {error}"))
 }
 
 async fn run(
@@ -98,59 +116,8 @@ fn changed_beyond_the_timestamp(table: &SyncedTable) -> String {
     format!("{} IS NOT {}", strip("NEW"), strip("OLD"))
 }
 
-/// The three statements that log one table.
-#[must_use]
-pub fn change_log(table: &SyncedTable) -> [String; 3] {
-    let name = table.name;
-    [
-        append(
-            name,
-            "insert",
-            "",
-            &table.id_of("NEW"),
-            "NULL",
-            &table.json_object("NEW"),
-        ),
-        append(
-            name,
-            "update",
-            &format!("WHEN {}", changed_beyond_the_timestamp(table)),
-            &table.id_of("NEW"),
-            &table.json_object("OLD"),
-            &updated_object(table, "NEW"),
-        ),
-        append(
-            name,
-            "delete",
-            "",
-            &table.id_of("OLD"),
-            &table.json_object("OLD"),
-            "NULL",
-        ),
-    ]
-}
-
-fn append(table: &str, op: &str, guard: &str, row_id: &str, before: &str, after: &str) -> String {
-    let event = match op {
-        "insert" => "AFTER INSERT",
-        "update" => "AFTER UPDATE",
-        _ => "AFTER DELETE",
-    };
-    format!(
-        "CREATE TEMP TRIGGER IF NOT EXISTS luma_log_{table}_{op} {event} ON {table} FOR EACH ROW {guard} BEGIN
-    INSERT INTO changes (id, uid, table_name, row_id, op, before_json, after_json)
-    VALUES (
-        lower(hex(randomblob(16))),
-        COALESCE((SELECT active_uid FROM auth_write_admission WHERE singleton = 1), ''),
-        '{table}',
-        {row_id},
-        '{op}',
-        {before},
-        {after}
-    );
-END"
-    )
-}
+/// The entry's metadata: the transaction's actor, or NULL for the person.
+const ACTOR: &str = "(SELECT actor FROM temp.luma_actor LIMIT 1)";
 
 /// The three `CREATE TEMP TRIGGER` statements that fill `powersync_crud`.
 ///
@@ -171,8 +138,8 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
             "CREATE TEMP TRIGGER IF NOT EXISTS ps_crud_{name}_insert
              AFTER INSERT ON main.{name}
              BEGIN
-               INSERT INTO powersync_crud(op, id, type, data)
-               VALUES ('PUT', {insert_id}, '{name}', {});
+               INSERT INTO powersync_crud(op, id, type, data, metadata)
+               VALUES ('PUT', {insert_id}, '{name}', {}, {ACTOR});
              END;",
             table.json_object("NEW")
         ),
@@ -184,10 +151,10 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
              AFTER UPDATE ON main.{name}
              WHEN {guard}
              BEGIN
-               INSERT INTO powersync_crud(op, id, type, data)
+               INSERT INTO powersync_crud(op, id, type, data, metadata)
                SELECT 'PATCH', {insert_id}, '{name}', json_group_object(n.key, CASE n.type
                         WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
-                        ELSE n.value END)
+                        ELSE n.value END), {ACTOR}
                  FROM json_each({new}) AS n
                  JOIN json_each({old}) AS o ON o.key = n.key
                 WHERE n.value IS NOT o.value
@@ -198,8 +165,8 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
             "CREATE TEMP TRIGGER IF NOT EXISTS ps_crud_{name}_delete
              AFTER DELETE ON main.{name}
              BEGIN
-               INSERT INTO powersync_crud(op, id, type, data)
-               VALUES ('DELETE', {delete_id}, '{name}', NULL);
+               INSERT INTO powersync_crud(op, id, type, data, metadata)
+               VALUES ('DELETE', {delete_id}, '{name}', NULL, {ACTOR});
              END;"
         ),
     ]
@@ -210,34 +177,20 @@ mod tests {
     use super::*;
     use crate::sync::schema::table;
 
-    #[test]
-    fn a_clip_change_names_the_row_and_both_sides() {
-        let clips = table("clips").expect("clips is synced");
-        let [insert, update, delete] = change_log(clips);
-        assert!(insert.contains("AFTER INSERT ON clips"));
-        assert!(insert.contains("'insert'"));
-        assert!(insert.contains("json_object('id', NEW.id"));
-        assert!(update.contains("json_object('id', OLD.id"));
-        assert!(delete.contains("AFTER DELETE ON clips"));
-        assert!(!delete.contains("NEW."));
-    }
-
-    /// The `*_updated_at` trigger's own write must not read as a second edit,
-    /// in either set.
+    /// The `*_updated_at` trigger's own write must not read as a second edit.
     #[test]
     fn a_timestamp_only_update_is_not_a_change() {
         let clips = table("clips").expect("clips is synced");
-        for statement in [change_log(clips)[1].clone(), upload_queue(clips)[1].clone()] {
-            let guard = statement
-                .split("WHEN ")
-                .nth(1)
-                .expect("the update trigger is guarded");
-            assert!(
-                !guard.contains("'updated_at', NEW.updated_at"),
-                "the guard compares updated_at: {guard}"
-            );
-            assert!(guard.contains("'start', NEW.start"));
-        }
+        let statement = upload_queue(clips)[1].clone();
+        let guard = statement
+            .split("WHEN ")
+            .nth(1)
+            .expect("the update trigger is guarded");
+        assert!(
+            !guard.contains("'updated_at', NEW.updated_at"),
+            "the guard compares updated_at: {guard}"
+        );
+        assert!(guard.contains("'start', NEW.start"));
     }
 
     /// …and the timestamp still travels, as the value the touch trigger is
@@ -272,7 +225,8 @@ mod installed {
     async fn crud_queue(connection: &mut sqlx::SqliteConnection) {
         sqlx::query(
             "CREATE TEMP TABLE IF NOT EXISTS powersync_crud
-                 (seq INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT, id TEXT, type TEXT, data TEXT)",
+                 (seq INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT, id TEXT, type TEXT, data TEXT,
+                  metadata TEXT)",
         )
         .execute(connection)
         .await
@@ -297,86 +251,6 @@ mod installed {
             .await
             .unwrap();
         (directory, pool)
-    }
-
-    /// The change log is the history store, so what it records has to be the
-    /// row — both sides of it, named, with the writer — once per edit.
-    #[tokio::test]
-    async fn every_write_to_a_synced_table_appends_one_change() {
-        let (_directory, pool) = database("changes.db").await;
-        let mut connection = pool.acquire().await.unwrap();
-        crud_queue(&mut connection).await;
-        install(&mut connection).await.unwrap();
-
-        for statement in [
-            "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Basement')",
-            "UPDATE venues SET name = 'Cellar' WHERE id = 'v'",
-            "DELETE FROM venues WHERE id = 'v'",
-        ] {
-            sqlx::query(statement)
-                .execute(&mut *connection)
-                .await
-                .unwrap();
-        }
-
-        let logged: Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
-            "SELECT op, uid, row_id, actor,
-                        json_extract(before_json, '$.name'),
-                        json_extract(after_json, '$.name')
-                 FROM changes WHERE table_name = 'venues' ORDER BY rowid",
-        )
-        .fetch_all(&mut *connection)
-        .await
-        .unwrap();
-        let names: Vec<_> = logged
-            .iter()
-            .map(|(op, uid, row, actor, before, after)| {
-                (
-                    op.as_str(),
-                    uid.as_str(),
-                    row.as_str(),
-                    actor.as_deref(),
-                    before.as_deref(),
-                    after.as_deref(),
-                )
-            })
-            .collect();
-        // Three writes, three entries: the `venues_updated_at` trigger's own
-        // write differs only in the timestamp and is not an edit.
-        assert_eq!(
-            names,
-            vec![
-                ("insert", "alice", "v", None, None, Some("Basement")),
-                (
-                    "update",
-                    "alice",
-                    "v",
-                    None,
-                    Some("Basement"),
-                    Some("Cellar")
-                ),
-                ("delete", "alice", "v", None, Some("Cellar"), None),
-            ]
-        );
-
-        // `changes` is synced but never its own subject; logging it would log
-        // the log.
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM changes WHERE table_name = 'changes'"
-            )
-            .fetch_one(&mut *connection)
-            .await
-            .unwrap(),
-            0
-        );
     }
 
     /// The timestamp the edit uploads is the one the row ends up with — the
@@ -413,30 +287,59 @@ mod installed {
         assert_eq!(queued[1].1.as_deref(), Some(stored.as_str()));
     }
 
-    /// The triggers are TEMP, so a second connection — the sync SDK's — writes
-    /// without appending anything. That is what keeps a download out of this
-    /// database's history.
+    /// An attributed transaction stamps every entry it enqueues, deletes
+    /// included, and the next transaction on the same connection is the
+    /// person's again — whether the attributed one committed or rolled back.
     #[tokio::test]
-    async fn a_connection_without_the_triggers_writes_no_history() {
-        let (_directory, pool) = database("temp.db").await;
-        let mut bare = pool.acquire().await.unwrap();
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Quiet')")
-            .execute(&mut *bare)
+    async fn an_attributed_write_carries_its_actor_and_only_it_does() {
+        let (_directory, pool) = database("actor.db").await;
+        let mut connection = pool.acquire().await.unwrap();
+        crud_queue(&mut connection).await;
+        install(&mut connection).await.unwrap();
+
+        let mut model = sqlx::Connection::begin(&mut *connection).await.unwrap();
+        attribute(&mut model, "claude-opus-5-5").await.unwrap();
+        for statement in [
+            "INSERT INTO venues (id, uid, name) VALUES ('v', 'alice', 'Basement')",
+            "UPDATE venues SET name = 'Cellar' WHERE id = 'v'",
+            "DELETE FROM venues WHERE id = 'v'",
+        ] {
+            sqlx::query(statement).execute(&mut *model).await.unwrap();
+        }
+        unattribute(&mut model).await.unwrap();
+        model.commit().await.unwrap();
+
+        let mut abandoned = sqlx::Connection::begin(&mut *connection).await.unwrap();
+        attribute(&mut abandoned, "claude-opus-5-5").await.unwrap();
+        abandoned.rollback().await.unwrap();
+
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('w', 'alice', 'Attic')")
+            .execute(&mut *connection)
             .await
             .unwrap();
+
+        let queued: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT op, id, metadata FROM powersync_crud WHERE type = 'venues' ORDER BY seq",
+        )
+        .fetch_all(&mut *connection)
+        .await
+        .unwrap();
+        let model = Some("claude-opus-5-5".to_owned());
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM changes")
-                .fetch_one(&mut *bare)
-                .await
-                .unwrap(),
-            0
+            queued,
+            vec![
+                ("PUT".into(), "v".into(), model.clone()),
+                ("PATCH".into(), "v".into(), model.clone()),
+                ("DELETE".into(), "v".into(), model),
+                ("PUT".into(), "w".into(), None),
+            ]
         );
     }
 
     /// A composite-key table is addressed by the id its generated column
     /// spells, because a generated column is not readable from a trigger.
     #[tokio::test]
-    async fn a_composite_key_row_is_logged_under_its_generated_id() {
+    async fn a_composite_key_row_is_queued_under_its_generated_id() {
         let (_directory, pool) = database("composite.db").await;
         let mut connection = pool.acquire().await.unwrap();
         crud_queue(&mut connection).await;
@@ -452,7 +355,7 @@ mod installed {
                 .unwrap();
         }
         let row_id: String =
-            sqlx::query_scalar("SELECT row_id FROM changes WHERE table_name = 'venue_node_params'")
+            sqlx::query_scalar("SELECT id FROM powersync_crud WHERE type = 'venue_node_params'")
                 .fetch_one(&mut *connection)
                 .await
                 .unwrap();

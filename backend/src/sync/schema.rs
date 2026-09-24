@@ -1,9 +1,8 @@
 //! The synced tables, named once, and the PowerSync statements they generate.
 //!
-//! A column a table has but this list omits is local. One list drives all three
-//! consumers — the change log in [`super::triggers`], the upload queue next to
-//! it, and the raw tables a download is applied through — so they cannot
-//! describe different tables. A table not listed here is never uploaded, never
+//! A column a table has but this list omits is local. One list drives both
+//! consumers — the upload queue in [`super::triggers`] and the raw tables a
+//! download is applied through — so they cannot describe different tables. A table not listed here is never uploaded, never
 //! downloaded and never cleared.
 
 use luma_sync::powersync::sdk::schema::{PendingStatement, PendingStatementValue, RawTable};
@@ -101,9 +100,8 @@ macro_rules! table {
     };
 }
 
-/// Every table PowerSync carries. `changes` is on the list — a person's own
-/// history follows them between devices — but it never gets a change-log
-/// trigger of its own, or writing one would write another.
+/// Every table PowerSync carries. History is not one of them: the server keeps
+/// it, and no device needs it.
 pub const SYNCED_TABLES: &[SyncedTable] = &[
     table!(
         "venues",
@@ -389,7 +387,8 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "venue_id",
             "name",
             "created_at",
-            "updated_at"
+            "updated_at",
+            "authored_at"
         ]
     ),
     table!(
@@ -520,31 +519,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "updated_at"
         ]
     ),
-    table!(
-        "changes",
-        "@.id",
-        "uid",
-        [
-            "id",
-            "uid",
-            "table_name",
-            "row_id",
-            "op",
-            "before_json",
-            "after_json",
-            "actor",
-            "at",
-            "created_at",
-            "updated_at"
-        ]
-    ),
 ];
-
-/// The tables the change log records. `changes` describes the others and is
-/// not its own subject.
-pub fn logged_tables() -> impl Iterator<Item = &'static SyncedTable> {
-    SYNCED_TABLES.iter().filter(|table| table.name != "changes")
-}
 
 /// One synced table by name, or `None` if it is local-only.
 #[must_use]
@@ -563,7 +538,7 @@ pub const BOOLEAN_COLUMNS: &[&str] = &["groups_initialized", "address_pinned", "
 ///
 /// A row whose only difference is this one has not changed in any sense a
 /// reader cares about: the timestamp trigger fired, or a writer rewrote the
-/// row it already had. Neither the change log nor the upload queue records it.
+/// row it already had. The upload queue does not record it.
 pub const TOUCH_COLUMN: &str = "updated_at";
 
 /// How a raw-table parameter must be coerced on the way in.

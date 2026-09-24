@@ -1,7 +1,7 @@
 //! Deleting a row from a synced table.
 //!
-//! A delete is a delete: the row goes and the change log records it. Nothing is
-//! tombstoned — the sync transport replicates the deletion itself.
+//! A delete is a delete: the row goes and the upload queue carries it. Nothing
+//! is tombstoned — the sync transport replicates the deletion itself.
 //!
 //! Children are removed first, by the explicit list below rather than by
 //! SQLite's `ON DELETE CASCADE`. That is deliberate, and it is the same reason

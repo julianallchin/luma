@@ -355,35 +355,46 @@ async fn run_child(
 /// and close it. Work the parent did meanwhile survives; a whole-document
 /// overwrite would silently undo it.
 async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, _text: &str) -> SubagentOutcome {
-    let services = ctx.services();
-    let pool = services.db().0.clone();
-    let mut connection = match pool.acquire().await {
-        Ok(connection) => connection,
-        Err(error) => {
-            return SubagentOutcome::Failed {
-                message: error.to_string(),
-            }
-        }
-    };
-    let draft = match sqlx::query_scalar::<_, String>("SELECT id FROM drafts WHERE thread_id = ?")
-        .bind(child_thread_id)
-        .fetch_optional(&mut *connection)
-        .await
-    {
-        Ok(Some(draft)) => draft,
-        // A child with no score in scope had nothing to draft and nothing to
-        // merge; its answer is the whole of its contribution.
-        Ok(None) => return SubagentOutcome::Merged,
-        Err(error) => {
-            return SubagentOutcome::Failed {
-                message: error.to_string(),
-            }
-        }
-    };
-    match drafts::merge(&mut connection, &draft).await {
-        Ok(_) => SubagentOutcome::Merged,
+    let pool = ctx.services().db().0.clone();
+    match merge_draft(&pool, child_thread_id).await {
+        Ok(()) => SubagentOutcome::Merged,
         Err(message) => SubagentOutcome::Failed { message },
     }
+}
+
+/// The merge is the child's edit, so its rows are attributed to the child's
+/// actor. One transaction, so the attribution cannot outlive it and a merge
+/// that fails halfway leaves the live score as it was.
+async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(), String> {
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| error.to_string())?;
+    let found: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT draft.id, thread.actor FROM drafts draft
+         LEFT JOIN agent_threads thread ON thread.id = draft.thread_id
+         WHERE draft.thread_id = ?",
+    )
+    .bind(child_thread_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    // A child with no score in scope had nothing to draft and nothing to
+    // merge; its answer is the whole of its contribution.
+    let Some((draft, actor)) = found else {
+        return Ok(());
+    };
+    if let Some(actor) = actor.as_deref() {
+        crate::sync::triggers::attribute(&mut transaction, actor).await?;
+    }
+    drafts::merge(&mut transaction, &draft).await?;
+    if actor.is_some() {
+        crate::sync::triggers::unattribute(&mut transaction).await?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Close a failed child's draft. A failure to close is not worth failing the

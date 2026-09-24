@@ -53,6 +53,8 @@ pub struct VenueHost {
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
     venue_id: String,
+    /// Who this thread's writes are attributed to: the thread's `actor`.
+    actor: Option<String>,
     /// The score that lights the room, when the thread has one. Without it the
     /// rig uses the venue's saved environment, with geometry and no score beams.
     lighting: Option<Arc<TrackHost>>,
@@ -72,6 +74,7 @@ impl VenueHost {
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
         venue_id: String,
+        actor: Option<String>,
         lighting: Option<Arc<TrackHost>>,
     ) -> Self {
         Self {
@@ -80,6 +83,7 @@ impl VenueHost {
             resource_root,
             workspace,
             venue_id,
+            actor,
             lighting,
             drafts: std::sync::Mutex::default(),
         }
@@ -282,7 +286,7 @@ impl VenueHost {
         }
 
         let mut access =
-            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+            self.write_access()
                 .await
                 .map_err(|error| {
                     HostCallError::new(
@@ -340,7 +344,7 @@ impl VenueHost {
         }
 
         let mut access =
-            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+            self.write_access()
                 .await
                 .map_err(|error| {
                     HostCallError::new(
@@ -369,6 +373,16 @@ impl VenueHost {
                     format!("the venue is not available: {error}"),
                 )
             })
+    }
+
+    /// This thread's venue, open for writing as the thread's actor.
+    async fn write_access(&self) -> Result<VenueAccess<'_, Write>, String> {
+        VenueAccess::<Write>::write_as(
+            &self.pool,
+            VenueResource::Venue(&self.venue_id),
+            self.actor.as_deref(),
+        )
+        .await
     }
 
     /// The environment on the venue record right now.
@@ -408,6 +422,7 @@ impl VenueHost {
     /// This thread's venue, bound to the verbs.
     fn stage(&self) -> Stage<'_> {
         Stage::new(&self.pool, &self.resource_root, &self.venue_id)
+            .attributed(self.actor.as_deref())
     }
 
     /// The placeable vocabulary. A read of the catalog, not of the venue, so it
@@ -473,7 +488,7 @@ impl VenueHost {
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
         let mut access =
-            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+            self.write_access()
                 .await
                 .map_err(|error| HostCallError::new("invalid_group", error))?;
         let group = groups::set_named_group(
@@ -499,7 +514,7 @@ impl VenueHost {
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
         let mut access =
-            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+            self.write_access()
                 .await
                 .map_err(|error| HostCallError::new("invalid_group", error))?;
         groups::snapshot_generated_groups(&self.resource_root, &mut access, true)

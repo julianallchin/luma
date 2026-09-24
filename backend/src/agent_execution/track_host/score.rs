@@ -76,10 +76,13 @@ impl TrackHost {
             .edit_scope
             .as_ref()
             .ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-        let mut access =
-            VenueAccess::<Write>::write(&self.pool, VenueResource::Score(&self.scope.score_id))
-                .await
-                .map_err(|error| HostCallError::new("forbidden", error))?;
+        let mut access = VenueAccess::<Write>::write_as(
+            &self.pool,
+            VenueResource::Score(&self.scope.score_id),
+            self.actor.as_deref(),
+        )
+        .await
+        .map_err(|error| HostCallError::new("forbidden", error))?;
         match self.draft_id.as_deref() {
             Some(draft) => drafts::apply(access.connection(), draft, candidate)
                 .await

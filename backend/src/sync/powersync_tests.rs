@@ -16,7 +16,8 @@ use super::triggers::{install, upload_queue};
 /// A stand-in for the core extension's `powersync_crud` view, so the triggers
 /// can be exercised without loading the extension.
 const CRUD_QUEUE: &str = "CREATE TEMP TABLE powersync_crud \
-     (seq INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT, id TEXT, type TEXT, data TEXT);";
+     (seq INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT, id TEXT, type TEXT, data TEXT, \
+      metadata TEXT);";
 
 /// A migrated database with write admission armed for `user-1`.
 ///
@@ -45,7 +46,7 @@ async fn database(name: &str) -> (tempfile::TempDir, SqlitePool) {
     (directory, pool)
 }
 
-/// A connection with the crud queue stand-in and the trigger sets installed.
+/// A connection with the crud queue stand-in and the upload triggers installed.
 async fn writer(pool: &SqlitePool) -> sqlx::pool::PoolConnection<sqlx::Sqlite> {
     let mut connection = pool.acquire().await.expect("acquire");
     sqlx::raw_sql(CRUD_QUEUE)
@@ -57,10 +58,6 @@ async fn writer(pool: &SqlitePool) -> sqlx::pool::PoolConnection<sqlx::Sqlite> {
 }
 
 /// The queue entries for one table.
-///
-/// Filtered because the change log is itself a synced table: every write
-/// enqueues its own row *and* the `changes` row describing it, which is the
-/// design — a person's history follows them between devices.
 async fn queue(
     connection: &mut SqliteConnection,
     table: &str,
@@ -539,10 +536,10 @@ async fn every_table_installs_its_triggers() {
     let _connection = writer(&pool).await;
 }
 
-/// The upload queue and the change log are generated from one list, so the
-/// columns they name are the same columns.
+/// The upload queue is generated from the list, so every listed column
+/// travels.
 #[test]
-fn both_trigger_sets_describe_the_same_columns() {
+fn the_upload_queue_names_every_column() {
     for synced in SYNCED_TABLES {
         let [put, _, _] = upload_queue(synced);
         for column in synced.columns {
