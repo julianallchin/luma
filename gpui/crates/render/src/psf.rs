@@ -708,6 +708,12 @@ fn stretch(aperture: Aperture) -> f32 {
     stored_deg / real_deg
 }
 
+/// The veil's energy per square degree at angle θ is `vos(θ)` times this:
+/// what the tonemap needs to draw the veil of a source off the frame.
+pub(crate) fn veil_scale(style: GlareStyle) -> f32 {
+    parts(style).1 / vos_total() as f32
+}
+
 fn parts(style: GlareStyle) -> (Option<Aperture>, f32) {
     match style {
         GlareStyle::Bloom => (None, 1.0),
