@@ -676,6 +676,37 @@ fn lit_counted(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     return lit_interval(li, ray, a, b);
 }
 
+// Level of detail for the haze shadow walk, in pixel footprints of chord
+// along the ray. A mixed hierarchy block whose chord fits the allowance is not
+// refined; its lit fraction is sampled instead. The allowance starts at one
+// footprint, detail the pixel cannot resolve. A (ray, light) pair that has
+// walked SHADOW_SOFT_STEPS doubles it every SHADOW_DOUBLING_STEPS, so a ray
+// that crosses many shadow edges near a source degrades to coarser blocks
+// instead of walking every texel; after SHADOW_HARD_STEPS no block is refined.
+const SHADOW_FOOTPRINT_CHORD: f32 = 1.0;
+const SHADOW_SOFT_STEPS: i32 = 24;
+const SHADOW_DOUBLING_STEPS: f32 = 4.0;
+const SHADOW_HARD_STEPS: i32 = 64;
+
+// Lit fraction of the chord between two clip-space points of one shadow layer,
+// from four stratified samples. The chord lies inside the clipped projection.
+fn chord_visibility(a: vec4<f32>, b: vec4<f32>, layer: i32, planes: vec4<f32>) -> f32 {
+    if HAZE_WORK_COUNTS { haze_work[3] += 4u; }
+    let dims = vec2<i32>(textureDimensions(fixture_shadow_map));
+    var lit = 0.0;
+    for (var i = 0u; i < 4u; i += 1u) {
+        let clip = mix(a, b, (f32(i) + 0.5) * 0.25);
+        let inverse = 1.0 / max(clip.w, 1e-6);
+        let uv = vec2<f32>(clip.x, -clip.y) * inverse * 0.5 + 0.5;
+        let coord = clamp(vec2<i32>(uv * vec2<f32>(dims)), vec2<i32>(0), dims - 1);
+        var stored: f32;
+        if layer < 256 { stored = textureLoad(fixture_shadow_map, coord, layer, 0); }
+        else { stored = textureLoad(fixture_shadow_map_extra, coord, layer - 256, 0); }
+        lit += select(0.0, 1.0, shadow_compare_reference(clip.z * inverse, planes.x, planes.y, 0.02) >= stored);
+    }
+    return lit * 0.25;
+}
+
 fn clip_shadow_plane(span: ptr<function, vec2<f32>>, offset: f32, slope: f32) -> bool {
     if slope > 1e-8 { (*span).x = max((*span).x, -offset / slope); }
     else if slope < -1e-8 { (*span).y = min((*span).y, -offset / slope); }
@@ -686,6 +717,14 @@ fn clip_shadow_plane(span: ptr<function, vec2<f32>>, offset: f32, slope: f32) ->
 // Intersect the camera ray with the piecewise constant shadow-map height
 // field. Consecutive visible texels form one interval; empty space therefore
 // requires no repeated medium/phase evaluations and there is no sample noise.
+//
+// A mixed block within the LOD allowance (`SHADOW_FOOTPRINT_CHORD`) adds its
+// lit fraction as a shorter interval: appended to the open run, whose later
+// pieces then shift earlier by the accumulated dark length (the deficit, kept
+// within the allowance), or else placed at the block's end so the next lit
+// block can join it. Intervals stay plain
+// intervals, so the lit-interval cache replays them unchanged. With no
+// footprint block the walk and its intervals are exactly the texel walk's.
 fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f32> {
     if HAZE_WORK_COUNTS { haze_work[6] += 1u; }
     if INTERVAL_CACHE || HAZE_WORK_HIST { cache_count = 0u; cache_nonempty = 0u; }
@@ -726,11 +765,22 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
     let difference = vec2<u32>(cell ^ last_cell);
     let max_level = max(i32(firstLeadingBit(difference.x | difference.y)), 0);
     var next_level = max_level;
+    // World size of one pixel per metre along the ray: the angle to the
+    // neighbouring pixel's ray in this target.
+    let ray_ndc = vec2<f32>(ray.uv.x * 2.0 - 1.0, 1.0 - ray.uv.y * 2.0);
+    let beside = normalize(world_from_ndc(vec3<f32>(ray_ndc.x + 2.0 / haze.transport.w, ray_ndc.y, 0.5))
+        - haze.camera_pos.xyz);
+    let footprint_per_metre = length(beside - ray.dir) * SHADOW_FOOTPRINT_CHORD;
+    var deficit = 0.0;
     // Each accepted block crosses at least one monotone texel coordinate.
     // A clipped projected line cannot visit more than width + height cells.
     for (var iteration = 0; iteration < dims.x + dims.y + 2; iteration += 1) {
         if t >= span.y { break; }
         if HAZE_WORK_COUNTS { haze_work[2] += 1u; }
+        let capped = iteration >= SHADOW_HARD_STEPS;
+        let footprint = t * footprint_per_metre
+            * exp2(f32(max(iteration - SHADOW_SOFT_STEPS, 0)) / SHADOW_DOUBLING_STEPS);
+        var coverage = -1.0;
         if any(cell < vec2<i32>(0)) || any(cell >= dims) {
             // Only boundary roundoff can leave the already-clipped map span.
             sum += lit_counted(li, ray, t, span.y);
@@ -780,6 +830,10 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
                 visible_a = t; visible_b = end; break;
             }
             if max(start_ref, end_ref) < depth_range.x { break; }
+            if level >= 0 && (capped || end - t <= footprint) {
+                coverage = chord_visibility(start_clip, end_clip, layer, planes);
+                break;
+            }
             if level == -1 {
                 let caster = planes.x * planes.y / max(planes.x + depth_range.x * (planes.y - planes.x), 1e-5) + 0.02;
                 visible_a = t;
@@ -794,13 +848,31 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
             level -= 1;
         }
         next_level = min(level + 1, max_level);
+        // A sampled block is lit on its last `coverage` of chord; appended to
+        // an open run it adds its dark part to the deficit instead. One call
+        // site keeps the quadrature shared by every lane that closes a run.
+        var join_at = visible_a;
+        var dark = 0.0;
+        if coverage >= 0.0 {
+            let lit = (end - t) * coverage;
+            visible_a = end - lit;
+            visible_b = end;
+            join_at = t;
+            dark = end - t - lit;
+        }
         if visible_b > visible_a {
-            if lit_start >= 0.0 && visible_a > lit_end + 1e-5 {
+            if lit_start >= 0.0 && (join_at > lit_end + deficit + 1e-5 || (!capped && deficit + dark > footprint)) {
                 sum += lit_counted(li, ray, lit_start, lit_end);
                 lit_start = -1.0;
             }
-            if lit_start < 0.0 { lit_start = visible_a; }
-            lit_end = visible_b;
+            if lit_start < 0.0 {
+                lit_start = visible_a;
+                lit_end = visible_b;
+                deficit = 0.0;
+            } else {
+                deficit += dark;
+                lit_end = visible_b - deficit;
+            }
         }
         t = end;
         let next_clip = origin + direction * t;
