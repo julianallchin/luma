@@ -507,6 +507,27 @@ impl Luma {
         }
     }
 
+    /// The renderer's cost level: applied to the stage now and kept as the
+    /// `stage_low_quality` device setting, like the render percent.
+    pub(super) fn set_view_quality(
+        &mut self,
+        quality: scene_desc::Quality,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        if state.render_controls.quality == quality {
+            return;
+        }
+        state.render_controls.quality = quality;
+        // A new level starts from its whole pixel budget.
+        state.stage.borrow_mut().dynamic = super::DynamicBudget::default();
+        let low = quality == scene_desc::Quality::Low;
+        self.write_view_setting("stage_low_quality", low.to_string(), cx);
+        cx.notify();
+    }
+
     /// One local view setting, written once.
     ///
     /// Deliberately *not* `Luma::write_setting`: that one re-reads the whole
