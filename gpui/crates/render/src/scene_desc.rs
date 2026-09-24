@@ -1375,6 +1375,16 @@ pub struct Lens {
     /// Wide end of the beam angle, degrees. Zero means "unknown".
     #[serde(rename = "@DegreesMax")]
     pub degrees_max: f32,
+    /// Measured front-lens radius in metres, from a spec sheet. QLC+ has no
+    /// such attribute; when present it wins over the per-class stand-in in
+    /// [`crate::luminaire::lens_for`].
+    #[serde(rename = "@RadiusM", default, skip_serializing_if = "Option::is_none")]
+    pub radius_m: Option<f32>,
+    /// Measured distance in metres from the head's tilt pivot forward along
+    /// the beam axis to the lens centre (GDTF's `Beam` position). When present
+    /// it wins over the head mesh's front face in `frame::lens_centre`.
+    #[serde(rename = "@OffsetM", default, skip_serializing_if = "Option::is_none")]
+    pub offset_m: Option<f32>,
 }
 
 /// Versioned, self-describing inputs for one renderer golden PNG.

@@ -880,7 +880,7 @@ pub fn build_with(
             // pixel of that head's run.
             let cone = cone_from_opening(PIXEL);
             // Each pixel is its own emitter behind its own optic.
-            let lens = pixel_lens(dims[0] / layout_w as f32, dims[1] / layout_h as f32);
+            let lens = pixel_lens(def, dims[0] / layout_w as f32, dims[1] / layout_h as f32);
             let dir = beam_direction(Some(def), fixture.rot, None);
             for head in 0..head_count {
                 let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
@@ -1466,11 +1466,11 @@ mod tests {
             scene.state.insert(format!("bar:{head}"), lit());
         }
         let frame = build(&scene, &definitions, 0.0, &mut library()).unwrap();
-        // The 300 mm default housing split into three 100 x 300 mm cells; the
-        // drawn pixel quad fills 90% of a cell.
+        // The 300 mm default housing split into three 100 x 300 mm cells: a
+        // pixel optic, not a third of the bar.
         assert_eq!(frame.fixture_cones.len(), 3);
         for cone in &frame.fixture_cones {
-            assert!((cone.lens.radius - 0.1 * 0.45).abs() < 1e-5);
+            assert!((cone.lens.radius - 0.015).abs() < 1e-5);
         }
     }
 
