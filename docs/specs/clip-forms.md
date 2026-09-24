@@ -388,6 +388,15 @@ clip do not overlap in time and keep its place in the paint order.
   paint in order instead. Largest difference: 0.28 (`multiply` chase) and
   0.049 (`replace` chase).
 
+**Dark padding removed (2026-09-24).** No clip is black only, and a clip
+does not run dark before or after the part where it lights. The split's
+dark padding was removed from its clips: the dark lead-in Wash was deleted,
+454 Washes were cut to where their brightness curve lights (8 at the start,
+453 at the end), and 25 chases were cut to their travel. Seven chases that
+started about 0.02 beats after the previous chase of the same old clip were
+one hit detected twice; the later one was deleted. The look changed where
+the padding hid the layers under it: that light now shows between hits.
+
 **Render check.** A dry run over a copy of the reference database renders
 every converted clip, old and new, at a fixed set of times on its real venue,
 and reports the largest difference per clip. A conversion counts as exact below
