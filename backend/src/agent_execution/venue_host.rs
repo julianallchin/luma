@@ -305,6 +305,12 @@ impl VenueHost {
             }),
             (None, None) => unreachable!("a read returned above"),
         };
+        // This verb has no azimuth dial, so an outdoor room keeps the side
+        // its sun is on.
+        let wanted = match current {
+            VenueEnvironment::Outdoor { .. } => wanted.with_sun_azimuth(current.sun_azimuth_deg()),
+            VenueEnvironment::Indoor { .. } => wanted,
+        };
         crate::database::local::venues::set_environment(&mut access, wanted)
             .await
             .map_err(|error| HostCallError::new("internal", error))?;

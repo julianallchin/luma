@@ -3070,7 +3070,7 @@ pub(crate) fn visualizer(
 
 fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
     let controls = &state.render_controls;
-    div()
+    let haze = div()
         .flex()
         .flex_col()
         .gap(px(8.))
@@ -3128,7 +3128,11 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             0.,
             360.,
             ViewValue::WindDirection,
-        ))
+        ));
+    let viewport = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
         .child(view_toggle(
             state,
             app,
@@ -3161,7 +3165,14 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             f32::from(*RENDER_SCALE_RANGE.end()),
             ViewValue::RenderScale,
         ))
-        .children(render_size_caption(state))
+        .children(render_size_caption(state));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(settings::section("Haze", haze))
+        .child(luma_ui::float::divider())
+        .child(settings::section("Viewport", viewport))
 }
 
 /// The pixels the stage is actually rendering, under the percent that asks for
@@ -3223,7 +3234,6 @@ fn view_value(
     max: f32,
     control: ViewValue,
 ) -> Div {
-    let app = app.clone();
     let (step, power) = match control {
         ViewValue::HazeDensity => (0.001, 2.0),
         // A whole percent, linearly: the quantity is already a percentage, so a
@@ -3232,6 +3242,23 @@ fn view_value(
         ViewValue::RenderScale => (1.0, 1.0),
         _ => (0.01, 1.0),
     };
+    let app = app.clone();
+    scrub_row(label, value, min..=max, step, power, move |value, cx| {
+        app.update(cx, |this, cx| this.set_view_value(control, value, cx));
+    })
+}
+
+/// The one row shape of the floating settings surface: a label on the left
+/// and a value scrub on the right. `on_change` gets the value already clamped
+/// to `range` and landed on `step`.
+fn scrub_row(
+    label: &'static str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f64,
+    power: f64,
+    on_change: impl Fn(f32, &mut gpui::App) + 'static,
+) -> Div {
     div()
         .flex()
         .items_center()
@@ -3242,15 +3269,11 @@ fn view_value(
             luma_ui::float::scrub_with_power(
                 label,
                 value.into(),
-                f64::from(min)..=f64::from(max),
+                f64::from(*range.start())..=f64::from(*range.end()),
                 step,
                 76.0,
                 power,
-                move |value, _, cx| {
-                    app.update(cx, |this, cx| {
-                        this.set_view_value(control, value as f32, cx)
-                    });
-                },
+                move |value, _, cx| on_change(value as f32, cx),
             )
             .agent_node(Role::Slider, label),
         )

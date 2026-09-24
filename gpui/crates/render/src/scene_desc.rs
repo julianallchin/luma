@@ -138,7 +138,8 @@ pub struct Ghost {
     pub pos: [f32; 3],
     /// Data-space Euler triple.
     pub rot: [f32; 3],
-    /// Uniform scale, as [`Piece::scale`].
+    /// Uniform scale of `geometry`, as [`Piece::scale`]. A light's housing
+    /// ignores it and is drawn at the definition's own size.
     pub scale: f32,
     /// A ghost the resolver would refuse — drawn red rather than white. Only
     /// the extend run raises it: its refusal is a length past a measured gap,
@@ -392,25 +393,42 @@ impl SkyParams {
         exposure: None,
     };
 
-    /// The sky for an open-air venue whose sun is `elevation_deg` up.
+    /// The sky for an open-air venue whose sun is `elevation_deg` up and
+    /// `azimuth_deg` round.
     ///
     /// **This is the environment seam.** [`VenueEnvironment::Outdoor`] carries
-    /// exactly one number, and this is the function that turns it into a sky:
-    /// `crate::house::fill`'s outdoor arm should return `Self::outdoor(env
-    /// .sun_elevation_deg())` here, drop its placeholder sun and ambient, and
-    /// let the atmosphere supply all three. Nothing else has to change — the
-    /// renderer already prefers the sky's sun over an authored one whenever
-    /// [`RenderSettings::sky`] is set.
+    /// the sun's two angles, and this is the function that turns them into a
+    /// sky: `crate::house::fill`'s outdoor arm returns it, and the atmosphere
+    /// supplies the background, the ambient and the sun. The renderer prefers
+    /// the sky's sun over an authored one whenever [`RenderSettings::sky`] is
+    /// set.
     #[must_use]
-    pub fn outdoor(elevation_deg: f32) -> Self {
+    pub fn outdoor(elevation_deg: f32, azimuth_deg: f32) -> Self {
         Self {
             sun_elevation_deg: if elevation_deg.is_finite() {
                 elevation_deg.clamp(-90.0, 90.0)
             } else {
                 Self::DUSK.sun_elevation_deg
             },
+            sun_azimuth_deg: wrap_azimuth(azimuth_deg),
             ..Self::DUSK
         }
+    }
+}
+
+/// An azimuth brought into 0..=360 degrees.
+///
+/// A value already in range is kept as it is, so 360 stays 360 and a slider
+/// held at its top does not jump to its bottom. Any other finite value wraps
+/// round the circle; a non-finite one reads as [`SkyParams::DUSK`]'s.
+#[must_use]
+pub fn wrap_azimuth(deg: f32) -> f32 {
+    if !deg.is_finite() {
+        SkyParams::DUSK.sun_azimuth_deg
+    } else if (0.0..=360.0).contains(&deg) {
+        deg
+    } else {
+        deg.rem_euclid(360.0)
     }
 }
 
@@ -421,16 +439,16 @@ impl SkyParams {
 /// agent's offscreen frame — is taken under it. [`crate::house`] is the one
 /// place it turns into light.
 ///
-/// One scalar per mode, on purpose. A room is either lit by its own house rig
-/// or by the sky, and the question an operator actually asks is "how far up?"
-/// — how bright the house is, or how high the sun is. Everything else about
-/// either mode is derived, so there is nothing else to store and nothing that
-/// can disagree.
+/// A room is either lit by its own house rig or by the sky. Indoors the one
+/// question is "how far up?" — how bright the house is. Outdoors it is where
+/// the sun is: how high, and from which side. Everything else about either
+/// mode is derived, so there is nothing else to store and nothing that can
+/// disagree.
 ///
-/// Both scalars are read through [`Self::house_level`] and
-/// [`Self::sun_elevation_deg`], which clamp: a value that arrived from a
-/// database column or an agent cannot put the renderer in a state it has no
-/// answer for.
+/// The dials are read through [`Self::house_level`],
+/// [`Self::sun_elevation_deg`] and [`Self::sun_azimuth_deg`], which clamp or
+/// wrap: a value that arrived from a database column or an agent cannot put
+/// the renderer in a state it has no answer for.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase")]
 pub enum VenueEnvironment {
@@ -448,6 +466,11 @@ pub enum VenueEnvironment {
         /// Degrees above the horizon.
         #[serde(rename = "sunElevationDeg")]
         sun_elevation_deg: f32,
+        /// Degrees counter-clockwise from world +X, as
+        /// [`SkyParams::sun_azimuth_deg`]. A record written before this dial
+        /// existed reads as [`SkyParams::DUSK`]'s.
+        #[serde(rename = "sunAzimuthDeg", default = "dusk_azimuth")]
+        sun_azimuth_deg: f32,
     },
 }
 
@@ -467,11 +490,28 @@ impl VenueEnvironment {
         }
     }
 
-    /// Open air with the sun `deg` above the horizon, clamped to -90..=90.
+    /// Open air with the sun `deg` above the horizon, clamped to -90..=90,
+    /// at [`SkyParams::DUSK`]'s azimuth.
     #[must_use]
     pub fn outdoor(deg: f32) -> Self {
         Self::Outdoor {
             sun_elevation_deg: deg.clamp(-90.0, 90.0),
+            sun_azimuth_deg: SkyParams::DUSK.sun_azimuth_deg,
+        }
+    }
+
+    /// The same room with the sun at azimuth `deg`, wrapped into 0..=360.
+    /// Indoors there is no sun, so an indoor room is returned unchanged.
+    #[must_use]
+    pub fn with_sun_azimuth(self, deg: f32) -> Self {
+        match self {
+            Self::Indoor { .. } => self,
+            Self::Outdoor {
+                sun_elevation_deg, ..
+            } => Self::Outdoor {
+                sun_elevation_deg,
+                sun_azimuth_deg: wrap_azimuth(deg),
+            },
         }
     }
 
@@ -497,6 +537,7 @@ impl VenueEnvironment {
             Self::Indoor { .. } => 0.0,
             Self::Outdoor {
                 sun_elevation_deg: deg,
+                ..
             } => {
                 if deg.is_finite() {
                     deg.clamp(-90.0, 90.0)
@@ -504,6 +545,18 @@ impl VenueEnvironment {
                     0.0
                 }
             }
+        }
+    }
+
+    /// The sun's azimuth, always in 0..=360. Indoors there is no sun, and
+    /// this is [`SkyParams::DUSK`]'s.
+    #[must_use]
+    pub fn sun_azimuth_deg(self) -> f32 {
+        match self {
+            Self::Indoor { .. } => SkyParams::DUSK.sun_azimuth_deg,
+            Self::Outdoor {
+                sun_azimuth_deg, ..
+            } => wrap_azimuth(sun_azimuth_deg),
         }
     }
 
@@ -527,6 +580,10 @@ impl VenueEnvironment {
     pub fn to_record(self) -> String {
         serde_json::to_string(&self).unwrap_or_else(|_| String::from("{}"))
     }
+}
+
+fn dusk_azimuth() -> f32 {
+    SkyParams::DUSK.sun_azimuth_deg
 }
 
 /// Read an environment back out of a venue record.
@@ -1524,6 +1581,48 @@ impl Definition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sun_azimuth_round_trips_through_the_environment_record() {
+        let environment = VenueEnvironment::outdoor(12.0).with_sun_azimuth(95.0);
+        assert_eq!(VenueEnvironment::from(environment.to_record()), environment);
+        assert_eq!(environment.sun_azimuth_deg(), 95.0);
+        assert_eq!(environment.sun_elevation_deg(), 12.0);
+    }
+
+    #[test]
+    fn a_record_without_an_azimuth_reads_the_dusk_default() {
+        let old = String::from(r#"{"mode":"outdoor","sunElevationDeg":20.0}"#);
+        let environment = VenueEnvironment::from(old);
+        assert_eq!(environment.sun_elevation_deg(), 20.0);
+        assert_eq!(
+            environment.sun_azimuth_deg(),
+            SkyParams::DUSK.sun_azimuth_deg
+        );
+    }
+
+    #[test]
+    fn sun_azimuth_wraps_into_a_full_turn() {
+        let at = |deg| {
+            VenueEnvironment::outdoor(10.0)
+                .with_sun_azimuth(deg)
+                .sun_azimuth_deg()
+        };
+        assert_eq!(at(0.0), 0.0);
+        assert_eq!(at(360.0), 360.0, "the top of the slider stays at the top");
+        assert_eq!(at(370.0), 10.0);
+        assert_eq!(at(-30.0), 330.0);
+        assert_eq!(at(f32::NAN), SkyParams::DUSK.sun_azimuth_deg);
+        // Stored past the range by another writer, read back in range.
+        let stored = VenueEnvironment::Outdoor {
+            sun_elevation_deg: 10.0,
+            sun_azimuth_deg: 725.0,
+        };
+        assert_eq!(stored.sun_azimuth_deg(), 5.0);
+        // Indoors there is no sun to turn.
+        let indoor = VenueEnvironment::indoor(0.5);
+        assert_eq!(indoor.with_sun_azimuth(10.0), indoor);
+    }
 
     #[test]
     fn venue_haze_round_trips_through_its_record() {
