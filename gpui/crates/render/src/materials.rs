@@ -103,7 +103,6 @@ const PLAIN: Material = Material {
     emissive: Vec3::ZERO,
     normal_scale: 1.0,
     occlusion_strength: 1.0,
-    flat_shading: false,
 };
 
 /// What each bundled mesh's glTF materials become, by material name.
@@ -174,9 +173,6 @@ pub(crate) fn apply(asset: &str, glb: &mut Glb) {
             .map_or(Vec3::ONE, mean_linear);
         primitive.material = Material {
             base_color: preset.base_color / texture_mean.max(Vec3::splat(1e-3)),
-            // Geometry facts stay the mesh's own: a mesh without normals is
-            // flat-shaded whatever its finish.
-            flat_shading: primitive.material.flat_shading,
             normal_scale: primitive.material.normal_scale,
             occlusion_strength: primitive.material.occlusion_strength,
             ..preset
