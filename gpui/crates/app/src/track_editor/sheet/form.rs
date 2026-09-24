@@ -2,7 +2,7 @@
 //! each of its inputs. The sheet shows them in the form's order, under the
 //! engine's names. Where the form allows it, an input can hold a source in
 //! place of a plain value: a curve over the clip or over each hit, noise, the
-//! level of a frequency range of the mix, or a list of stamped beats.
+//! level of a frequency range of the mix.
 
 use super::*;
 use luma_lib::node_graph::lighting::decode;
@@ -10,7 +10,6 @@ use luma_patterns as p;
 use luma_ui::arg::envelope::{EnvelopeChanged, EnvelopeEditor};
 use luma_ui::arg::number::format_value;
 use luma_ui::arg::preset_picker::{luma_preset_picker, Thumb};
-use luma_ui::text_input::{self, TextInput};
 
 /// Inputs in beats that must stay above zero.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
@@ -20,8 +19,6 @@ const MIN_BEATS: f64 = 1. / 16.;
 const CURVE_BEATS: f64 = 8.;
 /// Beats a new noise source takes to wander once.
 const NOISE_SPEED: f64 = 4.;
-/// How many beats a new stamped list holds.
-const STAMPS: usize = 4;
 /// The grain choices. A clump holds N heads; N is its own field.
 const GRAINS: [&str; 3] = ["Head", "Fixture", "Clump"];
 /// The two readings of a period that can be 0: once over the clip, or beats.
@@ -125,7 +122,6 @@ fn source_label(kind: p::SourceKind) -> &'static str {
         p::SourceKind::Hit => "↗ Per hit",
         p::SourceKind::Noise => "↗ Noise",
         p::SourceKind::Audio => "↗ Audio",
-        p::SourceKind::Events => "↗ Stamped beats",
     }
 }
 
@@ -152,10 +148,6 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
         p::Value::Noise(p::NoiseSource { range, .. }) => Some(range[1]),
         // Audio at its loudest gives 1.
         p::Value::Audio(_) => Some(1.),
-        p::Value::Events(p::Events::Beats { times }) => match times.as_slice() {
-            [first, second, ..] if second > first => Some(second - first),
-            _ => None,
-        },
         other => level(other),
     }
     .or_else(|| slot.spec.default.as_ref().and_then(level))
@@ -183,10 +175,6 @@ fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value
                 threshold: 0.,
             })
         }
-        Some(p::SourceKind::Events) => p::Value::Events(p::Events::Beats {
-            times: p::EventTimes::new((0..STAMPS).map(|i| i as f64 * number).collect::<Vec<_>>())
-                .expect("ordered beats"),
-        }),
     }
 }
 
@@ -373,41 +361,6 @@ fn color_keys(gradient: &Gradient) -> p::Keyframes {
     }
 }
 
-/// Beats typed as a list: numbers at or after zero, split by commas or
-/// spaces. `None` while the text is not such a list.
-fn parse_beats(text: &str) -> Option<Vec<f64>> {
-    let mut times = text
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|token| !token.is_empty())
-        .map(|token| {
-            token
-                .parse::<f64>()
-                .ok()
-                .filter(|t| t.is_finite() && *t >= 0.)
-        })
-        .collect::<Option<Vec<_>>>()?;
-    if times.is_empty() {
-        return None;
-    }
-    times.sort_by(f64::total_cmp);
-    Some(times)
-}
-
-fn format_beats(times: &[f64]) -> String {
-    times
-        .iter()
-        .map(|t| format_value(*t))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn stamped(value: &p::Value) -> Option<&[f64]> {
-    match value {
-        p::Value::Events(p::Events::Beats { times }) => Some(times.as_slice()),
-        _ => None,
-    }
-}
-
 // -- widgets ------------------------------------------------------------------
 
 /// The control for a form input's current value.
@@ -588,36 +541,6 @@ pub(super) fn widget(
             }));
             Widget::Audio([from, to, floor, threshold])
         }
-        Some(p::Value::Events(p::Events::Beats { times })) => {
-            let text = format_beats(times.as_slice());
-            let field = cx.new(|cx| {
-                let mut field = TextInput::search("0, 1, 2", cx);
-                field.set_text(text, cx);
-                field
-            });
-            let def = def.clone();
-            subs.push(cx.subscribe(
-                &field,
-                move |this: &mut Luma, field, event: &text_input::Event, cx| {
-                    if *event != text_input::Event::Edited {
-                        return;
-                    }
-                    let Some(times) = parse_beats(field.read(cx).text()) else {
-                        return;
-                    };
-                    // A resync writes the stored list back into the field;
-                    // that echo is not an edit.
-                    this.form_edit(&def, spec, cx, |value| {
-                        (stamped(value) != Some(&times[..])).then(|| {
-                            p::Value::Events(p::Events::Beats {
-                                times: p::EventTimes::new(times).expect("sorted beats"),
-                            })
-                        })
-                    });
-                },
-            ));
-            Widget::Stamps(field)
-        }
         value => {
             let current = value.as_ref().and_then(level);
             if def.id == "grain" {
@@ -753,12 +676,6 @@ pub(super) fn resync(
             to.update(cx, |field, cx| field.set_value(audio.to_hz, cx));
             floor.update(cx, |field, cx| field.set_value(audio.floor * 100., cx));
             threshold.update(cx, |field, cx| field.set_value(audio.threshold * 100., cx));
-        }
-        (Widget::Stamps(field), Some(value)) => {
-            let times = stamped(&value).unwrap_or_default().to_vec();
-            if parse_beats(field.read(cx).text()).as_deref() != Some(&times[..]) {
-                field.update(cx, |field, cx| field.set_text(format_beats(&times), cx));
-            }
         }
         (Widget::Grain(entity), Some(value)) => {
             if let Some(n) = level(&value).filter(|n| *n >= 2.) {
@@ -1450,23 +1367,6 @@ fn control(
                 // Energy below the threshold gives 0; 0% is no gate.
                 .child(arg_row("Threshold", threshold.clone()))
         }
-        Widget::Stamps(field) => {
-            let times = value.as_ref().and_then(stamped).unwrap_or_default();
-            column()
-                .child(
-                    luma_ui::float::field()
-                        .w(px(FIELD_W))
-                        .font_family(luma_ui::fonts::MONO)
-                        .child(div().w_full().child(field.clone()))
-                        .agent_node(
-                            Role::Input,
-                            format!("{name}: Beats = {}", format_beats(times)),
-                        ),
-                )
-                .child(luma_ui::caption(
-                    "Beats from the clip start, split by commas".to_string(),
-                ))
-        }
         Widget::Color(entity) => div().child(entity.clone()),
         Widget::Scalar(entity) => div().child(entity.clone()),
         Widget::Gradient(entity) => div().child(entity.clone()),
@@ -1487,8 +1387,8 @@ fn range_row(low: &Entity<DraftedNumber>, high: &Entity<DraftedNumber>) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{
-        curve_options, curve_preset, envelope_of, envelope_options, format_beats, keyframes_of,
-        parse_beats, promote, same_curve, scaled, stamped, Slot, Thumb, CURVE_BEATS, MIN_BEATS,
+        curve_options, curve_preset, envelope_of, envelope_options, keyframes_of, promote,
+        same_curve, scaled, Slot, Thumb, CURVE_BEATS, MIN_BEATS,
     };
     use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
     use luma_patterns as p;
@@ -1522,10 +1422,6 @@ mod tests {
             promote(&every, &p::Value::Time(curve), None),
             p::Value::Beats(3.)
         );
-
-        let events = promote(&every, &p::Value::Beats(2.), Some(p::SourceKind::Events));
-        assert_eq!(stamped(&events), Some(&[0., 2., 4., 6.][..]));
-        assert_eq!(promote(&every, &events, None), p::Value::Beats(2.));
 
         let color = slot("color.chase@1", "color");
         let red = p::Value::Color([1., 0., 0.]);
@@ -1705,15 +1601,5 @@ mod tests {
         if let Some(p::Author::Choice { options, .. }) = &axis.author {
             assert!(envelope_options(options).is_none(), "axis stays a select");
         }
-    }
-
-    #[test]
-    fn beat_lists_parse_or_wait() {
-        assert_eq!(parse_beats("0, 1.5 3"), Some(vec![0., 1.5, 3.]));
-        assert_eq!(parse_beats("3, 1"), Some(vec![1., 3.]));
-        assert_eq!(parse_beats(""), None);
-        assert_eq!(parse_beats("1, x"), None);
-        assert_eq!(parse_beats("-1"), None);
-        assert_eq!(format_beats(&[0., 1.5]), "0, 1.5");
     }
 }

@@ -251,10 +251,7 @@ fn form_inputs_must_be_complete_known_and_promotable() {
             SourceKind::Audio
         ]
     );
-    assert_eq!(
-        chase.inputs["every"].promotable,
-        [SourceKind::Time, SourceKind::Events]
-    );
+    assert_eq!(chase.inputs["every"].promotable, [SourceKind::Time]);
     assert!(chase.inputs["axis"].promotable.is_empty());
 }
 
@@ -496,7 +493,8 @@ fn chase_paths_and_direction_following_shapes() {
 }
 
 #[test]
-fn stamped_events_count_from_the_clip_start() {
+fn every_takes_no_list_of_hit_times() {
+    // A hit is a clip on the timeline; one clip never holds a list of hits.
     let (form, mut inputs) = preset("Chase");
     set(
         &mut inputs,
@@ -505,11 +503,7 @@ fn stamped_events_count_from_the_clip_start() {
             times: EventTimes::new(vec![0.0, 3.0]).unwrap(),
         }),
     );
-    let first = render(&form, &inputs, 1.0);
-    assert!(first.iter().any(|v| *v > 0.0));
-    assert_eq!(render(&form, &inputs, 2.5), vec![0.0; 8]);
-    assert_eq!(render(&form, &inputs, 4.0), first);
-    assert_eq!(render(&form, &inputs, 6.0), vec![0.0; 8]);
+    assert!(prepare(&form, &inputs).is_err());
 }
 
 #[test]
@@ -654,27 +648,18 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
 }
 
 #[test]
-fn a_sparkle_on_paced_events_never_lights_every_head() {
+fn a_sparkle_never_lights_every_head() {
     let (form, mut inputs) = preset("Random heads");
     set(&mut inputs, "coverage", Value::Proportion(1.0));
     let error = prepare(&form, &inputs).unwrap_err();
     assert!(error.0.contains("use a Wash"), "{error}");
-    // A curve may pass through 100%, and stamped events have no Wash.
+    // A curve may pass through 100%.
     set(
         &mut inputs,
         "coverage",
         Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Segment::Linear)),
     );
     prepare(&form, &inputs).unwrap();
-    set(&mut inputs, "coverage", Value::Proportion(1.0));
-    set(
-        &mut inputs,
-        "every",
-        Value::Events(Events::Beats {
-            times: EventTimes::new(vec![0.0, 1.5]).unwrap(),
-        }),
-    );
-    assert_eq!(lit(&render(&form, &inputs, 0.5)), vec![true; 8]);
 }
 
 #[test]
@@ -971,7 +956,6 @@ fn sources_are_tagged_values_in_stored_clips() {
         serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["hold"]}}),
         serde_json::json!({"type": "noise", "value": {"speed": 4.0, "range": [0.2, 1.0]}}),
         serde_json::json!({"type": "audio", "value": {"from_hz": 40.0, "to_hz": 100.0, "floor": 0.3}}),
-        serde_json::json!({"type": "events", "value": {"source": "beats", "times": [0.0, 1.5, 3.0]}}),
     ] {
         let value: Value = serde_json::from_value(json.clone()).unwrap();
         value.validate().unwrap();

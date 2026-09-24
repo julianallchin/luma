@@ -3,8 +3,7 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-/// The kinds of value a form input accepts besides a plain value. `events`
-/// is the stamped event list that `every` accepts in place of beats.
+/// The kinds of value a form input accepts besides a plain value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
@@ -12,7 +11,6 @@ pub enum SourceKind {
     Hit,
     Noise,
     Audio,
-    Events,
 }
 
 /// How a keyframe curve moves from one point to the next. `hold` keeps the

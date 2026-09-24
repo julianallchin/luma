@@ -193,7 +193,6 @@ impl Value {
             Self::Hit(_) => crate::SourceKind::Hit,
             Self::Noise(_) => crate::SourceKind::Noise,
             Self::Audio(_) => crate::SourceKind::Audio,
-            Self::Events(_) => crate::SourceKind::Events,
             _ => return None,
         })
     }
