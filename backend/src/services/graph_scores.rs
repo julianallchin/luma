@@ -38,13 +38,6 @@ async fn prepare_scene_data(
     score: &Score,
     include_empty: bool,
 ) -> Result<SceneData, String> {
-    let migrated;
-    let score = if score.version() != Score::VERSION {
-        migrated = luma_patterns::migration::upgrade(score).map_err(|error| error.to_string())?;
-        &migrated
-    } else {
-        score
-    };
     score
         .validate(&standard_library())
         .map_err(|error| error.to_string())?;

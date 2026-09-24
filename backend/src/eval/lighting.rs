@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
         let score: p::Score = serde_json::from_value(serde_json::json!({
-            "version":2,"definitions":{"custom":{
+            "definitions":{"custom":{
                 "name":"Runtime error", "inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"nodes":{

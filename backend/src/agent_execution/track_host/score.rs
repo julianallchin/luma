@@ -117,12 +117,6 @@ impl TrackHost {
         }
         supervise(async {
             match method {
-                "track.score_upgrade" => {
-                    let request: Candidate = decode(payload)?;
-                    let candidate = luma_patterns::migration::upgrade(&request.candidate)
-                        .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
-                    Ok(json!(candidate))
-                }
                 "track.graph_instance" => {
                     self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
                     let request: Instance = decode(payload)?;

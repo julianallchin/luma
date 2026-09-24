@@ -623,7 +623,7 @@ mod tests {
 
     fn score(clip: serde_json::Value) -> p::Score {
         serde_json::from_value(serde_json::json!({
-            "version": 7, "definitions": {}, "clips": { "c": clip }
+            "definitions": {}, "clips": { "c": clip }
         }))
         .unwrap()
     }

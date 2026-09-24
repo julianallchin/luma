@@ -16,7 +16,6 @@ mod graph;
 mod inference;
 mod mapping;
 mod metrics;
-pub mod migration;
 pub mod oklab;
 mod output;
 mod point_fields;
@@ -44,7 +43,7 @@ mod event_targets;
 pub use event_targets::EventTargets;
 mod event_timing;
 pub use event_timing::TrackTiming;
-pub use field_ops::{FieldMath, ScalarKind};
+pub use field_ops::FieldMath;
 pub use forms::{
     axis_presets, input_order, is_form, palette_steps, path_presets, shape_presets, steps_path,
     FORMS, MAX_WIDTH,

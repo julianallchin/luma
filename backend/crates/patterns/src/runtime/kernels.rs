@@ -835,24 +835,6 @@ pub(crate) fn run(
                 )?,
             )
         }
-        Primitive::ScalarBinary(_)
-        | Primitive::ScalarConvert { .. }
-        | Primitive::Broadcast(_)
-        | Primitive::ColorField
-        | Primitive::MaskToField
-        | Primitive::TravelClock
-        | Primitive::WriteMask
-        | Primitive::WriteStrobeMask
-        | Primitive::WriteColor
-        | Primitive::WriteSpeed
-        | Primitive::WritePosition
-        | Primitive::AddLighting
-        | Primitive::ChaseEvents
-        | Primitive::PulseEvents
-        | Primitive::DissolveEvents
-        | Primitive::MaskColor => Err(Error(
-            "historical primitives must be migrated before execution".into(),
-        )),
         Primitive::BeatEvents => structured(
             "trigger",
             vec![Value::Events(Events::Periodic {

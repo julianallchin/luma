@@ -79,10 +79,6 @@ class ScoreTests(unittest.TestCase):
         self.calls = []
         def call(method, payload):
             self.calls.append((method, copy.deepcopy(payload)))
-            if method == "track.score_upgrade":
-                candidate = copy.deepcopy(payload["candidate"])
-                candidate["version"] = 3
-                return candidate
             if method == "track.graph_instance":
                 child = copy.deepcopy((nodes | payload["candidate"]["definitions"])[payload["definition"]])
                 child["body"] = {"kind": "graph", "body": {
@@ -94,20 +90,8 @@ class ScoreTests(unittest.TestCase):
                 return {"revision": "next", "score": payload["candidate"]}
             return {"ok": True}
         return GraphTrack({"id": "track", "title": "Test", "revision": "base", "editable": True,
-                           "beat_origin_s": 1.5, "document": {"version": 3, "definitions": {}, "clips": {}}},
+                           "beat_origin_s": 1.5, "document": {"definitions": {}, "clips": {}}},
                           nodes=nodes, features={"beats": [1., 1.5, 2., 3., 4.], "downbeats": [1.5, 5.]}, host_call=call)
-
-    def test_v2_edit_upgrades_a_copy_and_keeps_the_saved_revision_as_its_base(self):
-        track = self.track()
-        track._document["version"] = 2
-        edit = track.edit()
-        self.assertEqual(edit.candidate["version"], 3)
-        self.assertEqual(track._document["version"], 2)
-        self.assertEqual(edit.base_revision, "base")
-        self.assertEqual(self.calls[0][0], "track.score_upgrade")
-        edit.apply()
-        self.assertEqual(self.calls[-1][1]["baseRevision"], "base")
-        self.assertEqual(self.calls[-1][1]["candidate"]["version"], 3)
 
     def test_manifest_refresh_keeps_live_track_and_revokes_departed_scope(self):
         from luma_exec.bindings import build_namespace, reconcile_facades

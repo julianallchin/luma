@@ -299,11 +299,6 @@ impl InputNode {
 pub enum Primitive {
     Output,
     FieldBinary(crate::FieldMath),
-    ScalarBinary(crate::FieldMath),
-    ScalarConvert {
-        from: crate::ScalarKind,
-        to: crate::ScalarKind,
-    },
     FieldUnary(crate::UnaryMath),
     Power,
     FieldRank,
@@ -341,11 +336,6 @@ pub enum Primitive {
     ThinEvents,
     RandomEventTargets,
     EventAges,
-    /// Version 3 effect kernels. Decoded from frozen documents only; migration
-    /// rebuilds them as graphs before execution.
-    ChaseEvents,
-    PulseEvents,
-    DissolveEvents,
     Harmony,
     Noise,
     ValueNoise1d,
@@ -353,34 +343,21 @@ pub enum Primitive {
     SeedStream,
     DomainIndex,
     AlignDomain,
-    WriteMask,
-    WriteStrobeMask,
     SampleGradient,
     SampleGradientField,
     MixPalette,
     PaletteFallback,
-    ColorField,
-    /// Colour × mask, from before one Multiply took every signal. Decoded
-    /// from frozen documents only; migration rewrites it.
-    MaskColor,
-    WriteColor,
     Hsv,
     RotateHue,
-    Broadcast(crate::ScalarKind),
     FieldClamp,
-    MaskToField,
     FieldGreater,
     FieldSelect,
     RandomField,
     ChooseNumber,
     ResolveMapping,
     Rhythm,
-    TravelClock,
     CoordinateOffset,
     FieldEnvelope,
-    WritePosition,
-    WriteSpeed,
-    AddLighting,
     Envelope,
     SoftEdges,
     Odometer,
@@ -652,16 +629,9 @@ impl Library {
         self.validate_many(std::iter::once(id))
     }
     pub(crate) fn validate_many<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
-        self.validate_many_using(ids, &crate::catalog::primitive)
-    }
-    pub(crate) fn validate_many_using<'a>(
-        &self,
-        ids: impl IntoIterator<Item = &'a str>,
-        interface: &impl Fn(Primitive) -> Definition,
-    ) -> Result<()> {
         let mut done = BTreeMap::new();
         for id in ids {
-            self.validate_definition(id, &mut BTreeSet::new(), &mut done, interface)?;
+            self.validate_definition(id, &mut BTreeSet::new(), &mut done)?;
         }
         Ok(())
     }
@@ -675,7 +645,6 @@ impl Library {
         id: &str,
         visiting: &mut BTreeSet<String>,
         done: &mut BTreeMap<String, Complexity>,
-        interface: &impl Fn(Primitive) -> Definition,
     ) -> Result<()> {
         if done.contains_key(id) {
             return Ok(());
@@ -714,7 +683,7 @@ impl Library {
         let complexity = match &def.body {
             Body::Primitive(p) => {
                 // Primitive interfaces are owned by the kernel catalog, not editable JSON.
-                let canonical = interface(*p);
+                let canonical = crate::catalog::primitive(*p);
                 if serde_json::to_value(&def.inputs).unwrap()
                     != serde_json::to_value(&canonical.inputs).unwrap()
                     || serde_json::to_value(&def.outputs).unwrap()
@@ -764,7 +733,7 @@ impl Library {
                     {
                         return Err(Error(format!("{name}: node position must be finite")));
                     }
-                    self.validate_definition(&node.definition, visiting, done, interface)?;
+                    self.validate_definition(&node.definition, visiting, done)?;
                     let child = self.definition(&node.definition)?;
                     for key in node.inputs.keys() {
                         if !child.inputs.contains_key(key) {

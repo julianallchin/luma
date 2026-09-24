@@ -191,7 +191,6 @@ impl HostCallHandler for TrackHost {
             if matches!(
                 method,
                 "track.score_check"
-                    | "track.score_upgrade"
                     | "track.graph_instance"
                     | "track.score_apply"
                     | "track.score_render"
