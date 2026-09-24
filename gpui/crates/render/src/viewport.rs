@@ -128,6 +128,25 @@ pub const LIVE_SUBFRAMES: u32 = 2;
 /// lighting is shared in the volume grid; it does not lower this target's size.
 pub const LIVE_HAZE_RESOLUTION: f32 = 1.0;
 
+/// The luminance range of the display a live frame is presented on.
+///
+/// The picture below SDR white is the same in both; HDR only keeps the
+/// highlights that SDR compresses into white (see `agx_hdr` in
+/// `composite.wgsl`). The window says which it is — with gpui, from
+/// `Window::hdr_output`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum DisplayRange {
+    /// Colour values up to 1.0.
+    #[default]
+    Sdr,
+    /// Colour values up to `headroom`, where 1.0 is SDR white. The frame is
+    /// half-float linear light instead of sRGB-encoded 8-bit.
+    Hdr {
+        /// The brightest output, as a multiple of SDR white. At least 1.
+        headroom: f32,
+    },
+}
+
 /// Where a finished frame's pixels are.
 ///
 /// The two are the same picture, and a caller that only paints it need not care
@@ -410,6 +429,7 @@ pub struct AsyncViewport {
     shared: Arc<Shared<FrameRequest, anyhow::Result<AsyncPresentation>>>,
     next_serial: u64,
     subframes: u32,
+    range: DisplayRange,
     /// Behind a lock because [`Self::take_latest`] takes `&self`: the caller
     /// holding a shared viewport is the one presenting frames, and making it
     /// take `&mut` to be measured would push this measurement's cost into
@@ -422,6 +442,7 @@ struct FrameRequest {
     width: u32,
     height: u32,
     subframes: u32,
+    range: DisplayRange,
     /// When the UI thread handed this frame over.
     ///
     /// The worker takes the newest request whenever it is free, so a frame can
@@ -778,6 +799,7 @@ impl AsyncViewport {
             shared,
             next_serial: 0,
             subframes: LIVE_SUBFRAMES,
+            range: DisplayRange::Sdr,
             pacing: Mutex::new(Pacing::default()),
         }
     }
@@ -786,6 +808,12 @@ impl AsyncViewport {
     /// frames and clamped to at least one sample.
     pub fn set_subframes(&mut self, subframes: u32) {
         self.subframes = subframes.max(1);
+    }
+
+    /// Present subsequently submitted frames for a display in `range`. The
+    /// window compositor decides this, not the scene.
+    pub fn set_display_range(&mut self, range: DisplayRange) {
+        self.range = range;
     }
 
     /// Queue one live frame without waiting for the renderer or GPU.
@@ -816,6 +844,7 @@ impl AsyncViewport {
                 width: width.max(1),
                 height: height.max(1),
                 subframes: self.subframes,
+                range: self.range,
                 submitted: Instant::now(),
             },
         );
@@ -1189,6 +1218,7 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                         request.width,
                         request.height,
                         request.subframes,
+                        request.range,
                         slot,
                         measure,
                         request.submitted.elapsed(),

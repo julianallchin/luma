@@ -1933,6 +1933,16 @@ impl PlatformWindow for X11Window {
         self.0.state.borrow().renderer.wgpu_device()
     }
 
+    // LUMA LOCAL EDIT: see `gpui::Window::hdr_output`.
+    fn hdr_output(&self) -> Option<gpui::HdrOutput> {
+        self.0.state.borrow().renderer.hdr_output()
+    }
+
+    // LUMA LOCAL EDIT: see `gpui::Window::set_hdr_output_allowed`.
+    fn set_hdr_output_allowed(&self, allowed: bool) {
+        self.0.state.borrow_mut().renderer.set_hdr_output_allowed(allowed);
+    }
+
     fn play_system_bell(&self) {
         // Volume 0% means don't increase or decrease from system volume
         let _ = self.0.xcb.bell(0);

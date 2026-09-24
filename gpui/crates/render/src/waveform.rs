@@ -441,6 +441,7 @@ impl Waveform {
             self.context.adopted,
             view.width,
             view.height,
+            crate::gpu::Channels::Bgra,
         );
         let texture = shared.is_none().then(|| {
             texture(

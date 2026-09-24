@@ -102,3 +102,38 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
     );
     assert_eq!(out["engine"], serde_json::json!(["Codex subscription"]));
 }
+
+/// The HDR output row on General: present, labelled in sentence case, and a
+/// press writes through the seam without a save error. The automation tree
+/// carries no checked state, and the harness window has no HDR display, so
+/// what the window does with the value is not visible here.
+const HDR_SCRIPT: &str = r#"
+    nav.venue("Test Venue");
+    // The ⌘, door: this test is about the row, not the account menu.
+    app.action("luma::OpenSettings");
+    until("the loaded General settings", (s) =>
+        s.find({ role: "checkbox", label: "HDR output" }) !== undefined);
+    app.click(app.snapshot().find({ role: "checkbox", label: "HDR output" }));
+    // The write re-reads every setting; a failed write shows as a text node.
+    const settled = until("the re-read after the write", (s) =>
+        s.find({ role: "checkbox", label: "HDR output" }) !== undefined ? s : undefined);
+    ({
+        labels: settled.findAll({ role: "checkbox" }).map((n) => n.label),
+        failed: settled.nodes.some((n) => (n.label || "").startsWith("Failed to save")),
+    })
+"#;
+
+#[test]
+fn hdr_output_is_a_general_setting() {
+    let mut harness = support::Fixture::new("settings-hdr", 1, vec![])
+        .without_track()
+        .open(Mode::Headless);
+    let result = harness.exec(&support::script(HDR_SCRIPT), Duration::from_secs(60));
+    assert_eq!(result.error, None, "script failed");
+    let out: Value = result.result;
+    assert_eq!(
+        out["labels"],
+        serde_json::json!(["Enable Audio Output", "HDR output"])
+    );
+    assert_eq!(out["failed"], false);
+}
