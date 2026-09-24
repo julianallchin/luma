@@ -584,6 +584,8 @@ struct Stage {
     /// Fixture shadow maps redrawn by the previous frame. Zero is the healthy
     /// steady state; a sustained non-zero run is tenancy churning.
     last_shadow_maps: Option<u32>,
+    /// Low quality's frame-time-driven share of its pixel budget.
+    dynamic: DynamicBudget,
     /// When the stage last asked for another frame, and when its prepaint last
     /// ran. Together these separate the two ways a frame can be late: the UI
     /// thread never ran one, or it ran one that took too long to reach the
@@ -678,6 +680,63 @@ const EXPOSURE_SETTLE_FRAMES: u32 = 180;
 /// stays native.
 const RENDER_BUDGET_PIXELS: f64 = 2227.0 * 1391.0;
 
+/// GPU frame time low quality aims under: a 60 Hz frame with room for the UI.
+const DYNAMIC_TARGET_GPU_MS: f32 = 14.0;
+
+/// Low quality's dynamic resolution: the share of its pixel budget the stage
+/// renders, driven by measured GPU frame time.
+///
+/// It steps down fast (three slow samples in a row take a fifth of the pixels
+/// away) and back up slowly (thirty quick ones give a tenth back), because a
+/// resize rejects the haze history and a size that hunts would never settle.
+/// A quarter of the budget is the floor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DynamicBudget {
+    factor: f64,
+    slow: u32,
+    quick: u32,
+}
+
+impl Default for DynamicBudget {
+    fn default() -> Self {
+        Self {
+            factor: 1.0,
+            slow: 0,
+            quick: 0,
+        }
+    }
+}
+
+impl DynamicBudget {
+    fn factor(&self) -> f64 {
+        self.factor
+    }
+
+    fn observe(&mut self, gpu_ms: f32) {
+        if !gpu_ms.is_finite() {
+            return;
+        }
+        if gpu_ms > DYNAMIC_TARGET_GPU_MS * 1.15 {
+            self.slow += 1;
+            self.quick = 0;
+        } else if gpu_ms < DYNAMIC_TARGET_GPU_MS * 0.7 {
+            self.quick += 1;
+            self.slow = 0;
+        } else {
+            self.slow = 0;
+            self.quick = 0;
+        }
+        if self.slow >= 3 {
+            self.factor = (self.factor * 0.8).max(0.25);
+            self.slow = 0;
+        }
+        if self.quick >= 30 {
+            self.factor = (self.factor * 1.1).min(1.0);
+            self.quick = 0;
+        }
+    }
+}
+
 /// How the stage's render size follows its element's physical size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RenderScale {
@@ -736,14 +795,18 @@ impl RenderScale {
     ///   now*. Had the percent replaced the budget, then on a large retina
     ///   window — where the budget already picks ~0.6 — the top of the slider's
     ///   travel would do nothing at all, which reads as a broken control.
-    fn size(self, percent: u8, (width, height): (u32, u32)) -> (u32, u32) {
+    ///
+    /// `limit` is a quality level's own pixel budget, when it has one, and it
+    /// caps every variant: low quality on a laptop must not render a native
+    /// 4K window because `LUMA_RENDER_BUDGET=off` was set for a desktop.
+    fn size(self, percent: u8, limit: Option<f64>, (width, height): (u32, u32)) -> (u32, u32) {
+        let area = f64::from(width) * f64::from(height);
         let env = match self {
             Self::Native => 1.0,
             Self::Fixed(scale) => f64::from(scale),
-            Self::Budget => (RENDER_BUDGET_PIXELS / (f64::from(width) * f64::from(height)))
-                .sqrt()
-                .min(1.0),
+            Self::Budget => (RENDER_BUDGET_PIXELS / area).sqrt().min(1.0),
         };
+        let env = limit.map_or(env, |pixels| env.min((pixels / area).sqrt()));
         let scale = env * f64::from(clamp_render_scale(i64::from(percent))) / 100.0;
         let fit = |side: u32| ((f64::from(side) * scale).round() as u32).clamp(1, side.max(1));
         (fit(width), fit(height))
@@ -834,6 +897,10 @@ struct RenderControls {
     /// (`stage_look`), like the grid: it is how this machine looks at any
     /// venue.
     look: scene_desc::Look,
+    /// The renderer's cost level — the `stage_low_quality` device setting.
+    /// Low lowers the haze resolution and gobo samples here, the pixel budget
+    /// in [`RenderScale::size`], and the rest inside the renderer.
+    quality: scene_desc::Quality,
 }
 
 /// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
@@ -891,6 +958,11 @@ impl RenderControls {
         // local cost knobs it deliberately does not hold.
         render.haze.steps = self.haze_steps;
         render.haze.resolution = self.haze_resolution;
+        if self.quality == scene_desc::Quality::Low {
+            render.haze.steps = render.haze.steps.min(self.quality.haze_steps());
+            render.haze.resolution = render.haze.resolution.min(self.quality.haze_resolution());
+        }
+        render.quality = self.quality;
         render.show_grid = self.grid_enabled;
         render.show_gizmos = self.gizmos_enabled;
         render.fixture_surface_lighting = self.fixture_surface_lighting;
@@ -936,6 +1008,7 @@ impl RenderControls {
             gizmos_enabled: true,
             render_scale_percent: 100,
             look: scene_desc::Look::STAGE,
+            quality: scene_desc::Quality::High,
         };
         controls.set_environment(environment);
         controls
@@ -1161,6 +1234,11 @@ impl Visualizer {
                 state.render_controls.render_scale_percent =
                     clamp_render_scale(i64::from(settings.render_scale));
                 state.render_controls.look = stored_look(&settings.stage_look);
+                state.render_controls.quality = if settings.stage_low_quality {
+                    scene_desc::Quality::Low
+                } else {
+                    scene_desc::Quality::High
+                };
                 cx.notify();
             })
             .ok();
@@ -3239,9 +3317,9 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             controls.gizmos_enabled,
             ViewToggle::Gizmos,
         ))
-        // A cost knob, so it sits with the other cost knobs rather than in the
-        // middle of the haze cluster, and it sits last because its caption
+        // The cost knobs sit together; the percent last because its caption
         // belongs directly under it.
+        .child(quality_row(controls.quality, app))
         .child(view_value(
             app,
             "Render scale (%)",
@@ -3429,6 +3507,33 @@ fn view_value(
     scrub_row(label, value, min..=max, step, power, move |value, cx| {
         app.update(cx, |this, cx| this.set_view_value(control, value, cx));
     })
+}
+
+/// "Quality: High / Low", the renderer's cost level. The scrub row's shape
+/// with a segmented choice where the scrub would be.
+fn quality_row(quality: scene_desc::Quality, app: &Entity<Luma>) -> Div {
+    let mut track = luma_ui::float::segmented();
+    for (name, level) in [
+        ("High", scene_desc::Quality::High),
+        ("Low", scene_desc::Quality::Low),
+    ] {
+        let app = app.clone();
+        track = track.child(
+            luma_ui::float::segment(name, quality == level, name)
+                .id(gpui::ElementId::Name(format!("quality-{name}").into()))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.set_view_quality(level, cx));
+                })
+                .agent_node(Role::Toggle, name),
+        );
+    }
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(12.))
+        .child(div().text_size(px(12.)).child("Quality"))
+        .child(track.agent_node(Role::Card, "Quality"))
 }
 
 /// The one row shape of the floating settings surface: a label on the left
@@ -4052,8 +4157,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             // downstream — the idle key, the renderer, the trace — sees this.
             // `from_env` caches in a `OnceLock`, so the live percent cannot go
             // through it and is threaded in instead.
+            let limit = key_controls
+                .quality
+                .pixel_budget()
+                .map(|pixels| pixels * stage.borrow().dynamic.factor());
             let (width, height) = RenderScale::from_env().size(
                 key_controls.render_scale_percent,
+                limit,
                 (
                     (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
                     (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
@@ -4220,6 +4330,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                                     Some(timings.cpu_encode_submit_ms as f32);
                                                 stage.last_gpu_ms =
                                                     Some(timings.gpu_total_ms as f32);
+                                                stage.dynamic.observe(timings.gpu_total_ms as f32);
                                                 stage.last_cluster_ms =
                                                     Some(timings.cpu_cluster_ms as f32);
                                             }
@@ -4715,7 +4826,43 @@ mod view_tests {
 
 #[cfg(test)]
 mod render_scale_tests {
-    use super::RenderScale;
+    use super::{DynamicBudget, RenderScale};
+
+    /// Low quality's pixel budget caps every variant, native included, and
+    /// composes with the operator's percent.
+    #[test]
+    fn a_quality_limit_caps_every_variant() {
+        let limit = Some(1.0e6);
+        let (w, h) = RenderScale::Native.size(FULL, limit, (1920, 1080));
+        assert!(f64::from(w) * f64::from(h) <= 1.0e6 * 1.01, "{w}x{h}");
+        assert_eq!(
+            RenderScale::Native.size(FULL, limit, (800, 600)),
+            (800, 600)
+        );
+        let (half_w, _) = RenderScale::Native.size(50, limit, (1920, 1080));
+        assert_eq!(half_w, (f64::from(w) / 2.0).round() as u32);
+    }
+
+    #[test]
+    fn dynamic_budget_steps_down_fast_and_up_slowly() {
+        let mut budget = DynamicBudget::default();
+        for _ in 0..3 {
+            budget.observe(30.0);
+        }
+        assert!((budget.factor() - 0.8).abs() < 1e-9);
+        // A single quick frame, or an in-band one, changes nothing.
+        budget.observe(5.0);
+        budget.observe(14.0);
+        assert!((budget.factor() - 0.8).abs() < 1e-9);
+        for _ in 0..30 {
+            budget.observe(5.0);
+        }
+        assert!((budget.factor() - 0.88).abs() < 1e-9);
+        for _ in 0..300 {
+            budget.observe(100.0);
+        }
+        assert_eq!(budget.factor(), 0.25);
+    }
 
     /// The percent the operator has not touched. Every assertion about the
     /// behaviour that predates the setting is taken at this value.
@@ -4723,14 +4870,20 @@ mod render_scale_tests {
 
     #[test]
     fn an_ordinary_window_renders_native() {
-        assert_eq!(RenderScale::Budget.size(FULL, (1984, 1511)), (1984, 1511));
-        assert_eq!(RenderScale::Budget.size(FULL, (2227, 1391)), (2227, 1391));
-        assert_eq!(RenderScale::Budget.size(FULL, (1, 1)), (1, 1));
+        assert_eq!(
+            RenderScale::Budget.size(FULL, None, (1984, 1511)),
+            (1984, 1511)
+        );
+        assert_eq!(
+            RenderScale::Budget.size(FULL, None, (2227, 1391)),
+            (2227, 1391)
+        );
+        assert_eq!(RenderScale::Budget.size(FULL, None, (1, 1)), (1, 1));
     }
 
     #[test]
     fn fullscreen_scales_to_the_budget_at_its_own_aspect() {
-        let (width, height) = RenderScale::Budget.size(FULL, (3600, 2260));
+        let (width, height) = RenderScale::Budget.size(FULL, None, (3600, 2260));
         let scale = f64::from(width) / 3600.0;
         assert!((scale - 0.617).abs() < 0.002, "scale {scale}");
         assert!(
@@ -4766,12 +4919,15 @@ mod render_scale_tests {
             RenderScale::Native
         );
         assert_eq!(RenderScale::parse(None, Some("on")), RenderScale::Budget);
-        assert_eq!(RenderScale::Native.size(FULL, (3600, 2260)), (3600, 2260));
         assert_eq!(
-            RenderScale::Fixed(0.5).size(FULL, (3600, 2260)),
+            RenderScale::Native.size(FULL, None, (3600, 2260)),
+            (3600, 2260)
+        );
+        assert_eq!(
+            RenderScale::Fixed(0.5).size(FULL, None, (3600, 2260)),
             (1800, 1130)
         );
-        assert_eq!(RenderScale::Fixed(0.25).size(FULL, (2, 2)), (1, 1));
+        assert_eq!(RenderScale::Fixed(0.25).size(FULL, None, (2, 2)), (1, 1));
     }
 
     /// The operator's percent **composes** with the env-var scale; it does not
@@ -4780,10 +4936,10 @@ mod render_scale_tests {
     #[test]
     fn the_percent_composes_with_the_budget_rather_than_replacing_it() {
         let fullscreen = (3600, 2260);
-        let budgeted = RenderScale::Budget.size(FULL, fullscreen);
+        let budgeted = RenderScale::Budget.size(FULL, None, fullscreen);
         // Replacement would render 50% of 3600 = 1800 wide. Composition renders
         // half of what the budget already picked.
-        let halved = RenderScale::Budget.size(50, fullscreen);
+        let halved = RenderScale::Budget.size(50, None, fullscreen);
         // Half of what the budget picked, to within the rounding each side is
         // fitted to — not half of the element.
         assert!(
@@ -4802,7 +4958,7 @@ mod render_scale_tests {
         // control — a monotone walk, not one flat stretch at the top.
         let mut previous = budgeted;
         for percent in [99, 90, 75, 60, 45, 30, 25] {
-            let size = RenderScale::Budget.size(percent, fullscreen);
+            let size = RenderScale::Budget.size(percent, None, fullscreen);
             assert!(size.0 < previous.0, "{percent}% gave {size:?}");
             previous = size;
         }
@@ -4831,7 +4987,7 @@ mod render_scale_tests {
                         |side: u32| ((f64::from(side) * env).round() as u32).clamp(1, side.max(1));
                     (fit(size.0), fit(size.1))
                 };
-                assert_eq!(scale.size(FULL, size), old, "{scale:?} at {size:?}");
+                assert_eq!(scale.size(FULL, None, size), old, "{scale:?} at {size:?}");
             }
         }
     }
@@ -4841,12 +4997,12 @@ mod render_scale_tests {
     #[test]
     fn an_out_of_range_percent_is_held_to_the_slider_travel() {
         assert_eq!(
-            RenderScale::Native.size(0, (1000, 1000)),
-            RenderScale::Native.size(25, (1000, 1000))
+            RenderScale::Native.size(0, None, (1000, 1000)),
+            RenderScale::Native.size(25, None, (1000, 1000))
         );
         assert_eq!(
-            RenderScale::Native.size(255, (1000, 1000)),
-            RenderScale::Native.size(100, (1000, 1000))
+            RenderScale::Native.size(255, None, (1000, 1000)),
+            RenderScale::Native.size(100, None, (1000, 1000))
         );
     }
 }
