@@ -944,6 +944,12 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     // its own state and reads the library synchronously, and the two fields
     // are disjoint.
     let stage_view = app.stage_view();
+    // The venue's room — indoor or outdoor, sun, haze — sits beside the stage
+    // it lights, on the venue tab only.
+    let environment = matches!(app.workspace.active_body(), Some(Body::Patch(_)))
+        .then(|| app.visualizer.as_ref())
+        .flatten()
+        .map(|state| visualizer::environment_panel(state, &cx.entity()));
     let venue_tools = match (app.workspace.active_body(), stage_view.as_ref()) {
         (Some(Body::Patch(page)), Some(stage_view)) => Some(stage::controls(
             &page.stage,
@@ -1000,7 +1006,8 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
                         .h_full()
                         .key_context(keymap::context::VISUALIZER)
                         .children(stage),
-                ),
+                )
+                .children(environment),
         )
         .child(visualizer_seam())
         .child(active_tab(app, window, cx))
@@ -1032,6 +1039,7 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
         let enabled = availability.enabled();
         let label = choice.label();
         let icon = match choice {
+            tab_chrome::NewTabChoice::Venue => luma_ui::icons::IconName::Cpu,
             tab_chrome::NewTabChoice::Track => luma_ui::icons::IconName::Play,
         };
         let button = luma_ui::button("", enabled.into())

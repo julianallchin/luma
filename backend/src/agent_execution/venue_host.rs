@@ -306,12 +306,16 @@ impl VenueHost {
             }),
             (None, None) => unreachable!("a read returned above"),
         };
-        // This verb has no azimuth dial, so an outdoor room keeps the side
-        // its sun is on.
+        // This verb has no azimuth, cloud or floor dial, so an outdoor room
+        // keeps the side its sun is on and the weather it has, and either
+        // keeps its floor while the other kind of room does not offer it.
         let wanted = match current {
-            VenueEnvironment::Outdoor { .. } => wanted.with_sun_azimuth(current.sun_azimuth_deg()),
+            VenueEnvironment::Outdoor { .. } => wanted
+                .with_sun_azimuth(current.sun_azimuth_deg())
+                .with_clouds(current.clouds()),
             VenueEnvironment::Indoor { .. } => wanted,
-        };
+        }
+        .with_floor(current.floor());
         crate::database::local::venues::set_environment(&mut access, wanted)
             .await
             .map_err(|error| HostCallError::new("internal", error))?;

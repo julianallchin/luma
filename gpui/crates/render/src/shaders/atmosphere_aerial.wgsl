@@ -7,6 +7,7 @@
 @group(0) @binding(3) var radiance_out: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(4) var transmittance_out: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(5) var<uniform> cfg: SkyUniform;
+@group(0) @binding(6) var cloud_shadow_map: texture_2d<f32>;
 
 const AERIAL_STEPS: u32 = 4u;
 
@@ -44,8 +45,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let sun_transmittance = transmittance_to_top(transmittance_lut, lut_sampler, r, mu_sun);
             let ms_uv = vec2<f32>(mu_sun * 0.5 + 0.5, clamp((r - GROUND_RADIUS_KM) / (TOP_RADIUS_KM - GROUND_RADIUS_KM), 0.0, 1.0));
             let psi_ms = textureSampleLevel(multiscatter_lut, lut_sampler, ms_uv, 0.0).rgb;
-            let source = (m.rayleigh_scattering * phase_r + m.mie_scattering * phase_m) * sun_transmittance * lit
-                + (m.rayleigh_scattering + vec3<f32>(m.mie_scattering)) * psi_ms;
+            // The air under a cloud layer is in its shadow where the map
+            // says so — which is what cuts shafts through its gaps — and
+            // under its grey everywhere (`cfg.clouds.y`).
+            let world_m = (cfg.camera.xyz + dir * t) * 1000.0;
+            let cloud = cloud_shadow_in_air(cloud_shadow_map, lut_sampler, cfg.shadow, cfg.clouds.xw, sun, world_m);
+            // Sunlight the cloud diffused on its way down: from the whole
+            // upper hemisphere, so half of it scatters toward any direction.
+            let diffuse = (1.0 - cloud) * cfg.clouds.z * max(mu_sun, 0.0) * INV_PI * 0.5;
+            // The grey holds back the sky's light only under the layer. The
+            // sky's march (`atmosphere_cloud_view.wgsl`) takes the same
+            // terms off the clear table, so the far ground and the sky at
+            // the horizon agree.
+            let under = 1.0 - smoothstep(cfg.clouds.x, max(cfg.clouds.w, cfg.clouds.x + 1e-3), r - GROUND_RADIUS_KM);
+            let source = (m.rayleigh_scattering * phase_r + m.mie_scattering * phase_m) * sun_transmittance * lit * cloud
+                + (m.rayleigh_scattering + vec3<f32>(m.mie_scattering))
+                    * (psi_ms * mix(1.0, cfg.clouds.y, under) + sun_transmittance * lit * diffuse);
             let step_t = exp(-m.extinction * dt);
             radiance += throughput * source * (vec3<f32>(1.0) - step_t) / max(m.extinction, vec3<f32>(1e-9));
             throughput *= step_t;

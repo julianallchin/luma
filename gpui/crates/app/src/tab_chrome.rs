@@ -437,14 +437,16 @@ fn progress(started: Instant, now: Instant) -> f32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
+    Venue,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 1] = [Self::Track];
+    pub(crate) const ALL: [Self; 2] = [Self::Venue, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::Venue => "Venue",
             Self::Track => "Track editor",
         }
     }
@@ -468,9 +470,10 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 1] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 2] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
+            NewTabChoice::Venue if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
             _ => None,
@@ -546,6 +549,7 @@ impl Luma {
     ) {
         self.tab_chrome.menu_open = false;
         match choice {
+            NewTabChoice::Venue => self.open_patch(cx),
             NewTabChoice::Track => {
                 if let Some(track) = self.selected_track().map(str::to_string) {
                     self.open_track(&track, cx);
@@ -727,6 +731,10 @@ mod tests {
         };
         let none = NewTabPrerequisites::default();
         assert_eq!(
+            reason(&none, NewTabChoice::Venue),
+            Some("Select a venue first")
+        );
+        assert_eq!(
             reason(&none, NewTabChoice::Track),
             Some("Select a venue first")
         );
@@ -735,6 +743,7 @@ mod tests {
             venue: Some("v".into()),
             ..Default::default()
         };
+        assert_eq!(reason(&venue, NewTabChoice::Venue), None);
         assert_eq!(
             reason(&venue, NewTabChoice::Track),
             Some("Select a track first")

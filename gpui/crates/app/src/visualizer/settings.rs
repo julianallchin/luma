@@ -88,25 +88,10 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .p(px(14.))
         .gap(px(12.))
         .child(float::label("View settings"))
-        .child(section(
-            "Environment",
-            environment_card(state.venue_environment(), app),
-        ))
-        .when_some(sun_rows(state.venue_environment(), app), |card, sun| {
-            card.child(float::divider()).child(section("Sun", sun))
-        })
-        .child(float::divider())
         .child(super::view_controls(state, app))
         .child(float::divider())
         .child(section("Debug", export_camera(app)));
-    for error in [
-        &state.environment_error,
-        &state.haze_error,
-        &state.view_setting_error,
-    ]
-    .into_iter()
-    .flatten()
-    {
+    if let Some(error) = &state.view_setting_error {
         content = content.child(float::error_row(error.clone()));
     }
     let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, state.settings_open)
@@ -181,6 +166,63 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 ),
             )
         })
+        .into_any_element()
+}
+
+/// The room itself, beside the stage on the venue tab: indoor or outdoor, the sun and the
+/// haze. These are venue truth, saved on the venue row, so they live with the
+/// venue and not with the render settings, which are about the picture.
+pub(crate) fn environment_panel(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
+    let environment = state.venue_environment();
+    let mut rows = div()
+        .id("venue-environment-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .px(px(12.))
+        .pb(px(12.))
+        .child(environment_card(environment, app))
+        .when_some(sun_rows(environment, app), |rows, sun| {
+            rows.child(float::divider()).child(section("Sun", sun))
+        })
+        .when_some(cloud_rows(environment, app), |rows, clouds| {
+            rows.child(float::divider())
+                .child(section("Clouds", clouds))
+        })
+        .child(float::divider())
+        .child(section("Floor", floor_rows(environment, app)))
+        .child(float::divider())
+        .child(section("Haze", super::haze_rows(state, app)));
+    for error in [&state.environment_error, &state.haze_error]
+        .into_iter()
+        .flatten()
+    {
+        rows = rows.child(float::error_row(error.clone()));
+    }
+    div()
+        .flex_none()
+        .w(px(260.))
+        .h_full()
+        .overflow_hidden()
+        .border_l_1()
+        .border_color(ladder::trim())
+        .bg(ladder::background())
+        .text_color(ladder::foreground())
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex_none()
+                .px(px(12.))
+                .py(px(8.))
+                .text_size(px(12.5))
+                .child("Environment"),
+        )
+        .child(rows)
+        .agent_node(Role::Card, "Venue environment")
         .into_any_element()
 }
 
@@ -358,7 +400,9 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                         // The dial moves the sun up and down, not round.
                         VenueEnvironment::outdoor(fraction * 180. - 90.)
                             .with_sun_azimuth(environment.sun_azimuth_deg())
-                    },
+                            .with_clouds(environment.clouds())
+                    }
+                    .with_floor(environment.floor()),
                     cx,
                 )
             });
@@ -714,6 +758,91 @@ fn environment_card(environment: VenueEnvironment, app: &Entity<Luma>) -> AnyEle
 }
 const ENVIRONMENT_DEFAULT_SUN_DEG: f32 = 40.;
 
+/// The sky's cloud cover, as one choice of five. `None` indoors, where there
+/// is no sky.
+///
+/// A column rather than a row: five labels do not fit across the panel, and
+/// a clipped "Fair weather" reads as a different word. It writes the venue's
+/// environment and keeps the sun where it is.
+fn cloud_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> {
+    if !matches!(environment, VenueEnvironment::Outdoor { .. }) {
+        return None;
+    }
+    let chosen = environment.clouds();
+    let mut track = float::segmented()
+        .w_full()
+        .h_auto()
+        .flex_col()
+        .items_stretch();
+    for clouds in scene_desc::CloudCover::ALL {
+        let app = app.clone();
+        let label = clouds.label();
+        track = track.child(
+            float::segment(label, clouds == chosen, label)
+                .flex_none()
+                .h(px(luma_ui::CONTROL_HEIGHT - 4.))
+                .id(gpui::ElementId::Name(format!("clouds-{label}").into()))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        let Some(now) = this.visualizer_mut().map(|s| s.venue_environment()) else {
+                            return;
+                        };
+                        this.set_visualizer_environment(now.with_clouds(clouds), cx);
+                    });
+                })
+                .agent_node(Role::Toggle, label),
+        );
+    }
+    Some(
+        div().child(track).child(
+            div()
+                .size_0()
+                .overflow_hidden()
+                .agent_node(Role::Text, format!("Clouds = {}", chosen.label())),
+        ),
+    )
+}
+
+/// What the ground is made of, as one choice among the floors this kind of
+/// venue offers: ground outdoors, stage and hall floors indoors.
+///
+/// A column like [`cloud_rows`], for the same reason. It writes the venue's
+/// environment and keeps the light and the sky as they are.
+fn floor_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Div {
+    let chosen = environment.floor();
+    let indoor = matches!(environment, VenueEnvironment::Indoor { .. });
+    let mut track = float::segmented()
+        .w_full()
+        .h_auto()
+        .flex_col()
+        .items_stretch();
+    for &floor in scene_desc::Floor::options(indoor) {
+        let app = app.clone();
+        let label = floor.label();
+        track = track.child(
+            float::segment(label, floor == chosen, label)
+                .flex_none()
+                .h(px(luma_ui::CONTROL_HEIGHT - 4.))
+                .id(gpui::ElementId::Name(format!("floor-{label}").into()))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        let Some(now) = this.visualizer_mut().map(|s| s.venue_environment()) else {
+                            return;
+                        };
+                        this.set_visualizer_environment(now.with_floor(floor), cx);
+                    });
+                })
+                .agent_node(Role::Toggle, label),
+        );
+    }
+    div().child(track).child(
+        div()
+            .size_0()
+            .overflow_hidden()
+            .agent_node(Role::Text, format!("Floor = {}", chosen.label())),
+    )
+}
+
 /// A titled group of rows on the View settings card: the card's quiet
 /// [`float::label`] over the rows it names.
 pub(super) fn section(title: &'static str, rows: impl IntoElement) -> Div {
@@ -753,7 +882,10 @@ fn sun_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> {
                             return;
                         };
                         this.set_visualizer_environment(
-                            VenueEnvironment::outdoor(deg).with_sun_azimuth(now.sun_azimuth_deg()),
+                            VenueEnvironment::outdoor(deg)
+                                .with_sun_azimuth(now.sun_azimuth_deg())
+                                .with_clouds(now.clouds())
+                                .with_floor(now.floor()),
                             cx,
                         );
                     });

@@ -50,7 +50,12 @@ fn surface_transmittance(direction: vec3<f32>, distance: f32, frag_xy: vec2<f32>
 // `scene_radiance` for the opaque scene pipeline, which knows its fragment
 // position and may read the fog grid instead of marching.
 fn surface_radiance(color: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
-    let aerial = aerial_radiance(color, delta);
+    return surface_haze(aerial_radiance(color, delta), delta, frag_xy);
+}
+
+// The haze half of `surface_radiance`, over light that has crossed the
+// aerial perspective already.
+fn surface_haze(aerial: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
     if PROFILE_SKIP_SURFACE_CLOUDS { return aerial; }
     let debug = u32(globals.params.w + 0.5);
     if globals.medium.max.w <= 0.0 || globals.medium.min.w <= 0.0

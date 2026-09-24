@@ -176,10 +176,12 @@ pub fn fill(env: VenueEnvironment) -> Fill {
             // instead of quietly showing an invented sunset.
             environment: Environment::DARK,
             sun: None,
-            sky: Some(SkyParams::outdoor(
-                env.sun_elevation_deg(),
-                env.sun_azimuth_deg(),
-            )),
+            // The sky's ground is the venue's floor, run out to the horizon.
+            sky: Some(SkyParams {
+                clouds: env.clouds(),
+                ground_albedo: crate::floor::mean_color(env.floor()).to_array(),
+                ..SkyParams::outdoor(env.sun_elevation_deg(), env.sun_azimuth_deg())
+            }),
         },
     }
 }
@@ -469,12 +471,17 @@ mod tests {
     #[test]
     fn a_level_out_of_range_is_read_back_in_range() {
         assert_eq!(
-            VenueEnvironment::Indoor { house_level: 9.0 }.house_level(),
+            VenueEnvironment::Indoor {
+                house_level: 9.0,
+                floor: crate::scene_desc::Floor::BlackStage,
+            }
+            .house_level(),
             1.0
         );
         assert_eq!(
             VenueEnvironment::Indoor {
-                house_level: f32::NAN
+                house_level: f32::NAN,
+                floor: crate::scene_desc::Floor::BlackStage,
             }
             .house_level(),
             0.0

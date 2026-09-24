@@ -35,6 +35,11 @@ struct Globals {
     surface_fog: vec4<f32>,
     // xy: output size in pixels, zw: its reciprocal.
     viewport: vec4<f32>,
+    // The ground's floor material, read by `fs_ground` (`floor.wgsl`).
+    floor_a: vec4<f32>,
+    floor_b: vec4<f32>,
+    floor_c: vec4<f32>,
+    floor_d: vec4<f32>,
 };
 
 struct Instance {

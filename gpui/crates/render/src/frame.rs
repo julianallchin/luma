@@ -27,6 +27,20 @@ pub const MAX_FIXTURE_CONES: usize = 512;
 /// Indoor ground extent, beyond the artistic distance dissolve.
 const FLOOR_EXTENT_M: f32 = 2000.0;
 
+/// Say once per floor that its maps would not load. The frame falls back to
+/// the plain ground, so this is the only trace of it.
+fn warn_floor_once(floor: crate::scene_desc::Floor, error: &anyhow::Error) {
+    static WARNED: std::sync::Mutex<Vec<crate::scene_desc::Floor>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut warned = WARNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !warned.contains(&floor) {
+        warned.push(floor);
+        eprintln!("floor {floor:?} is drawn plain: {error:#}");
+    }
+}
+
 /// Whether `mesh_key` names the ground plane, indoors or out. The ground only
 /// receives: everything it could shade stands on it.
 pub(crate) fn is_ground(mesh_key: &str) -> bool {
@@ -326,6 +340,11 @@ pub struct Frame {
     pub look: crate::scene_desc::Look,
     /// Where the frame is seen from.
     pub camera: Camera,
+    /// The ground's floor material, when the subject is a venue and its
+    /// maps loaded. The ground draw then carries the maps in its material
+    /// slots and is shaded by `floor.wgsl`; without it the ground is one
+    /// flat colour.
+    pub floor: Option<crate::floor::Surface>,
 }
 
 /// A look-at camera. The orbit parameterisation of spec §2.4 belongs in
@@ -918,10 +937,42 @@ pub fn build_with(
         ("::floor", FLOOR_EXTENT_M)
     };
     let floor = bank.insert(floor_key.into(), || ground_mesh(floor_extent));
+    // A venue's floor material. Its maps are 2K images, so they go through
+    // the library's cache, and a set that will not load leaves the plain
+    // ground rather than no picture.
+    let quality = scene.render.quality;
+    let floor_surface = scene
+        .render
+        .house
+        .filter(|_| scene.render.show_floor)
+        .map(|house| crate::floor::Surface::of(house.floor(), quality));
+    let floor_maps = floor_surface.and_then(|surface| {
+        crate::floor::maps(lib, &surface, quality)
+            .inspect_err(|error| warn_floor_once(surface.floor, error))
+            .ok()
+    });
+    let floor_surface = floor_surface.filter(|_| floor_maps.is_some());
+    let floor_textures = floor_maps.map_or_else(MaterialTextures::default, |(own, transition)| {
+        let name = floor_surface.map_or("", |s| s.floor.set());
+        let size = own.albedo.width;
+        let mut image = |role: &str, set: &str, map: crate::assets::Image| {
+            bank.insert_image(format!("::floor:{set}:{size}:{role}"), || map)
+        };
+        let transition_name = floor_surface.and_then(|s| s.transition()).unwrap_or("");
+        MaterialTextures {
+            base_color: Some(image("albedo", name, own.albedo)),
+            normal: Some(image("detail", name, own.detail)),
+            metallic_roughness: None,
+            occlusion: transition
+                .as_ref()
+                .map(|maps| image("detail", transition_name, maps.detail.clone())),
+            emissive: transition.map(|maps| image("albedo", transition_name, maps.albedo)),
+        }
+    });
     if scene.render.show_floor {
         draws.push(Draw {
             mesh: floor,
-            textures: MaterialTextures::default(),
+            textures: floor_textures,
             model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             // Indoors this is the venue's black floor. Outdoors it is the
             // ground, and the ground already has an albedo: the one the sky
@@ -930,7 +981,7 @@ pub fn build_with(
             // is visible as a seam exactly where the distance fade dissolves
             // one into the other.
             material: sky.map_or(crate::materials::VENUE_FLOOR, |sky| Material {
-                base_color: Vec3::splat(sky.ground_albedo),
+                base_color: sky.ground_albedo,
                 ..crate::materials::GROUND
             }),
             editor_object: None,
@@ -1304,6 +1355,7 @@ pub fn build_with(
         look: scene.render.look,
         camera,
         overlays,
+        floor: floor_surface,
     })
 }
 

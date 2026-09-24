@@ -24,9 +24,18 @@
 //! Finite camera-to-surface paths are integrated in an angular/distance volume
 //! (`aerial`). Surfaces read its RGB transmittance and scattered radiance before
 //! blending. The volume is cached by sun and camera altitude.
+//!
+//! A cloud layer (`clouds`, `cloud_gpu`) is traced every frame from the
+//! camera behind the geometry, and it casts a shadow map that the surfaces,
+//! the aerial volume and the stage haze read for the sun. A direction
+//! panorama of it, marched when the sun or the weather changes, puts it in
+//! the probe.
 
 mod aerial;
+mod cloud_gpu;
+pub(crate) mod clouds;
 pub(crate) use aerial::{surface_prelude, Textures as AerialTextures, MAX_DISTANCE_M};
+pub(crate) use cloud_gpu::FrameInput as CloudFrame;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -34,7 +43,7 @@ use half::f16;
 use wgpu::util::DeviceExt;
 
 use crate::environment::{EnvironmentPipelines, CUBE_SIZE};
-use crate::scene_desc::SkyParams;
+use crate::scene_desc::{CloudCover, Quality, SkyParams};
 
 /// Ground sphere, kilometres.
 const GROUND_RADIUS_KM: f32 = 6360.0;
@@ -121,7 +130,11 @@ fn prelude() -> String {
          const MULTISCATTER_SIZE: u32 = {MULTISCATTER_SIZE}u;\n\
          const SKYVIEW_WIDTH: u32 = {SKYVIEW_WIDTH}u;\n\
          const SKYVIEW_HEIGHT: u32 = {SKYVIEW_HEIGHT}u;\n\
-         const SKY_CUBE_SIZE: u32 = {CUBE_SIZE}u;\n{}{}",
+         const SKY_CUBE_SIZE: u32 = {CUBE_SIZE}u;\n\
+         const CLOUD_MAX_KM: f32 = {:?};\n\
+         const SHADOW_BANDS: u32 = {}u;\n{}{}",
+        clouds::MAX_MARCH_KM,
+        clouds::SHADOW_BANDS,
         v("RAYLEIGH_SCATTERING", RAYLEIGH_SCATTERING),
         v("OZONE_ABSORPTION", OZONE_ABSORPTION),
     )
@@ -130,9 +143,10 @@ fn prelude() -> String {
 /// The shader prelude the composite pass prepends to read the sky tables.
 pub(crate) fn composite_prelude() -> String {
     format!(
-        "{}{}{}",
+        "{}{}{}{}",
         prelude(),
         include_str!("shaders/atmosphere_common.wgsl"),
+        include_str!("shaders/cloud_shadow.wgsl"),
         include_str!("shaders/atmosphere_sky.wgsl"),
     )
 }
@@ -208,8 +222,13 @@ pub struct SkyFrame {
     pub sun_radiance: Vec3,
     /// Display exposure applied to the sky, the probe and the sun alike.
     pub exposure: f32,
-    /// Ground albedo the sky-view table bounces sunlight off.
-    pub ground_albedo: f32,
+    /// Ground albedo the sky-view table bounces sunlight off, linear RGB:
+    /// the floor's mean colour.
+    pub ground_albedo: Vec3,
+    /// The cloud layer over the venue. Its shadow is not in
+    /// [`Self::sun_radiance`]: it varies over the ground, and the surfaces
+    /// and the air read it from the layer's shadow map.
+    pub clouds: CloudCover,
 }
 
 /// Display exposure for a sun elevation.
@@ -249,15 +268,19 @@ pub(crate) fn resolve(params: &SkyParams) -> SkyFrame {
     let azimuth = params.sun_azimuth_deg.to_radians();
     let (sin_e, cos_e) = elevation.sin_cos();
     let (sin_a, cos_a) = azimuth.sin_cos();
+    let layer = clouds::Layer::of(params.clouds);
     let exposure = params
         .exposure
         .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or_else(|| default_exposure(params.sun_elevation_deg));
+        .unwrap_or_else(|| {
+            default_exposure(params.sun_elevation_deg) * layer.map_or(1.0, |layer| layer.exposure)
+        });
     SkyFrame {
         sun_direction: Vec3::new(cos_e * cos_a, cos_e * sin_a, sin_e),
         sun_radiance: transmittance(GROUND_RADIUS_KM + VIEW_HEIGHT_KM, sin_e) * exposure,
         exposure,
-        ground_albedo: params.ground_albedo.clamp(0.0, 1.0),
+        ground_albedo: Vec3::from(params.ground_albedo).clamp(Vec3::ZERO, Vec3::ONE),
+        clouds: params.clouds,
     }
 }
 
@@ -268,6 +291,19 @@ pub(crate) fn resolve(params: &SkyParams) -> SkyFrame {
 struct SkyUniform {
     sun: [f32; 4],
     params: [f32; 4],
+    /// x: the cloud layer's base, km. y: the clear sky's diffuse light the
+    /// cloud layer lets through. z: the share of the sun's flux the layer's
+    /// cloud passes on as diffuse light (`clouds::Layer::deck_diffuse`).
+    /// w: the layer's top, km.
+    clouds: [f32; 4],
+    /// The cloud shadow map: xy its centre, km, z its side, km, or zero
+    /// when there is none, w the sun it lets through on average
+    /// (`cloud_shadow.wgsl`).
+    shadow: [f32; 4],
+    /// The camera, km, in the venue frame.
+    camera: [f32; 4],
+    /// rgb: the ground's albedo (`SkyFrame::ground_albedo`). w unused.
+    ground: [f32; 4],
 }
 
 impl SkyUniform {
@@ -276,18 +312,41 @@ impl SkyUniform {
             Self {
                 sun: [0.0, 0.0, 1.0, 0.0],
                 params: [1.0, 0.0, VIEW_HEIGHT_KM, 1.0],
+                clouds: [0.0, 1.0, 0.0, 0.0],
+                shadow: [0.0; 4],
+                camera: [0.0; 4],
+                ground: [0.0; 4],
             },
             |sky| Self {
                 sun: sky.sun_direction.extend(1.0).to_array(),
                 params: [
                     sky.exposure,
-                    sky.ground_albedo,
+                    0.0,
                     VIEW_HEIGHT_KM,
                     SUN_ANGULAR_RADIUS.cos(),
                 ],
+                clouds: clouds::Layer::of(sky.clouds).map_or([0.0, 1.0, 0.0, 0.0], |layer| {
+                    [
+                        layer.base_km,
+                        layer.sky_light,
+                        layer.deck_diffuse(),
+                        layer.base_km + layer.thickness_km,
+                    ]
+                }),
+                shadow: [0.0; 4],
+                camera: [0.0; 4],
+                ground: sky.ground_albedo.extend(0.0).to_array(),
             },
         )
     }
+}
+
+/// The sky tables a cloud pass reads.
+pub(crate) struct Tables<'a> {
+    transmittance: &'a wgpu::TextureView,
+    multiscatter: &'a wgpu::TextureView,
+    skyview: &'a wgpu::TextureView,
+    sampler: &'a wgpu::Sampler,
 }
 
 /// The scene-independent half: the two static tables, the pipelines that fill
@@ -301,7 +360,14 @@ pub(crate) struct AtmospherePipelines {
     composite_layout: wgpu::BindGroupLayout,
     skyview_pipeline: wgpu::ComputePipeline,
     cube_pipeline: wgpu::ComputePipeline,
+    clouds: cloud_gpu::Pipelines,
     sampler: wgpu::Sampler,
+    /// Reads the cloud panorama: wraps round the compass, clamps at the
+    /// horizon and the zenith.
+    panorama_sampler: wgpu::Sampler,
+    /// A clear cloud layer: one texel of (0, 0, 0, 1). Bound wherever a
+    /// frame has no clouds, and as the shadow map with no map in use.
+    no_clouds: wgpu::TextureView,
     /// Group 2 for a frame with no sky: the tables replaced by a black texel
     /// and `sun.w` zero, so the composite keeps one pipeline and one
     /// bind-group layout. Built once — an indoor venue renders this every
@@ -321,7 +387,17 @@ impl AtmospherePipelines {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let aerial = aerial::Pipelines::new(device, queue, &sampler);
+        let panorama_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("atmosphere-clouds"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let no_clouds =
+            placeholder_texture(device, queue, [f16::ZERO, f16::ZERO, f16::ZERO, f16::ONE]);
+        let aerial = aerial::Pipelines::new(device, queue, &sampler, &no_clouds);
         let transmittance = transmittance_table(device, queue);
         let prelude = prelude();
         let common = include_str!("shaders/atmosphere_common.wgsl");
@@ -375,6 +451,8 @@ impl AtmospherePipelines {
                 sampler_entry(1),
                 storage_2d_array(2),
                 uniform_entry(3, wgpu::ShaderStages::COMPUTE),
+                sampled_2d(4),
+                sampler_entry(5),
             ],
         ));
         let cube_pipeline = compute(
@@ -387,6 +465,8 @@ impl AtmospherePipelines {
             ),
         );
 
+        let clouds = cloud_gpu::Pipelines::new(device, queue);
+
         let composite_layout = device.create_bind_group_layout(&layout(
             "atmosphere-composite",
             &[
@@ -394,10 +474,13 @@ impl AtmospherePipelines {
                 sampled_2d(1),
                 sampler_entry(2),
                 uniform_entry(3, wgpu::ShaderStages::FRAGMENT),
+                sampled_2d(4),
+                sampler_entry(5),
+                sampled_2d(6),
             ],
         ));
 
-        let placeholder = placeholder_texture(device, queue);
+        let placeholder = placeholder_texture(device, queue, [f16::ZERO; 4]);
         let off = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("atmosphere-composite-off"),
             layout: &composite_layout,
@@ -409,6 +492,9 @@ impl AtmospherePipelines {
                     3,
                     buffer(device, SkyUniform::of(None), "atmosphere-sky-off").as_entire_binding(),
                 ),
+                binding(4, wgpu::BindingResource::TextureView(&no_clouds)),
+                binding(5, wgpu::BindingResource::Sampler(&sampler)),
+                binding(6, wgpu::BindingResource::TextureView(&no_clouds)),
             ],
         });
         Self {
@@ -420,7 +506,10 @@ impl AtmospherePipelines {
             composite_layout,
             skyview_pipeline,
             cube_pipeline,
+            clouds,
             sampler,
+            panorama_sampler,
+            no_clouds,
             off,
         }
     }
@@ -435,10 +524,19 @@ impl AtmospherePipelines {
 pub(crate) struct AtmosphereCache {
     resident: Option<Resident>,
     aerial: aerial::Cache,
+    clouds: cloud_gpu::Cache,
+    /// This frame's cloud shadow map and its `SkyUniform::shadow`, for the
+    /// aerial volume and the surfaces.
+    shadow: Option<(wgpu::TextureView, [f32; 4])>,
 }
 
 struct Resident {
     sky: SkyFrame,
+    quality: Quality,
+    /// Rewritten each frame with the shadow map's place and the camera.
+    uniform: wgpu::Buffer,
+    skyview: wgpu::TextureView,
+    /// Group 2 with no clouds bound, for a clear sky.
     composite: wgpu::BindGroup,
     probe: (wgpu::TextureView, wgpu::TextureView),
 }
@@ -450,42 +548,122 @@ impl AtmosphereCache {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         sky: Option<&SkyFrame>,
-        height_m: f32,
+        eye_m: Vec3,
         profile: &mut crate::pass_profile::PassQueries<'_>,
     ) -> AerialTextures {
-        self.aerial
-            .prepare(pipelines, device, encoder, sky, height_m, profile)
+        self.aerial.prepare(
+            pipelines,
+            device,
+            encoder,
+            sky,
+            eye_m,
+            self.shadow.as_ref(),
+            profile,
+        )
     }
 
-    /// Bring the sky-view table and the environment probe up to date with
-    /// `sky`, returning the composite's group-2 bindings and, when there is a
-    /// sky, the irradiance and specular cubes the scene pass should use.
+    /// Bring the sky tables and the probe up to date with `sky`, trace this
+    /// frame's clouds, and return the composite's group-2 bindings and, when
+    /// there is a sky, the irradiance and specular cubes the scene pass
+    /// should use.
     ///
-    /// Rebuilds nothing when the sun has not moved: the sky-view table is a
-    /// function of `sky` alone, and a venue render moves the camera far more
-    /// often than the sun.
+    /// The tables and the probe are rebuilt only when the sun, the weather
+    /// or the quality changes: a venue render moves the camera far more
+    /// often than the sun. The clouds are traced every frame, because they
+    /// are seen from the camera.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare(
         &mut self,
         pipelines: &AtmospherePipelines,
         environment: &EnvironmentPipelines,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         sky: Option<&SkyFrame>,
+        input: &CloudFrame,
+        profile: &mut crate::pass_profile::PassQueries<'_>,
     ) -> (
         wgpu::BindGroup,
         Option<(wgpu::TextureView, wgpu::TextureView)>,
     ) {
+        self.shadow = None;
         let Some(sky) = sky else {
             self.resident = None;
             return (pipelines.off.clone(), None);
         };
-        if let Some(resident) = &self.resident {
-            if resident.sky == *sky {
-                return (resident.composite.clone(), Some(resident.probe.clone()));
-            }
+        let quality = input.quality;
+        if self
+            .resident
+            .as_ref()
+            .is_none_or(|resident| resident.sky != *sky || resident.quality != quality)
+        {
+            self.resident =
+                Some(self.tables(pipelines, environment, device, queue, encoder, sky, quality));
         }
+        let resident = self.resident.as_ref().expect("tables resident");
+        let tables = Tables {
+            transmittance: &pipelines.transmittance,
+            multiscatter: &pipelines.multiscatter,
+            skyview: &resident.skyview,
+            sampler: &pipelines.sampler,
+        };
+        let traced = self.clouds.trace(
+            &pipelines.clouds,
+            device,
+            queue,
+            encoder,
+            sky,
+            &tables,
+            &resident.uniform,
+            input,
+            profile,
+        );
+        let mut uniform = SkyUniform::of(Some(sky));
+        uniform.camera = (input.eye * 0.001).extend(0.0).to_array();
+        let Some(traced) = traced else {
+            queue.write_buffer(&resident.uniform, 0, bytemuck::bytes_of(&uniform));
+            return (resident.composite.clone(), Some(resident.probe.clone()));
+        };
+        uniform.shadow = traced.shadow_params;
+        queue.write_buffer(&resident.uniform, 0, bytemuck::bytes_of(&uniform));
+        let composite = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("atmosphere-composite-clouds"),
+            layout: &pipelines.composite_layout,
+            entries: &[
+                binding(
+                    0,
+                    wgpu::BindingResource::TextureView(&pipelines.transmittance),
+                ),
+                binding(1, wgpu::BindingResource::TextureView(&resident.skyview)),
+                binding(2, wgpu::BindingResource::Sampler(&pipelines.sampler)),
+                binding(3, resident.uniform.as_entire_binding()),
+                binding(4, wgpu::BindingResource::TextureView(&traced.view)),
+                binding(5, wgpu::BindingResource::Sampler(&pipelines.sampler)),
+                binding(6, wgpu::BindingResource::TextureView(&traced.shadow)),
+            ],
+        });
+        self.shadow = Some((traced.shadow, traced.shadow_params));
+        (composite, Some(resident.probe.clone()))
+    }
 
-        let uniform = buffer(device, SkyUniform::of(Some(sky)), "atmosphere-sky");
+    /// The sky-view table, the probe and the clear composite bindings for
+    /// one sun, weather and quality.
+    #[allow(clippy::too_many_arguments)]
+    fn tables(
+        &mut self,
+        pipelines: &AtmospherePipelines,
+        environment: &EnvironmentPipelines,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        sky: &SkyFrame,
+        quality: Quality,
+    ) -> Resident {
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("atmosphere-sky"),
+            contents: bytemuck::bytes_of(&SkyUniform::of(Some(sky))),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let skyview_texture = storage_texture(
             device,
             SKYVIEW_WIDTH,
@@ -520,6 +698,25 @@ impl AtmosphereCache {
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(SKYVIEW_WIDTH.div_ceil(8), SKYVIEW_HEIGHT.div_ceil(8), 1);
         }
+        let tables = Tables {
+            transmittance: &pipelines.transmittance,
+            multiscatter: &pipelines.multiscatter,
+            skyview: &skyview,
+            sampler: &pipelines.sampler,
+        };
+        let clouds = self
+            .clouds
+            .panorama(
+                &pipelines.clouds,
+                device,
+                queue,
+                encoder,
+                sky,
+                &tables,
+                &uniform,
+                quality,
+            )
+            .unwrap_or_else(|| pipelines.no_clouds.clone());
 
         // The probe: the same sky, projected onto the cube the environment
         // preprocessing already knows how to convolve. That is the whole of the
@@ -540,6 +737,11 @@ impl AtmosphereCache {
                 binding(1, wgpu::BindingResource::Sampler(&pipelines.sampler)),
                 binding(2, wgpu::BindingResource::TextureView(&raw_target)),
                 binding(3, uniform.as_entire_binding()),
+                binding(4, wgpu::BindingResource::TextureView(&clouds)),
+                binding(
+                    5,
+                    wgpu::BindingResource::Sampler(&pipelines.panorama_sampler),
+                ),
             ],
         });
         {
@@ -564,14 +766,19 @@ impl AtmosphereCache {
                 binding(1, wgpu::BindingResource::TextureView(&skyview)),
                 binding(2, wgpu::BindingResource::Sampler(&pipelines.sampler)),
                 binding(3, uniform.as_entire_binding()),
+                binding(4, wgpu::BindingResource::TextureView(&pipelines.no_clouds)),
+                binding(5, wgpu::BindingResource::Sampler(&pipelines.sampler)),
+                binding(6, wgpu::BindingResource::TextureView(&pipelines.no_clouds)),
             ],
         });
-        self.resident = Some(Resident {
+        Resident {
             sky: *sky,
-            composite: composite.clone(),
-            probe: probe.clone(),
-        });
-        (composite, Some(probe))
+            quality,
+            uniform,
+            skyview,
+            composite,
+            probe,
+        }
     }
 }
 
@@ -688,7 +895,11 @@ fn multiscatter_table(
     view
 }
 
-fn placeholder_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+fn placeholder_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texel: [f16; 4],
+) -> wgpu::TextureView {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("atmosphere-placeholder"),
         size: wgpu::Extent3d {
@@ -710,7 +921,7 @@ fn placeholder_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Text
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &[0; 8],
+        bytemuck::cast_slice(&texel.map(f16::to_bits)),
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(8),

@@ -69,7 +69,8 @@ fn prepare(
         &context.device,
         &mut encoder,
         sky,
-        height,
+        glam::Vec3::new(0.0, 0.0, height),
+        None,
         &mut crate::pass_profile::PassQueries::new(None),
     );
     context.queue.submit([encoder.finish()]);

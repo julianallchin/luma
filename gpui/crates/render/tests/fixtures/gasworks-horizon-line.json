@@ -1,0 +1,8212 @@
+{
+  "version": 1,
+  "exported_at": "20260924T224024Z",
+  "scene": {
+    "venue_id": "346ce3ae-84e9-4c4f-916b-03bf4d115365",
+    "venue_name": "Gasworks Park",
+    "score_id": null,
+    "playhead_s": 0.0
+  },
+  "viewport": {
+    "width": 2039,
+    "height": 1155,
+    "scale_factor": 1.0
+  },
+  "camera": {
+    "eye": [
+      -1.412981,
+      18.204943,
+      5.0797033
+    ],
+    "target": [
+      0.79897004,
+      -1.0792652,
+      4.3438253
+    ],
+    "up": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "fov_y_deg": 50.0,
+    "near": 0.1,
+    "far": 100000.0,
+    "projection_kind": "perspective-reverse-z",
+    "orbit": {
+      "target": [
+        0.79897004,
+        -1.0792652,
+        4.3438253
+      ],
+      "radius": 19.424597,
+      "azimuth": 1.685,
+      "polar": 1.5329034
+    },
+    "view": [
+      -0.99348587,
+      0.0043170713,
+      -0.11387373,
+      0.0,
+      -0.11395553,
+      -0.037637044,
+      0.9927727,
+      0.0,
+      0.0,
+      0.9992822,
+      0.037883826,
+      0.0,
+      0.6707773,
+      -4.3847766,
+      -18.42671,
+      1.0
+    ],
+    "projection": [
+      1.2147647,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      2.1445067,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.000001000001,
+      -1.0,
+      0.0,
+      0.0,
+      0.1000001,
+      0.0
+    ],
+    "view_projection": [
+      -1.2068516,
+      0.009257988,
+      -1.13873845e-7,
+      0.11387373,
+      -0.13842915,
+      -0.08071289,
+      9.927737e-7,
+      -0.9927727,
+      0.0,
+      2.1429672,
+      3.7883865e-8,
+      -0.037883826,
+      0.8148366,
+      -9.403183,
+      0.09998167,
+      18.42671
+    ]
+  },
+  "sun": {
+    "direction": [
+      -0.087102674,
+      0.9955879,
+      0.034899496
+    ],
+    "azimuth_deg": 95.0,
+    "elevation_deg": 2.0,
+    "radiance": [
+      7.4378476,
+      1.918098,
+      0.13874324
+    ],
+    "shadow_eye": [
+      -1.3605872,
+      15.55158,
+      0.54514754
+    ],
+    "shadows": true,
+    "shadow_softness": 1.0
+  },
+  "sky": {
+    "sun_direction": [
+      -0.087102674,
+      0.9955879,
+      0.034899496
+    ],
+    "sun_radiance": [
+      7.4378476,
+      1.918098,
+      0.13874324
+    ],
+    "exposure": 25.298222,
+    "ground_albedo": 0.26
+  },
+  "shadow": {
+    "map_size": 2048,
+    "near": 0.1,
+    "splits": [
+      12.0,
+      45.0,
+      180.0
+    ],
+    "blend": 0.1,
+    "cascades": [
+      {
+        "slice": [
+          0.1,
+          12.0
+        ],
+        "centre": [
+          -0.33947754,
+          4.4257812
+        ],
+        "radius": 12.875,
+        "slice_depth": [
+          -17.327364,
+          -5.1468377
+        ],
+        "caster_depth": -17.327364,
+        "planes": [
+          19.853163,
+          -18.327364
+        ],
+        "light_view": [
+          -0.9961947,
+          0.0030416923,
+          -0.087102674,
+          0.0,
+          -0.08715577,
+          -0.034766693,
+          0.9955879,
+          0.0,
+          0.0,
+          0.9993909,
+          0.034899496,
+          0.0,
+          -0.0,
+          -3.7252903e-9,
+          -1.0000001,
+          1.0
+        ],
+        "view_projection": [
+          -0.07737435,
+          0.00023624794,
+          -0.0022813375,
+          0.0,
+          -0.00676938,
+          -0.0027003256,
+          0.026075803,
+          0.0,
+          0.0,
+          0.07762259,
+          0.0009140653,
+          0.0,
+          0.026367188,
+          -0.34375,
+          0.49379003,
+          1.0
+        ]
+      },
+      {
+        "slice": [
+          12.0,
+          45.0
+        ],
+        "centre": [
+          -0.9369507,
+          4.3724365
+        ],
+        "radius": 45.6875,
+        "slice_depth": [
+          -5.7119102,
+          28.618036
+        ],
+        "caster_depth": -6.2626567,
+        "planes": [
+          53.618034,
+          -7.2626567
+        ],
+        "light_view": [
+          -0.9961947,
+          0.0030416923,
+          -0.087102674,
+          0.0,
+          -0.08715577,
+          -0.034766693,
+          0.9955879,
+          0.0,
+          0.0,
+          0.9993909,
+          0.034899496,
+          0.0,
+          -0.0,
+          -3.7252903e-9,
+          -1.0000001,
+          1.0
+        ],
+        "view_projection": [
+          -0.021804536,
+          0.00006657603,
+          -0.0014307109,
+          0.0,
+          -0.0019076503,
+          -0.0007609673,
+          0.016353097,
+          0.0,
+          0.0,
+          0.021874495,
+          0.00057324406,
+          0.0,
+          0.020507812,
+          -0.09570313,
+          0.8642812,
+          1.0
+        ]
+      },
+      {
+        "slice": [
+          45.0,
+          180.0
+        ],
+        "centre": [
+          -3.2211914,
+          4.115967
+        ],
+        "radius": 183.25,
+        "slice_depth": [
+          26.499012,
+          166.74707
+        ],
+        "caster_depth": -6.2626567,
+        "planes": [
+          191.74707,
+          -7.2626567
+        ],
+        "light_view": [
+          -0.9961947,
+          0.0030416923,
+          -0.087102674,
+          0.0,
+          -0.08715577,
+          -0.034766693,
+          0.9955879,
+          0.0,
+          0.0,
+          0.9993909,
+          0.034899496,
+          0.0,
+          -0.0,
+          -3.7252903e-9,
+          -1.0000001,
+          1.0
+        ],
+        "view_projection": [
+          -0.0054362603,
+          0.000016598593,
+          -0.0004376805,
+          0.0,
+          -0.00047561128,
+          -0.00018972275,
+          0.00500271,
+          0.0,
+          0.0,
+          0.005453702,
+          0.00017536579,
+          0.0,
+          0.017578125,
+          -0.022460938,
+          0.95848113,
+          1.0
+        ]
+      }
+    ]
+  },
+  "haze": {
+    "density": 0.035,
+    "appearance": {
+      "cloudiness": 0.34,
+      "cloudSize": 2.3,
+      "turbulence": 1.0,
+      "windSpeed": 0.15,
+      "windDirection": 71.03
+    },
+    "bounds": {
+      "min": [
+        -19.669151,
+        -21.584576,
+        -8.0
+      ],
+      "max": [
+        19.669151,
+        10.415424,
+        24.0
+      ]
+    },
+    "steps": 8,
+    "resolution": 1.0
+  },
+  "caster_bounds": {
+    "min": [
+      -16.012032,
+      -16.010084,
+      -4.8317685
+    ],
+    "max": [
+      16.012032,
+      7.010251,
+      16.010084
+    ]
+  },
+  "casters": [
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        5.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        4.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        4.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        4.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        4.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        4.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        5.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        5.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        5.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        5.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        5.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.29085,
+        4.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        3.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        3.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        3.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        3.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        3.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        4.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        4.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        4.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        4.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        4.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.6363636,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.0863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.98636365,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.8863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.7863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.6863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.5863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.4863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.38636363,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.2863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -0.18636358,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        11.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        10.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        10.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        10.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        10.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        10.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        11.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        11.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        11.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        11.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        11.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.29085,
+        2.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        1.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        1.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        1.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        1.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        1.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        2.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        2.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        2.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        2.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        2.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.29085,
+        8.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        7.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        7.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        7.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        7.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        7.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        8.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        8.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        8.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        8.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        8.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.29085,
+        10.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        9.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        9.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        9.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        9.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        9.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        10.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        10.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        10.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        10.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        10.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.7272725,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.2772727,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.3772726,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.4772725,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.5772724,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.6772723,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.7772727,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.8772726,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        5.9772725,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.0772724,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.177273,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        3.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        2.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        2.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        2.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        2.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        2.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        3.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        3.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        3.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        3.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        3.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -5.2125,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -5.2128463,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -5.212499,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -4.048611,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -4.048611,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -4.9055767,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -4.9052296,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -4.9055758,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        9.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        8.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        8.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        8.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        8.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        8.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        9.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        9.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        9.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        9.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        9.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        2.4291666,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        2.4291666,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -1.3378847,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -1.3375378,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -1.3378844,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        0.8097223,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        0.80972224,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -3.1217308,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -3.121384,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -3.1217303,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        4.0136538,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        4.014,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        4.013653,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        0.44596153,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        0.44630826,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        0.44596148,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.9090909,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.3590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.259091,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.1590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.0590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.9590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.8590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.7590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.6590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.5590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -1.4590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -4.788428,
+        -8.064548,
+        8.0
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -4.7891498,
+        -8.0,
+        8.0
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        13.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        12.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        12.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        12.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        12.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        12.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        13.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        13.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        13.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        13.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        13.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.79085,
+        5.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        5.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -2.2298076,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -2.2294607,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -2.2298071,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.79085,
+        7.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        7.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -1.0425,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -1.0428467,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -1.0424998,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        3.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        2.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        2.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        2.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        2.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        2.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        3.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        3.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        3.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        3.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        3.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        4.788428,
+        -7.935452,
+        2.7125
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        4.7891498,
+        -8.0,
+        2.7125
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        4.9055767,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        4.905923,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        4.9055758,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        7.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        6.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        6.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        6.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        6.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        6.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        7.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        7.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        7.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        7.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        7.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.0,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.45,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.35,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.25,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.15,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -7.05,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.95,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.85,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.75,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.65,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.55,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        5.2125,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        5.212153,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        5.212499,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.79085,
+        5.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        5.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -0.44596153,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -0.44561476,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -0.44596148,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.4545455,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.0045457,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.1045456,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.2045455,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.3045454,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.4045453,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5045457,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.6045456,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.7045455,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.8045454,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.904546,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.29085,
+        4.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        3.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        3.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        3.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        3.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        3.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        4.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        4.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        4.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        4.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        4.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        4.788428,
+        -7.935452,
+        13.2875
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        4.7891498,
+        -8.0,
+        13.2875
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.79085,
+        7.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        6.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        6.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        6.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        6.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        6.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        7.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        7.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        7.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        7.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5,
+        -7.7498503,
+        7.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -4.0136538,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -4.0133066,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -4.013653,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.0,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.55,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.65,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.75,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.85,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        6.95,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.05,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.15,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.25,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.35,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        7.45,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        7.2875,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        7.2875,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        11.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        10.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        10.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        10.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        10.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        10.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        11.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        11.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        11.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        11.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        11.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        3.1217308,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        3.1220772,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        3.1217303,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.29085,
+        6.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        5.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        5.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        5.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        5.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        5.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        6.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        6.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        6.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        6.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        6.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        7.2975,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        7.297153,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        7.297499,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.1818182,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.6318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.5318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.4318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.331818,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.2318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.1318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -3.0318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.9318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.831818,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -2.7318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        5.6680555,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        5.6680555,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.29085,
+        2.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        1.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        1.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        1.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        1.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        1.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        2.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        2.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        2.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        2.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        2.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        5.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        4.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        4.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        4.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        4.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        4.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        5.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        5.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        5.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        5.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        5.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        13.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        12.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        12.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        12.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        12.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        12.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        13.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        13.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        13.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        13.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        13.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.79085,
+        1.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.6500001
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        1.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -7.2975,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -7.2978463,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -7.297499,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        1.3378847,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        1.3382313,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        1.3378844,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        3.1275,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        3.1271532,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        3.1274996,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.79085,
+        3.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        3.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.29085,
+        8.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        7.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        7.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        7.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        7.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        7.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        8.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        8.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        8.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        8.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        8.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -4.788428,
+        -8.064548,
+        13.2875
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -4.7891498,
+        -8.0,
+        13.2875
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.4545455,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.9045453,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.8045454,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.7045455,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.6045456,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.5045457,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.4045453,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.3045454,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.2045455,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.1045456,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -4.004545,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -7.2875,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -7.2875,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.29085,
+        10.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        9.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        9.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        9.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        9.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        9.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        10.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        10.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        10.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        10.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        8.0,
+        -9.249849,
+        10.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.79085,
+        1.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.6500001
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        11.5,
+        -10.749849,
+        1.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.79085,
+        3.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        3.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.79085,
+        9.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        8.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        8.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        8.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        8.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        8.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        9.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        9.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        9.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        9.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        4.5,
+        -7.7498503,
+        9.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        2.2298076,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        2.230154,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        2.2298071,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.79085,
+        7.5
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -11.5,
+        -10.749849,
+        7.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -2.4291666,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -2.4291666,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.1818182,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.7318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.8318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.9318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.0318184,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.1318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.2318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.3318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.4318182,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.5318184,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        3.6318183,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -0.8097222,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -0.80972224,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        1.0425,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        1.0421531,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        1.0424998,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -4.788428,
+        -8.064548,
+        2.7125
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -4.7891498,
+        -8.0,
+        2.7125
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        5.7975,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        5.7978463,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        5.797499,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.6363636,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.18636364,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.28636363,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.38636363,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.48636365,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.5863637,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.68636364,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.78636366,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.8863636,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        0.98636365,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.0863637,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.7272725,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.1772723,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -6.0772724,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.9772725,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.8772726,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.7772727,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.6772723,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.5772724,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.4772725,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.3772726,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -5.277272,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        4.788428,
+        -7.935452,
+        8.0
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        4.7891498,
+        -8.0,
+        8.0
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        4.048611,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        4.048611,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/strobe.glb#0",
+      "centre": [
+        -5.6680555,
+        -0.2115719,
+        7.233698
+      ],
+      "radius": 0.3565676
+    },
+    {
+      "mesh": "qlc/strobe.glb#1",
+      "centre": [
+        -5.6680555,
+        -0.21085002,
+        7.16915
+      ],
+      "radius": 0.35467136
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -5.7975,
+        -0.49999997,
+        1.3979424
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -5.797153,
+        -0.5,
+        1.5822048
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -5.797499,
+        -0.49997565,
+        1.6655879
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "qlc/moving_head.glb#0",
+      "centre": [
+        -3.1275,
+        -0.49999997,
+        6.9503574
+      ],
+      "radius": 0.2826901
+    },
+    {
+      "mesh": "qlc/moving_head.glb#1",
+      "centre": [
+        -3.1278465,
+        -0.5,
+        6.7660947
+      ],
+      "radius": 0.23871925
+    },
+    {
+      "mesh": "qlc/moving_head.glb#2",
+      "centre": [
+        -3.1274996,
+        -0.49997565,
+        6.6827106
+      ],
+      "radius": 0.19026443
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.9090909,
+        -5.29085,
+        7.16915
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.459091,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.5590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.6590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.7590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.8590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        1.959091,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.0590909,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.159091,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.259091,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        2.3590908,
+        -5.2498503,
+        7.16915
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::housing-box:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.29085,
+        6.0
+      ],
+      "radius": 0.5057914
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        5.55
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        5.65
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        5.75
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        5.85
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        5.95
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        6.05
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        6.15
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        6.25
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        6.35
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "::bar-pixel:Showtec/Showtec-Sunstrip-Active.qxf",
+      "centre": [
+        -8.0,
+        -9.249849,
+        6.45
+      ],
+      "radius": 0.07380548
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/30",
+      "centre": [
+        0.0,
+        -0.5,
+        7.16915
+      ],
+      "radius": 7.510251
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        6.9999995,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        1.5000001,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        1.5000001,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        6.0,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        6.0,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        -6.0,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        -6.0,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -3.5,
+        1.52
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -3.5,
+        1.035
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        1.9999223,
+        -3.5,
+        1.965
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -3.5,
+        2.0149999
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        0.0,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        0.0,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/30",
+      "centre": [
+        0.0,
+        -5.5,
+        7.16915
+      ],
+      "radius": 7.510251
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -9.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/30",
+      "centre": [
+        0.0,
+        -3.0,
+        7.16915
+      ],
+      "radius": 7.510251
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        6.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        6.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        6.0000777,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        6.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        -1.5,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        -1.5,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        3.0,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        3.0,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        9.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/24",
+      "centre": [
+        -8.0,
+        -9.5,
+        6.0
+      ],
+      "radius": 6.0109186
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        11.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        1.0000001,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/5",
+      "centre": [
+        -9.0,
+        -0.5,
+        5.75
+      ],
+      "radius": 1.2734566
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        4.77
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        4.77
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        5.05
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        5.05
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        5.33
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        5.33
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        5.61
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        5.61
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        5.89
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        5.89
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        6.17
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        6.17
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        6.45
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        6.45
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        -9.0,
+        -0.47076657,
+        6.73
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        -8.803268,
+        -0.47076657,
+        6.73
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/24",
+      "centre": [
+        0.0,
+        -0.5,
+        1.17915
+      ],
+      "radius": 6.0109186
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        -4.5,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        -4.5,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        7.4999995,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        7.4999995,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -0.49999994,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -0.49999994,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -0.49999994,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -0.49999994,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -3.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/24",
+      "centre": [
+        8.0,
+        -9.5,
+        6.0
+      ],
+      "radius": 6.0109186
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -5.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        0.0,
+        -3.5,
+        1.52
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        0.0,
+        -3.5,
+        1.035
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -0.00007766485,
+        -3.5,
+        1.965
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        0.0,
+        -3.5,
+        2.0149999
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#0",
+      "centre": [
+        -1.4901161e-8,
+        -3.2935343,
+        2.0651045
+      ],
+      "radius": 0.20794716
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#1",
+      "centre": [
+        0.0,
+        -3.5068834,
+        2.0651667
+      ],
+      "radius": 0.2968198
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#2",
+      "centre": [
+        2.9802322e-8,
+        -3.7026083,
+        2.0651045
+      ],
+      "radius": 0.20849916
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#3",
+      "centre": [
+        -0.008668706,
+        -3.2939603,
+        2.063059
+      ],
+      "radius": 0.108698666
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#4",
+      "centre": [
+        -0.008668706,
+        -3.2941103,
+        2.0558355
+      ],
+      "radius": 0.10627213
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#5",
+      "centre": [
+        0.16546404,
+        -3.2920902,
+        2.0674384
+      ],
+      "radius": 0.0064581544
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#6",
+      "centre": [
+        0.0,
+        -3.4975452,
+        2.1045344
+      ],
+      "radius": 0.29694426
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#7",
+      "centre": [
+        0.0064823776,
+        -3.2941103,
+        2.070283
+      ],
+      "radius": 0.0913697
+    },
+    {
+      "mesh": "stage_lab/mixer_djm_a9.glb#8",
+      "centre": [
+        -0.051578566,
+        -3.4590762,
+        2.0223567
+      ],
+      "radius": 0.14849244
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#0",
+      "centre": [
+        0.4119643,
+        -3.5250432,
+        2.0394688
+      ],
+      "radius": 0.24743226
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#1",
+      "centre": [
+        0.41232836,
+        -3.5263178,
+        2.0471373
+      ],
+      "radius": 0.26639217
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#2",
+      "centre": [
+        0.415,
+        -3.4994738,
+        2.124152
+      ],
+      "radius": 0.29907802
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#3",
+      "centre": [
+        0.415,
+        -3.5254788,
+        2.1155622
+      ],
+      "radius": 0.2728826
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#4",
+      "centre": [
+        0.41499996,
+        -3.3280518,
+        2.0721374
+      ],
+      "radius": 0.17788543
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#5",
+      "centre": [
+        0.30732837,
+        -3.5067136,
+        2.027302
+      ],
+      "radius": 0.10538444
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#6",
+      "centre": [
+        0.5614791,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.0150831025
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#7",
+      "centre": [
+        0.5614791,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.011757978
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#8",
+      "centre": [
+        0.5614791,
+        -3.6564336,
+        2.1319728
+      ],
+      "radius": 0.009848861
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#9",
+      "centre": [
+        0.41255796,
+        -3.3496318,
+        2.149152
+      ],
+      "radius": 0.15804411
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#10",
+      "centre": [
+        0.41255796,
+        -3.2612197,
+        2.1713314
+      ],
+      "radius": 0.12738043
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#0",
+      "centre": [
+        -0.4180357,
+        -3.5250432,
+        2.0394688
+      ],
+      "radius": 0.24743226
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#1",
+      "centre": [
+        -0.4176716,
+        -3.5263178,
+        2.0471373
+      ],
+      "radius": 0.26639217
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#2",
+      "centre": [
+        -0.41499996,
+        -3.4994738,
+        2.124152
+      ],
+      "radius": 0.29907802
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#3",
+      "centre": [
+        -0.41499996,
+        -3.5254788,
+        2.1155622
+      ],
+      "radius": 0.2728826
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#4",
+      "centre": [
+        -0.415,
+        -3.3280518,
+        2.0721374
+      ],
+      "radius": 0.17788543
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#5",
+      "centre": [
+        -0.5226716,
+        -3.5067136,
+        2.027302
+      ],
+      "radius": 0.10538444
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#6",
+      "centre": [
+        -0.2685209,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.0150831025
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#7",
+      "centre": [
+        -0.2685209,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.011757978
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#8",
+      "centre": [
+        -0.2685209,
+        -3.6564336,
+        2.1319728
+      ],
+      "radius": 0.009848861
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#9",
+      "centre": [
+        -0.41744202,
+        -3.3496318,
+        2.149152
+      ],
+      "radius": 0.15804411
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#10",
+      "centre": [
+        -0.41744202,
+        -3.2612197,
+        2.1713314
+      ],
+      "radius": 0.12738043
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#0",
+      "centre": [
+        0.79496425,
+        -3.5250432,
+        2.0394688
+      ],
+      "radius": 0.24743226
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#1",
+      "centre": [
+        0.7953284,
+        -3.5263178,
+        2.0471373
+      ],
+      "radius": 0.26639217
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#2",
+      "centre": [
+        0.798,
+        -3.4994738,
+        2.124152
+      ],
+      "radius": 0.29907802
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#3",
+      "centre": [
+        0.798,
+        -3.5254788,
+        2.1155622
+      ],
+      "radius": 0.2728826
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#4",
+      "centre": [
+        0.798,
+        -3.3280518,
+        2.0721374
+      ],
+      "radius": 0.17788543
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#5",
+      "centre": [
+        0.69032836,
+        -3.5067136,
+        2.027302
+      ],
+      "radius": 0.10538444
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#6",
+      "centre": [
+        0.94447905,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.0150831025
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#7",
+      "centre": [
+        0.94447905,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.011757978
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#8",
+      "centre": [
+        0.94447905,
+        -3.6564336,
+        2.1319728
+      ],
+      "radius": 0.009848861
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#9",
+      "centre": [
+        0.7955579,
+        -3.3496318,
+        2.149152
+      ],
+      "radius": 0.15804411
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#10",
+      "centre": [
+        0.7955579,
+        -3.2612197,
+        2.1713314
+      ],
+      "radius": 0.12738043
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#0",
+      "centre": [
+        -0.8010357,
+        -3.5250432,
+        2.0394688
+      ],
+      "radius": 0.24743226
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#1",
+      "centre": [
+        -0.8006716,
+        -3.5263178,
+        2.0471373
+      ],
+      "radius": 0.26639217
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#2",
+      "centre": [
+        -0.798,
+        -3.4994738,
+        2.124152
+      ],
+      "radius": 0.29907802
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#3",
+      "centre": [
+        -0.798,
+        -3.5254788,
+        2.1155622
+      ],
+      "radius": 0.2728826
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#4",
+      "centre": [
+        -0.798,
+        -3.3280518,
+        2.0721374
+      ],
+      "radius": 0.17788543
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#5",
+      "centre": [
+        -0.9056716,
+        -3.5067136,
+        2.027302
+      ],
+      "radius": 0.10538444
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#6",
+      "centre": [
+        -0.6515209,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.0150831025
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#7",
+      "centre": [
+        -0.6515209,
+        -3.6564336,
+        2.1244729
+      ],
+      "radius": 0.011757978
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#8",
+      "centre": [
+        -0.6515209,
+        -3.6564336,
+        2.1319728
+      ],
+      "radius": 0.009848861
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#9",
+      "centre": [
+        -0.80044204,
+        -3.3496318,
+        2.149152
+      ],
+      "radius": 0.15804411
+    },
+    {
+      "mesh": "stage_lab/cdj_3000x.glb#10",
+      "centre": [
+        -0.80044204,
+        -3.2612197,
+        2.1713314
+      ],
+      "radius": 0.12738043
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -1.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -6.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -6.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -5.9999223,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -6.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        2.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        2.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        2.0000777,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        2.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/18",
+      "centre": [
+        -11.5,
+        -11.0,
+        4.5
+      ],
+      "radius": 4.512031
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        -3.0,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        -3.0,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -1.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -1.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -1.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -1.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        5.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/18",
+      "centre": [
+        11.5,
+        -11.0,
+        4.5
+      ],
+      "radius": 4.512031
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -2.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -2.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -2.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -2.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/12",
+      "centre": [
+        -7.5,
+        -3.0,
+        7.16915
+      ],
+      "radius": 3.0142496
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -3.5,
+        1.52
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -3.5,
+        1.035
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -2.0000777,
+        -3.5,
+        1.965
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -3.5,
+        2.0149999
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        4.0,
+        -3.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        4.0,
+        -3.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        4.0000777,
+        -3.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        4.0,
+        -3.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -4.0,
+        -5.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -4.0,
+        -5.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -3.9999223,
+        -5.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -4.0,
+        -5.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        3.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "procedural/truss/12",
+      "centre": [
+        7.5,
+        -3.0,
+        7.16915
+      ],
+      "radius": 3.0142496
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -11.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        5.9604645e-8,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        5.9604645e-8,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        0.00007778406,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        5.9604645e-8,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/32",
+      "centre": [
+        -4.5,
+        -8.0,
+        8.0
+      ],
+      "radius": 8.010084
+    },
+    {
+      "mesh": "procedural/truss/32",
+      "centre": [
+        4.5,
+        -8.0,
+        8.0
+      ],
+      "radius": 8.010084
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        4.5,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        4.5,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#0",
+      "centre": [
+        -7.5,
+        1.5000001,
+        0.28025
+      ],
+      "radius": 0.78943187
+    },
+    {
+      "mesh": "stage_lab/speaker_dual18sub.glb#1",
+      "centre": [
+        -7.5,
+        1.5075206,
+        0.28550002
+      ],
+      "radius": 0.7842552
+    },
+    {
+      "mesh": "stage_lab/guardrail.glb#0",
+      "centre": [
+        -7.0,
+        3.0,
+        0.49998632
+      ],
+      "radius": 1.1432666
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#0",
+      "centre": [
+        -2.0,
+        -4.5,
+        0.51
+      ],
+      "radius": 1.2247449
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#1",
+      "centre": [
+        -2.0,
+        -4.5,
+        0.025
+      ],
+      "radius": 1.0848387
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#2",
+      "centre": [
+        -1.9999223,
+        -4.5,
+        0.95500004
+      ],
+      "radius": 0.47225693
+    },
+    {
+      "mesh": "stage_lab/stage_praticavel_2x1x1.glb#3",
+      "centre": [
+        -2.0,
+        -4.5,
+        1.005
+      ],
+      "radius": 1.1113393
+    },
+    {
+      "mesh": "procedural/truss/5",
+      "centre": [
+        9.0,
+        -0.5,
+        5.75
+      ],
+      "radius": 1.2734566
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        4.77
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        4.77
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        5.05
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        5.05
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        5.33
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        5.33
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        5.61
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        5.61
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        5.89
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        5.89
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        6.17
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        6.17
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        6.45
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        6.45
+      ],
+      "radius": 0.43324164
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#0",
+      "centre": [
+        9.0,
+        -0.47076657,
+        6.73
+      ],
+      "radius": 0.50777054
+    },
+    {
+      "mesh": "stage_lab/speaker_jbl_vtx_v20.glb#1",
+      "centre": [
+        9.196732,
+        -0.47076657,
+        6.73
+      ],
+      "radius": 0.43324164
+    }
+  ],
+  "quality": "High",
+  "debug_view": "Pbr"
+}

@@ -150,8 +150,10 @@ pub struct Sky {
     pub sun_radiance: [f32; 3],
     /// Display exposure.
     pub exposure: f32,
-    /// Ground albedo of the sky table.
-    pub ground_albedo: f32,
+    /// Ground albedo of the sky table, linear RGB: the floor's mean colour.
+    /// Files written before it was a colour hold one number, read as grey.
+    #[serde(deserialize_with = "crate::scene_desc::albedo_rgb")]
+    pub ground_albedo: [f32; 3],
 }
 
 /// The sun's cascaded shadow map for this frame.
@@ -329,7 +331,7 @@ impl CameraExport {
                 sun_direction: sky.sun_direction.to_array(),
                 sun_radiance: sky.sun_radiance.to_array(),
                 exposure: sky.exposure,
-                ground_albedo: sky.ground_albedo,
+                ground_albedo: sky.ground_albedo.to_array(),
             }),
             shadow: ShadowState {
                 map_size: SHADOW_SIZE,

@@ -1,0 +1,88 @@
+{
+  "grass": {
+    "source": "ambientCG", "asset": "Grass004", "url": "https://ambientcg.com/view?id=Grass004",
+    "albedo": 0.12, "desaturate": 0.25, "mean_rgb": [0.1087, 0.1305, 0.0444],
+    "max_rotation_deg": 180, "rotation_why": "Top-down blades face every way: isotropic.",
+    "tints": [[1.3, 1.18, 0.72], [0.72, 0.9, 0.66]], "min_roughness": 0.9, "tile_m": 1.4, "parallax_m": 0.0, "unevenness": 0.35, "variation": 0.8,
+    "transition": "mud", "transition_share": 0.08
+  },
+  "dirt": {
+    "source": "ambientCG", "asset": "Ground072", "url": "https://ambientcg.com/view?id=Ground072",
+    "albedo": 0.13, "desaturate": 0.0, "mean_rgb": [0.1905, 0.1189, 0.0612],
+    "max_rotation_deg": 180, "rotation_why": "Packed earth with straw lying every way: isotropic.",
+    "tints": [[0.62, 0.6, 0.58], [1.2, 1.14, 1.04]], "min_roughness": 0.85, "tile_m": 1.75, "parallax_m": 0.02, "unevenness": 0.3, "variation": 0.7,
+    "transition": "moss", "transition_share": 0.1
+  },
+  "fine_sand": {
+    "source": "Poly Haven", "asset": "playground_sand", "url": "https://polyhaven.com/a/playground_sand",
+    "albedo": 0.28, "desaturate": 0.0, "mean_rgb": [0.3783, 0.2678, 0.1198],
+    "max_rotation_deg": 180, "rotation_why": "Trodden sand pits, no direction.",
+    "tints": [[0.74, 0.71, 0.68], [1.12, 1.1, 1.05]], "min_roughness": 0.9, "tile_m": 2.07, "parallax_m": 0.01, "unevenness": 0.2, "variation": 0.6
+  },
+  "beach": {
+    "source": "ambientCG", "asset": "Ground055L", "url": "https://ambientcg.com/view?id=Ground055L",
+    "albedo": 0.35, "desaturate": 0.0, "mean_rgb": [0.3838, 0.3517, 0.2461],
+    "max_rotation_deg": 0, "rotation_why": "Wind ripples run one way; turned copies point them anew in every cell.",
+    "tints": [[0.7, 0.67, 0.62], [1.12, 1.1, 1.06]], "min_roughness": 0.9, "tile_m": 3.0, "parallax_m": 0.015, "unevenness": 0.2, "variation": 0.5
+  },
+  "gravelly_sand": {
+    "source": "Poly Haven", "asset": "gravelly_sand", "url": "https://polyhaven.com/a/gravelly_sand",
+    "albedo": 0.26, "desaturate": 0.0, "mean_rgb": [0.4126, 0.2299, 0.1092],
+    "max_rotation_deg": 180, "rotation_why": "Grains and small stones, no direction.",
+    "tints": [[0.74, 0.71, 0.68], [1.12, 1.1, 1.05]], "min_roughness": 0.85, "tile_m": 2.48, "parallax_m": 0.015, "unevenness": 0.25, "variation": 0.6
+  },
+  "asphalt": {
+    "source": "ambientCG", "asset": "Asphalt020L", "url": "https://ambientcg.com/view?id=Asphalt020L",
+    "albedo": 0.09, "desaturate": 0.0, "mean_rgb": [0.089, 0.091, 0.0825],
+    "max_rotation_deg": 180, "rotation_why": "Even aggregate, no streaks or roller marks in the maps.",
+    "tints": [[0.68, 0.68, 0.7], [1.35, 1.32, 1.28]], "min_roughness": 0.8, "tile_m": 4.6, "parallax_m": 0.0, "unevenness": 0.1, "variation": 0.6
+  },
+  "concrete": {
+    "source": "Poly Haven", "asset": "concrete_floor_worn_001", "url": "https://polyhaven.com/a/concrete_floor_worn_001",
+    "albedo": 0.28, "desaturate": 0.0, "mean_rgb": [0.2787, 0.284, 0.2634],
+    "max_rotation_deg": 0, "rotation_why": "The scan has straight form strips and scratches running one way.",
+    "tints": [[0.72, 0.7, 0.66], [1.12, 1.12, 1.1]], "min_roughness": 0.7, "tile_m": 3.0, "parallax_m": 0.0, "unevenness": 0.08, "variation": 0.6
+  },
+  "gravel": {
+    "source": "Poly Haven", "asset": "gravel_floor_02", "url": "https://polyhaven.com/a/gravel_floor_02",
+    "albedo": 0.22, "desaturate": 0.0, "mean_rgb": [0.2313, 0.22, 0.1899],
+    "max_rotation_deg": 180, "rotation_why": "Loose stones, no direction.",
+    "tints": [[0.78, 0.77, 0.76], [1.14, 1.12, 1.08]], "min_roughness": 0.85, "tile_m": 2.0, "parallax_m": 0.025, "unevenness": 0.3, "variation": 0.55
+  },
+  "stage_deck": {
+    "source": "ambientCG", "asset": "WoodFloor041", "url": "https://ambientcg.com/view?id=WoodFloor041",
+    "albedo": 0.10, "desaturate": 0.25, "mean_rgb": [0.1299, 0.0948, 0.0646],
+    "max_rotation_deg": 0, "rotation_why": "Planks: not hex tiled at all.",
+    "tints": [[0.85, 0.83, 0.8], [1.12, 1.1, 1.06]], "hex": false, "min_roughness": 0.55, "tile_m": 1.9, "parallax_m": 0.0, "unevenness": 0.03, "variation": 0.15
+  },
+  "hall_floor": {
+    "source": "Poly Haven", "asset": "wood_floor", "url": "https://polyhaven.com/a/wood_floor",
+    "albedo": 0.22, "desaturate": 0.0, "mean_rgb": [0.356, 0.1924, 0.0911],
+    "max_rotation_deg": 0, "rotation_why": "Planks: not hex tiled at all.",
+    "tints": [[0.88, 0.85, 0.8], [1.1, 1.08, 1.04]], "hex": false, "min_roughness": 0.35, "tile_m": 1.7, "parallax_m": 0.0, "unevenness": 0.03, "variation": 0.15
+  },
+  "black_stage": {
+    "source": "ambientCG", "asset": "Rubber004", "url": "https://ambientcg.com/view?id=Rubber004",
+    "albedo": 0.035, "desaturate": 0.0, "mean_rgb": [0.0326, 0.0346, 0.0442],
+    "max_rotation_deg": 180, "rotation_why": "Fine rubber grain, no direction.",
+    "tints": [[0.85, 0.85, 0.85], [1.25, 1.25, 1.25]], "min_roughness": 0.65, "tile_m": 0.75, "parallax_m": 0.0, "unevenness": 0.03, "variation": 0.1
+  },
+  "carpet": {
+    "source": "ambientCG", "asset": "Carpet012", "url": "https://ambientcg.com/view?id=Carpet012",
+    "albedo": 0.05, "desaturate": 0.25, "mean_rgb": [0.0444, 0.0505, 0.0646],
+    "max_rotation_deg": 0, "rotation_why": "Loop pile runs in rows; a carpet is laid one way.",
+    "tints": [[0.88, 0.88, 0.9], [1.1, 1.1, 1.1]], "min_roughness": 0.95, "tile_m": 1.0, "parallax_m": 0.0, "unevenness": 0.1, "variation": 0.1
+  },
+  "moss": {
+    "source": "ambientCG", "asset": "Ground037", "url": "https://ambientcg.com/view?id=Ground037",
+    "albedo": 0.10, "desaturate": 0.0, "mean_rgb": [0.111, 0.1026, 0.0387],
+    "max_rotation_deg": 180, "rotation_why": "Moss and grass tufts, no direction.",
+    "tile_m": 2.1
+  },
+  "mud": {
+    "source": "Poly Haven", "asset": "brown_mud_leaves_01", "url": "https://polyhaven.com/a/brown_mud_leaves_01",
+    "albedo": 0.09, "desaturate": 0.0, "mean_rgb": [0.1198, 0.0866, 0.0335],
+    "max_rotation_deg": 180, "rotation_why": "Mud with sprouts, no direction.",
+    "tile_m": 1.3
+  }
+}

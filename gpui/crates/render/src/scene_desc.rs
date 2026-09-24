@@ -611,10 +611,13 @@ pub struct SkyParams {
     pub sun_elevation_deg: f32,
     /// Degrees counter-clockwise from world +X.
     pub sun_azimuth_deg: f32,
-    /// Albedo of the ground the sky bounces sunlight off, 0 to 1. It is what
-    /// fills the sky below the horizon, where a venue's floor dissolves into
-    /// the background.
-    pub ground_albedo: f32,
+    /// Albedo of the ground the sky bounces sunlight off, linear RGB, 0 to
+    /// 1: the floor's mean colour. It is what fills the sky below the
+    /// horizon, where a venue's floor dissolves into the background, and
+    /// what the ambient light bounces up off the ground. A single number,
+    /// as older descriptors hold, is read as grey.
+    #[serde(deserialize_with = "albedo_rgb")]
+    pub ground_albedo: [f32; 3],
     /// Display exposure, or `None` for the elevation-fitted default.
     ///
     /// The default is the honest answer for almost every frame: dusk to noon is
@@ -623,6 +626,24 @@ pub struct SkyParams {
     /// match another at a different hour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposure: Option<f32>,
+    /// The cloud layer over the venue. Omitted when clear, so a descriptor
+    /// written before clouds existed serializes unchanged.
+    #[serde(default, skip_serializing_if = "CloudCover::is_clear")]
+    pub clouds: CloudCover,
+}
+
+/// An RGB albedo, or a single number for a grey one.
+pub(crate) fn albedo_rgb<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[f32; 3], D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Albedo {
+        Grey(f32),
+        Rgb([f32; 3]),
+    }
+    Ok(match Albedo::deserialize(deserializer)? {
+        Albedo::Grey(value) => [value; 3],
+        Albedo::Rgb(rgb) => rgb,
+    })
 }
 
 impl SkyParams {
@@ -642,8 +663,9 @@ impl SkyParams {
     pub const DUSK: Self = Self {
         sun_elevation_deg: 4.0,
         sun_azimuth_deg: 270.0 - Self::DEFAULT_OFFSET_DEG,
-        ground_albedo: 0.1,
+        ground_albedo: [0.1; 3],
         exposure: None,
+        clouds: CloudCover::Clear,
     };
 
     /// The sky for an open-air venue whose sun is `elevation_deg` up and
@@ -685,6 +707,198 @@ pub fn wrap_azimuth(deg: f32) -> f32 {
     }
 }
 
+/// The cloud layer over an open-air venue: one of five skies.
+///
+/// A preset rather than dials, for the same reason [`SkyParams`] is two
+/// angles: coverage, thickness, altitude and darkness are one weather, and
+/// dials for each could be set to a sky nobody has seen. `crate::atmosphere`
+/// turns each into a layer, and the same layer dims the sun, greys the
+/// ambient and fills the background, so the three cannot disagree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloudCover {
+    /// No clouds: the sky this app has always drawn.
+    #[default]
+    Clear,
+    /// Small separate cumulus with blue sky between them.
+    FairWeather,
+    /// High, thin cirrus streaks: the sun shines through them.
+    Wispy,
+    /// Large cumulus over about half the sky; they can cover the sun.
+    Scattered,
+    /// One unbroken grey layer. The light is soft and has almost no shadow.
+    Overcast,
+    /// A thick, dark, low layer under a dim sky.
+    Storm,
+}
+
+impl CloudCover {
+    /// Every preset, clearest first: the order the editor offers them in.
+    pub const ALL: [Self; 6] = [
+        Self::Clear,
+        Self::FairWeather,
+        Self::Wispy,
+        Self::Scattered,
+        Self::Overcast,
+        Self::Storm,
+    ];
+
+    /// Whether this is [`Self::Clear`]; serde's skip test.
+    #[must_use]
+    pub fn is_clear(&self) -> bool {
+        *self == Self::Clear
+    }
+
+    /// The name the editor shows, in sentence case.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clear => "Clear",
+            Self::FairWeather => "Fair weather",
+            Self::Wispy => "Wispy",
+            Self::Scattered => "Scattered",
+            Self::Overcast => "Overcast",
+            Self::Storm => "Storm",
+        }
+    }
+}
+
+/// The ground a venue stands on: one of a few real materials.
+///
+/// Venue truth, like [`CloudCover`]: it sits on the venue's environment
+/// record. Each is a scanned or procedural CC0 material set
+/// (`resources/meshes/floors`), drawn by [`crate::floor`]. An open-air venue
+/// offers the ground kinds and a room offers floor coverings; concrete is
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Floor {
+    /// A lawn.
+    Grass,
+    /// Trodden earth with straw, patched with mud.
+    Dirt,
+    /// Fine, even sand.
+    FineSand,
+    /// A beach: pale dry sand with fine wind ripples.
+    Beach,
+    /// Coarse orange sand with grit.
+    GravellySand,
+    /// A car park or road.
+    Asphalt,
+    /// Worn concrete, indoors or out.
+    Concrete,
+    /// Fine grey gravel.
+    Gravel,
+    /// Dark, worn stage planks.
+    StageDeck,
+    /// Varnished hall floorboards.
+    HallFloor,
+    /// Matte black dance floor.
+    BlackStage,
+    /// Plain dark loop-pile carpet.
+    Carpet,
+}
+
+impl Floor {
+    /// The floors an open-air venue offers, in the editor's order.
+    pub const OUTDOOR: [Self; 8] = [
+        Self::Grass,
+        Self::Dirt,
+        Self::FineSand,
+        Self::Beach,
+        Self::GravellySand,
+        Self::Asphalt,
+        Self::Concrete,
+        Self::Gravel,
+    ];
+
+    /// The floors a room offers, in the editor's order.
+    pub const INDOOR: [Self; 5] = [
+        Self::Concrete,
+        Self::StageDeck,
+        Self::HallFloor,
+        Self::BlackStage,
+        Self::Carpet,
+    ];
+
+    /// The floors a venue of this kind offers.
+    #[must_use]
+    pub fn options(indoor: bool) -> &'static [Self] {
+        if indoor {
+            &Self::INDOOR
+        } else {
+            &Self::OUTDOOR
+        }
+    }
+
+    /// What a venue of this kind stands on until someone chooses: the
+    /// nearest to the floor it had before floors existed. Indoors that was
+    /// black paint; outdoors a plain grey ground.
+    #[must_use]
+    pub fn default_for(indoor: bool) -> Self {
+        if indoor {
+            Self::BlackStage
+        } else {
+            Self::Concrete
+        }
+    }
+
+    fn is_indoor_default(&self) -> bool {
+        *self == Self::default_for(true)
+    }
+
+    fn is_outdoor_default(&self) -> bool {
+        *self == Self::default_for(false)
+    }
+
+    fn indoor_default() -> Self {
+        Self::default_for(true)
+    }
+
+    fn outdoor_default() -> Self {
+        Self::default_for(false)
+    }
+
+    /// The name the editor shows, in sentence case.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grass => "Grass",
+            Self::Dirt => "Dirt",
+            Self::FineSand => "Fine sand",
+            Self::Beach => "Beach",
+            Self::GravellySand => "Gravelly sand",
+            Self::Asphalt => "Asphalt",
+            Self::Concrete => "Concrete",
+            Self::Gravel => "Gravel",
+            Self::StageDeck => "Stage deck",
+            Self::HallFloor => "Hall floor",
+            Self::BlackStage => "Black stage floor",
+            Self::Carpet => "Carpet",
+        }
+    }
+
+    /// The material set's directory under `resources/meshes/floors`, and its
+    /// key in that directory's `floors.json`.
+    #[must_use]
+    pub fn set(self) -> &'static str {
+        match self {
+            Self::Grass => "grass",
+            Self::Dirt => "dirt",
+            Self::FineSand => "fine_sand",
+            Self::Beach => "beach",
+            Self::GravellySand => "gravelly_sand",
+            Self::Asphalt => "asphalt",
+            Self::Concrete => "concrete",
+            Self::Gravel => "gravel",
+            Self::StageDeck => "stage_deck",
+            Self::HallFloor => "hall_floor",
+            Self::BlackStage => "black_stage",
+            Self::Carpet => "carpet",
+        }
+    }
+}
+
 /// What kind of room a venue is, and the one dial that mode has.
 ///
 /// This is **venue truth**, not a render dial: it sits on the venue record
@@ -710,6 +924,13 @@ pub enum VenueEnvironment {
         /// How far up the house lights are.
         #[serde(rename = "houseLevel")]
         house_level: f32,
+        /// The floor. A record written before floors existed, or one on
+        /// the default, has no key.
+        #[serde(
+            default = "Floor::indoor_default",
+            skip_serializing_if = "Floor::is_indoor_default"
+        )]
+        floor: Floor,
     },
     /// Open air. `sun_elevation_deg` is the time of day: -90 (midnight) to
     /// 90 (overhead).
@@ -724,13 +945,23 @@ pub enum VenueEnvironment {
         /// existed reads as [`SkyParams::DUSK`]'s.
         #[serde(rename = "sunAzimuthDeg", default = "dusk_azimuth")]
         sun_azimuth_deg: f32,
+        /// The sky's cloud cover. A record written before clouds existed,
+        /// or one that is clear, has no key: clear is the sky it always had.
+        #[serde(default, skip_serializing_if = "CloudCover::is_clear")]
+        clouds: CloudCover,
+        /// The ground, as [`Self::Indoor`]'s floor.
+        #[serde(
+            default = "Floor::outdoor_default",
+            skip_serializing_if = "Floor::is_outdoor_default"
+        )]
+        floor: Floor,
     },
 }
 
 impl Default for VenueEnvironment {
     /// Indoor, house at full: the picture this app has always drawn.
     fn default() -> Self {
-        Self::Indoor { house_level: 1.0 }
+        Self::indoor(1.0)
     }
 }
 
@@ -740,6 +971,7 @@ impl VenueEnvironment {
     pub fn indoor(level: f32) -> Self {
         Self::Indoor {
             house_level: level.clamp(0.0, 1.0),
+            floor: Floor::default_for(true),
         }
     }
 
@@ -750,6 +982,8 @@ impl VenueEnvironment {
         Self::Outdoor {
             sun_elevation_deg: deg.clamp(-90.0, 90.0),
             sun_azimuth_deg: SkyParams::DUSK.sun_azimuth_deg,
+            clouds: CloudCover::Clear,
+            floor: Floor::default_for(false),
         }
     }
 
@@ -760,11 +994,86 @@ impl VenueEnvironment {
         match self {
             Self::Indoor { .. } => self,
             Self::Outdoor {
-                sun_elevation_deg, ..
+                sun_elevation_deg,
+                clouds,
+                floor,
+                ..
             } => Self::Outdoor {
                 sun_elevation_deg,
                 sun_azimuth_deg: wrap_azimuth(deg),
+                clouds,
+                floor,
             },
+        }
+    }
+
+    /// The same room under `clouds`. Indoors there is no sky, so an indoor
+    /// room is returned unchanged.
+    #[must_use]
+    pub fn with_clouds(self, clouds: CloudCover) -> Self {
+        match self {
+            Self::Indoor { .. } => self,
+            Self::Outdoor {
+                sun_elevation_deg,
+                sun_azimuth_deg,
+                floor,
+                ..
+            } => Self::Outdoor {
+                sun_elevation_deg,
+                sun_azimuth_deg,
+                clouds,
+                floor,
+            },
+        }
+    }
+
+    /// The same room on `floor`, or unchanged when this kind of venue does
+    /// not offer it.
+    #[must_use]
+    pub fn with_floor(self, floor: Floor) -> Self {
+        if !Floor::options(self.is_indoor()).contains(&floor) {
+            return self;
+        }
+        match self {
+            Self::Indoor { house_level, .. } => Self::Indoor { house_level, floor },
+            Self::Outdoor {
+                sun_elevation_deg,
+                sun_azimuth_deg,
+                clouds,
+                ..
+            } => Self::Outdoor {
+                sun_elevation_deg,
+                sun_azimuth_deg,
+                clouds,
+                floor,
+            },
+        }
+    }
+
+    /// The floor, always one this kind of venue offers: a record that names
+    /// another reads as the default.
+    #[must_use]
+    pub fn floor(self) -> Floor {
+        let floor = match self {
+            Self::Indoor { floor, .. } | Self::Outdoor { floor, .. } => floor,
+        };
+        if Floor::options(self.is_indoor()).contains(&floor) {
+            floor
+        } else {
+            Floor::default_for(self.is_indoor())
+        }
+    }
+
+    fn is_indoor(self) -> bool {
+        matches!(self, Self::Indoor { .. })
+    }
+
+    /// The sky's cloud cover, or [`CloudCover::Clear`] indoors.
+    #[must_use]
+    pub fn clouds(self) -> CloudCover {
+        match self {
+            Self::Indoor { .. } => CloudCover::Clear,
+            Self::Outdoor { clouds, .. } => clouds,
         }
     }
 
@@ -772,7 +1081,7 @@ impl VenueEnvironment {
     #[must_use]
     pub fn house_level(self) -> f32 {
         match self {
-            Self::Indoor { house_level } => {
+            Self::Indoor { house_level, .. } => {
                 if house_level.is_finite() {
                     house_level.clamp(0.0, 1.0)
                 } else {
@@ -1869,6 +2178,59 @@ mod tests {
     }
 
     #[test]
+    fn clouds_round_trip_and_a_clear_sky_writes_no_key() {
+        let clear = VenueEnvironment::outdoor(12.0).with_sun_azimuth(95.0);
+        assert!(
+            !clear.to_record().contains("clouds"),
+            "{}",
+            clear.to_record()
+        );
+        for clouds in CloudCover::ALL {
+            let environment = clear.with_clouds(clouds);
+            assert_eq!(VenueEnvironment::from(environment.to_record()), environment);
+            assert_eq!(environment.clouds(), clouds);
+        }
+        // Changing the sun keeps the weather.
+        let storm = clear.with_clouds(CloudCover::Storm);
+        assert_eq!(storm.with_sun_azimuth(10.0).clouds(), CloudCover::Storm);
+        // Indoors there is no sky to cloud.
+        let indoor = VenueEnvironment::indoor(0.5);
+        assert_eq!(indoor.with_clouds(CloudCover::Storm), indoor);
+        assert_eq!(indoor.clouds(), CloudCover::Clear);
+    }
+
+    #[test]
+    fn floors_round_trip_per_kind_of_venue_and_the_default_writes_no_key() {
+        for indoor in [true, false] {
+            let room = if indoor {
+                VenueEnvironment::indoor(0.5)
+            } else {
+                VenueEnvironment::outdoor(12.0).with_clouds(CloudCover::Storm)
+            };
+            assert_eq!(room.floor(), Floor::default_for(indoor));
+            assert!(!room.to_record().contains("floor"), "{}", room.to_record());
+            for &floor in Floor::options(indoor) {
+                let chosen = room.with_floor(floor);
+                assert_eq!(VenueEnvironment::from(chosen.to_record()), chosen);
+                assert_eq!(chosen.floor(), floor);
+            }
+        }
+        // A room offers no grass, and an open-air venue no carpet.
+        let indoor = VenueEnvironment::indoor(0.5);
+        assert_eq!(indoor.with_floor(Floor::Grass), indoor);
+        let outdoor = VenueEnvironment::outdoor(12.0).with_floor(Floor::Gravel);
+        assert_eq!(outdoor.with_floor(Floor::Carpet), outdoor);
+        // Moving the sun and changing the weather keep the ground.
+        let moved = outdoor
+            .with_sun_azimuth(10.0)
+            .with_clouds(CloudCover::Storm);
+        assert_eq!(moved.floor(), Floor::Gravel);
+        // Records from before floors existed read as the default.
+        let old = VenueEnvironment::from(String::from(r#"{"mode":"indoor","houseLevel":0.3}"#));
+        assert_eq!(old.floor(), Floor::BlackStage);
+    }
+
+    #[test]
     fn a_record_without_an_azimuth_reads_the_dusk_default() {
         let old = String::from(r#"{"mode":"outdoor","sunElevationDeg":20.0}"#);
         let environment = VenueEnvironment::from(old);
@@ -1895,6 +2257,8 @@ mod tests {
         let stored = VenueEnvironment::Outdoor {
             sun_elevation_deg: 10.0,
             sun_azimuth_deg: 725.0,
+            clouds: CloudCover::Clear,
+            floor: Floor::Concrete,
         };
         assert_eq!(stored.sun_azimuth_deg(), 5.0);
         // Indoors there is no sun to turn.

@@ -275,7 +275,8 @@ impl WgpuContext {
         //
         // The renderer also needs the adapter's storage-buffer limits, as
         // `luma_render::device` asks for its own device. The scene pass binds
-        // more than the default eight storage buffers per stage.
+        // more than the default eight storage buffers and sixteen sampled
+        // textures per stage.
         #[cfg(not(target_family = "wasm"))]
         let required_limits = {
             let wanted = wgpu::Limits::default()
@@ -288,6 +289,8 @@ impl WgpuContext {
                     max_buffer_size: limits.max_buffer_size,
                     max_storage_buffers_per_shader_stage: limits
                         .max_storage_buffers_per_shader_stage,
+                    max_sampled_textures_per_shader_stage: limits
+                        .max_sampled_textures_per_shader_stage,
                     ..wanted
                 }
             } else {
