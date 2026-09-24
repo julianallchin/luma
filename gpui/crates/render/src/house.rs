@@ -115,6 +115,7 @@ impl Lamp {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
+            lens: crate::luminaire::Lens::POINT,
         }
     }
 }

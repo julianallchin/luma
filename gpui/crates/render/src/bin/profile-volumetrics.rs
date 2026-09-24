@@ -1423,6 +1423,7 @@ fn frame_with_lights(
             gobo: (index % 3) as u32,
             gobo_rotation: 0.31,
             haze_gain: 1.0,
+            lens: luma_render::luminaire::Lens::POINT,
         });
     }
     frame

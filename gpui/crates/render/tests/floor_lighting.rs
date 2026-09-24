@@ -59,6 +59,7 @@ fn floor() -> Frame {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
+        lens: luma_render::luminaire::Lens::POINT,
     });
     frame
 }

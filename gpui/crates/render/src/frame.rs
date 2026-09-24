@@ -12,7 +12,8 @@ use glam::{Mat4, Vec3};
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
 use crate::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use crate::luminaire::{
-    beam_direction, cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL,
+    beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
+    pixel_lens, Lens, PIXEL,
 };
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
@@ -85,11 +86,21 @@ pub struct MaterialTextures {
 /// One fixture's finite light cone, shared by opaque surface lighting and haze.
 /// Field order mirrors the two `SoA` storage buffers the shaders bind: the
 /// `position`/`range` pair alone drives the sphere reject.
+///
+/// The beam leaves a lens-sized disc at `position`, not a point. Its cone
+/// converges on a virtual apex behind the lens ([`Self::apex`]); the angular
+/// profile, the gobo and the shadow projection are all seen from that apex, so
+/// the beam is exactly lens-wide at the lens and the lit pool on a surface is
+/// the beam's own footprint. Distance falloff and `range` are measured from the
+/// lens, and nothing behind the lens plane is lit.
 #[derive(Debug, Clone, Copy)]
 pub struct FixtureCone {
-    /// Apex of the cone, in world space.
+    /// Centre of the lens, in world space: where the beam starts.
+    ///
+    /// Pan/tilt-invariant, as §7 of `docs/design/volumetrics-v2.md` needs; the
+    /// virtual apex is not (it swings on the beam axis behind this point).
     pub position: Vec3,
-    /// Cull radius, including the smoothly fading beam tail.
+    /// Cull radius from the lens, including the smoothly fading beam tail.
     pub range: f32,
     /// Unit beam axis.
     pub direction: Vec3,
@@ -110,6 +121,40 @@ pub struct FixtureCone {
     /// Scattering multiplier for this cone in the participating medium.
     /// Stage fixtures and house lamps both use one; zero disables scattering.
     pub haze_gain: f32,
+    /// The disc the beam leaves through, centred on `position`.
+    pub lens: Lens,
+}
+
+impl FixtureCone {
+    /// Distance from the virtual apex back to the lens plane, metres; zero for
+    /// a point source. See [`Lens::apex_distance`].
+    #[must_use]
+    pub fn lens_distance(&self) -> f32 {
+        self.lens.apex_distance(self.cos_field)
+    }
+
+    /// The cone's virtual apex: [`Self::lens_distance`] behind the lens centre
+    /// on the beam axis. The projection centre of the angular profile, the gobo
+    /// and the shadow map.
+    ///
+    /// It lies on the beam's own axis. A ray from it to any point of the beam
+    /// crosses the lens plane inside the lens disc, so once the segment behind
+    /// the lens plane is excluded, visibility from the apex is visibility from
+    /// a point of the lens — exactly the lens centre on the axis (the argument
+    /// of §15.1 in `docs/design/volumetrics-v2.md`).
+    #[must_use]
+    pub fn apex(&self) -> Vec3 {
+        let direction = self.direction.try_normalize().unwrap_or(Vec3::NEG_Y);
+        self.position - direction * self.lens_distance()
+    }
+
+    /// Reach from the virtual apex: `range + lens_distance`. The ball of this
+    /// radius about [`Self::apex`] contains the lens ball of `range`, so a cone
+    /// test against (apex, apex reach) is conservative for the beam.
+    #[must_use]
+    pub fn apex_reach(&self) -> f32 {
+        self.range + self.lens_distance()
+    }
 }
 
 /// A fixture's face light: lights its own housing from behind the lens and
@@ -834,6 +879,8 @@ pub fn build_with(
             // One haze cone per *head* (not per pixel), fired from the middle
             // pixel of that head's run.
             let cone = cone_from_opening(PIXEL);
+            // Each pixel is its own emitter behind its own optic.
+            let lens = pixel_lens(dims[0] / layout_w as f32, dims[1] / layout_h as f32);
             let dir = beam_direction(Some(def), fixture.rot, None);
             for head in 0..head_count {
                 let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
@@ -869,6 +916,7 @@ pub fn build_with(
                     gobo: head_state.gobo.min(2),
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
+                    lens,
                 });
             }
             continue;
@@ -953,6 +1001,7 @@ pub fn build_with(
             gobo: head_state.gobo.min(2),
             gobo_rotation: head_state.gobo_rotation,
             haze_gain: 1.0,
+            lens: lens_for(def, Some(kind)),
         });
     }
 
@@ -1361,6 +1410,68 @@ mod tests {
             house_dark.fixture_lighting_domain, house_lit.fixture_lighting_domain,
             "house geometry is independent of the house dimmer"
         );
+    }
+
+    /// §7's apex invariant, restated for a lens-sized source.
+    ///
+    /// §7 (`docs/design/volumetrics-v2.md`) rests on "a moving head's
+    /// light-emitting point does not move under pan/tilt". With a lens, the
+    /// emitting point is the lens centre, `FixtureCone::position`, and it still
+    /// does not move. The cone's *virtual* apex does move: it sits a fixed
+    /// distance behind the lens on the beam axis, so it swings on a sphere
+    /// about the lens as the head aims. That is the §15.1 situation (an offset
+    /// along the beam, not across it): apex, lens and every point on the axis
+    /// stay collinear, so an apex-anchored shadow cache must key on the lens
+    /// centre and treat the apex as derived.
+    #[test]
+    fn the_lens_centre_holds_still_under_pan_and_tilt_and_the_apex_rides_the_axis() {
+        let definitions =
+            Definitions::from([("head.qxf".into(), definition("Moving Head", "One", 1))]);
+        let mut scene = scene(vec![fixture("head", "head.qxf", "One")]);
+        let mut library = library();
+        let mut lens_centres = Vec::new();
+        for [pan, tilt] in [[0.0, 0.0], [90.0, 45.0], [-170.0, 120.0], [33.0, -80.0]] {
+            scene.state.insert(
+                "head:0".into(),
+                PrimitiveState {
+                    position: [pan, tilt],
+                    ..lit()
+                },
+            );
+            let frame = build(&scene, &definitions, 0.0, &mut library).unwrap();
+            let cone = frame.fixture_cones[0];
+            assert!(cone.lens.radius > 0.0, "a moving head has a lens");
+            let back = cone.position - cone.apex();
+            assert!((back.length() - cone.lens_distance()).abs() < 1e-5);
+            assert!(
+                back.normalize().dot(cone.direction) > 0.999_999,
+                "the apex is behind the lens on the beam axis"
+            );
+            lens_centres.push(cone.position);
+        }
+        assert!(
+            lens_centres.windows(2).all(|pair| pair[0] == pair[1]),
+            "the lens centre is pan/tilt-invariant: {lens_centres:?}"
+        );
+    }
+
+    /// Each emitter of a multi-cell fixture carries its own small optic, not
+    /// the housing's.
+    #[test]
+    fn a_pixel_bar_head_uses_its_cell_lens() {
+        let definitions =
+            Definitions::from([("bar.qxf".into(), definition("LED Bar (Pixels)", "Three", 3))]);
+        let mut scene = scene(vec![fixture("bar", "bar.qxf", "Three")]);
+        for head in 0..3 {
+            scene.state.insert(format!("bar:{head}"), lit());
+        }
+        let frame = build(&scene, &definitions, 0.0, &mut library()).unwrap();
+        // The 300 mm default housing split into three 100 x 300 mm cells; the
+        // drawn pixel quad fills 90% of a cell.
+        assert_eq!(frame.fixture_cones.len(), 3);
+        for cone in &frame.fixture_cones {
+            assert!((cone.lens.radius - 0.1 * 0.45).abs() < 1e-5);
+        }
     }
 
     #[test]

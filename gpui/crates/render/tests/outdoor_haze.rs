@@ -132,6 +132,7 @@ fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32)
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 0.0,
+        lens: luma_render::luminaire::Lens::POINT,
     }
 }
 
@@ -399,6 +400,7 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
+        lens: luma_render::luminaire::Lens::POINT,
     });
     let live = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     let reference = renderer

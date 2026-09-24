@@ -88,6 +88,111 @@ pub fn luminaire_for(def: &Definition, kind: Option<ModelKind>) -> Luminaire {
     }
 }
 
+/// The disc a beam leaves through.
+///
+/// A real fixture does not emit from a point: its beam is as wide as its front
+/// lens where it leaves the glass, and opens at the field angle from there. The
+/// renderer models that as a cone whose apex is *virtual*: it sits
+/// [`Lens::apex_distance`] behind the lens centre on the beam axis, so that the
+/// cone is exactly lens-wide at the lens plane. The segment between the virtual
+/// apex and the lens is not part of the beam.
+///
+/// This is the lens model's one home. A later focus-dependent profile (beam
+/// waist, crossover) belongs here as more fields, next to `radius`, and changes
+/// what [`Lens::apex_distance`] means rather than adding a second model.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Lens {
+    /// Radius of the front lens in metres. Zero is a point source.
+    pub radius: f32,
+}
+
+impl Lens {
+    /// A point source: the apex is the lens centre. House lamps and synthetic
+    /// test cones use it.
+    pub const POINT: Self = Self { radius: 0.0 };
+
+    /// The largest lens the renderer accepts, metres. Above any fixture's
+    /// front glass; it bounds a corrupt value, not a real one.
+    pub const MAX_RADIUS_M: f32 = 0.5;
+
+    /// Largest distance from virtual apex to lens plane, metres. Only a
+    /// sub-degree cone gets near it; past it the cone is wider than the lens at
+    /// the lens plane, which keeps every bound conservative.
+    pub const MAX_APEX_DISTANCE_M: f32 = 10.0;
+
+    /// Distance from the virtual apex to the lens plane, for a cone whose edge
+    /// has cosine `cos_field`: `radius / tan(half field)`, so that the cone's
+    /// radius at the lens plane is the lens radius and at `d` metres beyond it
+    /// is `radius + d · tan(half field)`.
+    ///
+    /// Zero for a point source, exactly: every consumer then reduces to the
+    /// point-apex arithmetic bit for bit.
+    #[must_use]
+    pub fn apex_distance(self, cos_field: f32) -> f32 {
+        let radius = if self.radius.is_finite() {
+            self.radius.clamp(0.0, Self::MAX_RADIUS_M)
+        } else {
+            0.0
+        };
+        if radius == 0.0 {
+            return 0.0;
+        }
+        let cos = if cos_field.is_finite() {
+            cos_field.clamp(0.01, 1.0)
+        } else {
+            1.0
+        };
+        let tan = (1.0 - cos * cos).max(0.0).sqrt() / cos;
+        (radius / tan.max(1.0e-6)).min(Self::MAX_APEX_DISTANCE_M)
+    }
+}
+
+/// Front-lens diameter as a share of the housing's smaller face dimension.
+///
+/// QLC+ describes a housing, a pixel layout and a beam angle, never a lens
+/// size, so this is an estimate from the housing, per class. A moving head's
+/// `Dimensions` include the yoke; its front lens is about 40% of that width
+/// (Clay Paky Sharpy: 405 mm wide, ~160 mm glass; Martin MAC Aura: 302 mm,
+/// ~120 mm). A par or a strobe is mostly face. A scanner's mirror is small
+/// against its long body.
+fn lens_face_share(kind: Option<ModelKind>) -> f32 {
+    match kind {
+        Some(ModelKind::MovingHead) => 0.4,
+        Some(ModelKind::Scanner) => 0.25,
+        // Pars, strobes and anything unrecognised: the face is the lens.
+        _ => 0.8,
+    }
+}
+
+/// Smallest lens the housing estimate returns, metres: a 20 mm LED optic.
+const MIN_LENS_RADIUS_M: f32 = 0.01;
+/// Largest lens the housing estimate returns, metres: a 400 mm fresnel.
+const MAX_LENS_RADIUS_M: f32 = 0.2;
+
+/// The one answer to "how big is this fixture's front lens".
+///
+/// Estimated from the housing's `Dimensions` and the class share in
+/// [`lens_face_share`]; a definition without dimensions uses the 300 mm housing
+/// that [`Definition::dimensions_m`] reports for it.
+#[must_use]
+pub fn lens_for(def: &Definition, kind: Option<ModelKind>) -> Lens {
+    let [width, height, _] = def.dimensions_m();
+    Lens {
+        radius: (width.min(height) * 0.5 * lens_face_share(kind))
+            .clamp(MIN_LENS_RADIUS_M, MAX_LENS_RADIUS_M),
+    }
+}
+
+/// The lens of one pixel of a procedural bar or matrix: each emitter has its
+/// own optic, filling most of its cell (the drawn pixel quad is 90% of it).
+#[must_use]
+pub fn pixel_lens(cell_width_m: f32, cell_height_m: f32) -> Lens {
+    Lens {
+        radius: (cell_width_m.min(cell_height_m) * 0.45)
+            .clamp(MIN_LENS_RADIUS_M * 0.5, MAX_LENS_RADIUS_M),
+    }
+}
+
 /// Cone geometry derived from an opening angle.
 #[derive(Debug, Clone, Copy)]
 pub struct Cone {
@@ -338,6 +443,88 @@ mod tests {
         // or, with no mesh kind, the box as well (`frame::housing_draws`).
         assert_eq!(model_kind(&typed("Par 64")), Some(ModelKind::Par));
         assert_eq!(model_kind(&typed("Laser")), None);
+    }
+
+    /// Radius of a cone with virtual apex `apex_distance` behind the lens, at
+    /// `d` metres past the lens plane.
+    fn footprint(lens: Lens, cos_field: f32, d: f32) -> f32 {
+        let tan = (1.0 - cos_field * cos_field).sqrt() / cos_field;
+        (lens.apex_distance(cos_field) + d) * tan
+    }
+
+    /// The lens model's contract: the cone is exactly lens-wide at the lens
+    /// plane and opens at the field angle from there, `r + d·tan(half)`. The
+    /// narrowest clamped cone (4° beam, 8° field) with a big lens is where the
+    /// virtual apex sits furthest back, so it is checked alongside a wash.
+    #[test]
+    fn a_lens_cone_is_lens_wide_at_the_lens_and_opens_at_the_field_angle() {
+        for (field_deg, radius) in [(8.0_f32, 0.09_f32), (8.0, 0.2), (36.0, 0.06), (120.0, 0.12)] {
+            let half = (field_deg / 2.0).to_radians();
+            let cos_field = half.cos();
+            let lens = Lens { radius };
+            let at_lens = footprint(lens, cos_field, 0.0);
+            assert!(
+                (at_lens - radius).abs() < 1e-5,
+                "{field_deg}° field: {at_lens} m at the lens, want {radius} m"
+            );
+            for d in [0.5_f32, 3.0, 12.0] {
+                let want = radius + d * half.tan();
+                let got = footprint(lens, cos_field, d);
+                assert!(
+                    (got - want).abs() < 1e-4 * want.max(1.0),
+                    "{field_deg}° field at {d} m: {got}, want {want}"
+                );
+            }
+        }
+        // A 2° half-field, 0.1 m lens: the apex sits 2.86 m behind the glass.
+        let far_back = Lens { radius: 0.1 }.apex_distance(2f32.to_radians().cos());
+        assert!((far_back - 0.1 / 2f32.to_radians().tan()).abs() < 1e-3);
+    }
+
+    /// A point source keeps its apex on the lens, exactly — every consumer's
+    /// point-apex arithmetic depends on the zero being a true zero.
+    #[test]
+    fn a_point_lens_has_no_apex_offset_and_bad_input_is_bounded() {
+        for cos in [0.01, 0.5, 0.9999, 1.0, f32::NAN] {
+            assert_eq!(Lens::POINT.apex_distance(cos).to_bits(), 0.0f32.to_bits());
+        }
+        let degenerate = Lens { radius: 0.2 };
+        assert_eq!(degenerate.apex_distance(1.0), Lens::MAX_APEX_DISTANCE_M);
+        assert_eq!(Lens { radius: f32::NAN }.apex_distance(0.9), 0.0);
+        assert!(Lens { radius: 1e9 }.apex_distance(0.5) <= Lens::MAX_APEX_DISTANCE_M);
+    }
+
+    /// Lens sizes come from the housing, per class, within physical bounds.
+    #[test]
+    fn lens_size_follows_the_housing_and_the_class() {
+        let sized = |kind: &str, w: f32, h: f32| Definition {
+            kind: kind.into(),
+            modes: Vec::new(),
+            physical: Some(crate::scene_desc::Physical {
+                dimensions: Some(crate::scene_desc::Dimensions {
+                    width: w,
+                    height: h,
+                    depth: 300.0,
+                }),
+                layout: None,
+                lens: None,
+            }),
+        };
+        // Clay Paky Sharpy's QLC+ housing: 405 x 450 mm -> ~160 mm glass.
+        let sharpy = sized("Moving Head", 405.0, 450.0);
+        let r = lens_for(&sharpy, model_kind(&sharpy)).radius;
+        assert!((r - 0.081).abs() < 1e-4, "{r}");
+        // A par is mostly face.
+        let par = sized("Color Changer", 250.0, 250.0);
+        assert!((lens_for(&par, model_kind(&par)).radius - 0.1).abs() < 1e-4);
+        // Bounds: nothing below an LED optic, nothing above a 400 mm fresnel.
+        let tiny = sized("Color Changer", 5.0, 5.0);
+        assert_eq!(lens_for(&tiny, model_kind(&tiny)).radius, MIN_LENS_RADIUS_M);
+        let huge = sized("Color Changer", 3000.0, 3000.0);
+        assert_eq!(lens_for(&huge, model_kind(&huge)).radius, MAX_LENS_RADIUS_M);
+        // No dimensions: the 300 mm default housing.
+        let bare = typed("Moving Head");
+        assert!((lens_for(&bare, model_kind(&bare)).radius - 0.06).abs() < 1e-4);
     }
 
     /// The reference point the whole concentration curve is anchored on.
