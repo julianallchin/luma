@@ -41,6 +41,7 @@ pub mod image_out;
 pub mod interval_cache;
 pub mod light_index;
 pub mod luminaire;
+pub mod materials;
 mod medium;
 pub mod metrics;
 pub mod overlay;

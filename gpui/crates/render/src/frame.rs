@@ -10,7 +10,7 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
-use crate::coords::{hex_srgb, three_pose_from_data, three_to_world_basis, world_from_three};
+use crate::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use crate::luminaire::{
     beam_direction, cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL,
 };
@@ -376,7 +376,7 @@ impl Bank {
 ///
 /// Authored art expands to one draw per glTF primitive, each at its node's
 /// world transform; a generated family is a single mesh at `root` wearing
-/// [`crate::truss::ALUMINIUM`]. The one place that knows how a [`Geometry`]
+/// [`crate::materials::ALUMINIUM`]. The one place that knows how a [`Geometry`]
 /// becomes drawable: the lit pass builds placed pieces through here, and
 /// `overlay::build` builds the builder's ghost through here, so a piece and its
 /// preview can never be different shapes.
@@ -399,7 +399,7 @@ pub(crate) fn piece_draws(
                 .iter()
                 .zip(&worlds)
                 .flat_map(|(node, world)| node.primitives.iter().map(move |&p| (p, *world)))
-                .map(|(p, world)| glb_draw(bank, path, glb, p, world, |m| m, editor_object.clone()))
+                .map(|(p, world)| glb_draw(bank, path, glb, p, world, editor_object.clone()))
                 .collect()
         }
         Geometry::Procedural(procedural) => {
@@ -411,7 +411,7 @@ pub(crate) fn piece_draws(
             vec![Draw {
                 mesh,
                 model: root,
-                material: crate::truss::ALUMINIUM,
+                material: crate::materials::ALUMINIUM,
                 textures: MaterialTextures::default(),
                 editor_object,
             }]
@@ -474,10 +474,7 @@ pub(crate) fn housing_draws(
             // back face `depth / 2` above the origin, which is where
             // `catalog::clamp_standoff` puts the clamp.
             model: base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
-            material: Material {
-                base_color: hex_srgb(0x05_05_05),
-                ..Material::default()
-            },
+            material: crate::materials::POWDER_COAT,
             editor_object,
         }]);
     };
@@ -500,19 +497,14 @@ pub(crate) fn housing_draws(
     let mut draws = Vec::new();
     for (node, world) in glb.nodes.iter().zip(&worlds) {
         for &p in &node.primitives {
-            // Every fixture body is forced near-black so only beams and
-            // emissives read. The colour is already linear, so no sRGB
-            // decode here.
+            // The library has already dressed the body in powder coat
+            // (`materials`), so the room and the ghost draw the same finish.
             draws.push(glb_draw(
                 bank,
                 &mesh_rel,
                 glb,
                 p,
                 *world,
-                |m| Material {
-                    base_color: Vec3::splat(0.08),
-                    ..m
-                },
                 editor_object.clone(),
             ));
         }
@@ -520,16 +512,14 @@ pub(crate) fn housing_draws(
     Ok(draws)
 }
 
-/// Intern one glTF primitive's geometry and base-colour texture, and emit the
-/// draw that references them. `material` is the caller's chance to override the
-/// asset's own constants (the near-black fixture housing).
+/// Intern one glTF primitive's geometry and material maps, and emit the draw
+/// that references them.
 fn glb_draw(
     bank: &mut Bank,
     asset: &str,
     glb: &crate::assets::Glb,
     p: usize,
     model: Mat4,
-    material: impl FnOnce(Material) -> Material,
     editor_object: Option<EditorObject>,
 ) -> Draw {
     let prim = &glb.primitives[p];
@@ -555,7 +545,7 @@ fn glb_draw(
     Draw {
         mesh,
         model,
-        material: material(prim.material),
+        material: prim.material,
         textures,
         editor_object,
     }
@@ -767,24 +757,16 @@ pub fn build_with(
             mesh: floor,
             textures: MaterialTextures::default(),
             model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-            material: Material {
-                // Indoors this is a black stage floor. Outdoors it is the
-                // ground, and the ground already has an albedo: the one the
-                // sky bounces sunlight off. Spelling it twice would let a
-                // venue's near floor and the same ground at the horizon
-                // disagree, which is visible as a seam exactly where the
-                // distance fade dissolves one into the other.
-                base_color: sky.map_or_else(
-                    || hex_srgb(0x03_03_03),
-                    |sky| Vec3::splat(sky.ground_albedo),
-                ),
-                metallic: 0.0,
-                roughness: 0.95,
-                emissive: Vec3::ZERO,
-                normal_scale: 1.0,
-                occlusion_strength: 1.0,
-                flat_shading: false,
-            },
+            // Indoors this is the venue's black floor. Outdoors it is the
+            // ground, and the ground already has an albedo: the one the sky
+            // bounces sunlight off. Spelling it twice would let a venue's
+            // near floor and the same ground at the horizon disagree, which
+            // is visible as a seam exactly where the distance fade dissolves
+            // one into the other.
+            material: sky.map_or(crate::materials::VENUE_FLOOR, |sky| Material {
+                base_color: Vec3::splat(sky.ground_albedo),
+                ..crate::materials::GROUND
+            }),
             editor_object: None,
         });
     }
@@ -842,13 +824,8 @@ pub fn build_with(
                     textures: MaterialTextures::default(),
                     model: base * Mat4::from_translation(*local),
                     material: Material {
-                        base_color: Vec3::ZERO,
-                        metallic: 0.0,
-                        roughness: 1.0,
                         emissive: Vec3::from(head_state.color) * intensity * 5.0,
-                        normal_scale: 1.0,
-                        occlusion_strength: 1.0,
-                        flat_shading: false,
+                        ..crate::materials::LED_FACE
                     },
                     editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
                 });
