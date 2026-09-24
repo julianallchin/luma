@@ -248,6 +248,10 @@ pub struct RenderSettings {
     pub sky: Option<SkyParams>,
     /// Renderer diagnostic output. `Pbr` is the authored display path.
     pub debug_view: DebugView,
+    /// The camera: exposure, tone curve and glare. Every constructor starts at
+    /// [`Look::NEUTRAL`], the picture the tracked images were captured with;
+    /// the live stage sets its own.
+    pub look: Look,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
     pub fixture_surface_lighting: bool,
     /// Whether opaque venue geometry casts shadows into fixture light and haze.
@@ -302,6 +306,149 @@ impl DebugView {
             Self::Depth => 6,
             Self::VolumetricAccumulation => 7,
         }
+    }
+}
+
+/// How the camera turns scene light into a picture: exposure, the tone curve
+/// and the glare around hot sources.
+///
+/// [`Self::NEUTRAL`] is the single-pass picture every tracked image was
+/// captured with: fixed exposure, AgX, nothing added. Anything else runs the
+/// post chain in `post.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Look {
+    /// Display transform from exposed scene light to the display.
+    pub tone: ToneCurve,
+    /// How bright the scene is taken to be.
+    pub exposure: Exposure,
+    /// Bloom, star streaks and lens glow around hot sources.
+    pub glare: Glare,
+}
+
+impl Look {
+    /// Fixed exposure, AgX, no glare: the look before the post chain existed.
+    pub const NEUTRAL: Self = Self {
+        tone: ToneCurve::Agx,
+        exposure: Exposure {
+            auto: false,
+            ev: 0.0,
+            min_ev: Exposure::STAGE.min_ev,
+            max_ev: Exposure::STAGE.max_ev,
+        },
+        glare: Glare::OFF,
+    };
+
+    /// The live stage's default: metered exposure, a punchier curve and a
+    /// strong glare, so a light at full reads as blinding.
+    pub const STAGE: Self = Self {
+        tone: ToneCurve::AgxPunchy,
+        exposure: Exposure::STAGE,
+        glare: Glare::STAGE,
+    };
+
+    /// Whether this look needs the post chain rather than the single
+    /// composite pass.
+    #[must_use]
+    pub fn needs_post(&self) -> bool {
+        *self != Self::NEUTRAL
+    }
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Self::NEUTRAL
+    }
+}
+
+/// The display transform. All three keep scene-linear 1.0 near the same
+/// display value; they differ in contrast and in how colour goes to white.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToneCurve {
+    /// three's AgX: soft contrast, bright colours go to white.
+    #[default]
+    Agx,
+    /// AgX with Blender's "Punchy" look: more contrast and saturation.
+    AgxPunchy,
+    /// Narkowicz's fit of the ACES filmic curve, per channel: hard contrast,
+    /// saturated colours stay saturated.
+    Aces,
+}
+
+impl ToneCurve {
+    /// Shader selector, shared with `tone.wgsl`.
+    #[must_use]
+    pub const fn shader_code(self) -> u32 {
+        match self {
+            Self::Agx => 0,
+            Self::AgxPunchy => 1,
+            Self::Aces => 2,
+        }
+    }
+}
+
+/// Exposure in stops. With `auto` the renderer meters each frame and `ev` is
+/// the compensation added to the metered value; without it `ev` is the
+/// exposure itself (0 = the fixed exposure the transport was tuned at).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exposure {
+    /// Meter the frame and adapt to it over time.
+    pub auto: bool,
+    /// Compensation (auto) or exposure (manual), in stops.
+    pub ev: f32,
+    /// Lowest metered exposure, in stops. A frame full of blinders cannot
+    /// push the rest of the stage below this.
+    pub min_ev: f32,
+    /// Highest metered exposure, in stops. A dark room with a few beams
+    /// cannot lift the room above this.
+    pub max_ev: f32,
+}
+
+impl Exposure {
+    /// Metered, no compensation, two stops down and one and a half up.
+    pub const STAGE: Self = Self {
+        auto: true,
+        ev: 0.0,
+        min_ev: -2.5,
+        max_ev: 1.5,
+    };
+    /// The range the exposure control offers, in stops.
+    pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
+}
+
+/// Glare around hot sources, added after the tone curve so full white stays
+/// white and the halo spreads past it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Glare {
+    /// Overall strength; 0 turns bloom, streaks and lens glow off.
+    pub strength: f32,
+    /// Exposed scene light above which a pixel glares, as a multiple of
+    /// diffuse white.
+    pub threshold: f32,
+    /// Star streaks as a fraction of the bloom.
+    pub star: f32,
+}
+
+impl Glare {
+    /// No glare.
+    pub const OFF: Self = Self {
+        strength: 0.0,
+        threshold: 2.0,
+        star: 0.0,
+    };
+    /// The live stage's default.
+    pub const STAGE: Self = Self {
+        strength: 1.0,
+        threshold: 2.0,
+        star: 0.5,
+    };
+    /// Whether any glare is drawn.
+    #[must_use]
+    pub fn on(&self) -> bool {
+        self.strength > 0.0
     }
 }
 
@@ -862,6 +1009,7 @@ impl RenderSettings {
             house: None,
             sky: None,
             debug_view: DebugView::Pbr,
+            look: Look::NEUTRAL,
             fixture_surface_lighting: true,
             fixture_shadows: true,
             geometry_shadows: false,
@@ -896,6 +1044,7 @@ impl RenderSettings {
             house: None,
             sky: None,
             debug_view: DebugView::Pbr,
+            look: Look::NEUTRAL,
             fixture_surface_lighting: true,
             fixture_shadows: true,
             geometry_shadows: false,
@@ -946,6 +1095,7 @@ impl RenderSettings {
             house: Some(environment),
             sky: fill.sky,
             debug_view: DebugView::Pbr,
+            look: Look::NEUTRAL,
             fixture_surface_lighting: true,
             fixture_shadows: true,
             geometry_shadows: false,
@@ -980,6 +1130,8 @@ struct RenderSettingsWire {
     sky: Option<SkyParams>,
     #[serde(default)]
     debug_view: DebugView,
+    #[serde(default)]
+    look: Option<Look>,
     #[serde(default)]
     fixture_surface_lighting: Option<bool>,
     #[serde(default)]
@@ -1031,6 +1183,9 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // contract image was captured under.
                 sky: wire.sky,
                 debug_view: wire.debug_view,
+                // Absent means the camera every tracked image was captured
+                // with.
+                look: wire.look.unwrap_or(Look::NEUTRAL),
                 // Absent means the constructors' default, which is on — only
                 // the golden catalogue branch below pins it off, and that pin
                 // has its own justification.
@@ -1055,6 +1210,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.haze.steps = wire.haze_steps.unwrap_or(8);
         settings.haze.density = wire.haze_density.unwrap_or(0.0);
         settings.debug_view = wire.debug_view;
+        settings.look = wire.look.unwrap_or(Look::NEUTRAL);
         // The golden catalogue predates surface fixture lighting. Keeping it
         // off here preserves those captured inputs; every interactive preset
         // enables the path.

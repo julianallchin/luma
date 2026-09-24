@@ -986,9 +986,10 @@ pub struct FrameTimings {
     /// them. Zero redrawn maps (`ShadowStats::redrawn_maps`) makes this the
     /// depth prepass and the scene pass alone.
     pub gpu_scene_ms: f64,
-    /// The composite pass alone: its two inputs' completion through its own.
-    /// Editor overlays run after the last sample, so they are outside every
-    /// span here.
+    /// The composite pass, and the post chain (`post.rs`) when the frame's
+    /// look runs one: its two inputs' completion through the output's last
+    /// write. Editor overlays run after the last sample, so they are outside
+    /// every span here.
     pub gpu_composite_ms: f64,
     /// The light-index build compute pass. Compute has no vertex/fragment
     /// split, so this one is a true begin-to-end bracket — but the pass
@@ -1138,7 +1139,7 @@ impl Channels {
     }
 
     /// Slot in [`Renderer::composite_pipelines`].
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         match self {
             Self::Rgba => 0,
             Self::Bgra => 1,
@@ -1164,6 +1165,8 @@ pub struct Renderer {
     environment: EnvironmentCache,
     atmosphere: AtmosphereCache,
     sky_visibility: crate::sky_visibility::SkyVisibility,
+    /// Exposure state and post-chain targets (`post.rs`).
+    post: crate::post::Post,
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
     fixture_shadow_map: wgpu::TextureView,
@@ -2158,6 +2161,10 @@ pub struct Gpu {
     /// Indexed by [`Channels::index`]: the same pass, targeting each output
     /// format. The [`Channels::Hdr`] one keeps highlights above SDR white.
     composite_pipelines: [wgpu::RenderPipeline; 3],
+    /// The composite pass writing scene-linear light for the post chain.
+    composite_linear_pipeline: wgpu::RenderPipeline,
+    /// Exposure, lens glow, tone curve and glare (`post.rs`).
+    post: crate::post::Pipelines,
     grid_pipeline: wgpu::RenderPipeline,
     compass_pipeline: wgpu::RenderPipeline,
     cable_pipeline: wgpu::RenderPipeline,
@@ -2774,11 +2781,12 @@ impl Gpu {
             &device,
             "composite",
             &format!(
-                "{}{}{}{}{}",
+                "{}{}{}{}{}{}",
                 crate::haze_field::prelude(),
                 include_str!("shaders/medium.wgsl"),
                 crate::atmosphere::composite_prelude(),
                 include_str!("shaders/haze_daylight.wgsl"),
+                include_str!("shaders/tone.wgsl"),
                 include_str!("shaders/composite.wgsl")
             ),
         );
@@ -3996,6 +4004,32 @@ impl Gpu {
             })
         });
 
+        let composite_linear_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("composite-linear"),
+                layout: Some(&composite_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &composite_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &composite_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(crate::post::SCENE_FORMAT.into())],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("LINEAR_OUTPUT", 1.0)],
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
         let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("grid"),
             layout: Some(&scene_pipeline_layout),
@@ -4235,8 +4269,14 @@ impl Gpu {
 
         let shadow_hierarchy_pipelines = crate::shadow_hierarchy::Pipelines::new(&device);
         let sky_visibility = crate::sky_visibility::Pipelines::new(&device, &queue);
+        let post = crate::post::Pipelines::new(
+            &device,
+            &Channels::ALL.map(|channels| (channels.format(), channels == Channels::Hdr)),
+        );
         Ok(Self {
             sky_visibility,
+            post,
+            composite_linear_pipeline,
             device,
             queue,
             adapter_profile,
@@ -4383,6 +4423,7 @@ impl Renderer {
     /// The precondition on `profiled` is [`Self::profiling_on`]'s to check, so
     /// nothing here can fail: on an existing device this only allocates.
     fn build_on(gpu: Arc<Gpu>, profiled: bool) -> Self {
+        let post = crate::post::Post::new(&gpu.device);
         let staging_device = gpu.device.clone();
         let (device, queue) = (&gpu.device, &gpu.queue);
         let query_capacity = if std::env::var_os("LUMA_PROFILE_DETAIL").is_some_and(|v| v == "1") {
@@ -4448,6 +4489,7 @@ impl Renderer {
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
             sky_visibility: crate::sky_visibility::SkyVisibility::default(),
+            post,
             shadow_map,
             shadow_layers,
             fixture_shadow_map,
@@ -4890,6 +4932,15 @@ impl Renderer {
             .into_pixels()
             .expect("a Bytes destination reads its pixels back");
         Ok(timing)
+    }
+
+    /// The exposure the last post-chain frame used and the one it was
+    /// adapting toward, in stops (`post.rs`). Blocks until the GPU is idle.
+    ///
+    /// # Errors
+    /// Fails if the readback cannot be mapped.
+    pub fn metered_exposure(&self) -> anyhow::Result<[f32; 2]> {
+        self.post.read_exposure(&self.gpu.device, &self.gpu.queue)
     }
 
     /// Read cumulative immutable-resource upload counts.
@@ -7944,11 +7995,38 @@ impl Renderer {
                     ],
                 });
             {
+                // The frame's last timestamp belongs to whichever pass writes
+                // the output: the composite, or the post chain after it.
+                let last_timestamp = profile_resources.as_ref().map(|(queries, ..)| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set: queries,
+                        beginning_of_pass_write_index: None,
+                        end_of_pass_write_index: Some(3),
+                    }
+                });
+                // Diagnostic views are exact channel dumps; the camera stays
+                // out of them.
+                let post = (frame.look.needs_post()
+                    && frame.debug_view == crate::scene_desc::DebugView::Pbr
+                    && !frame.cluster_debug)
+                    .then(|| self.post.scene_target(&self.gpu.device, t_width, t_height));
                 {
+                    let (target, pipeline, timestamps) = match &post {
+                        Some(scene) => (
+                            scene,
+                            &self.gpu.composite_linear_pipeline,
+                            pass_queries.render("composite", None),
+                        ),
+                        None => (
+                            &output_view,
+                            &self.gpu.composite_pipelines[channels.index()],
+                            pass_queries.render("composite", last_timestamp.clone()),
+                        ),
+                    };
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("composite"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &output_view,
+                            view: target,
                             resolve_target: None,
                             depth_slice: None,
                             ops: wgpu::Operations {
@@ -7957,23 +8035,41 @@ impl Renderer {
                             },
                         })],
                         depth_stencil_attachment: None,
-                        timestamp_writes: pass_queries.render(
-                            "composite",
-                            profile_resources.as_ref().map(|(queries, ..)| {
-                                wgpu::RenderPassTimestampWrites {
-                                    query_set: queries,
-                                    beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(3),
-                                }
-                            }),
-                        ),
+                        timestamp_writes: timestamps,
                         ..Default::default()
                     });
-                    pass.set_pipeline(&self.gpu.composite_pipelines[channels.index()]);
+                    pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, &bind_group, &[]);
                     pass.set_bind_group(1, &environment_bg, &[]);
                     pass.set_bind_group(2, &sky_bg, &[]);
                     pass.draw(0..3, 0..1);
+                }
+                if post.is_some() {
+                    self.post.encode(
+                        &self.gpu.post,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut encoder,
+                        &crate::post::PostFrame {
+                            look: frame.look,
+                            cones: &frame.fixture_cones,
+                            view_proj,
+                            eye: frame.camera.eye,
+                            target: frame.camera.target,
+                            fov_y_deg: frame.camera.fov_y_deg,
+                            near: CAMERA_NEAR,
+                            far: camera_far,
+                            width: t_width,
+                            height: t_height,
+                            headroom: destination.headroom(),
+                            output: channels.index(),
+                            temporal,
+                        },
+                        &depth_view,
+                        &output_view,
+                        &mut pass_queries,
+                        last_timestamp,
+                    );
                 }
 
                 // Editor affordances are display UI, not scene radiance. Drawing
@@ -12079,6 +12175,7 @@ mod tests {
             haze_resolution: 0.5,
             time: 0.0,
             debug_view: DebugView::Pbr,
+            look: crate::scene_desc::Look::NEUTRAL,
             camera: Camera {
                 eye: Vec3::new(0.0, -6.0, 4.5),
                 target: Vec3::ZERO,
@@ -12626,6 +12723,7 @@ mod tests {
             haze_resolution: 1.0,
             time: 0.0,
             debug_view: DebugView::Pbr,
+            look: crate::scene_desc::Look::NEUTRAL,
             camera: Camera {
                 eye: Vec3::new(0.0, -5.0, 0.0),
                 target: Vec3::ZERO,

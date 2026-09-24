@@ -46,6 +46,7 @@ mod medium;
 pub mod metrics;
 pub mod overlay;
 mod pass_profile;
+mod post;
 pub mod scene_desc;
 mod shadow;
 mod shadow_hierarchy;
