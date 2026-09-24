@@ -362,6 +362,10 @@ pub fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
             lens: p.lens.as_ref().map(|l| scene_desc::Lens {
                 degrees_min: l.degrees_min.unwrap_or(0.0),
                 degrees_max: l.degrees_max.unwrap_or(0.0),
+                // QLC+ has no lens size or position; spec-sheet values
+                // go here when the library carries them.
+                radius_m: None,
+                offset_m: None,
             }),
         }),
     }

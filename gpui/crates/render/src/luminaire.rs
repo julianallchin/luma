@@ -147,49 +147,149 @@ impl Lens {
     }
 }
 
-/// Front-lens diameter as a share of the housing's smaller face dimension.
-///
-/// QLC+ describes a housing, a pixel layout and a beam angle, never a lens
-/// size, so this is an estimate from the housing, per class. A moving head's
-/// `Dimensions` include the yoke; its front lens is about 40% of that width
-/// (Clay Paky Sharpy: 405 mm wide, ~160 mm glass; Martin MAC Aura: 302 mm,
-/// ~120 mm). A par or a strobe is mostly face. A scanner's mirror is small
-/// against its long body.
-fn lens_face_share(kind: Option<ModelKind>) -> f32 {
-    match kind {
-        Some(ModelKind::MovingHead) => 0.4,
-        Some(ModelKind::Scanner) => 0.25,
-        // Pars, strobes and anything unrecognised: the face is the lens.
-        _ => 0.8,
+/// Optical class for the lens stand-in. Not [`ModelKind`] (which picks a mesh):
+/// a moving head splits into beam, spot, profile and wash by its beam angle
+/// and housing, because their front lenses differ by more than 2x.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LensClass {
+    /// Narrow beam head (Clay Paky Sharpy, Robe Pointe in beam mode).
+    Beam,
+    /// Mid-size spot head with a gobo train.
+    Spot,
+    /// Large profile/spot head (Martin MAC Viper, Robe BMFL).
+    Profile,
+    /// Moving LED wash.
+    Wash,
+    /// Mirror scanner: the beam leaves a small lens onto the mirror.
+    Scanner,
+    /// Fixed par can or LED par.
+    Par,
+    /// Strobe: a linear lamp behind a flat front.
+    Strobe,
+    /// One cell of a blinder (a PAR36 lamp).
+    BlinderCell,
+    /// One pixel of an LED bar or matrix.
+    PixelCell,
+}
+
+impl LensClass {
+    /// The stand-in's class for a definition: beam angles at or below 8° are
+    /// beam heads, a moving head over 30° is a wash, and a spot whose smaller
+    /// housing side reaches 450 mm is a large profile.
+    #[must_use]
+    pub fn of(def: &Definition, kind: Option<ModelKind>) -> Self {
+        if def.kind.to_lowercase().contains("blinder") {
+            return Self::BlinderCell;
+        }
+        match kind {
+            Some(ModelKind::MovingHead) => {
+                let beam = beam_angle_deg(Some(def), kind);
+                let [width, height, _] = def.dimensions_m();
+                if beam <= 8.0 {
+                    Self::Beam
+                } else if beam > 30.0 {
+                    Self::Wash
+                } else if width.min(height) >= 0.45 {
+                    Self::Profile
+                } else {
+                    Self::Spot
+                }
+            }
+            Some(ModelKind::Scanner) => Self::Scanner,
+            Some(ModelKind::Strobe) => Self::Strobe,
+            _ => Self::Par,
+        }
+    }
+
+    /// `(typical front-lens radius, housing it was read from)`, metres. The
+    /// housing is the smaller of a QLC+ definition's width and height for that
+    /// product, so a bigger or smaller housing scales the lens a little.
+    ///
+    /// **Stand-in values, not measurements.** They are typical of current
+    /// products from memory of manufacturer photos and spec-sheet dimensions
+    /// and have not been checked against drawings; replace them per fixture
+    /// with `Physical.Lens@RadiusM` as spec-sheet data arrives:
+    ///
+    /// - Beam: Clay Paky Sharpy front lens about 110 mm across (r 0.055), in
+    ///   a 405 mm housing. Robe Pointe is similar.
+    /// - Spot: 130-140 mm front lens (r 0.065), 400 mm housing (Robe
+    ///   MegaPointe, Martin MAC Encore class).
+    /// - Profile: 150-170 mm front lens (r 0.08), 500 mm housing (MAC Viper,
+    ///   Robe BMFL).
+    /// - Wash: LED emitting face about 140 mm (r 0.07), 300 mm housing (MAC
+    ///   Aura, Robe LEDBeam 150).
+    /// - Scanner: 60-70 mm lens onto the mirror (r 0.032), 300 mm housing.
+    /// - Par: LED par face about 150 mm (r 0.075), 250 mm housing; a PAR64
+    ///   lamp is 203 mm, which the housing scale reaches.
+    /// - Strobe: a flat front about 250 x 100 mm; the equal-area disc is
+    ///   r 0.06 in a 250 mm housing.
+    /// - Blinder cell: a PAR36 lamp, 114 mm (r 0.057).
+    /// - Pixel cell: a 20-25 mm LED optic (r 0.012), capped by the cell.
+    #[must_use]
+    pub fn stand_in(self) -> (f32, f32) {
+        match self {
+            Self::Beam => (0.055, 0.40),
+            Self::Spot => (0.065, 0.40),
+            Self::Profile => (0.08, 0.50),
+            Self::Wash => (0.07, 0.30),
+            Self::Scanner => (0.032, 0.30),
+            Self::Par => (0.075, 0.25),
+            Self::Strobe => (0.06, 0.25),
+            Self::BlinderCell => (0.057, 0.25),
+            Self::PixelCell => (0.012, 0.05),
+        }
     }
 }
 
-/// Smallest lens the housing estimate returns, metres: a 20 mm LED optic.
-const MIN_LENS_RADIUS_M: f32 = 0.01;
-/// Largest lens the housing estimate returns, metres: a 400 mm fresnel.
-const MAX_LENS_RADIUS_M: f32 = 0.2;
+/// Smallest lens the stand-in returns, metres: a 16 mm LED optic.
+const MIN_LENS_RADIUS_M: f32 = 0.008;
+/// Largest lens the stand-in returns, metres: a 200 mm fresnel or PAR64.
+const MAX_LENS_RADIUS_M: f32 = 0.1;
+/// How far the housing may scale a class's typical lens either way.
+const HOUSING_SCALE: (f32, f32) = (0.8, 1.25);
+
+/// The stand-in front-lens radius for a class in a housing whose smaller face
+/// side is `housing_m`: the class's typical lens, scaled by the housing
+/// against the class's reference housing within [`HOUSING_SCALE`].
+#[must_use]
+pub fn stand_in_lens_radius(class: LensClass, housing_m: f32) -> f32 {
+    let (radius, reference) = class.stand_in();
+    let scale = (housing_m / reference).clamp(HOUSING_SCALE.0, HOUSING_SCALE.1);
+    (radius * scale).clamp(MIN_LENS_RADIUS_M, MAX_LENS_RADIUS_M)
+}
+
+/// A spec-sheet radius from the definition, if it has a usable one.
+fn measured_lens_radius(def: &Definition) -> Option<f32> {
+    def.physical
+        .as_ref()?
+        .lens
+        .as_ref()?
+        .radius_m
+        .filter(|r| r.is_finite() && *r > 0.0)
+}
 
 /// The one answer to "how big is this fixture's front lens".
 ///
-/// Estimated from the housing's `Dimensions` and the class share in
-/// [`lens_face_share`]; a definition without dimensions uses the 300 mm housing
-/// that [`Definition::dimensions_m`] reports for it.
+/// A spec-sheet `Physical.Lens@RadiusM` wins; otherwise the per-class
+/// stand-in ([`LensClass::stand_in`]) scaled by the housing.
 #[must_use]
 pub fn lens_for(def: &Definition, kind: Option<ModelKind>) -> Lens {
     let [width, height, _] = def.dimensions_m();
     Lens {
-        radius: (width.min(height) * 0.5 * lens_face_share(kind))
-            .clamp(MIN_LENS_RADIUS_M, MAX_LENS_RADIUS_M),
+        radius: measured_lens_radius(def)
+            .unwrap_or_else(|| stand_in_lens_radius(LensClass::of(def, kind), width.min(height))),
     }
 }
 
 /// The lens of one pixel of a procedural bar or matrix: each emitter has its
-/// own optic, filling most of its cell (the drawn pixel quad is 90% of it).
+/// own optic. A spec-sheet radius wins; the stand-in is a pixel optic, never
+/// more than 45% of the cell (the drawn pixel quad is 90% of it).
 #[must_use]
-pub fn pixel_lens(cell_width_m: f32, cell_height_m: f32) -> Lens {
+pub fn pixel_lens(def: &Definition, cell_width_m: f32, cell_height_m: f32) -> Lens {
+    let cell = cell_width_m.min(cell_height_m);
     Lens {
-        radius: (cell_width_m.min(cell_height_m) * 0.45)
-            .clamp(MIN_LENS_RADIUS_M * 0.5, MAX_LENS_RADIUS_M),
+        radius: measured_lens_radius(def)
+            .unwrap_or_else(|| stand_in_lens_radius(LensClass::PixelCell, cell).min(cell * 0.45)),
     }
 }
 
@@ -494,10 +594,8 @@ mod tests {
         assert!(Lens { radius: 1e9 }.apex_distance(0.5) <= Lens::MAX_APEX_DISTANCE_M);
     }
 
-    /// Lens sizes come from the housing, per class, within physical bounds.
-    #[test]
-    fn lens_size_follows_the_housing_and_the_class() {
-        let sized = |kind: &str, w: f32, h: f32| Definition {
+    fn sized(kind: &str, w: f32, h: f32, beam_deg: f32) -> Definition {
+        Definition {
             kind: kind.into(),
             modes: Vec::new(),
             physical: Some(crate::scene_desc::Physical {
@@ -507,24 +605,67 @@ mod tests {
                     depth: 300.0,
                 }),
                 layout: None,
-                lens: None,
+                lens: Some(crate::scene_desc::Lens {
+                    degrees_min: beam_deg,
+                    degrees_max: beam_deg,
+                    radius_m: None,
+                    offset_m: None,
+                }),
             }),
-        };
-        // Clay Paky Sharpy's QLC+ housing: 405 x 450 mm -> ~160 mm glass.
-        let sharpy = sized("Moving Head", 405.0, 450.0);
-        let r = lens_for(&sharpy, model_kind(&sharpy)).radius;
-        assert!((r - 0.081).abs() < 1e-4, "{r}");
-        // A par is mostly face.
-        let par = sized("Color Changer", 250.0, 250.0);
-        assert!((lens_for(&par, model_kind(&par)).radius - 0.1).abs() < 1e-4);
-        // Bounds: nothing below an LED optic, nothing above a 400 mm fresnel.
-        let tiny = sized("Color Changer", 5.0, 5.0);
-        assert_eq!(lens_for(&tiny, model_kind(&tiny)).radius, MIN_LENS_RADIUS_M);
-        let huge = sized("Color Changer", 3000.0, 3000.0);
-        assert_eq!(lens_for(&huge, model_kind(&huge)).radius, MAX_LENS_RADIUS_M);
-        // No dimensions: the 300 mm default housing.
+        }
+    }
+
+    /// The stand-in: class by beam angle and housing, a typical lens per
+    /// class, scaled a little by the housing, and pencil-thin for a beam head.
+    #[test]
+    fn stand_in_lens_follows_class_and_housing() {
+        let lens = |def: &Definition| lens_for(def, model_kind(def)).radius;
+        // Clay Paky Sharpy's QLC+ definition: 405 x 450 mm, 3.8° beam.
+        let sharpy = sized("Moving Head", 405.0, 450.0, 3.8);
+        assert_eq!(LensClass::of(&sharpy, model_kind(&sharpy)), LensClass::Beam);
+        assert!((lens(&sharpy) - 0.055 * 405.0 / 400.0).abs() < 1e-5);
+        let viper = sized("Moving Head", 500.0, 720.0, 20.0);
+        assert_eq!(
+            LensClass::of(&viper, model_kind(&viper)),
+            LensClass::Profile
+        );
+        let aura = sized("Moving Head", 302.0, 302.0, 34.5);
+        assert_eq!(LensClass::of(&aura, model_kind(&aura)), LensClass::Wash);
+        let blinder = sized("Blinder 2-lite", 250.0, 500.0, 40.0);
+        assert_eq!(
+            LensClass::of(&blinder, model_kind(&blinder)),
+            LensClass::BlinderCell
+        );
+        // The housing scales within bounds, and the bounds hold.
+        let tiny = sized("Color Changer", 5.0, 5.0, 25.0);
+        assert!((lens(&tiny) - 0.075 * 0.8).abs() < 1e-6);
+        let huge = sized("Color Changer", 3000.0, 3000.0, 25.0);
+        assert!((lens(&huge) - 0.075 * 1.25).abs() < 1e-6);
+        assert!(stand_in_lens_radius(LensClass::Profile, 9.0) <= MAX_LENS_RADIUS_M);
+        // No dimensions: the 300 mm default housing, a par's stand-in.
         let bare = typed("Moving Head");
-        assert!((lens_for(&bare, model_kind(&bare)).radius - 0.06).abs() < 1e-4);
+        assert_eq!(LensClass::of(&bare, model_kind(&bare)), LensClass::Spot);
+        assert!(lens(&bare) <= 0.08);
+    }
+
+    /// A spec-sheet radius on the definition wins over the stand-in, for
+    /// heads and for pixels alike, with no other change.
+    #[test]
+    fn a_measured_lens_radius_wins_over_the_stand_in() {
+        let mut sharpy = sized("Moving Head", 405.0, 450.0, 3.8);
+        sharpy
+            .physical
+            .as_mut()
+            .unwrap()
+            .lens
+            .as_mut()
+            .unwrap()
+            .radius_m = Some(0.0512);
+        assert_eq!(lens_for(&sharpy, model_kind(&sharpy)).radius, 0.0512);
+        assert_eq!(pixel_lens(&sharpy, 0.1, 0.1).radius, 0.0512);
+        let bar = typed("LED Bar (Pixels)");
+        assert!((pixel_lens(&bar, 0.1, 0.3).radius - 0.012 * 1.25).abs() < 1e-6);
+        assert!((pixel_lens(&bar, 0.02, 0.3).radius - 0.009).abs() < 1e-6);
     }
 
     /// The reference point the whole concentration curve is anchored on.
