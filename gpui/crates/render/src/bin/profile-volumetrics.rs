@@ -652,11 +652,13 @@ fn profile_catalogue(
         scene_time,
         &mut library,
     )?;
-    // `--haze=D` replaces the fixed 0.8 fog density.
+    // The venue's own haze, as the stage draws it (zero when the venue has
+    // haze off); `--haze=D` overrides the density. Measurements before this
+    // default used a fixed 0.8: pass `--haze=0.8` to compare against them.
     let haze: f32 = arguments
         .iter()
         .find_map(|a| a.strip_prefix("--haze="))
-        .map_or(Ok(0.8), str::parse)?;
+        .map_or(Ok(frame.haze_density), str::parse)?;
     frame.haze_density = if arguments.iter().any(|a| a == "--surface-only") {
         0.0
     } else {
