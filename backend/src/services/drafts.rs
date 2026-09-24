@@ -2,9 +2,9 @@
 //!
 //! A draft holds two copies of the score: `base_json`, as it stood when the
 //! child started, and `state_json`, what the child has made of it. Merging
-//! diffs the two per clip and per definition and applies only the differences,
-//! so work the parent did meanwhile survives — a whole-document overwrite
-//! would silently undo it.
+//! diffs the two per clip and applies only the differences, so work the
+//! parent did meanwhile survives — a whole-document overwrite would silently
+//! undo it.
 
 use luma_patterns::Score;
 use sqlx::SqliteConnection;
@@ -105,19 +105,6 @@ pub async fn merge(connection: &mut SqliteConnection, draft_id: &str) -> Result<
     {
         live.clips.remove(id);
     }
-    for (id, definition) in &state.definitions {
-        if base.definitions.get(id) != Some(definition) {
-            live.definitions.insert(id.clone(), definition.clone());
-        }
-    }
-    for id in base
-        .definitions
-        .keys()
-        .filter(|id| !state.definitions.contains_key(*id))
-    {
-        live.definitions.remove(id);
-    }
-
     rows::save_score(&mut *connection, &score_id, &uid, &live).await?;
     discard(connection, draft_id).await?;
     Ok(live)
@@ -168,7 +155,7 @@ mod tests {
 
     fn clip(start: f64) -> Clip {
         Clip {
-            graph: "strobe".into(),
+            graph: "strobe.constant@1".into(),
             start,
             duration: 4.0,
             seed: 7,

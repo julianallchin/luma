@@ -53,9 +53,7 @@ async fn prepare_scene_data(
             .await?
             .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
-    let library = score
-        .library(&standard_library())
-        .map_err(|error| error.to_string())?;
+    let library = standard_library();
     let mut compiled = Vec::new();
     let mut clip_cells = std::collections::BTreeMap::new();
     let mut prepared_clips = Vec::new();

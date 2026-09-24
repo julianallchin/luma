@@ -34,7 +34,6 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
         "scores",
         &[
             ("clips", "score_id"),
-            ("score_definitions", "score_id"),
             ("drafts", "score_id"),
         ],
     ),

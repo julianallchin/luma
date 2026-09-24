@@ -1,16 +1,15 @@
-//! A score is rows: one `clips` row per clip, one `score_definitions` row per
-//! local definition, and the `scores` row itself.
+//! A score is rows: one `clips` row per clip, and the `scores` row itself.
 //!
-//! A clip key and a definition key are unique inside their score, not across
-//! the library — two scores may each have a `flash` — so the stored id is
-//! `score_id:key` and the key is read back off it. A score id is a uuid and
+//! A clip key is unique inside its score, not across the library — two
+//! scores may each have a `flash` — so the stored id is `score_id:key` and
+//! the key is read back off it. A score id is a uuid and
 //! carries no colon, so the split is unambiguous however the key is spelled.
 //!
 //! [`save_score`] writes only what differs. There is no revision token: a
 //! stale candidate overwrites the rows it touches one column at a time, so two
 //! people editing different clips of one score do not collide.
 
-use luma_patterns::{BlendMode, Clip, Definition, Score, Selection};
+use luma_patterns::{BlendMode, Clip, Score, Selection};
 use sqlx::{Row, SqliteConnection};
 
 /// What one [`save_score`] actually wrote. Zero of everything is a no-op save,
@@ -129,7 +128,7 @@ fn key_of(score_id: &str, id: &str) -> Result<String, String> {
         .ok_or_else(|| format!("row {id} does not belong to score {score_id}"))
 }
 
-/// Read one score's clips and local definitions back into a document.
+/// Read one score's clips back into a document.
 pub async fn load_score(
     connection: &mut SqliteConnection,
     score_id: &str,
@@ -149,22 +148,6 @@ pub async fn load_score(
         score
             .clips
             .insert(key_of(score_id, &id)?, read_clip(&row)?.into_clip()?);
-    }
-    let rows = sqlx::query(
-        "SELECT id, definition_json FROM score_definitions WHERE score_id = ? ORDER BY id",
-    )
-    .bind(score_id)
-    .fetch_all(&mut *connection)
-    .await
-    .map_err(|error| format!("failed to read the score's definitions: {error}"))?;
-    for row in rows {
-        let id: String = row.try_get("id").map_err(|error| error.to_string())?;
-        let source: String = row
-            .try_get("definition_json")
-            .map_err(|error| error.to_string())?;
-        score
-            .definitions
-            .insert(key_of(score_id, &id)?, from_json::<Definition>(&source)?);
     }
     Ok(score)
 }
@@ -208,48 +191,6 @@ pub async fn save_score(
             .execute(&mut *connection)
             .await
             .map_err(|error| format!("failed to delete clip {id}: {error}"))?;
-        changed.deleted += 1;
-    }
-
-    for (id, definition) in &candidate.definitions {
-        let source = json(definition)?;
-        match stored.definitions.get(id) {
-            None => {
-                sqlx::query(
-                    "INSERT INTO score_definitions (id, uid, score_id, definition_json)
-                     VALUES (?, ?, ?, ?)",
-                )
-                .bind(row_id(score_id, id))
-                .bind(uid)
-                .bind(score_id)
-                .bind(&source)
-                .execute(&mut *connection)
-                .await
-                .map_err(|error| format!("failed to insert definition {id}: {error}"))?;
-                changed.inserted += 1;
-            }
-            Some(current) if json(current)? != source => {
-                sqlx::query("UPDATE score_definitions SET definition_json = ? WHERE id = ?")
-                    .bind(&source)
-                    .bind(row_id(score_id, id))
-                    .execute(&mut *connection)
-                    .await
-                    .map_err(|error| format!("failed to update definition {id}: {error}"))?;
-                changed.updated += 1;
-            }
-            Some(_) => {}
-        }
-    }
-    for id in stored
-        .definitions
-        .keys()
-        .filter(|id| !candidate.definitions.contains_key(*id))
-    {
-        sqlx::query("DELETE FROM score_definitions WHERE id = ?")
-            .bind(row_id(score_id, id))
-            .execute(&mut *connection)
-            .await
-            .map_err(|error| format!("failed to delete definition {id}: {error}"))?;
         changed.deleted += 1;
     }
 
@@ -379,7 +320,7 @@ mod tests {
 
     fn clip(seed: u64, start: f64) -> Clip {
         Clip {
-            graph: "strobe".into(),
+            graph: "strobe.constant@1".into(),
             start,
             duration: 4.0,
             seed,

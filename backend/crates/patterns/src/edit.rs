@@ -332,50 +332,6 @@ impl Definition {
     }
 }
 
-impl crate::Score {
-    /// Reconcile callers when a graph removes an exposed input. Clip overrides
-    /// and parent bindings cannot keep controls the callee no longer accepts.
-    /// Incomplete wiring is retained as a draft; validate before publication.
-    pub fn edit_graph(&mut self, base: &Library, id: &str, edit: GraphEdit) -> Result<()> {
-        let mut candidate = self.clone();
-        let library = candidate.library(base)?;
-        candidate
-            .definitions
-            .get_mut(id)
-            .ok_or_else(|| Error("copy this built-in into the score before editing it".into()))?
-            .edit(&library, edit)?;
-        loop {
-            let library = candidate.library(base)?;
-            let mut removed = false;
-            for definition in candidate.definitions.values_mut() {
-                let previously_used = definition.referenced_inputs();
-                if let Body::Graph(graph) = &mut definition.body {
-                    for node in graph.nodes.values_mut() {
-                        if let Some(child) = library.definitions.get(&node.definition) {
-                            node.inputs.retain(|id, _| child.inputs.contains_key(id));
-                        }
-                    }
-                }
-                let before = definition.inputs.len();
-                definition.prune_disconnected_inputs(&previously_used);
-                removed |= before != definition.inputs.len();
-            }
-            if !removed {
-                break;
-            }
-        }
-        let library = candidate.library(base)?;
-        for clip in candidate.clips.values_mut() {
-            if let Some(definition) = library.definitions.get(&clip.graph) {
-                clip.inputs
-                    .retain(|id, _| definition.inputs.contains_key(id));
-            }
-        }
-        *self = candidate;
-        Ok(())
-    }
-}
-
 fn input_spec<'a>(
     library: &'a Library,
     graph: &Graph,
@@ -428,7 +384,7 @@ mod tests {
     #[test]
     fn exposed_defaults_and_refused_wires_preserve_the_authored_graph() {
         let library = standard_library();
-        let mut definition = library.definitions["chase"].instance("chase");
+        let mut definition = library.definitions["color.chase@1"].instance("color.chase@1");
         let Body::Graph(body) = &definition.body else {
             unreachable!()
         };
@@ -485,7 +441,7 @@ mod tests {
     #[test]
     fn removing_a_node_keeps_a_repairable_draft_but_cannot_execute() {
         let mut library = standard_library();
-        let mut definition = library.definitions["chase"].instance("chase");
+        let mut definition = library.definitions["color.chase@1"].instance("color.chase@1");
         let Body::Graph(body) = &definition.body else {
             unreachable!()
         };
@@ -499,37 +455,9 @@ mod tests {
             .contains("missing output"));
     }
     #[test]
-    fn removing_an_exposure_updates_nested_callers_and_clip_overrides() {
-        let base = standard_library();
-        let mut score = crate::Score::default();
-        score
-            .insert_effect(&base, "beat_chase", "inner", 0., 4.)
-            .unwrap();
-        let wrapper = score.definitions["inner"].instance("inner");
-        score.definitions.insert("outer".into(), wrapper);
-        let mut clip = score.clips["inner"].clone();
-        clip.graph = "outer".into();
-        clip.inputs.insert("width".into(), Value::Proportion(0.7));
-        score.clips.insert("outer-clip".into(), clip);
-        score
-            .edit_graph(
-                &base,
-                "inner",
-                GraphEdit::RemoveInput {
-                    key: "width".into(),
-                },
-            )
-            .unwrap();
-        score.validate(&base).unwrap();
-        assert!(!score.definitions["inner"].inputs.contains_key("width"));
-        assert!(!score.definitions["outer"].inputs.contains_key("width"));
-        assert!(!score.clips["outer-clip"].inputs.contains_key("width"));
-        assert!(score.clips["outer-clip"].graph == "outer");
-    }
-    #[test]
     fn closing_a_wire_cycle_is_refused_without_destroying_the_draft() {
         let library = standard_library();
-        let mut definition = library.definitions["chase"].instance("chase");
+        let mut definition = library.definitions["color.chase@1"].instance("color.chase@1");
         for id in ["a", "b"] {
             definition
                 .edit(
@@ -574,7 +502,7 @@ mod tests {
     #[test]
     fn rename_keeps_unrelated_interface_declarations() {
         let library = standard_library();
-        let mut definition = library.definitions["chase"].instance("chase");
+        let mut definition = library.definitions["color.chase@1"].instance("color.chase@1");
         definition
             .inputs
             .insert("reserved".into(), definition.inputs["width"].clone());

@@ -48,27 +48,10 @@ pub(crate) async fn preview(
     if cells.len().saturating_mul(request.times.len()) > 1_000_000 {
         return Err("preview exceeds one million cell samples; request fewer times".into());
     }
-    let mut library = request.library.unwrap_or_else(standard_library);
-    let definition_id = if let Some(definition) = library.definitions.get(&request.definition) {
-        if !definition.playable() && definition.placeable() {
-            let wrapped = definition
-                .clip_instance(&request.definition)
-                .map_err(|e| e.to_string())?;
-            let mut id = "preview/output".to_owned();
-            while library.definitions.contains_key(&id) {
-                id.push('_');
-            }
-            library.definitions.insert(id.clone(), wrapped);
-            id
-        } else {
-            request.definition.clone()
-        }
-    } else {
-        request.definition.clone()
-    };
+    let library = standard_library();
     let definition = library
         .definitions
-        .get(&definition_id)
+        .get(&request.definition)
         .ok_or_else(|| format!("unknown graph {}", request.definition))?;
     let lighting = definition
         .lighting_output()
@@ -79,7 +62,7 @@ pub(crate) async fn preview(
         .map_err(|e| e.to_string())?;
     let prepared = PreparedGraph::new(
         &library,
-        &definition_id,
+        &request.definition,
         &request.inputs,
         Frame {
             features: None,

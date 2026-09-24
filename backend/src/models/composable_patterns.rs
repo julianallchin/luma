@@ -1,7 +1,7 @@
 //! The composable-pattern preview boundary. Graph/input schemas come directly
 //! from luma-patterns; the native and JSON hosts use the same definitions.
 use super::{selection::Selection, universe::UniverseState};
-use luma_patterns::{Cell, Library, Value};
+use luma_patterns::{Cell, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -11,8 +11,6 @@ pub struct ComposablePreviewRequest {
     pub venue_id: String,
     pub track_id: String,
     pub definition: String,
-    #[serde(default)]
-    pub library: Option<Library>,
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
     /// Each selection is one mapping group. Overlaps are rejected rather than

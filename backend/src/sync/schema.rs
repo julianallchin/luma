@@ -414,19 +414,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ]
     ),
     table!(
-        "score_definitions",
-        "@.id",
-        "uid",
-        [
-            "id",
-            "uid",
-            "score_id",
-            "definition_json",
-            "created_at",
-            "updated_at"
-        ]
-    ),
-    table!(
         "midi_modifiers",
         "@.id",
         "uid",

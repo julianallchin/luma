@@ -904,20 +904,36 @@ fn hit_width_grows_each_stroke_over_its_life() {
 }
 
 #[test]
-fn form_clips_stay_forms_when_copied_between_scores() {
+fn a_score_holds_only_form_clips_with_finite_timing() {
     let library = standard_library();
-    let mut source = Score::default();
-    source.clips.insert(
+    let mut score = Score::default();
+    score.clips.insert(
         "chase".into(),
-        presets().preset("Chase").unwrap().clip(0.0, 8.0),
+        presets().preset("Chase").unwrap().clip(START, 4.0),
     );
-    let mut target = Score::default();
-    target
-        .import_clip(&library, &source, "chase", "copy")
+    score.validate(&library).unwrap();
+
+    let prepared = score
+        .prepare_clip(&library, "chase", &BTreeMap::new(), &cells())
         .unwrap();
-    assert_eq!(target.clips["copy"].graph, "color.chase@1");
-    assert!(target.definitions.is_empty());
-    assert!(target.make_independent(&library, "copy", "local").is_err());
+    assert!(prepared.evaluate(START - 0.01).unwrap().is_empty());
+    assert!(prepared.evaluate(START + 4.0).unwrap().is_empty());
+    assert!(prepared.evaluate(f64::NAN).is_err());
+
+    let clip = score.clips.get_mut("chase").unwrap();
+    clip.duration = f64::MAX;
+    clip.start = f64::MAX;
+    assert!(score.validate(&library).is_err());
+
+    let clip = score.clips.get_mut("chase").unwrap();
+    clip.start = START;
+    clip.duration = 4.0;
+    clip.graph = "output".into();
+    assert!(score
+        .validate(&library)
+        .unwrap_err()
+        .0
+        .contains("is not a form"));
 }
 
 #[test]

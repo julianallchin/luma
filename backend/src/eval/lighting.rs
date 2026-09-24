@@ -3,8 +3,6 @@ use super::{Arena, OutputBinding, Plan, ViewTap};
 use crate::models::node_graph::Signal;
 use crate::models::universe::{PrimitiveState, UniverseState};
 use luma_patterns as p;
-#[cfg(test)]
-use luma_patterns::Body;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -343,8 +341,8 @@ mod tests {
     use super::*;
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
-        let score: p::Score = serde_json::from_value(serde_json::json!({
-            "definitions":{"custom":{
+        let mut library = p::standard_library();
+        let custom: p::Definition = serde_json::from_value(serde_json::json!({
                 "name":"Runtime error", "inputs":{},
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"nodes":{
@@ -356,16 +354,19 @@ mod tests {
                     "tint":{"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"root","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
                     "output":{"definition":"output","inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
-            }},"clips":{"clip":{"graph":"custom","start":0,"duration":4,"seed":0}}
         })).unwrap();
-        let library = score.library(&p::standard_library()).unwrap();
+        library.definitions.insert("custom".into(), custom);
+        let clip: p::Clip = serde_json::from_value(serde_json::json!({
+            "graph":"custom","start":0,"duration":4,"seed":0
+        }))
+        .unwrap();
+        let clip = &clip;
         let cells = vec![p::Cell {
             id: "head".into(),
             group: "wash".into(),
             world: [0.; 3],
             uvz: [0.; 3],
         }];
-        let clip = &score.clips["clip"];
         let program = p::PreparedGraph::new(
             &library,
             &clip.graph,
@@ -412,24 +413,12 @@ mod tests {
     }
 
     #[test]
-    fn graph_score_compiles_local_definitions_and_matches_batched_core_output() {
+    fn a_form_clip_compiles_to_the_batched_core_output() {
         let base = p::standard_library();
         let mut score = p::Score::default();
-        score
-            .insert_effect(&base, "beat_dissolve", "flash", 1.0, 3.0)
-            .unwrap();
-        // The output name is author-owned; playback must follow the interface.
-        let graph = score.definitions.get_mut("flash").unwrap();
-        let output = graph.outputs.remove("lighting").unwrap();
-        graph.outputs.insert("heads".into(), output);
-        if let Body::Graph(graph) = &mut graph.body {
-            let output = graph.outputs.remove("lighting").unwrap();
-            graph.outputs.insert("heads".into(), output);
-        }
-        let clip = score.clips.get_mut("flash").unwrap();
+        let mut clip = p::presets().preset("Dissolve").unwrap().clip(1.0, 3.0);
         clip.seed = 129;
-        clip.inputs
-            .insert("grid_aligned".into(), p::Value::Boolean(false));
+        score.clips.insert("flash".into(), clip);
         let cells: Vec<_> = (0..24)
             .map(|i| p::Cell {
                 id: format!("bar:{i}"),
@@ -438,11 +427,10 @@ mod tests {
                 uvz: [0.0, 0.0, i as f64],
             })
             .collect();
-        let library = score.library(&base).unwrap();
         let clock = p::BeatTimeline::new(vec![0.0, 0.5, 1.0, 2.0, 3.0, 4.0], 0.0).unwrap();
         let clip = &score.clips["flash"];
         let program = p::PreparedGraph::new(
-            &library,
+            &base,
             &clip.graph,
             &clip.inputs,
             p::Frame {
@@ -455,7 +443,7 @@ mod tests {
             },
         )
         .unwrap();
-        let plan = compile_clip(clip, clock.clone(), cells.clone(), program, "heads").unwrap();
+        let plan = compile_clip(clip, clock.clone(), cells.clone(), program, "lighting").unwrap();
         let prepared = score
             .prepare_clip(&base, "flash", &BTreeMap::new(), &cells)
             .unwrap();
@@ -477,7 +465,7 @@ mod tests {
             let direct = prepared
                 .evaluate(clock.beat_at(f64::from(seconds)).unwrap())
                 .unwrap();
-            let Some(p::Value::Lighting(values)) = direct.get("heads") else {
+            let Some(p::Value::Lighting(values)) = direct.get("lighting") else {
                 assert!(frame.primitives.is_empty());
                 continue;
             };
