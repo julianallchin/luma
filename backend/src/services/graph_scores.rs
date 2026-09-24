@@ -302,6 +302,14 @@ fn strip(
             &mut crate::eval::Arena::default(),
         )?;
     }
+    // An aim gives no light: its picture is where the beams point.
+    if clip.graph == "aim@1" {
+        return Ok(crate::annotation_preview::render_aim_preview(
+            clip_id.to_owned(),
+            &frames,
+            cells,
+        ));
+    }
     // A form clip's strip orders heads along a line through the rig; a clip
     // with its own graph keeps the brightness order it always had.
     let order = luma_patterns::is_form(&clip.graph)
@@ -323,7 +331,16 @@ pub fn stand_in_strip(
     preset: &luma_patterns::FormPreset,
     beats: f64,
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
-    synthetic_strip(&preset.clip(0.0, beats), &line_cells(STAND_IN_HEADS))
+    let mut cells = line_cells(STAND_IN_HEADS);
+    // An aim reads against the room: the line hangs a metre up and a metre
+    // upstage of center stage, so a point at the origin is in front of it.
+    if preset.form == "aim@1" {
+        for cell in &mut cells {
+            cell.uvz = [cell.uvz[0] - 0.5, -1., 1.];
+            cell.world = [cell.uvz[0], 1., 1.];
+        }
+    }
+    synthetic_strip(&preset.clip(0.0, beats), &cells)
 }
 
 /// `heads` heads evenly along U, in order.
@@ -444,6 +461,27 @@ mod tests {
         assert!(rows.len() > 16, "{rows:?}");
         assert!(rows.windows(2).all(|pair| pair[1] >= pair[0]), "{rows:?}");
         assert!(rows.last().unwrap() - rows[0] >= 24, "{rows:?}");
+    }
+
+    #[test]
+    fn an_aim_strip_shows_where_the_beams_point_and_how_they_move() {
+        let picture = |name: &str| {
+            let preset = luma_patterns::presets().preset("aim@1", name).unwrap();
+            let strip = stand_in_strip(preset, 16.0).unwrap();
+            assert_eq!((strip.width, strip.height), (128, 28), "{name}");
+            strip.pixels
+        };
+        // The dim path a moving beam's tip leaves, between the dark ground,
+        // the heads and the bright beams.
+        let moves = |pixels: &[u8]| pixels.chunks(4).any(|px| (60..120).contains(&px[0]));
+        let still = picture("Position");
+        assert!(!moves(&still));
+        for name in ["Fan", "Converge", "Bloom"] {
+            assert_ne!(picture(name), still, "{name}");
+        }
+        for name in ["Bloom", "Sweep", "Wave", "Circle", "Figure-8", "Ballyhoo"] {
+            assert!(moves(&picture(name)), "{name}");
+        }
     }
 
     #[test]
