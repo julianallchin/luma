@@ -67,13 +67,16 @@ fn haze_at(frag: vec4<f32>) -> HazeOutput {
     var total_importance = 0.0;
     var selected_importance = 1.0;
     while light_index_next(&cursor, &li) {
+        if !beam_routed(li) { continue; }
         if NATIVE_DETERMINISTIC {
             deterministic += beam_scatter(li, ray, sigma);
             continue;
         }
         let rest = light_rest[li];
         if GRID_FOG && rest.gobo < 0.5 {
-            if include_shared { deterministic += beam_scatter(li, ray, sigma); }
+            if include_shared || BEAM_ROUTE == BEAM_ROUTE_WIDE {
+                deterministic += beam_scatter(li, ray, sigma);
+            }
             continue;
         }
         if group_size > 1u && rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5 && rest.haze_gain > 0.0 {
@@ -118,7 +121,10 @@ fn haze_at(frag: vec4<f32>) -> HazeOutput {
     // composite's bilateral upsample have a distance-independent threshold.
     // Stochastic work is weighted by its sample count; deterministic work is
     // emitted once, including the full depth needed by the composite.
-    let depth_weight = select(weight, select(0.0, 1.0, include_shared), GRID_FOG);
+    // The wide-beam pass is deterministic and upsampled on its own, so it
+    // always carries its depth.
+    let wide = BEAM_ROUTE == BEAM_ROUTE_WIDE;
+    let depth_weight = select(select(weight, select(0.0, 1.0, include_shared), GRID_FOG), 1.0, wide);
     return HazeOutput(vec4<f32>(scattered * weight + deterministic, ray.view_depth * depth_weight), vec4<f32>(sampled * weight, 0.0));
 }
 

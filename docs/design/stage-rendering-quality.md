@@ -391,3 +391,48 @@ star +0.11.
 `profile-volumetrics --catalogue` now renders at the venue's own haze
 density (as the stage does). Every measurement above was taken at a fixed
 0.8; add `--haze=0.8` to the reproduction commands to compare against them.
+
+## Quality levels and beam cost (2026-09-23)
+
+`RenderSettings::quality` is `High` (the reference) or `Low` (a laptop GPU).
+The View popover's Viewport section sets it; it is the `stage_low_quality`
+device setting. The renderer turns it into a `QualityBudget` in `gpu.rs`.
+
+Both levels:
+
+- **Wide beams at half resolution.** On the live fragment grid path at native
+  haze resolution, beams wider than 35° (no gobo) run in a half-resolution
+  pass and are added into the native haze target with the composite's
+  depth-aware bilateral upsample (`shaders/haze_wide.wgsl`). The route is a
+  pipeline constant: as a uniform branch it cost the unsplit pass 25%.
+  `LUMA_WIDE_BEAMS=0` keeps every beam native. Not on the Metal compute path.
+- **Plain-beam piece cap.** Below cloudiness 0.5, `lit_interval` uses at most
+  8 pieces (Low: 4), never fewer than the equiangular criterion needs.
+- **Shadow redraw budget.** A moved head keeps its slot and its last map; at
+  most 64 moved maps (Low: 16) are redrawn per frame, by priority × frames
+  waited. New maps always draw.
+- **Dark cones** (intensity × brightest channel ≤ 1e-4) get no shadow map,
+  light-index entry or beam work.
+
+Low also: haze at 0.5, 4 gobo samples, 1 MP pixel budget (with a
+frame-time-driven share of it, floor a quarter), MSAA 1×, 16 px fog cells,
+twice the shadow-walk footprint and half its steps, and twice again while the
+camera moves.
+
+Saved Get Lucky at Gasworks, t = 30 s, RTX 5090 / Vulkan, 1920×1080 output
+(Low renders 1333×750), 7 static poses plus a 1.5°/frame orbit, per-pose
+minimum of 2–3 alternating runs of 24-frame medians:
+
+| | GPU mean (static) | GPU max | orbit GPU | CPU submit |
+|---|---:|---:|---:|---:|
+| High before | 15.7 ms | 24.9 ms | 14.3 ms | 1.4 ms |
+| High after | 11.8 ms | 15.9 ms | 11.5 ms | 1.4 ms |
+| Low | 6.1 ms | 8.3 ms | 4.4 ms | 1.3 ms |
+| All 418 heads moving, before | 18.6 ms | 31.0 ms | 16.7 ms | 7.6 ms |
+| All heads moving, High after | 12.1 ms | 17.3 ms | 11.7 ms | 3.1 ms |
+
+High after differs from before by a mean of 0.03–0.06 / 255, up to 67 on
+under 0.05% of pixels, at wide washes' hot cores and silhouettes. The
+`truss-shadow-near` transport case measures RMSE 3.5 with wide routing
+against 0.9 without: a truss member across the lens leaves a one-pixel halo.
+`volumetric_transport` now measures routing separately from the integrator.

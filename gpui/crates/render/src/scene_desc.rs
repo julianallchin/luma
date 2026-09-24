@@ -262,11 +262,69 @@ pub struct RenderSettings {
     pub cluster_debug: bool,
     /// Vertical field of view, degrees.
     pub fov: f32,
+    /// How much work the renderer may spend per frame. A device choice, not
+    /// the room's look; see [`Quality`]. Omitted when high, so descriptors
+    /// written before it existed serialize unchanged.
+    #[serde(skip_serializing_if = "Quality::is_high")]
+    pub quality: Quality,
     /// Positional shadow anchor of the golden catalogue's directional light.
     /// Not serialized; only the golden catalogue adapter sets it, so the
     /// orthographic shadow projection of those captures stays byte-exact.
     #[serde(skip)]
     pub(crate) golden_shadow_eye: Option<[f32; 3]>,
+}
+
+/// The renderer's cost level.
+///
+/// `High` is the reference picture. `Low` is for a laptop GPU: it lowers
+/// multisampling, the far-field fog grid's resolution and the haze shadow
+/// walk's detail, and it coarsens haze shadows further while the camera
+/// moves. Callers lower the haze and output resolutions themselves, because
+/// those are already their own settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Quality {
+    /// The reference picture.
+    #[default]
+    High,
+    /// A laptop GPU's budget.
+    Low,
+}
+
+impl Quality {
+    /// Whether this is [`Self::High`]; serde's skip test.
+    #[must_use]
+    pub fn is_high(&self) -> bool {
+        *self == Self::High
+    }
+
+    /// The haze target's fraction of the output resolution.
+    #[must_use]
+    pub fn haze_resolution(self) -> f32 {
+        match self {
+            Self::High => crate::LIVE_HAZE_RESOLUTION,
+            Self::Low => 0.5,
+        }
+    }
+
+    /// Stochastic samples per gobo beam.
+    #[must_use]
+    pub fn haze_steps(self) -> u32 {
+        match self {
+            Self::High => 8,
+            Self::Low => 4,
+        }
+    }
+
+    /// Most pixels a live viewport renders before the compositor upscales,
+    /// when this level sets its own limit.
+    #[must_use]
+    pub fn pixel_budget(self) -> Option<f64> {
+        match self {
+            Self::High => None,
+            Self::Low => Some(1.0e6),
+        }
+    }
 }
 
 /// Runtime-selectable renderer diagnostic output.
@@ -1046,6 +1104,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
+            quality: Quality::High,
             golden_shadow_eye: None,
         }
     }
@@ -1081,6 +1140,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
+            quality: Quality::High,
             golden_shadow_eye: None,
         }
     }
@@ -1132,6 +1192,7 @@ impl RenderSettings {
             geometry_shadows: false,
             cluster_debug: false,
             fov,
+            quality: Quality::High,
             golden_shadow_eye: None,
         }
     }
@@ -1172,6 +1233,8 @@ struct RenderSettingsWire {
     #[serde(default)]
     cluster_debug: bool,
     fov: f32,
+    #[serde(default)]
+    quality: Quality,
     #[serde(default)]
     dark_stage: Option<bool>,
     #[serde(default)]
@@ -1225,6 +1288,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
                 fov: wire.fov,
+                quality: wire.quality,
                 golden_shadow_eye: None,
             });
         }

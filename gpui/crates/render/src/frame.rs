@@ -317,6 +317,8 @@ pub struct Frame {
     pub haze_bounds: luma_scene::Aabb,
     /// Equiangular samples per beam.
     pub haze_steps: u32,
+    /// The renderer's cost level; see [`crate::scene_desc::Quality`].
+    pub quality: crate::scene_desc::Quality,
     /// Fraction of the output resolution the haze pass runs at.
     ///
     /// The haze is a full-screen ray-march and is by far the most expensive
@@ -1268,6 +1270,7 @@ pub fn build_with(
         },
         haze_steps: scene.render.haze.steps,
         haze_resolution: scene.render.haze.resolution,
+        quality: scene.render.quality,
         time,
         debug_view: scene.render.debug_view,
         look: scene.render.look,
