@@ -30,7 +30,7 @@
 use glam::Vec3;
 
 use crate::aabb::Aabb;
-use crate::camera::Camera;
+use crate::camera::{Camera, MIN_EYE_Z};
 
 /// The extent a camera has to fit, in render-world space (Z-up): the cloud of
 /// points every view has to keep on screen, and the box that summarises them.
@@ -278,14 +278,21 @@ impl Framing {
         (near, (fitted * Self::FAR_MULTIPLE).max(near * 2.0))
     }
 
-    /// The polar range an *orbit* may reach — off the pole, above the horizon.
+    /// The polar range an *orbit* may reach — off the pole, and with the eye
+    /// no lower than `MIN_EYE_Z` above the floor.
     ///
-    /// Named views are not bound by it (an audience eye looks *up* at a truss),
-    /// which is why this is a verb the orbit calls rather than a clamp baked
-    /// into [`Camera`].
+    /// Below the target's horizon is allowed: an eye under a raised target
+    /// looks *up* at it, which is how a truss is inspected. The old limit was
+    /// the horizon itself, and it stopped the orbit before it could look up.
+    /// Never tighter than the horizon, so a target on the floor orbits as
+    /// before. Named views are not bound by it, which is why this is a verb
+    /// the orbit calls rather than a clamp baked into [`Camera`].
     #[must_use]
-    pub fn clamp_polar(polar: f32) -> f32 {
-        polar.clamp(Self::MIN_POLAR, Self::MAX_POLAR)
+    pub fn clamp_orbit_polar(&self, polar: f32, target_z: f32, radius: f32) -> f32 {
+        let lowest = (self.floor_z() + MIN_EYE_Z - target_z) / radius.max(f32::EPSILON);
+        let floor = lowest.clamp(-1.0, 1.0).acos();
+        let max = floor.clamp(Self::MAX_POLAR, std::f32::consts::PI - Self::MIN_POLAR);
+        polar.clamp(Self::MIN_POLAR, max)
     }
 }
 
@@ -710,5 +717,19 @@ mod tests {
         let view = Viewfinder::new(50.0, 1.0).inset(Insets::vertical(0.6, 0.6));
         let d = f.required_distance(f.target(), Vec3::NEG_Y, &view);
         assert!(d.is_finite() && d < 1.0e4, "{d}");
+    }
+
+    #[test]
+    fn orbit_can_look_up_at_a_raised_target_but_not_through_the_floor() {
+        let f = Framing::default();
+        let floor = f.floor_z();
+        // A target 5 m up, 4 m away: the eye may drop below its horizon.
+        let polar = f.clamp_orbit_polar(3.0, floor + 5.0, 4.0);
+        assert!(polar > std::f32::consts::FRAC_PI_2, "{polar}");
+        let eye_z = floor + 5.0 + 4.0 * polar.cos();
+        assert!(eye_z >= floor + MIN_EYE_Z - 1e-4, "{eye_z}");
+        // A target on the floor keeps the old horizon limit.
+        let flat = f.clamp_orbit_polar(3.0, floor, 4.0);
+        assert!((flat - Framing::MAX_POLAR).abs() < 1e-6, "{flat}");
     }
 }

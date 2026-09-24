@@ -338,9 +338,7 @@ pub(crate) fn build(
     }
 
     for ghost in &build.ghosts {
-        let root = to_world
-            * three_pose_from_data(ghost.pos, ghost.rot)
-            * Mat4::from_scale(Vec3::splat(ghost.scale));
+        let pose = to_world * three_pose_from_data(ghost.pos, ghost.rot);
         // A ghost whose asset will not load draws nothing: the same missing
         // mesh is already absent from the room, and a placement preview is not
         // worth failing a frame over. A held *light* draws its housing — the
@@ -351,10 +349,18 @@ pub(crate) fn build(
             .as_deref()
             .and_then(|path| Some((path, definitions.get(path)?)));
         let draws = match housing {
+            // The housing is drawn at the definition's own size. `scale`
+            // shrinks only the stand-in block, which has no true size.
             Some((path, def)) => {
-                crate::frame::housing_draws(def, path, root, [0.0, 0.0], lib, bank, None)
+                crate::frame::housing_draws(def, path, pose, [0.0, 0.0], lib, bank, None)
             }
-            None => crate::frame::piece_draws(&ghost.geometry, root, lib, bank, None),
+            None => crate::frame::piece_draws(
+                &ghost.geometry,
+                pose * Mat4::from_scale(Vec3::splat(ghost.scale)),
+                lib,
+                bank,
+                None,
+            ),
         }
         .unwrap_or_default();
         out.extend(draws.into_iter().map(|draw| Overlay {
