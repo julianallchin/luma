@@ -74,19 +74,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     curve("Every curve", "Beats between events, over the clip"),
                 ),
                 (
-                    "stamps",
-                    Input {
-                        optional: true,
-                        ..port(
-                            "Stamped events",
-                            "Event times in beats from the clip start",
-                            ValueType::Events,
-                            Rate::Fixed,
-                            None,
-                        )
-                    },
-                ),
-                (
                     "life",
                     beats(
                         "Life",
@@ -243,22 +230,12 @@ pub(crate) fn run(
         Primitive::EventLife => {
             let origin = frame.clip_start;
             let span = frame.clip_duration;
-            let schedule = match inputs.get("stamps").map(|value| value.control(0)) {
-                Some(Value::Events(Events::Beats { times })) => {
-                    Schedule::Stamps(times.as_slice().iter().map(|t| origin + t).collect())
-                }
-                Some(_) => {
-                    return Err(Error(
-                        "stamped events must be a list of beats from the clip start".into(),
-                    ))
-                }
-                None => Schedule::Paced(Pace::new(
-                    origin,
-                    span,
-                    whole_clip(inputs["every"].fixed_scalar()?, span),
-                    keyframes(inputs, "every_curve"),
-                )?),
-            };
+            let schedule = Schedule(Pace::new(
+                origin,
+                span,
+                whole_clip(inputs["every"].fixed_scalar()?, span),
+                keyframes(inputs, "every_curve"),
+            )?);
             let life = Pace::new(
                 origin,
                 span,
@@ -370,32 +347,20 @@ fn whole_clip(period: f64, clip_duration: f64) -> f64 {
     }
 }
 
-enum Schedule {
-    /// Absolute event beats, in order.
-    Stamps(Vec<f64>),
-    /// Event k starts when the pace has counted k periods.
-    Paced(Pace),
-}
+/// Event k starts when the pace has counted k periods.
+struct Schedule(Pace);
 impl Schedule {
     /// Events that start at or before `beat`.
     fn count(&self, beat: f64) -> i64 {
-        match self {
-            Self::Stamps(times) => times.partition_point(|t| *t <= beat) as i64,
-            Self::Paced(pace) => {
-                let turns = pace.turns(beat);
-                if turns < 0.0 {
-                    0
-                } else {
-                    turns.floor() as i64 + 1
-                }
-            }
+        let turns = self.0.turns(beat);
+        if turns < 0.0 {
+            0
+        } else {
+            turns.floor() as i64 + 1
         }
     }
     fn time(&self, k: i64) -> Option<f64> {
-        match self {
-            Self::Stamps(times) => usize::try_from(k).ok().and_then(|k| times.get(k)).copied(),
-            Self::Paced(pace) => (k >= 0).then(|| pace.beat_at(k as f64)),
-        }
+        (k >= 0).then(|| self.0.beat_at(k as f64))
     }
 }
 

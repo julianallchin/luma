@@ -61,7 +61,7 @@ pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
 /// the clip like an odometer instead of read frame by frame.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
 
-use SourceKind::{Audio, Events as Stamps, Hit, Noise, Time};
+use SourceKind::{Audio, Hit, Noise, Time};
 
 // ---------------------------------------------------------------------------
 // Building blocks
@@ -648,10 +648,7 @@ fn chase() -> Definition {
         vec![
             ("color", color_input()),
             ("axis", axis_input(MappingSource::U)),
-            (
-                "every",
-                every_input(2.0, "Beats between strokes", &[Time, Stamps]),
-            ),
+            ("every", every_input(2.0, "Beats between strokes", &[Time])),
             (
                 "travel",
                 input(
@@ -764,10 +761,7 @@ fn sparkle() -> Definition {
         "Sparkle",
         vec![
             ("color", color_input()),
-            (
-                "every",
-                every_input(1.0, "Beats between events", &[Time, Stamps]),
-            ),
+            ("every", every_input(1.0, "Beats between events", &[Time])),
             (
                 "duration",
                 input(
@@ -957,11 +951,10 @@ pub(crate) fn check_inputs(
             .map_err(|error| Error(format!("{id}.{name}: {error}")))?;
         check_value(name, spec, value).map_err(|error| Error(format!("{id}.{name}: {error}")))?;
     }
-    // A sparkle lights a random share. A fixed 100% on paced events is a
-    // Wash with a brightness per hit. Stamped events have no Wash yet.
+    // A sparkle lights a random share. A fixed 100% is a Wash with a
+    // brightness per hit.
     if id == "color.sparkle@1"
         && matches!(inputs.get("coverage"), Some(Value::Proportion(v)) if *v >= 1.0)
-        && !matches!(inputs.get("every"), Some(Value::Events(_)))
     {
         return Err(Error(format!(
             "{id}.coverage: a fixed 100% lights every head; use a Wash (color.constant@1)"
@@ -1033,7 +1026,6 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
             !color && !speed && within(Box::new(range.iter().copied()))
         }
         Value::Audio(_) => !color && !speed,
-        Value::Events(Events::Beats { times }) => times.as_slice().iter().all(|t| *t >= 0.0),
         _ => false,
     };
     if fits {
@@ -1078,16 +1070,12 @@ pub(crate) fn lower(
         let mut body = Body::default();
         let key = |part: &str| format!("source/{name}/{part}");
         let replacement = match value {
-            Value::Events(_) => {
-                clocks(graph, name, |_| "stamps".into(), value)?;
-                None
-            }
             Value::Time(curve) if SPEEDS.contains(&name.as_str()) => {
                 let curve = Value::Time(curve.clone());
-                clocks(graph, name, |key| format!("{key}_curve"), &curve)?;
-                Some(time_curve(&mut body, &key, curve))
+                clocks(graph, name, &curve);
+                time_curve(&mut body, &key, curve)
             }
-            Value::Time(curve) => Some(time_curve(&mut body, &key, Value::Time(curve.clone()))),
+            Value::Time(curve) => time_curve(&mut body, &key, Value::Time(curve.clone())),
             Value::Hit(curve) => {
                 let progress = hit_progress(graph)
                     .ok_or_else(|| Error(format!("{id} has no events for a hit source")))?;
@@ -1099,7 +1087,7 @@ pub(crate) fn lower(
                         ("progress", progress),
                     ],
                 );
-                Some(c(&key("curve"), "value"))
+                c(&key("curve"), "value")
             }
             Value::Noise(noise) => {
                 body.node(
@@ -1116,12 +1104,7 @@ pub(crate) fn lower(
                         ("z", n(0.0)),
                     ],
                 );
-                Some(scale(
-                    &mut body,
-                    &key,
-                    c(&key("noise"), "value"),
-                    noise.range,
-                ))
+                scale(&mut body, &key, c(&key("noise"), "value"), noise.range)
             }
             Value::Audio(audio) => {
                 let (low, high) = (audio.from_hz, audio.to_hz);
@@ -1147,7 +1130,7 @@ pub(crate) fn lower(
                     [audio.floor, 1.0],
                 );
                 // Below the threshold the level is 0, under the floor too.
-                Some(if audio.threshold > 0.0 {
+                if audio.threshold > 0.0 {
                     body.node(
                         &key("gate"),
                         "core/greater",
@@ -1160,12 +1143,11 @@ pub(crate) fn lower(
                     body.multiply(&key("gated"), level, c(&key("gate"), "mask"))
                 } else {
                     level
-                })
+                }
             }
             _ => unreachable!("checked source"),
         };
         graph.nodes.extend(body.0);
-        let mut unbound = false;
         for binding in graph
             .nodes
             .values_mut()
@@ -1173,16 +1155,8 @@ pub(crate) fn lower(
             .chain(graph.outputs.values_mut())
         {
             if matches!(binding, Binding::Input { input } if input == name) {
-                match &replacement {
-                    Some(replacement) => *binding = replacement.clone(),
-                    None => unbound = true,
-                }
+                *binding = replacement.clone();
             }
-        }
-        if unbound {
-            return Err(Error(format!(
-                "{id}.{name}: this source only drives the event clock"
-            )));
         }
     }
     Ok(Some((lowered, plain)))
@@ -1199,13 +1173,9 @@ fn hit_progress(graph: &Graph) -> Option<Binding> {
     }
 }
 
-/// Give a speed source to the clocks that read the input, in place of it.
-fn clocks(
-    graph: &mut Graph,
-    name: &str,
-    rename: impl Fn(&str) -> String,
-    value: &Value,
-) -> Result<()> {
+/// Give a speed curve to the clocks that read the input, on their `_curve`
+/// port in place of the input.
+fn clocks(graph: &mut Graph, name: &str, curve: &Value) {
     for node in graph.nodes.values_mut() {
         if !matches!(
             node.definition.as_str(),
@@ -1221,10 +1191,10 @@ fn clocks(
             .collect();
         for key in keys {
             node.inputs.remove(&key);
-            node.inputs.insert(rename(&key), value.clone().into());
+            node.inputs
+                .insert(format!("{key}_curve"), curve.clone().into());
         }
     }
-    Ok(())
 }
 
 fn time_curve(body: &mut Body, key: &impl Fn(&str) -> String, curve: Value) -> Binding {

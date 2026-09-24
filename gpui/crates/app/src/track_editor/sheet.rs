@@ -173,8 +173,6 @@ enum Widget {
     Noise([Entity<DraftedNumber>; 3]),
     /// An audio source: from and to in Hz, then the floor in percent.
     Audio([Entity<DraftedNumber>; 4]),
-    /// A list of stamped beats.
-    Stamps(Entity<luma_ui::text_input::TextInput>),
     /// A form's axis: its presets, spans and plane; holds the custom plane
     /// axis U, V, Z.
     Axis([Entity<DraftedNumber>; 3]),
@@ -806,8 +804,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
             | Widget::Every(_)
             | Widget::Noise(_)
             | Widget::Audio(_)
-            | Widget::Axis(_)
-            | Widget::Stamps(_) => {}
+            | Widget::Axis(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -1243,8 +1240,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         | Widget::Every(_)
         | Widget::Noise(_)
         | Widget::Audio(_)
-        | Widget::Axis(_)
-        | Widget::Stamps(_) => Vec::new(),
+        | Widget::Axis(_) => Vec::new(),
     }
 }
 

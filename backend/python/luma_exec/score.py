@@ -54,7 +54,7 @@ def _typed(kind, value):
         spec = kind["signal"]
         if isinstance(value, dict) and "type" in value:
             if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field",
-                                     "time", "hit", "noise", "audio", "events"}:
+                                     "time", "hit", "noise", "audio"}:
                 raise TrackError("a signal socket needs a numerical value or a source")
             return value  # The core validates units, channels and fixture domains.
         rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
