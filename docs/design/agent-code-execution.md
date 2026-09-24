@@ -193,10 +193,10 @@ document head, no compare-and-swap and no server RPC.
 
 ### 5.5 History
 
-A TEMP trigger set on every writer connection adds one `changes` row for every
-insert, update and delete on a synced table, with the row before and after.
-`changes` syncs to its owner. The only reader is score provenance. Nothing
-replays the log. Undo in the editors stays in memory.
+A Postgres trigger records every authored row change on the server, with the
+row before and after and the actor: the person, or the model that made it.
+History does not sync to devices. Undo in the editors stays in memory. See
+[sync.md](sync.md).
 
 ### 5.6 Agent edits
 

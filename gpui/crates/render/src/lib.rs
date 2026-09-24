@@ -26,6 +26,7 @@
 pub mod assets;
 pub mod atmosphere;
 pub(crate) mod cables;
+pub mod camera_export;
 pub mod catalog;
 pub mod coords;
 pub mod device;

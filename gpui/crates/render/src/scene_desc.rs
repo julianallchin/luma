@@ -95,6 +95,19 @@ pub struct Editor {
     /// What the builder is about to do, drawn over the room it would change.
     /// Empty on every screen that is not the stage page.
     pub build: Build,
+    /// Where the score wants heads the preview's motors have not reached yet,
+    /// each drawn as a faint line along its beam.
+    pub aim_targets: Vec<AimTarget>,
+}
+
+/// A head's pan and tilt as the score sends them, while the previewed head
+/// is still turning toward them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AimTarget {
+    /// The primitive key, `"<fixtureId>:<head>"`.
+    pub head: String,
+    /// `[pan, tilt]` in degrees, as [`PrimitiveState::position`].
+    pub position: [f32; 2],
 }
 
 /// The builder's uncommitted intent: the piece under the cursor, the run being

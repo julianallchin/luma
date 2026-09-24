@@ -194,9 +194,7 @@ impl HostCallHandler for TrackHost {
         self.runtime.block_on(async {
             if matches!(
                 method,
-                "track.score_check"
-                    | "track.score_apply"
-                    | "track.score_render"
+                "track.score_check" | "track.score_apply" | "track.score_render"
             ) {
                 return self.score_call(method, payload, context).await;
             }
@@ -292,6 +290,7 @@ mod tests {
                 strobe: 0.0,
                 position: [0.0, 0.0],
                 speed: 1.0,
+                aim: None,
             },
         );
         let second = UniverseState::default();

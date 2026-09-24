@@ -1,4 +1,5 @@
 //! Host boundary for the shared tensor evaluator: fixture output and scene compositing.
+pub mod aim;
 pub mod composite;
 pub mod context;
 pub mod lighting;
@@ -26,6 +27,7 @@ pub struct OutputBinding {
     pub position: bool,
     pub strobe: bool,
     pub speed: bool,
+    pub aim: bool,
 }
 #[derive(Clone, Debug)]
 pub struct ViewTap {

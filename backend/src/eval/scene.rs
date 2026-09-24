@@ -13,6 +13,7 @@
 //! tick and the frame-cache grain live at the *output* boundary (the render
 //! loop / emitter), never here.
 
+use crate::eval::aim::{Aiming, Rig};
 use crate::eval::composite::{blank_frame, composite_frame};
 use crate::eval::{try_eval, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
@@ -35,10 +36,17 @@ pub struct CompiledAnnotation {
 
 /// A compiled, evaluable lighting program for one `(track, venue)` — every
 /// annotation's plan, ready to render either singly or composited.
+///
+/// A scene that aims heads ([`Scene::with_rig`]) also moves them in black and
+/// solves their pan and tilt in [`Scope::Composite`]. The solver remembers
+/// what it last sent, to choose among the pan/tilt pairs that point a head
+/// the same way; the direction a head points is still a pure function of `t`.
+/// Clones share that memory.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
     /// Annotations in z-order ascending (painter's algorithm: lower z first).
     pub annotations: Vec<CompiledAnnotation>,
+    aiming: Option<Arc<Aiming>>,
 }
 
 /// What to render from a [`Scene`].
@@ -56,7 +64,25 @@ impl Scene {
     /// [`Scope::Single`] indices are stable and compositing is painter-ordered.
     pub fn new(mut annotations: Vec<CompiledAnnotation>) -> Self {
         annotations.sort_by_key(|a| a.z_index);
-        Self { annotations }
+        Self {
+            annotations,
+            aiming: None,
+        }
+    }
+
+    /// Aim the heads of `rig` that a layer aims: move them in black and solve
+    /// their pan and tilt. Samples when each is lit up front.
+    ///
+    /// # Errors
+    /// Fails when a layer cannot be evaluated.
+    pub fn with_rig(mut self, rig: Rig) -> Result<Self, String> {
+        self.aiming = Aiming::new(&self.annotations, rig)?.map(Arc::new);
+        Ok(self)
+    }
+
+    /// The heads this scene aims.
+    pub fn rig(&self) -> Option<&Rig> {
+        self.aiming.as_deref().map(Aiming::rig)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -86,34 +112,46 @@ impl Scene {
                 Some(ann) => try_eval(ann.plan.as_ref(), times, scratch),
                 None => Ok(times.iter().map(|_| blank_frame()).collect()),
             },
-            Scope::Composite => self.composite(times, scratch),
+            Scope::Composite => {
+                let mut frames = composite(&self.annotations, times, scratch)?;
+                if let Some(aiming) = &self.aiming {
+                    aiming.apply(&self.annotations, times, &mut frames, scratch)?;
+                }
+                Ok(frames)
+            }
         }
     }
+}
 
-    /// Each annotation evaluates one batch of its active times. Samples outside
-    /// its clip must neither contribute output nor cause an evaluation failure.
-    fn composite(&self, times: &[f32], scratch: &mut Arena) -> Result<Vec<UniverseState>, String> {
-        let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
-        for ann in &self.annotations {
-            let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
-            if !times.iter().any(active) {
-                continue;
-            }
-            let sample_times: std::borrow::Cow<'_, [f32]> = if times.iter().all(active) {
-                times.into()
-            } else {
-                times
-                    .iter()
-                    .copied()
-                    .filter(active)
-                    .collect::<Vec<_>>()
-                    .into()
-            };
-            let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
-            for ((k, _), frame) in times.iter().enumerate().filter(|(_, t)| active(t)).zip(got) {
-                composite_frame(&mut frames[k], &frame, &ann.plan.outputs, ann.blend_mode);
-            }
+/// The z-ordered composite of `annotations` at `times`, before any aiming.
+///
+/// Each annotation evaluates one batch of its active times. Samples outside
+/// its clip must neither contribute output nor cause an evaluation failure.
+pub(crate) fn composite(
+    annotations: &[CompiledAnnotation],
+    times: &[f32],
+    scratch: &mut Arena,
+) -> Result<Vec<UniverseState>, String> {
+    let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
+    for ann in annotations {
+        let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
+        if !times.iter().any(active) {
+            continue;
         }
-        Ok(frames)
+        let sample_times: std::borrow::Cow<'_, [f32]> = if times.iter().all(active) {
+            times.into()
+        } else {
+            times
+                .iter()
+                .copied()
+                .filter(active)
+                .collect::<Vec<_>>()
+                .into()
+        };
+        let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
+        for ((k, _), frame) in times.iter().enumerate().filter(|(_, t)| active(t)).zip(got) {
+            composite_frame(&mut frames[k], &frame, &ann.plan.outputs, ann.blend_mode);
+        }
     }
+    Ok(frames)
 }

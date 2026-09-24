@@ -172,6 +172,7 @@ impl RenderEngine {
                     strobe: 0.0,
                     position: [0.0, 0.0],
                     speed: 0.0,
+                    aim: None,
                 };
                 let mut primitives = HashMap::new();
                 for target in &identify.targets {
@@ -406,6 +407,7 @@ fn score_mix(
         let mut speed = 0.0f32;
 
         let mut best_position = [0.0f32; 2];
+        let mut best_aim = None;
         let mut best_vol = -1.0f32;
 
         for (state, vol) in &frames {
@@ -421,6 +423,7 @@ fn score_mix(
                 if *vol > best_vol {
                     best_vol = *vol;
                     best_position = prim.position;
+                    best_aim = prim.aim;
                 }
             }
         }
@@ -433,6 +436,7 @@ fn score_mix(
                 strobe: strobe.clamp(0.0, 1.0),
                 position: best_position,
                 speed: if speed > 0.5 { 1.0 } else { 0.0 },
+                aim: best_aim,
             },
         );
     }

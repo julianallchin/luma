@@ -30,17 +30,48 @@ struct SceneData {
     cells: std::collections::BTreeMap<String, Vec<luma_patterns::Cell>>,
 }
 
+/// `single` is a one-clip preview: it keeps a clip that lights no cells and
+/// fails with the clip's error. A whole score instead leaves out each clip
+/// that fails, logs why, and plays the rest, so one bad clip never darkens
+/// the score.
 async fn prepare_scene_data(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     track_id: &str,
     score: &Score,
-    include_empty: bool,
+    single: bool,
 ) -> Result<SceneData, String> {
-    score
-        .validate(&standard_library())
-        .map_err(|error| error.to_string())?;
+    let library = standard_library();
+    if single {
+        score
+            .validate(&library)
+            .map_err(|error| error.to_string())?;
+    }
+    // A clip that fails leaves the scene; see above.
+    let skip = |error: String| -> Result<(), String> {
+        if single {
+            return Err(error);
+        }
+        log::warn!("score clip left out of the scene: {error}");
+        Ok(())
+    };
+    let score = &Score {
+        clips: score
+            .clips
+            .iter()
+            .filter(
+                |(id, clip)| match Score::validate_clip(&library, id, clip) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        log::warn!("score clip left out of the scene: {error}");
+                        false
+                    }
+                },
+            )
+            .map(|(id, clip)| (id.clone(), clip.clone()))
+            .collect(),
+    };
     if score.clips.is_empty() {
         return Ok(SceneData {
             scene: crate::eval::Scene::default(),
@@ -53,7 +84,6 @@ async fn prepare_scene_data(
             .await?
             .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
-    let library = standard_library();
     let mut compiled = Vec::new();
     let mut clip_cells = std::collections::BTreeMap::new();
     let mut prepared_clips = Vec::new();
@@ -77,10 +107,10 @@ async fn prepare_scene_data(
             domains.insert(key, cells.clone());
             cells
         };
-        if cells.is_empty() && !include_empty {
+        if cells.is_empty() && !single {
             continue;
         }
-        let prepared = luma_patterns::PreparedGraph::new(
+        let prepared = match luma_patterns::PreparedGraph::new(
             &library,
             &clip.graph,
             &clip.inputs,
@@ -92,8 +122,13 @@ async fn prepare_scene_data(
                 clip_duration: clip.duration,
                 seed: clip.seed,
             },
-        )
-        .map_err(|e| format!("clip {id}: {e}"))?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                skip(format!("clip {id}: {error}"))?;
+                continue;
+            }
+        };
         for request in prepared.feature_requests() {
             if !requests.contains(request) {
                 requests.push(request.clone());
@@ -111,18 +146,32 @@ async fn prepare_scene_data(
     };
     for (id, clip, cells, prepared) in prepared_clips {
         let prepared = match &features {
-            Some(features) => prepared
-                .with_features(features.clone())
-                .map_err(|e| format!("clip {id}: {e}"))?,
+            Some(features) => match prepared.with_features(features.clone()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    skip(format!("clip {id}: {error}"))?;
+                    continue;
+                }
+            },
             None => prepared,
         };
         let output = library.definitions[&clip.graph]
             .lighting_output()
             .ok_or("clip graph must produce fixture output")?;
-        clip_cells.insert(id.clone(), cells.clone());
-        let plan =
-            crate::eval::lighting::compile_clip(clip, clock.clone(), cells, prepared, output)
-                .map_err(|error| format!("clip {id}: {error}"))?;
+        let plan = match crate::eval::lighting::compile_clip(
+            clip,
+            clock.clone(),
+            cells.clone(),
+            prepared,
+            output,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                skip(format!("clip {id}: {error}"))?;
+                continue;
+            }
+        };
+        clip_cells.insert(id.clone(), cells);
         compiled.push(crate::eval::CompiledAnnotation {
             span: plan.span,
             plan: std::sync::Arc::new(plan),
@@ -130,8 +179,18 @@ async fn prepare_scene_data(
             blend_mode: clip.blend_mode,
         });
     }
+    let aimed: std::collections::BTreeSet<&str> = compiled
+        .iter()
+        .filter(|annotation| annotation.plan.outputs.aim)
+        .flat_map(|annotation| annotation.plan.primitive_ids.iter().map(String::as_str))
+        .collect();
+    let rig = if aimed.is_empty() {
+        crate::eval::aim::Rig::default()
+    } else {
+        crate::eval::aim::Rig::load(access, fixtures_root, aimed).await?
+    };
     Ok(SceneData {
-        scene: crate::eval::Scene::new(compiled),
+        scene: crate::eval::Scene::new(compiled).with_rig(rig)?,
         features,
         cells: clip_cells,
     })
@@ -292,6 +351,14 @@ fn strip(
             &mut crate::eval::Arena::default(),
         )?;
     }
+    // An aim gives no light: its picture is where the beams point.
+    if clip.graph == "aim@1" {
+        return Ok(crate::annotation_preview::render_aim_preview(
+            clip_id.to_owned(),
+            &frames,
+            cells,
+        ));
+    }
     // A form clip's strip orders heads along a line through the rig; a clip
     // with its own graph keeps the brightness order it always had.
     let order = luma_patterns::is_form(&clip.graph)
@@ -313,7 +380,16 @@ pub fn stand_in_strip(
     preset: &luma_patterns::FormPreset,
     beats: f64,
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
-    synthetic_strip(&preset.clip(0.0, beats), &line_cells(STAND_IN_HEADS))
+    let mut cells = line_cells(STAND_IN_HEADS);
+    // An aim reads against the room: the line hangs a metre up and a metre
+    // upstage of center stage, so a point at the origin is in front of it.
+    if preset.form == "aim@1" {
+        for cell in &mut cells {
+            cell.uvz = [cell.uvz[0] - 0.5, -1., 1.];
+            cell.world = [cell.uvz[0], 1., 1.];
+        }
+    }
+    synthetic_strip(&preset.clip(0.0, beats), &cells)
 }
 
 /// `heads` heads evenly along U, in order.
@@ -379,12 +455,16 @@ mod tests {
 
     /// The strip of a shipped preset over `heads` heads in a row along U,
     /// shuffled so selection order says nothing about where a head is.
-    fn preset_strip(preset: &str, heads: usize) -> crate::models::patterns::AnnotationPreview {
+    fn preset_strip(
+        form: &str,
+        preset: &str,
+        heads: usize,
+    ) -> crate::models::patterns::AnnotationPreview {
         let mut cells = line_cells(heads);
         cells.reverse();
         cells.swap(1, heads / 2);
         let clip = luma_patterns::presets()
-            .preset(preset)
+            .preset(form, preset)
             .expect("a shipped preset")
             .clip(0.0, 4.0);
         synthetic_strip(&clip, &cells).unwrap()
@@ -419,7 +499,7 @@ mod tests {
 
     #[test]
     fn a_chase_strip_is_a_diagonal() {
-        let preview = preset_strip("Chase", 48);
+        let preview = preset_strip("color.chase@1", "Chase", 48);
         assert_eq!((preview.width, preview.height), (64, 32));
         // One stroke crosses the rig over the first two beats: 32 columns.
         let rows: Vec<u32> = brightest(&preview)[..32]
@@ -433,8 +513,29 @@ mod tests {
     }
 
     #[test]
+    fn an_aim_strip_shows_where_the_beams_point_and_how_they_move() {
+        let picture = |name: &str| {
+            let preset = luma_patterns::presets().preset("aim@1", name).unwrap();
+            let strip = stand_in_strip(preset, 16.0).unwrap();
+            assert_eq!((strip.width, strip.height), (128, 28), "{name}");
+            strip.pixels
+        };
+        // The dim path a moving beam's tip leaves, between the dark ground,
+        // the heads and the bright beams.
+        let moves = |pixels: &[u8]| pixels.chunks(4).any(|px| (60..120).contains(&px[0]));
+        let still = picture("Position");
+        assert!(!moves(&still));
+        for name in ["Fan", "Converge", "Bloom"] {
+            assert_ne!(picture(name), still, "{name}");
+        }
+        for name in ["Bloom", "Sweep", "Wave", "Circle", "Figure-8", "Ballyhoo"] {
+            assert!(moves(&picture(name)), "{name}");
+        }
+    }
+
+    #[test]
     fn a_gradient_strip_is_bands_constant_over_time() {
-        let preview = preset_strip("Gradient", 48);
+        let preview = preset_strip("color.space@1", "Gradient", 48);
         let pixel = |row: u32, col: u32| {
             let i = ((row * preview.width + col) * 4) as usize;
             preview.pixels[i..i + 3].to_vec()

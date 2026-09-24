@@ -94,7 +94,9 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
     assert_eq!(clips.len(), 1);
     let clip = clips.values().next().unwrap();
     assert_eq!(clip["graph"], "color.chase@1");
-    let chase = luma_patterns::presets().preset("Chase").unwrap();
+    let chase = luma_patterns::presets()
+        .preset("color.chase@1", "Chase")
+        .unwrap();
     assert_eq!(
         clip["inputs"],
         serde_json::to_value(&chase.inputs).unwrap(),
@@ -105,7 +107,7 @@ fn the_picker_lists_presets_and_places_a_form_clip() {
 #[test]
 fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
     let mut harness = Fixture::new("clip-forms-sheet", 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -230,7 +232,7 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
 #[test]
 fn a_curve_input_offers_its_curves_and_custom_opens_the_editor() {
     let mut harness = Fixture::new("clip-forms-width-curves", 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -347,7 +349,7 @@ fn a_curve_input_offers_its_curves_and_custom_opens_the_editor() {
 #[test]
 fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
     let mut harness = Fixture::new("clip-forms-gradient", 20, vec![])
-        .with_graph_score(support::preset_score("Color fade"))
+        .with_graph_score(support::preset_score("color.time@1", "Color fade"))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -431,7 +433,7 @@ fn the_gradient_editor_adds_drags_off_types_hex_and_picks_a_preset() {
 #[test]
 fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
     let mut harness = Fixture::new("clip-forms-envelope-drag", 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 1400.)
         .open(Mode::Headless);
@@ -485,7 +487,7 @@ fn an_envelope_point_dragged_outside_the_editor_keeps_following_and_clamps() {
 #[test]
 fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
     let mut harness = Fixture::new("clip-forms-blur", 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -531,7 +533,7 @@ fn a_click_elsewhere_blurs_a_field_and_commits_its_value() {
 #[test]
 fn the_wash_sheet_shows_brightness_and_every() {
     let mut harness = Fixture::new("clip-forms-wash", 20, vec![])
-        .with_graph_score(support::preset_score("Pulse"))
+        .with_graph_score(support::preset_score("color.constant@1", "Pulse"))
         .with_rig()
         .window(1400., 1000.)
         .open(Mode::Headless);
@@ -586,7 +588,7 @@ fn the_wash_sheet_shows_brightness_and_every() {
 #[test]
 fn every_sheet_row_has_one_shape() {
     let mut harness = Fixture::new("clip-forms-rows", 20, vec![])
-        .with_graph_score(support::preset_score("Shimmer"))
+        .with_graph_score(support::preset_score("color.sparkle@1", "Shimmer"))
         .with_rig()
         .window(1400., 1400.)
         .open(Mode::Headless);

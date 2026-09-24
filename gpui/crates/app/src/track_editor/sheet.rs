@@ -113,6 +113,8 @@ enum Menu {
     Span(usize),
     /// The plane menu of the axis at this index.
     Plane(usize),
+    /// The mirror menu of the axis at this index.
+    Mirror(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every
@@ -173,9 +175,28 @@ enum Widget {
     Noise([Entity<DraftedNumber>; 3]),
     /// An audio source: from and to in Hz, then the floor in percent.
     Audio([Entity<DraftedNumber>; 4]),
-    /// A form's axis: its presets, spans and plane; holds the custom plane
-    /// axis U, V, Z.
-    Axis([Entity<DraftedNumber>; 3]),
+    /// A form's axis: its presets, spans, mirror and plane.
+    Axis(AxisFields),
+    /// An aim direction, as turn and tilt: one pair for a fixed value, one
+    /// for each end of a curve over the clip. Holds each pair's turn, which
+    /// a direction straight up or down does not say.
+    Direction(Vec<f64>),
+    /// A point in metres: U, V and Z fields, one set for a fixed value, one
+    /// for each end of a curve over the clip.
+    Point(Vec<[Entity<DraftedNumber>; 3]>),
+}
+
+/// The number fields of a form's axis.
+struct AxisFields {
+    /// The custom plane's axis, U, V, Z.
+    plane: [Entity<DraftedNumber>; 3],
+    /// The custom mirror plane's normal, U, V, Z.
+    normal: [Entity<DraftedNumber>; 3],
+    /// How far the mirror plane is from the middle, in metres.
+    offset: Entity<DraftedNumber>,
+    /// Custom plane was picked, so its normal shows even when it is one of
+    /// the fixed planes.
+    custom_mirror: Rc<std::cell::Cell<bool>>,
 }
 
 // -- wire codecs --------------------------------------------------------------
@@ -633,8 +654,10 @@ fn plain_widget(
                 ));
                 Widget::Color(entity)
             }
-            // A form's axis is its own widget; a mapping here did not decode.
+            // A form's axis and choices are their own widgets; one here did
+            // not decode.
             PatternArgType::Mapping => Widget::Invalid("Unreadable axis".into()),
+            PatternArgType::Choice => Widget::Invalid("Unreadable choice".into()),
             PatternArgType::Boundary
             | PatternArgType::Boolean
             | PatternArgType::AudioSource
@@ -804,7 +827,9 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
             | Widget::Every(_)
             | Widget::Noise(_)
             | Widget::Audio(_)
-            | Widget::Axis(_) => {}
+            | Widget::Axis(_)
+            | Widget::Direction(_)
+            | Widget::Point(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -851,7 +876,8 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
 
 impl Luma {
     /// A blend pick from the sheet: every selected clip takes the mode, in
-    /// one committed write.
+    /// one committed write. A clip of a replace-only form (aim) keeps
+    /// replace.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
         self.track_command(
             move |editor| {
@@ -860,7 +886,9 @@ impl Luma {
                 }
                 let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
                 for clip in &mut clips {
-                    if editor.selected.contains(&clip.id) {
+                    if editor.selected.contains(&clip.id)
+                        && !luma_patterns::replace_only(&clip.pattern)
+                    {
                         clip.blend = mode;
                     }
                 }
@@ -1090,7 +1118,14 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
-                    .child(named("Blend", blend_select(state, built, app)))
+                    // An aim blends by alpha only: it offers no blend mode.
+                    .when(
+                        !built
+                            .pattern
+                            .as_deref()
+                            .is_some_and(luma_patterns::replace_only),
+                        |el| el.child(named("Blend", blend_select(state, built, app))),
+                    )
                     .children(args(state, built, app)),
             ),
         )
@@ -1240,7 +1275,9 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         | Widget::Every(_)
         | Widget::Noise(_)
         | Widget::Audio(_)
-        | Widget::Axis(_) => Vec::new(),
+        | Widget::Axis(_)
+        | Widget::Direction(_)
+        | Widget::Point(_) => Vec::new(),
     }
 }
 

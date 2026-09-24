@@ -89,7 +89,7 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
             .unwrap()
             .clone()
     };
-    assert_eq!(sample(&mut library, &def).writes(), [false; 5]);
+    assert_eq!(sample(&mut library, &def).writes(), [false; 6]);
     bind(
         &mut def,
         &library,
@@ -99,7 +99,7 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
     )
     .unwrap();
     let zero = sample(&mut library, &def);
-    assert_eq!(zero.writes(), [true, true, false, false, false]);
+    assert_eq!(zero.writes(), [true, true, false, false, false, false]);
     assert!(zero
         .sample(0)
         .unwrap()
@@ -130,7 +130,7 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
     .unwrap();
     assert_eq!(
         sample(&mut library, &def).writes(),
-        [false, false, true, false, false]
+        [false, false, true, false, false, false]
     );
 }
 

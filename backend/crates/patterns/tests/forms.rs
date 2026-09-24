@@ -37,8 +37,19 @@ fn prepare(form: &str, inputs: &BTreeMap<String, Value>) -> Result<PreparedGraph
     )
 }
 
+/// The light preset called `name`: these tests cover the color and strobe
+/// forms, whose preset names are unique among them. Aim has its own, in
+/// `aim.rs`.
+fn light(name: &str) -> &'static luma_patterns::FormPreset {
+    presets()
+        .presets
+        .iter()
+        .find(|preset| preset.name == name && preset.form != "aim@1")
+        .unwrap_or_else(|| panic!("{name}"))
+}
+
 fn preset(name: &str) -> (String, BTreeMap<String, Value>) {
-    let preset = presets().preset(name).unwrap_or_else(|| panic!("{name}"));
+    let preset = light(name);
     (preset.form.clone(), preset.inputs.clone())
 }
 
@@ -73,6 +84,16 @@ fn curve(points: &[[f64; 2]], segment: Segment) -> Keyframes {
 fn every_preset_is_complete_valid_and_places_as_a_clip() {
     let library = standard_library();
     let shipped = presets();
+    // A name is unique within its form; two forms may share one.
+    let mut seen = std::collections::BTreeSet::new();
+    for preset in &shipped.presets {
+        assert!(
+            seen.insert((preset.form.as_str(), preset.name.as_str())),
+            "{} {} twice",
+            preset.form,
+            preset.name
+        );
+    }
     for form in FORMS {
         assert!(
             shipped.presets.iter().any(|preset| preset.form == form),
@@ -103,7 +124,7 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
         "Aurora",
         "Strobe",
     ] {
-        let preset = shipped.preset(name).unwrap_or_else(|| panic!("{name}"));
+        let preset = light(name);
         preset.validate(&library).unwrap();
         let mut score = Score::default();
         score.clips.insert("clip".into(), preset.clip(START, 16.0));
@@ -197,7 +218,10 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         .contains("unknown input delay"));
 
     let mut score = Score::default();
-    let mut clip = presets().preset("Chase").unwrap().clip(0.0, 4.0);
+    let mut clip = presets()
+        .preset("color.chase@1", "Chase")
+        .unwrap()
+        .clip(0.0, 4.0);
     clip.inputs = missing;
     score.clips.insert("clip".into(), clip);
     assert!(score.validate(&standard_library()).is_err());
@@ -392,7 +416,7 @@ fn clipped_strokes_enter_and_leave_fully() {
         set(
             &mut inputs,
             "axis",
-            presets().preset("Chase").unwrap().inputs["axis"].clone(),
+            presets().preset("color.chase@1", "Chase").unwrap().inputs["axis"].clone(),
         );
         // A rest between strokes: every 4, travel 2.
         let mut rest = inputs.clone();
@@ -411,7 +435,7 @@ fn back_to_back_strokes_are_never_cut_off() {
         set(
             &mut inputs,
             "axis",
-            presets().preset("Chase").unwrap().inputs["axis"].clone(),
+            presets().preset("color.chase@1", "Chase").unwrap().inputs["axis"].clone(),
         );
         let program = prepare(&form, &inputs).unwrap();
         let beats: Vec<f64> = (0..=800)
@@ -999,12 +1023,12 @@ fn radial_and_angle_axes_need_no_solved_circle() {
         reverse: false,
         mirror: None,
     };
-    let angle = spec(MappingSource::Angle).resolve(&ring).unwrap();
+    let angle = spec(MappingSource::Angle).resolve(&ring, 0).unwrap();
     for (n, coordinate) in angle.coordinates.iter().enumerate() {
         assert!((coordinate.position - n as f64 / 8.0).abs() < 1e-9);
         assert!(coordinate.closed);
     }
-    let radial = spec(MappingSource::Radial).resolve(&ring).unwrap();
+    let radial = spec(MappingSource::Radial).resolve(&ring, 0).unwrap();
     for (n, coordinate) in radial.coordinates.iter().enumerate() {
         assert!((coordinate.position - if n % 2 == 0 { 0.0 } else { 1.0 }).abs() < 1e-9);
     }
@@ -1044,7 +1068,10 @@ fn a_score_holds_only_form_clips_with_finite_timing() {
     let mut score = Score::default();
     score.clips.insert(
         "chase".into(),
-        presets().preset("Chase").unwrap().clip(START, 4.0),
+        presets()
+            .preset("color.chase@1", "Chase")
+            .unwrap()
+            .clip(START, 4.0),
     );
     score.validate(&library).unwrap();
 
@@ -1226,4 +1253,48 @@ fn round_axes_need_a_plane_and_axes_have_no_per_group() {
         set(&mut bad, "axis", Value::Mapping(wrong));
         assert!(prepare(&form, &bad).is_err());
     }
+}
+
+/// A random axis chases every head once per stroke, in a shuffled order
+/// that stays the same from stroke to stroke.
+#[test]
+fn a_random_axis_chases_each_head_once_in_a_stable_order() {
+    let (form, mut inputs) = preset("Chase");
+    set(
+        &mut inputs,
+        "axis",
+        axis_presets()
+            .into_iter()
+            .find(|(name, _)| *name == "Random")
+            .unwrap()
+            .1,
+    );
+    set(&mut inputs, "width", Value::Number(0.05));
+    set(&mut inputs, "width_relative", Value::Boolean(false));
+    // The beat at which each head is brightest, for two strokes.
+    let every = match inputs["every"] {
+        Value::Beats(every) => every,
+        _ => panic!("every"),
+    };
+    let peaks = |from: f64| {
+        let mut best = vec![(0.0, f64::NEG_INFINITY); 8];
+        for step in 0..400 {
+            let beat = from + every * f64::from(step) / 400.0;
+            for (head, value) in render(&form, &inputs, beat).into_iter().enumerate() {
+                if value > best[head].1 {
+                    best[head] = (beat - from, value);
+                }
+            }
+        }
+        best
+    };
+    let (one, two) = (peaks(0.0), peaks(every));
+    let order = |peaks: &[(f64, f64)]| {
+        let mut heads: Vec<usize> = (0..8).collect();
+        heads.sort_by(|a, b| peaks[*a].0.total_cmp(&peaks[*b].0));
+        heads
+    };
+    assert!(one.iter().all(|(_, value)| *value > 0.5));
+    assert_eq!(order(&one), order(&two));
+    assert_ne!(order(&one), (0..8).collect::<Vec<_>>());
 }

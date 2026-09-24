@@ -132,6 +132,7 @@ impl EvaluatedValue {
                 Channels::Rgb,
                 None,
             )?,
+            Value::Vector(uvz) => Signal::vector(uvz.to_vec(), Unit::Number)?,
             Value::Field(values) | Value::Mask(values) => Signal::new(
                 Array3::from_shape_vec((values.len(), 1, 1), values.values().copied().collect())
                     .unwrap(),
@@ -188,6 +189,9 @@ impl EvaluatedValue {
             (ValueType::Position, false) => Value::Position(scalar()),
             (ValueType::Color | ValueType::ColorField, false) => {
                 Value::Color(std::array::from_fn(|ch| signal.at(0, time, ch)))
+            }
+            (ValueType::Vector, false) => {
+                Value::Vector(std::array::from_fn(|ch| signal.at(0, time, ch)))
             }
             (ValueType::Number | ValueType::Field, true) => Value::Field(field()),
             (ValueType::Proportion | ValueType::Mask, true) => Value::Mask(field()),

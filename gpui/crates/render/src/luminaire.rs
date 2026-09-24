@@ -428,6 +428,18 @@ pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<
     crate::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
 }
 
+/// The angle, in degrees, between the beams of two `[pan, tilt]` positions of
+/// one head.
+///
+/// Independent of the mount: both beams turn out of the same frame, and a
+/// rotation keeps angles.
+#[must_use]
+pub fn degrees_between(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let mount = Mount::from_frame(Vec3::ZERO, glam::Mat3::IDENTITY);
+    let beam = |[pan, tilt]: [f32; 2]| aim(&mount, &Articulation::from_degrees(pan, tilt));
+    beam(a).dot(beam(b)).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
 /// LED bars and matrices are drawn from their layout rather than from a mesh.
 ///
 /// Fuzzy for the same reason [`model_kind`] is: `Type` is free text a bundle

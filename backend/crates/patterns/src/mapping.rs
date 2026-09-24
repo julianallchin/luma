@@ -31,9 +31,13 @@ pub enum MappingSource {
     Vector {
         direction: [f64; 3],
     },
+    /// A shuffled even spread: within each span, the heads take the evenly
+    /// spaced coordinates 0 to 1 in an order set by the clip's seed and each
+    /// head's id. The same seed gives the same order on every frame.
+    Random,
 }
 impl MappingSource {
-    pub const OPTIONS: [(&'static str, &'static str); 8] = [
+    pub const OPTIONS: [(&'static str, &'static str); 9] = [
         ("z", "Up (Z+)"),
         ("u", "Stage right (U+)"),
         ("v", "Downstage (V+)"),
@@ -42,7 +46,18 @@ impl MappingSource {
         ("radial", "Radial"),
         ("angle", "Angle"),
         ("vector", "Custom vector"),
+        ("random", "Random"),
     ];
+
+    /// Whether the source takes a mirror: a mirror needs a spatial axis
+    /// along a line. Order and random have no spatial axis, and radial and
+    /// angle are measured around a center. See [`MirrorPlane`].
+    pub fn takes_mirror(&self) -> bool {
+        !matches!(
+            self,
+            Self::Order | Self::Radial | Self::Angle | Self::Random
+        )
+    }
 
     pub fn key(&self) -> &'static str {
         match self {
@@ -54,6 +69,7 @@ impl MappingSource {
             Self::Radial => "radial",
             Self::Angle => "angle",
             Self::Vector { .. } => "vector",
+            Self::Random => "random",
         }
     }
 
@@ -71,6 +87,7 @@ impl MappingSource {
             "vector" => Self::Vector {
                 direction: [1., 0., 1.],
             },
+            "random" => Self::Random,
             _ => return Err(Error(format!("Unknown mapping {key}"))),
         })
     }
@@ -208,6 +225,11 @@ impl AxisPlane {
     }
 }
 
+/// A mirror reflects the heads on the low side of the plane onto the high
+/// side before the axis reads them, so both halves of a span do the same.
+/// The plane goes through the middle of the span's extent along the normal,
+/// moved by `offset`. Only a spatial axis along a line takes a mirror; see
+/// [`MappingSource::takes_mirror`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MirrorPlane {
@@ -226,7 +248,9 @@ impl MirrorPlane {
         Ok(())
     }
 
-    fn fold(&self, cells: &[&Cell]) -> Result<Vec<[f64; 3]>> {
+    /// The unit normal and each head's signed distance from the plane, in
+    /// metres; the low side is negative.
+    fn distances(&self, cells: &[&Cell]) -> Result<([f64; 3], Vec<f64>)> {
         let normal = unit_direction(self.normal)?;
         let (min, max) = cells
             .iter()
@@ -237,10 +261,22 @@ impl MirrorPlane {
         // Use the extent, not the centroid: fixture density on one side must
         // not move the symmetry plane of an otherwise unchanged selection.
         let center = min * 0.5 + max * 0.5 + self.offset;
+        Ok((
+            normal,
+            cells
+                .iter()
+                .map(|cell| dot(cell.uvz, normal) - center)
+                .collect(),
+        ))
+    }
+
+    fn fold(&self, cells: &[&Cell]) -> Result<Vec<[f64; 3]>> {
+        let (normal, distances) = self.distances(cells)?;
         Ok(cells
             .iter()
-            .map(|cell| {
-                let distance = (dot(cell.uvz, normal) - center).min(0.);
+            .zip(distances)
+            .map(|(cell, distance)| {
+                let distance = distance.min(0.);
                 std::array::from_fn(|axis| cell.uvz[axis] - 2. * distance * normal[axis])
             })
             .collect())
@@ -264,8 +300,11 @@ impl MappingSpec {
         }
         if let Some(mirror) = &self.mirror {
             mirror.validate()?;
-            if matches!(self.source, MappingSource::Order) {
-                return Err(Error("a mirror plane requires a spatial mapping; selection order has no spatial axis".into()));
+            if !self.source.takes_mirror() {
+                return Err(Error(
+                    "a mirror plane requires a spatial axis along a line; order, radial, angle and random take no mirror"
+                        .into(),
+                ));
             }
         }
         match &self.source {
@@ -280,7 +319,8 @@ impl MappingSpec {
             _ => Ok(()),
         }
     }
-    pub fn resolve(&self, cells: &[Cell]) -> Result<Mapping> {
+    /// The heads of each span, in selection order.
+    fn spans<'a>(&self, cells: &'a [Cell]) -> Result<BTreeMap<&'a str, Vec<&'a Cell>>> {
         self.validate()?;
         if cells
             .iter()
@@ -300,6 +340,109 @@ impl MappingSpec {
                 .or_default()
                 .push(c);
         }
+        Ok(groups)
+    }
+
+    /// How a fan leans each head: a share of the fan angle and the stage
+    /// direction it leans toward. Linear axes lean along the axis direction
+    /// by `c − 0.5`, with `c` the head's coordinate (`order`: from the first
+    /// head of the span to the last). Radial leans away from the span's
+    /// center in its plane, and angle along the circle around it (the way
+    /// angle grows), both by `r`: the head's distance from the center over
+    /// the largest distance in the span. Random leans along the span's
+    /// order direction by its shuffled coordinate. With a mirror, `c` is
+    /// the folded coordinate.
+    pub(crate) fn leans(
+        &self,
+        cells: &[Cell],
+        seed: u64,
+    ) -> Result<BTreeMap<String, (f64, [f64; 3])>> {
+        let groups = self.spans(cells)?;
+        let mut result = BTreeMap::new();
+        if !matches!(self.source, MappingSource::Radial | MappingSource::Angle) {
+            let coordinates: BTreeMap<_, _> = self
+                .resolve(cells, seed)?
+                .coordinates
+                .into_iter()
+                .map(|c| (c.cell, c.position))
+                .collect();
+            for group in groups.values() {
+                let toward = match &self.source {
+                    MappingSource::U => [1., 0., 0.],
+                    MappingSource::V => [0., 1., 0.],
+                    MappingSource::Z => [0., 0., 1.],
+                    MappingSource::Vector { direction } => unit_direction(*direction)?,
+                    MappingSource::MajorAxis { toward } => {
+                        Cell::stage_coordinates(major_axis(group, toward)?)
+                    }
+                    MappingSource::Order | MappingSource::Random => {
+                        let (first, last) = (group[0].uvz, group[group.len() - 1].uvz);
+                        unit_direction(std::array::from_fn(|a| last[a] - first[a]))
+                            .unwrap_or([0.; 3])
+                    }
+                    MappingSource::Radial | MappingSource::Angle => unreachable!(),
+                };
+                for c in group {
+                    result.insert(c.id.clone(), (coordinates[&c.id] - 0.5, toward));
+                }
+            }
+            return Ok(result);
+        }
+        for group in groups.values() {
+            let points: Vec<[f64; 3]> = group.iter().map(|c| c.uvz).collect();
+            let center = centroid(&points);
+            let plane = self.plane.as_ref().expect("validated");
+            let [first, second] = plane.basis(&points, center)?;
+            let flat: Vec<(f64, f64)> = points
+                .iter()
+                .map(|p| {
+                    let d: [f64; 3] = std::array::from_fn(|a| p[a] - center[a]);
+                    (dot(d, first), dot(d, second))
+                })
+                .collect();
+            let farthest = flat.iter().map(|(x, y)| x.hypot(*y)).fold(0., f64::max);
+            for (c, (x, y)) in group.iter().zip(flat) {
+                let distance = x.hypot(y);
+                if farthest <= 1e-9 || distance <= 1e-9 * farthest {
+                    result.insert(c.id.clone(), (0., [0.; 3]));
+                    continue;
+                }
+                let (x, y) = (x / distance, y / distance);
+                let (a, b) = match self.source {
+                    MappingSource::Radial => (x, y),
+                    _ => (-y, x),
+                };
+                let toward = std::array::from_fn(|i| a * first[i] + b * second[i]);
+                result.insert(c.id.clone(), (distance / farthest, toward));
+            }
+        }
+        Ok(result)
+    }
+
+    /// The heads an aim mirrors: for each head on the low side of the
+    /// mirror plane, the plane's unit normal. Such a head takes the mirror
+    /// image of its fan and motion. Heads on the plane or above it, and
+    /// every head without a mirror, are not in the map.
+    pub(crate) fn mirrored(&self, cells: &[Cell]) -> Result<BTreeMap<String, [f64; 3]>> {
+        let mut result = BTreeMap::new();
+        let Some(plane) = &self.mirror else {
+            return Ok(result);
+        };
+        for group in self.spans(cells)?.values() {
+            let (normal, distances) = plane.distances(group)?;
+            for (cell, distance) in group.iter().zip(distances) {
+                if distance < -1e-9 {
+                    result.insert(cell.id.clone(), normal);
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Each head's coordinate 0–1. `seed` orders a random axis; the other
+    /// sources ignore it.
+    pub fn resolve(&self, cells: &[Cell], seed: u64) -> Result<Mapping> {
+        let groups = self.spans(cells)?;
         let mut result = Mapping::default();
         for group in groups.values() {
             let folded = self
@@ -308,13 +451,23 @@ impl MappingSpec {
                 .map(|plane| plane.fold(group))
                 .transpose()?;
             let mapped = match &self.source {
+                MappingSource::Random => {
+                    let mut shuffled: Vec<(f64, &str)> = group
+                        .iter()
+                        .map(|c| (crate::spatial::threshold(&c.id, seed), c.id.as_str()))
+                        .collect();
+                    shuffled.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+                    Mapping::linear(
+                        shuffled
+                            .into_iter()
+                            .enumerate()
+                            .map(|(rank, (_, id))| (id.to_string(), rank as f64)),
+                        self.reverse,
+                    )?
+                }
                 MappingSource::Angle | MappingSource::Radial => {
                     let plane = self.plane.as_ref().expect("validated");
-                    let points: Vec<[f64; 3]> = group
-                        .iter()
-                        .enumerate()
-                        .map(|(index, c)| folded.as_ref().map_or(c.uvz, |folded| folded[index]))
-                        .collect();
+                    let points: Vec<[f64; 3]> = group.iter().map(|c| c.uvz).collect();
                     let center = centroid(&points);
                     let [first, second] = plane.basis(&points, center)?;
                     let flat = points.iter().map(|p| {

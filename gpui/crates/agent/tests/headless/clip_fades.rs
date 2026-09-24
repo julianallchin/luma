@@ -65,7 +65,7 @@ fn run(harness: &mut gpui_agent::Harness, script: String) -> Value {
 fn fade_bend_and_level_handles_write_the_clip_alpha() {
     const NAME: &str = "clip-fades-handles";
     let mut harness = Fixture::new(NAME, 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 900.)
         .open(Mode::Headless);
@@ -193,11 +193,17 @@ fn moving_a_clip_over_the_end_of_another_crosses_them() {
     let presets = luma_patterns::presets();
     document.clips.insert(
         "first".into(),
-        presets.preset("Wash").unwrap().clip(0.0, 4.0),
+        presets
+            .preset("color.constant@1", "Wash")
+            .unwrap()
+            .clip(0.0, 4.0),
     );
     document.clips.insert(
         "second".into(),
-        presets.preset("Chase").unwrap().clip(8.0, 4.0),
+        presets
+            .preset("color.chase@1", "Chase")
+            .unwrap()
+            .clip(8.0, 4.0),
     );
     let mut harness = Fixture::new(NAME, 20, vec![])
         .with_graph_score(serde_json::to_value(document).unwrap())
@@ -262,7 +268,7 @@ fn moving_a_clip_over_the_end_of_another_crosses_them() {
 fn a_resize_keeps_the_fade_lengths() {
     const NAME: &str = "clip-fades-resize";
     let mut harness = Fixture::new(NAME, 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 900.)
         .open(Mode::Headless);
@@ -305,7 +311,7 @@ fn a_resize_keeps_the_fade_lengths() {
 fn a_segment_of_the_line_moves_up_and_down() {
     const NAME: &str = "clip-fades-segments";
     let mut harness = Fixture::new(NAME, 20, vec![])
-        .with_graph_score(support::preset_score("Chase"))
+        .with_graph_score(support::preset_score("color.chase@1", "Chase"))
         .with_rig()
         .window(1400., 900.)
         .open(Mode::Headless);
