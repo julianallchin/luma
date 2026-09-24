@@ -323,9 +323,7 @@ pub enum Primitive {
     ClipRange,
     BandEnergy,
     AudioSpectrum,
-    FilterAudio {
-        highpass: bool,
-    },
+    FilterAudio { highpass: bool },
     DrumClock,
     BeatEvents,
     DrumEvents,
@@ -365,6 +363,10 @@ pub enum Primitive {
     SampleCurve,
     RandomShare,
     PathGlides,
+    AimBase,
+    AimFan,
+    AimMotion,
+    AimOffset,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {

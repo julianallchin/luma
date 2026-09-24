@@ -280,7 +280,8 @@ impl MappingSpec {
             _ => Ok(()),
         }
     }
-    pub fn resolve(&self, cells: &[Cell]) -> Result<Mapping> {
+    /// The heads of each span, in selection order.
+    fn spans<'a>(&self, cells: &'a [Cell]) -> Result<BTreeMap<&'a str, Vec<&'a Cell>>> {
         self.validate()?;
         if cells
             .iter()
@@ -300,6 +301,84 @@ impl MappingSpec {
                 .or_default()
                 .push(c);
         }
+        Ok(groups)
+    }
+
+    /// How a fan leans each head: a share of the fan angle and the stage
+    /// direction it leans toward. Linear axes lean along the axis direction
+    /// by `c − 0.5`, with `c` the head's coordinate (`order`: from the first
+    /// head of the span to the last). Radial leans away from the span's
+    /// center in its plane, and angle along the circle around it (the way
+    /// angle grows), both by `r`: the head's distance from the center over
+    /// the largest distance in the span.
+    pub(crate) fn leans(&self, cells: &[Cell]) -> Result<BTreeMap<String, (f64, [f64; 3])>> {
+        let groups = self.spans(cells)?;
+        let mut result = BTreeMap::new();
+        if !matches!(self.source, MappingSource::Radial | MappingSource::Angle) {
+            let coordinates: BTreeMap<_, _> = self
+                .resolve(cells)?
+                .coordinates
+                .into_iter()
+                .map(|c| (c.cell, c.position))
+                .collect();
+            for group in groups.values() {
+                let toward = match &self.source {
+                    MappingSource::U => [1., 0., 0.],
+                    MappingSource::V => [0., 1., 0.],
+                    MappingSource::Z => [0., 0., 1.],
+                    MappingSource::Vector { direction } => unit_direction(*direction)?,
+                    MappingSource::MajorAxis { toward } => {
+                        Cell::stage_coordinates(major_axis(group, toward)?)
+                    }
+                    MappingSource::Order => {
+                        let (first, last) = (group[0].uvz, group[group.len() - 1].uvz);
+                        unit_direction(std::array::from_fn(|a| last[a] - first[a]))
+                            .unwrap_or([0.; 3])
+                    }
+                    MappingSource::Radial | MappingSource::Angle => unreachable!(),
+                };
+                for c in group {
+                    result.insert(c.id.clone(), (coordinates[&c.id] - 0.5, toward));
+                }
+            }
+            return Ok(result);
+        }
+        for group in groups.values() {
+            let points = match &self.mirror {
+                Some(plane) => plane.fold(group)?,
+                None => group.iter().map(|c| c.uvz).collect(),
+            };
+            let center = centroid(&points);
+            let plane = self.plane.as_ref().expect("validated");
+            let [first, second] = plane.basis(&points, center)?;
+            let flat: Vec<(f64, f64)> = points
+                .iter()
+                .map(|p| {
+                    let d: [f64; 3] = std::array::from_fn(|a| p[a] - center[a]);
+                    (dot(d, first), dot(d, second))
+                })
+                .collect();
+            let farthest = flat.iter().map(|(x, y)| x.hypot(*y)).fold(0., f64::max);
+            for (c, (x, y)) in group.iter().zip(flat) {
+                let distance = x.hypot(y);
+                if farthest <= 1e-9 || distance <= 1e-9 * farthest {
+                    result.insert(c.id.clone(), (0., [0.; 3]));
+                    continue;
+                }
+                let (x, y) = (x / distance, y / distance);
+                let (a, b) = match self.source {
+                    MappingSource::Radial => (x, y),
+                    _ => (-y, x),
+                };
+                let toward = std::array::from_fn(|i| a * first[i] + b * second[i]);
+                result.insert(c.id.clone(), (distance / farthest, toward));
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn resolve(&self, cells: &[Cell]) -> Result<Mapping> {
+        let groups = self.spans(cells)?;
         let mut result = Mapping::default();
         for group in groups.values() {
             let folded = self

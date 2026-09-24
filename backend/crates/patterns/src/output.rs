@@ -18,6 +18,10 @@ pub struct FixtureOutput {
     pub strobe: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
+    /// Where the head points, with the clip's alpha as weight. Never pan or
+    /// tilt: a solver turns it into pan and tilt after compositing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim: Option<crate::Aim>,
 }
 impl FixtureOutput {
     pub fn from_rgb(rgb: [f64; 3]) -> Self {
@@ -38,13 +42,14 @@ impl FixtureOutput {
             .map(|v| v * self.dimmer.unwrap_or(0.0))
     }
     /// Capability layout is static across a graph's selected head domain.
-    pub fn writes(&self) -> [bool; 5] {
+    pub fn writes(&self) -> [bool; 6] {
         [
             self.color.is_some(),
             self.dimmer.is_some(),
             self.position.is_some(),
             self.strobe.is_some(),
             self.speed.is_some(),
+            self.aim.is_some(),
         ]
     }
     /// Layer complete effect outputs with exactly the cross-clip blend math.
@@ -76,6 +81,11 @@ impl FixtureOutput {
         if let Some(speed) = top.speed {
             self.speed = Some(if speed > 0.5 { 1.0 } else { 0.0 });
         }
+        // Aim ignores the blend mode: it always blends toward the aim
+        // under it by alpha, along the shortest arc.
+        if let Some(aim) = top.aim {
+            self.aim = crate::blend_aim(self.aim, aim);
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -90,6 +100,9 @@ impl FixtureOutput {
                 .into_iter()
                 .flatten()
                 .any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+            || self.aim.is_some_and(|aim| {
+                aim.direction.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&aim.weight)
+            })
         {
             return Err(Error("invalid fixture output".into()));
         }
@@ -120,6 +133,15 @@ pub(crate) fn terminal_definition() -> crate::Definition {
             (
                 "speed".into(),
                 port("Movement speed", Value::Proportion(1.0)),
+            ),
+            (
+                "aim".into(),
+                Input {
+                    description: "Where the head points in U, V, Z. The vector's length, \
+                                  at most 1, is its weight over the aim under it"
+                        .into(),
+                    ..port("Aim", Value::Vector([0.0, 0.0, -1.0]))
+                },
             ),
         ]),
         outputs: BTreeMap::from([(
