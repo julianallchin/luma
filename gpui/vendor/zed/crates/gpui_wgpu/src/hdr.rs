@@ -541,4 +541,286 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         expect(3, 0.214_041 * display.sdr_white_nits, "UI grey at sRGB 0.5");
         Ok(())
     }
+
+    /// Copy a 1×1 `texture` to the CPU and return its bytes.
+    fn read_pixel(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut encoder: wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> Result<Vec<u8>> {
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pixel readback"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: None,
+                },
+            },
+            texture.size(),
+        );
+        queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).expect("readback receiver");
+            });
+        device.poll(wgpu::PollType::wait_indefinitely())?;
+        receiver.recv()??;
+        Ok(readback.slice(..).get_mapped_range()?.to_vec())
+    }
+
+    /// An IEEE half-float, as `Rgba16Float` stores it.
+    fn f16_to_f32(bits: u16) -> f32 {
+        let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+        let exponent = i32::from((bits >> 10) & 0x1f);
+        let mantissa = f32::from(bits & 0x3ff);
+        sign * match exponent {
+            0 => mantissa * 2f32.powi(-24),
+            31 => f32::INFINITY,
+            _ => (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
+        }
+    }
+
+    /// A path over opaque UI, through the path pipelines' blend states into
+    /// the HDR scene target and out through the encode pass, as a
+    /// premultiplied (transparent) window presents it. The aim curves are
+    /// many overlapping strokes; this draws sixteen.
+    ///
+    /// Stage 1 rasterizes them into the path intermediate with the
+    /// `path_rasterization` blend, as `fs_path_rasterization` outputs them
+    /// (premultiplied). Stage 2 composites the intermediate with
+    /// [`PATHS_BLEND`] over a background a quad left opaque.
+    ///
+    /// An SDR swapchain clamps the composited alpha to 1 and shows the
+    /// colour as is. The float scene target keeps alpha 1 + coverage, and the
+    /// encode must still show that colour at its SDR luminance.
+    #[test]
+    fn path_strokes_over_opaque_ui_keep_their_sdr_luminance() -> Result<()> {
+        use crate::wgpu_renderer::PATHS_BLEND;
+
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("no GPU adapter; skipping");
+            return Ok(());
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
+        let display = HdrOutput {
+            sdr_white_nits: 203.0,
+            peak_nits: 1000.0,
+        };
+        const STROKES: u32 = 16;
+        const STROKE: f32 = 0.6;
+        const COVERAGE: f32 = 0.5;
+        const BACKGROUND: f64 = 0.1;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("path proof"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    r#"
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {{
+    let xy = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4<f32>(xy * 2.0 - 1.0, 0.0, 1.0);
+}}
+@fragment
+fn stroke() -> @location(0) vec4<f32> {{
+    // `fs_path_rasterization`'s output: colour times coverage.
+    return vec4<f32>(vec3<f32>({STROKE:?} * {COVERAGE:?}), {COVERAGE:?});
+}}
+@group(0) @binding(0) var intermediate: texture_2d<f32>;
+@fragment
+fn composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {{
+    // `fs_path`'s output: the intermediate as is.
+    return textureLoad(intermediate, vec2<i32>(position.xy), 0);
+}}
+"#
+                )
+                .into(),
+            ),
+        });
+        let pipeline = |entry: &str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: SCENE_FORMAT,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let stroke = pipeline("stroke", wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let composite = pipeline("composite", PATHS_BLEND);
+        let texture = |label: &str, format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let intermediate = texture("path intermediate", SCENE_FORMAT);
+        let intermediate_view = intermediate.create_view(&Default::default());
+        // Drawn here and copied into the scene target, which is not readable.
+        let scene = texture("scene", SCENE_FORMAT);
+        let output = texture("pq output", wgpu::TextureFormat::Rgb10a2Unorm);
+        let composite_bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &composite.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&intermediate_view),
+            }],
+        });
+        let pass = |encoder: &mut wgpu::CommandEncoder,
+                    view: &wgpu::TextureView,
+                    clear: wgpu::Color,
+                    pipeline: &wgpu::RenderPipeline,
+                    bindings: Option<&wgpu::BindGroup>,
+                    instances: u32| {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            if let Some(bindings) = bindings {
+                pass.set_bind_group(0, bindings, &[]);
+            }
+            pass.draw(0..3, 0..instances);
+        };
+
+        let mut hdr = HdrEncoder::new(&device, wgpu::TextureFormat::Rgb10a2Unorm);
+        let target = hdr.scene_view(&device, [1, 1]).texture().clone();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        pass(
+            &mut encoder,
+            &intermediate_view,
+            wgpu::Color::TRANSPARENT,
+            &stroke,
+            None,
+            STROKES,
+        );
+        pass(
+            &mut encoder,
+            &scene.create_view(&Default::default()),
+            wgpu::Color {
+                r: BACKGROUND,
+                g: BACKGROUND,
+                b: BACKGROUND,
+                a: 1.0,
+            },
+            &composite,
+            Some(&composite_bindings),
+            1,
+        );
+        encoder.copy_texture_to_texture(
+            scene.as_image_copy(),
+            target.as_image_copy(),
+            scene.size(),
+        );
+        hdr.encode(
+            &device,
+            &queue,
+            &mut encoder,
+            &output.create_view(&Default::default()),
+            display,
+            true,
+        );
+        let scene_bytes = read_pixel(&device, &queue, encoder, &scene)?;
+        let pq_bytes = read_pixel(
+            &device,
+            &queue,
+            device.create_command_encoder(&Default::default()),
+            &output,
+        )?;
+
+        let scene_pixel: [f32; 4] = std::array::from_fn(|channel| {
+            f16_to_f32(u16::from_le_bytes([
+                scene_bytes[channel * 2],
+                scene_bytes[channel * 2 + 1],
+            ]))
+        });
+        let packed = u32::from_le_bytes(pq_bytes[..4].try_into().unwrap());
+        let pq = [
+            packed & 0x3ff,
+            (packed >> 10) & 0x3ff,
+            (packed >> 20) & 0x3ff,
+        ];
+
+        // The strokes' colour never exceeds SDR white in the scene target.
+        let covered = 1.0 - (1.0 - COVERAGE).powi(STROKES as i32);
+        let colour = STROKE * covered + BACKGROUND as f32 * (1.0 - covered);
+        for channel in &scene_pixel[..3] {
+            assert!(
+                (channel - colour).abs() < 2e-3 && *channel <= 1.0,
+                "scene colour {scene_pixel:?}, expected {colour}"
+            );
+        }
+        // What an SDR frame shows: that colour, opaque.
+        let nits = srgb_to_linear_extended(colour) * display.sdr_white_nits;
+        let expected = (pq_encode(nits) * 1023.0).round() as i64;
+        for channel in pq {
+            assert!(
+                (channel as i64 - expected).abs() <= 1,
+                "scene {scene_pixel:?} encoded to PQ code {channel} ({:.0} nits), \
+                 expected {expected} ({nits:.0} nits)",
+                pq_decode(channel as f32 / 1023.0),
+            );
+        }
+        Ok(())
+    }
+
+    /// SMPTE ST 2084 EOTF, for readable failures.
+    fn pq_decode(code: f32) -> f32 {
+        let (m1, m2) = (0.159_301_76_f32, 78.843_75_f32);
+        let (c1, c2, c3) = (0.835_937_5_f32, 18.851_563_f32, 18.6875_f32);
+        let power = code.powf(1.0 / m2);
+        10_000.0 * ((power - c1).max(0.0) / (c2 - c3 * power)).powf(1.0 / m1)
+    }
 }

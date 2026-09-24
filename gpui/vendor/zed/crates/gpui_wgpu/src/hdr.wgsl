@@ -43,19 +43,26 @@ fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let texel = textureLoad(scene, vec2<i32>(position.xy), 0);
     var encoded = texel.rgb;
+    // An SDR swapchain is unorm and clamps alpha to 1 on every write; the
+    // float scene target does not. The paths composite adds alpha (One, One)
+    // and relies on that clamp: over opaque UI it leaves 1 + coverage. No
+    // pipeline reads destination alpha, and every alpha blend here maps a
+    // value >= 1 to a value >= 1, so clamping once here gives exactly the
+    // alpha an SDR frame holds.
+    let alpha = min(texel.a, 1.0);
     // A premultiplied frame holds colour times alpha, and the compositor
     // divides it out again in the encoded domain, as it does for SDR. The
     // transfer function is not linear, so it applies to the straight colour.
-    let premultiplied = params.premultiplied != 0u && texel.a > 0.0;
+    let premultiplied = params.premultiplied != 0u && alpha > 0.0;
     if premultiplied {
-        encoded = encoded / texel.a;
+        encoded = encoded / alpha;
     }
     // Colours outside the BT.2020 gamut have no PQ code value; clip them.
     let linear = max(BT709_TO_BT2020 * srgb_to_linear_extended(encoded), vec3<f32>(0.0));
     let nits = min(linear * params.sdr_white_nits, vec3<f32>(params.peak_nits));
     var pq = pq_encode(nits);
     if premultiplied {
-        pq = pq * texel.a;
+        pq = pq * alpha;
     }
-    return vec4<f32>(pq, texel.a);
+    return vec4<f32>(pq, alpha);
 }
