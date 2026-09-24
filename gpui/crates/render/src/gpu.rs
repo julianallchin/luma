@@ -41,10 +41,10 @@ use crate::viewport::{Presented, PRESENTATION_SLOTS};
 /// Three bounded layers cover the part of a venue in which directional
 /// shadows remain useful. 2048² per layer costs 48 MiB in `Depth32Float`, versus
 /// an unbounded camera-sized allocation or 192 MiB for three legacy 4096 maps.
-const SHADOW_SIZE: u32 = 2048;
-const CASCADE_COUNT: usize = 3;
-const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
-const CASCADE_BLEND: f32 = 0.1;
+pub(crate) const SHADOW_SIZE: u32 = 2048;
+pub(crate) const CASCADE_COUNT: usize = 3;
+pub(crate) const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
+pub(crate) const CASCADE_BLEND: f32 = 0.1;
 
 const HAZE_WORKGROUP: [u32; 2] = [8, 4];
 const _: () = assert!(HAZE_WORKGROUP[0] * HAZE_WORKGROUP[1] == 32);
@@ -72,7 +72,7 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// not — see the resolve in `submit_readback`.
 const QUERY_COUNT: u32 = 10;
 const MSAA_SAMPLES: u32 = 4;
-const CAMERA_NEAR: f32 = 0.1;
+pub(crate) const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
 /// Emitted intensity times the brightest colour channel below which a cone
 /// is dark. The frame builder already drops dimmers under 1%; this catches a
@@ -5436,21 +5436,12 @@ impl Renderer {
             self.upload_stats.geometry += 1;
         }
 
-        let camera_far = if frame.sky.is_some() {
-            crate::atmosphere::MAX_DISTANCE_M
-        } else {
-            CAMERA_FAR
-        };
         let aspect = width as f32 / height as f32;
-        // Passing the bounds in reverse order produces a finite reverse-Z
-        // projection: near maps to one and the bounded far plane maps to zero.
-        let proj = Mat4::perspective_rh(
-            frame.camera.fov_y_deg.to_radians(),
-            aspect,
-            camera_far,
-            CAMERA_NEAR,
-        );
-        let view = Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z);
+        let CameraMatrices {
+            far: camera_far,
+            view,
+            proj,
+        } = camera_matrices(frame, aspect);
         let view_proj = proj * view;
 
         let camera_forward = (frame.camera.target - frame.camera.eye).normalize_or(Vec3::Y);
@@ -5463,10 +5454,8 @@ impl Renderer {
                     .as_ref()
                     .expect("frame geometry uploaded")
                     .bounds;
-                let casters: Vec<_> = frame.draws[..opaque]
-                    .iter()
-                    .filter(|draw| !crate::frame::is_ground(&frame.meshes[draw.mesh].key))
-                    .map(|draw| world_sphere(draw, bounds[draw.mesh]))
+                let casters: Vec<_> = sun_casters(frame, bounds)
+                    .map(|(_, sphere)| sphere)
                     .collect();
                 cascade_matrices(
                     frame.camera.eye,
@@ -13358,7 +13347,7 @@ fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
 /// Centred on the midpoint of the extent rather than the centroid: a mesh with
 /// most of its vertices clustered at one end would otherwise get a sphere that
 /// has to reach much further to cover the rest.
-fn local_bounding_sphere(vertices: &[crate::assets::Vertex]) -> (Vec3, f32) {
+pub(crate) fn local_bounding_sphere(vertices: &[crate::assets::Vertex]) -> (Vec3, f32) {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for vertex in vertices {
@@ -13905,6 +13894,50 @@ fn specialize_wgsl_overrides(source: &str, values: &[(&str, f64)]) -> String {
         .join("\n")
 }
 
+/// The camera exactly as the scene pass sees it.
+pub(crate) struct CameraMatrices {
+    /// The far plane: bounded under a sky, where the atmosphere ends.
+    pub far: f32,
+    pub view: Mat4,
+    /// Finite reverse-Z: near maps to one, `far` to zero.
+    pub proj: Mat4,
+}
+
+/// The frame's camera matrices at `aspect`. One function, so a debug export
+/// of the camera cannot drift from what the renderer drew.
+pub(crate) fn camera_matrices(frame: &Frame, aspect: f32) -> CameraMatrices {
+    let far = if frame.sky.is_some() {
+        crate::atmosphere::MAX_DISTANCE_M
+    } else {
+        CAMERA_FAR
+    };
+    CameraMatrices {
+        far,
+        // Passing the bounds in reverse order produces a finite reverse-Z
+        // projection: near maps to one and the bounded far plane maps to zero.
+        proj: Mat4::perspective_rh(
+            frame.camera.fov_y_deg.to_radians(),
+            aspect,
+            far,
+            CAMERA_NEAR,
+        ),
+        view: Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z),
+    }
+}
+
+/// The sun's shadow casters: every opaque draw but the ground, with its world
+/// bounding sphere. `mesh_bounds` are the meshes' local spheres, by index.
+pub(crate) fn sun_casters<'a>(
+    frame: &'a Frame,
+    mesh_bounds: &'a [(Vec3, f32)],
+) -> impl Iterator<Item = (&'a Draw, (Vec3, f32))> + 'a {
+    let opaque = frame.draws.len() - frame.transparent.len();
+    frame.draws[..opaque]
+        .iter()
+        .filter(|draw| !crate::frame::is_ground(&frame.meshes[draw.mesh].key))
+        .map(|draw| (draw, world_sphere(draw, mesh_bounds[draw.mesh])))
+}
+
 /// A draw's world-space bounding sphere from its mesh's local one, scaled by
 /// the model's largest axis.
 fn world_sphere(draw: &Draw, (local, radius): (Vec3, f32)) -> (Vec3, f32) {
@@ -13935,6 +13968,39 @@ fn cascade_matrices(
     to_light: Vec3,
     casters: &[(Vec3, f32)],
 ) -> [Mat4; CASCADE_COUNT] {
+    cascade_fits(eye, forward, fov_y, aspect, to_light, casters).map(|fit| fit.view_proj)
+}
+
+/// One sun cascade, with the numbers its matrix was built from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CascadeFit {
+    /// Camera distances of the view slice this cascade covers.
+    pub slice: (f32, f32),
+    /// The fixed light frame every cascade shares.
+    pub light_view: Mat4,
+    /// Snapped slice centre in light space, x and y.
+    pub centre: (f32, f32),
+    /// Quantized half-extent of the orthographic square.
+    pub radius: f32,
+    /// Light-space depth of the slice's nearest and furthest corner.
+    pub slice_depth: (f32, f32),
+    /// Nearest depth after reaching back to the casters.
+    pub caster_depth: f32,
+    /// The orthographic near and far planes as passed (far margin, near
+    /// margin applied).
+    pub planes: (f32, f32),
+    pub view_proj: Mat4,
+}
+
+/// Every cascade's fit. See [`cascade_matrices`].
+pub(crate) fn cascade_fits(
+    eye: Vec3,
+    forward: Vec3,
+    fov_y: f32,
+    aspect: f32,
+    to_light: Vec3,
+    casters: &[(Vec3, f32)],
+) -> [CascadeFit; CASCADE_COUNT] {
     let forward = forward.normalize_or(Vec3::Y);
     let world_up = if forward.z.abs() > 0.99 {
         Vec3::Y
@@ -14021,14 +14087,24 @@ fn cascade_matrices(
         // projection and let this fixed light frame cover venues on either
         // side of its origin. The far margin keeps the blend band at the end
         // of the previous slice, which also samples this map, inside it.
-        Mat4::orthographic_rh(
-            snapped_x - radius,
-            snapped_x + radius,
-            snapped_y - radius,
-            snapped_y + radius,
-            max_depth + 25.0,
-            near_depth - 1.0,
-        ) * light_view
+        let planes = (max_depth + 25.0, near_depth - 1.0);
+        CascadeFit {
+            slice: (near, far),
+            light_view,
+            centre: (snapped_x, snapped_y),
+            radius,
+            slice_depth: (min_depth, max_depth),
+            caster_depth: near_depth,
+            planes,
+            view_proj: Mat4::orthographic_rh(
+                snapped_x - radius,
+                snapped_x + radius,
+                snapped_y - radius,
+                snapped_y + radius,
+                planes.0,
+                planes.1,
+            ) * light_view,
+        }
     })
 }
 

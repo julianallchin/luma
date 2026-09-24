@@ -557,6 +557,12 @@ impl Render for Luma {
                     cx.notify();
                 }
             }))
+            .on_action(cx.listener(|this, _: &keymap::ExportStageCamera, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.export_camera();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &keymap::FocusStageSelection, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     if state.focus_selection() {
