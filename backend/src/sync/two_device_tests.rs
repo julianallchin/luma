@@ -166,7 +166,7 @@ impl BackendConnector for TestConnector {
 }
 
 /// One app database, opened exactly the way the app opens it: the real
-/// migrations, the real trigger sets, the real PowerSync connection pair.
+/// migrations, the real upload triggers, the real PowerSync connection pair.
 ///
 /// `directory` is an app config directory, so the file inside it is `luma.db`
 /// and two devices are two directories.
@@ -233,7 +233,6 @@ async fn inventory(pool: &SqlitePool) -> String {
         "tracks",
         "scores",
         "clips",
-        "changes",
         "drafts",
     ] {
         let count: i64 =
@@ -352,7 +351,7 @@ async fn until(
 }
 
 /// A track, a venue, a score, and `clips` clips on it — the smallest library
-/// with something in it. Written with the real trigger sets, so every row here
+/// with something in it. Written with the real upload triggers, so every row here
 /// is also an upload.
 async fn seed(pool: &SqlitePool, user: &str, venue: &str, score: &str, clips: &[(&str, f64)]) {
     sqlx::query(

@@ -194,11 +194,11 @@ pub async fn save_score(
         changed.deleted += 1;
     }
 
-    // The score row is what "last worked on" reads, and what the change log
-    // records one entry per save under. Only touched when something moved.
+    // `authored_at` is what "last worked on" reads. Only touched when
+    // something moved; the touch trigger moves `updated_at` with it.
     if changed.any() {
         sqlx::query(
-            "UPDATE scores SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+            "UPDATE scores SET authored_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
         )
         .bind(score_id)
         .execute(&mut *connection)

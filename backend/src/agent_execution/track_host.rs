@@ -73,6 +73,8 @@ pub struct TrackHost {
     /// The draft this thread writes into, for a subagent. `None` means the
     /// thread edits the live score.
     draft_id: Option<String>,
+    /// Who this thread's writes are attributed to: the thread's `actor`.
+    actor: Option<String>,
 }
 
 impl TrackHost {
@@ -85,6 +87,7 @@ impl TrackHost {
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
         draft_id: Option<String>,
+        actor: Option<String>,
     ) -> Self {
         Self {
             runtime,
@@ -95,6 +98,7 @@ impl TrackHost {
             scope,
             edit_scope,
             draft_id,
+            actor,
         }
     }
 

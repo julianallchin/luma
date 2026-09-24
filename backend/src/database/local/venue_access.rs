@@ -29,6 +29,9 @@ pub struct VenueAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     venue_id: String,
     principal: Option<String>,
+    /// Whether the writes are an agent's, and so must be given back to the
+    /// person before commit. See [`crate::sync::triggers::attribute`].
+    attributed: bool,
     _mode: PhantomData<Mode>,
 }
 
@@ -72,14 +75,33 @@ impl<'a> VenueAccess<'a, Read> {
 
 impl<'a> VenueAccess<'a, Write> {
     pub async fn write(pool: &'a SqlitePool, resource: VenueResource<'_>) -> Result<Self, String> {
+        Self::write_as(pool, resource, None).await
+    }
+
+    /// A mutation made on `actor`'s behalf — a model id or an MCP client's
+    /// label — so the server's history names it instead of the person. `None`
+    /// is the person, as [`Self::write`].
+    pub async fn write_as(
+        pool: &'a SqlitePool,
+        resource: VenueResource<'_>,
+        actor: Option<&str>,
+    ) -> Result<Self, String> {
         let transaction = pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
-        authorize(transaction, resource, true).await
+        let mut access: Self = authorize(transaction, resource, true).await?;
+        if let Some(actor) = actor {
+            crate::sync::triggers::attribute(&mut access.transaction, actor).await?;
+            access.attributed = true;
+        }
+        Ok(access)
     }
 
-    pub async fn commit(self) -> Result<(), String> {
+    pub async fn commit(mut self) -> Result<(), String> {
+        if self.attributed {
+            crate::sync::triggers::unattribute(&mut self.transaction).await?;
+        }
         self.transaction
             .commit()
             .await
@@ -198,6 +220,7 @@ async fn authorize<'a, Mode>(
         transaction,
         venue_id,
         principal,
+        attributed: false,
         _mode: PhantomData,
     })
 }

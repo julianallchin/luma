@@ -72,10 +72,9 @@ macro_rules! admitted_venue {
 /// The provenance columns every score listing carries: when the score was last
 /// written, and what its agent threads have cost.
 ///
-/// The time comes from the change log rather than the score row's own
-/// `updated_at`, because the row moves for reasons that are not authorship.
-/// `save_score` touches the score row exactly when something changed, so the
-/// newest `changes` entry naming this score *is* the last edit.
+/// The time is the score's `authored_at` rather than its `updated_at`, because
+/// the row moves for reasons that are not authorship. `save_score` sets it
+/// exactly when something changed.
 ///
 /// Correlated subqueries rather than joins, because a one-to-many join would
 /// multiply the counts the listing already groups for.
@@ -86,9 +85,7 @@ macro_rules! admitted_venue {
 /// take them without an assertion that they are safe to run.
 macro_rules! provenance {
     () => {
-        "(SELECT change.at FROM changes change
-                 WHERE change.table_name = 'scores' AND change.row_id = score.id
-                 ORDER BY change.at DESC LIMIT 1) AS last_authored_at,
+        "score.authored_at AS last_authored_at,
                 (SELECT SUM(usage.cost_usd)
                    FROM agent_thread_usage usage
                    JOIN agent_threads thread ON thread.id = usage.thread_id

@@ -318,6 +318,7 @@ pub async fn run_python_cell_inner(
             track_scope,
             edit_scope,
             draft_id.clone(),
+            thread.actor.clone(),
         ))
     });
     let venue = scope.venue_id.clone().map(|venue_id| {
@@ -327,6 +328,7 @@ pub async fn run_python_cell_inner(
             resource_root.to_path_buf(),
             Arc::clone(&workspace),
             venue_id,
+            thread.actor.clone(),
             track.clone(),
         )
     });
