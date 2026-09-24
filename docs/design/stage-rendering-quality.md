@@ -387,3 +387,7 @@ stage look with lens glow and star +0.19 ms.
 Glare styles, same setup at 146 s with 162 cones, no other GPU load, min of
 three 100-frame p50s: neutral 8.381 ms; bloom +0.07; iris +0.12; eye +0.14;
 star +0.11.
+
+`profile-volumetrics --catalogue` now renders at the venue's own haze
+density (as the stage does). Every measurement above was taken at a fixed
+0.8; add `--haze=0.8` to the reproduction commands to compare against them.
