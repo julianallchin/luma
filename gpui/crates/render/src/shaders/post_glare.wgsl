@@ -112,7 +112,7 @@ fn fs_up(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 /// One Kawase streak pass: seven taps along a line, symmetric, each
-/// attenuated by its distance. Repeated with spacing 1, 4, 16 it reaches 63
+/// attenuated by its distance. Repeated with spacing 1, 3, 9 it reaches 39
 /// texels each way.
 @fragment
 fn fs_streak(in: VsOut) -> @location(0) vec4<f32> {

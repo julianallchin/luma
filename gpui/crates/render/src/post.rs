@@ -43,10 +43,12 @@ const GLARE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const GLARE_LEVELS: usize = 6;
 /// Directions of the star's lines, in degrees. Three lines, six points.
 const STREAK_ANGLES_DEG: [f32; 3] = [15.0, 75.0, 135.0];
-/// Tap spacing of the three streak passes, in quarter-resolution texels.
-const STREAK_SPACING: [f32; 3] = [1.0, 4.0, 16.0];
-/// Per-texel attenuation along a streak.
-const STREAK_ATTENUATION: f32 = 0.96;
+/// Tap spacing of the three streak passes, in quarter-resolution texels:
+/// they reach 3 + 9 + 27 = 39 texels each way, a sixth of a 1080p frame.
+const STREAK_SPACING: [f32; 3] = [1.0, 3.0, 9.0];
+/// Per-texel attenuation along a streak. Short and bright at the core, so a
+/// row of lenses reads as a row of stars rather than a lattice.
+const STREAK_ATTENUATION: f32 = 0.93;
 /// Bins plus the black slot, as `post_exposure.wgsl` lays them out.
 const HISTOGRAM_SLOTS: u64 = 129;
 
