@@ -285,10 +285,10 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     "spread",
                     port(
                         "Spread",
-                        "Share of a cycle across the axis",
-                        signal(Unit::Proportion),
+                        "Degrees of phase across the axis; 360 is one cycle",
+                        signal(Unit::Number),
                         Rate::Frame,
-                        Some(Value::Proportion(0.0)),
+                        Some(Value::Number(0.0)),
                     ),
                 ),
                 (
@@ -628,7 +628,7 @@ fn aim_step(
             )]
         }
         Primitive::AimFan => {
-            let leans = axis(inputs).leans(batch.frame.cells)?;
+            let leans = axis(inputs).leans(batch.frame.cells, batch.frame.seed)?;
             vec![(
                 "direction",
                 directions(&|n, t| {
@@ -655,7 +655,7 @@ fn aim_step(
             let motion = choice(inputs, "motion");
             let shape = choice(inputs, "shape");
             let coordinates: BTreeMap<String, f64> = axis(inputs)
-                .resolve(batch.frame.cells)?
+                .resolve(batch.frame.cells, batch.frame.seed)?
                 .coordinates
                 .into_iter()
                 .map(|c| (c.cell, c.position))
@@ -672,8 +672,9 @@ fn aim_step(
                         "none" => (0.0, 0.0),
                         "shape" => {
                             let c = coordinates.get(id).copied().unwrap_or(0.0);
+                            // Spread is degrees of phase: 360 is one cycle.
                             let phase = get("cycles", row("cycles", n), t)
-                                - get("spread", row("spread", n), t) * c;
+                                - get("spread", row("spread", n), t) / 360.0 * c;
                             let (s, c1) = (tau * phase).sin_cos();
                             match shape {
                                 "swing_left_right" => (size * s, 0.0),

@@ -251,7 +251,7 @@ fn nod_wave_travels_along_the_truss() {
     let beat = 1.0;
     let aims = directions(&cells, &inputs, beat);
     for (i, aim) in aims.iter().enumerate() {
-        let phase = beat / 4.0 - 0.6 * i as f64 / 4.0;
+        let phase = beat / 4.0 - 216.0 / 360.0 * i as f64 / 4.0;
         close(*aim, offset(REST, 0.0, 25.0 * (TAU * phase).sin()));
     }
     assert!(degrees(aims[0], aims[4]) > 1.0);
@@ -444,4 +444,109 @@ fn aim_inputs_are_checked() {
     clip.blend_mode = BlendMode::Add;
     score.clips.insert("clip".into(), clip);
     assert!(score.validate(&library).unwrap_err().0.contains("replace"));
+}
+
+/// Spread is degrees of phase across the axis: 360° is one whole cycle, so
+/// the two end heads move alike; 720° on five heads makes every other head
+/// alike; a negative spread runs the wave the other way.
+#[test]
+fn spread_is_degrees_of_phase_across_the_axis() {
+    let cells = truss();
+    let beat = 1.3;
+    for spread in [0.0, 360.0, 720.0, -216.0, 1440.0] {
+        let mut inputs = preset("Wave");
+        set(&mut inputs, "spread", Value::Number(spread));
+        let aims = directions(&cells, &inputs, beat);
+        for (i, aim) in aims.iter().enumerate() {
+            let c = i as f64 / 4.0;
+            let phase = beat / 4.0 - spread / 360.0 * c;
+            close(*aim, offset(REST, 0.0, 25.0 * (TAU * phase).sin()));
+        }
+        match spread {
+            0.0 | 1440.0 => aims.iter().for_each(|aim| close(*aim, aims[0])),
+            360.0 => close(aims[0], aims[4]),
+            720.0 => {
+                close(aims[0], aims[2]);
+                close(aims[2], aims[4]);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A clip stored before spread became degrees is refused with a message
+/// that says what to store instead.
+#[test]
+fn a_spread_stored_as_a_share_of_a_cycle_is_refused() {
+    let library = standard_library();
+    let mut clip = presets().preset("aim@1", "Wave").unwrap().clip(0.0, 4.0);
+    clip.inputs.insert("spread".into(), Value::Proportion(0.6));
+    let mut score = Score::default();
+    score.clips.insert("clip".into(), clip);
+    let error = score.validate(&library).unwrap_err().0;
+    assert!(
+        error.contains("spread") && error.contains("degrees"),
+        "{error}"
+    );
+    assert!(error.contains("216"), "{error}");
+}
+
+/// A mirror on an order axis folds it from the middle: the wave starts in
+/// the middle head and runs out to both ends alike.
+#[test]
+fn a_mirror_on_order_waves_from_the_middle() {
+    let cells = truss();
+    let mut inputs = preset("Wave");
+    let Value::Mapping(mut axis) = inputs["axis"].clone() else {
+        panic!("axis")
+    };
+    assert_eq!(axis.source, MappingSource::Order);
+    axis.mirror = Some(MirrorPlane {
+        normal: [1.0, 0.0, 0.0],
+        offset: 0.0,
+    });
+    set(&mut inputs, "axis", Value::Mapping(axis));
+    set(&mut inputs, "spread", Value::Number(180.0));
+    let beat = 0.7;
+    let aims = directions(&cells, &inputs, beat);
+    for (i, c) in [1.0, 0.5, 0.0, 0.5, 1.0].into_iter().enumerate() {
+        let phase = beat / 4.0 - 0.5 * c;
+        close(aims[i], offset(REST, 0.0, 25.0 * (TAU * phase).sin()));
+    }
+    close(aims[0], aims[4]);
+    close(aims[1], aims[3]);
+    assert!(degrees(aims[2], aims[0]) > 1.0);
+}
+
+/// A random axis gives the heads the evenly spaced phases of an order axis,
+/// shuffled by the clip's seed.
+#[test]
+fn a_random_axis_shuffles_the_wave_phases() {
+    let cells = truss();
+    let mut inputs = preset("Wave");
+    set(
+        &mut inputs,
+        "axis",
+        axis_presets()
+            .into_iter()
+            .find(|(name, _)| *name == "Random")
+            .unwrap()
+            .1,
+    );
+    let beat = 1.0;
+    let aims = directions(&cells, &inputs, beat);
+    let mut expected: Vec<[f64; 3]> = (0..5)
+        .map(|i| {
+            let phase = beat / 4.0 - 216.0 / 360.0 * f64::from(i) / 4.0;
+            offset(REST, 0.0, 25.0 * (TAU * phase).sin())
+        })
+        .collect();
+    let mut got = aims.clone();
+    let key = |a: &[f64; 3], b: &[f64; 3]| a[2].total_cmp(&b[2]);
+    expected.sort_by(key);
+    got.sort_by(key);
+    for (a, b) in got.into_iter().zip(expected) {
+        close(a, b);
+    }
+    assert_eq!(aims, directions(&cells, &inputs, beat));
 }

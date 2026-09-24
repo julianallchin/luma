@@ -198,7 +198,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 0.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Fan", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -212,7 +212,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 0.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Converge", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -226,7 +226,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 0.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Bloom", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -240,7 +240,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 0.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Sweep", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -254,7 +254,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 45.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Wave", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -268,7 +268,7 @@
       "shape": {"type": "choice", "value": "swing_up_down"},
       "size": {"type": "number", "value": 25.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.6}
+      "spread": {"type": "number", "value": 216.0}
     }},
     {"name": "Circle", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -282,7 +282,7 @@
       "shape": {"type": "choice", "value": "circle"},
       "size": {"type": "number", "value": 18.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Figure-8", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -296,7 +296,7 @@
       "shape": {"type": "choice", "value": "figure_8"},
       "size": {"type": "number", "value": 25.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }},
     {"name": "Ballyhoo", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
@@ -310,7 +310,7 @@
       "shape": {"type": "choice", "value": "swing_left_right"},
       "size": {"type": "number", "value": 40.0},
       "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "proportion", "value": 0.0}
+      "spread": {"type": "number", "value": 0.0}
     }}
   ],
   "frequencies": [

@@ -85,7 +85,7 @@ fn angled_wings_each_get_their_own_principal_progression() {
         per_group: true,
         reverse: false,
     }
-    .resolve(&cells)
+    .resolve(&cells, 0)
     .unwrap();
     for c in &m.coordinates {
         let n = c.cell.rsplit('-').next().unwrap().parse::<f64>().unwrap();
@@ -101,7 +101,7 @@ fn angled_wings_each_get_their_own_principal_progression() {
         per_group: true,
         reverse: true,
     }
-    .resolve(&cells)
+    .resolve(&cells, 0)
     .unwrap();
     for (a, b) in m.coordinates.iter().zip(&reversed.coordinates) {
         assert!((a.position + b.position - 1.0).abs() < 1e-9);
@@ -128,7 +128,7 @@ fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
         per_group: false,
         reverse: false,
     }
-    .resolve(&cells)
+    .resolve(&cells, 0)
     .unwrap();
     assert_eq!(
         map.coordinates
@@ -163,4 +163,3 @@ fn internal_layering_preserves_color_when_only_movement_is_written() {
     assert_eq!(output.rgb(), [0.0; 3]);
     assert_eq!(output.position, Some([0.0, 0.0]));
 }
-

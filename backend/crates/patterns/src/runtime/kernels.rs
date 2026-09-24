@@ -562,7 +562,7 @@ pub(crate) fn run(
             };
             structured(
                 "coordinates",
-                vec![Value::Coordinates(spec.resolve(frame.cells)?)],
+                vec![Value::Coordinates(spec.resolve(frame.cells, frame.seed)?)],
             )
         }
         Primitive::CoordinateOffset => {

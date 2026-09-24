@@ -508,7 +508,7 @@ mod tests {
                 per_group: false,
                 reverse: false,
             }
-            .resolve(&cells)
+            .resolve(&cells, 0)
             .unwrap()
             .coordinates
             .iter()
