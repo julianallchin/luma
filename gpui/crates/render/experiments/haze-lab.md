@@ -101,7 +101,7 @@ differences as meaningful. A triangle-visibility reference additionally removes
 the shadow-map approximation, at considerable cost for dense geometry.
 
 `LUMA_PROFILE_OMIT` accepts `surface-clouds`, `surface-lighting`,
-`surface-shadows`, `face-lights`, `native-shadows`, `native-integrals`,
+`surface-shadows`, `native-shadows`, `native-integrals`,
 `native-clouds`, `native-light-depth`, `native-camera-depth`, or
 `grid-shadow-tests`. Unknown values fail at pipeline creation. An invocation
 with this variable set is tagged both `qualityReferenceEligible: false` and

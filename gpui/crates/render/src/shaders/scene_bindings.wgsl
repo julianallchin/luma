@@ -23,7 +23,7 @@ struct Globals {
     dir_to_light: vec4<f32>,
     // rgb: directional radiance, w: shadow-filter radius in texels.
     dir_color: vec4<f32>,
-    // x: point-light count, y: shadow-map texel size, z: shadows enabled,
+    // x: unused, y: shadow-map texel size, z: shadows enabled,
     // w: material debug-view code.
     params: vec4<f32>,
     medium: ProceduralMedium,
@@ -50,16 +50,8 @@ struct Instance {
     flags: vec4<f32>,
 };
 
-struct PointLightData {
-    // xyz: world position, w: cutoff distance.
-    position: vec4<f32>,
-    // rgb: colour * intensity, a: unused.
-    color: vec4<f32>,
-};
-
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
-@group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
 @group(0) @binding(3) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
 @group(0) @binding(10) var haze_noise_field: texture_3d<f32>;

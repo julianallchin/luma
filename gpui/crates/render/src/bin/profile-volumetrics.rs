@@ -20,7 +20,7 @@ use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{
     CameraPose, DebugView, Environment, Geometry, Piece, RenderSettings, Scene,
 };
-use luma_render::{build_frame_with, FrameTimings, MetricSummary, Renderer, LIVE_SUBFRAMES};
+use luma_render::{FrameTimings, LIVE_SUBFRAMES, MetricSummary, Renderer, build_frame_with};
 use serde::Serialize;
 
 const WIDTH: u32 = 1920;
@@ -593,7 +593,10 @@ fn profile_catalogue(
     arguments: &[String],
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
-        !arguments.iter().any(|a| a.starts_with("--cones=") || a.starts_with("--case=") || a.starts_with("--range-scale=") || a == "--orbit"),
+        !arguments.iter().any(|a| a.starts_with("--cones=")
+            || a.starts_with("--case=")
+            || a.starts_with("--range-scale=")
+            || a == "--orbit"),
         "saved-venue mode preserves its fixtures and geometry; synthetic scene overrides are unsupported"
     );
     anyhow::ensure!(
@@ -1261,7 +1264,7 @@ fn append_field(output: &mut Vec<u8>, field: &[u8]) {
 
 #[cfg(test)]
 mod provenance_tests {
-    use super::{manifest_hash, relevant_path, ProvenanceEntry, PROFILE_ARTIFACT};
+    use super::{PROFILE_ARTIFACT, ProvenanceEntry, manifest_hash, relevant_path};
 
     fn entry(path: &str, hash: &str) -> ProvenanceEntry {
         ProvenanceEntry {
@@ -1445,7 +1448,6 @@ fn frame_with_lights(
         transparent: base.transparent.clone(),
         gizmo_pivot: base.gizmo_pivot,
         overlays: Vec::new(),
-        point_lights: base.point_lights.clone(),
         fixture_cones: Vec::with_capacity(count),
         fixture_shadow_capacity_hint: 0,
         fixture_lighting_domain: None,

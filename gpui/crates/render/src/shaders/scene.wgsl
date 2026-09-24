@@ -1,6 +1,5 @@
 // Diagnostic omissions specialize away at pipeline creation. Never quality references.
 override PROFILE_SKIP_FIXTURES: bool = false;
-override PROFILE_SKIP_FACE_LIGHTS: bool = false;
 override PROFILE_SKIP_SURFACE_SHADOWS: bool = false;
 
 // Opaque scene pass. One material path, three.js `MeshStandardMaterial`
@@ -504,24 +503,6 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness);
         }
-    }
-
-    let count = select(u32(globals.params.x), 0u, PROFILE_SKIP_FACE_LIGHTS);
-    for (var i = 0u; i < count; i = i + 1u) {
-        let light = point_lights[i];
-        let delta = light.position.xyz - in.world;
-        let d = length(delta);
-        if d > light.position.w {
-            continue;
-        }
-        let l = delta / max(d, 1e-4);
-        let dot_nl = saturate(dot(n, l));
-        if dot_nl <= 0.0 {
-            continue;
-        }
-        let irradiance = dot_nl * light.color.rgb * distance_attenuation(d, light.position.w);
-        out += irradiance * diffuse_color * RECIPROCAL_PI;
-        out += irradiance * brdf_ggx(n, v, l, f0, roughness);
     }
 
     if surface_clusters.flags.x > 0.5 && !PROFILE_SKIP_FIXTURES {
