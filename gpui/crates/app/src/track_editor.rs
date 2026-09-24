@@ -50,6 +50,12 @@
 //! have no graphs simply keeps the flat translucent fill, and so does any
 //! clip too narrow to read.
 //!
+//! An aim clip gives no light, so its body is curves instead: the pan and
+//! tilt the solver sends each head, over the clip, as two bands. Heads that
+//! move alike share one curve. The seam hands the curves back with the
+//! preview; the painter only strokes them, at whatever width the body has —
+//! see [`paint_aim`].
+//!
 //! # The vertical bands, which are the whole pointer contract
 //!
 //! ```text
@@ -89,7 +95,7 @@ use luma_ui::{float, ladder, paint};
 
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
-use luma_lib::models::patterns::AnnotationPreview;
+use luma_lib::models::patterns::{AimCurves, AnnotationPreview};
 use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
 use luma_lib::models::waveforms::TrackWaveform;
 
@@ -330,18 +336,24 @@ impl Clip {
     }
 }
 
-/// One clip's heatmap, baked for the GPU — see [`bake`].
-struct Preview {
-    /// Two frames under one identity — frame 0 at [`BODY_ALPHA`], frame 1
-    /// opaque — so selecting a clip picks a frame instead of a second image.
-    /// The identity is the clip's for as long as it has a preview: a
-    /// re-render refreshes one atlas tile instead of abandoning a trail of
-    /// them — `STAGE_IMAGE_ID`'s trick in `visualizer.rs`, one per clip.
-    image: Arc<RenderImage>,
-    /// Whether the atlas has been told about these bytes. False for every
-    /// fresh bake, so the painter refreshes the tile under the kept identity
-    /// before drawing it.
-    published: bool,
+/// One clip's preview, ready to paint.
+enum Preview {
+    /// A heatmap, baked for the GPU — see [`bake`].
+    Heatmap {
+        /// Two frames under one identity — frame 0 at [`BODY_ALPHA`], frame
+        /// 1 opaque — so selecting a clip picks a frame instead of a second
+        /// image. The identity is the clip's for as long as it has a
+        /// preview: a re-render refreshes one atlas tile instead of
+        /// abandoning a trail of them — `STAGE_IMAGE_ID`'s trick in
+        /// `visualizer.rs`, one per clip.
+        image: Arc<RenderImage>,
+        /// Whether the atlas has been told about these bytes. False for
+        /// every fresh bake, so the painter refreshes the tile under the
+        /// kept identity before drawing it.
+        published: bool,
+    },
+    /// An aim clip's pan and tilt curves — see [`paint_aim`].
+    Aim(AimCurves),
 }
 
 impl Preview {
@@ -351,6 +363,9 @@ impl Preview {
     /// skipping it leaves the flat fill, which is already what a missing
     /// preview means.
     fn decode(row: AnnotationPreview, identity: Option<ImageId>) -> Option<(SharedString, Self)> {
+        if let Some(curves) = row.aim {
+            return Some((row.annotation_id.into(), Self::Aim(curves)));
+        }
         if row.width == 0
             || row.height == 0
             || row.pixels.len() != (row.width * row.height * 4) as usize
@@ -363,7 +378,7 @@ impl Preview {
         }
         Some((
             row.annotation_id.into(),
-            Self {
+            Self::Heatmap {
                 image: Arc::new(image),
                 published: false,
             },
@@ -1181,9 +1196,10 @@ impl Editor {
     /// Adopt one clip's re-rendered preview — `preview_annotation`'s answer.
     fn install_preview(&mut self, row: AnnotationPreview) {
         let mut previews = self.previews.borrow_mut();
-        let identity = previews
-            .remove(row.annotation_id.as_str())
-            .map(|previous| previous.image.id);
+        let identity = match previews.remove(row.annotation_id.as_str()) {
+            Some(Preview::Heatmap { image, .. }) => Some(image.id),
+            _ => None,
+        };
         if let Some((id, preview)) = Preview::decode(row, identity) {
             previews.insert(id, preview);
         }
@@ -4153,7 +4169,7 @@ fn paint_ghost(
             .map(|image| {
                 (
                     ghost.clip.id.clone(),
-                    Preview {
+                    Preview::Heatmap {
                         image: Arc::clone(image),
                         published: true,
                     },
@@ -4290,7 +4306,8 @@ fn clip_body(box_: Bounds<Pixels>) -> Bounds<Pixels> {
 /// uploaded once and then only drawn.
 const CELL_TEXELS: u32 = 4;
 
-/// Stretch a clip's heatmap over its body.
+/// Stretch a clip's heatmap over its body, or stroke an aim clip's curves
+/// across it.
 ///
 /// Answers whether it painted, so the caller can put the flat fill down when
 /// there is nothing to stretch — no decoded preview, or a body too narrow to
@@ -4311,27 +4328,88 @@ fn paint_preview(
         return false;
     }
     let mut previews = previews.borrow_mut();
-    let Some(preview) = previews.get_mut(&clip.id) else {
-        return false;
+    let (image, published) = match previews.get_mut(&clip.id) {
+        None => return false,
+        Some(Preview::Aim(curves)) => return paint_aim(body, curves, selected, window),
+        Some(Preview::Heatmap { image, published }) => (image, published),
     };
-    if !preview.published {
+    if !*published {
         // A re-render lands under the clip's kept atlas identity, and the
         // atlas answers paints from its cache, so it has to be told: same-size
         // tiles are refreshed in place, resized ones evicted for the paint
         // below to re-insert.
-        window.update_image(&preview.image).ok();
-        preview.published = true;
+        window.update_image(image).ok();
+        *published = true;
     }
     window
         .paint_image(
             body,
             body,
             Corners::default(),
-            Arc::clone(&preview.image),
+            Arc::clone(image),
             usize::from(selected),
             false,
         )
         .ok();
+    true
+}
+
+/// The least body height that holds both of an aim clip's bands.
+const AIM_BODY: f32 = 12.;
+
+/// Stroke an aim clip's curves across its body: pan in the top band, tilt in
+/// the bottom, each in its own trace colour on the dark ground. Both bands
+/// are 0–1 from the seam, bottom to top, so zoom only changes where the
+/// points land. Answers false for a body too short for two bands.
+///
+/// A curve keeps about one point per 2px of body: a zoomed-out clip strokes
+/// a few dozen points, and a zoomed-in one every sample the seam sent.
+fn paint_aim(
+    body: Bounds<Pixels>,
+    curves: &AimCurves,
+    selected: bool,
+    window: &mut Window,
+) -> bool {
+    if f32::from(body.size.height) < AIM_BODY {
+        return false;
+    }
+    let alpha = if selected { 1. } else { BODY_ALPHA };
+    window.paint_quad(fill(body, fade(ladder::background(), alpha)));
+    let half = body.size.height / 2.;
+    // The line between the bands.
+    window.paint_quad(fill(
+        Bounds {
+            origin: point(body.origin.x, body.origin.y + half),
+            size: size(body.size.width, px(1.)),
+        },
+        fade(ladder::foreground(), 0.12),
+    ));
+    let width = f32::from(body.size.width);
+    for (top, band, color) in [
+        (body.origin.y, &curves.pan, ladder::aim_pan()),
+        (body.origin.y + half, &curves.tilt, ladder::aim_tilt()),
+    ] {
+        // 3px of air above and below each band, for the stroke's width.
+        let (top, height) = (top + px(3.), half - px(6.));
+        let mut path = PathBuilder::stroke(px(1.5));
+        for curve in band.iter().filter(|curve| curve.len() > 1) {
+            let last = curve.len() - 1;
+            let stride = ((last as f32 / (width / 2.).max(1.)).ceil() as usize).max(1);
+            let at = |i: usize| {
+                point(
+                    body.origin.x + body.size.width * (i as f32 / last as f32),
+                    top + height * (1. - curve[i].clamp(0., 1.)),
+                )
+            };
+            path.move_to(at(0));
+            for i in (stride..last).step_by(stride).chain([last]) {
+                path.line_to(at(i));
+            }
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, fade(color, alpha));
+        }
+    }
     true
 }
 

@@ -281,27 +281,36 @@ fn strip(
     cells: &[luma_patterns::Cell],
 ) -> Result<crate::models::patterns::AnnotationPreview, String> {
     let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
+    let aim = clip.graph == "aim@1";
     let mut frames = Vec::new();
     if let Some(annotation) = scene.annotations.first() {
         if (annotation.plan.primitive_ids.len()).saturating_mul(width) > 1_000_000 {
             return Err("clip preview exceeds one million head samples".into());
         }
-        let times: Vec<_> = (0..width)
-            .map(|index| span.0 + (span.1 - span.0) * index as f32 / width as f32)
+        // A column per step for a heatmap. An aim's curves also need the
+        // clip's last moment, and the solver's pan and tilt, which only the
+        // composite gives.
+        let (count, scope) = if aim {
+            (width + 1, crate::eval::Scope::Composite)
+        } else {
+            (width, crate::eval::Scope::Single(0))
+        };
+        let times: Vec<_> = (0..count)
+            .map(|index| {
+                (span.0 + (span.1 - span.0) * index as f32 / width as f32).min(span.1.next_down())
+            })
             .collect();
-        frames = scene.try_render(
-            &times,
-            crate::eval::Scope::Single(0),
-            &mut crate::eval::Arena::default(),
-        )?;
+        frames = scene.try_render(&times, scope, &mut crate::eval::Arena::default())?;
     }
-    // An aim gives no light: its picture is where the beams point.
-    if clip.graph == "aim@1" {
-        return Ok(crate::annotation_preview::render_aim_preview(
-            clip_id.to_owned(),
-            &frames,
-            cells,
-        ));
+    // An aim gives no light: its picture is where the beams point, and on a
+    // rig that can move, the pan and tilt that take them there.
+    if aim {
+        let mut preview =
+            crate::annotation_preview::render_aim_preview(clip_id.to_owned(), &frames, cells);
+        preview.aim = scene
+            .rig()
+            .and_then(|rig| crate::annotation_preview::aim_curves(&frames, cells, rig));
+        return Ok(preview);
     }
     // A form clip's strip orders heads along a line through the rig; a clip
     // with its own graph keeps the brightness order it always had.

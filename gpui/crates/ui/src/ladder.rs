@@ -307,6 +307,17 @@ pub fn plot_trace(index: usize) -> Rgba {
     hsla((index % 12) as f32 * 30. / 360., 0.82, 0.62, 1.).into()
 }
 
+/// An aim clip's pan curves on the timeline: [`plot_trace`]'s cyan.
+pub fn aim_pan() -> Rgba {
+    plot_trace(6)
+}
+
+/// An aim clip's tilt curves on the timeline: [`plot_trace`]'s magenta, the
+/// hue farthest from [`aim_pan`] that is not the playhead's.
+pub fn aim_tilt() -> Rgba {
+    plot_trace(10)
+}
+
 /// [`foreground`] at an arbitrary alpha, for an icon or label that sits dimmer
 /// than the resting text.
 pub fn foreground_alpha(alpha: f32) -> Hsla {
