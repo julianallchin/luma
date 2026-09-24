@@ -48,7 +48,6 @@ streams:
       - SELECT * FROM agent_thread_messages WHERE uid = auth.user_id()
       - SELECT * FROM agent_thread_transcript_heads WHERE uid = auth.user_id()
       - SELECT * FROM drafts WHERE uid = auth.user_id()
-      - SELECT * FROM changes WHERE uid = auth.user_id()
       # A score with no venue is private authoring; it still needs its rows.
       - SELECT * FROM scores WHERE id IN accessible_scores
       - SELECT * FROM clips WHERE score_id IN accessible_scores

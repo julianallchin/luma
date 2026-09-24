@@ -15,6 +15,9 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20260923100000_drop_cues_and_pattern_library.sql` — after the clip-forms
   change set is applied and after the sync rules below no longer name
   `patterns`, `implementations` or `cues`
+- `20260923200000_drop_score_definitions.sql`
+- `20260924000000_server_history.sql` — after the sync rules below no longer
+  name `changes`, and before a client that uploads `scores.authored_at`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

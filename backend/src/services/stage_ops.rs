@@ -1122,10 +1122,12 @@ impl<'a> Stage<'a> {
 
     async fn write(&self) -> Result<VenueAccess<'a, Write>> {
         self.ensure_migrated().await?;
-        Ok(
-            VenueAccess::<Write>::write_as(self.pool, VenueResource::Venue(self.venue_id), self.actor)
-                .await?,
+        Ok(VenueAccess::<Write>::write_as(
+            self.pool,
+            VenueResource::Venue(self.venue_id),
+            self.actor,
         )
+        .await?)
     }
 
     async fn ensure_migrated(&self) -> Result<()> {

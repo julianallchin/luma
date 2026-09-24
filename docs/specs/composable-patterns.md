@@ -90,8 +90,8 @@ A score is rows. See [docs/design/sync.md](../design/sync.md).
 - Saving compares the candidate with the rows and writes only the rows that
   changed. There is no revision token. A stale candidate overwrites the rows it
   touches.
-- Every insert, update and delete on a synced table adds one row to the local
-  `changes` log.
+- The server records every insert, update and delete on an authored table in
+  its history.
 - PowerSync replicates the rows. Concurrent edits to one row merge per column;
   the last write wins.
 - Undo in the editors stays in memory.

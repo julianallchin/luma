@@ -11,7 +11,7 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
 - Every synced table has an `id`, a `uid` (the owner), `created_at` and
   `updated_at`. In Postgres `id` is `text primary key` and `uid` is
   `uuid not null`. Locally the shape is looser: `uid` is `NOT NULL` only on
-  `clips`, `drafts`, `changes` and `venue_members`
+  `clips`, `drafts` and `venue_members`
   (`scores.uid` is deliberately nullable), and
   `agent_thread_messages.updated_at` and
   `agent_thread_transcript_heads.created_at` are nullable with no default, so
@@ -85,28 +85,23 @@ Clips play score-local definitions only.
 
 ## History
 
-The local-only trigger set on every writer connection appends one row to
-`changes` for every insert, update and delete on a synced table:
+History is the server's and does not sync. A Postgres trigger on each authored
+table (venues and their content, `scores`, `clips`, MIDI modifiers and
+bindings) appends to `public.history` on every insert, update and delete:
 
-`changes(id, uid, table_name, row_id, op, before_json, after_json, actor, at,
-created_at, updated_at)`
+`history(id, uid, table_name, row_id, op, before, after, actor, at)`
 
-Two exclusions: `changes` itself is never logged, and an update whose only
-difference is `updated_at` is suppressed.
+An update whose only difference is `updated_at` is skipped. `uid` is who made
+the change, and only they can read it. `actor` is `user:<uid>` for a person, or
+a model id or MCP client label for an agent. An agent's write runs in a
+transaction attributed with `sync::triggers::attribute`; the upload triggers
+put the actor in each `powersync_crud` entry's metadata, and the connector
+sends it as the `x-luma-actor` header. Upserts from different actors are never
+batched into one request. See
+`supabase/migrations/20260924000000_server_history.sql`.
 
-`actor` is always NULL. A pooled connection is not a session, so nothing on the
-write path can honestly name a writer beyond `uid`; the column stays because
-its migration is applied.
-
-`uid` is who made the change, not who owns the row: a venue member editing the
-owner's clip writes a change of their own.
-
-`changes` syncs to its owner. Session undo in the editors stays in memory. The
-only reader is score provenance — the last actor and time on a score listing
-(`backend/src/database/local/scores.rs`). Nothing replays the log.
-
-Download application runs on the SDK connection, which has no TEMP triggers, so
-downloaded rows do not produce `changes` or upload entries.
+Session undo in the editors stays in memory. A score's "last edited" time is
+`scores.authored_at`, which `save_score` sets when a save moves something.
 
 ## Drafts
 
@@ -135,7 +130,7 @@ track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
 clips, midi_modifiers,
 midi_bindings, agent_threads, agent_thread_messages,
-agent_thread_transcript_heads, drafts, changes.
+agent_thread_transcript_heads, drafts.
 
 Local only: settings, universe_outputs, preprocessing_failures,
 track_waveforms, track_mert, fixture_group_overrides, agent_thread_runs,
@@ -157,7 +152,7 @@ venue between devices. Only the three hardware-port columns above are local.
 - `backend/src/sync/schema.rs`: the synced table list with columns. Generates
   the PowerSync `RawTable` put and delete statements.
 - `backend/src/sync/triggers.rs`: generates the TEMP triggers for writer
-  connections: one set into `powersync_crud`, one set into `changes`.
+  connections, into `powersync_crud`.
 - `backend/src/sync/connector.rs`: `fetch_credentials` returns the PowerSync
   Cloud endpoint and the Supabase access token. `upload_data` posts each CRUD
   transaction to Supabase PostgREST (`POST` with `Prefer:

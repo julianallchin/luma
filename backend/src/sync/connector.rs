@@ -4,6 +4,10 @@
 //! connector replays it against PostgREST as the signed-in user, so Postgres
 //! row-level security is the only authorization. Downloads do not come through
 //! here: the SDK streams them and applies the statements in `schema.rs`.
+//!
+//! An entry an agent wrote carries its actor as metadata (see `triggers.rs`),
+//! and the request carries it as [`ACTOR_HEADER`] for the server's history
+//! trigger. A request without it is the signed-in person's.
 
 use std::time::Duration;
 
@@ -15,6 +19,9 @@ use serde_json::{Map, Value};
 use sqlx::SqlitePool;
 
 use crate::database::local::auth;
+
+/// The header the history trigger reads the actor from.
+const ACTOR_HEADER: &str = "x-luma-actor";
 
 /// A connector-side failure, as an `Error` so it can be handed to
 /// [`PowerSyncError::upload_error`] — the SDK's only public constructor.
@@ -108,7 +115,7 @@ impl Connector {
                 .query(&filter)
                 .header("Prefer", "return=minimal"),
         };
-        builder
+        attributed(builder, entry)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
@@ -120,7 +127,8 @@ impl Connector {
     /// request per few hundred rows instead of one per row — the difference
     /// between minutes and seconds. The header is the same as for a single
     /// row, because a batch *is* a single row repeated: `merge-duplicates`
-    /// makes every one of them an upsert.
+    /// makes every one of them an upsert. Every entry in a batch has the same
+    /// actor, so the first one speaks for all.
     fn put_request(
         &self,
         table: &str,
@@ -128,9 +136,15 @@ impl Connector {
         token: &str,
     ) -> reqwest::RequestBuilder {
         let url = format!("{}/{}", self.postgrest_url.trim_end_matches('/'), table);
-        self.http
+        let builder = self
+            .http
             .post(&url)
-            .header("Prefer", "resolution=merge-duplicates,return=minimal")
+            .header("Prefer", "resolution=merge-duplicates,return=minimal");
+        let builder = match entries.first() {
+            Some(first) => attributed(builder, first),
+            None => builder,
+        };
+        builder
             .json(&Value::Array(
                 entries
                     .iter()
@@ -251,12 +265,21 @@ impl Connector {
     }
 }
 
+/// Name the entry's actor on its request, when it has one.
+fn attributed(builder: reqwest::RequestBuilder, entry: &CrudEntry) -> reqwest::RequestBuilder {
+    match entry.metadata.as_deref() {
+        Some(actor) => builder.header(ACTOR_HEADER, actor),
+        None => builder,
+    }
+}
+
 /// Split a transaction's entries into the requests they become.
 ///
-/// A run of consecutive upserts of one table is one request; everything else
-/// is one request per entry. Consecutive is load-bearing: the queue is ordered
-/// and an update or a delete between two upserts of the same row is not
-/// something to reorder around.
+/// A run of consecutive upserts of one table by one actor is one request;
+/// everything else is one request per entry. Consecutive is load-bearing: the
+/// queue is ordered and an update or a delete between two upserts of the same
+/// row is not something to reorder around. One actor, because the actor
+/// travels per request.
 #[must_use]
 fn batches(entries: &[CrudEntry]) -> Vec<&[CrudEntry]> {
     let mut batches = Vec::new();
@@ -266,7 +289,9 @@ fn batches(entries: &[CrudEntry]) -> Vec<&[CrudEntry]> {
             rest.iter()
                 .take(PUT_BATCH)
                 .take_while(|next| {
-                    matches!(next.update_type, UpdateType::Put) && next.table == first.table
+                    matches!(next.update_type, UpdateType::Put)
+                        && next.table == first.table
+                        && next.metadata == first.metadata
                 })
                 .count()
         } else {
@@ -399,6 +424,44 @@ mod tests {
             ),
             Schema::default(),
         )
+    }
+
+    /// Rows two actors wrote are two requests, each naming its own actor: the
+    /// server's history reads the actor off the request.
+    #[tokio::test]
+    async fn upserts_by_different_actors_are_separate_requests() {
+        let mut model = in_table("clips", "clip-2", UpdateType::Put, Some(row()));
+        model.metadata = Some("claude-opus-5-5".into());
+        let entries = vec![
+            in_table("clips", "clip-1", UpdateType::Put, Some(row())),
+            model,
+        ];
+        let batches = batches(&entries);
+        assert_eq!(batches.len(), 2);
+
+        let connector = connector();
+        let person = connector
+            .put_request("clips", &batches[0].iter().collect::<Vec<_>>(), "token")
+            .build()
+            .expect("request");
+        assert!(person.headers().get(ACTOR_HEADER).is_none());
+        let agent = connector
+            .put_request("clips", &batches[1].iter().collect::<Vec<_>>(), "token")
+            .build()
+            .expect("request");
+        assert_eq!(agent.headers()[ACTOR_HEADER], "claude-opus-5-5");
+    }
+
+    /// A delete has no row left to say who removed it, so the request does.
+    #[tokio::test]
+    async fn an_attributed_delete_names_its_actor() {
+        let mut delete = entry(UpdateType::Delete, None);
+        delete.metadata = Some("claude-opus-5-5".into());
+        let request = connector()
+            .request(&delete, "token")
+            .build()
+            .expect("request");
+        assert_eq!(request.headers()[ACTOR_HEADER], "claude-opus-5-5");
     }
 
     fn entry(update_type: UpdateType, data: Option<Map<String, Value>>) -> CrudEntry {
