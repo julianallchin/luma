@@ -906,10 +906,6 @@ async fn every_venue_child_shape_reaches_a_member() {
     for statement in [
         format!("UPDATE venues SET share_code = '{code}' WHERE id = '{venue}'"),
         format!(
-            "INSERT INTO score_definitions (id, uid, score_id, definition_json)
-             VALUES ('{score}:strobe', '{USER}', '{score}', '{{}}')"
-        ),
-        format!(
             "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json)
              VALUES ('{track}', '{USER}', '[]', '[]')"
         ),
@@ -977,7 +973,6 @@ async fn every_venue_child_shape_reaches_a_member() {
         ("midi_bindings", "venue_id", venue.as_str()),
         ("scores", "venue_id", venue.as_str()),
         ("clips", "score_id", score.as_str()),
-        ("score_definitions", "score_id", score.as_str()),
         ("tracks", "id", track.as_str()),
         ("track_beats", "track_id", track.as_str()),
     ] {

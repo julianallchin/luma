@@ -1012,13 +1012,6 @@ async fn score_content_provenance(
     pool: &sqlx::SqlitePool,
     score_id: &str,
 ) -> Result<Value, String> {
-    let definitions: Vec<String> = sqlx::query_scalar(
-        "SELECT definition_json FROM score_definitions WHERE score_id = ? ORDER BY id",
-    )
-    .bind(score_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|error| error.to_string())?;
     let clips: Vec<String> = sqlx::query_scalar(
         "SELECT json_object(\
          'id', id, 'graph', graph, 'start', start, 'duration', duration, 'seed', seed, \
@@ -1031,13 +1024,12 @@ async fn score_content_provenance(
     .await
     .map_err(|error| error.to_string())?;
     let mut digest = Sha256::new();
-    for value in definitions.iter().chain(&clips) {
+    for value in &clips {
         digest.update((value.len() as u64).to_le_bytes());
         digest.update(value.as_bytes());
     }
     Ok(json!({
-        "algorithm": "sha256(length-prefixed score definitions followed by SQLite JSON clip rows; each table ordered by id)",
-        "definition_count": definitions.len(),
+        "algorithm": "sha256(length-prefixed SQLite JSON clip rows ordered by id)",
         "clip_count": clips.len(),
         "sha256": format!("{:x}", digest.finalize()),
     }))

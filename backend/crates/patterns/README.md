@@ -1,14 +1,11 @@
 # Composable pattern contracts
 
-This crate owns canonical score graphs, fixture × time × channel tensors,
-structured controls and deterministic event sampling. It has no database,
-playback-device state or separate scalar execution engine.
+This crate owns the clip forms, the graphs they are built from, fixture ×
+time × channel tensors, structured controls and deterministic event sampling.
+It has no database, playback-device state or separate scalar execution engine.
 
-- `chase`, `pulse` and `dissolve` emit numerical brightness signals.
-  Events determine journey starts; travel sets each journey's duration. Longer
-  journeys overlap with Max, and completed journeys contribute zero. A snare
-  trigger and a periodic trigger connect to the same Chase input.
-- `src/recipes.json` is the editable source of built-in graph recipes. Primitive
+- `src/recipes.json` holds the few shared graphs the forms are built from:
+  Normalize, Uniform mask, Mapped position and Strobe output. Primitive
   signatures live in Rust and are the only kernel registry.
 - Numbers, colors and masks use the same numerical operations, with channel,
   unit and fixture-domain metadata. Scalar axes broadcast. Structured values
@@ -35,9 +32,6 @@ playback-device state or separate scalar execution engine.
   per-head weights for each requested event; with count one, those weights hold
   the current selection until the next event. Missing recorded events have zero
   weight, while global events broadcast their presence.
-- `beat_shimmer` lights a share of heads on each beat. Its Coverage input is an
-  envelope over the event. `circle` is a four-node vector recipe which can feed
-  ordinary scale/offset math for motion or sampled geometry.
 - Wire rate follows its actual dependencies. Computed constants can feed fixed
   controls; time-varying wires cannot. Editable graph outputs remain able to
   accept animation after starting with a constant value.
@@ -48,8 +42,8 @@ playback-device state or separate scalar execution engine.
 - `audio_spectrum` emits FFT magnitudes as channels and their spacing in Hz.
   Channel indexing, arithmetic and channel sums express frequency selections;
   several consumers can share one spectrum wire. The host supplies the exact
-  requested mix/stem. Missing stems are errors. New spectra are silent outside
-  their audio; migrated graphs explicitly retain their old boundary hold.
+  requested mix/stem. Missing stems are errors. Spectra are silent outside
+  their audio.
 - `audio_lowpass` and `audio_highpass` compose immutable audio-source requests.
   Their source and cutoff are fixed controls. The host prepares each requested
   filter chain once using the shared Butterworth filters; spectra and bands read
@@ -76,17 +70,15 @@ playback-device state or separate scalar execution engine.
   without a separate musical-color kernel.
 - Output is the only terminal. It accepts independent color, dimmer, pan/tilt,
   strobe and speed signals. An unwritten capability remains distinct from zero.
-  A numerical effect placed on the score gets a visible effect → Output graph;
-  callers can add a color input on Output without changing the Chase node.
 - Color-only Output extracts brightness. Color plus an explicit dimmer keeps
   the two independent. Perceptual gradient interpolation remains OKLab.
 - Named Input nodes preserve stable keys while
   exposing destination-inferred controls; renaming a label does not lose clip
   overrides. Timing, selection, layering and the overall random seed belong to
   the clip; individual noise operations can also expose an explicit seed.
-- Spatial recipes use arithmetic, ranking, field reductions, envelopes and
-  deterministic random thresholds. Custom UVZ vectors supplement mapping
-  presets; a mirror has an independent plane normal and offset.
+- Custom UVZ vectors supplement mapping presets; a mirror has an independent
+  plane normal and offset. Radial and angle need a plane and read around the
+  centroid of the span.
 - `wander_points` emits bounded, deterministic XYZ triples in consecutive signal
   channels. Time, count, seed, bounds, drift, amplitude and axis periods are
   explicit inputs. `proximity_weights` accepts these or custom point triples,
@@ -95,11 +87,10 @@ playback-device state or separate scalar execution engine.
   normalized exponential weights. Neither operation reads fixture layout or
   colors. A caller can supply world positions or sample another spatial domain.
 
-Mapping is an authored choice; Coordinates is a resolved runtime field. Saved
-scores reject runtime cell snapshots. The host supplies selected cells and their
-world/U/V/Z coordinates. Group expression resolution remains the host's job.
-Circle solving reuses the existing geometry implementation. Major axis is a true
-principal direction, independently normalized per requested group.
+Mapping is an authored choice; Coordinates is a resolved runtime field. The
+host supplies selected cells and their world/U/V/Z coordinates. Group
+expression resolution remains the host's job. Major axis is a true principal
+direction, independently normalized per requested group.
 
 Run checks from the repository root:
 
@@ -114,7 +105,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```json
 {
   "operation": "evaluate",
-  "definition": "chase",
+  "definition": "color.chase@1",
   "cells": [
     {"id":"head-a","group":"bar","world":[0,0,0],"uvz":[0,0,0]},
     {"id":"head-b","group":"bar","world":[0,0,1],"uvz":[0,0,1]}
@@ -123,7 +114,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
   "clip_duration": 8,
   "seed": 42,
   "inputs": {
-    "width": {"type":"proportion","value":0.5}
+    "travel": {"type":"beats","value":2}
   }
 }
 ```
@@ -138,8 +129,7 @@ A form is a shipped graph with a fixed interface: `color.constant@1`,
 `color.time@1`, `color.space@1`, `color.chase@1`, `color.sparkle@1`,
 `color.noise@1` and `strobe.constant@1` (see `docs/specs/clip-forms.md`).
 A form clip sets `graph` to the form id and holds a value for every input.
-A missing or unknown input is an error. Score-local graph clips keep the
-older rules.
+A missing or unknown input is an error. A score holds form clips only.
 
 - An input takes a plain value or, where its `promotable` list allows, a
   source: `time` and `hit` keyframe curves, `noise`, `audio` (a band of the
@@ -163,11 +153,6 @@ retain journeys or replay a graph for each event. `Score::prepare_clip` freezes
 clip inputs and enforces the clip span. Native visualizer previews share this
 path, including real track audio, beat-grid interpolation and argument overrides.
 
-`scripts/library/ebf_graph_reset.py` holds manually rebuilt EBF graph recipes
-and compares them with recorded output. It calls `score_dsl_export`,
-`score_dsl_validate` and `score_dsl_import`, which are not in the dispatch
-table, so it does not run today.
-
 ## Native venue previews
 
 The shared native/headless dispatcher exposes `get_pattern_node_library` and
@@ -177,7 +162,7 @@ The shared native/headless dispatcher exposes `get_pattern_node_library` and
 {
   "venueId": "venue UUID",
   "trackId": "track UUID",
-  "definition": "chase",
+  "definition": "color.chase@1",
   "targets": [{"expression": "pixel_bars"}],
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
@@ -192,7 +177,6 @@ Each target is a mapping group; overlapping targets are rejected. Missing
 fixture definitions are reported rather than replaced by invented single-head
 geometry. Preview retains venue and track
 read authorization and does not change the active scene or drive hardware.
-An optional `library` supplies custom graph definitions using the same contracts.
 
 Save one returned frame as JSON to render it in the real venue. `render_venue`
 is a backend binary:
@@ -209,5 +193,5 @@ all heads, time samples and channels, retaining the signal's unit. It defaults t
 estimate, with adjustable resolution for faster or longer signals. Preparation
 uses bounded batches and only the upstream dependency graph. Nested ranges prepare
 in dependency order, and playback reuses the result. Rebinding track analysis
-recomputes it. Normalize and Invert over clip are five-node arithmetic recipes
-using the same range, rather than separate evaluator kernels.
+recomputes it. Normalize is a five-node arithmetic graph using the same range,
+rather than a separate evaluator kernel.

@@ -117,19 +117,6 @@ impl TrackHost {
         }
         supervise(async {
             match method {
-                "track.graph_instance" => {
-                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-                    let request: Instance = decode(payload)?;
-                    let library = request.candidate.library(&luma_patterns::standard_library())
-                        .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?;
-                    let definition = library.definitions.get(&request.definition)
-                        .ok_or_else(|| HostCallError::new("invalid_score", "unknown graph definition"))?;
-                    let instance = if definition.placeable() {
-                        definition.clip_instance(&request.definition)
-                            .map_err(|error| HostCallError::new("invalid_score", error.to_string()))?
-                    } else { definition.instance(&request.definition) };
-                    Ok(json!(instance))
-                }
                 "track.score_check" => {
                     let plan: Candidate = decode(payload)?;
                     let scene = self.prepare_score(&plan.candidate).await?;
@@ -140,30 +127,6 @@ impl TrackHost {
                     validate_window(&self.pool, &self.scope.track_id, request.start_time, request.end_time).await?;
                     let scene = self.prepare_score(&request.candidate).await?;
                     self.render_scene(scene, request.start_time, request.end_time).await
-                }
-                "track.graph_edit" => {
-                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-                    let mut request: Edit = decode(payload)?;
-                    if request.edits.len() > 256 { return Err(HostCallError::new("invalid_edit", "at most 256 graph gestures per call")); }
-                    for edit in request.edits {
-                        request.candidate.edit_graph(&luma_patterns::standard_library(), &request.graph, edit)
-                            .map_err(|error| HostCallError::new("invalid_edit", error.to_string()))?;
-                    }
-                    Ok(json!(request.candidate))
-                }
-                "track.score_independent" => {
-                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-                    let mut request: Independent = decode(payload)?;
-                    request.candidate.make_independent(&luma_patterns::standard_library(), &request.clip, &request.id)
-                        .map_err(|error| HostCallError::new("invalid_edit", error.to_string()))?;
-                    Ok(json!(request.candidate))
-                }
-                "track.graph_customize" => {
-                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
-                    let mut request: Customize = decode(payload)?;
-                    request.candidate.customize_node(&luma_patterns::standard_library(), &request.graph, &request.node, &request.id)
-                        .map_err(|error| HostCallError::new("invalid_edit", error.to_string()))?;
-                    Ok(json!(request.candidate))
                 }
                 _ => Err(HostCallError::new("unknown_method", "unknown score operation")),
             }
@@ -178,41 +141,9 @@ struct Candidate {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Instance {
-    candidate: Score,
-    definition: String,
-}
-
-#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Render {
     candidate: Score,
     start_time: f64,
     end_time: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Edit {
-    candidate: Score,
-    graph: String,
-    edits: Vec<luma_patterns::GraphEdit>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Independent {
-    candidate: Score,
-    clip: String,
-    id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Customize {
-    candidate: Score,
-    graph: String,
-    node: String,
-    id: String,
 }

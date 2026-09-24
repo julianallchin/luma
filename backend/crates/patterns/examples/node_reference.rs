@@ -6,9 +6,9 @@
 //! Ports, types, rates and defaults come from the library. Categories and the
 //! one-line summaries live in `CATEGORIES` below. The run fails when a library
 //! definition has no category, or a category names a definition that is gone.
-use luma_patterns::{standard_library, Binding, Body, Definition, Input, Library, Rate, Value};
+use luma_patterns::{standard_library, Body, Definition, Input, Library, Rate, Value};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::Write as _,
     fs,
     path::PathBuf,
@@ -57,8 +57,6 @@ const CATEGORIES: &[Category] = &[
             ("audio_lowpass", "Adds a lowpass filter to an audio source. Connect the result to Frequency energy or Audio spectrum."),
             ("audio_highpass", "Adds a highpass filter to an audio source. Connect the result to Frequency energy or Audio spectrum."),
             ("harmony", "The current pitch class from the chord analysis, from 0 (C) to 11 (B), and whether a pitch class is present."),
-            ("band_mask", "Frequency energy multiplied by Sensitivity, then shaped by the Response curve."),
-            ("drum_mask", "A pulse on every onset of one drum."),
         ],
     },
     Category {
@@ -72,16 +70,12 @@ const CATEGORIES: &[Category] = &[
             ("resolve_mapping", "Resolves a mapping to one coordinate from 0 to 1 per head. The mapping sets the source direction, grouping, reversal and an optional mirror plane."),
             ("mapped_position", "The resolved mapping coordinate of each head."),
             ("coordinate_offset", "The distance of each head's mapped coordinate from Position. When the boundary wraps, the distance wraps into the range −0.5 to 0.5. `wrapped` is 1 for heads that wrap."),
-            ("radial_distance", "The distance of each head from the mean U/V center of the selection, in meters."),
             ("core/radial_coordinates", "The angle in turns and the radius of each point around the centroid of the first two position channels."),
             ("core/fit_circle", "Fits a circle to 3D points and gives the angle of each point around it, in turns. If the fit fails, it uses the angle around the centroid."),
             ("core/principal_direction", "The main direction of a 2D point cloud, as a unit vector."),
             ("core/rank_nearby", "Ranks heads by Sort value. A head within Merge distance of the previous head in that order gets the same rank."),
             ("wander_points", "Point count seeded points that drift and oscillate inside a box. The output has three channels (XYZ) per point."),
             ("proximity_weights", "For each position, one weight per point. The weights add up to 1. Nearer points get more weight. Blend distance sets how soft the blend is. At 0 only the nearest point gets weight."),
-            ("circle", "The sine of Phase and the sine of Phase + 0.25 turns, as a 2-channel vector."),
-            ("normalize_field", "Rescales a value so that the minimum over the selection is 0 and the maximum is 1."),
-            ("remap_field", "Rescales a value: (value − Input minimum) ÷ (Input maximum − Input minimum)."),
             ("core/domain_index", "The index of each head in the prepared selection."),
             ("core/align_domain", "Puts Value on the heads of Domain. If Domain has no per-head values, it takes the value of the head with the lowest First fixture order."),
             ("core/field_first", "The value of the head with the lowest Order."),
@@ -94,21 +88,9 @@ const CATEGORIES: &[Category] = &[
         description: "Nodes that make per-head brightness masks and movement over time.",
         intro: "A mask is a value from 0 to 1 per head. Multiply a mask by a color to make a lit effect.",
         nodes: &[
-            ("pulse", "For each trigger event, samples Shape over Duration beats. Overlapping events combine with the maximum."),
-            ("chase", "Each trigger event moves a stroke of Width from Start to End over Travel time, on the mapping. Overlapping strokes combine with the maximum."),
-            ("dissolve", "Each trigger event lights a seeded random set of heads. Coverage sets the fraction of heads over the event. Brightness curve sets their level."),
-            ("pill", "A stroke of Width centered at Position on the mapping. Shape sets the brightness across the stroke. Activity scales it."),
-            ("profile_mask", "Samples Shape across a window of Width centered where the offset is 0."),
-            ("noise_mask", "Coherent noise over the mapped U and V positions and clip time, shaped by Response."),
             ("uniform_mask", "The same coverage on every head, clamped to 0–1."),
-            ("multiply_mask", "Multiplies two masks and clamps the result to 0–1."),
-            ("scale_mask", "Multiplies a mask by Amount and clamps the result to 0–1."),
-            ("random_selection", "Selects Proportion of the heads in a random order. A new Index gives a new order. Softness fades the heads near the edge of the selection."),
-            ("random_heads_mask", "Lights a Density share of the heads and changes them every Change every beats."),
-            ("event_envelope", "Samples Shape at the progress of each event, multiplies by its weight, and takes the maximum over events."),
             ("envelope", "Samples an editable curve at Progress."),
             ("soft_edges", "Makes an envelope that rises and falls linearly at both edges. Edge softness sets the width of the edges."),
-            ("motion", "Moves from Start to End along Travel curve over Travel time. Gives the position, the progress and whether the journey is still active."),
         ],
     },
     Category {
@@ -125,25 +107,18 @@ const CATEGORIES: &[Category] = &[
         ],
     },
     Category {
-        slug: "effects",
-        title: "Effects",
-        description: "Complete effect graphs that you can place as clips.",
-        intro: "Each of these graphs gives values that Apply accepts. You can place them on the timeline as clips. The [recipes](/docs/node-reference/recipes) page shows how some of them are built.",
+        slug: "forms",
+        title: "Forms",
+        description: "The shipped clip forms. A clip plays one form.",
+        intro: "Each form is a graph of the nodes on the other pages. A clip names one form and sets its inputs.",
         nodes: &[
-            ("wash", "One color on every head."),
-            ("beat_pulse", "Beat trigger into Pulse, multiplied by Color."),
-            ("beat_chase", "Beat trigger into Chase along a mapping, multiplied by Color."),
-            ("beat_dissolve", "Beat trigger into Dissolve, multiplied by Color."),
-            ("beat_shimmer", "Beat trigger with a short repeat into Dissolve, multiplied by Color."),
-            ("band_pulse", "Frequency mask multiplied by Color."),
-            ("drum_pulse", "Drum pulse mask multiplied by Color."),
-            ("noise_wash", "Noise mask multiplied by Color."),
-            ("random_heads", "Random heads mask multiplied by Color."),
-            ("rainbow", "The hue turns once every Repeat beats."),
-            ("gradient", "Samples the gradient by clip progress."),
-            ("spatial_gradient", "Samples the gradient by the mapped position of each head."),
-            ("harmony_color", "Maps the current pitch class to a color of the gradient. Dark when no pitch class is present."),
-            ("strobe", "Color on every head and a strobe value of Strobe rate."),
+            ("color.constant@1", "All selected heads one color."),
+            ("color.time@1", "A color gradient over time, all heads equal."),
+            ("color.space@1", "A gradient laid across the rig. Each head gets a fixed color from its position."),
+            ("color.chase@1", "Strokes travel across the heads. Each event starts one stroke."),
+            ("color.sparkle@1", "Each event lights a random share of the heads."),
+            ("color.noise@1", "Soft brightness that wanders across space and time."),
+            ("strobe.constant@1", "Fixture shutter strobe at Rate × Alpha."),
         ],
     },
     Category {
@@ -170,7 +145,6 @@ const CATEGORIES: &[Category] = &[
             ("core/choose_number", "Yes when Condition is on, No when it is off."),
             ("core/clamp_coverage", "Clamps a value to 0–1."),
             ("normalize", "Rescales a signal so that its minimum over the clip is 0 and its maximum is 1."),
-            ("invert", "Reflects a signal inside its range over the clip: minimum + maximum − value."),
             ("clip_range", "The minimum and maximum of a signal, sampled at evenly spaced times across the clip."),
             ("core/field_minimum", "The minimum over all heads."),
             ("core/field_maximum", "The maximum over all heads."),
@@ -198,22 +172,9 @@ const CATEGORIES: &[Category] = &[
         intro: "Apply is the only node that writes lighting. Every clip graph ends in one Apply.",
         nodes: &[
             ("output", "Writes color, pan, tilt, strobe and movement speed for each head. An unwired input leaves that capability untouched. The brightness of a head is its largest RGB channel. Apply sends it as the dimmer and normalizes the color."),
-            ("write_position", "Passes Pan and Tilt through to outputs that connect to Apply."),
-            ("write_speed", "Passes a movement speed through to an output that connects to Apply."),
             ("write_strobe", "Gives a strobe value on every head, clamped to 0–1."),
         ],
     },
-];
-
-const RECIPES: &[&str] = &[
-    "beat_pulse",
-    "beat_chase",
-    "beat_dissolve",
-    "band_pulse",
-    "drum_pulse",
-    "harmony_color",
-    "rainbow",
-    "spatial_gradient",
 ];
 
 const GENERATED: &str = "{/* Generated by backend/crates/patterns/examples/node_reference.rs from luma_patterns::standard_library(). Do not edit this file. Run the example again. */}";
@@ -251,10 +212,8 @@ fn main() {
         )
         .unwrap();
     }
-    fs::write(dir.join("recipes.mdx"), recipes(&library, &category_of)).unwrap();
     let mut pages = vec!["index".to_string()];
     pages.extend(CATEGORIES.iter().map(|c| c.slug.to_string()));
-    pages.push("recipes".into());
     fs::write(
         dir.join("meta.json"),
         serde_json::to_string_pretty(&serde_json::json!({
@@ -523,201 +482,6 @@ A per-frame wire cannot connect to a fixed input.\n\n",
             writeln!(out, "- {} (`{id}`)", text(&library.display_name(id))).unwrap();
         }
         out.push('\n');
-    }
-    out.push_str(
-        "### [Recipes](/docs/node-reference/recipes)\n\nDiagrams of how the effect graphs are built from other nodes.\n",
-    );
-    out
-}
-
-fn binding_source(binding: &Binding) -> Option<(String, String)> {
-    match binding {
-        Binding::Input { input } => Some(("inputs".into(), input.clone())),
-        Binding::Connection { node, output } => Some((node.clone(), output.clone())),
-        Binding::Value { .. } => None,
-    }
-}
-
-fn recipes(library: &Library, category_of: &BTreeMap<&str, &Category>) -> String {
-    let mut out = front_matter(
-        "Recipes",
-        "How the effect graphs of the standard library are built from other nodes.",
-    );
-    out.push_str(
-        "Each recipe below is a graph in the standard library. \
-The diagram shows the nodes of the graph. \
-**Inputs** are the inputs of the graph. **Outputs** connect to Apply. \
-Constant values show inside the node.\n\n",
-    );
-    for id in RECIPES {
-        let definition = &library.definitions[*id];
-        let Body::Graph(graph) = &definition.body else {
-            panic!("{id} is not a graph");
-        };
-        let summary = category_of[id]
-            .nodes
-            .iter()
-            .find(|(node, _)| node == id)
-            .unwrap()
-            .1;
-        writeln!(out, "---\n\n## {}\n", text(&definition.name)).unwrap();
-        writeln!(out, "`{id}` · {summary}\n").unwrap();
-
-        // Column of a node: the longest path from the graph inputs.
-        fn depth(
-            graph: &luma_patterns::Graph,
-            id: &str,
-            memo: &mut BTreeMap<String, usize>,
-        ) -> usize {
-            if let Some(d) = memo.get(id) {
-                return *d;
-            }
-            let d = 1 + graph.nodes[id]
-                .inputs
-                .values()
-                .filter_map(|b| match b {
-                    Binding::Connection { node, .. } => Some(depth(graph, node, memo)),
-                    _ => None,
-                })
-                .max()
-                .unwrap_or(0);
-            memo.insert(id.into(), d);
-            d
-        }
-        let mut memo = BTreeMap::new();
-        let mut columns: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-        for node in graph.nodes.keys() {
-            columns
-                .entry(depth(graph, node, &mut memo))
-                .or_default()
-                .push(node);
-        }
-        let last = columns.keys().max().copied().unwrap_or(0) + 1;
-
-        let mut used_outputs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut edges = Vec::new();
-        for (node, spec) in &graph.nodes {
-            for (port, binding) in &spec.inputs {
-                if let Some((from, handle)) = binding_source(binding) {
-                    used_outputs
-                        .entry(from.clone())
-                        .or_default()
-                        .insert(handle.clone());
-                    edges.push(serde_json::json!({
-                        "from": from, "fromHandle": handle, "to": node, "toHandle": port,
-                    }));
-                }
-            }
-        }
-        for (port, binding) in &graph.outputs {
-            if let Some((from, handle)) = binding_source(binding) {
-                used_outputs
-                    .entry(from.clone())
-                    .or_default()
-                    .insert(handle.clone());
-                edges.push(serde_json::json!({
-                    "from": from, "fromHandle": handle, "to": "outputs", "toHandle": port,
-                }));
-            }
-        }
-
-        let row = |ports: usize| 40 + 18 * ports as i64;
-        let mut nodes = vec![serde_json::json!({
-            "id": "inputs", "label": "Inputs", "category": "io", "x": 0, "y": 0,
-            "outputs": used_outputs.get("inputs").map(|s| s.iter().collect::<Vec<_>>()).unwrap_or_default(),
-        })];
-        let mut tallest = 0;
-        for (column, ids) in &columns {
-            let mut y = 0;
-            for node in ids {
-                let spec = &graph.nodes[*node];
-                let inputs: Vec<_> = spec
-                    .inputs
-                    .iter()
-                    .filter(|(_, b)| !matches!(b, Binding::Value { .. }))
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                let params: serde_json::Map<_, _> = spec
-                    .inputs
-                    .iter()
-                    .filter_map(|(k, b)| match b {
-                        Binding::Value { value: v } => {
-                            Some((k.clone(), serde_json::Value::String(value(v))))
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                let outputs: Vec<_> = used_outputs
-                    .get(*node)
-                    .map(|s| s.iter().cloned().collect())
-                    .unwrap_or_default();
-                let category = category_of
-                    .get(spec.definition.as_str())
-                    .map_or("math", |c| c.slug);
-                let ports = inputs.len() + params.len() + outputs.len();
-                nodes.push(serde_json::json!({
-                    "id": node,
-                    "label": library.display_name(&spec.definition),
-                    "category": category,
-                    "x": *column as i64 * 240,
-                    "y": y,
-                    "inputs": inputs,
-                    "outputs": outputs,
-                    "params": params,
-                }));
-                y += row(ports) + 30;
-            }
-            tallest = tallest.max(y);
-        }
-        nodes.push(serde_json::json!({
-            "id": "outputs", "label": "Outputs", "category": "io",
-            "x": last as i64 * 240, "y": 0,
-            "inputs": graph.outputs.keys().collect::<Vec<_>>(),
-        }));
-        let inputs_height = row(used_outputs.get("inputs").map_or(0, BTreeSet::len)) + 30;
-        let height = (tallest.max(inputs_height) + 80).clamp(260, 640);
-
-        writeln!(out, "<NodeGraph\n  height={{{height}}}\n  nodes={{[").unwrap();
-        for node in &nodes {
-            writeln!(out, "    {node},").unwrap();
-        }
-        out.push_str("  ]}\n  edges={[\n");
-        for edge in &edges {
-            writeln!(out, "    {edge},").unwrap();
-        }
-        out.push_str("  ]}\n/>\n\n");
-
-        out.push_str("### Nodes\n\n");
-        let mut ordered: Vec<_> = graph.nodes.keys().collect();
-        ordered.sort_by_key(|node| (memo[node.as_str()], node.as_str()));
-        for node in ordered {
-            let spec = &graph.nodes[node];
-            let mut reads = Vec::new();
-            for (port, binding) in &spec.inputs {
-                reads.push(match binding {
-                    Binding::Input { input } => format!("`{port}` from the graph input `{input}`"),
-                    Binding::Connection { node, output } => {
-                        format!("`{port}` from `{node}.{output}`")
-                    }
-                    Binding::Value { value: v } => format!("`{port}` = `{}`", value(v)),
-                });
-            }
-            let reads = if reads.is_empty() {
-                "It has no bound inputs.".to_string()
-            } else {
-                format!("It reads {}.", reads.join(", "))
-            };
-            writeln!(
-                out,
-                "- **{node}** is {} (`{}`). {reads}",
-                text(&library.display_name(&spec.definition)),
-                spec.definition
-            )
-            .unwrap();
-        }
-        out.push('\n');
-        out.push_str("### Inputs\n\n");
-        inputs_table(&mut out, &definition.inputs);
     }
     out
 }
