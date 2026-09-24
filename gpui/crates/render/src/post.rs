@@ -6,7 +6,7 @@
 //! this chain finishes the frame:
 //!
 //! 1. **Lens glow** (`post_lens.wgsl`). Each lit cone's lens is a small
-//!    camera-facing disc at its apex. It is as bright as the beam's peak when
+//!    camera-facing disc at its lens centre, the lens's own radius. It is as bright as the beam's peak when
 //!    the camera is within three quarters of the beam angle, and only a faint
 //!    glow from the side. It is hidden by nearer geometry. On with the glare.
 //! 2. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
@@ -86,13 +86,14 @@ const ADAPT_DOWN: f32 = 3.0;
 /// does not jump on its next frame.
 const MAX_ADAPT_STEP_S: f32 = 0.1;
 
-/// Lens radius in metres for a hard beam and for a wide wash.
+/// Lens radius in metres for a point-source cone (a house lamp, a synthetic
+/// test cone), which carries none: a hard beam and a wide wash.
 const LENS_RADIUS_BEAM_M: f32 = 0.05;
 const LENS_RADIUS_WASH_M: f32 = 0.12;
 /// Scene-linear radiance of a lens on its axis, per unit of cone intensity.
 const LENS_GAIN: f32 = 60.0;
-/// Depth slack for the lens's own housing: the apex sits inside it.
-const LENS_OCCLUSION_SLACK_M: f32 = 0.5;
+/// Depth slack for the lens's own glass and bezel, which sit at its centre.
+const LENS_OCCLUSION_SLACK_M: f32 = 0.1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -735,12 +736,15 @@ impl Post {
                 .iter()
                 .filter(|cone| cone.intensity > 0.0)
                 .map(|cone| LensInstance {
+                    // `position` is the lens centre on the front glass.
                     position: cone
                         .position
-                        .extend(
+                        .extend(if cone.lens.radius > 0.0 {
+                            cone.lens.radius.min(crate::luminaire::Lens::MAX_RADIUS_M)
+                        } else {
                             LENS_RADIUS_BEAM_M
-                                + (LENS_RADIUS_WASH_M - LENS_RADIUS_BEAM_M) * cone.wash,
-                        )
+                                + (LENS_RADIUS_WASH_M - LENS_RADIUS_BEAM_M) * cone.wash
+                        })
                         .to_array(),
                     direction: cone.direction.extend(cone.cos_beam).to_array(),
                     color: cone.color.extend(cone.intensity).to_array(),

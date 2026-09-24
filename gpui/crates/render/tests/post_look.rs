@@ -77,6 +77,7 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
+        lens: luma_render::luminaire::Lens { radius: 0.05 },
     }];
     frame
 }
