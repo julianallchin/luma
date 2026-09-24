@@ -162,7 +162,7 @@ Strokes travel across the heads. Each event starts one stroke.
 |---|---|---|---|
 | color | color | T | Stroke color |
 | axis | axis | — | Which way the heads are ordered |
-| every | beats, or event list | T | Time between strokes |
+| every | beats | T | Time between strokes |
 | travel | beats | T | Time for one stroke to cross the whole axis |
 | width | number 0–4 + rel/abs | T H | Stroke size |
 | shape | shape preset or curve | — | Brightness across the stroke |
@@ -204,8 +204,10 @@ Strokes travel across the heads. Each event starts one stroke.
     position) of the span, in its plane. With the fixture span, each
     fixture turns around its own center. Radial is the distance within the
     plane, scaled 0–1 over the span.
-- **every** is beats, or a list of stamped event times in beats from the clip
-  start. No `delay` and no `grid_aligned`: to shift, move the clip.
+- **every** is beats. No `delay` and no `grid_aligned`: to shift, move the
+  clip. A hit is a clip that you place on the timeline. One clip never holds
+  a list of hit times: hits that do not repeat at a fixed period are
+  separate clips with `every` = 0.
 - **Strokes on the axis at once** = `travel / every`. Strokes overlap when
   events come faster than travel.
 - **Overrun.** With boundary `clip` and a gliding path, a stroke enters fully
@@ -258,7 +260,7 @@ Each event lights a random share of the heads.
 | Input | Type | Promotable | Meaning |
 |---|---|---|---|
 | color | color | T | |
-| every | beats, or event list | T | Time between events |
+| every | beats | T | Time between events |
 | duration | beats | T | Life of one event |
 | coverage | proportion | T H N A | Share of heads lit, below 100% |
 | brightness | proportion | T H N A | Brightness of the lit heads |
@@ -270,8 +272,7 @@ Each event lights a random share of the heads.
 - Events overlap when `every < duration`; overlaps keep the maximum.
 - Sparkle is random heads only. A fixed coverage of 100% lights every head,
   which is a Wash with a brightness per hit, so validation rejects it. A
-  sparkle with stamped events may still have 100%: the Wash has no stamped
-  hits. A curve may pass through 100% (Dissolve, Build).
+  curve may pass through 100% (Dissolve, Build).
 
 Presets:
 
@@ -345,8 +346,8 @@ Conversions of removed inputs:
 - `delay` and `grid_aligned`: move the clip start to the first event and
   shorten it by the same amount. This is exact when nothing is lit before the
   first event; the render check proves it per clip.
-- Drum triggers: stamp the analyzed hit times into `every` as an event list.
-  The output is unchanged and the score no longer depends on drum analysis.
+- Drum triggers: one clip per analyzed hit, placed at the hit. The score no
+  longer depends on drum analysis.
 - Harmony color (3): bake into a `color.time` curve.
 - Mapping `reverse`: `path = backward` on chase; reversed stops on a
   gradient.
@@ -361,7 +362,31 @@ events became a Wash with the same color, brightness, every and alpha. At
 coverage 100% the grain has no effect. When `duration` equals `every` the
 hit curve is kept; when `duration < every` the curve is squeezed into the
 first `duration / every` of each hit and the rest is 0, as the sparkle was
-dark between events. Sparkles with stamped events stay sparkles.
+dark between events.
+
+**Stamped events split (2026-09-24).** `every` no longer takes a list of
+hit times. 66 stored clips had a list: 63 sparkles, all at coverage 100%,
+and 3 chases, with 1012 hits. Each became one clip per hit, on the same
+layer, with the same blend, selection, seed and alpha. The clips of one old
+clip do not overlap in time and keep its place in the paint order.
+
+- A sparkle became Washes with `every = 0`. The old clip showed the
+  brightest live hit, so its span is split where the brightest hit changes.
+  Each Wash plays the part of its hit's curve that it covers. A hit that is
+  always under a brighter one gets no clip (1 hit).
+- Where the old clip hid the layers under it between hits (`replace`,
+  `multiply`, or a later layer that blends onto its dark heads), the Washes
+  also cover the dark time: a dark tail to the next hit and a dark lead-in
+  before the first hit. Otherwise a Wash covers only its hit's life, cut at
+  the old clip end.
+- A chase became one chase per hit with `every = 0` and the same travel.
+  One `multiply` chase got a Wash at brightness 0 before its first hit, to
+  keep the dark lead-in.
+- The render check on the full score was exact for 64 of 66 clips. The two
+  chases that differ have double hits about 0.02 beats apart. One clip took
+  the brightest of two overlapping strokes per head; two clips on one layer
+  paint in order instead. Largest difference: 0.28 (`multiply` chase) and
+  0.049 (`replace` chase).
 
 **Render check.** A dry run over a copy of the reference database renders
 every converted clip, old and new, at a fixed set of times on its real venue,
@@ -401,7 +426,7 @@ to one onto the stored form.
 ## Delivery
 
 Slice 1 is Chase end to end: engine additions (curve hold/step, `alpha`,
-sources, stamped events, relative width, `steps(N)`, direction-following
+sources, relative width, `steps(N)`, direction-following
 shape, custom vector axis), `color.chase@1`, presets, the inspector with
 promotion, and migration with the render check for the chase rows of the
 table. Slice 2 adds the other forms and the preset-only picker. Slice 3
@@ -413,7 +438,7 @@ score-local definitions.
 - Place Chase from the picker; set every input in the inspector; promote
   `every` to a time curve and see strokes multiply without a jump.
 - Alternating sides renders identically to its old graph.
-- A drum-triggered chase migrates to stamped events with no render difference.
+- A drum-triggered chase migrates to one chase clip per hit.
 - Seek to any beat and get the same frame as playback.
 - Patterns crate tests and the affected headless tests pass.
 

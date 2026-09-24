@@ -132,9 +132,8 @@ A form clip sets `graph` to the form id and holds a value for every input.
 A missing or unknown input is an error. A score holds form clips only.
 
 - An input takes a plain value or, where its `promotable` list allows, a
-  source: `time` and `hit` keyframe curves, `noise`, `audio` (a band of the
-  full mix, scaled over the clip), or `events` (stamped beats from the clip
-  start, on `every` only). Sources are tagged values, for example
+  source: `time` and `hit` keyframe curves, `noise`, or `audio` (a band of
+  the full mix, scaled over the clip). Sources are tagged values, for example
   `{"type":"time","value":{"points":[[0,2],[1,0.5]],"segments":["linear"]}}`.
 - `PreparedGraph::new` lowers each source into nodes of a copy of the form.
   A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
