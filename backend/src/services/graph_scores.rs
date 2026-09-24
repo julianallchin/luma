@@ -30,17 +30,48 @@ struct SceneData {
     cells: std::collections::BTreeMap<String, Vec<luma_patterns::Cell>>,
 }
 
+/// `single` is a one-clip preview: it keeps a clip that lights no cells and
+/// fails with the clip's error. A whole score instead leaves out each clip
+/// that fails, logs why, and plays the rest, so one bad clip never darkens
+/// the score.
 async fn prepare_scene_data(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     track_id: &str,
     score: &Score,
-    include_empty: bool,
+    single: bool,
 ) -> Result<SceneData, String> {
-    score
-        .validate(&standard_library())
-        .map_err(|error| error.to_string())?;
+    let library = standard_library();
+    if single {
+        score
+            .validate(&library)
+            .map_err(|error| error.to_string())?;
+    }
+    // A clip that fails leaves the scene; see above.
+    let skip = |error: String| -> Result<(), String> {
+        if single {
+            return Err(error);
+        }
+        log::warn!("score clip left out of the scene: {error}");
+        Ok(())
+    };
+    let score = &Score {
+        clips: score
+            .clips
+            .iter()
+            .filter(
+                |(id, clip)| match Score::validate_clip(&library, id, clip) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        log::warn!("score clip left out of the scene: {error}");
+                        false
+                    }
+                },
+            )
+            .map(|(id, clip)| (id.clone(), clip.clone()))
+            .collect(),
+    };
     if score.clips.is_empty() {
         return Ok(SceneData {
             scene: crate::eval::Scene::default(),
@@ -53,7 +84,6 @@ async fn prepare_scene_data(
             .await?
             .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
-    let library = standard_library();
     let mut compiled = Vec::new();
     let mut clip_cells = std::collections::BTreeMap::new();
     let mut prepared_clips = Vec::new();
@@ -77,10 +107,10 @@ async fn prepare_scene_data(
             domains.insert(key, cells.clone());
             cells
         };
-        if cells.is_empty() && !include_empty {
+        if cells.is_empty() && !single {
             continue;
         }
-        let prepared = luma_patterns::PreparedGraph::new(
+        let prepared = match luma_patterns::PreparedGraph::new(
             &library,
             &clip.graph,
             &clip.inputs,
@@ -92,8 +122,13 @@ async fn prepare_scene_data(
                 clip_duration: clip.duration,
                 seed: clip.seed,
             },
-        )
-        .map_err(|e| format!("clip {id}: {e}"))?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                skip(format!("clip {id}: {error}"))?;
+                continue;
+            }
+        };
         for request in prepared.feature_requests() {
             if !requests.contains(request) {
                 requests.push(request.clone());
@@ -111,18 +146,32 @@ async fn prepare_scene_data(
     };
     for (id, clip, cells, prepared) in prepared_clips {
         let prepared = match &features {
-            Some(features) => prepared
-                .with_features(features.clone())
-                .map_err(|e| format!("clip {id}: {e}"))?,
+            Some(features) => match prepared.with_features(features.clone()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    skip(format!("clip {id}: {error}"))?;
+                    continue;
+                }
+            },
             None => prepared,
         };
         let output = library.definitions[&clip.graph]
             .lighting_output()
             .ok_or("clip graph must produce fixture output")?;
-        clip_cells.insert(id.clone(), cells.clone());
-        let plan =
-            crate::eval::lighting::compile_clip(clip, clock.clone(), cells, prepared, output)
-                .map_err(|error| format!("clip {id}: {error}"))?;
+        let plan = match crate::eval::lighting::compile_clip(
+            clip,
+            clock.clone(),
+            cells.clone(),
+            prepared,
+            output,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                skip(format!("clip {id}: {error}"))?;
+                continue;
+            }
+        };
+        clip_cells.insert(id.clone(), cells);
         compiled.push(crate::eval::CompiledAnnotation {
             span: plan.span,
             plan: std::sync::Arc::new(plan),

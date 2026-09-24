@@ -28,12 +28,16 @@ pub async fn apply_score_document(
     score_id: String,
     score: luma_patterns::Score,
 ) -> Result<(), CommandError> {
-    score
-        .validate(&luma_patterns::standard_library())
-        .map_err(|error| CommandError::Invalid(error.to_string()))?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
     let metadata = db::get_score(&mut access, &score_id).await?;
+    // Check each clip this write changes. A stored clip that no longer
+    // passes, such as one from before a form changed, does not block edits
+    // to the rest of the score.
+    let stored = rows::load_score(access.connection(), &score_id).await?;
+    score
+        .validate_changes(&luma_patterns::standard_library(), &stored)
+        .map_err(|error| CommandError::Invalid(error.to_string()))?;
     rows::save_score(
         access.connection(),
         &score_id,

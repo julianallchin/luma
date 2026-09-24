@@ -184,9 +184,9 @@ impl Editor {
                 .collect::<Result<_, String>>()?;
             score.clips.insert(clip.id.to_string(), authored);
         }
-        score
-            .validate(&p::standard_library())
-            .map_err(|error| error.to_string())?;
+        // Not checked as a whole: one stale clip must not stop the rest from
+        // playing, previewing or saving. The backend checks each clip it
+        // saves, and a scene leaves out a clip that fails.
         Ok(score)
     }
 
@@ -424,8 +424,7 @@ impl Editor {
         clip.z_index = z;
         clip.selection = selection;
         clip.seed = uuid::Uuid::new_v4().as_u64_pair().0;
-        score
-            .validate(&p::standard_library())
+        p::Score::validate_clip(&p::standard_library(), &id, clip)
             .map_err(|error| error.to_string())?;
         self.edit_graph_score(score)?;
         self.menu = None;
