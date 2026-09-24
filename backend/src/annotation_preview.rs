@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::models::patterns::AnnotationPreview;
+use crate::models::patterns::{AimCurves, AnnotationPreview};
 use crate::models::universe::UniverseState;
 use luma_patterns as p;
 
@@ -19,6 +19,7 @@ fn empty_preview(annotation_id: String) -> AnnotationPreview {
         height: 1,
         pixels: vec![0, 0, 0, 0],
         dominant_color: [0.0; 3],
+        aim: None,
     }
 }
 
@@ -176,6 +177,7 @@ pub(crate) fn render_preview(
         height,
         pixels,
         dominant_color,
+        aim: None,
     }
 }
 
@@ -285,7 +287,81 @@ pub(crate) fn render_aim_preview(
         height,
         pixels,
         dominant_color: [mean; 3],
+        aim: None,
     }
+}
+
+/// Most curves a band of [`aim_curves`] holds. Past this many distinct
+/// tracks the band is a texture, and an even pick of them reads the same.
+const AIM_CURVES: usize = 16;
+/// Two tracks within this many degrees of each other at every sample are one
+/// curve: well under a pixel in any band.
+const SAME_TRACK: f32 = 0.25;
+/// The least span a band covers, in degrees. A still or barely moving head is
+/// a near-flat line, not a jitter stretched to the band's height.
+const AIM_MIN_SPAN: f32 = 30.;
+
+/// An aim clip's curves: the pan and tilt the solver sent each head in
+/// `rig` at every frame, one band per axis. `frames` are samples across the
+/// clip, in order, from a scene that aims them. `None` when no head in
+/// `cells` can move.
+pub(crate) fn aim_curves(
+    frames: &[UniverseState],
+    cells: &[p::Cell],
+    rig: &crate::eval::aim::Rig,
+) -> Option<AimCurves> {
+    let heads: Vec<&str> = cells
+        .iter()
+        .map(|cell| cell.id.as_str())
+        .filter(|id| rig.head(id).is_some())
+        .collect();
+    if heads.is_empty() || frames.is_empty() {
+        return None;
+    }
+    let track = |id: &str, axis: usize| -> Vec<f32> {
+        frames
+            .iter()
+            .map(|frame| frame.primitives.get(id).map_or(0., |s| s.position[axis]))
+            .collect()
+    };
+    let band = |axis: usize| distinct_curves(heads.iter().map(|id| track(id, axis)));
+    Some(AimCurves {
+        pan: band(0),
+        tilt: band(1),
+    })
+}
+
+/// One band of [`aim_curves`]: `tracks` in degrees, with tracks that match
+/// an earlier one to [`SAME_TRACK`] left out, scaled together so the range
+/// they use (at least [`AIM_MIN_SPAN`]) fills 0 to 1 about its middle.
+fn distinct_curves(tracks: impl Iterator<Item = Vec<f32>>) -> Vec<Vec<f32>> {
+    let mut distinct: Vec<Vec<f32>> = Vec::new();
+    for track in tracks {
+        let same = |other: &Vec<f32>| {
+            other
+                .iter()
+                .zip(&track)
+                .all(|(a, b)| (a - b).abs() <= SAME_TRACK)
+        };
+        if !distinct.iter().any(same) {
+            distinct.push(track);
+        }
+    }
+    let values = distinct.iter().flatten().copied();
+    let low = values.clone().fold(f32::INFINITY, f32::min);
+    let high = values.fold(f32::NEG_INFINITY, f32::max);
+    let middle = (low + high) / 2.;
+    let span = (high - low).max(AIM_MIN_SPAN);
+    let count = distinct.len();
+    let picked = count.min(AIM_CURVES);
+    (0..picked)
+        .map(|i| {
+            distinct[i * count / picked]
+                .iter()
+                .map(|v| 0.5 + (v - middle) / span)
+                .collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -338,5 +414,36 @@ mod tests {
         assert_eq!(green_at(0), 255);
         assert_eq!(green_at(15), 0);
         assert_eq!(green_at(31), 255);
+    }
+    #[test]
+    fn heads_that_move_alike_share_one_curve() {
+        let sweep = |offset: f32| -> Vec<f32> {
+            (0..64)
+                .map(|i| offset + 45. * (i as f32 / 8.).sin())
+                .collect()
+        };
+        // Four heads on one sweep, one a hair off it: one curve.
+        let alike = distinct_curves([sweep(0.), sweep(0.), sweep(0.1), sweep(0.)].into_iter());
+        assert_eq!(alike.len(), 1);
+        // A 45° swing either way fills the band.
+        let (low, high) = alike[0]
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+        assert!(low < 0.05 && high > 0.95, "{low} {high}");
+        // A fan: each head its own lean, so each its own curve.
+        let fanned = distinct_curves((0..5).map(|i| sweep(i as f32 * 10.)));
+        assert_eq!(fanned.len(), 5);
+        // Fanned twice over is still five.
+        let twice = distinct_curves((0..10).map(|i| sweep((i % 5) as f32 * 10.)));
+        assert_eq!(twice, fanned);
+        // More distinct tracks than a band holds are thinned evenly.
+        let many = distinct_curves((0..40).map(|i| sweep(i as f32)));
+        assert_eq!(many.len(), AIM_CURVES);
+    }
+
+    #[test]
+    fn a_still_head_is_a_flat_line_in_the_middle() {
+        let still = distinct_curves(std::iter::once(vec![12.; 16]));
+        assert_eq!(still, vec![vec![0.5; 16]]);
     }
 }

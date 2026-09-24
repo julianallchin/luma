@@ -8,4 +8,18 @@ pub struct AnnotationPreview {
     pub height: u32,
     pub pixels: Vec<u8>,
     pub dominant_color: [f32; 3],
+    /// An aim clip's pan and tilt, when any of its heads can move: the
+    /// timeline draws these curves instead of `pixels`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim: Option<AimCurves>,
+}
+
+/// The solved pan and tilt of an aim clip's heads over its span, one band
+/// each. A curve is one sample per step from the clip's start to its end,
+/// each 0 (bottom of the band) to 1 (top). Heads that move alike share one
+/// curve, so a band holds only the distinct tracks.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AimCurves {
+    pub pan: Vec<Vec<f32>>,
+    pub tilt: Vec<Vec<f32>>,
 }
