@@ -33,10 +33,6 @@ name = "bench_waveform"
 path = "src/bin/bench_waveform.rs"
 
 [[bin]]
-name = "clip_forms_apply"
-path = "src/bin/clip_forms_apply.rs"
-
-[[bin]]
 name = "dump_venue"
 path = "src/bin/dump_venue.rs"
 

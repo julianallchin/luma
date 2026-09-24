@@ -22,7 +22,6 @@ mod genre_worker;
 pub mod headless_host;
 pub mod host_audio;
 mod mert_worker;
-pub mod migration;
 mod mixer_manager;
 pub mod models;
 mod n2n_worker;
