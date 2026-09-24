@@ -62,16 +62,26 @@ impl Head {
             return None;
         }
         let range = definition.focus_range();
-        Some(Self {
+        Some(Self::with_range(
             mount,
-            reach: std::array::from_fn(|axis| {
+            std::array::from_fn(|axis| {
                 if moves[axis] {
-                    f64::from(range[axis]) / 2.0
+                    f64::from(range[axis])
                 } else {
                     0.0
                 }
             }),
-        })
+        ))
+    }
+
+    /// A head hung at `mount` whose pan and tilt each turn `range` degrees
+    /// end to end, centred on home.
+    #[must_use]
+    pub fn with_range(mount: Mount, range: [f64; 2]) -> Self {
+        Self {
+            mount,
+            reach: range.map(|degrees| degrees / 2.0),
+        }
     }
 
     /// Where the head points with pan and tilt at the middle of their ranges,

@@ -48,7 +48,7 @@ pub(crate) struct State {
     /// A thumbnail is being rendered. One at a time.
     thumbing: bool,
     /// Every preset's strip on the stand-in rig, by key, once rendered.
-    stand_ins: Option<Rc<HashMap<String, Arc<RenderImage>>>>,
+    stand_ins: Option<Rc<HashMap<String, Preview>>>,
     stand_ins_asked: bool,
     /// The key of the preset under the pointer.
     hovered: Option<String>,
@@ -61,7 +61,7 @@ pub(crate) struct State {
 }
 
 enum Thumbnail {
-    Ready(Arc<RenderImage>),
+    Ready(Preview),
     Failed,
 }
 
@@ -152,7 +152,7 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
                         let row =
                             luma_lib::services::graph_scores::stand_in_strip(preset, THUMB_BEATS)
                                 .ok()?;
-                        Some((key(preset), Arc::new(baked(&row)?)))
+                        Some((key(preset), Preview::decode(row, None)?))
                     })
                     .collect::<HashMap<_, _>>()
             })
@@ -167,13 +167,6 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
     .detach();
 }
 
-/// A strip baked for painting, or `None` for one that is not
-/// `width * height` of RGBA.
-fn baked(row: &AnnotationPreview) -> Option<RenderImage> {
-    (row.width > 0 && row.height > 0 && row.pixels.len() == (row.width * row.height * 4) as usize)
-        .then(|| bake(row.width, row.height, &row.pixels))
-}
-
 /// Called while a clip is selected: the browser is gone, and so is anything
 /// it was playing.
 pub(super) fn leave(editor: &mut Editor) {
@@ -186,7 +179,7 @@ pub(super) fn leave(editor: &mut Editor) {
 /// A preset carried over the timeline, drawn where and as it would land.
 pub(in crate::track_editor) struct DropGhost {
     pub(in crate::track_editor) clip: Clip,
-    pub(in crate::track_editor) strip: Option<Arc<RenderImage>>,
+    pub(in crate::track_editor) strip: Option<Preview>,
     /// It would open a new lane at the boundary above `clip.row`.
     pub(in crate::track_editor) insert: bool,
 }
@@ -230,9 +223,9 @@ impl Editor {
 
 /// A preset's strip: on the real rig when it has rendered for `selection`,
 /// else on the stand-in rig.
-fn strip(browser: &State, preset: &FormPreset, selection: &str) -> Option<Arc<RenderImage>> {
+fn strip(browser: &State, preset: &FormPreset, selection: &str) -> Option<Preview> {
     match browser.thumbs.get(&(key(preset), selection.to_owned())) {
-        Some(Thumbnail::Ready(image)) => Some(Arc::clone(image)),
+        Some(Thumbnail::Ready(preview)) => Some(preview.clone()),
         _ => browser
             .stand_ins
             .as_ref()
@@ -364,8 +357,8 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
             this.edit_track_tab(&target, cx, |editor| {
                 let browser = &mut editor.sheet.browser;
                 browser.thumbing = false;
-                let thumb = match result.ok().as_ref().and_then(baked) {
-                    Some(image) => Thumbnail::Ready(Arc::new(image)),
+                let thumb = match result.ok().and_then(|row| Preview::decode(row, None)) {
+                    Some(preview) => Thumbnail::Ready(preview),
                     None => Thumbnail::Failed,
                 };
                 browser.thumbs.insert(key, thumb);
@@ -512,7 +505,7 @@ pub(in crate::track_editor) struct PresetDrag(&'static FormPreset);
 /// What follows the pointer during a drag: the preset's strip and name.
 struct Carried {
     name: SharedString,
-    strip: Option<Arc<RenderImage>>,
+    strip: Option<Preview>,
 }
 
 impl Render for Carried {
@@ -619,11 +612,7 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-fn row(
-    preset: &'static FormPreset,
-    strip: Option<Arc<RenderImage>>,
-    app: &Entity<Luma>,
-) -> AnyElement {
+fn row(preset: &'static FormPreset, strip: Option<Preview>, app: &Entity<Luma>) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
     let key = format!("preset-row-{}", key(preset));
     let carried = strip.clone();
@@ -672,7 +661,7 @@ fn row(
 
 /// A row's strip: on the real rig, else on the stand-in rig, else a flat
 /// frame for the moment the stand-ins take to render.
-fn thumbnail(name: &str, strip: Option<Arc<RenderImage>>) -> Div {
+fn thumbnail(name: &str, strip: Option<Preview>) -> Div {
     let frame = div()
         .w(px(STRIP[0]))
         .h(px(STRIP[1]))
@@ -682,7 +671,7 @@ fn thumbnail(name: &str, strip: Option<Arc<RenderImage>>) -> Div {
         .border_1()
         .border_color(luma_ui::glass::hairline(0.12))
         .bg(luma_ui::glass::ink(0.06));
-    let Some(image) = strip else {
+    let Some(preview) = strip else {
         return frame;
     };
     let label = format!("{name} thumbnail");
@@ -692,17 +681,8 @@ fn thumbnail(name: &str, strip: Option<Arc<RenderImage>>) -> Div {
                 agent_paint_node(Role::Card, label.clone(), bounds, window, cx);
             },
             move |bounds, _, window, _| {
-                // Frame 1 is the opaque one — see `bake`.
-                window
-                    .paint_image(
-                        bounds,
-                        bounds,
-                        Corners::all(px(2.)),
-                        Arc::clone(&image),
-                        1,
-                        false,
-                    )
-                    .ok();
+                // Opaque, as a selected clip's body.
+                preview.paint(bounds, true, Corners::all(px(2.)), window);
             },
         )
         .size_full(),
