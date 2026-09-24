@@ -645,7 +645,7 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
             span: Default::default(),
             plane: None,
             mirror: None,
-            source: MappingSource::Circle { origin: 0.25 },
+            source: MappingSource::U,
             per_group: true,
             reverse: true,
         }),

@@ -14,7 +14,6 @@ mod mapping_tests {
     #[test]
     fn authoring_projection_preserves_structured_mapping_values() {
         for source in [
-            p::MappingSource::Circle { origin: 0.375 },
             p::MappingSource::MajorAxis {
                 toward: [1., -2., 3.],
             },

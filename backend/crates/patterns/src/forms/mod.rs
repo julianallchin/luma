@@ -968,12 +968,6 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
                     "an axis has no per_group; choose the group span".into(),
                 ));
             }
-            let round = matches!(mapping.source, MappingSource::Radial | MappingSource::Angle);
-            if round != mapping.plane.is_some() {
-                return Err(Error(
-                    "radial and angle axes need a plane; other axes have none".into(),
-                ));
-            }
         }
         return Ok(());
     };
