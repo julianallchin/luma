@@ -44,51 +44,68 @@ impl Score {
         if self.clips.len() > 2048 {
             return Err(Error("a score supports at most 2,048 clips".into()));
         }
-        for (id, clip) in &self.clips {
-            crate::graph::identity(id)?;
-            clip.selection.validate()?;
-            if !clip.start.is_finite()
-                || !clip.duration.is_finite()
-                || clip.duration <= 0.0
-                || !(clip.start + clip.duration).is_finite()
-            {
-                return Err(Error(
-                    "clip needs finite start and positive duration".into(),
-                ));
-            }
-            if !crate::forms::is_form(&clip.graph) {
-                return Err(Error(format!("clip {id}: {} is not a form", clip.graph)));
-            }
-            let definition = base
-                .definitions
-                .get(&clip.graph)
-                .ok_or_else(|| Error(format!("clip {id}: unknown form {}", clip.graph)))?;
-            crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
-                .map_err(|error| Error(format!("clip {id}: {error}")))?;
-            // Aim always blends toward the aim under it by alpha.
-            if crate::forms::replace_only(&clip.graph)
-                && clip.blend_mode != crate::BlendMode::Replace
-            {
-                return Err(Error(format!(
-                    "clip {id}: an aim clip blends with replace only"
-                )));
-            }
-            // Check fixed timing/value relationships without binding venue geometry.
-            PreparedGraph::new_validated(
-                base,
-                &clip.graph,
-                &clip.inputs,
-                Frame {
-                    features: None,
-                    cells: &[],
-                    beat: clip.start,
-                    clip_start: clip.start,
-                    clip_duration: clip.duration,
-                    seed: clip.seed,
-                },
-            )
-            .map_err(|error| Error(format!("clip {id}: {error}")))?;
+        self.clips
+            .iter()
+            .try_for_each(|(id, clip)| Self::validate_clip(base, id, clip))
+    }
+
+    /// [`Score::validate`] for a write over `stored`: only the clips that
+    /// differ from it are checked, so a stored clip that no longer passes
+    /// does not block edits to the rest of the score.
+    pub fn validate_changes(&self, base: &Library, stored: &Score) -> Result<()> {
+        if self.clips.len() > 2048 {
+            return Err(Error("a score supports at most 2,048 clips".into()));
         }
+        self.clips
+            .iter()
+            .filter(|(id, clip)| stored.clips.get(*id) != Some(*clip))
+            .try_for_each(|(id, clip)| Self::validate_clip(base, id, clip))
+    }
+
+    /// One clip's checks, so a player can leave out a clip that fails them
+    /// and still play the rest of the score.
+    pub fn validate_clip(base: &Library, id: &str, clip: &Clip) -> Result<()> {
+        crate::graph::identity(id)?;
+        clip.selection.validate()?;
+        if !clip.start.is_finite()
+            || !clip.duration.is_finite()
+            || clip.duration <= 0.0
+            || !(clip.start + clip.duration).is_finite()
+        {
+            return Err(Error(format!(
+                "clip {id}: clip needs finite start and positive duration"
+            )));
+        }
+        if !crate::forms::is_form(&clip.graph) {
+            return Err(Error(format!("clip {id}: {} is not a form", clip.graph)));
+        }
+        let definition = base
+            .definitions
+            .get(&clip.graph)
+            .ok_or_else(|| Error(format!("clip {id}: unknown form {}", clip.graph)))?;
+        crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
+            .map_err(|error| Error(format!("clip {id}: {error}")))?;
+        // Aim always blends toward the aim under it by alpha.
+        if crate::forms::replace_only(&clip.graph) && clip.blend_mode != crate::BlendMode::Replace {
+            return Err(Error(format!(
+                "clip {id}: an aim clip blends with replace only"
+            )));
+        }
+        // Check fixed timing/value relationships without binding venue geometry.
+        PreparedGraph::new_validated(
+            base,
+            &clip.graph,
+            &clip.inputs,
+            Frame {
+                features: None,
+                cells: &[],
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .map_err(|error| Error(format!("clip {id}: {error}")))?;
         Ok(())
     }
     pub fn to_json(&self, base: &Library) -> Result<String> {
