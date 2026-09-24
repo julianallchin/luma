@@ -429,8 +429,36 @@ pub struct Glare {
     /// Exposed scene light above which a pixel glares, as a multiple of
     /// diffuse white.
     pub threshold: f32,
-    /// Star streaks as a fraction of the bloom.
+    /// The diffraction around a lens (see [`GlareStyle`]), 0 to 1.
     pub star: f32,
+    /// What the diffraction looks like. Absent in a look stored before
+    /// there was a choice, which means the default.
+    #[serde(default)]
+    pub style: GlareStyle,
+}
+
+/// The shape of the light around a lens, on top of the soft bloom every
+/// style has. The first three are physical: `psf.rs` computes their
+/// patterns from an aperture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GlareStyle {
+    /// Bloom only: a veiling glow with a long faint tail.
+    Bloom,
+    /// A camera iris of nine rounded blades: eighteen faint thin rays with
+    /// coloured fringes.
+    #[default]
+    Aperture,
+    /// The eye: a corona of many fine radial streaks from the lens's
+    /// ciliary fibres.
+    Eye,
+    /// Six drawn streaks per hot pixel. Not physical; bright and graphic.
+    Star,
+}
+
+impl GlareStyle {
+    /// Every style, in the order they are offered.
+    pub const ALL: [Self; 4] = [Self::Bloom, Self::Aperture, Self::Eye, Self::Star];
 }
 
 impl Glare {
@@ -439,12 +467,14 @@ impl Glare {
         strength: 0.0,
         threshold: 2.0,
         star: 0.0,
+        style: GlareStyle::Aperture,
     };
     /// The live stage's default.
     pub const STAGE: Self = Self {
-        strength: 1.0,
+        strength: 0.7,
         threshold: 2.0,
-        star: 0.3,
+        star: 0.5,
+        style: GlareStyle::Aperture,
     };
     /// Whether any glare is drawn.
     #[must_use]
