@@ -138,6 +138,8 @@ pub struct Glb {
     /// piece, every frame, for an answer that cannot change: a loaded GLB is
     /// immutable.
     measured: std::sync::OnceLock<(Vec3, Vec3)>,
+    /// [`Self::node_bounds`], measured once for the same reason.
+    node_measured: std::sync::OnceLock<Vec<Option<(Vec3, Vec3)>>>,
 }
 
 impl Glb {
@@ -167,6 +169,31 @@ impl Glb {
     #[must_use]
     pub fn bounds(&self) -> (Vec3, Vec3) {
         *self.measured.get_or_init(|| self.measure())
+    }
+
+    /// Bounds of one node's own primitives in that node's local space, or
+    /// `None` for a node that draws nothing. The frame builder seats a lens
+    /// on the front face of the `head` node with it.
+    #[must_use]
+    pub fn node_bounds(&self, node: usize) -> Option<(Vec3, Vec3)> {
+        self.node_measured
+            .get_or_init(|| {
+                self.nodes
+                    .iter()
+                    .map(|node| {
+                        let mut points = node
+                            .primitives
+                            .iter()
+                            .flat_map(|&p| self.primitives[p].vertices.iter())
+                            .map(|v| Vec3::from(v.position));
+                        let first = points.next()?;
+                        Some(points.fold((first, first), |(lo, hi), v| (lo.min(v), hi.max(v))))
+                    })
+                    .collect()
+            })
+            .get(node)
+            .copied()
+            .flatten()
     }
 
     fn measure(&self) -> (Vec3, Vec3) {
@@ -324,6 +351,7 @@ fn load(path: &Path) -> anyhow::Result<Glb> {
         primitives,
         images: images.iter().map(to_rgba8).collect(),
         measured: std::sync::OnceLock::new(),
+        node_measured: std::sync::OnceLock::new(),
     })
 }
 

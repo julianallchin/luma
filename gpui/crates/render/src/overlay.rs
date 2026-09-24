@@ -351,7 +351,9 @@ pub(crate) fn build(
             .as_deref()
             .and_then(|path| Some((path, definitions.get(path)?)));
         let draws = match housing {
-            Some((path, def)) => crate::frame::housing_draws(def, path, root, lib, bank, None),
+            Some((path, def)) => {
+                crate::frame::housing_draws(def, path, root, [0.0, 0.0], lib, bank, None)
+            }
             None => crate::frame::piece_draws(&ghost.geometry, root, lib, bank, None),
         }
         .unwrap_or_default();

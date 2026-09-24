@@ -1,16 +1,14 @@
-//! Where the renderer puts a beam today, pinned — and the same numbers
+//! Where the renderer puts a beam, pinned — and the same numbers
 //! `fixture-kinematics` produces, checked on this workspace's toolchain.
 //!
 //! Two things live here, and they are deliberately separate:
 //!
-//! 1. **Characterization.** `frame::build` currently sites a moving head's cone
-//!    at `base.transform_point3(Vec3::ZERO)` — the bare mounting origin, with no
-//!    pivot and no aperture depth. That is almost certainly wrong (a beam should
-//!    leave the lens, not the clamp), but it is what every committed golden was
-//!    captured against, so it is pinned here *before* anything moves. When the
-//!    renderer is swapped onto `fixture_kinematics::beam_ray`, this test is the
-//!    diff: it should fail in exactly the way the new geometry predicts, and its
-//!    expectations are updated in the same commit that recaptures the goldens.
+//! 1. **Characterization.** `frame::build` seats a moving head's lens on the
+//!    front face of its drawn head: the tilt pivot the bundled mesh puts below
+//!    the clamp, plus the head's depth along the beam. It used to sit at the
+//!    bare mounting origin; this test was the diff for that move, and it now
+//!    pins the pivot-plus-depth geometry in `fixture_kinematics` terms (a
+//!    pivot offset, and an origin further along the same ray).
 //!
 //! 2. **Agreement.** The shared contract vectors, evaluated here rather than in
 //!    `backend/`. The app and the renderer are separate cargo workspaces and
@@ -21,7 +19,7 @@ use std::path::PathBuf;
 
 use glam::{Mat3, Mat4, Vec3};
 use luma_render::assets::Library;
-use luma_render::coords::{euler_xyz, three_to_world_basis, world_from_data};
+use luma_render::coords::world_from_data;
 use luma_render::scene_desc::{
     CameraPose, Definition, Dimensions, Fixture, Lens, Mode, Physical, PrimitiveState,
     RenderSettings, Scene,
@@ -55,6 +53,8 @@ fn mover_definition() -> Definition {
             lens: Some(Lens {
                 degrees_min: 14.0,
                 degrees_max: 14.0,
+                radius_m: None,
+                offset_m: None,
             }),
         }),
     }
@@ -103,60 +103,76 @@ fn characterization_frame() -> Frame {
         .expect("characterization scene should build")
 }
 
+/// The bundled moving-head mesh's tilt pivot below the clamp, in the mount's
+/// own data frame (`-Z` is the rest beam), at the mover definition's size.
+fn mesh_pivot_offset() -> Vec3 {
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let mut library = Library::new(meshes);
+    let glb = library.get("qlc/moving_head.glb").unwrap();
+    let (lo, hi) = glb.bounds();
+    let scale_y = 0.42 / (hi.y - lo.y);
+    let worlds = glb.world_matrices(Mat4::IDENTITY, &std::collections::HashMap::new());
+    let head = worlds[glb.node_index("head").unwrap()].transform_point3(Vec3::ZERO);
+    // Three space is `(x, z, y)` of data space; the pivot is on the mesh axis.
+    Vec3::new(0.0, 0.0, head.y * scale_y)
+}
+
+fn pivot_ray() -> fixture_kinematics::Ray {
+    let geom = fixture_kinematics::FixtureGeometry::unauthored(vec![Vec3::ZERO])
+        .with_pivot_offset(mesh_pivot_offset());
+    let mount = fixture_kinematics::Mount::from_stored(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
+    let art = fixture_kinematics::Articulation::from_degrees(PAN_DEG, TILT_DEG);
+    fixture_kinematics::beam_ray(&geom, &mount, &art, 0)
+}
+
 #[test]
-fn beam_origin_today_is_the_bare_mounting_origin() {
+fn beam_origin_is_the_lens_in_front_of_the_tilt_pivot() {
     let frame = characterization_frame();
     let cone = frame
         .fixture_cones
         .first()
         .expect("a lit moving head should emit one cone");
-
-    // The pinned value, spelled as the renderer derives it: the mounting origin
-    // and nothing else. Pivot offset and aperture depth do not appear, which is
-    // the bug this pinning exists to make visible.
-    let to_world = Mat4::from_mat3(three_to_world_basis());
-    let pos_three = Vec3::new(MOUNT_POSITION[0], MOUNT_POSITION[2], MOUNT_POSITION[1]);
-    let rot_three = euler_xyz(MOUNT_ROTATION[0], MOUNT_ROTATION[2], MOUNT_ROTATION[1]);
-    let base = to_world * Mat4::from_translation(pos_three) * Mat4::from_mat3(rot_three);
-    let expected = base.transform_point3(Vec3::ZERO);
-
+    let ray = pivot_ray();
+    let pivot = world_from_data(ray.origin);
+    let front = cone.position - pivot;
+    // On the beam, ahead of the pivot by the head's scaled depth (the mesh's
+    // head reaches 0.329 units past its pivot; this head is 0.42 m tall).
     assert!(
-        cone.position.abs_diff_eq(expected, 1e-6),
-        "beam origin moved: {:?} vs the pinned {expected:?}",
-        cone.position
+        front.normalize().dot(cone.direction) > 0.9999,
+        "the lens left the beam axis: {front:?} vs {:?}",
+        cone.direction
     );
-    // And, literally, so that a change to the derivation above cannot silently
-    // agree with itself.
     assert!(
-        cone.position
-            .abs_diff_eq(Vec3::new(-1.5, -2.75, 5.25), 1e-5),
-        "beam origin moved: {:?}",
-        cone.position
+        (front.length() - 0.128).abs() < 2e-3,
+        "lens depth {} m",
+        front.length()
+    );
+    // And the pivot itself, literally, so the derivation cannot agree with
+    // itself: 0.10 m below the clamp along the rotated mount normal.
+    let clamp = world_from_data(Vec3::from(MOUNT_POSITION));
+    assert!(
+        ((pivot - clamp).length() - 0.1007).abs() < 1e-3,
+        "{pivot:?}"
     );
 }
 
 #[test]
-fn kinematics_reproduces_todays_beam_direction() {
-    // Direction is the half of the ray the renderer already gets right, so the
-    // crate must agree with it *now*, unconditionally. Only the origin is
-    // expected to change when the swap lands.
+fn kinematics_reproduces_the_beam_direction_and_ray() {
     let frame = characterization_frame();
     let cone = frame.fixture_cones.first().expect("one cone");
-
-    let geom = fixture_kinematics::FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-    let mount = fixture_kinematics::Mount::from_stored(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
-    let art = fixture_kinematics::Articulation::from_degrees(PAN_DEG, TILT_DEG);
-    let ray = fixture_kinematics::beam_ray(&geom, &mount, &art, 0);
-
+    let ray = pivot_ray();
     assert!(
         world_from_data(ray.direction).abs_diff_eq(cone.direction, 1e-6),
         "aim disagrees: crate {:?} vs renderer {:?}",
         world_from_data(ray.direction),
         cone.direction
     );
+    // The lens lies on the crate's pivot ray: the renderer's origin is a
+    // reparameterisation along it (§15.1), not a displacement off it.
+    let along = (cone.position - world_from_data(ray.origin)).dot(cone.direction);
     assert!(
-        world_from_data(ray.origin).abs_diff_eq(cone.position, 1e-6),
-        "unauthored geometry must reproduce today's origin exactly"
+        (world_from_data(ray.origin) + cone.direction * along).abs_diff_eq(cone.position, 1e-4),
+        "the lens is off the crate's pivot ray"
     );
 }
 
