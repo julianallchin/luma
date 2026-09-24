@@ -35,8 +35,9 @@ fn ring() -> Vec<Cell> {
 }
 
 fn preset(name: &str) -> BTreeMap<String, Value> {
-    let preset = presets().preset(name).unwrap_or_else(|| panic!("{name}"));
-    assert_eq!(preset.form, "aim@1", "{name}");
+    let preset = presets()
+        .preset("aim@1", name)
+        .unwrap_or_else(|| panic!("{name}"));
     preset.inputs.clone()
 }
 
@@ -111,12 +112,12 @@ fn the_nine_presets_are_valid_clips() {
     assert_eq!(
         names,
         [
-            "Position", "Fan", "Converge", "Bloom", "Sweep", "Nod wave", "Circle", "Figure-8",
+            "Position", "Fan", "Converge", "Bloom", "Sweep", "Wave", "Circle", "Figure-8",
             "Ballyhoo"
         ]
     );
     for name in names {
-        let preset = presets().preset(name).unwrap();
+        let preset = presets().preset("aim@1", name).unwrap();
         preset.validate(&library).unwrap();
         let mut score = Score::default();
         score
@@ -246,7 +247,7 @@ fn spread_zero_moves_every_head_identically() {
 #[test]
 fn nod_wave_travels_along_the_truss() {
     let cells = truss();
-    let inputs = preset("Nod wave");
+    let inputs = preset("Wave");
     let beat = 1.0;
     let aims = directions(&cells, &inputs, beat);
     for (i, aim) in aims.iter().enumerate() {
@@ -411,7 +412,10 @@ fn aim_inputs_are_checked() {
     let library = standard_library();
     let check = |inputs: &BTreeMap<String, Value>| {
         let mut score = Score::default();
-        let mut clip = presets().preset("Position").unwrap().clip(0.0, 4.0);
+        let mut clip = presets()
+            .preset("aim@1", "Position")
+            .unwrap()
+            .clip(0.0, 4.0);
         clip.inputs = inputs.clone();
         score.clips.insert("clip".into(), clip);
         score.validate(&library)
@@ -433,7 +437,10 @@ fn aim_inputs_are_checked() {
     assert!(check(&inputs).is_err());
 
     let mut score = Score::default();
-    let mut clip = presets().preset("Position").unwrap().clip(0.0, 4.0);
+    let mut clip = presets()
+        .preset("aim@1", "Position")
+        .unwrap()
+        .clip(0.0, 4.0);
     clip.blend_mode = BlendMode::Add;
     score.clips.insert("clip".into(), clip);
     assert!(score.validate(&library).unwrap_err().0.contains("replace"));

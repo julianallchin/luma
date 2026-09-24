@@ -42,14 +42,15 @@ const PREPARED: usize = 8;
 pub(crate) struct State {
     search: Option<Entity<TextInput>>,
     query: String,
-    /// Thumbnails by preset name and target selection expression.
+    /// Thumbnails by preset key (see [`key`]) and target selection
+    /// expression.
     thumbs: HashMap<(String, String), Thumbnail>,
     /// A thumbnail is being rendered. One at a time.
     thumbing: bool,
-    /// Every preset's strip on the stand-in rig, by name, once rendered.
+    /// Every preset's strip on the stand-in rig, by key, once rendered.
     stand_ins: Option<Rc<HashMap<String, Arc<RenderImage>>>>,
     stand_ins_asked: bool,
-    /// The preset under the pointer.
+    /// The key of the preset under the pointer.
     hovered: Option<String>,
     /// Prepared single-clip programs, newest last.
     prepared: VecDeque<(Key, Arc<ClipPreview>)>,
@@ -67,6 +68,7 @@ enum Thumbnail {
 /// What an audition program was prepared for.
 #[derive(Clone, PartialEq)]
 struct Key {
+    /// The preset's [`key`].
     preset: String,
     selection: String,
     /// The whole beat the loop starts on.
@@ -150,7 +152,7 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
                         let row =
                             luma_lib::services::graph_scores::stand_in_strip(preset, THUMB_BEATS)
                                 .ok()?;
-                        Some((preset.name.clone(), Arc::new(baked(&row)?)))
+                        Some((key(preset), Arc::new(baked(&row)?)))
                     })
                     .collect::<HashMap<_, _>>()
             })
@@ -229,17 +231,20 @@ impl Editor {
 /// A preset's strip: on the real rig when it has rendered for `selection`,
 /// else on the stand-in rig.
 fn strip(browser: &State, preset: &FormPreset, selection: &str) -> Option<Arc<RenderImage>> {
-    match browser
-        .thumbs
-        .get(&(preset.name.clone(), selection.to_owned()))
-    {
+    match browser.thumbs.get(&(key(preset), selection.to_owned())) {
         Some(Thumbnail::Ready(image)) => Some(Arc::clone(image)),
         _ => browser
             .stand_ins
             .as_ref()
-            .and_then(|strips| strips.get(&preset.name))
+            .and_then(|strips| strips.get(&key(preset)))
             .cloned(),
     }
+}
+
+/// What tells a preset apart: its form and its name. A name is unique only
+/// within its form; Chase and Aim each have a Wave.
+fn key(preset: &FormPreset) -> String {
+    format!("{}/{}", preset.form, preset.name)
 }
 
 /// The presets matching the query, in shipped order. A query matches a
@@ -334,11 +339,11 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(preset) = matching(&browser.query).into_iter().find(|preset| {
         !browser
             .thumbs
-            .contains_key(&(preset.name.clone(), selection.expression.clone()))
+            .contains_key(&(key(preset), selection.expression.clone()))
     }) else {
         return;
     };
-    let key = (preset.name.clone(), selection.expression.clone());
+    let key = (key(preset), selection.expression.clone());
     let score = match single_clip_score(editor, preset, 0., THUMB_BEATS, &selection) {
         Ok(score) => score,
         Err(_) => {
@@ -382,14 +387,14 @@ impl Luma {
         };
         if !over {
             let browser = &mut editor.sheet.browser;
-            if browser.hovered.as_deref() == Some(preset.name.as_str()) {
+            if browser.hovered.as_deref() == Some(key(preset).as_str()) {
                 browser.hovered = None;
                 browser.audition = None;
                 cx.notify();
             }
             return;
         }
-        editor.sheet.browser.hovered = Some(preset.name.clone());
+        editor.sheet.browser.hovered = Some(key(preset));
         editor.sheet.browser.audition = None;
         cx.notify();
         let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
@@ -406,7 +411,7 @@ impl Luma {
         };
         let selection = target_selection(editor);
         let key = Key {
-            preset: preset.name.clone(),
+            preset: self::key(preset),
             selection: selection.expression.clone(),
             start,
         };
@@ -423,6 +428,7 @@ impl Luma {
             .library
             .prepare_score_clip_preview(&score_id, CLIP_ID, &score);
         let target = target(editor);
+        let name = preset.name.clone();
         cx.spawn(async move |this, cx| {
             let Ok(scene) = pending.await else {
                 return;
@@ -438,7 +444,7 @@ impl Luma {
                         .prepared
                         .push_back((key.clone(), Arc::clone(&scene)));
                     if browser.hovered.as_deref() == Some(key.preset.as_str()) {
-                        browser.audition = Some(Audition::new(&key.preset, scene));
+                        browser.audition = Some(Audition::new(&name, scene));
                     }
                 });
             })
@@ -619,7 +625,7 @@ fn row(
     app: &Entity<Luma>,
 ) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
-    let key = format!("preset-row-{}", preset.name);
+    let key = format!("preset-row-{}", key(preset));
     let carried = strip.clone();
     let hover = app.clone();
     let place = app.clone();
@@ -716,6 +722,9 @@ mod tests {
         let chases = names("chase");
         assert!(chases.contains(&"Wave") && chases.contains(&"Stepped chase"));
         assert!(!chases.contains(&"Wash"));
+        // Chase and Aim each have a Wave.
+        let waves: Vec<&str> = matching("wave").iter().map(|p| p.form.as_str()).collect();
+        assert_eq!(waves, ["color.chase@1", "aim@1"]);
         assert_eq!(matching("").len(), luma_patterns::presets().presets.len());
         assert!(matching("no such preset").is_empty());
     }
@@ -732,7 +741,8 @@ mod tests {
                 "Chase",
                 "Sparkle",
                 "Noise",
-                "Strobe"
+                "Strobe",
+                "Aim"
             ]
         );
         let color_time = &grouped("")[1].1;
