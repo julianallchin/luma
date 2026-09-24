@@ -49,24 +49,20 @@ impl FixtureOutput {
     }
     /// Layer complete effect outputs with exactly the cross-clip blend math.
     /// Connections decide base/top ordering; no hidden graph traversal priority.
+    /// An unwritten dimmer is no light, so every mode blends against the
+    /// light underneath (see [`crate::blend_light`]).
     pub fn composite(&mut self, top: &Self, mode: crate::BlendMode) {
-        let opacity = top.dimmer.unwrap_or(0.0).clamp(0.0, 1.0) as f32;
-        if let Some(color) = top.color {
-            self.color = Some(
-                crate::blend_color(
-                    self.color.unwrap_or([1.0; 3]).map(|v| v as f32),
-                    color.map(|v| v as f32),
-                    opacity,
-                    mode,
-                )
-                .map(f64::from),
+        if top.color.is_some() || top.dimmer.is_some() {
+            let f = |color: Option<[f64; 3]>| color.unwrap_or([1.0; 3]).map(|v| v as f32);
+            let (color, dimmer) = crate::blend_light(
+                f(self.color),
+                self.dimmer.unwrap_or(0.0) as f32,
+                f(top.color),
+                top.dimmer.unwrap_or(0.0) as f32,
+                mode,
             );
-        }
-        if top.dimmer.is_some() {
-            self.dimmer = Some(f64::from(
-                crate::blend_value(self.dimmer.unwrap_or(0.0) as f32, opacity, mode)
-                    .clamp(0.0, 1.0),
-            ));
+            self.color = Some(color.map(f64::from));
+            self.dimmer = Some(f64::from(dimmer));
         }
         if let Some(strobe) = top.strobe {
             self.strobe = Some(f64::from(

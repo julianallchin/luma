@@ -43,6 +43,24 @@ A clip keeps its row: timing, selection, seed, z-index, blend mode, inputs.
 Layers combine forms. A "rainbow that chases" is a color layer with a chase
 layer on top in `multiply`. There is no multiplying of forms inside one value.
 
+**Blending.** A layer blends onto the light under it: color × dimmer, per
+head. No clip on a head is no light. A head that a lower clip left dark is
+also no light, and its color has no effect. So every blend mode is its math
+on that light, with no special case for the first layer:
+
+- `replace` sets the light. Black on replace paints black. Over no light it
+  gives the top light.
+- `add`, `screen`, `max` and `lighten` over black give the same result as
+  over nothing: the top light.
+- `multiply`, `min` and `subtract` over nothing give nothing. A mask over no
+  light is no light.
+- Strobe blends the same way, from 0 where nothing is under it.
+
+Alpha multiplies the clip's brightness. So a clip at alpha 0 adds no light:
+under any layer, and on top in `add`, `screen`, `max`, `lighten` or
+`subtract`, it is the same as no clip. On top in `replace`, `multiply` or
+`min` it is black, the same as brightness 0.
+
 ## Picker
 
 Right-click and the picker search **presets only**: the shipped presets.
