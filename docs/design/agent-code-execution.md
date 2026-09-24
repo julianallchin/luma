@@ -179,7 +179,7 @@ edits and binding changes do not reset a workspace.
 
 ### 5.4 Authored state is rows
 
-A score is `scores`, `clips` and `score_definitions` rows.
+A score is `scores` and `clips` rows.
 `luma_patterns::Score` is the in-memory type. There is no revision history, no
 document head, no compare-and-swap and no server RPC.
 
@@ -326,11 +326,11 @@ In a thread with a score, `luma.track` is a domain object backed by the binding
 tree (`GraphTrack` in `luma_exec/score.py`). It exposes track metadata plus:
 
 ```python
-luma.track.document          # read-only score mapping; clips and definitions by ID
+luma.track.document          # read-only score mapping; clips by ID
 luma.track.clips             # every saved Clip, ordered by start beat, z, then ID
 luma.track.editable          # descriptive; the host rechecks authority
 luma.track.nodes(search)     # node IDs and names
-luma.track.definition(id)    # one built-in or score-local definition
+luma.track.definition(id)    # one built-in definition, such as a form
 luma.track.edit()            # start a private edit of the complete score
 luma.track.window(beats=...) # an immutable view of the saved score
 ```
@@ -463,8 +463,8 @@ generic mutation callback.
 Two host capabilities can change state:
 
 - `luma.track.edit()` returns a Python-local `Edit` that holds the complete
-  score candidate. `edit.graph(...)`, `add_clip`, `update_clip`, `remove_clip`
-  and `make_independent` change only that candidate. `edit.diff()` is local.
+  score candidate. `add_clip`, `update_clip` and `remove_clip` change only
+  that candidate. `edit.diff()` is local.
   `edit.check()`, preview through `luma.venue.render(edit=edit)`, and
   `edit.apply()` cross the sandbox through named host calls
   (`track.score_check`, `track.score_render`, `track.score_apply`).
@@ -820,7 +820,7 @@ luma.track
   key
   beat_origin_s             absolute seconds of musical beat 0
   editable                  the owner may edit, check and apply
-  document                  the complete saved score: clips and definitions by ID
+  document                  the complete saved score: clips by ID
 
 luma.audio
   mix                       lazy AudioTensor
@@ -1511,9 +1511,10 @@ candidate (`backend/python/luma_exec/score.py`):
 
 ```python
 edit = luma.track.edit()
-chase = edit.graph(node="chase")
-clip = edit.add_clip(chase, bars=(49, 57), selection="front_wash",
-                     inputs={"width": 0.4})
+form = "color.chase@1"
+inputs = {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
+inputs["width"] = 0.4
+clip = edit.add_clip(form, bars=(49, 57), selection="front_wash", inputs=inputs)
 edit.update_clip(clip, bars=(49, 65))
 
 edit.diff()
@@ -1524,8 +1525,7 @@ edit.apply()
 
 ### 18.1 Complete snapshot
 
-`luma.track.document` holds every clip and every score-local definition, keyed
-by stable ID. Timestamps, ownership and sync columns are not part of it.
+`luma.track.document` holds every clip, keyed by stable ID. Timestamps, ownership and sync columns are not part of it.
 
 ### 18.2 Staged candidate
 
@@ -1536,13 +1536,10 @@ the complete saved score. All changes stay local until `apply()`.
 - Exactly one of `beats=(start, end)`, `bars=(start, end)` or
   `seconds=(start, end)` gives a range. Ranges are half-open. Beats start at 0.
   Bars start at 1 and follow the detected downbeats.
-- `add_clip(graph, ...)` takes a graph or a definition ID, plus `selection`,
-  `z`, `blend`, `seed` and `inputs`.
+- `add_clip(form, ...)` takes a form ID, plus `selection`, `z`, `blend`,
+  `seed` and `inputs`. `inputs` holds a value for every input of the form.
 - `update_clip` changes only the fields it is given. `remove_clip` removes one
   clip.
-- `edit.graph(...)` builds or opens a score-local graph.
-  `make_independent(clip)` copies a clip's local subgraphs, so later edits do
-  not change other clips.
 
 ### 18.3 Views and preview
 
@@ -1557,7 +1554,7 @@ Candidate output is sampled at 16 samples per beat, capped at 2,048 samples
 
 `edit.check()` sends the complete candidate to the host (`track.score_check`).
 The host re-resolves scope from the durable thread, validates the score and
-prepares its graphs. It changes nothing.
+prepares its clips. It changes nothing.
 
 `edit.apply()` (`track.score_apply`) repeats the checks and writes the
 candidate. A root thread writes the live score rows; a subagent writes its
@@ -1800,8 +1797,7 @@ Platform acceptance tests must prove:
 
 - the bound score round-trips exact clip IDs, graphs, beat ranges, `z`, blend
   mode, seeds and input values;
-- `add_clip`, `update_clip`, `remove_clip`, `edit.graph` and
-  `make_independent` change only the local candidate;
+- `add_clip`, `update_clip` and `remove_clip` change only the local candidate;
 - beat, bar and second ranges are half-open and require exactly one form;
 - a window stays immutable after later candidate changes;
 - `check()` changes nothing and reports preparation failures;
