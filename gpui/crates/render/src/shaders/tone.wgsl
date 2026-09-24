@@ -123,6 +123,9 @@ fn tone_curve(color: vec3<f32>, curve: u32) -> vec3<f32> {
 }
 
 /// One least-significant bit of triangular noise for an 8-bit sRGB target.
+/// An HDR frame takes the same noise. One 8-bit sRGB step is about one 10-bit
+/// PQ step near SDR white and several in the shadows, so it also breaks up
+/// the steps of an HDR10 swapchain.
 ///
 /// The amplitude is in *display* code values, not in the linear ones the
 /// shader returns. The target is sRGB-encoded, so a fixed linear step is a
