@@ -17,7 +17,7 @@
 //!
 //! | Preset | Base colour | Metallic | Roughness |
 //! |---|---|---|---|
-//! | [`ALUMINIUM`] | 0.91, 0.92, 0.92 | 1 | 0.38 |
+//! | [`ALUMINIUM`] | 0.91, 0.92, 0.92 | 1 | 0.6 |
 //! | [`STEEL`] | 0.56, 0.57, 0.58 | 1 | 0.5 |
 //! | [`POWDER_COAT`] | 0.03 | 0 | 0.5 |
 //! | [`CARPET`] | 0.05 | 0 | 0.95 |
@@ -40,12 +40,13 @@ use glam::Vec3;
 use crate::assets::{Glb, Image, Material};
 
 /// Mill-finish aluminium: truss and deck frames. The base colour is
-/// aluminium's measured reflectance; the roughness is a brushed, handled
-/// surface, not a polished one.
+/// aluminium's measured reflectance; the roughness is hire-stock truss,
+/// oxidised, scuffed and handled, which reads dull grey with a soft sheen.
+/// At 0.38 every tube caught the sun as a bright line.
 pub const ALUMINIUM: Material = Material {
     base_color: Vec3::new(0.91, 0.92, 0.92),
     metallic: 1.0,
-    roughness: 0.38,
+    roughness: 0.6,
     ..PLAIN
 };
 
