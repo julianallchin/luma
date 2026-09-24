@@ -802,11 +802,33 @@ fn live_shadow_intervals_agree_with_converged_transport() {
             fov_y_deg: 50.0,
         };
         input.haze_resolution = 1.0;
+        // Wide beams at half resolution: measured apart from the integrator,
+        // because the upsample's error sits on geometry silhouettes, not on
+        // shadow edges. Native beams are the integrator's own answer.
+        renderer.set_wide_beams(true);
+        let routed = renderer
+            .render_next(&input, 960, 640, luma_render::LIVE_SUBFRAMES)
+            .unwrap();
+        renderer.set_wide_beams(false);
         let live = renderer
             .render_next(&input, 960, 640, luma_render::LIVE_SUBFRAMES)
             .unwrap();
         input.haze_steps = 32;
         let reference = renderer.render_reference(&input, 960, 640, 64).unwrap();
+        let routed_rmse = (routed
+            .chunks_exact(4)
+            .zip(reference.chunks_exact(4))
+            .flat_map(|(a, b)| (0..3).map(move |c| (f64::from(a[c]) - f64::from(b[c])).powi(2)))
+            .sum::<f64>()
+            / (960.0 * 640.0 * 3.0))
+            .sqrt();
+        // Measured 0.88-3.53 on this suite (2026-09-23); the worst is a truss
+        // member across the lens in "truss-shadow-near".
+        assert!(
+            routed_rmse < 4.0,
+            "{} wide-beam routing drifted: RMSE {routed_rmse:.3}",
+            pose["id"]
+        );
         let mut errors = Vec::with_capacity(960 * 640 * 3);
         for (a, b) in live.chunks_exact(4).zip(reference.chunks_exact(4)) {
             errors.extend(

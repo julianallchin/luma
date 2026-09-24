@@ -74,6 +74,67 @@ const QUERY_COUNT: u32 = 10;
 const MSAA_SAMPLES: u32 = 4;
 const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
+/// Emitted intensity times the brightest colour channel below which a cone
+/// is dark. The frame builder already drops dimmers under 1%; this catches a
+/// lit dimmer on a black colour.
+const DARK_CONE: f32 = 1e-4;
+
+/// The per-frame work a [`Quality`](crate::scene_desc::Quality) level buys.
+/// `High` is the reference picture: its shadow walk is the one the renderer
+/// had before the levels existed. Its plain-beam piece cap and shadow redraw
+/// budget are new, and measured to leave the picture unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct QualityBudget {
+    /// Gauss-Legendre piece cap for a plain beam (`quadrature_pieces`).
+    plain_pieces: f32,
+    /// Scale on the haze shadow walk's pixel-footprint allowance.
+    shadow_footprint: f32,
+    /// Scale on the haze shadow walk's soft and hard step counts.
+    shadow_steps: f32,
+    /// Most moved fixture shadow maps redrawn in one frame.
+    shadow_redraws: usize,
+    /// Far-field fog grid cell size in pixels.
+    fog_tile: u32,
+    /// Scene-pass samples per pixel.
+    msaa: u32,
+}
+
+impl QualityBudget {
+    fn of(quality: crate::scene_desc::Quality, camera_moving: bool) -> Self {
+        use crate::scene_desc::Quality;
+        match (quality, camera_moving) {
+            (Quality::High, _) => Self {
+                plain_pieces: 8.0,
+                shadow_footprint: 1.0,
+                shadow_steps: 1.0,
+                shadow_redraws: 64,
+                fog_tile: crate::fog_grid::default_tile_size(),
+                msaa: MSAA_SAMPLES,
+            },
+            // A laptop budget: twice the shadow walk's footprint allowance
+            // and half its steps, and twice again while the camera moves,
+            // when history is rejected and nothing settles anyway.
+            (Quality::Low, moving) => Self {
+                plain_pieces: 4.0,
+                shadow_footprint: if moving { 4.0 } else { 2.0 },
+                shadow_steps: if moving { 0.25 } else { 0.5 },
+                shadow_redraws: 16,
+                fog_tile: crate::fog_grid::default_tile_size().max(crate::fog_grid::LOW_TILE_SIZE),
+                msaa: 1,
+            },
+        }
+    }
+
+    /// `Haze::quality`.
+    fn haze(self) -> [f32; 4] {
+        [
+            self.plain_pieces,
+            self.shadow_footprint,
+            self.shadow_steps,
+            0.0,
+        ]
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -753,7 +814,19 @@ struct HazeUniform {
     depth: [f32; 4],
     /// x: shadowed fixture count, y: shadow texel size.
     shadow: [f32; 4],
+    /// [`QualityBudget::haze`].
+    quality: [f32; 4],
     medium: crate::medium::Uniform,
+}
+
+/// `shaders/haze_wide.wgsl`'s uniform.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct WideMergeUniform {
+    /// xy: wide target size, z: bilateral depth sigma in metres.
+    params: [f32; 4],
+    /// xy: camera near/far planes.
+    depth: [f32; 4],
 }
 
 #[repr(C)]
@@ -1177,6 +1250,11 @@ pub struct Renderer {
     /// Which cone occupies each shadow slot, carried across frames so
     /// [`assign_shadow_slots`] can keep a resident rather than reshuffling.
     fixture_shadow_slots: Vec<Option<usize>>,
+    /// Per slot, the position a map was last drawn from and the projection it
+    /// was drawn with; a deferred redraw keeps sampling it.
+    fixture_shadow_drawn: Vec<Option<(Vec3, FixtureShadowMatrix)>>,
+    /// Per slot, frames a moved map has waited for its redraw.
+    fixture_shadow_age: Vec<u32>,
     /// Uploaded images by stable source identity and color-space role.
     texture_views: HashMap<TextureKey, wgpu::TextureView>,
     /// Material bind groups by their five immutable map identities.
@@ -1197,6 +1275,9 @@ pub struct Renderer {
     geometry_shadow_samples: u32,
     wide_light_group: u32,
     grid_fog: bool,
+    /// Route wide beams to a half-resolution pass (`LUMA_WIDE_BEAMS=0` keeps
+    /// every beam native, for A/B runs).
+    wide_beams: bool,
     /// Single-pass deterministic transport writes its outputs directly on Metal.
     haze_compute: bool,
     surface_transmittance: SurfaceTransmittance,
@@ -1211,6 +1292,9 @@ pub struct Renderer {
     medium_cache: crate::medium::Cache,
     shadow_hierarchy: crate::shadow_hierarchy::Targets,
     last_live_time: Option<f32>,
+    /// The previous live frame's eye, target and field of view, to tell a
+    /// moving camera from a still one.
+    last_live_camera: Option<[u32; 7]>,
     live_noise_frame: u32,
     profiler: Option<ProfilerResources>,
     light_index: LightIndex,
@@ -1387,6 +1471,8 @@ struct ResidualGlobalKey {
     casters: u64,
     depth: u64,
     shadow_samples: u32,
+    /// The haze pass's [`QualityBudget`], as bits.
+    quality: [u32; 4],
 }
 
 /// Per-resident inputs that change scalar transport. The identity is keyed by
@@ -1836,13 +1922,20 @@ struct Targets {
     haze_width: u32,
     haze_height: u32,
     destination: Destination,
-    msaa_color: wgpu::TextureView,
+    /// The multisampled scene colour; `None` at one sample, where the scene
+    /// pass draws straight into `scene`.
+    msaa_color: Option<wgpu::TextureView>,
+    /// Scene-pass samples per pixel.
+    samples: u32,
     msaa_surface_depth: Option<wgpu::TextureView>,
     msaa_depth: wgpu::TextureView,
     scene: wgpu::TextureView,
     depth: wgpu::TextureView,
     haze: wgpu::TextureView,
     haze_sampled: wgpu::TextureView,
+    /// Wide beams' reduced-resolution haze target and its unused stochastic
+    /// twin (the haze pipeline writes both), allocated on first use.
+    haze_wide: Option<((u32, u32), [wgpu::TextureView; 2])>,
     haze_work_counts: wgpu::Buffer,
     /// Counted compaction: classify, residual and hot each sum into their
     /// own records so the fused kernel's totals can be checked for identity.
@@ -2081,14 +2174,22 @@ pub struct Gpu {
     temporal_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     overlay_layout: wgpu::BindGroupLayout,
-    scene_pipeline: wgpu::RenderPipeline,
-    surface_depth_pipeline: wgpu::RenderPipeline,
+    /// Scene-pass pipelines at [`MSAA_SAMPLES`].
+    scene_pipelines: ScenePipelines,
+    /// What the single-sample set is built from, on first low-quality frame.
+    scene_source: ScenePipelineSource,
+    scene_pipelines_single: std::sync::OnceLock<ScenePipelines>,
     depth_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     fixture_shadow_layout: wgpu::BindGroupLayout,
     fixture_shadow_pipeline: wgpu::RenderPipeline,
     haze_pipeline: wgpu::RenderPipeline,
     haze_grid_pipeline: wgpu::RenderPipeline,
+    /// The grid haze pipeline integrating only narrow, then only wide beams.
+    haze_grid_routed: [wgpu::RenderPipeline; 2],
+    /// Adds the wide beams' half-resolution haze into the native target.
+    haze_wide_pipeline: wgpu::RenderPipeline,
+    haze_wide_layout: wgpu::BindGroupLayout,
     haze_compute_pipeline: wgpu::ComputePipeline,
     haze_compute_layout: wgpu::BindGroupLayout,
     haze_work_counts: bool,
@@ -2165,9 +2266,6 @@ pub struct Gpu {
     composite_linear_pipeline: wgpu::RenderPipeline,
     /// Exposure, lens glow, tone curve and glare (`post.rs`).
     post: crate::post::Pipelines,
-    grid_pipeline: wgpu::RenderPipeline,
-    compass_pipeline: wgpu::RenderPipeline,
-    cable_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`overlay_pipeline_index`]: the three output formats
     /// crossed with two topologies and two depth behaviours.
     overlay_pipelines: [wgpu::RenderPipeline; 12],
@@ -2813,91 +2911,21 @@ impl Gpu {
                 immediate_size: 0,
             });
 
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: 48,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 12,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 24,
-                    shader_location: 2,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 32,
-                    shader_location: 3,
-                },
+        let vertex_layout = mesh_vertex_layout();
+
+        let scene_source = ScenePipelineSource {
+            layout: scene_pipeline_layout.clone(),
+            scene: scene_module.clone(),
+            grid: grid_module.clone(),
+            cables: cable_module.clone(),
+            skips: [
+                omitted("surface-clouds"),
+                omitted("surface-lighting"),
+                omitted("surface-shadows"),
+                omitted("face-lights"),
             ],
         };
-
-        let scene_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene"),
-            layout: Some(&scene_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &scene_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(vertex_layout.clone())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &scene_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(SCENE_FORMAT.into())],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[
-                        ("PROFILE_SKIP_SURFACE_CLOUDS", omitted("surface-clouds")),
-                        ("PROFILE_SKIP_FIXTURES", omitted("surface-lighting")),
-                        ("PROFILE_SKIP_SURFACE_SHADOWS", omitted("surface-shadows")),
-                        ("PROFILE_SKIP_FACE_LIGHTS", omitted("face-lights")),
-                    ],
-                    ..Default::default()
-                },
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(depth_state(true)),
-            multisample: wgpu::MultisampleState {
-                count: MSAA_SAMPLES,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let surface_depth_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("surface-depth"),
-                layout: Some(&scene_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &scene_module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(vertex_layout.clone())],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &scene_module,
-                    entry_point: Some("fs_surface_depth"),
-                    targets: &[Some(wgpu::TextureFormat::R16Float.into())],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: Some(depth_state(true)),
-                multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            });
+        let scene_pipelines = scene_source.build(&device, MSAA_SAMPLES);
 
         let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("depth-prepass"),
@@ -2916,8 +2944,6 @@ impl Gpu {
             cache: None,
         });
 
-        let grid_vertex_layout = vertex_layout.clone();
-        let cable_vertex_layout = vertex_layout.clone();
         // The fixture shadow pass binds only what its vertex stage reads:
         // per-map globals, the instance table, and the mesh-bucketed caster
         // index list. Borrowing the full scene layout meant one material
@@ -3425,7 +3451,7 @@ impl Gpu {
             }
         });
 
-        let make_haze_pipeline = |grid: bool| {
+        let make_haze_pipeline = |grid: bool, route: u32| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("haze"),
                 layout: Some(
@@ -3463,6 +3489,7 @@ impl Gpu {
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[
                             ("GRID_FOG", f64::from(u8::from(grid))),
+                            ("BEAM_ROUTE", f64::from(route)),
                             ("PROFILE_SKIP_NATIVE_SHADOWS", omitted("native-shadows")),
                             ("PROFILE_SKIP_NATIVE_INTEGRALS", omitted("native-integrals")),
                             ("PROFILE_SKIP_NATIVE_CLOUDS", omitted("native-clouds")),
@@ -3932,8 +3959,69 @@ impl Gpu {
                 cache: None,
             });
 
-        let haze_pipeline = make_haze_pipeline(false);
-        let haze_grid_pipeline = make_haze_pipeline(true);
+        let haze_pipeline = make_haze_pipeline(false, 0);
+        let haze_grid_pipeline = make_haze_pipeline(true, 0);
+        // Wide-beam routing (`BEAM_ROUTE` in `beam_transport.wgsl`).
+        let haze_grid_routed = [make_haze_pipeline(true, 1), make_haze_pipeline(true, 2)];
+
+        let haze_wide_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("haze-wide-merge"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let haze_wide_module = shader(&device, "haze-wide", include_str!("shaders/haze_wide.wgsl"));
+        let haze_wide_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("haze-wide-merge"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("haze-wide-merge"),
+                    bind_group_layouts: &[Some(&haze_wide_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &haze_wide_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &haze_wide_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: ADD,
+                        alpha: ADD,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let temporal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("haze-temporal"),
@@ -4029,103 +4117,6 @@ impl Gpu {
                 multiview_mask: None,
                 cache: None,
             });
-
-        let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("grid"),
-            layout: Some(&scene_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &grid_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(grid_vertex_layout.clone())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &grid_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // `depthWrite: false` — the grid tests against the stage but never
-            // occludes it.
-            depth_stencil: Some(depth_state(false)),
-            multisample: wgpu::MultisampleState {
-                count: MSAA_SAMPLES,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // The grid's own state, with the grid's own module, down to a second
-        // fragment entry point: the compass is the same quad, blended the same
-        // way, and a divergent depth or blend choice here would be a second
-        // answer to a settled question.
-        let compass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("compass"),
-            layout: Some(&scene_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &grid_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(grid_vertex_layout.clone())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &grid_module,
-                entry_point: Some("fs_compass"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false)),
-            multisample: wgpu::MultisampleState {
-                count: MSAA_SAMPLES,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // The grid's own state, with the grid's shader swapped out: both are
-        // transparent scene-space affordances that test depth and never write
-        // it, and a second blend or depth choice here would be a second answer
-        // to the same question.
-        let cable_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cables"),
-            layout: Some(&scene_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &cable_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(cable_vertex_layout)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &cable_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false)),
-            multisample: wgpu::MultisampleState {
-                count: MSAA_SAMPLES,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
 
         let overlay_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay"),
@@ -4295,14 +4286,18 @@ impl Gpu {
             temporal_layout,
             composite_layout,
             overlay_layout,
-            scene_pipeline,
-            surface_depth_pipeline,
+            scene_pipelines,
+            scene_source,
+            scene_pipelines_single: std::sync::OnceLock::new(),
             depth_pipeline,
             shadow_pipeline,
             fixture_shadow_layout,
             fixture_shadow_pipeline,
             haze_pipeline,
             haze_grid_pipeline,
+            haze_grid_routed,
+            haze_wide_pipeline,
+            haze_wide_layout,
             haze_compute_pipeline,
             haze_compute_layout,
             haze_work_counts,
@@ -4342,9 +4337,6 @@ impl Gpu {
             fog_grid_read_layout,
             temporal_pipeline,
             composite_pipelines,
-            grid_pipeline,
-            compass_pipeline,
-            cable_pipeline,
             overlay_pipelines,
             hard_shadow_sampler,
             shadow_sampler,
@@ -4499,6 +4491,8 @@ impl Renderer {
             fixture_shadow_cache: vec![None; MAX_FIXTURE_SHADOWS],
             cascade_shadow_cache: [None; CASCADE_COUNT],
             fixture_shadow_slots: vec![None; MAX_FIXTURE_SHADOWS],
+            fixture_shadow_drawn: vec![None; MAX_FIXTURE_SHADOWS],
+            fixture_shadow_age: vec![0; MAX_FIXTURE_SHADOWS],
             texture_views: HashMap::new(),
             materials: HashMap::new(),
             geometry: None,
@@ -4509,6 +4503,7 @@ impl Renderer {
             surface_depth_cull: !std::env::var_os("LUMA_SURFACE_DEPTH_CULL")
                 .is_some_and(|v| v == "0"),
             grid_fog: !std::env::var_os("LUMA_GRID_FOG").is_some_and(|v| v == "0"),
+            wide_beams: !std::env::var_os("LUMA_WIDE_BEAMS").is_some_and(|v| v == "0"),
             wide_light_group: std::env::var("LUMA_WIDE_LIGHT_GROUP")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -4531,6 +4526,7 @@ impl Renderer {
             medium_cache,
             shadow_hierarchy,
             last_live_time: None,
+            last_live_camera: None,
             live_noise_frame: 0,
             profiler,
             light_index,
@@ -4573,12 +4569,16 @@ impl Renderer {
         destination: Destination,
         grid_fog: bool,
         surface_depth_cull: bool,
+        wide: Option<(u32, u32)>,
+        fog_tile: u32,
+        samples: u32,
     ) -> &Targets {
         let stale = self.targets.as_ref().is_none_or(|t| {
             t.width != width
                 || t.height != height
                 || !t.destination.same_targets(destination)
                 || (t.haze_width, t.haze_height) != haze
+                || t.samples != samples
         });
         let channels = destination.staged_channels();
         if stale {
@@ -4644,21 +4644,18 @@ impl Renderer {
                 haze_width: haze.0,
                 haze_height: haze.1,
                 destination,
-                msaa_color: color(
-                    width,
-                    height,
-                    MSAA_SAMPLES,
-                    wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    "scene-msaa",
-                ),
+                msaa_color: (samples > 1).then(|| {
+                    color(
+                        width,
+                        height,
+                        samples,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        "scene-msaa",
+                    )
+                }),
+                samples,
                 msaa_surface_depth: None,
-                msaa_depth: depth_texture(
-                    &self.gpu.device,
-                    width,
-                    height,
-                    MSAA_SAMPLES,
-                    "depth-msaa",
-                ),
+                msaa_depth: depth_texture(&self.gpu.device, width, height, samples, "depth-msaa"),
                 scene: color(
                     width,
                     height,
@@ -4676,7 +4673,7 @@ impl Renderer {
                         | wgpu::TextureUsages::STORAGE_BINDING,
                     "haze",
                 ),
-                fog: crate::fog_grid::Targets::new(&self.gpu.device, None),
+                fog: crate::fog_grid::Targets::new(&self.gpu.device, None, fog_tile),
                 haze_sampled: color(
                     haze.0,
                     haze.1,
@@ -4686,6 +4683,7 @@ impl Renderer {
                         | wgpu::TextureUsages::STORAGE_BINDING,
                     "haze-sampled",
                 ),
+                haze_wide: None,
                 haze_work_counts: self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("haze-work-counts"),
                     size: if self.gpu.haze_work_counts {
@@ -4753,7 +4751,7 @@ impl Renderer {
                                 depth_or_array_layers: 1,
                             },
                             mip_level_count: 1,
-                            sample_count: MSAA_SAMPLES,
+                            sample_count: samples,
                             dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::R16Float,
                             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -4765,11 +4763,41 @@ impl Renderer {
             }
         }
         if grid_fog {
-            self.targets
-                .as_mut()
-                .expect("just populated")
-                .fog
-                .ensure(&self.gpu.device, [width, height]);
+            self.targets.as_mut().expect("just populated").fog.ensure(
+                &self.gpu.device,
+                [width, height],
+                fog_tile,
+            );
+        }
+        if let Some(size) = wide {
+            let targets = self.targets.as_mut().expect("just populated");
+            if targets
+                .haze_wide
+                .as_ref()
+                .is_none_or(|(held, _)| *held != size)
+            {
+                let device = &self.gpu.device;
+                let view = |label| {
+                    device
+                        .create_texture(&wgpu::TextureDescriptor {
+                            label: Some(label),
+                            size: wgpu::Extent3d {
+                                width: size.0,
+                                height: size.1,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: SCENE_FORMAT,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        })
+                        .create_view(&wgpu::TextureViewDescriptor::default())
+                };
+                targets.haze_wide = Some((size, [view("haze-wide"), view("haze-wide-sampled")]));
+            }
         }
         self.targets.as_ref().expect("just populated")
     }
@@ -5178,6 +5206,16 @@ impl Renderer {
         }
     }
 
+    /// Route wide beams to the half-resolution haze pass (the default) or
+    /// keep every beam native. Native is the reference for integrator tests
+    /// that must not also measure the upsample's silhouette error.
+    pub fn set_wide_beams(&mut self, enabled: bool) {
+        if self.wide_beams != enabled {
+            self.wide_beams = enabled;
+            self.haze_history_valid = false;
+        }
+    }
+
     /// Number of fixtures with resident shadow maps on the last frame.
     #[must_use]
     pub fn shadowed_fixture_count(&self) -> usize {
@@ -5404,12 +5442,32 @@ impl Renderer {
             })
             .collect();
 
+        // A cone that emits nothing visible (a black colour at any dimmer)
+        // gets no shadow map, no light-index entry and no beam work.
         let fixture_cones: Vec<_> = frame
             .fixture_cones
             .iter()
-            .take(crate::frame::MAX_FIXTURE_CONES)
             .map(sanitize_fixture_cone)
+            .filter(|cone| cone.intensity * cone.color.max_element() > DARK_CONE)
+            .take(crate::frame::MAX_FIXTURE_CONES)
             .collect();
+        let camera_bits = [
+            frame.camera.eye.x,
+            frame.camera.eye.y,
+            frame.camera.eye.z,
+            frame.camera.target.x,
+            frame.camera.target.y,
+            frame.camera.target.z,
+            frame.camera.fov_y_deg,
+        ]
+        .map(f32::to_bits);
+        let camera_moving = temporal
+            && self
+                .last_live_camera
+                .is_some_and(|last| last != camera_bits);
+        self.last_live_camera = temporal.then_some(camera_bits);
+        let budget = QualityBudget::of(frame.quality, camera_moving);
+        let fog_tile = budget.fog_tile;
         let opaque = frame.draws.len() - frame.transparent.len();
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
@@ -5447,14 +5505,22 @@ impl Renderer {
             self.fixture_shadow_layers = layers;
             self.fixture_shadow_cache = vec![None; shadow_capacity];
             self.fixture_shadow_slots = vec![None; shadow_capacity];
+            self.fixture_shadow_drawn = vec![None; shadow_capacity];
+            self.fixture_shadow_age = vec![0; shadow_capacity];
         }
         // Full mode retains every projection; the legacy comparison keeps
         // its priority-based 16-map selection.
         let shadow_slots = if frame.fixture_shadows {
             if cached_shadows {
+                let origins: Vec<_> = self
+                    .fixture_shadow_drawn
+                    .iter()
+                    .map(|drawn| drawn.map(|(origin, _)| origin))
+                    .collect();
                 crate::shadow::assign_cached_slots(
                     &fixture_cones,
                     &self.fixture_shadow_cache,
+                    &origins,
                     caster_hash,
                 )
             } else {
@@ -5525,6 +5591,62 @@ impl Renderer {
                 },
             })
             .collect();
+        // Bound the maps redrawn per frame. A moved head over the budget keeps
+        // sampling the map it has, with the projection that map was drawn
+        // with, until its turn comes.
+        let mut fixture_shadow_matrices = fixture_shadow_matrices;
+        if cached_shadows && frame.fixture_shadows {
+            let dirty: Vec<bool> = fixture_shadow_matrices
+                .iter()
+                .zip(&shadow_slots)
+                .zip(&self.fixture_shadow_cache)
+                .map(|((matrix, resident), cached)| {
+                    resident.is_some()
+                        && *cached
+                            != Some(ShadowCacheKey {
+                                matrix_bits: shadow_matrix_bits(&matrix.view_proj),
+                                caster_hash,
+                            })
+                })
+                .collect();
+            let moved: Vec<bool> = shadow_slots
+                .iter()
+                .zip(&self.fixture_shadow_drawn)
+                .zip(&self.fixture_shadow_cache)
+                .map(|((resident, drawn), cached)| {
+                    // Same head and the same casters: only the projection moved.
+                    resident
+                        .zip(*drawn)
+                        .is_some_and(|(index, (origin, _))| origin == fixture_cones[index].position)
+                        && cached.is_some_and(|key| key.caster_hash == caster_hash)
+                })
+                .collect();
+            let priority: Vec<f32> = shadow_slots
+                .iter()
+                .map(|resident| {
+                    resident.map_or(0.0, |index| {
+                        crate::shadow::shadow_priority(&fixture_cones[index], frame.camera.eye)
+                    })
+                })
+                .collect();
+            let redraw = crate::shadow::budget_redraws(
+                &dirty,
+                &moved,
+                &priority,
+                &self.fixture_shadow_age,
+                budget.shadow_redraws,
+            );
+            for slot in 0..dirty.len() {
+                if dirty[slot] && !redraw[slot] {
+                    let (_, drawn) =
+                        self.fixture_shadow_drawn[slot].expect("a moved map was drawn");
+                    fixture_shadow_matrices[slot] = drawn;
+                    self.fixture_shadow_age[slot] += 1;
+                } else {
+                    self.fixture_shadow_age[slot] = 0;
+                }
+            }
+        }
         // Build the unified light index for this frame: sanitise + depth-sort +
         // Z-bins on the CPU, tile masks in two compute dispatches, and the
         // reordered light SoA upload. Rebuilt every frame — no cache, no key:
@@ -6064,6 +6186,13 @@ impl Renderer {
             ((width as f32 * scale).round() as u32).max(1),
             ((height as f32 * scale).round() as u32).max(1),
         );
+        // Wide beams are soft across their width, so a native haze target
+        // hands them to a half-resolution pass and upsamples the result with
+        // the same depth-aware weights the composite uses. Narrow beams and
+        // gobos, whose edges carry the picture, stay native. Only the live
+        // fragment grid path splits; below native the haze is already coarse.
+        let wide_size = (self.wide_beams && grid_fog && !self.haze_compute && scale >= 1.0)
+            .then(|| (haze_size.0.div_ceil(2), haze_size.1.div_ceil(2)));
         let targets_started = Instant::now();
         let (
             msaa_color,
@@ -6073,6 +6202,7 @@ impl Renderer {
             depth_view,
             haze_view,
             haze_sampled,
+            haze_wide,
             haze_work_counts,
             haze_work_counts_compact,
             fog_grid,
@@ -6094,6 +6224,9 @@ impl Renderer {
                 destination,
                 grid_fog,
                 surface_depth_cull,
+                wide_size,
+                fog_tile,
+                budget.msaa,
             );
             let presentation = &t.presentations[slot];
             let finish = match presentation {
@@ -6110,6 +6243,7 @@ impl Renderer {
                 t.depth.clone(),
                 t.haze.clone(),
                 t.haze_sampled.clone(),
+                wide_size.and(t.haze_wide.clone()),
                 t.haze_work_counts.clone(),
                 t.haze_work_counts_compact.clone(),
                 t.fog.incident.clone(),
@@ -6429,6 +6563,9 @@ impl Renderer {
                 for (index, key) in fixture_shadow_keys.iter().copied().enumerate() {
                     if fixture_shadow_dirty[index] {
                         self.fixture_shadow_cache[index] = Some(key);
+                        self.fixture_shadow_drawn[index] = shadow_slots[index].map(|cone| {
+                            (fixture_cones[cone].position, fixture_shadow_matrices[index])
+                        });
                     }
                 }
             }
@@ -6546,7 +6683,7 @@ impl Renderer {
                         timestamp_writes: pass_queries.render("surface-depth", None),
                         ..Default::default()
                     });
-                    pass.set_pipeline(&self.gpu.surface_depth_pipeline);
+                    pass.set_pipeline(&self.gpu.scene_pipelines(budget.msaa).surface_depth);
                     pass.set_bind_group(0, &lit_bg, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
@@ -6557,6 +6694,7 @@ impl Renderer {
                     &self.gpu.device,
                     &mut encoder,
                     msaa_surface_depth,
+                    budget.msaa > 1,
                     pass_queries.compute("surface-light-index", None),
                 );
             }
@@ -6577,14 +6715,15 @@ impl Renderer {
             // surface transmittance comes from the fog grid; then it is
             // encoded after `fog-transmittance` instead of here, still ahead
             // of the haze pass, so the legacy timestamp slots keep their order.
+            let samples = budget.msaa;
             let encode_scene = scene_encoder(|encoder, pass_queries, gpu, queries| {
                 let repeat_count = gpu.profile_copies("scene");
                 for repeat_index in 0..repeat_count {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("scene"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &msaa_color,
-                            resolve_target: Some(&scene_view),
+                            view: msaa_color.as_ref().unwrap_or(&scene_view),
+                            resolve_target: msaa_color.as_ref().map(|_| &scene_view),
                             depth_slice: None,
                             // Premultiplied radiance and coverage, including each
                             // surface's horizon fade. Transparent draws blend over
@@ -6607,16 +6746,17 @@ impl Renderer {
                         ),
                         ..Default::default()
                     });
-                    pass.set_pipeline(&gpu.scene_pipeline);
+                    let pipelines = gpu.scene_pipelines(samples);
+                    pass.set_pipeline(&pipelines.scene);
                     pass.set_bind_group(0, &lit_bg, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
                     draw_range(&mut pass, &all_opaque);
                     for (slot, kind) in frame.transparent.iter().enumerate() {
                         pass.set_pipeline(match kind {
-                            crate::frame::Transparent::Grid => &gpu.grid_pipeline,
-                            crate::frame::Transparent::Compass => &gpu.compass_pipeline,
-                            crate::frame::Transparent::Cables => &gpu.cable_pipeline,
+                            crate::frame::Transparent::Grid => &pipelines.grid,
+                            crate::frame::Transparent::Compass => &pipelines.compass,
+                            crate::frame::Transparent::Cables => &pipelines.cables,
                         });
                         draw_range(&mut pass, &transparent[slot..=slot]);
                     }
@@ -6714,15 +6854,15 @@ impl Renderer {
                         (haze_size.1 as f32).to_bits(),
                     ],
                     grid_size: [
-                        width.div_ceil(crate::fog_grid::tile_size()),
-                        height.div_ceil(crate::fog_grid::tile_size()),
+                        width.div_ceil(fog_tile),
+                        height.div_ceil(fog_tile),
                         crate::fog_grid::SLICES,
                     ],
                     camera_planes: [CAMERA_NEAR.to_bits(), camera_far.to_bits()],
                     fog_far: fog_far.to_bits(),
                     medium_min: std::array::from_fn(|index| medium.min[index].to_bits()),
                     medium_max: std::array::from_fn(|index| medium.max[index].to_bits()),
-                    tile_size: crate::fog_grid::tile_size(),
+                    tile_size: fog_tile,
                     block_side: crate::fog_grid::BLOCK_SIDE,
                     slices: crate::fog_grid::SLICES,
                     algorithm_version: crate::fog_visibility_cache::ALGORITHM_VERSION,
@@ -6940,7 +7080,7 @@ impl Renderer {
                     .collect()
             };
             let transport_key = (self.gpu.haze_resid_temporal != 0).then(|| {
-                residual_transport_key(
+                let key = residual_transport_key(
                     frame,
                     width,
                     height,
@@ -6955,7 +7095,11 @@ impl Renderer {
                     self.gpu.haze_resid_per_resident,
                     &fixture_cones,
                     &rests,
-                )
+                );
+                ResidualGlobalKey {
+                    quality: budget.haze().map(f32::to_bits),
+                    ..key
+                }
             });
             let resident_keys: Vec<Option<ResidualResidentKey>> = shadow_slots
                 .iter()
@@ -7136,6 +7280,7 @@ impl Renderer {
                         },
                         fog_far,
                     ],
+                    quality: budget.haze(),
                 };
                 // Indexed label: every subframe's upload lands before the one
                 // submit, so one shared label would leave all of them reading the
@@ -7146,49 +7291,57 @@ impl Renderer {
                     wgpu::BufferUsages::UNIFORM,
                     &format!("haze-{k}"),
                 );
-                let bind_group = self
-                    .gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("haze"),
-                        layout: &self.gpu.haze_layout,
-                        entries: &[
-                            binding(0, haze_buf.as_entire_binding()),
-                            binding(
-                                10,
-                                wgpu::BindingResource::TextureView(&self.medium_cache.view),
-                            ),
-                            binding(
-                                11,
-                                wgpu::BindingResource::TextureView(&self.shadow_hierarchy.views[0]),
-                            ),
-                            binding(
-                                12,
-                                wgpu::BindingResource::TextureView(&self.shadow_hierarchy.views[1]),
-                            ),
-                            binding(1, index_bindings.core.as_entire_binding()),
-                            binding(2, index_bindings.rest.as_entire_binding()),
-                            binding(3, wgpu::BindingResource::TextureView(&depth_view)),
-                            binding(
-                                4,
-                                wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
-                            ),
-                            binding(
-                                5,
-                                wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
-                            ),
-                            binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
-                            binding(
-                                7,
-                                wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
-                            ),
-                            binding(8, self.visibility.buffer.as_entire_binding()),
-                            binding(
-                                9,
-                                wgpu::BindingResource::TextureView(&self.fixture_shadow_map_extra),
-                            ),
-                        ],
-                    });
+                let haze_bind_group = |buffer: &wgpu::Buffer| {
+                    self.gpu
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("haze"),
+                            layout: &self.gpu.haze_layout,
+                            entries: &[
+                                binding(0, buffer.as_entire_binding()),
+                                binding(
+                                    10,
+                                    wgpu::BindingResource::TextureView(&self.medium_cache.view),
+                                ),
+                                binding(
+                                    11,
+                                    wgpu::BindingResource::TextureView(
+                                        &self.shadow_hierarchy.views[0],
+                                    ),
+                                ),
+                                binding(
+                                    12,
+                                    wgpu::BindingResource::TextureView(
+                                        &self.shadow_hierarchy.views[1],
+                                    ),
+                                ),
+                                binding(1, index_bindings.core.as_entire_binding()),
+                                binding(2, index_bindings.rest.as_entire_binding()),
+                                binding(3, wgpu::BindingResource::TextureView(&depth_view)),
+                                binding(
+                                    4,
+                                    wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
+                                ),
+                                binding(
+                                    5,
+                                    wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
+                                ),
+                                binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                                binding(
+                                    7,
+                                    wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
+                                ),
+                                binding(8, self.visibility.buffer.as_entire_binding()),
+                                binding(
+                                    9,
+                                    wgpu::BindingResource::TextureView(
+                                        &self.fixture_shadow_map_extra,
+                                    ),
+                                ),
+                            ],
+                        })
+                };
+                let bind_group = haze_bind_group(&haze_buf);
                 // The fill and classify passes never sample the medium cache, but
                 // a bind group that carries it would make them wait for the
                 // medium-cache pass; this one binds the static density field in
@@ -7331,8 +7484,8 @@ impl Renderer {
                         pass.set_bind_group(1, &light_index_bg, &[]);
                         pass.set_bind_group(2, &grid_prepare, &[]);
                         pass.dispatch_workgroups(
-                            width.div_ceil(crate::fog_grid::tile_size()).div_ceil(8),
-                            height.div_ceil(crate::fog_grid::tile_size()).div_ceil(8),
+                            width.div_ceil(fog_tile).div_ceil(8),
+                            height.div_ceil(fog_tile).div_ceil(8),
                             1,
                         );
                         drop(pass);
@@ -7351,8 +7504,8 @@ impl Renderer {
                         pass.set_bind_group(1, &light_index_bg, &[]);
                         pass.set_bind_group(2, &grid_transmittance, &[]);
                         pass.dispatch_workgroups(
-                            width.div_ceil(crate::fog_grid::tile_size()),
-                            height.div_ceil(crate::fog_grid::tile_size()),
+                            width.div_ceil(fog_tile),
+                            height.div_ceil(fog_tile),
                             1,
                         );
                         drop(pass);
@@ -7430,10 +7583,10 @@ impl Renderer {
                             pass.set_bind_group(2, &grid_classify, &[]);
                             pass.dispatch_workgroups(
                                 width
-                                    .div_ceil(crate::fog_grid::tile_size())
+                                    .div_ceil(fog_tile)
                                     .div_ceil(crate::fog_grid::BLOCK_SIDE),
                                 height
-                                    .div_ceil(crate::fog_grid::tile_size())
+                                    .div_ceil(fog_tile)
                                     .div_ceil(crate::fog_grid::BLOCK_SIDE),
                                 crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
                             );
@@ -7513,10 +7666,10 @@ impl Renderer {
                         pass.set_bind_group(2, &grid_write, &[]);
                         pass.dispatch_workgroups(
                             width
-                                .div_ceil(crate::fog_grid::tile_size())
+                                .div_ceil(fog_tile)
                                 .div_ceil(crate::fog_grid::BLOCK_SIDE),
                             height
-                                .div_ceil(crate::fog_grid::tile_size())
+                                .div_ceil(fog_tile)
                                 .div_ceil(crate::fog_grid::BLOCK_SIDE),
                             crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
                         );
@@ -7559,8 +7712,8 @@ impl Renderer {
                             &[],
                         );
                         pass.dispatch_workgroups(
-                            width.div_ceil(crate::fog_grid::tile_size()),
-                            height.div_ceil(crate::fog_grid::tile_size()),
+                            width.div_ceil(fog_tile),
+                            height.div_ceil(fog_tile),
                             1,
                         );
                     }
@@ -7854,18 +8007,21 @@ impl Renderer {
                     timestamp_writes: pass_queries.render(
                         "haze",
                         profile_resources.as_ref().and_then(|(queries, ..)| {
-                            (!resolve_haze && k + 1 == haze_passes).then_some(
-                                wgpu::RenderPassTimestampWrites {
-                                    query_set: queries,
-                                    beginning_of_pass_write_index: None,
-                                    end_of_pass_write_index: Some(2),
-                                },
-                            )
+                            (!resolve_haze
+                                && k + 1 == haze_passes
+                                && !(k == 0 && wide_size.is_some()))
+                            .then_some(wgpu::RenderPassTimestampWrites {
+                                query_set: queries,
+                                beginning_of_pass_write_index: None,
+                                end_of_pass_write_index: Some(2),
+                            })
                         }),
                     ),
                     ..Default::default()
                 });
-                pass.set_pipeline(if grid_fog {
+                pass.set_pipeline(if grid_fog && wide_size.is_some() && k == 0 {
+                    &self.gpu.haze_grid_routed[0]
+                } else if grid_fog {
                     &self.gpu.haze_grid_pipeline
                 } else {
                     &self.gpu.haze_pipeline
@@ -7875,6 +8031,112 @@ impl Renderer {
                 pass.set_bind_group(2, &grid_read, &[]);
                 pass.set_bind_group(3, &grid_read, &[]);
                 pass.draw(0..3, 0..1);
+                drop(pass);
+                let wide = wide_size.zip(haze_wide.as_ref()).filter(|_| k == 0);
+                if let Some((wide, (_, [wide_view, wide_sampled]))) = wide {
+                    let wide_uniform = HazeUniform {
+                        transport: [
+                            uniform.transport[0],
+                            uniform.transport[1],
+                            wide.1 as f32,
+                            wide.0 as f32,
+                        ],
+                        tiles: [
+                            width as f32 / wide.0 as f32,
+                            height as f32 / wide.1 as f32,
+                            1.0,
+                            uniform.tiles[3],
+                        ],
+                        ..uniform
+                    };
+                    let wide_buf = self.storage(
+                        &mut encoder,
+                        &[wide_uniform],
+                        wgpu::BufferUsages::UNIFORM,
+                        "haze-wide",
+                    );
+                    let wide_bind_group = haze_bind_group(&wide_buf);
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("haze-wide"),
+                            color_attachments: &[wide_view, wide_sampled].map(|view| {
+                                Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })
+                            }),
+                            depth_stencil_attachment: None,
+                            timestamp_writes: pass_queries.render("haze-wide", None),
+                            ..Default::default()
+                        });
+                        pass.set_pipeline(&self.gpu.haze_grid_routed[1]);
+                        pass.set_bind_group(0, &wide_bind_group, &[]);
+                        pass.set_bind_group(1, &light_index_bg, &[]);
+                        pass.set_bind_group(2, &grid_read, &[]);
+                        pass.set_bind_group(3, &grid_read, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
+                    let merge_buf = self.storage(
+                        &mut encoder,
+                        &[WideMergeUniform {
+                            // Bilateral sigma in metres, as the composite's.
+                            params: [wide.0 as f32, wide.1 as f32, 0.25, 0.0],
+                            depth: [CAMERA_NEAR, camera_far, 0.0, 0.0],
+                        }],
+                        wgpu::BufferUsages::UNIFORM,
+                        "haze-wide-merge",
+                    );
+                    let merge_bind_group =
+                        self.gpu
+                            .device
+                            .create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("haze-wide-merge"),
+                                layout: &self.gpu.haze_wide_layout,
+                                entries: &[
+                                    binding(0, merge_buf.as_entire_binding()),
+                                    binding(1, wgpu::BindingResource::TextureView(wide_view)),
+                                    binding(
+                                        2,
+                                        wgpu::BindingResource::Sampler(&self.gpu.linear_sampler),
+                                    ),
+                                    binding(3, wgpu::BindingResource::TextureView(&depth_view)),
+                                ],
+                            });
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("haze-wide-merge"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &haze_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: pass_queries.render(
+                            "haze-wide-merge",
+                            profile_resources.as_ref().and_then(|(queries, ..)| {
+                                (!resolve_haze && haze_passes == 1).then_some(
+                                    wgpu::RenderPassTimestampWrites {
+                                        query_set: queries,
+                                        beginning_of_pass_write_index: None,
+                                        end_of_pass_write_index: Some(2),
+                                    },
+                                )
+                            }),
+                        ),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&self.gpu.haze_wide_pipeline);
+                    pass.set_bind_group(0, &merge_bind_group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
             }
 
             let composite_haze = if resolve_haze {
@@ -9453,6 +9715,7 @@ mod tests {
             casters: 0,
             depth: 0,
             shadow_samples: 2,
+            quality: [0; 4],
         }
     }
 
@@ -9825,7 +10088,7 @@ mod tests {
     #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 512);
-        assert_eq!(std::mem::size_of::<HazeUniform>(), 240);
+        assert_eq!(std::mem::size_of::<HazeUniform>(), 256);
         assert_eq!(std::mem::size_of::<CompositeUniform>(), 224);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 80);
@@ -11698,13 +11961,19 @@ mod tests {
         frame.fixture_surface_lighting = false;
         let first = renderer.render(&frame, 160, 120, 1)?;
         for light in &mut frame.fixture_cones {
-            light.color = Vec3::ZERO;
-            light.intensity = 0.0;
+            light.color = Vec3::splat(0.05);
+            light.intensity = 0.01;
             light.gobo = 2;
         }
         let shading_only = renderer.render(&frame, 160, 120, 1)?;
         assert_eq!(first, shading_only);
         assert!(first.chunks_exact(4).any(|pixel| pixel[2] > 32));
+        // A dark cone is not a light at all: it leaves the index.
+        for light in &mut frame.fixture_cones {
+            light.color = Vec3::ZERO;
+        }
+        let dark = renderer.render(&frame, 160, 120, 1)?;
+        assert_ne!(dark, first);
         Ok(())
     }
 
@@ -11806,7 +12075,7 @@ mod tests {
         }
         let first = renderer.fog_block_stats()?.expect("classified frame");
         assert_eq!(first.image_size, [127, 97]);
-        let tile = crate::fog_grid::tile_size();
+        let tile = crate::fog_grid::default_tile_size();
         let first_grid = [127_u32.div_ceil(tile), 97_u32.div_ceil(tile), 128];
         let first_blocks = first_grid.map(|n| n.div_ceil(4));
         assert_eq!(first.grid_size, first_grid);
@@ -12174,6 +12443,7 @@ mod tests {
             haze_bounds: luma_scene::Aabb::new(Vec3::splat(-32.0), Vec3::splat(32.0)),
             haze_steps: 1,
             haze_resolution: 0.5,
+            quality: Default::default(),
             time: 0.0,
             debug_view: DebugView::Pbr,
             look: crate::scene_desc::Look::NEUTRAL,
@@ -12722,6 +12992,7 @@ mod tests {
             haze_bounds: luma_scene::Aabb::new(Vec3::splat(-32.0), Vec3::splat(32.0)),
             haze_steps: 1,
             haze_resolution: 1.0,
+            quality: Default::default(),
             time: 0.0,
             debug_view: DebugView::Pbr,
             look: crate::scene_desc::Look::NEUTRAL,
@@ -13164,6 +13435,237 @@ fn select_fixture_lighting_domain(
     (medium, selected_far, true)
 }
 
+/// The scene pass's multisampled pipelines. Low quality renders single
+/// sampled, and the sample count is baked into a pipeline.
+struct ScenePipelines {
+    scene: wgpu::RenderPipeline,
+    surface_depth: wgpu::RenderPipeline,
+    grid: wgpu::RenderPipeline,
+    compass: wgpu::RenderPipeline,
+    cables: wgpu::RenderPipeline,
+}
+
+/// Everything [`ScenePipelines`] is built from, kept so a second sample count
+/// can be built when it is first asked for.
+struct ScenePipelineSource {
+    layout: wgpu::PipelineLayout,
+    scene: wgpu::ShaderModule,
+    grid: wgpu::ShaderModule,
+    cables: wgpu::ShaderModule,
+    /// `LUMA_PROFILE_OMIT` switches of the scene shader.
+    skips: [f64; 4],
+}
+
+const MESH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 12,
+        shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 24,
+        shader_location: 2,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 32,
+        shader_location: 3,
+    },
+];
+
+fn mesh_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: 48,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &MESH_VERTEX_ATTRIBUTES,
+    }
+}
+
+impl ScenePipelineSource {
+    fn build(&self, device: &wgpu::Device, samples: u32) -> ScenePipelines {
+        let scene = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("scene"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.scene,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(mesh_vertex_layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.scene,
+                entry_point: Some("fs_main"),
+                targets: &[Some(SCENE_FORMAT.into())],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("PROFILE_SKIP_SURFACE_CLOUDS", self.skips[0]),
+                        ("PROFILE_SKIP_FIXTURES", self.skips[1]),
+                        ("PROFILE_SKIP_SURFACE_SHADOWS", self.skips[2]),
+                        ("PROFILE_SKIP_FACE_LIGHTS", self.skips[3]),
+                    ],
+                    ..Default::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let surface_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("surface-depth"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.scene,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(mesh_vertex_layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.scene,
+                entry_point: Some("fs_surface_depth"),
+                targets: &[Some(wgpu::TextureFormat::R16Float.into())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("grid"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.grid,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(mesh_vertex_layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.grid,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            // `depthWrite: false` — the grid tests against the stage but never
+            // occludes it.
+            depth_stencil: Some(depth_state(false)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // The grid's own state, with the grid's own module, down to a second
+        // fragment entry point: the compass is the same quad, blended the same
+        // way, and a divergent depth or blend choice here would be a second
+        // answer to a settled question.
+        let compass = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("compass"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.grid,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(mesh_vertex_layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.grid,
+                entry_point: Some("fs_compass"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(false)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // The grid's own state, with the grid's shader swapped out: both are
+        // transparent scene-space affordances that test depth and never write
+        // it, and a second blend or depth choice here would be a second answer
+        // to the same question.
+        let cables = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cables"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.cables,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(mesh_vertex_layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.cables,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(false)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        ScenePipelines {
+            scene,
+            surface_depth,
+            grid,
+            compass,
+            cables,
+        }
+    }
+}
+
+impl Gpu {
+    /// The scene pipelines for `samples` per pixel: [`MSAA_SAMPLES`] or one.
+    fn scene_pipelines(&self, samples: u32) -> &ScenePipelines {
+        if samples == MSAA_SAMPLES {
+            &self.scene_pipelines
+        } else {
+            self.scene_pipelines_single
+                .get_or_init(|| self.scene_source.build(&self.device, samples))
+        }
+    }
+}
+
 fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::FixtureCone {
     let finite = |value: f32, fallback: f32| value.is_finite().then_some(value).unwrap_or(fallback);
     let finite_vec =
@@ -13219,6 +13721,7 @@ fn haze_history_key(
     {
         push(value.to_bits());
     }
+    push(u32::from(frame.quality == crate::scene_desc::Quality::Low));
     push(frame.fixture_cones.len() as u32);
     for light in &frame.fixture_cones {
         for value in light.position.to_array() {
@@ -13330,6 +13833,7 @@ fn residual_transport_key(
         casters,
         depth,
         shadow_samples,
+        quality: [0; 4],
     }
 }
 

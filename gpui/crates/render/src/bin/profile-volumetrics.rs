@@ -1465,6 +1465,7 @@ fn frame_with_lights(
         haze_bounds: base.haze_bounds,
         haze_steps: base.haze_steps,
         haze_resolution: base.haze_resolution,
+        quality: base.quality,
         time: 0.0,
         debug_view: base.debug_view,
         look: base.look,

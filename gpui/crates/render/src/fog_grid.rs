@@ -1,10 +1,11 @@
 //! Shared volume lighting, native source integration, and conservative block bounds.
 
-/// Diagnostic spatial-resolution sweep. Fixed for the process so target
-/// allocation and compute dispatch always agree. Mac uses 16-pixel far-field
-/// cells after a native-pixel/motion quality sweep; other platforms retain 8.
-/// Near-source transport and truss-shadow intervals stay at native resolution.
-pub(crate) fn tile_size() -> u32 {
+/// Far-field cell size in pixels at high quality. Mac uses 16-pixel cells
+/// after a native-pixel/motion quality sweep; other platforms retain 8.
+/// `LUMA_FOG_TILE_SIZE` overrides it for diagnostic sweeps. Low quality uses
+/// at least [`LOW_TILE_SIZE`]. Near-source transport and truss-shadow
+/// intervals stay at native resolution either way.
+pub(crate) fn default_tile_size() -> u32 {
     static SIZE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *SIZE.get_or_init(|| {
         std::env::var("LUMA_FOG_TILE_SIZE")
@@ -14,6 +15,9 @@ pub(crate) fn tile_size() -> u32 {
             .unwrap_or(if cfg!(target_os = "macos") { 16 } else { 8 })
     })
 }
+
+/// The low-quality far-field cell size in pixels.
+pub(crate) const LOW_TILE_SIZE: u32 = 16;
 
 /// Keep the diagnostic shader variant and its classification dispatch paired.
 pub(crate) fn block_visibility() -> bool {
@@ -53,6 +57,8 @@ pub(crate) fn prelude() -> String {
 /// Retained across blackouts; allocated at viewport size only on first use.
 pub(crate) struct Targets {
     size: [u32; 2],
+    /// Cell size in pixels the grid was allocated for.
+    tile: u32,
     pub(crate) incident: wgpu::TextureView,
     pub(crate) columns: wgpu::TextureView,
     pub(crate) candidates: wgpu::Buffer,
@@ -66,10 +72,10 @@ pub(crate) struct Targets {
 }
 
 impl Targets {
-    pub(crate) fn new(device: &wgpu::Device, viewport: Option<[u32; 2]>) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, viewport: Option<[u32; 2]>, tile: u32) -> Self {
         let size = viewport.unwrap_or([0, 0]);
-        let columns = size[0].div_ceil(tile_size()).max(1);
-        let rows = size[1].div_ceil(tile_size()).max(1);
+        let columns = size[0].div_ceil(tile).max(1);
+        let rows = size[1].div_ceil(tile).max(1);
         let slices = if viewport.is_some() { SLICES } else { 1 };
         let typed_texture = |label, depth, format| {
             device
@@ -109,6 +115,7 @@ impl Targets {
             .create_view(&wgpu::TextureViewDescriptor::default());
         Self {
             size,
+            tile,
             columns: column_info,
             candidates: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("fog-block-candidates"),
@@ -128,9 +135,9 @@ impl Targets {
         }
     }
 
-    pub(crate) fn ensure(&mut self, device: &wgpu::Device, viewport: [u32; 2]) {
-        if self.size != viewport {
-            *self = Self::new(device, Some(viewport));
+    pub(crate) fn ensure(&mut self, device: &wgpu::Device, viewport: [u32; 2], tile: u32) {
+        if self.size != viewport || self.tile != tile {
+            *self = Self::new(device, Some(viewport), tile);
         }
     }
 
@@ -178,8 +185,8 @@ impl Targets {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         let grid_size = [
-            self.size[0].div_ceil(tile_size()),
-            self.size[1].div_ceil(tile_size()),
+            self.size[0].div_ceil(self.tile),
+            self.size[1].div_ceil(self.tile),
             SLICES,
         ];
         Ok(FogBlockStats {

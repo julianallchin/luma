@@ -62,6 +62,16 @@ pub(crate) fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
     Mat4::perspective_rh(field, 1.0, far, near) * view
 }
 
+/// How much a cone's shadow is noticed: its apparent size from the eye scaled
+/// by how bright it is. A close, wide, intense beam ranks first.
+pub(crate) fn shadow_priority(cone: &FixtureCone, eye: Vec3) -> f32 {
+    let half_angle_tan =
+        (1.0 - cone.cos_field * cone.cos_field).max(0.0).sqrt() / cone.cos_field.max(1.0e-3);
+    let radius = cone.range * half_angle_tan;
+    let distance = (cone.position - eye).length().max(0.1);
+    cone.intensity.max(0.0) * (radius * radius) / (distance * distance)
+}
+
 /// Choose which cones get a shadow map this frame, keeping last frame's choice
 /// where it is still defensible.
 ///
@@ -82,13 +92,7 @@ pub(crate) fn assign_shadow_slots(
     /// How much better a challenger must be to take an occupied slot.
     const EVICTION_MARGIN: f32 = 1.25;
 
-    let priority = |cone: &FixtureCone| {
-        let half_angle_tan =
-            (1.0 - cone.cos_field * cone.cos_field).max(0.0).sqrt() / cone.cos_field.max(1.0e-3);
-        let radius = cone.range * half_angle_tan;
-        let distance = (cone.position - eye).length().max(0.1);
-        cone.intensity.max(0.0) * (radius * radius) / (distance * distance)
-    };
+    let priority = |cone: &FixtureCone| shadow_priority(cone, eye);
 
     let mut ranked: Vec<(usize, f32)> = cones
         .iter()
@@ -139,9 +143,14 @@ pub(crate) fn assign_shadow_slots(
 /// Retain visibility by projection and caster geometry, not the compacted
 /// light-list index. Colour/dimmer changes and a blackout must not evict a
 /// stationary emitter's already rendered depth map.
+///
+/// A cone whose projection changed goes back to the free slot last drawn from
+/// its own position (`origins`), so a moving head keeps its previous map. That
+/// is what lets [`budget_redraws`] defer the redraw and keep showing it.
 pub(crate) fn assign_cached_slots(
     cones: &[FixtureCone],
     cache: &[Option<ShadowCacheKey>],
+    origins: &[Option<Vec3>],
     caster_hash: u64,
 ) -> Vec<Option<usize>> {
     let keys: Vec<_> = cones
@@ -166,12 +175,20 @@ pub(crate) fn assign_cached_slots(
         }
     }
     for index in pending {
-        // Prefer empty storage to evicting a currently dark emitter's map.
+        // The same head's previous map first; then empty storage rather than
+        // evicting a currently dark emitter's map.
+        let position = cones[index].position;
         let free = slots
             .iter()
             .enumerate()
             .find_map(|(slot, resident)| {
-                (resident.is_none() && cache[slot].is_none()).then_some(slot)
+                (resident.is_none() && origins.get(slot).copied().flatten() == Some(position))
+                    .then_some(slot)
+            })
+            .or_else(|| {
+                slots.iter().enumerate().find_map(|(slot, resident)| {
+                    (resident.is_none() && cache[slot].is_none()).then_some(slot)
+                })
             })
             .or_else(|| slots.iter().position(Option::is_none));
         if let Some(slot) = free {
@@ -179,6 +196,36 @@ pub(crate) fn assign_cached_slots(
         }
     }
     slots
+}
+
+/// Which dirty maps to redraw this frame, at most `budget` of those that only
+/// moved.
+///
+/// A dirty slot whose stored map was drawn from the same position (`moved`)
+/// can keep showing that map for a few frames: it is the same head's shadow,
+/// a little behind. Those compete for the budget by [`shadow_priority`] times
+/// the frames they have already waited (`age`), so every one is redrawn within
+/// a bounded number of frames. A slot with no map of its own head is always
+/// drawn, because its stored map belongs to a different light.
+pub(crate) fn budget_redraws(
+    dirty: &[bool],
+    moved: &[bool],
+    priority: &[f32],
+    age: &[u32],
+    budget: usize,
+) -> Vec<bool> {
+    let mut ranked: Vec<usize> = (0..dirty.len())
+        .filter(|&slot| dirty[slot] && moved[slot])
+        .collect();
+    let weight = |slot: usize| priority[slot].max(1e-6) * (1 + age[slot]) as f32;
+    ranked.sort_by(|&a, &b| weight(b).total_cmp(&weight(a)).then(a.cmp(&b)));
+    let mut redraw: Vec<bool> = (0..dirty.len())
+        .map(|slot| dirty[slot] && !moved[slot])
+        .collect();
+    for slot in ranked.into_iter().take(budget) {
+        redraw[slot] = true;
+    }
+    redraw
 }
 
 pub(crate) fn shadow_matrix_bits(matrix: &[[f32; 4]; 4]) -> [u32; 16] {
@@ -440,5 +487,79 @@ mod tests {
             moved > 0,
             "the reshuffle should be visible as slots changing tenant"
         );
+    }
+
+    fn spot(position: Vec3, direction: Vec3) -> FixtureCone {
+        FixtureCone {
+            position,
+            range: 20.0,
+            direction,
+            cos_beam: 0.95,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            cos_field: 0.9,
+            wash: 0.0,
+            gobo: 0,
+            gobo_rotation: 0.0,
+            haze_gain: 1.0,
+            lens: crate::luminaire::Lens::POINT,
+        }
+    }
+
+    /// A head that pans returns to the slot its previous map is in, even when
+    /// another slot is empty, so that map can stand in until it is redrawn.
+    #[test]
+    fn a_moving_head_keeps_its_own_slot() {
+        let first = vec![
+            spot(Vec3::new(-2.0, 0.0, 6.0), Vec3::NEG_Z),
+            spot(Vec3::new(2.0, 0.0, 6.0), Vec3::NEG_Z),
+        ];
+        let mut cache = vec![None; 4];
+        let mut origins = vec![None; 4];
+        let slots = assign_cached_slots(&first, &cache, &origins, 7);
+        for (slot, resident) in slots.iter().enumerate() {
+            if let Some(index) = resident {
+                cache[slot] = Some(ShadowCacheKey {
+                    matrix_bits: shadow_matrix_bits(
+                        &fixture_shadow_matrix(&first[*index]).to_cols_array_2d(),
+                    ),
+                    caster_hash: 7,
+                });
+                origins[slot] = Some(first[*index].position);
+            }
+        }
+        // Reverse the list order too: identity is the position, not the index.
+        let panned = vec![
+            spot(
+                Vec3::new(2.0, 0.0, 6.0),
+                Vec3::new(0.3, 0.0, -1.0).normalize(),
+            ),
+            spot(
+                Vec3::new(-2.0, 0.0, 6.0),
+                Vec3::new(-0.3, 0.0, -1.0).normalize(),
+            ),
+        ];
+        let moved = assign_cached_slots(&panned, &cache, &origins, 7);
+        for (slot, resident) in moved.iter().enumerate() {
+            if let Some(index) = resident {
+                assert_eq!(origins[slot], Some(panned[*index].position));
+            }
+        }
+    }
+
+    #[test]
+    fn redraw_budget_defers_only_moved_maps_and_ages_them_in() {
+        let dirty = [true, true, true, true, false];
+        let moved = [false, true, true, true, true];
+        let priority = [0.1, 1.0, 5.0, 2.0, 9.0];
+        let redraw = budget_redraws(&dirty, &moved, &priority, &[0; 5], 1);
+        // A fresh map always draws; one moved map fits, the brightest.
+        assert_eq!(redraw, vec![true, false, true, false, false]);
+        // Waiting raises a dim map above a bright one that just drew.
+        let redraw = budget_redraws(&dirty, &moved, &priority, &[0, 9, 0, 0, 0], 1);
+        assert_eq!(redraw, vec![true, true, false, false, false]);
+        // An unlimited budget draws every dirty map.
+        let all = budget_redraws(&dirty, &moved, &priority, &[0; 5], usize::MAX);
+        assert_eq!(all, dirty.to_vec());
     }
 }

@@ -102,8 +102,31 @@ struct Haze {
     depth: vec4<f32>,
     // x: shadowed fixture count, y: shadow texel size, z: reference tracer sample budget, w: fog-grid radial extent.
     shadow: vec4<f32>,
+    // Render-quality budgets (`gpu::QualityBudget`). x: piece cap for a plain
+    // beam's quadrature, y: shadow-walk footprint scale, z: shadow-walk step
+    // scale, w: unused.
+    quality: vec4<f32>,
     medium: ProceduralMedium,
 };
+
+// Which beams a haze pipeline integrates. Wide beams may run in their own
+// reduced-resolution pass; the two routes partition the beams, so every beam
+// is integrated once. A pipeline constant, not a uniform: the branch in the
+// light loop cost the unsplit pass a quarter of its time even when uniform.
+const BEAM_ROUTE_ALL: u32 = 0u;
+const BEAM_ROUTE_NARROW: u32 = 1u;
+const BEAM_ROUTE_WIDE: u32 = 2u;
+override BEAM_ROUTE: u32 = BEAM_ROUTE_ALL;
+// A beam whose field is wider than 35 degrees (half-angle 17.5) is wide.
+const WIDE_BEAM_COS: f32 = 0.9537;
+
+// Whether this pass integrates light `li`. Gobos keep native resolution.
+fn beam_routed(li: u32) -> bool {
+    if BEAM_ROUTE == BEAM_ROUTE_ALL { return true; }
+    let rest = light_rest[li];
+    let wide = rest.cos_field < WIDE_BEAM_COS && rest.gobo < 0.5;
+    return wide == (BEAM_ROUTE == BEAM_ROUTE_WIDE);
+}
 
 struct FixtureShadowMatrix {
     view_proj: mat4x4<f32>,
@@ -633,6 +656,24 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     return acc * sigma;
 }
 
+// Cloudiness from which the density field's metre-scale structure is worth a
+// piece per half cloud size along the whole interval.
+const DETAIL_CLOUDINESS: f32 = 0.5;
+
+// Gauss-Legendre pieces for an interval of `lit_interval`. Pieces follow the
+// equiangular span (0.4 rad each) and, in strongly cloudy haze, half the cloud
+// size. A plain beam in gentle haze is capped at `haze.quality.x` pieces: its
+// integrand is smooth apart from the cloud field's low contrast, and the cap
+// keeps long spans from paying for detail the image cannot show. Gobo beams
+// use the stochastic estimator and never reach this budget.
+fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
+    let angular = (th1 - th0) / 0.4;
+    let cloud = (b - a) / max(haze.medium.shape.y * 0.5, 0.1);
+    let full = clamp(u32(ceil(max(cloud, angular))), 1u, 32u);
+    if haze.medium.shape.x >= DETAIL_CLOUDINESS { return full; }
+    return min(full, max(u32(haze.quality.x), u32(ceil(angular))));
+}
+
 // Integrate a visible interval with Gauss-Legendre quadrature in equiangular
 // coordinates. Shadow boundaries are supplied by the shadow-map traversal.
 fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
@@ -645,7 +686,7 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
     let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
-    let pieces = clamp(u32(ceil(max((b - a) / max(haze.medium.shape.y * 0.5, 0.1), (th1 - th0) / 0.4))), 1u, 32u);
+    let pieces = quadrature_pieces(a, b, th0, th1);
     if HAZE_WORK_COUNTS { haze_work[5] += pieces * 4u; }
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
@@ -713,6 +754,8 @@ fn lit_counted(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
 // walked SHADOW_SOFT_STEPS doubles it every SHADOW_DOUBLING_STEPS, so a ray
 // that crosses many shadow edges near a source degrades to coarser blocks
 // instead of walking every texel; after SHADOW_HARD_STEPS no block is refined.
+// `haze.quality.y` scales the footprint and `haze.quality.z` both step counts;
+// both are one at high quality.
 const SHADOW_FOOTPRINT_CHORD: f32 = 1.0;
 const SHADOW_SOFT_STEPS: i32 = 24;
 const SHADOW_DOUBLING_STEPS: f32 = 4.0;
@@ -800,16 +843,18 @@ fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f3
     let ray_ndc = vec2<f32>(ray.uv.x * 2.0 - 1.0, 1.0 - ray.uv.y * 2.0);
     let beside = normalize(world_from_ndc(vec3<f32>(ray_ndc.x + 2.0 / haze.transport.w, ray_ndc.y, 0.5))
         - haze.camera_pos.xyz);
-    let footprint_per_metre = length(beside - ray.dir) * SHADOW_FOOTPRINT_CHORD;
+    let footprint_per_metre = length(beside - ray.dir) * SHADOW_FOOTPRINT_CHORD * haze.quality.y;
+    let soft_steps = i32(f32(SHADOW_SOFT_STEPS) * haze.quality.z);
+    let hard_steps = i32(f32(SHADOW_HARD_STEPS) * haze.quality.z);
     var deficit = 0.0;
     // Each accepted block crosses at least one monotone texel coordinate.
     // A clipped projected line cannot visit more than width + height cells.
     for (var iteration = 0; iteration < dims.x + dims.y + 2; iteration += 1) {
         if t >= span.y { break; }
         if HAZE_WORK_COUNTS { haze_work[2] += 1u; }
-        let capped = iteration >= SHADOW_HARD_STEPS;
+        let capped = iteration >= hard_steps;
         let footprint = t * footprint_per_metre
-            * exp2(f32(max(iteration - SHADOW_SOFT_STEPS, 0)) / SHADOW_DOUBLING_STEPS);
+            * exp2(f32(max(iteration - soft_steps, 0)) / SHADOW_DOUBLING_STEPS);
         var coverage = -1.0;
         if any(cell < vec2<i32>(0)) || any(cell >= dims) {
             // Only boundary roundoff can leave the already-clipped map span.

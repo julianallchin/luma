@@ -449,7 +449,7 @@ impl State {
         }
         let config = CacheConfig {
             slot_capacity: slot_capacity.clamp(1, MAX_SHADOW_SLOTS),
-            tile_size: crate::fog_grid::tile_size(),
+            tile_size: global.tile_size,
             block_side: crate::fog_grid::BLOCK_SIDE,
             slices: crate::fog_grid::SLICES,
             payload_pool_bytes: PAYLOAD_POOL_BYTES,

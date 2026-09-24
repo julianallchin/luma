@@ -401,8 +401,8 @@ pub struct LightIndexPipelines {
     build_layout: wgpu::BindGroupLayout,
     prepass: wgpu::ComputePipeline,
     fill: wgpu::ComputePipeline,
-    surface_layout: wgpu::BindGroupLayout,
-    surface_fill: wgpu::ComputePipeline,
+    /// `surface_fill` over a single-sampled (0) or multisampled (1) depth.
+    surface: [(wgpu::BindGroupLayout, wgpu::ComputePipeline); 2],
     /// Depth buckets `surface_fill` was compiled for; see [`surface_depth_split`].
     surface_split: u32,
     count_layout: wgpu::BindGroupLayout,
@@ -578,38 +578,63 @@ impl LightIndexPipelines {
             })
         };
 
-        let surface_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("surface-light-index"),
-            entries: &[
-                entry(0, wgpu::ShaderStages::COMPUTE, uniform),
-                entry(1, wgpu::ShaderStages::COMPUTE, storage(true)),
-                entry(3, wgpu::ShaderStages::COMPUTE, storage(false)),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: true,
+        // Index 0 reads a single-sampled surface depth, index 1 the
+        // multisampled one; the scene pass's sample count picks.
+        let surface = [false, true].map(|multisampled| {
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("surface-light-index"),
+                entries: &[
+                    entry(0, wgpu::ShaderStages::COMPUTE, uniform),
+                    entry(1, wgpu::ShaderStages::COMPUTE, storage(true)),
+                    entry(3, wgpu::ShaderStages::COMPUTE, storage(false)),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                entry(5, wgpu::ShaderStages::COMPUTE, storage(false)),
-            ],
-        });
-        let surface_fill = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("surface-light-index"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("surface-light-index"),
-                    bind_group_layouts: &[Some(&surface_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            module: &module,
-            entry_point: Some("surface_fill"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
+                    entry(5, wgpu::ShaderStages::COMPUTE, storage(false)),
+                ],
+            });
+            let single;
+            let module = if multisampled {
+                &module
+            } else {
+                // The same kernel over a plain texture: one sample, loaded
+                // from mip level zero.
+                single = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("light-index-build-single"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        format!(
+                            "const NARROW_PHASE: bool = {NARROW_PHASE};\nconst SURFACE_SPLIT: u32 = {surface_split}u;\n{}",
+                            include_str!("shaders/light_index_build.wgsl")
+                                .replace("texture_multisampled_2d<f32>", "texture_2d<f32>")
+                                .replace("textureNumSamples(surface_depth)", "1u")
+                        )
+                        .into(),
+                    ),
+                });
+                &single
+            };
+            let fill = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("surface-light-index"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("surface-light-index"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                module,
+                entry_point: Some("surface_fill"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+            (layout, fill)
         });
 
         // Profiler-only fragment counting: its own pass and layout so the
@@ -661,8 +686,7 @@ impl LightIndexPipelines {
         Self {
             prepass: pipeline("big_tile_prepass"),
             fill: pipeline("tile_fill"),
-            surface_layout,
-            surface_fill,
+            surface,
             surface_split,
             consumer_layout,
             build_layout,
@@ -957,15 +981,17 @@ impl LightIndex {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         surface_depth: &wgpu::TextureView,
+        multisampled: bool,
         timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
+        let (layout, fill) = &pipelines.surface[usize::from(multisampled)];
         let sized = self
             .sized
             .as_ref()
             .expect("light index built before surface refinement");
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("surface-light-index"),
-            layout: &pipelines.surface_layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -993,7 +1019,7 @@ impl LightIndex {
             label: Some("surface-light-index"),
             timestamp_writes: timestamps,
         });
-        pass.set_pipeline(&pipelines.surface_fill);
+        pass.set_pipeline(fill);
         pass.set_bind_group(0, &group, &[]);
         pass.dispatch_workgroups(sized.columns, sized.rows, 1);
     }

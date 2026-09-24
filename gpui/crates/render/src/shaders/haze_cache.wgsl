@@ -120,7 +120,7 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
     let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
-    let pieces = clamp(u32(ceil(max((b - a) / max(haze.medium.shape.y * 0.5, 0.1), (th1 - th0) / 0.4))), 1u, 32u);
+    let pieces = quadrature_pieces(a, b, th0, th1);
     if HAZE_WORK_COUNTS { haze_work[5] += pieces; }
     var nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     var weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
