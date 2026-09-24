@@ -1,11 +1,15 @@
 //! Named physically based materials, and which one each bundled mesh wears.
 //!
 //! Every surface the renderer draws takes its constants from this table: the
-//! generated truss, the fixture housings, the venue floor, and the bundled
-//! stage-lab meshes. The table is the single source of those numbers. A mesh's
-//! own glTF constants are used only where the table names nothing: the DJ
-//! gear and speaker art, whose authored values are already plausible and
-//! whose logos and screen prints are textures.
+//! generated truss, the fixture housings, the venue floor, the DJ gear and the
+//! bundled stage-lab meshes. The table is the single source of those numbers.
+//! A mesh's own glTF constants are used only where the table names nothing:
+//! the speaker art, and the mixer's red accents.
+//!
+//! The DJ gear is in the table because its `SketchUp` export carries one flat
+//! finish for everything (roughness 0.85, near-black factors multiplied onto
+//! already-dark photo prints, for an albedo under 0.01) and no emission, so a
+//! player read as unlit matte plastic with a dead screen.
 //!
 //! Values are linear base colour (albedo for a dielectric, F0 for a metal),
 //! metalness and perceptual roughness, in the ranges measured for the real
@@ -16,8 +20,10 @@
 //! | [`ALUMINIUM`] | 0.91, 0.92, 0.92 | 1 | 0.38 |
 //! | [`STEEL`] | 0.56, 0.57, 0.58 | 1 | 0.5 |
 //! | [`POWDER_COAT`] | 0.03 | 0 | 0.5 |
-//! | [`DECK`] | 0.05 | 0 | 0.7 |
+//! | [`CARPET`] | 0.05 | 0 | 0.95 |
+//! | [`PLASTIC`] | 0.035 | 0 | 0.45 |
 //! | [`RUBBER`] | 0.02 | 0 | 0.9 |
+//! | [`SCREEN`] | 0.01 | 0 | 0.1 |
 //! | [`LED_FACE`] | 0.02 | 0 | 0.25 |
 //! | [`VENUE_FLOOR`] | 0.035 | 0 | 0.55 |
 //! | [`GROUND`] | the sky's ground albedo | 0 | 0.95 |
@@ -25,7 +31,9 @@
 //! A textured primitive keeps its texture as detail. The preset then sets the
 //! texture's *mean*: the factor becomes the preset colour divided by the
 //! texture's mean linear colour, so a carpet or brushed-metal map varies the
-//! surface around the preset instead of darkening or tinting it.
+//! surface around the preset instead of darkening or tinting it. A preset with
+//! an emissive colour glows with the primitive's own print, so a screen shows
+//! its picture.
 
 use glam::Vec3;
 
@@ -56,14 +64,36 @@ pub const POWDER_COAT: Material = Material {
     ..PLAIN
 };
 
-/// Black painted stage deck top.
-pub const DECK: Material = Material {
+/// Charcoal plush carpet: the deck tops. Fibre is a diffuser, so
+/// nearly no sheen.
+pub const CARPET: Material = Material {
     base_color: Vec3::splat(0.05),
-    roughness: 0.7,
+    roughness: 0.95,
     ..PLAIN
 };
 
-/// Black rubber: cable cover bodies.
+/// Black moulded ABS: DJ player and mixer housings, printed panels and knobs.
+/// Satin, so the sky and a wash draw soft highlights along its edges.
+pub const PLASTIC: Material = Material {
+    base_color: Vec3::splat(0.035),
+    roughness: 0.45,
+    ..PLAIN
+};
+
+/// An LCD behind glass: a dark, glossy face that emits its own picture.
+///
+/// The emissive factor multiplies the print (see [`apply`]); it is in the
+/// same display units as [`LED_FACE`]'s pixels, which glow at 5, and is set
+/// so a screen reads in a dark room without blooming and stays legible,
+/// though washed, in daylight.
+pub const SCREEN: Material = Material {
+    base_color: Vec3::splat(0.01),
+    roughness: 0.1,
+    emissive: Vec3::splat(1.5),
+    ..PLAIN
+};
+
+/// Black rubber: cable cover bodies and equipment feet.
 pub const RUBBER: Material = Material {
     base_color: Vec3::splat(0.02),
     roughness: 0.9,
@@ -126,16 +156,57 @@ const MESHES: &[(&str, &[(&str, Material)])] = &[
         "stage_lab/speaker_stand.glb",
         &[("[Color_008]1", POWDER_COAT)],
     ),
+    ("stage_lab/cdj_3000x.glb", CDJ_PARTS),
+    ("stage_lab/mixer_djm_a9.glb", MIXER_PARTS),
 ];
 
+/// A CDJ-3000: rubber feet, the screen, and moulded plastic for the rest —
+/// body, top plate print (jog wheel included; the export does not separate
+/// it), front panel print, encoder and the labels.
+const CDJ_PARTS: &[(&str, Material)] = &[
+    ("M08_Obsidian_Black", RUBBER),
+    ("[Color M08]29", PLASTIC),
+    ("M09_Shadow_Night", PLASTIC),
+    ("Screenshot_102", PLASTIC),
+    ("<auto>26", PLASTIC),
+    ("(21) 99064-4321", PLASTIC),
+    ("*248", PLASTIC),
+    ("*249", PLASTIC),
+    ("CDJ-2000-top1", PLASTIC),
+    ("Screenshot_104", SCREEN),
+    ("__skp_image_0", PLASTIC),
+];
+
+/// A DJM-A9: plastic body, prints and knobs. `<Red>` keeps its authored
+/// accent colour.
+const MIXER_PARTS: &[(&str, Material)] = &[
+    ("DJM-A9-cgi-rear-pc", PLASTIC),
+    ("Material220", PLASTIC),
+    ("DJM-A9-cgi-front-pc", PLASTIC),
+    ("Material218", PLASTIC),
+    ("Material217", PLASTIC),
+    ("DJM-A9-cgi-top-pc", PLASTIC),
+    ("Material219", PLASTIC),
+    ("__skp_image_0", PLASTIC),
+];
+
+/// Textures whose contrast is compressed toward their mean, by material name,
+/// as the exponent applied to each texel's luminance ratio to the mean: 1
+/// keeps the map, 0 flattens it.
+///
+/// The deck carpet is a stock `SketchUp` plush map: 10:1 between its 5th and
+/// 95th percentile texels in linear light, far more than a real carpet at
+/// arm's length, so the tabletop read as coarse gravel. At 0.4 it is 2.5:1.
+const DETAIL: &[(&str, f32)] = &[("[Carpet Plush Charcoal]", 0.4)];
+
 /// The two stage decks share one material set: aluminium legs and frame, a
-/// charcoal-painted base frame, and a black top. The top's carpet map and
+/// charcoal-painted base frame, and a carpeted top. The top's carpet map and
 /// the frame's brushed-metal map stay on as detail.
 const DECK_PARTS: &[(&str, Material)] = &[
     ("[Metal Silver]1", ALUMINIUM),
     ("_default_", ALUMINIUM),
     ("[0136_Charcoal]2", POWDER_COAT),
-    ("[Carpet Plush Charcoal]", DECK),
+    ("[Carpet Plush Charcoal]", CARPET),
 ];
 
 /// Every fixture body is one bundled mesh under this directory, and every one
@@ -163,6 +234,18 @@ fn preset(asset: &str, name: Option<&str>) -> Option<Material> {
 /// it (the lit stage, the builder's ghost, the golden captures) wears the same
 /// finish.
 pub(crate) fn apply(asset: &str, glb: &mut Glb) {
+    let mut flattened = Vec::new();
+    for primitive in &glb.primitives {
+        let detail = DETAIL
+            .iter()
+            .find(|(name, _)| primitive.material_name.as_deref() == Some(*name));
+        if let (Some(&(_, detail)), Some(image)) = (detail, primitive.base_color_image) {
+            if !flattened.contains(&image) {
+                flatten(&mut glb.images[image], detail);
+                flattened.push(image);
+            }
+        }
+    }
     for primitive in &mut glb.primitives {
         let Some(preset) = preset(asset, primitive.material_name.as_deref()) else {
             continue;
@@ -177,19 +260,51 @@ pub(crate) fn apply(asset: &str, glb: &mut Glb) {
             occlusion_strength: primitive.material.occlusion_strength,
             ..preset
         };
+        if preset.emissive != Vec3::ZERO && primitive.emissive_image.is_none() {
+            primitive.emissive_image = primitive.base_color_image;
+        }
     }
+}
+
+/// Compress `image`'s contrast toward its mean: each texel's luminance ratio
+/// to the mean is raised to `detail`, hue kept.
+fn flatten(image: &mut Image, detail: f32) {
+    let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    let mean = luminance(mean_linear(image)).max(1e-4);
+    let rgba: Vec<u8> = image
+        .rgba
+        .chunks_exact(4)
+        .flat_map(|px| {
+            let c = Vec3::new(decode(px[0]), decode(px[1]), decode(px[2]));
+            let y = luminance(c).max(1e-5);
+            let c = c * (y / mean).powf(detail - 1.0);
+            [encode(c.x), encode(c.y), encode(c.z), px[3]]
+        })
+        .collect();
+    image.rgba = rgba.into();
+}
+
+fn decode(c: u8) -> f32 {
+    let c = f32::from(c) / 255.0;
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn encode(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round() as u8
 }
 
 /// Mean linear RGB of an sRGB-encoded image.
 fn mean_linear(image: &Image) -> Vec3 {
-    let decode = |c: u8| {
-        let c = f32::from(c) / 255.0;
-        if c <= 0.040_45 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
     let mut sum = Vec3::ZERO;
     let mut count = 0.0;
     for pixel in image.rgba.chunks_exact(4) {
@@ -209,7 +324,7 @@ mod tests {
 
     use glam::Vec3;
 
-    use super::{mean_linear, ALUMINIUM, DECK, FIXTURE_MESHES, MESHES, POWDER_COAT};
+    use super::{mean_linear, ALUMINIUM, CARPET, FIXTURE_MESHES, MESHES, POWDER_COAT};
     use crate::assets::Library;
 
     fn meshes() -> PathBuf {
@@ -260,7 +375,7 @@ mod tests {
             };
             let mean = primitive.material.base_color * mean_linear(&glb.images[image]);
             let preset = match primitive.material_name.as_deref() {
-                Some("[Carpet Plush Charcoal]") => DECK,
+                Some("[Carpet Plush Charcoal]") => CARPET,
                 Some("[Metal Silver]1") => ALUMINIUM,
                 other => panic!("unexpected textured deck part {other:?}"),
             };
@@ -273,6 +388,38 @@ mod tests {
             seen += 1;
         }
         assert_eq!(seen, 2);
+    }
+
+    /// A CDJ's screen glows with its own picture; its housing does not glow.
+    #[test]
+    fn screens_emit_their_print() {
+        let mut library = Library::new(meshes());
+        let glb = library.get("stage_lab/cdj_3000x.glb").unwrap();
+        for primitive in &glb.primitives {
+            let screen = primitive.material_name.as_deref() == Some("Screenshot_104");
+            assert_eq!(primitive.material.emissive != Vec3::ZERO, screen);
+            if screen {
+                assert_eq!(primitive.emissive_image, primitive.base_color_image);
+            }
+        }
+    }
+
+    /// The deck carpet's weave is compressed toward its mean.
+    #[test]
+    fn carpet_detail_is_flattened() {
+        let mut library = Library::new(meshes());
+        let glb = library.get("stage_lab/stage_praticavel_2x1x1.glb").unwrap();
+        let carpet = glb
+            .primitives
+            .iter()
+            .find(|p| p.material_name.as_deref() == Some("[Carpet Plush Charcoal]"))
+            .unwrap();
+        let image = &glb.images[carpet.base_color_image.unwrap()];
+        let mut values: Vec<u8> = image.rgba.chunks_exact(4).map(|px| px[1]).collect();
+        values.sort_unstable();
+        let at = |q: f32| super::decode(values[(q * (values.len() - 1) as f32) as usize]);
+        let spread = at(0.95) / at(0.05);
+        assert!(spread < 3.5, "5-95% linear spread {spread}");
     }
 
     /// Nothing in the table is outside the physically measured ranges: no
