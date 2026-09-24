@@ -88,7 +88,13 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .p(px(14.))
         .gap(px(12.))
         .child(float::label("View settings"))
-        .child(environment_card(state.venue_environment(), app))
+        .child(section(
+            "Environment",
+            environment_card(state.venue_environment(), app),
+        ))
+        .when_some(sun_rows(state.venue_environment(), app), |card, sun| {
+            card.child(float::divider()).child(section("Sun", sun))
+        })
         .child(float::divider())
         .child(super::view_controls(state, app));
     for error in [
@@ -329,7 +335,9 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                     if indoor {
                         VenueEnvironment::indoor(fraction)
                     } else {
+                        // The dial moves the sun up and down, not round.
                         VenueEnvironment::outdoor(fraction * 180. - 90.)
+                            .with_sun_azimuth(environment.sun_azimuth_deg())
                     },
                     cx,
                 )
@@ -624,3 +632,66 @@ fn environment_card(environment: VenueEnvironment, app: &Entity<Luma>) -> AnyEle
         .into_any_element()
 }
 const ENVIRONMENT_DEFAULT_SUN_DEG: f32 = 40.;
+
+/// A titled group of rows on the View settings card: the card's quiet
+/// [`float::label`] over the rows it names.
+pub(super) fn section(title: &'static str, rows: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(float::label(title))
+        .child(rows)
+}
+
+/// Where an open-air venue's sun is, as two rows in degrees. `None` indoors,
+/// where there is no sun.
+///
+/// Both write the venue's environment, the same synced value the dock's time
+/// of day slider writes, and each keeps the other angle as it is.
+fn sun_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> {
+    if !matches!(environment, VenueEnvironment::Outdoor { .. }) {
+        return None;
+    }
+    let elevation = app.clone();
+    let azimuth = app.clone();
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(super::scrub_row(
+                "Sun elevation (°)",
+                environment.sun_elevation_deg(),
+                -90.0..=90.0,
+                1.0,
+                1.0,
+                move |deg, cx| {
+                    elevation.update(cx, |this, cx| {
+                        let Some(now) = this.visualizer_mut().map(|s| s.venue_environment()) else {
+                            return;
+                        };
+                        this.set_visualizer_environment(
+                            VenueEnvironment::outdoor(deg).with_sun_azimuth(now.sun_azimuth_deg()),
+                            cx,
+                        );
+                    });
+                },
+            ))
+            .child(super::scrub_row(
+                "Sun azimuth (°)",
+                environment.sun_azimuth_deg(),
+                0.0..=360.0,
+                1.0,
+                1.0,
+                move |deg, cx| {
+                    azimuth.update(cx, |this, cx| {
+                        let Some(now) = this.visualizer_mut().map(|s| s.venue_environment()) else {
+                            return;
+                        };
+                        this.set_visualizer_environment(now.with_sun_azimuth(deg), cx);
+                    });
+                },
+            )),
+    )
+}

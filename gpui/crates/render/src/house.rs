@@ -175,7 +175,10 @@ pub fn fill(env: VenueEnvironment) -> Fill {
             // instead of quietly showing an invented sunset.
             environment: Environment::DARK,
             sun: None,
-            sky: Some(SkyParams::outdoor(env.sun_elevation_deg())),
+            sky: Some(SkyParams::outdoor(
+                env.sun_elevation_deg(),
+                env.sun_azimuth_deg(),
+            )),
         },
     }
 }
@@ -445,6 +448,16 @@ mod tests {
             fill.sky.expect("open air has a sky").sun_elevation_deg,
             37.0
         );
+    }
+
+    #[test]
+    fn outdoors_the_sky_takes_the_venue_sun_azimuth() {
+        let sky = fill(VenueEnvironment::outdoor(20.0).with_sun_azimuth(135.0))
+            .sky
+            .expect("open air has a sky");
+        assert_eq!(sky.sun_azimuth_deg, 135.0);
+        let default = fill(VenueEnvironment::outdoor(20.0)).sky.expect("sky");
+        assert_eq!(default.sun_azimuth_deg, SkyParams::DUSK.sun_azimuth_deg);
     }
 
     #[test]
