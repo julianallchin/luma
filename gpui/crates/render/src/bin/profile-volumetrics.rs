@@ -608,13 +608,26 @@ fn profile_catalogue(
         .ok_or_else(|| anyhow::anyhow!("empty catalogue"))?;
     let (width, height) = catalogue.frame_size();
     let mut library = Library::new(git_repository_root()?.join("resources/meshes"));
+    // `--color=r,g,b` and `--dimmer=` replace the full red cue.
+    let color = match arguments.iter().find_map(|a| a.strip_prefix("--color=")) {
+        Some(spec) => {
+            let parts: Vec<f32> = spec.split(',').map(str::parse).collect::<Result<_, _>>()?;
+            anyhow::ensure!(parts.len() == 3, "--color takes r,g,b");
+            [parts[0], parts[1], parts[2]]
+        }
+        None => [1.0, 0.03, 0.01],
+    };
+    let dimmer: f32 = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--dimmer="))
+        .map_or(Ok(1.0), str::parse)?;
     let mut frame = build_frame_with(
         scene,
         &catalogue.definitions,
         &|_, _| {
             Some(luma_render::scene_desc::PrimitiveState {
-                dimmer: 1.0,
-                color: [1.0, 0.03, 0.01],
+                dimmer,
+                color,
                 strobe: 0.0,
                 position: [0.0, 0.0],
                 gobo: 0,
@@ -636,13 +649,36 @@ fn profile_catalogue(
     let framing = scene.framing(&catalogue.definitions);
     let viewfinder = luma_scene::Viewfinder::new(50.0, width as f32 / height as f32)
         .open_air(scene.render.sky.is_some());
-    let camera =
-        luma_scene::Camera::for_view("quarter_right".parse()?, &framing, None, &viewfinder);
+    let view = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--view="))
+        .unwrap_or("quarter_right");
+    let camera = luma_scene::Camera::for_view(view.parse()?, &framing, None, &viewfinder);
     frame.camera = luma_render::frame::Camera {
         eye: camera.position(),
         target: camera.target,
         fov_y_deg: camera.fov_y_deg,
     };
+    // `--look=stage` renders through the post chain's live default;
+    // `--look=<json>` takes any `Look`. Absent keeps the saved scene's.
+    match arguments.iter().find_map(|a| a.strip_prefix("--look=")) {
+        Some("stage") => frame.look = luma_render::scene_desc::Look::STAGE,
+        Some("neutral") => frame.look = luma_render::scene_desc::Look::NEUTRAL,
+        Some(json) => frame.look = serde_json::from_str(json)?,
+        None => {}
+    }
+    // `--aim=F` turns every beam a fraction F of the way from its own axis
+    // toward the camera: 1 puts the camera on every beam's axis.
+    if let Some(aim) = arguments.iter().find_map(|a| a.strip_prefix("--aim=")) {
+        let aim: f32 = aim.parse()?;
+        for cone in &mut frame.fixture_cones {
+            let to_eye = (frame.camera.eye - cone.position).normalize_or_zero();
+            cone.direction = cone
+                .direction
+                .lerp(to_eye, aim)
+                .normalize_or(cone.direction);
+        }
+    }
     let enabled = std::env::var_os("LUMA_GEOMETRY_SHADOWS").is_some_and(|v| v == "1");
     let mut renderer = Renderer::new_profiled()?;
     renderer.set_geometry_shadows(enabled);
@@ -727,6 +763,9 @@ fn profile_catalogue(
         "warmup_frames": warmup, "measured_frames": measured,
         "cones": frame.fixture_cones.len(), "opaque_draws": opaque,
         "opaque_triangles": frame.draws.iter().take(opaque).map(|d| frame.meshes[d.mesh].indices.len()/3).sum::<usize>(),
+        "look": serde_json::to_value(frame.look)?,
+        "metered_ev": renderer.metered_exposure().ok(),
+        "post_passes": post_pass_summary(&samples),
         "gpu_total": summarize(samples.iter().map(|s| s.gpu_total_ms)),
         "gpu_scene": summarize(samples.iter().map(|s| s.gpu_scene_ms)),
         "gpu_fog_grid": summarize(samples.iter().map(|s| s.gpu_fog_grid_ms)),
@@ -1406,6 +1445,7 @@ fn frame_with_lights(
         haze_resolution: base.haze_resolution,
         time: 0.0,
         debug_view: base.debug_view,
+        look: base.look,
         camera: base.camera,
     };
     for index in 0..count {
@@ -1427,4 +1467,30 @@ fn frame_with_lights(
         });
     }
     frame
+}
+
+/// Median duration of each post-chain pass, summed over its repeats in a
+/// frame. Needs `LUMA_PROFILE_DETAIL=1`; empty otherwise. Brackets can
+/// overlap on some backends, so these are per-pass costs, not a partition.
+fn post_pass_summary(samples: &[luma_render::FrameTimings]) -> serde_json::Value {
+    let mut per_pass: std::collections::BTreeMap<&'static str, Vec<f64>> = Default::default();
+    for sample in samples {
+        let mut frame: std::collections::BTreeMap<&'static str, f64> = Default::default();
+        for pass in &sample.passes {
+            if pass.name.starts_with("post-") || pass.name == "composite" {
+                *frame.entry(pass.name).or_default() += pass.end_ms - pass.start_ms;
+            }
+        }
+        for (name, ms) in frame {
+            per_pass.entry(name).or_default().push(ms);
+        }
+    }
+    per_pass
+        .into_iter()
+        .map(|(name, mut values)| {
+            values.sort_by(f64::total_cmp);
+            (name.to_owned(), serde_json::json!(values[values.len() / 2]))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
