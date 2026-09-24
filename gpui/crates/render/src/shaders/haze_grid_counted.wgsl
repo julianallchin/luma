@@ -100,7 +100,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
             let d2 = dot(q, q);
             let dist = sqrt(d2);
             if dist >= core.range || dist <= FOG_SOURCE_INNER { continue; }
-            let angular = angular_profile(dot(q, rest.direction) / max(dist, 1e-4), rest.cos_beam, rest.cos_field);
+            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             gc[11] += 1u;
             var visibility = 1.0;

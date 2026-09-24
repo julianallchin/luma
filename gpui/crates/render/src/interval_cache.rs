@@ -38,6 +38,8 @@ pub(crate) struct SlotKey {
     /// shadow key only carries their clamped, derived forms.
     pub range: u32,
     pub cos_field: u32,
+    /// Virtual-apex distance: `beam_span` clips the span at the lens plane.
+    pub lens_distance: u32,
     pub wash: u32,
     /// Whether the cone scatters at all; a non-scattering cone never traverses
     /// and therefore never writes its region.
@@ -415,6 +417,7 @@ mod tests {
             },
             range: 1,
             cos_field: 2,
+            lens_distance: 0,
             wash: 3,
             scatters: true,
             rect,

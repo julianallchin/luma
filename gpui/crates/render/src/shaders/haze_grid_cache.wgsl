@@ -80,7 +80,7 @@ fn light_grid(
             let d2 = dot(q, q);
             let dist = sqrt(d2);
             if dist >= core.range || dist <= FOG_SOURCE_INNER { continue; }
-            let angular = angular_profile(dot(q, rest.direction) / max(dist, 1e-4), rest.cos_beam, rest.cos_field);
+            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             var visibility = 1.0;
             if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u && !PROFILE_SKIP_GRID_SHADOW_TESTS {

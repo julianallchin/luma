@@ -129,9 +129,12 @@ fn classify_blocks(@builtin(global_invocation_id) cell: vec3<u32>,
             let q = center - core.position;
             let distance = length(q);
             if distance > radius + core.range || distance + radius <= FOG_SOURCE_INNER { continue; }
-            let axial = dot(q, rest.direction);
+            // The cone test is from the virtual apex behind the lens, whose
+            // cone contains the beam; with a point source it is the lens.
+            let axial = dot(q, rest.direction) + rest.lens_distance;
             if rest.cos_field >= 0.0 {
-                let perpendicular = sqrt(max(dot(q,q) - axial * axial, 0.0));
+                let from_apex = q + rest.direction * rest.lens_distance;
+                let perpendicular = sqrt(max(dot(from_apex, from_apex) - axial * axial, 0.0));
                 let sine = sqrt(max(1.0 - rest.cos_field * rest.cos_field, 0.0));
                 if axial < -radius || rest.cos_field * perpendicular - axial * sine > radius { continue; }
             }

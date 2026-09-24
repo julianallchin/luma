@@ -29,12 +29,19 @@ pub(crate) struct ShadowCacheKey {
     pub(crate) caster_hash: u64,
 }
 
-/// Near/far planes of a cone's shadow projection. One home: the matrix and the
-/// shader-side depth linearisation must agree on these numbers exactly.
+/// Near/far planes of a cone's shadow projection, measured from the virtual
+/// apex. One home: the matrix and the shader-side depth linearisation must
+/// agree on these numbers exactly.
+///
+/// The near plane sits at the lens: nothing between the virtual apex and the
+/// lens — the inside of the fixture — casts into its own beam. A lens closer to
+/// the apex than the precision floor keeps the floor, as a point source does.
+/// The far plane is the lens range carried back to the apex.
 pub(crate) fn fixture_shadow_planes(light: &FixtureCone) -> (f32, f32) {
-    let far = light.range.clamp(0.05, 100.0);
-    let near = (far * 0.0025).clamp(0.01, 0.1).min(far * 0.5);
-    (near, far)
+    let reach = light.range.clamp(0.05, 100.0);
+    let lens = light.lens_distance();
+    let near = (reach * 0.0025).clamp(0.01, 0.1).min(reach * 0.5).max(lens);
+    (near, reach + lens)
 }
 
 pub(crate) fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
@@ -44,7 +51,10 @@ pub(crate) fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
     } else {
         Vec3::Z
     };
-    let view = Mat4::look_at_rh(light.position, light.position + direction, up);
+    // Projected from the virtual apex, so the map's frustum is the beam's own
+    // cone: lens-wide at the near plane.
+    let apex = light.apex();
+    let view = Mat4::look_at_rh(apex, apex + direction, up);
     let field = (2.0 * light.cos_field.clamp(-0.98, 0.9999).acos())
         .clamp(1.0_f32.to_radians(), 170.0_f32.to_radians());
     let (near, far) = fixture_shadow_planes(light);
@@ -247,6 +257,63 @@ mod tests {
     use super::*;
     use crate::frame::FixtureCone;
     use glam::Vec3;
+
+    /// The shadow map is the beam's own frustum: projected from the virtual
+    /// apex, its near plane is the lens and its side planes pass through the
+    /// lens rim. So the map cannot see the inside of the fixture, and it covers
+    /// the whole lens-wide beam from the glass on.
+    #[test]
+    fn a_lens_shadow_frustum_starts_at_the_lens_and_is_lens_wide_there() {
+        let half = 3f32.to_radians();
+        let light = FixtureCone {
+            position: Vec3::new(1.0, 2.0, 6.0),
+            range: 20.0,
+            direction: Vec3::NEG_Z,
+            cos_beam: (half * 0.6).cos(),
+            color: Vec3::ONE,
+            intensity: 1.0,
+            cos_field: half.cos(),
+            wash: 0.0,
+            gobo: 0,
+            gobo_rotation: 0.0,
+            haze_gain: 1.0,
+            lens: crate::luminaire::Lens { radius: 0.15 },
+        };
+        let lens = light.lens_distance();
+        let (near, far) = fixture_shadow_planes(&light);
+        assert_eq!(near, lens, "the near plane is the lens plane");
+        assert!((far - (light.range + lens)).abs() < 1e-4);
+        let matrix = fixture_shadow_matrix(&light);
+        let ndc = |p: Vec3| matrix.project_point3(p);
+        // Reverse-Z: the lens plane is depth 1, the far plane depth 0.
+        assert!((ndc(light.position).z - 1.0).abs() < 1e-4);
+        // The lens rim is the frustum edge at the near plane.
+        let rim = ndc(light.position + Vec3::X * 0.15);
+        assert!((rim.x.abs().max(rim.y.abs()) - 1.0).abs() < 1e-3, "{rim:?}");
+        // Behind the lens plane is clipped away.
+        assert!(ndc(light.position + Vec3::Z * 0.05).z > 1.0);
+    }
+
+    /// A point source keeps the planes and projection it always had.
+    #[test]
+    fn a_point_source_shadow_frustum_is_unchanged() {
+        let light = FixtureCone {
+            position: Vec3::new(0.0, 0.0, 4.0),
+            range: 12.0,
+            direction: Vec3::NEG_Z,
+            cos_beam: 0.95,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            cos_field: 0.9,
+            wash: 0.0,
+            gobo: 0,
+            gobo_rotation: 0.0,
+            haze_gain: 1.0,
+            lens: crate::luminaire::Lens::POINT,
+        };
+        assert_eq!(fixture_shadow_planes(&light), (0.03, 12.0));
+        assert_eq!(light.apex(), light.position);
+    }
 
     /// Characterization, not a gate: today a cone that goes dark for one frame
     /// loses its shadow slot and comes back into a *different* one.

@@ -1339,7 +1339,7 @@ struct ResidualGlobalKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResidualResidentKey {
     cone: [u32; 4],
-    rest: [u32; 10],
+    rest: [u32; 11],
     shadow: Option<ShadowCacheKey>,
     projection: [u32; 2],
     interval: [u32; 4],
@@ -1387,6 +1387,7 @@ fn residual_resident_key(
             rest.gobo_rotation.to_bits(),
             rest.inverse_right_length.to_bits(),
             rest.field_tangent.to_bits(),
+            rest.lens_distance.to_bits(),
         ],
         shadow,
         projection: [near.to_bits(), far.to_bits()],
@@ -5386,6 +5387,8 @@ impl Renderer {
                     haze_gain: light.haze_gain.clamp(0.0, 1.0),
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
+                    lens_distance: light.lens_distance(),
+                    lens_reserved: [0.0; 3],
                 }
             })
             .collect();
@@ -6122,9 +6125,9 @@ impl Renderer {
                         .filter(|&index| {
                             let (center, radius) = caster_bounds[index];
                             crate::light_index::cone_reaches_sphere(
-                                cone.position,
+                                cone.apex(),
                                 direction,
-                                cone.range,
+                                cone.apex_reach(),
                                 cone.cos_field,
                                 center,
                                 radius,
@@ -8949,6 +8952,7 @@ impl Renderer {
                         shadow,
                         range: cone.range.to_bits(),
                         cos_field: cone.cos_field.to_bits(),
+                        lens_distance: rests[index].lens_distance.to_bits(),
                         wash: cone.wash.to_bits(),
                         scatters: rests[index].haze_gain > 0.0,
                         rect: block_rect(tiles, scale, [blocks.0, blocks.1]),
@@ -9657,7 +9661,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<HazeUniform>(), 240);
         assert_eq!(std::mem::size_of::<CompositeUniform>(), 208);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
-        assert_eq!(std::mem::size_of::<LightRest>(), 64);
+        assert_eq!(std::mem::size_of::<LightRest>(), 80);
         assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 80);
         assert_eq!(std::mem::size_of::<SurfaceClusterUniform>(), 32);
         assert_eq!(std::mem::size_of::<super::CompactUniform>(), 4608);
@@ -12045,6 +12049,8 @@ mod tests {
                     haze_gain: light.haze_gain.clamp(0.0, 1.0),
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
+                    lens_distance: light.lens_distance(),
+                    lens_reserved: [0.0; 3],
                 }
             })
             .collect();
@@ -12292,6 +12298,8 @@ mod tests {
             haze_gain: 1.0,
             inverse_right_length: 1.0,
             field_tangent: 1.0,
+            lens_distance: 0.0,
+            lens_reserved: [0.0; 3],
         };
         let interval = [5, 1 | 2 << 16, 3 | 4 << 16, MODE_READ | 7 << 8];
         let baseline = residual_resident_key(&cone, &rest, None, interval);
@@ -12326,6 +12334,8 @@ mod tests {
             haze_gain: 1.0,
             inverse_right_length: 1.0,
             field_tangent: 1.0,
+            lens_distance: 0.0,
+            lens_reserved: [0.0; 3],
         };
         let key = Some(residual_resident_key(
             &cone,
@@ -12384,6 +12394,8 @@ mod tests {
                 haze_gain: cone.haze_gain,
                 inverse_right_length: 1.0,
                 field_tangent: 1.0,
+                lens_distance: 0.0,
+                lens_reserved: [0.0; 3],
             })
             .collect();
         let key = |medium| {
@@ -13053,6 +13065,7 @@ fn haze_history_key(
         push(light.gobo_rotation.to_bits());
         push(light.intensity.to_bits());
         push(light.haze_gain.to_bits());
+        push(light.lens.radius.to_bits());
         for value in light.color.to_array() {
             push(value.to_bits());
         }
@@ -13109,7 +13122,7 @@ fn residual_transport_key(
         .expect("medium uniform has sixteen words");
     let mut legacy_topology = Vec::new();
     if !per_resident {
-        legacy_topology.reserve(1 + cones.len() * 14);
+        legacy_topology.reserve(1 + cones.len() * 15);
         legacy_topology.push(cones.len() as u32);
         for (cone, rest) in cones.iter().zip(rests) {
             legacy_topology.extend(cone.position.to_array().map(f32::to_bits));
@@ -13124,6 +13137,7 @@ fn residual_transport_key(
                 rest.shadow_slot.to_bits(),
                 rest.inverse_right_length.to_bits(),
                 rest.field_tangent.to_bits(),
+                rest.lens_distance.to_bits(),
             ]);
         }
     }
