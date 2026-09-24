@@ -4658,7 +4658,10 @@ mod view_tests {
         assert_eq!(controls.settings(50.0).look, scene_desc::Look::STAGE);
         let haze = controls.haze;
         controls.set(ViewValue::Exposure, 9.0);
-        assert_eq!(controls.look.exposure.ev, *scene_desc::Exposure::RANGE.end());
+        assert_eq!(
+            controls.look.exposure.ev,
+            *scene_desc::Exposure::RANGE.end()
+        );
         controls.set(ViewValue::Glare, -1.0);
         assert_eq!(controls.look.glare.strength, 0.0);
         controls.set(ViewValue::GlareThreshold, 100.0);
