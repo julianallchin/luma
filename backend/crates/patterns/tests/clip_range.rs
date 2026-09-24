@@ -18,7 +18,6 @@ fn add(graph: &mut Graph, id: &str, definition: &str, inputs: &[(&str, Binding)]
         id.into(),
         Node {
             definition: definition.into(),
-            position: None,
             inputs: inputs
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
@@ -153,13 +152,9 @@ struct Analysis {
     reads: AtomicUsize,
 }
 impl FeatureSource for Analysis {
-    fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample> {
-        assert!(matches!(request, FeatureRequest::Band { .. }));
+    fn sample(&self, _: &FeatureRequest, beat: f64) -> Result<f64> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        Ok(FeatureSample::Energy(beat * self.scale))
-    }
-    fn onsets(&self, _: Drum) -> Result<EventTimes> {
-        unreachable!()
+        Ok(beat * self.scale)
     }
 }
 
@@ -234,20 +229,22 @@ fn range_sampling_does_not_execute_an_unrelated_output_branch() {
     );
     add(
         &mut graph,
-        "offset",
-        "core/subtract",
+        "far",
+        "core/multiply",
         &[
-            ("a", Value::Number(0.5).into()),
+            ("a", Value::Number(1e13).into()),
             ("b", wire("time", "progress")),
         ],
     );
+    // Noise fails beyond ±1e12, so this branch fails once progress passes 0.1.
     add(
         &mut graph,
         "root",
-        "core/power",
+        "core/noise",
         &[
-            ("base", wire("offset", "value")),
-            ("exponent", Value::Number(0.5).into()),
+            ("x", wire("far", "value")),
+            ("y", Value::Number(0.).into()),
+            ("z", Value::Number(0.).into()),
         ],
     );
     graph

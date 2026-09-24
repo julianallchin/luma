@@ -30,104 +30,11 @@ fn frame(cells: &[Cell]) -> Frame<'_> {
     }
 }
 
-#[derive(Debug)]
-struct EventAnalysis {
-    times: Vec<f64>,
-    reads: AtomicUsize,
-}
-impl FeatureSource for EventAnalysis {
-    fn sample(&self, _: &FeatureRequest, _: f64) -> Result<FeatureSample> {
-        Err(Error("event-only analysis".into()))
-    }
-    fn onsets(&self, _: Drum) -> Result<EventTimes> {
-        self.reads.fetch_add(1, Ordering::SeqCst);
-        EventTimes::new(self.times.clone())
-    }
-}
-
-#[test]
-fn binding_analysis_prepares_immutable_events_and_rebinding_replaces_them() {
-    let library = standard_library();
-    let source = |times| {
-        Arc::new(EventAnalysis {
-            times,
-            reads: AtomicUsize::new(0),
-        })
-    };
-    let first = source(vec![1., 2.]);
-    let second = source(vec![3., 4.]);
-    let prepared =
-        PreparedGraph::new(&library, "drum_trigger", &BTreeMap::new(), frame(&[])).unwrap();
-    assert_eq!(prepared.dynamic_step_count(), 1);
-    let prepared = prepared.with_features(first.clone()).unwrap();
-    assert_eq!(prepared.dynamic_step_count(), 0);
-    let expected = |times| {
-        Value::Events(Events::Beats {
-            times: EventTimes::new(times).unwrap(),
-        })
-    };
-    for beat in [0., 100., -10., 0.] {
-        assert_eq!(
-            prepared.evaluate(beat).unwrap()["trigger"],
-            expected(vec![1., 2.])
-        );
-    }
-    assert_eq!(first.reads.load(Ordering::SeqCst), 1);
-    let rebound = prepared.clone().with_features(second.clone()).unwrap();
-    assert_eq!(
-        rebound.evaluate(0.).unwrap()["trigger"],
-        expected(vec![3., 4.])
-    );
-    assert_eq!(
-        prepared.evaluate(0.).unwrap()["trigger"],
-        expected(vec![1., 2.])
-    );
-    assert_eq!(second.reads.load(Ordering::SeqCst), 1);
-    let mut borrowed = frame(&[]);
-    borrowed.features = Some(second.as_ref());
-    assert_eq!(
-        library
-            .evaluate("drum_trigger", &BTreeMap::new(), borrowed)
-            .unwrap()["trigger"],
-        expected(vec![3., 4.])
-    );
-    assert_eq!(second.reads.load(Ordering::SeqCst), 2);
-}
-
 #[derive(Debug, Default)]
-struct Analysis {
-    event_reads: AtomicUsize,
-}
+struct Analysis;
 impl FeatureSource for Analysis {
-    fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample> {
-        Ok(match request {
-            FeatureRequest::Timing => FeatureSample::Timing(Arc::new(
-                TrackTiming::new(
-                    BeatTimeline::new(vec![0., 0.5, 1., 1.5, 2.], 0.).unwrap(),
-                    EventTimes::new(vec![0., 0.5, 1., 1.5, 2.]).unwrap(),
-                    EventTimes::new(vec![0., 2.]).unwrap(),
-                    120.,
-                )
-                .unwrap(),
-            )),
-            FeatureRequest::Spectrum { .. } => FeatureSample::Spectrum {
-                bins: vec![beat.abs(), 0.5 + 0.4 * beat.sin(), 2.],
-                bin_hz: 20.,
-            },
-            FeatureRequest::Band { .. } => FeatureSample::Energy(0.5 + 0.4 * beat.sin()),
-            FeatureRequest::Harmony => {
-                FeatureSample::PitchClass(Some(beat.floor().rem_euclid(12.0) as u8))
-            }
-            FeatureRequest::Onsets(_) => FeatureSample::Onset(if beat >= 0.0 {
-                Some((beat.floor(), beat.floor() as u64))
-            } else {
-                None
-            }),
-        })
-    }
-    fn onsets(&self, _: Drum) -> Result<EventTimes> {
-        self.event_reads.fetch_add(1, Ordering::SeqCst);
-        EventTimes::new(vec![0.0, 1.0, 2.0, 2.5, 4.0, 6.0, 8.0, 10.0])
+    fn sample(&self, _: &FeatureRequest, beat: f64) -> Result<f64> {
+        Ok(0.5 + 0.4 * beat.sin())
     }
 }
 
@@ -179,7 +86,7 @@ fn default_graphs_keep_all_time_samples_through_arithmetic_color_and_output() {
             .unwrap_or_else(|e| panic!("empty {id}: {e}"));
         checked += 1;
     }
-    assert!(checked >= 25, "only checked {checked} default graphs");
+    assert!(checked >= 20, "only checked {checked} default graphs");
 }
 
 fn wired(node: &str, output: &str) -> Binding {
@@ -190,7 +97,6 @@ fn wired(node: &str, output: &str) -> Binding {
 }
 fn node(definition: &str, inputs: BTreeMap<String, Binding>) -> Node {
     Node {
-        position: None,
         definition: definition.into(),
         inputs,
     }
@@ -198,18 +104,16 @@ fn node(definition: &str, inputs: BTreeMap<String, Binding>) -> Node {
 
 #[test]
 fn nested_outputs_only_prepare_their_connected_analysis_and_reductions() {
+    // Only the bass band was analyzed.
     #[derive(Debug, Default)]
-    struct SnareOnly(AtomicUsize);
-    impl FeatureSource for SnareOnly {
-        fn sample(&self, _: &FeatureRequest, _: f64) -> Result<FeatureSample> {
-            Err(Error("audio analysis is unavailable".into()))
-        }
-        fn onsets(&self, drum: Drum) -> Result<EventTimes> {
-            if drum != Drum::Snare {
-                return Err(Error("only snare was analyzed".into()));
+    struct BassOnly(AtomicUsize);
+    impl FeatureSource for BassOnly {
+        fn sample(&self, request: &FeatureRequest, _: f64) -> Result<f64> {
+            if request.low_hz != 20. {
+                return Err(Error("only bass was analyzed".into()));
             }
             self.0.fetch_add(1, Ordering::SeqCst);
-            EventTimes::new(vec![1., 2.])
+            Ok(0.25)
         }
     }
     fn define(library: &mut Library, id: &str, graph: Graph) {
@@ -235,24 +139,24 @@ fn nested_outputs_only_prepare_their_connected_analysis_and_reductions() {
     }
     let mut library = standard_library();
     let mut graph = Graph::default();
-    for (name, drum) in [("snare", Drum::Snare), ("kick", Drum::Kick)] {
+    for (name, low, high) in [("bass", 20., 60.), ("treble", 4000., 8000.)] {
         graph.nodes.insert(
             name.into(),
             node(
-                "drum_trigger",
-                BTreeMap::from([("drum".into(), Value::Drum(drum).into())]),
+                "band_energy",
+                BTreeMap::from([
+                    ("low_hz".into(), Value::Number(low).into()),
+                    ("high_hz".into(), Value::Number(high).into()),
+                ]),
             ),
         );
-        graph.outputs.insert(name.into(), wired(name, "trigger"));
+        graph.outputs.insert(name.into(), wired(name, "value"));
     }
-    graph
-        .nodes
-        .insert("audio".into(), node("band_energy", BTreeMap::new()));
     graph.nodes.insert(
         "range".into(),
         node(
             "clip_range",
-            BTreeMap::from([("value".into(), wired("audio", "value"))]),
+            BTreeMap::from([("value".into(), wired("treble", "value"))]),
         ),
     );
     graph
@@ -266,11 +170,11 @@ fn nested_outputs_only_prepare_their_connected_analysis_and_reductions() {
     wrapper
         .nodes
         .insert("sources".into(), node("sources", BTreeMap::new()));
-    for key in ["snare", "kick", "peak", "constant"] {
+    for key in ["bass", "treble", "peak", "constant"] {
         wrapper.outputs.insert(key.into(), wired("sources", key));
     }
     define(&mut library, "wrapper", wrapper);
-    for key in ["snare", "constant", "kick", "peak"] {
+    for key in ["bass", "constant", "treble", "peak"] {
         let mut root = Graph::default();
         root.nodes
             .insert("source".into(), node("wrapper", BTreeMap::new()));
@@ -287,26 +191,25 @@ fn nested_outputs_only_prepare_their_connected_analysis_and_reductions() {
             continue;
         }
         assert_eq!(prepared.feature_requests().len(), 1);
-        let features = Arc::new(SnareOnly::default());
-        if key != "snare" {
+        let features = Arc::new(BassOnly::default());
+        if key != "bass" {
             // Connecting an unavailable branch still reports its real error.
             assert!(prepared.with_features(features).is_err());
             continue;
         }
         assert_eq!(
             prepared.feature_requests(),
-            &[FeatureRequest::Onsets(Drum::Snare)]
+            &[FeatureRequest {
+                low_hz: 20.,
+                high_hz: 60.,
+            }]
         );
         let prepared = prepared.with_features(features.clone()).unwrap();
         for beat in [2., 1., -1., 2.] {
             assert_eq!(
-                prepared.evaluate(beat).unwrap()["value"],
-                Value::Events(Events::Beats {
-                    times: EventTimes::new(vec![1., 2.]).unwrap(),
-                })
+                prepared.evaluate(beat).unwrap()["value"].scalar_value(),
+                Some(0.25)
             );
         }
-        assert_eq!(features.0.load(Ordering::SeqCst), 1);
     }
 }
-

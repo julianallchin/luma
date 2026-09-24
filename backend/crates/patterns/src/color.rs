@@ -104,12 +104,8 @@ impl Gradient {
     }
 }
 
-mod mix;
-pub(crate) use mix::mix_palette;
-
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     use crate::signals::port;
-    let field = |name| port(name, ValueType::Field, None);
     let gradient = || {
         port(
             "Gradient",
@@ -118,63 +114,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         )
     };
     let (name, inputs, output, kind) = match op {
-        Primitive::PaletteFallback => (
-            "Palette fallback",
-            vec![
-                (
-                    "gradient",
-                    port(
-                        "Palette",
-                        ValueType::Gradient,
-                        Some(Value::Gradient(Gradient { stops: vec![] })),
-                    ),
-                ),
-                (
-                    "fallback",
-                    port(
-                        "If empty",
-                        ValueType::Gradient,
-                        Some(Value::Gradient(Gradient::default())),
-                    ),
-                ),
-            ],
-            "gradient",
-            ValueType::Gradient,
-        ),
-        Primitive::MixPalette => (
-            "Mix palette",
-            vec![
-                ("gradient", gradient()),
-                (
-                    "perceptual",
-                    Input {
-                        rate: Rate::Fixed,
-                        ..port(
-                            "Perceptual mix",
-                            ValueType::Boolean,
-                            Some(Value::Boolean(false)),
-                        )
-                    },
-                ),
-                (
-                    "vibrance",
-                    port("Vibrance", ValueType::Number, Some(Value::Number(0.6))),
-                ),
-                (
-                    "weights",
-                    port(
-                        "Color weights",
-                        ValueType::Signal(SignalType {
-                            unit: Some(Unit::Number),
-                            channels: None,
-                        }),
-                        None,
-                    ),
-                ),
-            ],
-            "color",
-            ValueType::ColorField,
-        ),
         Primitive::SampleGradient => (
             "Sample gradient",
             vec![
@@ -191,48 +130,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             "color",
             ValueType::Color,
         ),
-        Primitive::SampleGradientField => (
-            "Sample gradient per head",
-            vec![("gradient", gradient()), ("position", field("Position"))],
-            "color",
-            ValueType::ColorField,
-        ),
-        Primitive::Hsv => (
-            "HSV color per head",
-            vec![
-                ("hue", field("Hue (turns)")),
-                (
-                    "saturation",
-                    port(
-                        "Saturation",
-                        ValueType::Proportion,
-                        Some(Value::Proportion(1.0)),
-                    ),
-                ),
-                (
-                    "value",
-                    port("Value", ValueType::Proportion, Some(Value::Proportion(1.0))),
-                ),
-            ],
-            "color",
-            ValueType::ColorField,
-        ),
-        Primitive::RotateHue => (
-            "Rotate hue",
-            vec![
-                ("color", port("Color", ValueType::ColorField, None)),
-                (
-                    "turns",
-                    port(
-                        "Rotation (turns)",
-                        ValueType::Number,
-                        Some(Value::Number(0.)),
-                    ),
-                ),
-            ],
-            "color",
-            ValueType::ColorField,
-        ),
         _ => return None,
     };
     let mut outputs = BTreeMap::from([(
@@ -242,10 +139,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             rate: Rate::Frame,
         },
     )]);
-    if matches!(
-        op,
-        Primitive::MixPalette | Primitive::SampleGradient | Primitive::SampleGradientField
-    ) {
+    if op == Primitive::SampleGradient {
         outputs.insert(
             "opacity".into(),
             Output {
@@ -260,48 +154,4 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
         outputs,
         body: Body::Primitive(op),
     })
-}
-
-pub(crate) fn hsv(h: f64, s: f64, v: f64) -> [f64; 3] {
-    let h = h.rem_euclid(1.0) * 6.0;
-    let chroma = v * s;
-    let x = chroma * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
-    let rgb = match h.floor() as u8 {
-        0 => [chroma, x, 0.0],
-        1 => [x, chroma, 0.0],
-        2 => [0.0, chroma, x],
-        3 => [0.0, x, chroma],
-        4 => [x, 0.0, chroma],
-        _ => [chroma, 0.0, x],
-    };
-    rgb.map(|c| (c + v - chroma).clamp(0.0, 1.0))
-}
-
-/// Hue rotation preserves RGB extrema (and therefore both HSL lightness and
-/// HSV value/saturation), including numerical headroom outside display gamut.
-pub(crate) fn rotate_hue([r, g, b]: [f64; 3], turns: f64) -> [f64; 3] {
-    let maximum = r.max(g).max(b);
-    let minimum = r.min(g).min(b);
-    let chroma = maximum - minimum;
-    if chroma == 0. {
-        return [r, g, b];
-    }
-    let hue = if maximum == r {
-        (g - b) / chroma
-    } else if maximum == g {
-        (b - r) / chroma + 2.
-    } else {
-        (r - g) / chroma + 4.
-    };
-    let hue = (hue + turns.rem_euclid(1.) * 6.).rem_euclid(6.);
-    let x = chroma * (1. - (hue.rem_euclid(2.) - 1.).abs());
-    let rgb = match hue.floor() as u8 {
-        0 => [chroma, x, 0.],
-        1 => [x, chroma, 0.],
-        2 => [0., chroma, x],
-        3 => [0., x, chroma],
-        4 => [x, 0., chroma],
-        _ => [chroma, 0., x],
-    };
-    rgb.map(|c| c + minimum)
 }

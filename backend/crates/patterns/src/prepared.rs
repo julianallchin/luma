@@ -428,20 +428,12 @@ impl PreparedGraph {
 /// Relations involving fixed controls are checked even when a graph's dynamic
 /// branch requires track data that is deliberately absent during source validation.
 fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Result<()> {
-    crate::event_tensor::validate_parameters(op, inputs)?;
-    let number = |name| inputs.get(name).map(Value::scalar);
-    match op {
-        Primitive::ClipRange => {
-            if let Some(samples) = number("samples") {
-                crate::clip_range::sample_count(samples)?;
-            }
-            Ok(())
+    if op == Primitive::ClipRange {
+        if let Some(samples) = inputs.get("samples").map(Value::scalar) {
+            crate::clip_range::sample_count(samples)?;
         }
-        Primitive::Rhythm if number("repeat").is_some_and(|v| v <= 0.0) => {
-            Err(Error("repeat interval must be greater than zero".into()))
-        }
-        _ => Ok(()),
     }
+    Ok(())
 }
 impl Source {
     fn read(&self, slots: &[Option<EvaluatedValue>]) -> Result<EvaluatedValue> {

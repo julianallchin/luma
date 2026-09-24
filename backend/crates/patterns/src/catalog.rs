@@ -25,23 +25,11 @@ fn primitive_definition(p: Primitive) -> Definition {
     if let Some(definition) = crate::forms::ops::definition(p) {
         return definition;
     }
-    if let Some(definition) = crate::point_fields::definition(p) {
-        return definition;
-    }
     if p == Primitive::ClipRange {
         return crate::clip_range::definition();
     }
-    if p == Primitive::RandomEventTargets {
-        return crate::event_targets::definition();
-    }
-    if let Some(definition) = crate::event_timing::definition(p) {
-        return definition;
-    }
     if p == Primitive::Output {
         return crate::output::terminal_definition();
-    }
-    if let Some(definition) = crate::event_tensor::definition(p) {
-        return definition;
     }
     if let Some(definition) = crate::features::definition(p) {
         return definition;
@@ -50,9 +38,7 @@ fn primitive_definition(p: Primitive) -> Definition {
     {
         return definition;
     }
-    if let Some(definition) =
-        crate::field_ops::definition(p).or_else(|| crate::metrics::definition(p))
-    {
+    if let Some(definition) = crate::field_ops::definition(p) {
         return definition;
     }
     use Rate::{Fixed, Frame};
@@ -94,42 +80,6 @@ fn primitive_definition(p: Primitive) -> Definition {
             )],
             vec![("coordinates", ValueType::Coordinates, Fixed)],
         ),
-        Primitive::Rhythm => (
-            "Rhythm",
-            vec![
-                (
-                    "delay",
-                    field(
-                        "Phase delay",
-                        "Shift stroke starts later on the beat grid",
-                        Value::Beats(0.0),
-                        Fixed,
-                    ),
-                ),
-                (
-                    "repeat",
-                    field(
-                        "Repeat",
-                        "Time between stroke starts, in beats",
-                        Value::Beats(4.0),
-                        Fixed,
-                    ),
-                ),
-                (
-                    "grid_aligned",
-                    field(
-                        "Follow track grid",
-                        "Otherwise start at the clip boundary",
-                        Value::Boolean(false),
-                        Fixed,
-                    ),
-                ),
-            ],
-            vec![
-                ("elapsed", ValueType::Beats, Frame),
-                ("cycle", ValueType::Number, Frame),
-            ],
-        ),
         Primitive::CoordinateOffset => (
             "Coordinate offset",
             vec![
@@ -169,44 +119,6 @@ fn primitive_definition(p: Primitive) -> Definition {
                 ("wrapped", ValueType::Mask, Frame),
             ],
         ),
-        Primitive::FieldEnvelope => (
-            "Sample envelope per head",
-            vec![
-                (
-                    "phase",
-                    input(
-                        "Phase",
-                        "Coordinate at which to sample the curve",
-                        ValueType::Field,
-                        Frame,
-                        None,
-                    ),
-                ),
-                (
-                    "shape",
-                    field(
-                        "Envelope",
-                        "Normalized editable curve",
-                        Value::Envelope(Envelope::soft_edges(0.1)),
-                        Frame,
-                    ),
-                ),
-            ],
-            vec![("mask", ValueType::Mask, Frame)],
-        ),
-        Primitive::SoftEdges => (
-            "Soft Edges",
-            vec![(
-                "softness",
-                field(
-                    "Edge softness",
-                    "Symmetric edge fraction",
-                    Value::Proportion(0.1),
-                    Frame,
-                ),
-            )],
-            vec![("shape", ValueType::Envelope, Frame)],
-        ),
         Primitive::Envelope => (
             "Evaluate Envelope",
             vec![
@@ -245,12 +157,8 @@ fn primitive_definition(p: Primitive) -> Definition {
 }
 pub(crate) fn primitive(p: Primitive) -> Definition {
     let mut definition = primitive_definition(p);
-    if matches!(p, Primitive::Envelope | Primitive::FieldEnvelope) {
-        let key = if p == Primitive::Envelope {
-            "progress"
-        } else {
-            "phase"
-        };
+    if p == Primitive::Envelope {
+        let key = "progress";
         let kind = ValueType::Signal(SignalType {
             unit: Some(Unit::Proportion),
             channels: None,
@@ -284,79 +192,22 @@ pub fn standard_library() -> Library {
             };
             for (id, op) in [
                 ("band_energy", Primitive::BandEnergy),
-                ("audio_spectrum", Primitive::AudioSpectrum),
-                ("audio_lowpass", Primitive::FilterAudio { highpass: false }),
-                ("audio_highpass", Primitive::FilterAudio { highpass: true }),
-                ("beat_trigger", Primitive::BeatEvents),
                 ("clip_time", Primitive::ClipTime),
                 ("clip_range", Primitive::ClipRange),
                 ("coordinate_offset", Primitive::CoordinateOffset),
-                ("core/absolute", Primitive::FieldUnary(UnaryMath::Absolute)),
                 ("core/add", Primitive::FieldBinary(FieldMath::Add)),
                 ("core/channel_maximum", Primitive::ChannelMaximum),
-                ("core/channel_sum", Primitive::ChannelSum),
-                ("core/channel_argmax", Primitive::ChannelArgmax),
-                ("core/channel_index", Primitive::ChannelIndex),
-                ("core/channel_count", Primitive::ChannelCount),
-                ("core/channel", Primitive::Channel),
                 ("core/join_channels", Primitive::JoinChannels),
-                ("core/choose", Primitive::FieldSelect),
                 ("core/choose_number", Primitive::ChooseNumber),
                 ("core/clamp_coverage", Primitive::FieldClamp),
                 ("core/divide", Primitive::FieldBinary(FieldMath::Divide)),
-                (
-                    "core/field_maximum",
-                    Primitive::FieldReduce(FieldReduction::Maximum),
-                ),
-                (
-                    "core/field_mean",
-                    Primitive::FieldReduce(FieldReduction::Mean),
-                ),
-                (
-                    "core/field_minimum",
-                    Primitive::FieldReduce(FieldReduction::Minimum),
-                ),
-                ("core/floor", Primitive::FieldUnary(UnaryMath::Floor)),
-                ("core/float32", Primitive::FieldUnary(UnaryMath::Float32)),
-                ("core/fraction", Primitive::FieldUnary(UnaryMath::Fraction)),
+                ("core/fraction", Primitive::Fraction),
                 ("core/greater", Primitive::FieldGreater),
-                (
-                    "core/head_count",
-                    Primitive::FieldReduce(FieldReduction::Count),
-                ),
                 ("core/maximum", Primitive::FieldBinary(FieldMath::Maximum)),
                 ("core/minimum", Primitive::FieldBinary(FieldMath::Minimum)),
                 ("core/multiply", Primitive::FieldBinary(FieldMath::Multiply)),
                 ("core/noise", Primitive::Noise),
-                ("core/value_noise_1d", Primitive::ValueNoise1d),
-                ("core/seed_stream", Primitive::SeedStream),
-                ("core/value_noise_3d", Primitive::ValueNoise3d),
-                ("core/domain_index", Primitive::DomainIndex),
-                ("core/align_domain", Primitive::AlignDomain),
-                ("core/power", Primitive::Power),
-                ("core/random", Primitive::RandomField),
-                ("core/rank", Primitive::FieldRank),
-                ("core/field_first", Primitive::FieldFirst),
-                ("core/rank_nearby", Primitive::RankNearby),
-                ("core/radial_coordinates", Primitive::RadialCoordinates),
-                ("core/fit_circle", Primitive::CirclePhase),
-                ("core/principal_direction", Primitive::PrincipalDirection),
-                (
-                    "core/distinct_count",
-                    Primitive::FieldReduce(FieldReduction::DistinctCount),
-                ),
-                ("core/sine", Primitive::FieldUnary(UnaryMath::Sine)),
-                (
-                    "core/square_root",
-                    Primitive::FieldUnary(UnaryMath::SquareRoot),
-                ),
                 ("core/subtract", Primitive::FieldBinary(FieldMath::Subtract)),
-                ("drum_time", Primitive::DrumClock),
-                ("drum_trigger", Primitive::DrumEvents),
-                ("core/track_time", Primitive::TrackTime),
-                ("core/grid_events", Primitive::GridEvents),
-                ("core/event_window", Primitive::EventWindow),
-                ("core/event_ages", Primitive::EventAges),
                 ("core/event_life", Primitive::EventLife),
                 ("core/odometer", Primitive::Odometer),
                 ("core/curve", Primitive::SampleCurve),
@@ -366,26 +217,10 @@ pub fn standard_library() -> Library {
                 ("core/aim_fan", Primitive::AimFan),
                 ("core/aim_motion", Primitive::AimMotion),
                 ("core/aim_offset", Primitive::AimOffset),
-                ("core/event_spacing", Primitive::EventSpacing),
-                ("core/thin_events", Primitive::ThinEvents),
-                ("random_subset", Primitive::RandomEventTargets),
                 ("envelope", Primitive::Envelope),
-                ("harmony", Primitive::Harmony),
-                ("hsv", Primitive::Hsv),
-                ("rotate_hue", Primitive::RotateHue),
-                ("mix_palette", Primitive::MixPalette),
-                ("palette_fallback", Primitive::PaletteFallback),
                 ("output", Primitive::Output),
                 ("resolve_mapping", Primitive::ResolveMapping),
-                ("rhythm", Primitive::Rhythm),
-                ("sample_field_envelope", Primitive::FieldEnvelope),
-                ("sample_field_gradient", Primitive::SampleGradientField),
                 ("sample_gradient", Primitive::SampleGradient),
-                ("soft_edges", Primitive::SoftEdges),
-                ("stage_coordinates", Primitive::StageCoordinates),
-                ("wander_points", Primitive::WanderPoints),
-                ("proximity_weights", Primitive::ProximityWeights),
-                ("fixture_geometry", Primitive::WorldGeometry),
             ] {
                 library.definitions.insert(id.into(), primitive(op));
             }

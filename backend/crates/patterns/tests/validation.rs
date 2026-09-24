@@ -8,12 +8,48 @@ fn wire(node: &str) -> Binding {
     }
 }
 
+/// A graph of one `effect` node that calls `id` with the same interface.
+fn wrap(library: &Library, id: &str) -> Definition {
+    let callee = &library.definitions[id];
+    Definition {
+        name: String::new(),
+        inputs: callee.inputs.clone(),
+        outputs: callee.outputs.clone(),
+        body: Body::Graph(Graph {
+            nodes: BTreeMap::from([(
+                "effect".into(),
+                Node {
+                    definition: id.into(),
+                    inputs: callee
+                        .inputs
+                        .keys()
+                        .map(|key| (key.clone(), Binding::Input { input: key.clone() }))
+                        .collect(),
+                },
+            )]),
+            outputs: callee
+                .outputs
+                .keys()
+                .map(|key| {
+                    (
+                        key.clone(),
+                        Binding::Connection {
+                            node: "effect".into(),
+                            output: key.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }),
+    }
+}
+
 #[test]
 fn compact_recursive_expansion_is_rejected_before_it_is_built() {
     let mut library = standard_library();
-    let mut previous = "core/absolute".to_owned();
+    let mut previous = "core/fraction".to_owned();
     for index in 0..16 {
-        let mut definition = library.definitions[&previous].instance(&previous);
+        let mut definition = wrap(&library, &previous);
         let Body::Graph(graph) = &mut definition.body else {
             unreachable!()
         };
@@ -23,7 +59,6 @@ fn compact_recursive_expansion_is_rejected_before_it_is_built() {
         graph.nodes.insert(
             "sum".into(),
             Node {
-                position: None,
                 definition: "core/add".into(),
                 inputs: BTreeMap::from([("a".into(), wire("effect")), ("b".into(), wire("copy"))]),
             },
@@ -39,7 +74,7 @@ fn compact_recursive_expansion_is_rejected_before_it_is_built() {
 #[test]
 fn long_wire_chains_and_deep_definition_chains_are_bounded() {
     let mut library = standard_library();
-    let mut definition = library.definitions["core/absolute"].instance("core/absolute");
+    let mut definition = wrap(&library, "core/fraction");
     let Body::Graph(graph) = &mut definition.body else {
         unreachable!()
     };
@@ -49,7 +84,6 @@ fn long_wire_chains_and_deep_definition_chains_are_bounded() {
         graph.nodes.insert(
             id.clone(),
             Node {
-                position: None,
                 definition: "core/add".into(),
                 inputs: BTreeMap::from([
                     ("a".into(), wire(&previous)),
@@ -67,9 +101,9 @@ fn long_wire_chains_and_deep_definition_chains_are_bounded() {
         .to_string()
         .contains("dependency depth"));
 
-    let mut previous = "core/absolute".to_owned();
+    let mut previous = "core/fraction".to_owned();
     for index in 0..30 {
-        let definition = library.definitions[&previous].instance(&previous);
+        let definition = wrap(&library, &previous);
         previous = format!("wrapper-{index}");
         library.definitions.insert(previous.clone(), definition);
     }
@@ -79,4 +113,3 @@ fn long_wire_chains_and_deep_definition_chains_are_bounded() {
         .to_string()
         .contains("nesting"));
 }
-

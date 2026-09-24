@@ -168,15 +168,6 @@ pub struct TrackBrowserRow {
     pub has_genres: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MelSpec {
-    pub width: usize,
-    pub height: usize,
-    pub data: Vec<f32>,
-    pub beat_grid: Option<crate::models::node_graph::BeatGrid>,
-}
-
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(rename_all = "snake_case")]

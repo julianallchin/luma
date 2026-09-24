@@ -224,36 +224,7 @@ pub fn status_bad() -> Rgba {
     rgb(0xf43f5e)
 }
 
-/// The hue a graph port and its wire carry, keyed by the wire spelling of
-/// `PortType`. One hue per signal kind is the graph editor's whole legend —
-/// the second place after the status dots where color means something rather
-/// than placing a surface.
-///
-/// Keyed by string rather than by the enum because that enum lives in Luma's
-/// core, which this crate deliberately does not depend on. The caller matches
-/// exhaustively on `PortType` to produce the key, so a new variant is a
-/// compile error there and lands here as [`default_port`] until it is named.
-pub fn port(port_type: &str) -> Rgba {
-    match port_type {
-        "Intensity" => rgb(0xf59e0b),
-        "Audio" => rgb(0x3b82f6),
-        "BeatGrid" => rgb(0x10b981),
-        "Series" => rgb(0x8b5cf6),
-        "Color" => rgb(0xec4899),
-        "Signal" => rgb(0x22d3ee),
-        "Selection" => rgb(0xc084fc),
-        "Events" => rgb(0xef4444),
-        "Stops" => rgb(0xf472b6),
-        _ => default_port(),
-    }
-}
-
-/// The hue of a port whose type [`port`] does not know: a neutral grey.
-pub fn default_port() -> Rgba {
-    rgb(0x6b7280)
-}
-
-/// The playhead, and the third place color means something
+/// The playhead, and the second place color means something
 /// rather than placing a surface. One hue, spent on "where the audio is".
 pub fn playhead() -> Rgba {
     rgb(0xf1b467)

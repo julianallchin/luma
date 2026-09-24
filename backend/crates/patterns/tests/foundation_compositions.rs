@@ -29,7 +29,6 @@ impl Patch {
         self.0.nodes.insert(
             id.into(),
             Node {
-                position: None,
                 definition: definition.into(),
                 inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             },

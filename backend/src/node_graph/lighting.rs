@@ -1,10 +1,7 @@
-//! Native authoring projection of the typed lighting catalogue. The graph file
-//! retains canvas positions; evaluation uses the same definitions as the core.
+//! Editor metadata and wire values for form inputs in the clip inspector.
 use crate::models::node_graph::*;
 use luma_patterns::{self as p, ValueType};
 use serde_json::{json, Value};
-
-pub const PREFIX: &str = "lighting/";
 
 #[cfg(test)]
 mod mapping_tests {
@@ -36,59 +33,6 @@ mod mapping_tests {
                 value
             );
         }
-    }
-}
-
-pub fn choices(kind: ValueType) -> Vec<ParamOption> {
-    let rows: &[(&str, &str)] = match kind {
-        ValueType::AudioSource => &[
-            ("mix", "Full mix"),
-            ("bass", "Bass"),
-            ("drums", "Drums"),
-            ("vocals", "Vocals"),
-            ("other", "Other instruments"),
-        ],
-        ValueType::Drum => &[
-            ("kick", "Kick"),
-            ("snare", "Snare"),
-            ("hihat", "Hi-hat"),
-            ("cymbal", "Cymbal"),
-        ],
-        ValueType::Mapping => &p::MappingSource::OPTIONS,
-        ValueType::Boundary => &[("natural", "Natural"), ("clip", "Clip"), ("wrap", "Wrap")],
-        ValueType::Boolean => &[("true", "Yes"), ("false", "No")],
-        _ => &[],
-    };
-    rows.iter()
-        .map(|(id, label)| ParamOption {
-            id: (*id).into(),
-            label: (*label).into(),
-        })
-        .collect()
-}
-
-pub fn port_type(kind: ValueType) -> PortType {
-    match kind {
-        ValueType::Seed => PortType::Seed,
-        ValueType::Signal(_) | ValueType::Number | ValueType::Field => PortType::Signal,
-        ValueType::Color | ValueType::ColorField => PortType::Signal,
-        ValueType::Gradient => PortType::Stops,
-        ValueType::AudioSource => PortType::Audio,
-        ValueType::Drum | ValueType::Events => PortType::Events,
-        ValueType::Beats => PortType::Signal,
-        ValueType::Proportion => PortType::Signal,
-        ValueType::Position => PortType::Signal,
-        ValueType::Boolean => PortType::Boolean,
-        ValueType::Mapping => PortType::Mapping,
-        ValueType::Coordinates => PortType::Coordinates,
-        ValueType::Boundary => PortType::Boundary,
-        ValueType::Envelope => PortType::Envelope,
-        ValueType::Mask => PortType::Signal,
-        ValueType::Lighting => PortType::Lighting,
-        ValueType::Vector => PortType::Signal,
-        ValueType::Choice => PortType::Choice,
-        // Clip sources; they drive numerical values.
-        ValueType::Time | ValueType::Hit | ValueType::Noise | ValueType::Audio => PortType::Signal,
     }
 }
 
@@ -258,13 +202,6 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
     Ok(decoded)
 }
 
-pub fn input_node_id(key: &str) -> String {
-    format!("$input/{key}")
-}
-/// The card a graph's named outputs are wired into. A pattern ends at its
-/// Apply node instead.
-pub const OUTPUTS_NODE: &str = "$outputs";
-
 pub fn input_label(input: &p::Input) -> String {
     let suffix = match input
         .value_type
@@ -300,10 +237,7 @@ pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
         };
     }
     Some(match kind {
-        ValueType::Seed => PatternArgType::Seed,
         ValueType::Gradient => PatternArgType::Gradient,
-        ValueType::AudioSource => PatternArgType::AudioSource,
-        ValueType::Drum => PatternArgType::Drum,
         ValueType::Mapping => PatternArgType::Mapping,
         ValueType::Boundary => PatternArgType::Boundary,
         ValueType::Envelope => PatternArgType::Envelope,
@@ -313,15 +247,19 @@ pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
     })
 }
 
+/// The options of a choice widget.
 pub fn arg_choices(kind: &PatternArgType) -> Vec<ParamOption> {
-    choices(match kind {
-        PatternArgType::Mapping => ValueType::Mapping,
-        PatternArgType::AudioSource => ValueType::AudioSource,
-        PatternArgType::Drum => ValueType::Drum,
-        PatternArgType::Boundary => ValueType::Boundary,
-        PatternArgType::Boolean => ValueType::Boolean,
-        _ => return Vec::new(),
-    })
+    let rows: &[(&str, &str)] = match kind {
+        PatternArgType::Boundary => &[("natural", "Natural"), ("clip", "Clip"), ("wrap", "Wrap")],
+        PatternArgType::Boolean => &[("true", "Yes"), ("false", "No")],
+        _ => &[],
+    };
+    rows.iter()
+        .map(|(id, label)| ParamOption {
+            id: (*id).into(),
+            label: (*label).into(),
+        })
+        .collect()
 }
 
 /// The alpha of a stop color: the `aa` byte of `"#rrggbbaa"` or the `a` field

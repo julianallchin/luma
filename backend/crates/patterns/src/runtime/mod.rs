@@ -4,10 +4,8 @@ use crate::*;
 use ndarray::Array3;
 use std::collections::BTreeMap;
 
-mod geometry;
 mod kernels;
 mod lighting;
-mod spectrum;
 pub(crate) use kernels::run;
 pub use lighting::LightingSignal;
 

@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**150 commands** across **26 domains** · **13 events**
+**149 commands** across **26 domains** · **13 events**
 
 ## Domains
 
@@ -17,7 +17,7 @@ name.
 | `agent_threads` | 8 | `backend/src/dispatch/handlers/agent_threads.rs` |
 | `artnet` | 6 | `backend/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
-| `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
+| `composable_patterns` | 1 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `backend/src/dispatch/handlers/controller.rs` |
 | `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
@@ -39,7 +39,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **150** | |
+| **total** | **149** | |
 
 ## Commands
 
@@ -92,7 +92,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `get_pattern_node_library` | — | `Value` |
 | `preview_composable_pattern` | `request: Value` | `Value` |
 
 ### `compositor`

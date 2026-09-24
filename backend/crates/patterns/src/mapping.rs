@@ -37,18 +37,6 @@ pub enum MappingSource {
     Random,
 }
 impl MappingSource {
-    pub const OPTIONS: [(&'static str, &'static str); 9] = [
-        ("z", "Up (Z+)"),
-        ("u", "Stage right (U+)"),
-        ("v", "Downstage (V+)"),
-        ("major_axis", "Major axis"),
-        ("order", "Selection order"),
-        ("radial", "Radial"),
-        ("angle", "Angle"),
-        ("vector", "Custom vector"),
-        ("random", "Random"),
-    ];
-
     /// Whether the source takes a mirror: a mirror needs a spatial axis
     /// along a line. Order and random have no spatial axis, and radial and
     /// angle are measured around a center. See [`MirrorPlane`].

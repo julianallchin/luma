@@ -139,7 +139,6 @@ use luma_render::scene_desc::{VenueEnvironment, VenueHaze};
 use prodjlink::DiscoveredDevice;
 
 commands! {
-    composable_patterns::get_pattern_node_library() -> Value;
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
 
     agent_threads::agent_thread_list(

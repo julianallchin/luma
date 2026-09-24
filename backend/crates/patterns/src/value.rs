@@ -11,10 +11,6 @@ pub enum ValueType {
     Proportion,
     Position,
     Boolean,
-    Seed,
-    AudioSource,
-    Drum,
-    Events,
     Color,
     Gradient,
     ColorField,
@@ -81,32 +77,6 @@ impl ValueType {
             _ => self == actual,
         }
     }
-    /// An editable, fixture-independent seed for an otherwise required signal
-    /// socket. A real destination default always takes precedence.
-    pub(crate) fn signal_default(self) -> Option<Value> {
-        use crate::{Channels, Unit};
-        let spec = self.signal_type()?;
-        Some(match spec.channels {
-            Some(Channels::Rgb) => Value::Color([1.0; 3]),
-            Some(channels @ (Channels::PanTilt | Channels::Components(_))) => Value::Signal(
-                crate::Signal::new(
-                    ndarray::Array3::zeros((1, 1, channels.count())),
-                    spec.unit.unwrap_or(Unit::Number),
-                    channels,
-                    None,
-                )
-                .ok()?,
-            ),
-            Some(Channels::Value) | None => match spec.unit {
-                Some(Unit::Beats) => Value::Beats(0.0),
-                Some(Unit::Proportion) => Value::Proportion(0.0),
-                Some(Unit::Position) => Value::Position(0.0),
-                Some(Unit::Degrees) => Value::Degrees(0.0),
-                Some(Unit::Seconds) => Value::Seconds(0.0),
-                Some(Unit::Number) | None => Value::Number(0.0),
-            },
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,11 +100,6 @@ pub enum Value {
     Proportion(f64),
     Position(f64),
     Boolean(bool),
-    /// Decimal text in documents keeps the full integer through JSON consumers.
-    Seed(#[serde(with = "seed_text")] u64),
-    AudioSource(crate::AudioInput),
-    Drum(crate::Drum),
-    Events(crate::Events),
     Color([f64; 3]),
     Gradient(crate::Gradient),
     ColorField(BTreeMap<String, [f64; 3]>),
@@ -175,10 +140,6 @@ impl Value {
             Self::Proportion(_) => ValueType::Proportion,
             Self::Position(_) => ValueType::Position,
             Self::Boolean(_) => ValueType::Boolean,
-            Self::Seed(_) => ValueType::Seed,
-            Self::AudioSource(_) => ValueType::AudioSource,
-            Self::Drum(_) => ValueType::Drum,
-            Self::Events(_) => ValueType::Events,
             Self::Color(_) => ValueType::Color,
             Self::Gradient(_) => ValueType::Gradient,
             Self::ColorField(_) => ValueType::ColorField,
@@ -219,7 +180,6 @@ impl Value {
             Self::Vector(v) => v.iter().all(|v| v.is_finite()),
             Self::Choice(name) => !name.is_empty(),
             Self::Gradient(g) => return g.validate(),
-            Self::AudioSource(audio) => return audio.validate(),
             Self::ColorField(colors) => {
                 for (id, color) in colors {
                     if id.is_empty() {
@@ -234,7 +194,6 @@ impl Value {
             Self::Noise(noise) => return noise.validate(),
             Self::Audio(audio) => return audio.validate(),
             Self::Mapping(m) => return m.validate(),
-            Self::Events(events) => return events.validate(),
             Self::Coordinates(m) => return m.validate(),
             Self::Field(m) => m.iter().all(|(id, v)| !id.is_empty() && v.is_finite()),
             Self::Mask(m) => m
@@ -282,30 +241,6 @@ impl Value {
     pub(crate) fn scalar(&self) -> f64 {
         self.scalar_value()
             .expect("graph type checking precedes execution")
-    }
-}
-
-mod seed_text {
-    use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(
-        value: &u64,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&value.to_string())
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<u64, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Seed {
-            Text(String),
-            Integer(u64),
-        }
-        match Seed::deserialize(deserializer)? {
-            Seed::Text(value) => value.parse().map_err(serde::de::Error::custom),
-            Seed::Integer(value) => Ok(value),
-        }
     }
 }
 

@@ -52,42 +52,6 @@ impl FixtureOutput {
             self.aim.is_some(),
         ]
     }
-    /// Layer complete effect outputs with exactly the cross-clip blend math.
-    /// Connections decide base/top ordering; no hidden graph traversal priority.
-    /// An unwritten dimmer is no light, so every mode blends against the
-    /// light underneath (see [`crate::blend_light`]).
-    pub fn composite(&mut self, top: &Self, mode: crate::BlendMode) {
-        if top.color.is_some() || top.dimmer.is_some() {
-            let f = |color: Option<[f64; 3]>| color.unwrap_or([1.0; 3]).map(|v| v as f32);
-            let (color, dimmer) = crate::blend_light(
-                f(self.color),
-                self.dimmer.unwrap_or(0.0) as f32,
-                f(top.color),
-                top.dimmer.unwrap_or(0.0) as f32,
-                mode,
-            );
-            self.color = Some(color.map(f64::from));
-            self.dimmer = Some(f64::from(dimmer));
-        }
-        if let Some(strobe) = top.strobe {
-            self.strobe = Some(f64::from(
-                crate::blend_value(self.strobe.unwrap_or(0.0) as f32, strobe as f32, mode)
-                    .clamp(0.0, 1.0),
-            ));
-        }
-        if top.position.is_some() {
-            self.position = top.position;
-        }
-        if let Some(speed) = top.speed {
-            self.speed = Some(if speed > 0.5 { 1.0 } else { 0.0 });
-        }
-        // Aim ignores the blend mode: it always blends toward the aim
-        // under it by alpha, along the shortest arc.
-        if let Some(aim) = top.aim {
-            self.aim = crate::blend_aim(self.aim, aim);
-        }
-    }
-
     pub fn validate(&self) -> Result<()> {
         if self
             .color

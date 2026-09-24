@@ -35,42 +35,8 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             "value",
             ValueType::Signal(SignalType::ANY),
         ),
-        Primitive::Channel => (
-            "Channel",
-            vec![
-                ("value", port("Signal", ValueType::Signal(SignalType::ANY))),
-                (
-                    "index",
-                    Input {
-                        optional: false,
-                        name: "Index".into(),
-                        description: "Channel index, starting at zero".into(),
-                        value_type: ValueType::Number,
-                        rate: Rate::Fixed,
-                        default: Some(Value::Number(0.)),
-                        author: None,
-                        promotable: Vec::new(),
-                    },
-                ),
-            ],
-            "value",
-            ValueType::Signal(SignalType {
-                unit: None,
-                channels: Some(Channels::Value),
-            }),
-        ),
-        Primitive::ChannelArgmax => (
-            "Strongest channel",
-            vec![("value", port("Signal", ValueType::Signal(SignalType::ANY)))],
-            "value",
-            ValueType::Number,
-        ),
-        Primitive::ChannelMaximum | Primitive::ChannelSum => (
-            if op == Primitive::ChannelSum {
-                "Sum channels"
-            } else {
-                "Maximum channel"
-            },
+        Primitive::ChannelMaximum => (
+            "Maximum channel",
             vec![("value", port("Value", ValueType::Signal(SignalType::ANY)))],
             "value",
             ValueType::Signal(SignalType {
@@ -129,25 +95,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 channels: None,
             }),
         ),
-        Primitive::FieldSelect => (
-            "Choose",
-            vec![
-                (
-                    "condition",
-                    port(
-                        "Condition",
-                        ValueType::Signal(SignalType {
-                            unit: Some(Unit::Proportion),
-                            channels: None,
-                        }),
-                    ),
-                ),
-                ("yes", port("Yes", ValueType::Signal(SignalType::ANY))),
-                ("no", port("No", ValueType::Signal(SignalType::ANY))),
-            ],
-            "value",
-            ValueType::Signal(SignalType::ANY),
-        ),
         Primitive::ChooseNumber => (
             "Choose number",
             vec![
@@ -157,31 +104,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             ],
             "value",
             ValueType::Number,
-        ),
-        Primitive::RandomField => (
-            "Random per head",
-            vec![(
-                "epoch",
-                Input {
-                    optional: false,
-                    name: "Epoch".into(),
-                    description: "Changing this index chooses a new deterministic random field"
-                        .into(),
-                    value_type: ValueType::Signal(SignalType {
-                        unit: Some(Unit::Number),
-                        channels: None,
-                    }),
-                    rate: Rate::Frame,
-                    default: Some(Value::Number(0.0)),
-                    author: None,
-                    promotable: Vec::new(),
-                },
-            )],
-            "value",
-            ValueType::Signal(SignalType {
-                unit: Some(Unit::Number),
-                channels: None,
-            }),
         ),
         _ => return None,
     };

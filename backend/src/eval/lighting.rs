@@ -1,26 +1,14 @@
 //! Canonical graph preparation and fixture/diagnostic output adapters.
-use super::{Arena, OutputBinding, Plan, ViewTap};
-use crate::models::node_graph::Signal;
+use super::{Arena, OutputBinding, Plan};
 use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
 use luma_patterns as p;
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct Program {
     prepared: p::PreparedGraph,
     clock: p::BeatTimeline,
     ids: Vec<String>,
     output: String,
-}
-#[derive(Debug)]
-pub struct Inspection {
-    pub times: Vec<f32>,
-    pub clock: p::BeatTimeline,
-    pub clip_start: f64,
-    pub values: BTreeMap<String, p::EvaluatedValue>,
-    pub spectrograms: BTreeMap<String, Result<Arc<crate::audio::melspec::Spectrogram>, String>>,
 }
 fn plan(
     prepared: p::PreparedGraph,
@@ -41,31 +29,6 @@ fn plan(
         .and_then(p::EvaluatedValue::lighting)
         .ok_or("graph did not produce fixture output")?
         .writes();
-    let views = initial
-        .iter()
-        .filter_map(|(name, value)| {
-            if name == output {
-                return None;
-            }
-            let (n, c, channels) = if let Some(signal) = value.signal() {
-                let (n, _, c) = signal.values().dim();
-                (n, c, channel_labels(*signal.channels(), c))
-            } else if matches!(value.sample(0), Ok(p::Value::Events(_))) {
-                (1, 1, vec!["events".into()])
-            } else {
-                return None;
-            };
-            Some((
-                name.strip_prefix("view/").unwrap_or(name).to_owned(),
-                ViewTap {
-                    output: name.clone(),
-                    n,
-                    c,
-                    channels,
-                },
-            ))
-        })
-        .collect();
     Ok(Plan {
         program: Some(Arc::new(program)),
         primitive_ids: ids,
@@ -78,7 +41,6 @@ fn plan(
             aim: writes[5],
         },
         span,
-        views,
     })
 }
 pub(crate) fn compile_clip(
@@ -100,55 +62,7 @@ pub(crate) fn compile_clip(
     let ids = cells.iter().map(|c| c.id.clone()).collect();
     plan(prepared, clock, ids, output, span)
 }
-fn channel_labels(channels: p::Channels, width: usize) -> Vec<String> {
-    let names: &[&str] = match channels {
-        p::Channels::Rgb => &["r", "g", "b"],
-        p::Channels::PanTilt => &["pan", "tilt"],
-        p::Channels::Value => &["value"],
-        _ => return (0..width).map(|i| format!("ch{i}")).collect(),
-    };
-    names.iter().map(|s| (*s).into()).collect()
-}
 impl Program {
-    pub(crate) fn inspect(&self, span: (f32, f32)) -> Result<Option<Inspection>, String> {
-        let names: Vec<_> = self
-            .prepared
-            .output_types()
-            .iter()
-            .filter(|(name, output)| {
-                **name != self.output
-                    && (output.value_type.signal_type().is_some()
-                        || matches!(
-                            output.value_type,
-                            p::ValueType::Events | p::ValueType::AudioSource
-                        ))
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        if names.is_empty() {
-            return Ok(None);
-        }
-        const SAMPLES: usize = 128;
-        if self.prepared.cell_count().saturating_mul(SAMPLES) > 1_000_000 {
-            return Err("graph inspection exceeds one million head samples".into());
-        }
-        let times: Vec<_> = (0..SAMPLES)
-            .map(|i| span.0 + (span.1 - span.0) * i as f32 / (SAMPLES - 1) as f32)
-            .collect();
-        let mut values = self.sample(&times)?;
-        values.retain(|name, _| names.contains(name));
-        Ok(Some(Inspection {
-            times,
-            clock: self.clock.clone(),
-            clip_start: self
-                .clock
-                .beat_at(f64::from(span.0))
-                .map_err(|e| e.to_string())?,
-            values,
-            spectrograms: BTreeMap::new(),
-        }))
-    }
-
     pub(crate) fn sample(
         &self,
         times: &[f32],
@@ -229,117 +143,6 @@ impl Program {
             })
             .collect())
     }
-    pub(crate) fn views(
-        &self,
-        times: &[f32],
-        taps: &[(String, ViewTap)],
-        span: (f32, f32),
-        scratch: &mut Arena,
-    ) -> Result<HashMap<String, Signal>, String> {
-        if taps.is_empty() || times.is_empty() {
-            return Ok(HashMap::new());
-        }
-        scratch.values = self.sample(times)?;
-        taps.iter()
-            .map(|(name, tap)| {
-                let value = &scratch.values[&tap.output];
-                let signal = if let Some(signal) = value.signal() {
-                    let values = signal.values();
-                    let (n, t, c) = values.dim();
-                    let rows = match signal.fixtures() {
-                        Some(domain) => self
-                            .ids
-                            .iter()
-                            .map(|id| {
-                                domain.iter().position(|v| v == id).ok_or_else(|| {
-                                    format!("view {} is missing fixture {id}", tap.output)
-                                })
-                            })
-                            .collect::<Result<Vec<_>, _>>()?,
-                        None => (0..n).collect(),
-                    };
-                    let mut data = Vec::with_capacity(rows.len() * times.len() * c);
-                    for row in &rows {
-                        for k in 0..times.len() {
-                            for ch in 0..c {
-                                data.push(values[[*row, if t == 1 { 0 } else { k }, ch]] as f32);
-                            }
-                        }
-                    }
-                    Signal {
-                        n: rows.len(),
-                        t: times.len(),
-                        c,
-                        data,
-                    }
-                } else if let Ok(p::Value::Events(events)) = value.sample(0) {
-                    self.event_signal(&events, times, span)?
-                } else {
-                    return Err(format!("{} is not a numerical or event view", tap.output));
-                };
-                Ok((name.clone(), signal))
-            })
-            .collect()
-    }
-    fn event_signal(
-        &self,
-        events: &p::Events,
-        times: &[f32],
-        span: (f32, f32),
-    ) -> Result<Signal, String> {
-        let mut source = events;
-        while let p::Events::Targeted { events, .. } = source {
-            source = events;
-        }
-        let mut data = vec![0.; times.len()];
-        let start = self
-            .clock
-            .beat_at(f64::from(span.0))
-            .map_err(|e| e.to_string())?;
-        let end = self
-            .clock
-            .beat_at(f64::from(span.1))
-            .map_err(|e| e.to_string())?;
-        // Event display bins are bounded by the requested grid, even for very dense schedules.
-        for (i, value) in data.iter_mut().enumerate() {
-            let a = span.0 + (span.1 - span.0) * i as f32 / times.len() as f32;
-            let b = span.0 + (span.1 - span.0) * (i + 1) as f32 / times.len() as f32;
-            let lo = self
-                .clock
-                .beat_at(f64::from(a))
-                .map_err(|e| e.to_string())?;
-            let hi = self
-                .clock
-                .beat_at(f64::from(b))
-                .map_err(|e| e.to_string())?;
-            let found = match source {
-                p::Events::Beats { times: recorded } => {
-                    let events = recorded.as_slice();
-                    let index = events.partition_point(|t| *t < lo);
-                    events
-                        .get(index)
-                        .is_some_and(|t| *t < hi || (i + 1 == times.len() && *t == end))
-                }
-                p::Events::Periodic {
-                    repeat,
-                    grid_aligned,
-                    delay,
-                } => {
-                    let origin = if *grid_aligned { 0. } else { start } + delay;
-                    let event = origin + ((lo - origin) / repeat).ceil() * repeat;
-                    event < hi || (i + 1 == times.len() && event == end)
-                }
-                _ => false,
-            };
-            *value = if found { 1. } else { 0. };
-        }
-        Ok(Signal {
-            n: 1,
-            t: times.len(),
-            c: 1,
-            data,
-        })
-    }
 }
 #[cfg(test)]
 mod tests {
@@ -352,11 +155,26 @@ mod tests {
                 "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
                 "body":{"kind":"graph","body":{"nodes":{
                     "clock":{"definition":"clip_time"},
-                    "subtract":{"definition":"core/subtract","inputs":{
-                        "a":{"source":"value","value":{"type":"number","value":0.5}},
-                        "b":{"source":"connection","node":"clock","output":"progress"}}},
-                    "root":{"definition":"core/square_root","inputs":{"value":{"source":"connection","node":"subtract","output":"value"}}},
-                    "tint":{"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"root","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
+                    "over":{"definition":"core/subtract","inputs":{
+                        "a":{"source":"connection","node":"clock","output":"progress"},
+                        "b":{"source":"value","value":{"type":"number","value":0.5}}}},
+                    "past":{"definition":"core/maximum","inputs":{
+                        "a":{"source":"connection","node":"over","output":"value"},
+                        "b":{"source":"value","value":{"type":"number","value":0.0}}}},
+                    "far":{"definition":"core/multiply","inputs":{
+                        "a":{"source":"connection","node":"past","output":"value"},
+                        "b":{"source":"value","value":{"type":"number","value":1e13}}}},
+                    "noise":{"definition":"core/noise","inputs":{
+                        "x":{"source":"connection","node":"far","output":"value"},
+                        "y":{"source":"value","value":{"type":"number","value":0.0}},
+                        "z":{"source":"value","value":{"type":"number","value":0.0}}}},
+                    "silent":{"definition":"core/multiply","inputs":{
+                        "a":{"source":"connection","node":"noise","output":"value"},
+                        "b":{"source":"value","value":{"type":"number","value":0.0}}}},
+                    "level":{"definition":"core/add","inputs":{
+                        "a":{"source":"connection","node":"silent","output":"value"},
+                        "b":{"source":"value","value":{"type":"number","value":0.5}}}},
+                    "tint":{"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"level","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
                     "output":{"definition":"output","inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
                 },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
         })).unwrap();
@@ -401,7 +219,7 @@ mod tests {
             scene
                 .try_render(&[0.5, 1.5], scope, &mut scratch)
                 .unwrap_err(),
-            "Square root: needs nonnegative values"
+            "Coherent noise: noise coordinates must be finite and within ±1e12"
         );
         assert!(scene.render(&[1.5], scope, &mut scratch)[0]
             .primitives

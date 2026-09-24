@@ -2,17 +2,6 @@
 //! frame deltas, and coherent noise is a pure function of its coordinates.
 use crate::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnaryMath {
-    Absolute,
-    Floor,
-    Float32,
-    Fraction,
-    Sine,
-    SquareRoot,
-}
-
 pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input {
     Input {
         optional: false,
@@ -38,123 +27,12 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ("beat", ValueType::Number),
             ],
         ),
-        Primitive::FieldUnary(math) => (
-            match math {
-                UnaryMath::Absolute => "Absolute value",
-                UnaryMath::Floor => "Floor",
-                UnaryMath::Float32 => "32-bit precision",
-                UnaryMath::Fraction => "Fraction (wrap)",
-                UnaryMath::Sine => "Sine (turns)",
-                UnaryMath::SquareRoot => "Square root",
-            },
+        Primitive::Fraction => (
+            "Fraction (wrap)",
             vec![(
                 "value",
                 port("Value", ValueType::Signal(SignalType::ANY), None),
             )],
-            vec![("value", ValueType::Signal(SignalType::ANY))],
-        ),
-        Primitive::ValueNoise1d | Primitive::ValueNoise3d => (
-            if matches!(op, Primitive::ValueNoise1d) {
-                "Value noise (1D)"
-            } else {
-                "Value noise (3D)"
-            },
-            if matches!(op, Primitive::ValueNoise1d) {
-                vec![
-                    ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
-                    (
-                        "position",
-                        port(
-                            "Position",
-                            ValueType::Signal(SignalType {
-                                unit: Some(Unit::Number),
-                                channels: None,
-                            }),
-                            Some(Value::Number(0.)),
-                        ),
-                    ),
-                    (
-                        "octaves",
-                        port("Octaves", ValueType::Number, Some(Value::Number(1.))),
-                    ),
-                ]
-            } else {
-                vec![
-                    ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
-                    (
-                        "x",
-                        port(
-                            "X",
-                            ValueType::Signal(SignalType {
-                                unit: Some(Unit::Number),
-                                channels: None,
-                            }),
-                            Some(Value::Number(0.)),
-                        ),
-                    ),
-                    (
-                        "y",
-                        port(
-                            "Y",
-                            ValueType::Signal(SignalType {
-                                unit: Some(Unit::Number),
-                                channels: None,
-                            }),
-                            Some(Value::Number(0.)),
-                        ),
-                    ),
-                    (
-                        "z",
-                        port(
-                            "Z",
-                            ValueType::Signal(SignalType {
-                                unit: Some(Unit::Number),
-                                channels: None,
-                            }),
-                            Some(Value::Number(0.)),
-                        ),
-                    ),
-                    (
-                        "octaves",
-                        port("Octaves", ValueType::Number, Some(Value::Number(1.))),
-                    ),
-                ]
-            },
-            vec![(
-                "value",
-                ValueType::Signal(SignalType {
-                    unit: Some(Unit::Number),
-                    channels: None,
-                }),
-            )],
-        ),
-        Primitive::SeedStream => (
-            "Seed stream",
-            vec![
-                ("seed", port("Seed", ValueType::Seed, Some(Value::Seed(0)))),
-                (
-                    "stream",
-                    port("Stream", ValueType::Seed, Some(Value::Seed(0))),
-                ),
-            ],
-            vec![("seed", ValueType::Seed)],
-        ),
-        Primitive::Power => (
-            "Power",
-            vec![
-                (
-                    "base",
-                    port("Base", ValueType::Signal(SignalType::ANY), None),
-                ),
-                (
-                    "exponent",
-                    port(
-                        "Exponent",
-                        ValueType::Signal(SignalType::ANY),
-                        Some(Value::Number(2.)),
-                    ),
-                ),
-            ],
             vec![("value", ValueType::Signal(SignalType::ANY))],
         ),
         Primitive::Noise => (
@@ -170,15 +48,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     };
     Some(Definition {
         name: name.into(),
-        inputs: inputs
-            .into_iter()
-            .map(|(k, mut v)| {
-                if v.value_type == ValueType::Seed {
-                    v.rate = Rate::Fixed;
-                }
-                (k.into(), v)
-            })
-            .collect(),
+        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         outputs: outputs
             .into_iter()
             .map(|(k, value_type)| {
@@ -186,11 +56,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                     k.into(),
                     Output {
                         value_type,
-                        rate: if op == Primitive::SeedStream {
-                            Rate::Fixed
-                        } else {
-                            Rate::Frame
-                        },
+                        rate: Rate::Frame,
                     },
                 )
             })
