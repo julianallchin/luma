@@ -389,12 +389,16 @@ mod tests {
 
     /// The strip of a shipped preset over `heads` heads in a row along U,
     /// shuffled so selection order says nothing about where a head is.
-    fn preset_strip(preset: &str, heads: usize) -> crate::models::patterns::AnnotationPreview {
+    fn preset_strip(
+        form: &str,
+        preset: &str,
+        heads: usize,
+    ) -> crate::models::patterns::AnnotationPreview {
         let mut cells = line_cells(heads);
         cells.reverse();
         cells.swap(1, heads / 2);
         let clip = luma_patterns::presets()
-            .preset(preset)
+            .preset(form, preset)
             .expect("a shipped preset")
             .clip(0.0, 4.0);
         synthetic_strip(&clip, &cells).unwrap()
@@ -429,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_chase_strip_is_a_diagonal() {
-        let preview = preset_strip("Chase", 48);
+        let preview = preset_strip("color.chase@1", "Chase", 48);
         assert_eq!((preview.width, preview.height), (64, 32));
         // One stroke crosses the rig over the first two beats: 32 columns.
         let rows: Vec<u32> = brightest(&preview)[..32]
@@ -444,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_gradient_strip_is_bands_constant_over_time() {
-        let preview = preset_strip("Gradient", 48);
+        let preview = preset_strip("color.space@1", "Gradient", 48);
         let pixel = |row: u32, col: u32| {
             let i = ((row * preview.width + col) * 4) as usize;
             preview.pixels[i..i + 3].to_vec()

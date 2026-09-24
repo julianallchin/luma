@@ -80,6 +80,7 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
         "Sparkle",
         "Noise",
         "Strobe",
+        "Aim",
     ];
     assert!(captions.len() >= 4, "{out}");
     assert_eq!(captions, forms[..captions.len()], "{out}");
@@ -103,7 +104,9 @@ fn the_browser_lists_presets_by_form_filters_and_places_on_click() {
     let clip = clips.values().next().unwrap();
     assert_eq!(clip["graph"], "color.chase@1");
     assert_eq!(clip["selection"]["expression"], "all");
-    let bounce = luma_patterns::presets().preset("Bounce").unwrap();
+    let bounce = luma_patterns::presets()
+        .preset("color.chase@1", "Bounce")
+        .unwrap();
     assert_eq!(
         clip["inputs"],
         serde_json::to_value(&bounce.inputs).unwrap(),
@@ -174,7 +177,9 @@ fn a_row_dragged_onto_the_timeline_shows_where_it_lands_and_lands_there() {
     let clips = score["clips"].as_object().unwrap();
     assert_eq!(clips.len(), 1, "{score}");
     let clip = clips.values().next().unwrap();
-    let ripple = luma_patterns::presets().preset("Ripple").unwrap();
+    let ripple = luma_patterns::presets()
+        .preset("color.chase@1", "Ripple")
+        .unwrap();
     assert_eq!(clip["graph"], "color.chase@1");
     assert_eq!(
         clip["inputs"],

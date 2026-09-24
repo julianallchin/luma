@@ -97,25 +97,25 @@ pub fn score(clips: Value) -> Value {
     json!({ "clips": clips })
 }
 
-/// One clip of a shipped preset over `start`..`start + duration` beats, with
-/// `seed`.
+/// One clip of the shipped preset `form`/`preset` over `start`..`start +
+/// duration` beats, with `seed`.
 #[must_use]
-pub fn preset_clip(preset: &str, start: f64, duration: f64, seed: u64) -> Value {
+pub fn preset_clip(form: &str, preset: &str, start: f64, duration: f64, seed: u64) -> Value {
     let mut clip = luma_patterns::presets()
-        .preset(preset)
+        .preset(form, preset)
         .expect("a shipped preset")
         .clip(start, duration);
     clip.seed = seed;
     serde_json::to_value(clip).expect("a serializable clip")
 }
 
-/// A score with one clip of a shipped preset at beats 2–6.
+/// A score with one clip of the shipped preset `form`/`preset` at beats 2–6.
 #[must_use]
-pub fn preset_score(preset: &str) -> Value {
+pub fn preset_score(form: &str, preset: &str) -> Value {
     let mut document: luma_patterns::Score =
         serde_json::from_value(score(json!({}))).expect("an empty score");
     let preset = luma_patterns::presets()
-        .preset(preset)
+        .preset(form, preset)
         .expect("a shipped preset");
     document
         .clips
@@ -717,7 +717,7 @@ impl Fixture {
     /// bpm grid, so a beat is half a second.
     fn timeline(&self) -> Value {
         let wash = luma_patterns::presets()
-            .preset("Wash")
+            .preset("color.constant@1", "Wash")
             .expect("a shipped preset");
         let mut clips = serde_json::Map::new();
         for clip in &self.clips {

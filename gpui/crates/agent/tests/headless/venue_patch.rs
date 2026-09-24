@@ -769,7 +769,7 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
 
 #[test]
 fn missing_group_dialog_repairs_saved_score_selectors() {
-    let mut lost = support::preset_clip("Chase", 0., 4., 0);
+    let mut lost = support::preset_clip("color.chase@1", "Chase", 0., 4., 0);
     lost["selection"] = serde_json::json!({"expression": "lost_wash"});
     let mut harness = Fixture::new("venue-missing-group", 20, Vec::new())
         .with_rig()

@@ -256,7 +256,7 @@
       "speed": {"type": "beats", "value": 4.0},
       "spread": {"type": "proportion", "value": 0.0}
     }},
-    {"name": "Nod wave", "form": "aim@1", "inputs": {
+    {"name": "Wave", "form": "aim@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
       "base": {"type": "choice", "value": "direction"},

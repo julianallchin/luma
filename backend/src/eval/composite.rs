@@ -95,7 +95,10 @@ mod tests {
         mode: p::BlendMode,
         z: i64,
     ) -> CompiledAnnotation {
-        let mut clip = p::presets().preset("Wash").unwrap().clip(0.0, 4.0);
+        let mut clip = p::presets()
+            .preset("color.constant@1", "Wash")
+            .unwrap()
+            .clip(0.0, 4.0);
         clip.inputs.insert("color".into(), p::Value::Color(color));
         clip.inputs
             .insert("brightness".into(), p::Value::Proportion(brightness));
@@ -138,7 +141,10 @@ mod tests {
     /// One `aim@1` Position clip on the head over beats 0–4, aimed at
     /// `direction` at `alpha`.
     fn aim(direction: [f64; 3], alpha: f64, z: i64) -> CompiledAnnotation {
-        let mut clip = p::presets().preset("Position").unwrap().clip(0.0, 4.0);
+        let mut clip = p::presets()
+            .preset("aim@1", "Position")
+            .unwrap()
+            .clip(0.0, 4.0);
         clip.inputs
             .insert("direction".into(), p::Value::Vector(direction));
         clip.inputs

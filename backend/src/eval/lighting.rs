@@ -421,7 +421,10 @@ mod tests {
     fn a_form_clip_compiles_to_the_batched_core_output() {
         let base = p::standard_library();
         let mut score = p::Score::default();
-        let mut clip = p::presets().preset("Dissolve").unwrap().clip(1.0, 3.0);
+        let mut clip = p::presets()
+            .preset("color.sparkle@1", "Dissolve")
+            .unwrap()
+            .clip(1.0, 3.0);
         clip.seed = 129;
         score.clips.insert("flash".into(), clip);
         let cells: Vec<_> = (0..24)
