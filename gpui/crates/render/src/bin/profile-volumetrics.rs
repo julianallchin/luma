@@ -602,10 +602,22 @@ fn profile_catalogue(
         "choose at most one lighting isolation mode"
     );
     let catalogue = luma_render::Catalogue::load(path)?;
+    // `--scene=N` picks a scene; a scene with pinned state (a score snapshot
+    // from `profile_score ... snapshot`) is lit by that state at its time.
+    let scene_index: usize = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--scene="))
+        .map_or(Ok(0), str::parse)?;
     let scene = catalogue
         .scenes
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("empty catalogue"))?;
+        .get(scene_index)
+        .ok_or_else(|| anyhow::anyhow!("no scene {scene_index} in the catalogue"))?;
+    let scored = !scene.state.is_empty();
+    let scene_time = if scored {
+        scene.times.first().copied().unwrap_or(0.0)
+    } else {
+        0.0
+    };
     let (width, height) = catalogue.frame_size();
     let mut library = Library::new(git_repository_root()?.join("resources/meshes"));
     // `--color=r,g,b` and `--dimmer=` replace the full red cue.
@@ -624,7 +636,10 @@ fn profile_catalogue(
     let mut frame = build_frame_with(
         scene,
         &catalogue.definitions,
-        &|_, _| {
+        &|id, head| {
+            if scored {
+                return scene.state.get(&format!("{id}:{head}")).copied();
+            }
             Some(luma_render::scene_desc::PrimitiveState {
                 dimmer,
                 color,
@@ -634,13 +649,18 @@ fn profile_catalogue(
                 gobo_rotation: 0.0,
             })
         },
-        0.0,
+        scene_time,
         &mut library,
     )?;
+    // `--haze=D` replaces the fixed 0.8 fog density.
+    let haze: f32 = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--haze="))
+        .map_or(Ok(0.8), str::parse)?;
     frame.haze_density = if arguments.iter().any(|a| a == "--surface-only") {
         0.0
     } else {
-        0.8
+        haze
     };
     frame.haze_resolution = luma_render::LIVE_HAZE_RESOLUTION;
     frame.haze_steps = 8;
@@ -697,7 +717,7 @@ fn profile_catalogue(
     let mut cold = None;
     let mut redraws = Vec::new();
     for i in 0..warmup + measured {
-        frame.time = i as f32 / 60.0;
+        frame.time = scene_time + i as f32 / 60.0;
         frame.fixture_cones.clone_from(&original_cones);
         for (index, cone) in frame
             .fixture_cones
