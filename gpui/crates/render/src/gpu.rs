@@ -8315,10 +8315,10 @@ impl Renderer {
                         &mut encoder,
                         &crate::post::PostFrame {
                             look: frame.look,
+                            quality: frame.quality,
                             cones: &frame.fixture_cones,
                             view_proj,
                             eye: frame.camera.eye,
-                            target: frame.camera.target,
                             fov_y_deg: frame.camera.fov_y_deg,
                             near: CAMERA_NEAR,
                             far: camera_far,

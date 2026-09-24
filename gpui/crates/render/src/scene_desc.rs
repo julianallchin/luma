@@ -482,12 +482,13 @@ impl Exposure {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glare {
-    /// Overall strength; 0 turns bloom, streaks and lens glow off.
+    /// Overall strength; 0 turns the glare and lens glow off.
     pub strength: f32,
     /// Exposed scene light above which a pixel glares, as a multiple of
     /// diffuse white.
     pub threshold: f32,
-    /// The diffraction around a lens (see [`GlareStyle`]), 0 to 1.
+    /// The diffraction pattern's weight in the glare kernel (see
+    /// [`GlareStyle`]), 0 to 1: 0.5 is physical, 0 leaves the veil alone.
     pub star: f32,
     /// What the diffraction looks like. Absent in a look stored before
     /// there was a choice, which means the default.
@@ -495,22 +496,25 @@ pub struct Glare {
     pub style: GlareStyle,
 }
 
-/// The shape of the light around a lens, on top of the soft bloom every
-/// style has. The first three are physical: `psf.rs` computes their
-/// patterns from an aperture.
+/// The shape of the glare around a hot source. Every style is physical:
+/// `psf.rs` builds its kernel from a veil and, but for bloom, the
+/// diffraction pattern of an aperture with a lens's dust and scratches.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GlareStyle {
-    /// Bloom only: a veiling glow with a long faint tail.
+    /// The eye's veiling glare alone (Vos): a glow with a long power-law
+    /// tail across the frame.
     Bloom,
-    /// A camera iris of nine rounded blades: eighteen faint thin rays with
-    /// coloured fringes.
+    /// A camera lens: an iris of nine rounded blades, dust and scratches.
+    /// Eighteen thin rays, irregular streaks and coloured haze, over a faint
+    /// veil.
     #[default]
     Aperture,
-    /// The eye: a corona of many fine radial streaks from the lens's
-    /// ciliary fibres.
+    /// The eye: the veil, and a corona of many fine radial streaks from the
+    /// lens's ciliary fibres.
     Eye,
-    /// Six drawn streaks per hot pixel. Not physical; bright and graphic.
+    /// A camera stopped down to six straight blades: six strong rays over
+    /// the same dust, scratches and faint veil.
     Star,
 }
 

@@ -19,13 +19,16 @@
 //!    The exposure moves toward the target with separate speeds up and down,
 //!    and snaps on a standalone frame so a capture is a function of its
 //!    frame alone.
-//! 3. **Glare** (`post_glare.wgsl`, `post_lens.wgsl`). The exposed frame
-//!    above a threshold, at half resolution, down a six-level dual-filter
-//!    pyramid and back up, each coarser level weighted less, so the glow
-//!    gathers near a source with a long faint tail. On top, by
-//!    [`GlareStyle`]: a diffraction pattern (`psf.rs`) drawn as a sprite at
-//!    every visible lens (iris or eye), or three lines of Kawase streaks at
-//!    quarter resolution (star), or nothing (bloom).
+//! 3. **Glare** (`post_glare.wgsl`, `psf.rs`). The exposed frame's light
+//!    above a threshold, averaged into a padded FFT grid (1024 × 512 at High,
+//!    512 × 256 at Low; the frame fills at most its top-left quarter), and
+//!    convolved with the glare kernel by FFT: the whole frame at once, so an
+//!    extended or oddly shaped bright area glares as its shape does
+//!    (Ritschel et al. 2009), not as a sprite per lens. The kernel is the
+//!    Vos veil plus, by [`GlareStyle`], a diffraction pattern of an iris, a
+//!    hexagonal star or an eye, with the lens's dust and scratches; its
+//!    spectrum is computed again only when the style, the diffraction amount
+//!    or the field of view changes.
 //! 4. **Tonemap** (`post_tonemap.wgsl`). Exposure, the tone curve, HDR
 //!    expansion, then the glare added over the tone-mapped picture: it
 //!    saturates at the display's white, so a white core stays white and the
@@ -37,35 +40,31 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
 use crate::frame::FixtureCone;
-use crate::scene_desc::{GlareStyle, Look};
+use crate::psf;
+use crate::scene_desc::{GlareStyle, Look, Quality};
 
 /// The scene-linear target the composite pass writes for this chain.
 pub(crate) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const GLARE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// Pyramid levels, the first at half resolution.
-const GLARE_LEVELS: usize = 6;
-/// Directions of the star's lines, in degrees. Three lines, six points.
-const STREAK_ANGLES_DEG: [f32; 3] = [15.0, 75.0, 135.0];
-/// Tap spacing of the three streak passes, in quarter-resolution texels:
-/// they reach 3 + 9 + 27 = 39 texels each way, a sixth of a 1080p frame.
-const STREAK_SPACING: [f32; 3] = [1.0, 3.0, 9.0];
-/// Per-texel attenuation along a streak. Short and bright at the core, so a
-/// row of lenses reads as a row of stars rather than a lattice.
-const STREAK_ATTENUATION: f32 = 0.93;
-/// Weight of each coarser bloom level against the one above it. Below one,
-/// the glow gathers near the source and fades into a long faint tail.
-const BLOOM_FALLOFF: f32 = 0.7;
-/// Diffraction sprite half-size, as a fraction of the frame height.
-const PSF_EXTENT_IRIS: f32 = 0.22;
-const PSF_EXTENT_EYE: f32 = 0.3;
-/// Diffraction gain at `star` = 1, over the physical fraction of the lens's
-/// light the pattern holds outside its core. The physical fraction alone is
-/// invisible next to the core's glare; this is a look, tuned on Get Lucky at
-/// Gasworks so the default `star` of 0.5 reads as faint.
-const PSF_GAIN: f32 = 60.0;
-/// The eye's corona spreads its light over many streaks and a wider sprite;
-/// at the iris's gain it veils the whole rig.
-const PSF_EYE_GAIN: f32 = 0.35;
+/// The glare's FFT grid, texels across and down, by quality. The frame is
+/// averaged into at most half of each side, so the kernel can reach across
+/// the whole frame before the cyclic convolution folds it back. At High a
+/// 16:9 frame is 455 × 256 texels, about 4 pixels each at 1080p: fine enough
+/// for a scratch's streak, and 1024 complex texels is the most one row
+/// transform holds in 16 KiB of workgroup memory.
+const GRID_HIGH: [usize; 2] = [1024, 512];
+const GRID_LOW: [usize; 2] = [512, 256];
+/// Glare gain over the physical kernel. The kernel spreads the physical
+/// fraction of a hot pixel's light; a lens here is about 60 times diffuse
+/// white where a real lamp's is thousands, so its glare would be as faint
+/// as a lamp a hundred times dimmer. The gain stands in for the missing
+/// range, alike for every style and every part of the kernel.
+const GLARE_GAIN: f32 = 10.0;
+/// The `star` setting at which the diffraction pattern is physical.
+const DIFFRACTION_PHYSICAL: f32 = 0.5;
+/// Relative change in the grid's focal length or reach that rebuilds the
+/// kernel.
+const KERNEL_TOLERANCE: f32 = 0.01;
 /// Bins plus the black slot, as `post_exposure.wgsl` lays them out.
 const HISTOGRAM_SLOTS: u64 = 129;
 
@@ -110,9 +109,6 @@ struct LensUniform {
     camera: [f32; 4],
     viewport: [f32; 4],
     depth: [f32; 4],
-    right: [f32; 4],
-    up: [f32; 4],
-    psf: [f32; 4],
 }
 
 #[repr(C)]
@@ -125,9 +121,9 @@ struct LensInstance {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct GlareUniform {
-    texel: [f32; 4],
-    streak: [f32; 4],
+struct FftUniform {
+    region: [u32; 4],
+    scene: [f32; 4],
 }
 
 #[repr(C)]
@@ -137,18 +133,13 @@ struct TonemapUniform {
     glare: [f32; 4],
 }
 
-/// One uniform slot per glare pass, at the device's offset alignment.
-const GLARE_SLOT: u64 = 256;
-const GLARE_PASSES: usize =
-    1 + (GLARE_LEVELS - 1) + (GLARE_LEVELS - 1) + STREAK_ANGLES_DEG.len() * STREAK_SPACING.len();
-
 /// Everything the chain needs from the frame.
 pub(crate) struct PostFrame<'a> {
     pub look: Look,
+    pub quality: Quality,
     pub cones: &'a [FixtureCone],
     pub view_proj: Mat4,
     pub eye: Vec3,
-    pub target: Vec3,
     pub fov_y_deg: f32,
     pub near: f32,
     pub far: f32,
@@ -164,6 +155,28 @@ pub(crate) struct PostFrame<'a> {
     pub temporal: bool,
 }
 
+/// The glare's compute pipelines for one grid size.
+struct Fft {
+    grid: [usize; 2],
+    rows_forward: wgpu::ComputePipeline,
+    rows_kernel: wgpu::ComputePipeline,
+    columns_forward: wgpu::ComputePipeline,
+    columns_convolve: wgpu::ComputePipeline,
+    rows_inverse: wgpu::ComputePipeline,
+}
+
+impl Fft {
+    /// Spectrum columns: the non-negative frequencies of a row.
+    fn half(&self) -> u32 {
+        (self.grid[0] / 2 + 1) as u32
+    }
+
+    /// Bytes of one spectrum: three planes of complex f32.
+    fn spectrum_bytes(&self) -> u64 {
+        3 * u64::from(self.half()) * self.grid[1] as u64 * 8
+    }
+}
+
 /// Shader modules and pipelines, shared by every renderer.
 pub(crate) struct Pipelines {
     exposure_layout: wgpu::BindGroupLayout,
@@ -171,19 +184,21 @@ pub(crate) struct Pipelines {
     adapt: wgpu::ComputePipeline,
     lens_layout: wgpu::BindGroupLayout,
     lens: wgpu::RenderPipeline,
-    glare_layout: wgpu::BindGroupLayout,
-    prefilter: wgpu::RenderPipeline,
-    down: wgpu::RenderPipeline,
-    up: wgpu::RenderPipeline,
-    streak: wgpu::RenderPipeline,
-    streak_add: wgpu::RenderPipeline,
-    psf: wgpu::RenderPipeline,
-    /// The iris's and the eye's diffraction patterns (`psf.rs`).
-    iris: wgpu::TextureView,
-    eye: wgpu::TextureView,
+    fft_layout: wgpu::BindGroupLayout,
+    /// High, then Low.
+    fft: [Fft; 2],
+    /// The apertures' diffraction patterns, baked once on a thread of their
+    /// own (about 85 ms on 32 cores, 190 ms on 4) and waited for by the first
+    /// frame with glare.
+    patterns: std::sync::OnceLock<psf::Patterns>,
+    baking: std::sync::Mutex<Option<std::thread::JoinHandle<psf::Patterns>>>,
     tonemap_layout: wgpu::BindGroupLayout,
     tonemap: Vec<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
+    /// Bound in place of the glare when there is none.
+    no_glare: wgpu::TextureView,
+    /// Bound in place of the kernel texels outside a kernel build.
+    no_kernel: wgpu::Buffer,
 }
 
 fn entry(
@@ -268,34 +283,46 @@ impl Pipelines {
                 entry(3, compute, storage(false)),
             ],
         });
-        let exposure_module = module(
-            device,
-            "post-exposure",
-            include_str!("shaders/post_exposure.wgsl").to_owned(),
-        );
-        let compute_pipeline = |label: &str, entry_point: &str| {
+        let compute_pipeline = |label: &str,
+                                layout: &wgpu::BindGroupLayout,
+                                module: &wgpu::ShaderModule,
+                                entry_point: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(label),
                 layout: Some(
                     &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some(label),
-                        bind_group_layouts: &[Some(&exposure_layout)],
+                        bind_group_layouts: &[Some(layout)],
                         immediate_size: 0,
                     }),
                 ),
-                module: &exposure_module,
+                module,
                 entry_point: Some(entry_point),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             })
         };
-        let histogram = compute_pipeline("post-histogram", "histogram_main");
-        let adapt = compute_pipeline("post-adapt", "adapt_main");
+        let exposure_module = module(
+            device,
+            "post-exposure",
+            include_str!("shaders/post_exposure.wgsl").to_owned(),
+        );
+        let histogram = compute_pipeline(
+            "post-histogram",
+            &exposure_layout,
+            &exposure_module,
+            "histogram_main",
+        );
+        let adapt = compute_pipeline(
+            "post-adapt",
+            &exposure_layout,
+            &exposure_module,
+            "adapt_main",
+        );
 
         let render_pipeline = |label: &str,
                                layout: &wgpu::BindGroupLayout,
                                module: &wgpu::ShaderModule,
-                               entry_point: &str,
                                format: wgpu::TextureFormat,
                                blend: Option<wgpu::BlendState>,
                                constants: &[(&str, f64)]| {
@@ -316,7 +343,7 @@ impl Pipelines {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module,
-                    entry_point: Some(entry_point),
+                    entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend,
@@ -349,9 +376,6 @@ impl Pipelines {
                         multisampled: false,
                     },
                 ),
-                entry(3, wgpu::ShaderStages::VERTEX, storage(true)),
-                entry(4, fragment, texture(true)),
-                entry(5, fragment, sampler()),
             ],
         });
         let lens_module = module(
@@ -363,102 +387,58 @@ impl Pipelines {
             "post-lens",
             &lens_layout,
             &lens_module,
-            "fs_main",
             SCENE_FORMAT,
             Some(ADDITIVE),
             &[],
         );
 
-        let psf = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("post-psf"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("post-psf"),
-                    bind_group_layouts: &[Some(&lens_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &lens_module,
-                entry_point: Some("vs_psf"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &lens_module,
-                entry_point: Some("fs_psf"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: GLARE_FORMAT,
-                    blend: Some(ADDITIVE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let pattern = |label: &str, aperture: crate::psf::Aperture| {
-            use wgpu::util::DeviceExt;
-            let side = crate::psf::SIZE as u32;
-            device
-                .create_texture_with_data(
-                    queue,
-                    &wgpu::TextureDescriptor {
-                        label: Some(label),
-                        size: wgpu::Extent3d {
-                            width: side,
-                            height: side,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    },
-                    wgpu::util::TextureDataOrder::LayerMajor,
-                    bytemuck::cast_slice(&crate::psf::bake(aperture)),
-                )
-                .create_view(&wgpu::TextureViewDescriptor::default())
-        };
-        let iris = pattern("post-psf-iris", crate::psf::Aperture::Iris);
-        let eye = pattern("post-psf-eye", crate::psf::Aperture::Eye);
-
-        let glare_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let fft_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post-glare"),
             entries: &[
-                entry(0, fragment, uniform()),
-                entry(1, fragment, texture(true)),
-                entry(2, fragment, sampler()),
-                entry(3, fragment, storage(true)),
-                entry(4, fragment, texture(true)),
+                entry(0, compute, uniform()),
+                entry(1, compute, texture(false)),
+                entry(2, compute, storage(true)),
+                entry(3, compute, storage(false)),
+                entry(4, compute, storage(false)),
+                entry(5, compute, storage(true)),
+                entry(
+                    6,
+                    compute,
+                    wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: GLARE_FORMAT,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                ),
             ],
         });
-        let glare_module = module(
-            device,
-            "post-glare",
-            include_str!("shaders/post_glare.wgsl").to_owned(),
-        );
-        let glare = |label: &str, entry_point: &str, blend: Option<wgpu::BlendState>| {
-            render_pipeline(
-                label,
-                &glare_layout,
-                &glare_module,
-                entry_point,
-                GLARE_FORMAT,
-                blend,
-                &[],
-            )
-        };
-        let prefilter = glare("post-glare-prefilter", "fs_prefilter", None);
-        let down = glare("post-glare-down", "fs_down", None);
-        let up = glare("post-glare-up", "fs_up", None);
-        let streak = glare("post-streak", "fs_streak", None);
-        let streak_add = glare("post-streak-add", "fs_streak", Some(ADDITIVE));
+        let fft = [GRID_HIGH, GRID_LOW].map(|grid| {
+            let module = module(
+                device,
+                "post-glare",
+                format!(
+                    "const ROW: u32 = {}u;\nconst COL: u32 = {}u;\n{}",
+                    grid[0],
+                    grid[1],
+                    include_str!("shaders/post_glare.wgsl")
+                ),
+            );
+            let pipeline = |label: &str, entry_point: &str| {
+                compute_pipeline(label, &fft_layout, &module, entry_point)
+            };
+            Fft {
+                grid,
+                rows_forward: pipeline("post-glare-rows", "rows_forward"),
+                rows_kernel: pipeline("post-glare-kernel-rows", "rows_kernel"),
+                columns_forward: pipeline("post-glare-kernel-columns", "columns_forward"),
+                columns_convolve: pipeline("post-glare-columns", "columns_convolve"),
+                rows_inverse: pipeline("post-glare-inverse", "rows_inverse"),
+            }
+        });
+        let baking = std::thread::Builder::new()
+            .name("glare-patterns".into())
+            .spawn(psf::Patterns::bake)
+            .ok();
 
         let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post-tonemap"),
@@ -466,9 +446,8 @@ impl Pipelines {
                 entry(0, fragment, uniform()),
                 entry(1, fragment, texture(false)),
                 entry(2, fragment, texture(true)),
-                entry(3, fragment, texture(true)),
-                entry(4, fragment, sampler()),
-                entry(5, fragment, storage(true)),
+                entry(3, fragment, sampler()),
+                entry(4, fragment, storage(true)),
             ],
         });
         let tonemap_module = module(
@@ -483,7 +462,6 @@ impl Pipelines {
                     "post-tonemap",
                     &tonemap_layout,
                     &tonemap_module,
-                    "fs_main",
                     format,
                     None,
                     if hdr { &[("HDR_OUTPUT", 1.0)] } else { &[] },
@@ -499,6 +477,36 @@ impl Pipelines {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let no_glare = {
+            use wgpu::util::DeviceExt;
+            device
+                .create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some("post-no-glare"),
+                        size: wgpu::Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: GLARE_FORMAT,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::LayerMajor,
+                    &[0; 8],
+                )
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let no_kernel = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("post-no-kernel"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         Self {
             exposure_layout,
@@ -506,87 +514,119 @@ impl Pipelines {
             adapt,
             lens_layout,
             lens,
-            glare_layout,
-            prefilter,
-            down,
-            up,
-            streak,
-            streak_add,
-            psf,
-            iris,
-            eye,
+            fft_layout,
+            fft,
+            patterns: std::sync::OnceLock::new(),
+            baking: std::sync::Mutex::new(baking),
             tonemap_layout,
             tonemap,
             sampler,
+            no_glare,
+            no_kernel,
         }
     }
 }
 
-struct Level {
-    size: [u32; 2],
-    view: wgpu::TextureView,
+impl Pipelines {
+    fn patterns(&self) -> &psf::Patterns {
+        self.patterns.get_or_init(|| {
+            let baking = self.baking.lock().map(|mut b| b.take()).ok().flatten();
+            baking
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_else(psf::Patterns::bake)
+        })
+    }
+}
+
+/// What the glare kernel was built for; a different key builds it again.
+#[derive(Clone, Copy, PartialEq)]
+struct KernelKey {
+    style: GlareStyle,
+    diffraction: f32,
+    focal: f32,
+    reach: [f32; 2],
+}
+
+impl KernelKey {
+    /// Whether a kernel built for `self` serves `other`. The frame's shape
+    /// moves the focal length and the reach a little on every resize; a
+    /// percent is invisible, and rebuilding costs 15–30 ms of CPU.
+    fn matches(&self, other: &Self) -> bool {
+        let near = |a: f32, b: f32| (a / b - 1.0).abs() < KERNEL_TOLERANCE;
+        self.style == other.style
+            && self.diffraction == other.diffraction
+            && near(self.focal, other.focal)
+            && near(self.reach[0], other.reach[0])
+            && near(self.reach[1], other.reach[1])
+    }
+}
+
+/// The glare's buffers for one frame size and grid.
+struct Glare {
+    /// Index into [`Pipelines::fft`].
+    fft: usize,
+    /// The frame's extent in grid texels, rounded up.
+    region: [u32; 2],
+    /// Frame pixels per grid texel.
+    scale: f32,
+    /// The convolved glare, `region` texels.
+    texture: wgpu::TextureView,
+    spectrum: wgpu::Buffer,
+    kernel: wgpu::Buffer,
+    built: Option<KernelKey>,
+}
+
+impl Glare {
+    fn new(device: &wgpu::Device, fft: &Fft, index: usize, size: [u32; 2]) -> Self {
+        let [gw, gh] = fft.grid;
+        // At most half the grid each way, and never finer than the frame.
+        let scale = (size[0] as f32 / (gw / 2) as f32)
+            .max(size[1] as f32 / (gh / 2) as f32)
+            .max(1.0);
+        let region = [
+            ((size[0] as f32 / scale).ceil() as u32).clamp(1, gw as u32 / 2),
+            ((size[1] as f32 / scale).ceil() as u32).clamp(1, gh as u32 / 2),
+        ];
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("post-glare"),
+            size: wgpu::Extent3d {
+                width: region[0],
+                height: region[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: GLARE_FORMAT,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let buffer = |label: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: fft.spectrum_bytes(),
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            fft: index,
+            region,
+            scale,
+            texture: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            spectrum: buffer("post-glare-spectrum"),
+            kernel: buffer("post-glare-kernel"),
+            built: None,
+        }
+    }
 }
 
 /// Sized render targets, reallocated on a size change.
 struct Targets {
     size: [u32; 2],
     scene: wgpu::TextureView,
-    /// Downsampled levels, half resolution first.
-    down: Vec<Level>,
-    /// Upsampled sums, one per level but the coarsest.
-    up: Vec<Level>,
-    /// Streak ping-pong and the star they accumulate into, at quarter
-    /// resolution.
-    streak: [Level; 3],
-    /// Diffraction sprites, at half resolution.
-    psf: Level,
-}
-
-fn level(device: &wgpu::Device, label: &str, size: [u32; 2], format: wgpu::TextureFormat) -> Level {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    Level {
-        size,
-        view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-    }
-}
-
-impl Targets {
-    fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
-        let halve = |s: [u32; 2]| [s[0].div_ceil(2).max(1), s[1].div_ceil(2).max(1)];
-        let mut down = Vec::with_capacity(GLARE_LEVELS);
-        let mut s = size;
-        for _ in 0..GLARE_LEVELS {
-            s = halve(s);
-            down.push(level(device, "post-glare-down", s, GLARE_FORMAT));
-        }
-        let up = down[..GLARE_LEVELS - 1]
-            .iter()
-            .map(|l| level(device, "post-glare-up", l.size, GLARE_FORMAT))
-            .collect();
-        let quarter = down[1].size;
-        let half = down[0].size;
-        Self {
-            size,
-            scene: level(device, "post-scene", size, SCENE_FORMAT).view,
-            down,
-            up,
-            streak: std::array::from_fn(|_| level(device, "post-streak", quarter, GLARE_FORMAT)),
-            psf: level(device, "post-psf", half, GLARE_FORMAT),
-        }
-    }
+    /// Allocated on the first frame with glare.
+    glare: Option<Glare>,
 }
 
 /// One renderer's post state: targets, the exposure it has adapted to, and
@@ -598,7 +638,7 @@ pub(crate) struct Post {
     meter: wgpu::Buffer,
     lens: wgpu::Buffer,
     lenses: Option<(wgpu::Buffer, u64)>,
-    glare: wgpu::Buffer,
+    fft: wgpu::Buffer,
     tonemap: wgpu::Buffer,
     last_adapt: Option<Instant>,
     /// Metering mode of the last frame; switching it snaps.
@@ -638,9 +678,9 @@ impl Post {
                 wgpu::BufferUsages::UNIFORM,
             ),
             lenses: None,
-            glare: buffer(
+            fft: buffer(
                 "post-glare",
-                GLARE_SLOT * GLARE_PASSES as u64,
+                std::mem::size_of::<FftUniform>() as u64,
                 wgpu::BufferUsages::UNIFORM,
             ),
             tonemap: buffer(
@@ -694,7 +734,26 @@ impl Post {
     ) -> wgpu::TextureView {
         let size = [width.max(1), height.max(1)];
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
-            self.targets = Some(Targets::new(device, size));
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("post-scene"),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: SCENE_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.targets = Some(Targets {
+                size,
+                scene: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                glare: None,
+            });
         }
         self.targets.as_ref().expect("just allocated").scene.clone()
     }
@@ -715,19 +774,8 @@ impl Post {
         pass_queries: &mut crate::pass_profile::PassQueries<'q>,
         last: Option<wgpu::RenderPassTimestampWrites<'q>>,
     ) {
-        let targets = self
-            .targets
-            .as_ref()
-            .expect("scene_target allocates the targets first");
         let look = frame.look;
         let glare_on = look.glare.on();
-        let style = look.glare.style;
-        let pattern = match style {
-            GlareStyle::Aperture => Some((&pipelines.iris, PSF_EXTENT_IRIS, PSF_GAIN)),
-            GlareStyle::Eye => Some((&pipelines.eye, PSF_EXTENT_EYE, PSF_GAIN * PSF_EYE_GAIN)),
-            GlareStyle::Bloom | GlareStyle::Star => None,
-        };
-        let mut lens_bind = None;
 
         // --- lens glow ------------------------------------------------------
         let lenses: Vec<LensInstance> = if glare_on {
@@ -753,6 +801,10 @@ impl Post {
         } else {
             Vec::new()
         };
+        let targets = self
+            .targets
+            .as_mut()
+            .expect("scene_target allocates the targets first");
         if !lenses.is_empty() {
             let bytes = bytemuck::cast_slice::<_, u8>(&lenses);
             let needed = bytes.len() as u64;
@@ -770,9 +822,6 @@ impl Post {
             }
             let (lens_buffer, _) = self.lenses.as_ref().expect("just allocated");
             queue.write_buffer(lens_buffer, 0, bytes);
-            let forward = (frame.target - frame.eye).normalize_or(Vec3::Y);
-            let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
-            let up = right.cross(forward);
             let focal = frame.height as f32 * 0.5 / (frame.fov_y_deg.to_radians() * 0.5).tan();
             queue.write_buffer(
                 &self.lens,
@@ -787,14 +836,6 @@ impl Post {
                         LENS_GAIN * look.glare.strength.min(1.0),
                     ],
                     depth: [frame.near, frame.far, LENS_OCCLUSION_SLACK_M, 0.0],
-                    right: right.extend(0.0).to_array(),
-                    up: up.extend(0.0).to_array(),
-                    psf: [
-                        pattern.map_or(0.0, |(_, extent, _)| extent),
-                        crate::psf::SIZE as f32,
-                        pattern.map_or(0.0, |(_, _, gain)| gain) * look.glare.star,
-                        0.0,
-                    ],
                 }),
             );
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -813,20 +854,6 @@ impl Post {
                         binding: 2,
                         resource: wgpu::BindingResource::TextureView(depth),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.state.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(
-                            pattern.map_or(&pipelines.eye, |(view, _, _)| view),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                    },
                 ],
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -839,8 +866,6 @@ impl Post {
             pass.set_pipeline(&pipelines.lens);
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..6, 0..lenses.len() as u32);
-            drop(pass);
-            lens_bind = Some(bind);
         }
 
         // --- metering ---------------------------------------------------------
@@ -908,207 +933,126 @@ impl Post {
             pass.dispatch_workgroups(1, 1, 1);
         }
 
-        // --- diffraction ------------------------------------------------------
-        // Cleared whenever the glare is on: the tonemap reads it for every
-        // style but the drawn star.
-        if glare_on && style != GlareStyle::Star {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("post-psf"),
-                color_attachments: &[Some(attachment(&targets.psf.view, true))],
-                depth_stencil_attachment: None,
-                timestamp_writes: pass_queries.render("post-psf", None),
-                ..Default::default()
-            });
-            if let (Some(bind), Some(_)) = (&lens_bind, pattern) {
-                pass.set_pipeline(&pipelines.psf);
-                pass.set_bind_group(0, bind, &[]);
-                pass.draw(0..6, 0..lenses.len() as u32);
-            }
-        }
-
         // --- glare ------------------------------------------------------------
-        if glare_on {
-            let mut slots: Vec<GlareUniform> = Vec::with_capacity(GLARE_PASSES);
-            let texel = |size: [u32; 2], scale: f32| {
-                [
-                    scale / size[0] as f32,
-                    scale / size[1] as f32,
-                    look.glare.threshold,
-                    look.glare.threshold * 0.5,
-                ]
-            };
-            // Prefilter reads the full-resolution scene.
-            slots.push(GlareUniform {
-                texel: texel(targets.size, 1.0),
-                streak: [0.0; 4],
-            });
-            for i in 1..GLARE_LEVELS {
-                slots.push(GlareUniform {
-                    texel: texel(targets.down[i - 1].size, 1.0),
-                    streak: [0.0; 4],
-                });
-            }
-            for i in (0..GLARE_LEVELS - 1).rev() {
-                slots.push(GlareUniform {
-                    texel: texel(targets.down[i + 1].size, 0.5),
-                    streak: [BLOOM_FALLOFF, 0.0, 0.0, 0.0],
-                });
-            }
-            let quarter = targets.down[1].size;
-            for angle in STREAK_ANGLES_DEG {
-                let (s, c) = angle.to_radians().sin_cos();
-                for spacing in STREAK_SPACING {
-                    slots.push(GlareUniform {
-                        texel: texel(quarter, 1.0),
-                        streak: [c, s, spacing, STREAK_ATTENUATION],
-                    });
-                }
-            }
-            let mut bytes = vec![0u8; GLARE_SLOT as usize * slots.len()];
-            for (i, slot) in slots.iter().enumerate() {
-                let at = i * GLARE_SLOT as usize;
-                bytes[at..at + std::mem::size_of::<GlareUniform>()]
-                    .copy_from_slice(bytemuck::bytes_of(slot));
-            }
-            queue.write_buffer(&self.glare, 0, &bytes);
-
-            let mut slot = 0u64;
-            let mut glare_pass = |encoder: &mut wgpu::CommandEncoder,
-                                  pass_queries: &mut crate::pass_profile::PassQueries<'q>,
-                                  label: &'static str,
-                                  pipeline: &wgpu::RenderPipeline,
-                                  source: &wgpu::TextureView,
-                                  detail: &wgpu::TextureView,
-                                  target: &wgpu::TextureView,
-                                  load: bool| {
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(label),
-                    layout: &pipelines.glare_layout,
+        let index = match frame.quality {
+            Quality::High => 0,
+            Quality::Low => 1,
+        };
+        let fft = &pipelines.fft[index];
+        if glare_on && targets.glare.as_ref().is_none_or(|g| g.fft != index) {
+            targets.glare = Some(Glare::new(device, fft, index, targets.size));
+        }
+        let glare = targets.glare.as_mut().filter(|_| glare_on);
+        let mut uv_scale = [1.0f32; 2];
+        if let Some(glare) = glare {
+            let frame_texels = [
+                targets.size[0] as f32 / glare.scale,
+                targets.size[1] as f32 / glare.scale,
+            ];
+            uv_scale = [
+                frame_texels[0] / glare.region[0] as f32,
+                frame_texels[1] / glare.region[1] as f32,
+            ];
+            queue.write_buffer(
+                &self.fft,
+                0,
+                bytemuck::bytes_of(&FftUniform {
+                    region: [glare.region[0], glare.region[1], 0, 0],
+                    scene: [
+                        glare.scale,
+                        look.glare.threshold,
+                        look.glare.threshold * 0.5,
+                        0.0,
+                    ],
+                }),
+            );
+            let bind = |kernel_texels: &wgpu::Buffer| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post-glare"),
+                    layout: &pipelines.fft_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &self.glare,
-                                offset: slot * GLARE_SLOT,
-                                size: wgpu::BufferSize::new(
-                                    std::mem::size_of::<GlareUniform>() as u64
-                                ),
-                            }),
+                            resource: self.fft.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::TextureView(source),
+                            resource: wgpu::BindingResource::TextureView(&targets.scene),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
                             resource: self.state.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: glare.spectrum.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
                             binding: 4,
-                            resource: wgpu::BindingResource::TextureView(detail),
+                            resource: glare.kernel.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: kernel_texels.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(&glare.texture),
                         },
                     ],
-                });
-                slot += 1;
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label),
-                    color_attachments: &[Some(attachment(target, !load))],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: pass_queries.render(label, None),
-                    ..Default::default()
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &bind, &[]);
-                pass.draw(0..3, 0..1);
+                })
             };
-            // `detail` is unused outside the upsample; any texture that is
-            // not this pass's target serves.
-            let unused = &targets.streak[2].view;
-            glare_pass(
-                encoder,
-                pass_queries,
-                "post-glare-prefilter",
-                &pipelines.prefilter,
-                &targets.scene,
-                unused,
-                &targets.down[0].view,
-                false,
-            );
-            for i in 1..GLARE_LEVELS {
-                glare_pass(
-                    encoder,
-                    pass_queries,
-                    "post-glare-down",
-                    &pipelines.down,
-                    &targets.down[i - 1].view,
-                    unused,
-                    &targets.down[i].view,
-                    false,
-                );
+
+            // The kernel's spectrum, when the style, the diffraction or the
+            // lens has changed.
+            let grid = psf::Grid {
+                width: fft.grid[0],
+                height: fft.grid[1],
+                focal: frame_texels[1] * 0.5 / (frame.fov_y_deg.to_radians() * 0.5).tan(),
+                reach: [
+                    fft.grid[0] as f32 - frame_texels[0] - 1.0,
+                    fft.grid[1] as f32 - frame_texels[1] - 1.0,
+                ],
+            };
+            let key = KernelKey {
+                style: look.glare.style,
+                diffraction: look.glare.star / DIFFRACTION_PHYSICAL,
+                focal: grid.focal,
+                reach: grid.reach,
+            };
+            if glare.built.is_none_or(|built| !built.matches(&key)) {
+                use wgpu::util::DeviceExt;
+                let texels = psf::kernel(key.style, key.diffraction, &grid, pipelines.patterns());
+                let kernel_texels = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("post-glare-kernel-texels"),
+                    contents: bytemuck::cast_slice(&texels),
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+                let bind = bind(&kernel_texels);
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("post-glare-kernel"),
+                    timestamp_writes: pass_queries.compute("post-glare-kernel", None),
+                });
+                pass.set_bind_group(0, &bind, &[]);
+                pass.set_pipeline(&fft.rows_kernel);
+                pass.dispatch_workgroups(fft.grid[1] as u32, 1, 1);
+                pass.set_pipeline(&fft.columns_forward);
+                pass.dispatch_workgroups(fft.half(), 1, 1);
+                glare.built = Some(key);
             }
-            for i in (0..GLARE_LEVELS - 1).rev() {
-                let coarser = if i + 1 == GLARE_LEVELS - 1 {
-                    &targets.down[i + 1].view
-                } else {
-                    &targets.up[i + 1].view
-                };
-                glare_pass(
-                    encoder,
-                    pass_queries,
-                    "post-glare-up",
-                    &pipelines.up,
-                    coarser,
-                    &targets.down[i].view,
-                    &targets.up[i].view,
-                    false,
-                );
-            }
-            for (line, _) in STREAK_ANGLES_DEG
-                .iter()
-                .enumerate()
-                .filter(|_| style == GlareStyle::Star)
-            {
-                let [a, b, star] = &targets.streak;
-                glare_pass(
-                    encoder,
-                    pass_queries,
-                    "post-streak",
-                    &pipelines.streak,
-                    &targets.down[1].view,
-                    unused,
-                    &a.view,
-                    false,
-                );
-                glare_pass(
-                    encoder,
-                    pass_queries,
-                    "post-streak",
-                    &pipelines.streak,
-                    &a.view,
-                    unused,
-                    &b.view,
-                    false,
-                );
-                let (pipeline, load) = if line == 0 {
-                    (&pipelines.streak, false)
-                } else {
-                    (&pipelines.streak_add, true)
-                };
-                glare_pass(
-                    encoder,
-                    pass_queries,
-                    "post-streak",
-                    pipeline,
-                    &b.view,
-                    &a.view,
-                    &star.view,
-                    load,
-                );
-            }
+
+            let bind = bind(&pipelines.no_kernel);
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("post-glare"),
+                timestamp_writes: pass_queries.compute("post-glare", None),
+            });
+            pass.set_bind_group(0, &bind, &[]);
+            pass.set_pipeline(&fft.rows_forward);
+            pass.dispatch_workgroups(glare.region[1], 1, 1);
+            pass.set_pipeline(&fft.columns_convolve);
+            pass.dispatch_workgroups(fft.half(), 1, 1);
+            pass.set_pipeline(&fft.rows_inverse);
+            pass.dispatch_workgroups(glare.region[1], 1, 1);
         }
 
         // --- tonemap ----------------------------------------------------------
@@ -1118,29 +1062,22 @@ impl Post {
             bytemuck::bytes_of(&TonemapUniform {
                 params: [
                     look.tone.shader_code() as f32,
-                    if glare_on { look.glare.strength } else { 0.0 },
-                    // The diffraction sprites carry `star` in their own gain.
-                    match style {
-                        GlareStyle::Bloom => 0.0,
-                        GlareStyle::Star => look.glare.star,
-                        GlareStyle::Aperture | GlareStyle::Eye => 1.0,
+                    if glare_on {
+                        look.glare.strength * GLARE_GAIN
+                    } else {
+                        0.0
                     },
+                    0.0,
                     frame.headroom,
                 ],
-                glare: [
-                    1.0 / (0..GLARE_LEVELS)
-                        .map(|level| BLOOM_FALLOFF.powi(level as i32))
-                        .sum::<f32>(),
-                    if style == GlareStyle::Star {
-                        1.0 / STREAK_ANGLES_DEG.len() as f32
-                    } else {
-                        1.0
-                    },
-                    0.0,
-                    0.0,
-                ],
+                glare: [uv_scale[0], uv_scale[1], 0.0, 0.0],
             }),
         );
+        let glare_view = targets
+            .glare
+            .as_ref()
+            .filter(|_| glare_on)
+            .map_or(&pipelines.no_glare, |g| &g.texture);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post-tonemap"),
             layout: &pipelines.tonemap_layout,
@@ -1155,22 +1092,14 @@ impl Post {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&targets.up[0].view),
+                    resource: wgpu::BindingResource::TextureView(glare_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(if style == GlareStyle::Star {
-                        &targets.streak[2].view
-                    } else {
-                        &targets.psf.view
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
                     resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 5,
+                    binding: 4,
                     resource: self.state.as_entire_binding(),
                 },
             ],
