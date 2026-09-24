@@ -54,12 +54,6 @@ const GLARE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// transform holds in 16 KiB of workgroup memory.
 const GRID_HIGH: [usize; 2] = [1024, 512];
 const GRID_LOW: [usize; 2] = [512, 256];
-/// Glare gain over the physical kernel. The kernel spreads the physical
-/// fraction of a hot pixel's light; a lens here is about 60 times diffuse
-/// white where a real lamp's is thousands, so its glare would be as faint
-/// as a lamp a hundred times dimmer. The gain stands in for the missing
-/// range, alike for every style and every part of the kernel.
-const GLARE_GAIN: f32 = 10.0;
 /// The `star` setting at which the diffraction pattern is physical.
 const DIFFRACTION_PHYSICAL: f32 = 0.5;
 /// Relative change in the grid's focal length or reach that rebuilds the
@@ -89,8 +83,12 @@ const MAX_ADAPT_STEP_S: f32 = 0.1;
 /// test cone), which carries none: a hard beam and a wide wash.
 const LENS_RADIUS_BEAM_M: f32 = 0.05;
 const LENS_RADIUS_WASH_M: f32 = 0.12;
-/// Scene-linear radiance of a lens on its axis, per unit of cone intensity.
-const LENS_GAIN: f32 = 60.0;
+/// Scene-linear radiance of a lens on its axis, per unit of cone intensity:
+/// about 600 times diffuse white. A real lamp's lens is thousands, and its
+/// glare comes from that range. The glare kernel is physical, so a
+/// reflection on a truss, a few times white, glares only faintly; a gain on
+/// the glare itself made every such reflection bloom like a lens.
+const LENS_GAIN: f32 = 600.0;
 /// Depth slack for the lens's own glass and bezel, which sit at its centre.
 const LENS_OCCLUSION_SLACK_M: f32 = 0.1;
 
@@ -1063,7 +1061,7 @@ impl Post {
                 params: [
                     look.tone.shader_code() as f32,
                     if glare_on {
-                        look.glare.strength * GLARE_GAIN
+                        look.glare.strength
                     } else {
                         0.0
                     },

@@ -421,9 +421,11 @@ setting `stage_look`. Any other look runs `post.rs`:
     far out on the tail. The tonemap reads the glare through a cubic
     B-spline, smooth to the second derivative.
 
-  `strength` scales the glare and `GLARE_GAIN` (10) stands in for the range
-  the scene lacks: a lens here is about 60× diffuse white where a real lamp
-  is thousands. `star` weights the pattern; 0.5 is physical. The Kawase star
+  `strength` scales the glare, which is otherwise physical. The lens is
+  drawn at about 600× diffuse white (`LENS_GAIN`), nearer a real lamp's
+  thousands, so lenses glare and reflections on truss, a few times white, do
+  not. An earlier gain of 10 on the glare itself made every such reflection
+  bloom like a lens. `star` weights the pattern; 0.5 is physical. The Kawase star
   streaks are gone: star is now a hexagonal aperture's six diffraction rays.
   Added after the tone curve, saturating at the display's white.
 
