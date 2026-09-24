@@ -816,6 +816,31 @@ pub fn scrub(
     scrub_with_power(id, value, min..=max, step, width, 1.0, on_change)
 }
 
+/// A [`scrub`] that shows `unit` after the value, dim, as a
+/// [`crate::arg::number::DraftedNumber`] field does: "°", "beats".
+#[allow(clippy::too_many_arguments)]
+pub fn scrub_with_unit(
+    id: impl Into<SharedString>,
+    value: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    width: f32,
+    unit: &'static str,
+    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<Div> {
+    scrub_box(
+        id,
+        value,
+        min..=max,
+        step,
+        width,
+        1.0,
+        Some(unit),
+        on_change,
+    )
+}
+
 /// A value scrub with a power curve. Powers above one give small values more
 /// pointer travel; the fill follows the pointer and the readout stays in units.
 pub fn scrub_with_power(
@@ -825,6 +850,20 @@ pub fn scrub_with_power(
     step: f64,
     width: f32,
     power: f64,
+    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<Div> {
+    scrub_box(id, value, range, step, width, power, None, on_change)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scrub_box(
+    id: impl Into<SharedString>,
+    value: f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+    width: f32,
+    power: f64,
+    unit: Option<&'static str>,
     on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<Div> {
     assert!(power.is_finite() && power > 0.0);
@@ -855,10 +894,19 @@ pub fn scrub_with_power(
                 .px(px(PICKER_CHIP_PAD))
                 .flex()
                 .items_center()
+                .gap(px(4.0))
                 .font_family(crate::fonts::MONO)
                 .text_size(px(11.0))
                 .text_color(ladder::foreground())
-                .child(text.clone())
+                .child(div().flex_1().min_w_0().child(text.clone()))
+                .when_some(unit, |row, unit| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_color(ladder::foreground_alpha(0.45))
+                            .child(unit),
+                    )
+                })
                 // The number the box draws, published — see
                 // [`crate::luma_slider`]: without it a driver can sweep the
                 // control and has no way to read what it landed on.

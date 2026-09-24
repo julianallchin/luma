@@ -114,6 +114,8 @@ pub enum PatternArgType {
     Boolean,
     Mapping,
     Boundary,
+    /// One of a form input's named options.
+    Choice,
 
     Color,
     Scalar,

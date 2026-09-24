@@ -308,6 +308,7 @@ pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
         ValueType::Boundary => PatternArgType::Boundary,
         ValueType::Envelope => PatternArgType::Envelope,
         ValueType::Boolean => PatternArgType::Boolean,
+        ValueType::Choice => PatternArgType::Choice,
         _ => return None,
     })
 }
