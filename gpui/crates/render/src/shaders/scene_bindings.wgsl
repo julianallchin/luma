@@ -103,11 +103,17 @@ struct FixtureLightRest {
     // Scattering multiplier: one for stage fixtures and house lamps,
     // zero to disable scattering.
     haze_gain: f32,
-    // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
-    // alignment and push the struct to 80 bytes, disagreeing with the Rust
-    // stride. Scalars keep it at 64.
+    // Scalars, not a `vec3`: a `vec3` member would take its own 16-byte
+    // alignment and move every later field, disagreeing with the Rust layout.
     inverse_right_length: f32,
     field_tangent: f32,
+    // Virtual apex to lens plane, metres; zero for a point source. The core's
+    // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
+    lens_distance: f32,
+    // Tail padding to the 80-byte stride; a beam-waist profile would take it.
+    lens_reserved0: f32,
+    lens_reserved1: f32,
+    lens_reserved2: f32,
 };
 
 struct SurfaceClusterParams {

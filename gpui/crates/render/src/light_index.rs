@@ -345,14 +345,18 @@ pub(crate) struct LightRest {
     pub shadow_slot: f32,
     /// This cone's share of the participating medium — see
     /// [`FixtureCone::haze_gain`](crate::frame::FixtureCone::haze_gain).
-    ///
-    /// It rides in what used to be the first padding word, so the struct is
-    /// still 64 bytes and the index's id space is untouched.
     pub haze_gain: f32,
     /// Reciprocal length of the aperture's unnormalised right vector.
     pub inverse_right_length: f32,
     /// Tangent of the field half-angle used by the optical-depth cache.
     pub field_tangent: f32,
+    /// Distance from the cone's virtual apex back to the lens plane —
+    /// [`FixtureCone::lens_distance`](crate::frame::FixtureCone::lens_distance).
+    /// Zero for a point source. `LightCore::position` stays the lens centre.
+    pub lens_distance: f32,
+    /// Tail padding to the WGSL stride (the struct aligns to 16 bytes). A
+    /// focus-dependent lens profile (beam waist) would take these words.
+    pub lens_reserved: [f32; 3],
 }
 
 #[repr(C)]
@@ -898,7 +902,7 @@ impl LightIndex {
             .map(|(source, cone, extent)| {
                 let rest = rests[*source as usize];
                 let source_range = if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
-                    cone.range.min(crate::fog_grid::SOURCE_OUTER)
+                    cone.source_reach(crate::fog_grid::SOURCE_OUTER)
                 } else {
                     0.0
                 };
@@ -1274,12 +1278,19 @@ impl View {
 }
 
 /// One sanitiser for the whole index; see [`View`] for the range ceiling.
+///
+/// The index bounds the cone from its **virtual apex**: `position` is
+/// [`FixtureCone::apex`] and `range` is [`FixtureCone::apex_reach`]. That solid
+/// contains the beam (cone ∩ lens ball ∩ the half-space past the lens plane),
+/// so every test built on it stays conservative.
 #[derive(Debug, Clone, Copy)]
 struct SanitizedCone {
     position: Vec3,
     range: f32,
     direction: Vec3,
     cos_field: f32,
+    /// Apex-to-lens distance: `range` minus the lens range.
+    lens_distance: f32,
 }
 
 impl SanitizedCone {
@@ -1299,15 +1310,26 @@ impl SanitizedCone {
     }
 
     fn new(light: &FixtureCone) -> Self {
+        let lens = finite_vec(light.position, Vec3::ZERO)
+            .clamp(Vec3::splat(-100_000.0), Vec3::splat(100_000.0));
+        let direction = finite_vec(light.direction, Vec3::NEG_Z)
+            .try_normalize()
+            .unwrap_or(Vec3::NEG_Z);
+        let cos_field = finite(light.cos_field, 0.95).clamp(0.01, 1.0);
+        let lens_distance = light.lens.apex_distance(cos_field);
         Self {
-            position: finite_vec(light.position, Vec3::ZERO)
-                .clamp(Vec3::splat(-100_000.0), Vec3::splat(100_000.0)),
-            range: finite(light.range, 0.05).clamp(0.05, 100.0),
-            direction: finite_vec(light.direction, Vec3::NEG_Z)
-                .try_normalize()
-                .unwrap_or(Vec3::NEG_Z),
-            cos_field: finite(light.cos_field, 0.95).clamp(0.01, 1.0),
+            position: lens - direction * lens_distance,
+            range: finite(light.range, 0.05).clamp(0.05, 100.0) + lens_distance,
+            direction,
+            cos_field,
+            lens_distance,
         }
+    }
+
+    /// The analytic source region's reach from the apex: the lens range capped
+    /// at `outer`, carried back to the apex so its ball contains the lens's.
+    fn source_reach(&self, outer: f32) -> f32 {
+        (self.range - self.lens_distance).min(outer) + self.lens_distance
     }
 }
 
@@ -1575,6 +1597,139 @@ mod tests {
             }
         }
         assert!(checked > 1000 && tightened > 0);
+    }
+
+    /// Deterministic points strictly inside a lens cone's beam: past the lens
+    /// plane, inside the lens-wide cone, inside the lens ball — including
+    /// points within a millimetre of the glass, near the rim.
+    fn lens_beam_points(light: &FixtureCone) -> Vec<Vec3> {
+        let direction = light.direction.normalize();
+        let side = direction.any_orthonormal_vector();
+        let up = direction.cross(side);
+        let tan = (1.0 - light.cos_field * light.cos_field).sqrt() / light.cos_field;
+        let mut points = Vec::new();
+        for d in [0.001, 0.05, 0.3, light.range * 0.4, light.range * 0.9] {
+            let radius = (light.lens.radius + d * tan) * 0.97;
+            for spoke in 0..12 {
+                let angle = spoke as f32 * std::f32::consts::TAU / 12.0;
+                points.push(
+                    light.position
+                        + direction * d
+                        + (side * angle.cos() + up * angle.sin()) * radius,
+                );
+            }
+        }
+        points
+    }
+
+    /// A lens-sized source's beam is wider than its point-apex cone near the
+    /// glass. The index bounds it from the virtual apex with the apex reach, so
+    /// every beam point — up to the lens rim — must land in its tile mask and
+    /// Z-bin, for cameras in front of, beside and between apex and lens.
+    #[test]
+    fn a_lens_beam_is_conservatively_indexed_to_the_rim() {
+        let lensed = |position, direction: Vec3, range, half_deg: f32, radius| FixtureCone {
+            lens: crate::luminaire::Lens { radius },
+            ..cone(
+                position,
+                direction.normalize(),
+                range,
+                half_deg.to_radians().cos(),
+            )
+        };
+        let lights = [
+            lensed(
+                Vec3::new(-1.0, 4.0, 1.5),
+                Vec3::new(0.2, 0.3, -1.0),
+                6.0,
+                4.0,
+                0.2,
+            ),
+            lensed(
+                Vec3::new(1.5, 6.0, 2.0),
+                Vec3::new(-0.4, -0.2, -1.0),
+                9.0,
+                2.0,
+                0.12,
+            ),
+            lensed(Vec3::new(0.0, 3.0, 0.5), Vec3::Y, 5.0, 25.0, 0.08),
+        ];
+        let cameras = [
+            camera(),
+            Camera {
+                eye: Vec3::new(3.0, 1.0, 2.0),
+                target: Vec3::new(-1.0, 4.0, 1.0),
+                fov_y_deg: 50.0,
+            },
+            // Between the first light's virtual apex and its lens.
+            Camera {
+                eye: lights[0].position
+                    - lights[0].direction.normalize() * 0.5 * lights[0].lens_distance(),
+                target: lights[0].position + lights[0].direction.normalize() * 3.0,
+                fov_y_deg: 60.0,
+            },
+        ];
+        assert!(
+            lights[0].lens_distance() > 1.0,
+            "the apex sits well behind the glass"
+        );
+        let mut checked = 0;
+        for camera in cameras {
+            let index = CpuLightIndex::build(&input(&lights, camera));
+            for (source, light) in lights.iter().enumerate() {
+                let source = source as u32;
+                for point in lens_beam_points(light) {
+                    let depth = index.view_depth(point);
+                    if depth < 0.1 {
+                        continue;
+                    }
+                    let Some([px, py]) = index.project(point) else {
+                        continue;
+                    };
+                    assert!(
+                        index.lights_at(px, py, depth).contains(&source),
+                        "light {source} missing at {point:?} from {camera:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 300, "{checked}");
+    }
+
+    /// The Wronski test from the virtual apex with the apex reach keeps every
+    /// sphere the lens beam touches, including one sitting on the lens rim.
+    #[test]
+    fn cone_reaches_sphere_from_the_virtual_apex_keeps_the_lens_rim() {
+        let light = FixtureCone {
+            lens: crate::luminaire::Lens { radius: 0.15 },
+            ..cone(
+                Vec3::new(0.0, 0.0, 5.0),
+                Vec3::NEG_Z,
+                10.0,
+                3f32.to_radians().cos(),
+            )
+        };
+        let apex = light.apex();
+        let reaches = |centre: Vec3, radius: f32| {
+            cone_reaches_sphere(
+                apex,
+                Vec3::NEG_Z,
+                light.apex_reach(),
+                light.cos_field,
+                centre,
+                radius,
+            )
+        };
+        let side = Vec3::X;
+        for point in lens_beam_points(&light) {
+            assert!(reaches(point, 0.0), "dropped {point:?}");
+        }
+        // Just outside the lens rim at the glass, and past the lens range.
+        assert!(!reaches(light.position + side * 0.2, 0.01));
+        assert!(!reaches(light.position + Vec3::NEG_Z * 10.5, 0.1));
+        // The lens rim itself, at the lens plane.
+        assert!(reaches(light.position + side * 0.1499, 0.0));
     }
 
     #[test]

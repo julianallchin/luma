@@ -20,6 +20,34 @@ fn shadow_compare_reference(raw_z: f32, near: f32, far: f32, slack: f32) -> f32 
     );
 }
 
+/// A beam leaves a lens-sized disc, not a point. Its cone converges on a
+/// virtual apex `lens_distance` behind the lens centre on the beam axis, so it
+/// is exactly lens-wide at the lens plane; the part behind that plane is not
+/// beam. Light positions are lens centres, and distance falloff is measured
+/// from them; angles (profile, gobo, shadow projection) are seen from the apex.
+/// `lens_distance == 0` is a point source, and both helpers then reduce to the
+/// point-apex arithmetic bit for bit.
+///
+/// `q` points from the lens centre to the sample; `dist` is its length.
+/// Returns the cosine of the sample's angle off the axis as seen from the apex,
+/// or -1 (outside every field) behind the lens plane.
+fn lens_cos_angle(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32, dist: f32) -> f32 {
+    let axial = dot(q, direction);
+    if lens_distance <= 0.0 {
+        return axial / max(dist, 1e-4);
+    }
+    if axial <= 0.0 {
+        return -1.0;
+    }
+    return (axial + lens_distance) / max(length(q + direction * lens_distance), 1e-4);
+}
+
+/// `q` (lens centre to sample) re-based on the virtual apex, for the gobo:
+/// its aperture coordinates scale with the cone, which is lens-wide at the lens.
+fn from_lens_apex(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32) -> vec3<f32> {
+    return q + direction * lens_distance;
+}
+
 /// Peaked photometric profile with GDTF beam/field semantics: 100% on the
 /// axis, 50% at the beam angle, smoothly cut to zero approaching the field
 /// angle.

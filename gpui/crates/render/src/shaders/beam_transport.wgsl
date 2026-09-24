@@ -71,11 +71,17 @@ struct LightRest {
     shadow_slot: f32,
     // Scattering multiplier; stage fixtures and house lamps both use one.
     haze_gain: f32,
-    // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
-    // alignment and push the struct to 80 bytes, disagreeing with the Rust
-    // stride. Scalars keep it at 64.
+    // Scalars, not a `vec3`: a `vec3` member would take its own 16-byte
+    // alignment and move every later field, disagreeing with the Rust layout.
     inverse_right_length: f32,
     field_tangent: f32,
+    // Virtual apex to lens plane, metres; zero for a point source. The core's
+    // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
+    lens_distance: f32,
+    // Tail padding to the 80-byte stride; a beam-waist profile would take it.
+    lens_reserved0: f32,
+    lens_reserved1: f32,
+    lens_reserved2: f32,
 };
 
 struct Haze {
@@ -383,13 +389,19 @@ fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
         return vec2<f32>(0.0);
     }
 
+    // The cone converges on the virtual apex behind the lens; the range ball
+    // above stays centred on the lens. With a point source (`lens == 0`) the
+    // apex terms below are the lens terms exactly.
     let rest = light_rest[li];
+    let lens = rest.lens_distance;
+    let oa = oc + rest.direction * lens;
+    let ba = dot(oa, ray_dir);
     let cf2 = rest.cos_field * rest.cos_field;
     let dv = dot(ray_dir, rest.direction);
-    let ov = dot(oc, rest.direction);
+    let ov = dot(oa, rest.direction);
     let qa = dv * dv - cf2;
-    let qb = dv * ov - cf2 * b;
-    let qc = ov * ov - cf2 * oo;
+    let qb = dv * ov - cf2 * ba;
+    let qc = ov * ov - cf2 * dot(oa, oa);
 
     var r0 = s0;
     var r1 = s0;
@@ -432,17 +444,35 @@ fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
         if eb - ea < 1e-5 {
             continue;
         }
-        let mp = oc + ray_dir * ((ea + eb) * 0.5);
+        let mp = oa + ray_dir * ((ea + eb) * 0.5);
         let mm = dot(mp, rest.direction);
         if mm > 0.0 && mm * mm >= cf2 * dot(mp, mp) {
             t_a = min(t_a, ea);
             t_b = max(t_b, eb);
         }
     }
+    // The beam starts at the lens plane: the virtual segment between the apex
+    // and the lens is inside the fixture. The plane is convex like the other
+    // two bounds, so clipping keeps one contiguous span; it covers a camera
+    // behind the lens (the span starts where the ray crosses the plane) and one
+    // inside the beam (it starts at the eye).
+    if lens > 0.0 && !clip_to_lens_plane(&t_a, &t_b, dot(oc, rest.direction), dv) {
+        return vec2<f32>(0.0);
+    }
     if t_b <= t_a {
         return vec2<f32>(0.0);
     }
     return vec2<f32>(t_a, t_b);
+}
+
+// Keep the part of `[t_a, t_b]` on the emitting side of the lens plane, where
+// `axial + t * slope >= 0` is the ray's signed distance past it. False when no
+// part is.
+fn clip_to_lens_plane(t_a: ptr<function, f32>, t_b: ptr<function, f32>, axial: f32, slope: f32) -> bool {
+    if slope > 1e-8 { *t_a = max(*t_a, -axial / slope); }
+    else if slope < -1e-8 { *t_b = min(*t_b, -axial / slope); }
+    else if axial < 0.0 { return false; }
+    return true;
 }
 
 // Unshadowed equiangular midpoint estimate guides reference light selection.
@@ -461,7 +491,7 @@ fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
     let t = -b + h * tan((theta_a + theta_b) * 0.5);
     let q = oc + ray.dir * t;
     let dist = max(length(q), 1e-4);
-    let angular = angular_profile(dot(q, rest.direction) / dist, rest.cos_beam, rest.cos_field);
+    let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
     let phase = henyey_greenstein(-(b + t) / dist, haze.transport.y);
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
     let spectrum = max(max(tint.r, tint.g), tint.b);
@@ -561,7 +591,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         let q = oc + ray_dir * t;
         let d2 = dot(q, q);
         let dist = sqrt(d2);
-        let cos_angle = dot(q, rest.direction) / max(dist, 1e-4);
+        let cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, dist);
 
         let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
         if angular <= 0.0 {
@@ -572,7 +602,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         // popping at the hard cull sphere.
         let taper = beam_range_falloff(dist, core.range);
         let gobo = gobo_transmission(
-            q,
+            from_lens_apex(q, rest.direction, rest.lens_distance),
             rest.direction,
             rest.cos_field,
             rest.gobo,
@@ -646,7 +676,7 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
             let q = oc + ray.dir * t;
             let d2 = dot(q, q);
             let distance = sqrt(d2);
-            let angular = angular_profile(dot(q, rest.direction) / max(distance, 1e-4), rest.cos_beam, rest.cos_field);
+            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
             let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
             let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
             let world = haze.camera_pos.xyz + ray.dir * t;

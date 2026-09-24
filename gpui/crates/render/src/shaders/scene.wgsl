@@ -177,7 +177,10 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
     let planes = fixture_shadow_matrices[layer].params;
     let row_x = vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x);
     let row_y = vec3<f32>(matrix[0].y, matrix[1].y, matrix[2].y);
-    let plane_distance = min(dot(normal, biased - fixture_cores[light_index].position), -1e-5);
+    // Signed distance from the projection centre — the cone's virtual apex.
+    let apex = fixture_cores[light_index].position
+        - fixture_rests[light_index].direction * fixture_rests[light_index].lens_distance;
+    let plane_distance = min(dot(normal, biased - apex), -1e-5);
     let projection_scale = planes.x * planes.y / (planes.y - planes.x);
     let gradient = projection_scale / plane_distance * vec2<f32>(
         2.0 * dot(normal, row_x) / dot(row_x, row_x),
@@ -556,13 +559,18 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
                 continue;
             }
             let from_light = q / distance;
-            let cos_angle = dot(from_light, rest.direction);
+            // Seen from the virtual apex behind the lens, so the lit pool is
+            // the beam's own footprint; falloff below stays from the lens.
+            var cos_angle = dot(from_light, rest.direction);
+            if rest.lens_distance > 0.0 {
+                cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, distance);
+            }
             let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
             if angular <= 0.0 {
                 continue;
             }
             let aperture = gobo_transmission(
-                q,
+                from_lens_apex(q, rest.direction, rest.lens_distance),
                 rest.direction,
                 rest.cos_field,
                 rest.gobo,

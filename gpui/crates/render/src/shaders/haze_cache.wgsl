@@ -171,7 +171,7 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
         let q = oc + ray.dir * t;
         let d2 = dot(q, q);
         let distance = sqrt(d2);
-        let angular = angular_profile(dot(q, rest.direction) / max(distance, 1e-4), rest.cos_beam, rest.cos_field);
+        let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
         let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
         let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
         let world = haze.camera_pos.xyz + ray.dir * t;
