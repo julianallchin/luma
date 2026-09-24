@@ -4271,6 +4271,7 @@ impl Gpu {
         let sky_visibility = crate::sky_visibility::Pipelines::new(&device, &queue);
         let post = crate::post::Pipelines::new(
             &device,
+            &queue,
             &Channels::ALL.map(|channels| (channels.format(), channels == Channels::Hdr)),
         );
         Ok(Self {

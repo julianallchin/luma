@@ -95,7 +95,7 @@ fn fs_down(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 /// Dual-filter upsample of the coarser level, added to this level's own
-/// downsample. The pyramid's top therefore holds every level's sum.
+/// downsample. The pyramid's top therefore holds every level's weighted sum.
 @fragment
 fn fs_up(in: VsOut) -> @location(0) vec4<f32> {
     let h = cfg.texel.xy;
@@ -108,7 +108,10 @@ fn fs_up(in: VsOut) -> @location(0) vec4<f32> {
     sum += tap(in.uv + vec2<f32>(-h.x, h.y)) * 2.0;
     sum += tap(in.uv + vec2<f32>(h.x, h.y)) * 2.0;
     let own = textureSampleLevel(detail, linear_clamp, in.uv, 0.0).rgb;
-    return vec4<f32>(sum / 12.0 + own, 1.0);
+    // `streak.x` weighs the coarser levels against this one: below one,
+    // each level out adds less, so the glow is concentrated near the source
+    // with a long faint tail rather than an even haze.
+    return vec4<f32>(sum / 12.0 * cfg.streak.x + own, 1.0);
 }
 
 /// One Kawase streak pass: seven taps along a line, symmetric, each
