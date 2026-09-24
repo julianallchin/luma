@@ -3282,6 +3282,23 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
                 .agent_node(Role::Toggle, name),
         );
     }
+    let mut style = luma_ui::float::segmented().w_full();
+    for (name, choice) in [
+        ("Bloom", scene_desc::GlareStyle::Bloom),
+        ("Iris", scene_desc::GlareStyle::Aperture),
+        ("Eye", scene_desc::GlareStyle::Eye),
+        ("Star", scene_desc::GlareStyle::Star),
+    ] {
+        let app = app.clone();
+        style = style.child(
+            luma_ui::float::segment(name, look.glare.style == choice, name)
+                .id(gpui::ElementId::Name(format!("glare-{name}").into()))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.set_view_glare_style(choice, cx));
+                })
+                .agent_node(Role::Toggle, name),
+        );
+    }
     let (exposure_min, exposure_max) = (
         *scene_desc::Exposure::RANGE.start(),
         *scene_desc::Exposure::RANGE.end(),
@@ -3326,9 +3343,10 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             *GLARE_THRESHOLD.end(),
             ViewValue::GlareThreshold,
         ))
+        .child(style.agent_node(Role::Card, "Glare style"))
         .child(view_value(
             app,
-            "Star",
+            "Diffraction",
             look.glare.star,
             0.,
             1.,
@@ -4685,6 +4703,12 @@ mod view_tests {
         let json = serde_json::to_string(&look).unwrap();
         assert_eq!(stored_look(&json), look);
         assert_eq!(stored_look(""), scene_desc::Look::STAGE);
+        // A look stored before there was a glare style keeps its dials and
+        // takes the default style.
+        let older = r#"{"tone":"aces","exposure":{"auto":true,"ev":0.5,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3}}"#;
+        let read = stored_look(older);
+        assert_eq!(read.exposure.ev, 0.5);
+        assert_eq!(read.glare.style, scene_desc::GlareStyle::default());
         assert_eq!(stored_look("{\"tone\":\"sepia\"}"), scene_desc::Look::STAGE);
     }
 }

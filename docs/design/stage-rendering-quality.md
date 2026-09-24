@@ -368,9 +368,14 @@ setting `stage_look`. Any other look runs `post.rs`:
   almost nothing lit holds the previous exposure. Adaptation: 3 /s closing,
   1.2 /s opening; a standalone capture snaps.
 - **Glare.** Exposed light above 2× diffuse white, down a six-level
-  dual-filter pyramid from half resolution and back up; three lines of three
-  7-tap Kawase streak passes at quarter resolution. Added after the tone
-  curve, saturating at the display's white.
+  dual-filter pyramid from half resolution and back up, each coarser level
+  weighted 0.7× the one above (a long faint tail). On top, by glare style:
+  *Iris* (default) and *Eye* draw a diffraction pattern at every visible
+  lens, computed at startup by FFT of a nine-blade iris or of a pupil with
+  ciliary fibres and particles (Ritschel et al. 2009, static), averaged over
+  12 wavelengths per channel so the Airy rings wash out and the rays remain;
+  *Star* draws three lines of Kawase streaks; *Bloom* adds nothing. Added
+  after the tone curve, saturating at the display's white.
 - **Tone curves.** AgX (three's), AgX with Blender's Punchy look (default),
   and Narkowicz's ACES fit. HDR expansion above the 0.6 knee applies to each.
 
@@ -378,3 +383,7 @@ Cost, 1920×1080, RTX 5090, Get Lucky at Gasworks (140 cones), min of three
 100-frame p50s, another GPU process running (so indicative only): neutral
 5.137 ms; tonemap chain +0.02 ms; metering +0.02 ms; bloom +0.10 ms; full
 stage look with lens glow and star +0.19 ms.
+
+Glare styles, same setup at 146 s with 162 cones, no other GPU load, min of
+three 100-frame p50s: neutral 8.381 ms; bloom +0.07; iris +0.12; eye +0.14;
+star +0.11.
