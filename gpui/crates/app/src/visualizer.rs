@@ -516,6 +516,12 @@ pub(crate) struct Visualizer {
     bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
     selection_motion: SelectionMotion,
+    /// The side the card sits on, for the selection it was chosen for. Kept
+    /// while it still fits, so an edit that reshapes the object does not flip
+    /// the card to another side.
+    selection_card_side: Option<(Vec<EditorObject>, CardSide)>,
+    /// Where the card was last placed, for the frames it is held still.
+    selection_card_last: Option<Point<Pixels>>,
     environment_error: Option<String>,
     environment_saving: bool,
     environment_edited: bool,
@@ -622,6 +628,10 @@ struct Stage {
     pane: Bounds<Pixels>,
     /// Measured card size; short cards align with the object just like tall ones.
     selection_card_size: gpui::Size<Pixels>,
+    /// A left press that began on the card and has not been released. The
+    /// card holds still under it, so a control being scrubbed never moves
+    /// away from the pointer.
+    selection_card_held: bool,
 }
 
 /// Everything a live frame is a function of.
@@ -1273,6 +1283,8 @@ impl Visualizer {
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),
             selection_motion: SelectionMotion::new(cx.reduce_motion()),
+            selection_card_side: None,
+            selection_card_last: None,
             environment_error: None,
             environment_saving: false,
             environment_edited: false,
@@ -1525,6 +1537,19 @@ impl Visualizer {
         self.selection.clear();
     }
 
+    /// Every selected object, primary last.
+    pub(crate) fn selected_objects(&self) -> &[EditorObject] {
+        self.selection.selected()
+    }
+
+    /// The live marquee rectangle, in viewport pixels.
+    fn marquee_rect(&self) -> Option<luma_scene::ScreenRect> {
+        match &self.editor_drag {
+            Some(EditorDrag::Marquee(marquee)) => Some(marquee.rect()),
+            _ => None,
+        }
+    }
+
     /// Replace the selection with one object — the headless pick's write.
     pub(crate) fn select_object(&mut self, object: EditorObject) {
         self.selection.click(object, false);
@@ -1550,7 +1575,14 @@ impl Visualizer {
         Some(self.camera.ray(ndc, viewport.x / viewport.y))
     }
 
-    fn selection_card_position(&self, size: gpui::Size<Pixels>) -> Point<Pixels> {
+    fn selection_card_position(&mut self, size: gpui::Size<Pixels>) -> Point<Pixels> {
+        // A press on the card freezes it: a scrubbed span reshapes the object,
+        // and a card that followed would slide out from under the pointer.
+        if self.stage.borrow().selection_card_held {
+            if let Some(last) = self.selection_card_last {
+                return last;
+            }
+        }
         let viewport = Vec2::new(f32::from(size.width), f32::from(size.height));
         let stage = self.stage.borrow();
         let camera = stage
@@ -1590,8 +1622,18 @@ impl Visualizer {
             f32::from(measured.width).max(280.0),
             f32::from(measured.height).max(1.0),
         );
-        let at = selection_card_at(lo, hi, viewport, card);
-        Point::new(px(at.x), px(at.y))
+        drop(stage);
+        let selected = self.selection.selected();
+        let sticky = self
+            .selection_card_side
+            .as_ref()
+            .filter(|(owner, _)| owner.as_slice() == selected)
+            .map(|(_, side)| *side);
+        let (at, side) = selection_card_at(lo, hi, viewport, card, sticky);
+        self.selection_card_side = side.map(|side| (selected.to_vec(), side));
+        let at = Point::new(px(at.x), px(at.y));
+        self.selection_card_last = Some(at);
+        at
     }
 
     /// Fit the selected objects' combined geometry bounds into the usable viewport.
@@ -1646,8 +1688,12 @@ impl Visualizer {
                 self.camera.azimuth -= turn * dx;
                 // Three lets phi run the full half-turn, which on a stage means
                 // orbiting under the floor and out the other side. Clamped to
-                // the quadrant that can actually see a rig.
-                self.camera.polar = Framing::clamp_polar(self.camera.polar - turn * dy);
+                // keep the eye above the floor, which still lets it look up.
+                self.camera.polar = self.framing.clamp_orbit_polar(
+                    self.camera.polar - turn * dy,
+                    self.camera.target.z,
+                    self.camera.radius,
+                );
             }
             // three's perspective pan: one screen height of drag moves the
             // target by the full visible extent at the target's depth, so a
@@ -2174,24 +2220,76 @@ impl SelectionMotion {
 
 /// Prefer beside the object's silhouette, flip sides when space runs out,
 /// and keep the whole scrollable card reachable at viewport edges.
-fn selection_card_at(lo: Vec2, hi: Vec2, viewport: Vec2, card: Vec2) -> Vec2 {
+/// Which side of the selection the object card sits on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CardSide {
+    Right,
+    Left,
+    Below,
+    Above,
+}
+
+/// Place the card beside the selection's screen bounds `lo..hi`.
+///
+/// A wide object puts the card below or above it, a tall one to its right or
+/// left: that is the side whose edge does not move when the object is
+/// lengthened. `sticky` is the side chosen last time for the same selection,
+/// and it wins while it still fits. Returns the side used, or `None` when
+/// nothing is on screen.
+fn selection_card_at(
+    lo: Vec2,
+    hi: Vec2,
+    viewport: Vec2,
+    card: Vec2,
+    sticky: Option<CardSide>,
+) -> (Vec2, Option<CardSide>) {
+    const GAP: f32 = 16.0;
     let inset = Vec2::splat(12.0);
     let max = (viewport - card - inset).max(inset);
     if !lo.is_finite() || !hi.is_finite() {
-        return Vec2::new(max.x, inset.y);
+        return (Vec2::new(max.x, inset.y), None);
     }
-    let right = hi.x + 16.0;
-    let left = lo.x - card.x - 16.0;
-    let x = if right <= max.x {
-        right
-    } else if left >= inset.x {
-        left
-    } else if viewport.x - hi.x >= lo.x {
-        right
-    } else {
-        left
+    let center = (lo + hi - card) * 0.5;
+    let place = |side: CardSide| match side {
+        CardSide::Right => Vec2::new(hi.x + GAP, center.y),
+        CardSide::Left => Vec2::new(lo.x - card.x - GAP, center.y),
+        CardSide::Below => Vec2::new(center.x, hi.y + GAP),
+        CardSide::Above => Vec2::new(center.x, lo.y - card.y - GAP),
     };
-    Vec2::new(x, (lo.y + hi.y - card.y) * 0.5).clamp(inset, max)
+    let fits = |side: CardSide| {
+        let at = place(side);
+        match side {
+            CardSide::Right => at.x <= max.x,
+            CardSide::Left => at.x >= inset.x,
+            CardSide::Below => at.y <= max.y,
+            CardSide::Above => at.y >= inset.y,
+        }
+    };
+    let size = hi - lo;
+    let order = if size.x > size.y {
+        [
+            CardSide::Below,
+            CardSide::Above,
+            CardSide::Right,
+            CardSide::Left,
+        ]
+    } else {
+        [
+            CardSide::Right,
+            CardSide::Left,
+            CardSide::Below,
+            CardSide::Above,
+        ]
+    };
+    let side = sticky
+        .filter(|side| fits(*side))
+        .or_else(|| order.into_iter().find(|side| fits(*side)))
+        .unwrap_or(if viewport.x - hi.x >= lo.x {
+            CardSide::Right
+        } else {
+            CardSide::Left
+        });
+    (place(side).clamp(inset, max), Some(side))
 }
 
 /// Data space to the world the renderer draws in, and back.
@@ -3142,6 +3240,26 @@ pub(crate) fn visualizer(
         .absolute()
         .inset_0()
     };
+    // The shift-drag sweep, drawn while it is live so the operator sees what
+    // the release will select.
+    let marquee = state
+        .marquee_rect()
+        .filter(|_| !state.presentation)
+        .map(|rect| {
+            let size = rect.size();
+            div()
+                .absolute()
+                .left(px(rect.min.x))
+                .top(px(rect.min.y))
+                .w(px(size.x))
+                .h(px(size.y))
+                .border_1()
+                .border_color(ladder::primary())
+                .bg(gpui::Rgba {
+                    a: 0.12,
+                    ..ladder::primary()
+                })
+        });
     let selection_target = state.selection_card_position(pane.size);
     let selection = if venue {
         state
@@ -3159,6 +3277,8 @@ pub(crate) fn visualizer(
         Point::new(px(at.x), px(at.y))
     } else {
         state.selection_motion.since = None;
+        // A press that closed the card (Remove) never sees its release.
+        state.stage.borrow_mut().selection_card_held = false;
         selection_target
     };
     let mut keys = gpui::KeyContext::default();
@@ -3181,6 +3301,7 @@ pub(crate) fn visualizer(
                 .relative()
                 .child(body)
                 .child(measure)
+                .children(marquee)
                 .children(builder)
                 .child(fps)
                 .children(floating)
@@ -3190,6 +3311,7 @@ pub(crate) fn visualizer(
                 })
                 .children(selection.map(|controls| {
                     let stage = Rc::clone(&state.stage);
+                    let held = Rc::clone(&state.stage);
                     luma_ui::float::popover_card()
                         .occlude()
                         .w(px(280.))
@@ -3205,8 +3327,31 @@ pub(crate) fn visualizer(
                             canvas(
                                 move |bounds, _, _| {
                                     stage.borrow_mut().selection_card_size = bounds.size;
+                                    bounds
                                 },
-                                |_, (), _, _| {},
+                                move |_, bounds, window, _| {
+                                    let pressed = Rc::clone(&held);
+                                    window.on_mouse_event(
+                                        move |event: &gpui::MouseDownEvent, phase, _, _| {
+                                            if phase.capture()
+                                                && event.button == gpui::MouseButton::Left
+                                                && bounds.contains(&event.position)
+                                            {
+                                                pressed.borrow_mut().selection_card_held = true;
+                                            }
+                                        },
+                                    );
+                                    let released = Rc::clone(&held);
+                                    window.on_mouse_event(
+                                        move |event: &gpui::MouseUpEvent, phase, _, _| {
+                                            if phase.capture()
+                                                && event.button == gpui::MouseButton::Left
+                                            {
+                                                released.borrow_mut().selection_card_held = false;
+                                            }
+                                        },
+                                    );
+                                },
                             )
                             .absolute()
                             .inset_0(),
@@ -5212,29 +5357,58 @@ mod selection_card_tests {
     #[test]
     fn card_follows_the_selection_and_flips_at_the_right_edge() {
         let viewport = Vec2::new(1200.0, 800.0);
-        let right = selection_card_at(
+        let card = Vec2::new(280.0, 230.0);
+        let (right, side) = selection_card_at(
             Vec2::new(400.0, 300.0),
             Vec2::new(500.0, 400.0),
             viewport,
-            Vec2::new(280.0, 230.0),
+            card,
+            None,
         );
-        assert_eq!(right.x, 516.0);
-        let left = selection_card_at(
+        assert_eq!((right.x, side), (516.0, Some(CardSide::Right)));
+        let (left, side) = selection_card_at(
             Vec2::new(900.0, 300.0),
             Vec2::new(1000.0, 400.0),
             viewport,
-            Vec2::new(280.0, 230.0),
+            card,
+            None,
         );
-        assert_eq!(left.x, 604.0);
+        assert_eq!((left.x, side), (604.0, Some(CardSide::Left)));
         assert_eq!(left.y, right.y);
-        let edge = selection_card_at(
+        let (edge, _) = selection_card_at(
             Vec2::new(-100.0, 790.0),
             Vec2::new(1400.0, 1000.0),
             viewport,
-            Vec2::new(280.0, 230.0),
+            card,
+            None,
         );
         assert!(edge.x >= 12.0 && edge.x <= 908.0);
         assert!(edge.y >= 12.0 && edge.y <= 558.0);
+    }
+
+    #[test]
+    fn a_wide_object_puts_the_card_below_and_keeps_it_there() {
+        let viewport = Vec2::new(1200.0, 800.0);
+        let card = Vec2::new(280.0, 230.0);
+        let (at, side) = selection_card_at(
+            Vec2::new(300.0, 200.0),
+            Vec2::new(700.0, 240.0),
+            viewport,
+            card,
+            None,
+        );
+        assert_eq!(side, Some(CardSide::Below));
+        assert_eq!(at.y, 256.0);
+        // Lengthened until it is taller than wide: the side does not flip.
+        let (grown, side) = selection_card_at(
+            Vec2::new(300.0, 200.0),
+            Vec2::new(340.0, 300.0),
+            viewport,
+            card,
+            side,
+        );
+        assert_eq!(side, Some(CardSide::Below));
+        assert_eq!(grown.y, 316.0);
     }
 }
 
@@ -5288,6 +5462,8 @@ mod orbit_selection_tests {
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(true)),
             selection_motion: SelectionMotion::new(true),
+            selection_card_side: None,
+            selection_card_last: None,
             environment_error: None,
             environment_saving: false,
             environment_edited: false,
@@ -5503,7 +5679,19 @@ mod orbit_selection_tests {
             .iter()
             .map(|p| (1.0 - p.y) * 400.0)
             .fold(f32::NEG_INFINITY, f32::max);
-        assert!((f32::from(at.y) + 40.0 - (top + bottom) * 0.5).abs() < 1e-3);
+        let left = points
+            .iter()
+            .map(|p| (p.x + 1.0) * 600.0)
+            .fold(f32::INFINITY, f32::min);
+        let right = points
+            .iter()
+            .map(|p| (p.x + 1.0) * 600.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        // Beside the object the card centers on it vertically; below or above
+        // it, horizontally. Either way it is placed from the rendered bounds.
+        let beside = (f32::from(at.y) + 40.0 - (top + bottom) * 0.5).abs() < 1e-3;
+        let under = (f32::from(at.x) + 140.0 - (left + right) * 0.5).abs() < 1e-3;
+        assert!(beside || under, "{at:?} is not aligned to the object");
         assert!(state.focus_selection());
         for corner in expected.corners() {
             let ndc = state.camera.project(corner, 1.5);

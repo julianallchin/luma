@@ -134,6 +134,25 @@ pub(crate) struct Build {
     /// so a second release while one is in flight is dropped rather than
     /// queued.
     pub(crate) committing: bool,
+    /// A scrubbed parameter: what the control shows while its writes catch up.
+    param_scrub: Option<ParamScrub>,
+}
+
+/// One control being scrubbed. A scrub fires on every pointer move, faster
+/// than a write and re-read return. Writes go one at a time, each after the
+/// last one's re-read, and only the newest value waits. Sent in parallel,
+/// they landed out of order and the control jumped between old values.
+struct ParamScrub {
+    node: String,
+    key: String,
+    /// The newest value asked for, shown in place of the graph's.
+    value: f64,
+    /// A value arrived while a write was in flight.
+    queued: bool,
+    /// The graph before the first write: the whole scrub is one undo step.
+    snapshot: luma_lib::models::venue_graph::VenueGraphRows,
+    /// At least one write succeeded, so there is a step to remember.
+    wrote: bool,
 }
 
 impl Build {
@@ -160,6 +179,7 @@ impl Build {
             redo: Vec::new(),
             report: Vec::new(),
             committing: false,
+            param_scrub: None,
         })
     }
 
@@ -490,13 +510,22 @@ impl Build {
                 luma_scene::catalog::Geometry::Mesh { .. }
                 | luma_scene::catalog::Geometry::Assembly(_) => None,
             });
+        // A scrub in flight shows the value asked for, not the graph's.
+        let scrubbed = |key: &str| {
+            self.param_scrub
+                .as_ref()
+                .filter(|scrub| &scrub.node == node && scrub.key == key)
+                .map(|scrub| scrub.value)
+        };
         let param = |key: &str| {
-            self.solved
-                .nodes
-                .iter()
-                .find(|n| &n.id == node)
-                .and_then(|n| n.params.get(key).copied())
-                .unwrap_or(0.0)
+            scrubbed(key).unwrap_or_else(|| {
+                self.solved
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node)
+                    .and_then(|n| n.params.get(key).copied())
+                    .unwrap_or(0.0)
+            })
         };
         Some(SelectedView {
             node: node.clone(),
@@ -510,20 +539,20 @@ impl Build {
             // radians there and degrees on this sheet. Reading it out of
             // `params` found nothing and drew every joint at zero.
             param: match freedom.param() {
-                Some("yaw") => self
-                    .graph
-                    .edge(node)
-                    .map_or(0.0, |edge| edge.roll.to_degrees().rem_euclid(360.0)),
+                Some("yaw") => scrubbed("yaw")
+                    .or_else(|| self.graph.edge(node).map(|edge| edge.roll))
+                    .map_or(0.0, |roll| roll.to_degrees().rem_euclid(360.0)),
                 Some(key) => param(key),
                 None => 0.0,
             },
             span: {
-                let stored = self
-                    .solved
-                    .nodes
-                    .iter()
-                    .find(|n| &n.id == node)
-                    .and_then(|n| n.params.get("span").copied());
+                let stored = scrubbed("span").or_else(|| {
+                    self.solved
+                        .nodes
+                        .iter()
+                        .find(|n| &n.id == node)
+                        .and_then(|n| n.params.get("span").copied())
+                });
                 // A straight truss placed without an explicit span is at the
                 // generator's default — the length is still its to change,
                 // so the row shows the default rather than nothing.
@@ -533,12 +562,14 @@ impl Build {
                 })
             },
             angle: (family == Some(luma_scene::catalog::Family::Hinge)).then(|| {
-                self.solved
-                    .nodes
-                    .iter()
-                    .find(|n| &n.id == node)
-                    .and_then(|n| n.params.get("angle").copied())
-                    .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+                scrubbed("angle").unwrap_or_else(|| {
+                    self.solved
+                        .nodes
+                        .iter()
+                        .find(|n| &n.id == node)
+                        .and_then(|n| n.params.get("angle").copied())
+                        .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+                })
             }),
             roll_step: self
                 .graph
@@ -1632,16 +1663,93 @@ impl Luma {
         value: f64,
         cx: &mut Context<Self>,
     ) {
-        let Some(venue) = self.build_state().map(|build| build.venue_id.clone()) else {
+        let Some(build) = self.build_mut() else {
             return;
         };
-        let pending = self.library.set_params(
-            &venue,
-            node,
-            BTreeMap::from([(key.to_string(), value)]),
-            None,
-        );
-        self.stage_verb(pending, cx);
+        match build.param_scrub.as_mut() {
+            Some(scrub) if scrub.node == node && scrub.key == key => {
+                scrub.value = value;
+                scrub.queued = true;
+                cx.notify();
+                return;
+            }
+            // Another control's writes are still running; this value waits
+            // for a moment when nothing is in flight.
+            Some(_) => return,
+            None => {
+                build.param_scrub = Some(ParamScrub {
+                    node: node.to_string(),
+                    key: key.to_string(),
+                    value,
+                    queued: true,
+                    snapshot: build.rows.clone(),
+                    wrote: false,
+                });
+            }
+        }
+        self.send_param_scrub(cx);
+    }
+
+    /// Write the newest scrubbed value, re-read the rig, then go again if a
+    /// newer value arrived meanwhile. One pass in flight at a time.
+    fn send_param_scrub(&mut self, cx: &mut Context<Self>) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        let venue = build.venue_id.clone();
+        let Some(scrub) = build.param_scrub.as_mut() else {
+            return;
+        };
+        if !scrub.queued {
+            // Caught up: the graph now holds the last value, so the control
+            // reads it again, and the whole scrub is one undo step.
+            let scrub = build.param_scrub.take().expect("checked above");
+            if scrub.wrote {
+                build.remember(scrub.snapshot);
+            }
+            cx.notify();
+            return;
+        }
+        scrub.queued = false;
+        let (node, key, value) = (scrub.node.clone(), scrub.key.clone(), scrub.value);
+        let write = self
+            .library
+            .set_params(&venue, &node, BTreeMap::from([(key, value)]), None);
+        cx.spawn(async move |this, cx| {
+            let result = write.await;
+            let Ok(reread) = this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    match &result {
+                        Ok(report) => {
+                            build.report = report.warnings.clone();
+                            if let Some(scrub) = build.param_scrub.as_mut() {
+                                scrub.wrote = true;
+                            }
+                        }
+                        Err(error) => build.report = vec![error.to_string()],
+                    }
+                }
+                cx.notify();
+                this.library.venue_rig(&venue)
+            }) else {
+                return;
+            };
+            let loaded = reread.await;
+            this.update(cx, |this, cx| {
+                if let Some(state) = this
+                    .visualizer
+                    .as_mut()
+                    .filter(|state| state.venue_id == venue)
+                {
+                    state.rig_reloaded(loaded);
+                    this.reload_patch(venue.clone(), cx);
+                }
+                this.send_param_scrub(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Detach the selected node. Its rows stay: it lands in the tray, which is
@@ -1755,52 +1863,112 @@ impl Luma {
     }
 
     /// Scene removal is undoable; fixtures retain their library/patch row.
+    ///
+    /// Acts on the whole selection — a row, a marquee, shift-clicks — not only
+    /// the primary. A node whose ancestor is also selected is left to the
+    /// ancestor's delete.
     pub(crate) fn stage_delete(&mut self, cx: &mut Context<Self>) {
         let Some(build) = self.build_state() else {
-            return;
-        };
-        let Some(node) = build.selected.clone() else {
             return;
         };
         if build.committing {
             return;
         }
-        if build
-            .graph
-            .node(&node)
-            .is_some_and(|n| n.kind == NodeKind::Fixture)
-        {
-            self.stage_detach(cx);
-        } else {
-            self.run_stage_delete(build.venue_id.clone(), node, cx);
+        let mut nodes: Vec<String> = self
+            .visualizer
+            .as_ref()
+            .map(|state| {
+                state
+                    .selected_objects()
+                    .iter()
+                    .map(|object| match object {
+                        luma_render::frame::EditorObject::Fixture(id)
+                        | luma_render::frame::EditorObject::StagePiece(id) => id.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if nodes.is_empty() {
+            nodes.extend(build.selected.clone());
         }
-    }
-
-    pub(crate) fn run_stage_delete(&mut self, venue: String, node: String, cx: &mut Context<Self>) {
-        let Some(build) = self.build_state() else {
-            return;
+        let has_selected_ancestor = |node: &str| {
+            let mut at = node;
+            while let Some(edge) = build.graph.edge(at) {
+                if nodes.iter().any(|n| *n == edge.parent) {
+                    return true;
+                }
+                at = &edge.parent;
+            }
+            false
         };
-        if build.committing || build.venue_id != venue || build.graph.node(&node).is_none() {
+        let jobs: Vec<(String, bool)> = nodes
+            .iter()
+            .filter(|node| !has_selected_ancestor(node))
+            .filter_map(|node| {
+                let data = build.graph.node(node)?;
+                Some((node.clone(), data.kind == NodeKind::Fixture))
+            })
+            .collect();
+        if jobs.is_empty() {
             return;
         }
+        let venue = build.venue_id.clone();
         let snapshot = build.rows.clone();
-        let pending = self.library.delete_subtree(&venue, &node);
         if let Some(build) = self.build_mut() {
             build.committing = true;
             build.select(None);
         }
+        if let Some(state) = self.visualizer.as_mut() {
+            state.clear_selection();
+        }
+        self.run_stage_deletes(
+            venue,
+            jobs.into_iter().rev().collect(),
+            snapshot,
+            Vec::new(),
+            cx,
+        );
+    }
+
+    /// Run queued deletes one at a time, so each sees the graph the last one
+    /// left. `jobs` is popped from the tail. The whole batch is one undo step.
+    fn run_stage_deletes(
+        &mut self,
+        venue: String,
+        mut jobs: Vec<(String, bool)>,
+        snapshot: luma_lib::models::venue_graph::VenueGraphRows,
+        mut errors: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((node, fixture)) = jobs.pop() else {
+            if let Some(build) = self.build_mut() {
+                build.committing = false;
+                build.report = errors.clone();
+                build.select(None);
+                // A partial batch still changed the graph; one snapshot
+                // restores all of it.
+                build.remember(snapshot);
+            }
+            self.reload_stage(cx);
+            cx.notify();
+            return;
+        };
+        let pending: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), LibraryError>> + Send>,
+        > = if fixture {
+            let detach = self.library.detach(&venue, &node);
+            Box::pin(async move { detach.await.map(|_| ()) })
+        } else {
+            let delete = self.library.delete_subtree(&venue, &node);
+            Box::pin(async move { delete.await.map(|_| ()) })
+        };
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                if let Some(build) = this.build_mut() {
-                    build.committing = false;
-                    match &result {
-                        Ok(_) => build.remember(snapshot),
-                        Err(error) => build.report = vec![error.to_string()],
-                    }
+                if let Err(error) = result {
+                    errors.push(error.to_string());
                 }
-                this.reload_stage(cx);
-                cx.notify();
+                this.run_stage_deletes(venue, jobs, snapshot, errors, cx);
             })
             .ok();
         })
@@ -3788,6 +3956,7 @@ mod tests {
             distribution_layout: luma_scene::distribute::Layout::Even,
             report: Vec::new(),
             committing: false,
+            param_scrub: None,
         }
     }
 

@@ -287,7 +287,7 @@ pub const EYE_HEIGHT_M: f32 = 1.7;
 
 /// Lowest an eye may sit, in metres. Not zero: a camera exactly on the floor
 /// plane renders it edge-on as a single row of pixels.
-const MIN_EYE_Z: f32 = 0.25;
+pub(crate) const MIN_EYE_Z: f32 = 0.25;
 
 /// Quarter views swing this far off the front azimuth.
 const QUARTER: f32 = std::f32::consts::FRAC_PI_4;

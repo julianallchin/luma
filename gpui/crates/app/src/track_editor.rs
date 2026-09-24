@@ -373,16 +373,17 @@ impl Preview {
 
 /// What a cut or a copy took, in its two shapes.
 ///
-/// The clips are whole rows so a paste can mint real clips from them, and the
-/// offsets are relative to the region (or to the cursor) so a paste lands
-/// wherever the cursor is now rather than where the copy happened.
+/// The clips are whole rows so a paste can mint real clips from them. They
+/// keep the times they were copied at, and a paste moves them by the musical
+/// distance from `origin` to the cursor — see [`shift_time`].
 struct Clipboard {
-    /// `offsetFromStart`, `row` relative to the topmost copied clip, and the
-    /// clip itself.
-    items: Vec<(f64, usize, Clip)>,
-    /// How long the whole clipboard is, which is what the cursor spans after a
+    /// `row` relative to the topmost copied clip, and the clip itself.
+    items: Vec<(usize, Clip)>,
+    /// The region's start, or the cursor's when whole clips were copied.
+    origin: f64,
+    /// Where the whole clipboard ends, which is what the cursor spans after a
     /// paste and how far a duplicate moves.
-    span: f64,
+    end: f64,
 }
 
 /// One state the timeline can be put back to.
@@ -575,6 +576,26 @@ fn snap(beats: Option<&BeatGrid>, time: f64, zoom: f32, capture: f32) -> f64 {
     } else {
         time
     }
+}
+
+/// `time` moved by the musical distance from `from` to `to`.
+///
+/// The distance is counted in beats, not seconds, because beats on a detected
+/// grid differ in length. A clip moved by a fixed number of seconds lands a
+/// fraction of a millisecond off the grid, and then overlaps its neighbour.
+/// Without a grid there are no beats to count, so seconds are all there is.
+fn shift_time(clock: Option<&luma_patterns::BeatTimeline>, time: f64, from: f64, to: f64) -> f64 {
+    // The beat round trip is not bit exact, and a clip that did not move
+    // must keep its authored beat.
+    if from == to {
+        return time;
+    }
+    let musical = clock.and_then(|clock| {
+        let beat =
+            clock.beat_at(time).ok()? + clock.beat_at(to).ok()? - clock.beat_at(from).ok()?;
+        clock.seconds_at(beat).ok()
+    });
+    musical.unwrap_or(time + (to - from))
 }
 
 /// The quantised point, before the capture test, or `None` when there is no
@@ -925,23 +946,26 @@ impl Editor {
         let beats = self.beats.as_deref();
         let zoom = self.view.zoom;
         let snap = |time: f64| snap(beats, time, zoom, SNAP_CAPTURE_DRAG);
+        let clock = beats.and_then(|grid| grid.timeline().ok());
+        let clock = clock.as_ref();
 
-        // What the pressed clip's own edge did, as a delta the rest can take.
-        // `None` where the pressed clip's guard refused the move, which
-        // refuses it for the whole group rather than letting the others slide
-        // without it.
+        // Where the pressed clip's own edge was and where it went, as a
+        // musical distance the rest can take. `None` where the pressed clip's
+        // guard refused the move, which refuses it for the whole group rather
+        // than letting the others slide without it.
         let shift = match drag {
-            Drag::Move => Some(snap(anchor.start + delta).max(0.) - anchor.start),
+            Drag::Move => Some((anchor.start, snap(anchor.start + delta).max(0.))),
             Drag::Resize(Edge::Start) => {
                 let start = snap(anchor.start + delta);
-                (start < anchor.end - MIN_RESIZE).then_some(start - anchor.start)
+                (start < anchor.end - MIN_RESIZE).then_some((anchor.start, start))
             }
             Drag::Resize(Edge::End) => {
                 let end = snap(anchor.end + delta);
-                (end > anchor.start + MIN_RESIZE).then_some(end - anchor.end)
+                (end > anchor.start + MIN_RESIZE).then_some((anchor.end, end))
             }
         };
-        let Some(shift) = shift else { return };
+        let Some((from, to)) = shift else { return };
+        let shift = |time: f64| shift_time(clock, time, from, to);
 
         // Downward motion stops at the floor; upward is unclamped, and mints
         // z values above the current top. Rows count *down* the screen, so
@@ -965,8 +989,9 @@ impl Editor {
             };
             match drag {
                 Drag::Move => {
-                    clip.start = (was.start + shift).max(0.);
-                    clip.end = clip.start + (was.end - was.start);
+                    clip.start = shift(was.start).max(0.);
+                    // The length stays the same number of beats, not seconds.
+                    clip.end = shift_time(clock, was.end, was.start, clip.start);
                     // Applied for real rather than as a paint offset: the
                     // whole lane change is a function of the row the press
                     // captured, so recomputing it every move from that is
@@ -975,13 +1000,13 @@ impl Editor {
                     clip.z = lanes::drag_z(layers, was.row as i32 - 1, rows);
                 }
                 Drag::Resize(Edge::Start) => {
-                    let moved = (was.start + shift).max(0.);
+                    let moved = shift(was.start).max(0.);
                     if moved < was.end - MIN_RESIZE {
                         clip.start = moved;
                     }
                 }
                 Drag::Resize(Edge::End) => {
-                    let moved = (was.end + shift).min(duration);
+                    let moved = shift(was.end).min(duration);
                     if moved > was.start + MIN_RESIZE {
                         clip.end = moved;
                     }
@@ -1279,7 +1304,7 @@ impl Editor {
     /// cursor, because both store their offsets relative to one.
     fn copy(&mut self) {
         let Some(cursor) = self.cursor else { return };
-        let items: Vec<(f64, usize, Clip)> = match cursor.span() {
+        let items: Vec<(usize, Clip)> = match cursor.span() {
             Some((from, to)) => {
                 let (top, bottom) = cursor.rows();
                 self.clips
@@ -1289,13 +1314,8 @@ impl Editor {
                     })
                     .filter_map(|clip| {
                         let (start, end) = (clip.start.max(from), clip.end.min(to));
-                        (end - start >= MIN_CLIP).then(|| {
-                            (
-                                start - from,
-                                clip.row.saturating_sub(top),
-                                clip.copy(start, end, clip.z),
-                            )
-                        })
+                        (end - start >= MIN_CLIP)
+                            .then(|| (clip.row.saturating_sub(top), clip.copy(start, end, clip.z)))
                     })
                     .collect()
             }
@@ -1307,27 +1327,24 @@ impl Editor {
                     .collect();
                 let top = held.iter().map(|clip| clip.row).min().unwrap_or(0);
                 held.iter()
-                    .map(|clip| {
-                        (
-                            clip.start - cursor.start,
-                            clip.row - top,
-                            clip.copy(clip.start, clip.end, clip.z),
-                        )
-                    })
+                    .map(|clip| (clip.row - top, clip.copy(clip.start, clip.end, clip.z)))
                     .collect()
             }
         };
         if items.is_empty() {
             return;
         }
-        let span = match cursor.span() {
-            Some((from, to)) => to - from,
-            None => items
-                .iter()
-                .map(|(offset, _, clip)| offset + (clip.end - clip.start))
-                .fold(0., f64::max),
+        let (origin, end) = match cursor.span() {
+            Some(span) => span,
+            None => (
+                cursor.start,
+                items
+                    .iter()
+                    .map(|(_, clip)| clip.end)
+                    .fold(cursor.start, f64::max),
+            ),
         };
-        self.clipboard = Some(Clipboard { items, span });
+        self.clipboard = Some(Clipboard { items, origin, end });
     }
 
     /// `cutSelection`: copy, then take out what was copied.
@@ -1348,8 +1365,10 @@ impl Editor {
         let (Some(cursor), Some(board)) = (self.cursor, self.clipboard.as_ref()) else {
             return;
         };
-        let span = board.span;
         let at = cursor.span().map_or(cursor.start, |(from, _)| from);
+        let clock = self.beats.as_deref().and_then(|grid| grid.timeline().ok());
+        let shift = |time: f64| shift_time(clock.as_ref(), time, board.origin, at);
+        let end = shift(board.end);
         let duration = f64::from(self.transport.duration).max(0.);
         let layers = z_ladder(&self.clips);
         let top = cursor.rows().0.max(1);
@@ -1357,8 +1376,8 @@ impl Editor {
         let minted: Vec<Clip> = board
             .items
             .iter()
-            .filter_map(|(offset, row, clip)| {
-                let (start, end) = (at + offset, at + offset + (clip.end - clip.start));
+            .filter_map(|(row, clip)| {
+                let (start, end) = (shift(clip.start), shift(clip.end));
                 (end <= duration)
                     .then(|| clip.copy(start, end, row_to_z(&layers, (top + row) as i32 - 1)))
             })
@@ -1366,14 +1385,8 @@ impl Editor {
         if minted.is_empty() {
             return;
         }
-        let bottom = top
-            + board
-                .items
-                .iter()
-                .map(|(_, row, _)| *row)
-                .max()
-                .unwrap_or(0);
-        let mut clips = clear_region(&self.clips, (at, at + span), top..=bottom);
+        let bottom = top + board.items.iter().map(|(row, _)| *row).max().unwrap_or(0);
+        let mut clips = clear_region(&self.clips, (at, end), top..=bottom);
         self.selected = minted.iter().map(|clip| clip.id.clone()).collect();
         clips.extend(minted);
         self.replace_clips(clips);
@@ -1381,7 +1394,7 @@ impl Editor {
             row: top,
             row_end: None,
             start: at,
-            end: Some(at + span),
+            end: Some(end),
         });
     }
 
@@ -1392,12 +1405,17 @@ impl Editor {
         let Some(board) = self.clipboard.as_ref() else {
             return;
         };
-        let span = board.span;
         let Some(cursor) = self.cursor else { return };
+        let clock = self.beats.as_deref().and_then(|grid| grid.timeline().ok());
         let end = cursor
             .span()
             .map_or(cursor.start, |(_, to)| to)
-            .max(cursor.start + span);
+            .max(shift_time(
+                clock.as_ref(),
+                board.end,
+                board.origin,
+                cursor.start,
+            ));
         // Re-derived from the topmost *selected* clip rather than kept from
         // the cursor, which may still be sitting where a drag started.
         let row = self
@@ -4560,4 +4578,40 @@ fn label(
         window,
         cx,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shift_time;
+
+    /// Beats that alternate between 0.4285 s and 0.4286 s, like a detected
+    /// grid stored to 0.1 ms.
+    fn uneven() -> luma_patterns::BeatTimeline {
+        let seconds = (0..40)
+            .scan(0., |at, i| {
+                let beat = *at;
+                *at += if i % 2 == 0 { 0.4285 } else { 0.4286 };
+                Some(beat)
+            })
+            .collect();
+        luma_patterns::BeatTimeline::new(seconds, 0.).unwrap()
+    }
+
+    #[test]
+    fn a_shift_moves_whole_beats_on_an_uneven_grid() {
+        let clock = uneven();
+        let at = |beat: f64| clock.seconds_at(beat).unwrap();
+        // A one-beat clip moved from beat 0 to beat 1 must still end on a beat.
+        let end = shift_time(Some(&clock), at(1.), at(0.), at(1.));
+        assert!((clock.beat_at(end).unwrap() - 2.).abs() < 1e-9);
+        // The seconds arithmetic this replaced lands 0.1 ms off the grid.
+        assert!(((at(1.) + at(1.) - at(0.)) - at(2.)).abs() > 5e-5);
+    }
+
+    #[test]
+    fn a_shift_of_nothing_keeps_the_exact_time() {
+        let clock = uneven();
+        let time = clock.seconds_at(2.5).unwrap() + 1e-13;
+        assert_eq!(shift_time(Some(&clock), time, 3., 3.), time);
+    }
 }
