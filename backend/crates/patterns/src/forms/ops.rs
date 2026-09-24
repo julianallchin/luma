@@ -351,6 +351,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                         Some(Value::Number(0.0)),
                     ),
                 ),
+                ("axis", axis_port()),
             ],
             vec![("direction", vector())],
         ),
@@ -629,6 +630,7 @@ fn aim_step(
         }
         Primitive::AimFan => {
             let leans = axis(inputs).leans(batch.frame.cells, batch.frame.seed)?;
+            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
             vec![(
                 "direction",
                 directions(&|n, t| {
@@ -636,21 +638,39 @@ fn aim_step(
                         .get(fixtures[n].as_str())
                         .copied()
                         .unwrap_or((0.0, [0.0; 3]));
+                    // A head on the low side of the mirror leans the mirror
+                    // image of the way it would.
+                    let toward = match mirrored.get(fixtures[n].as_str()) {
+                        Some(normal) => aim::reflect(toward, *normal),
+                        None => toward,
+                    };
                     let fan = get("fan", row("fan", n), t);
                     Ok(aim::lean(direction(n, t), toward, fan * share))
                 })?,
             )]
         }
-        Primitive::AimOffset => vec![(
-            "direction",
-            directions(&|n, t| {
-                Ok(aim::offset(
-                    direction(n, t),
-                    get("yaw", row("yaw", n), t),
-                    get("pitch", row("pitch", n), t),
-                ))
-            })?,
-        )],
+        Primitive::AimOffset => {
+            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
+            vec![(
+                "direction",
+                directions(&|n, t| {
+                    let (yaw, pitch) = (
+                        get("yaw", row("yaw", n), t),
+                        get("pitch", row("pitch", n), t),
+                    );
+                    Ok(match mirrored.get(fixtures[n].as_str()) {
+                        // A head on the low side of the mirror takes the
+                        // mirror image of the offset: reflect its aim, offset
+                        // it there, reflect back. The aim itself is kept.
+                        Some(normal) => aim::reflect(
+                            aim::offset(aim::reflect(direction(n, t), *normal), yaw, pitch),
+                            *normal,
+                        ),
+                        None => aim::offset(direction(n, t), yaw, pitch),
+                    })
+                })?,
+            )]
+        }
         Primitive::AimMotion => {
             let motion = choice(inputs, "motion");
             let shape = choice(inputs, "shape");

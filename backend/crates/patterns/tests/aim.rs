@@ -491,33 +491,6 @@ fn a_spread_stored_as_a_share_of_a_cycle_is_refused() {
     assert!(error.contains("216"), "{error}");
 }
 
-/// A mirror on an order axis folds it from the middle: the wave starts in
-/// the middle head and runs out to both ends alike.
-#[test]
-fn a_mirror_on_order_waves_from_the_middle() {
-    let cells = truss();
-    let mut inputs = preset("Wave");
-    let Value::Mapping(mut axis) = inputs["axis"].clone() else {
-        panic!("axis")
-    };
-    assert_eq!(axis.source, MappingSource::Order);
-    axis.mirror = Some(MirrorPlane {
-        normal: [1.0, 0.0, 0.0],
-        offset: 0.0,
-    });
-    set(&mut inputs, "axis", Value::Mapping(axis));
-    set(&mut inputs, "spread", Value::Number(180.0));
-    let beat = 0.7;
-    let aims = directions(&cells, &inputs, beat);
-    for (i, c) in [1.0, 0.5, 0.0, 0.5, 1.0].into_iter().enumerate() {
-        let phase = beat / 4.0 - 0.5 * c;
-        close(aims[i], offset(REST, 0.0, 25.0 * (TAU * phase).sin()));
-    }
-    close(aims[0], aims[4]);
-    close(aims[1], aims[3]);
-    assert!(degrees(aims[2], aims[0]) > 1.0);
-}
-
 /// A random axis gives the heads the evenly spaced phases of an order axis,
 /// shuffled by the clip's seed.
 #[test]
@@ -549,4 +522,92 @@ fn a_random_axis_shuffles_the_wave_phases() {
         close(a, b);
     }
     assert_eq!(aims, directions(&cells, &inputs, beat));
+}
+
+/// Eight heads on a straight truss along stage right, 6 m up, 1 m apart.
+/// The mirror plane (left–right) runs between heads 3 and 4.
+fn long_truss() -> Vec<Cell> {
+    (0..8)
+        .map(|i| cell(format!("truss:{i}"), [f64::from(i) - 3.5, 0.0, 6.0]))
+        .collect()
+}
+/// An x axis, mirrored left–right when `mirror` is set.
+fn x_axis(mirror: bool) -> Value {
+    Value::Mapping(MappingSpec {
+        source: MappingSource::U,
+        per_group: false,
+        reverse: false,
+        mirror: mirror.then_some(MirrorPlane {
+            normal: [1.0, 0.0, 0.0],
+            offset: 0.0,
+        }),
+        span: Span::Selection,
+        plane: None,
+    })
+}
+/// `v` reflected across the left–right plane.
+fn across(v: [f64; 3]) -> [f64; 3] {
+    [-v[0], v[1], v[2]]
+}
+
+/// A mirrored circle turns the other way on each half: heads `i` and
+/// `7 − i` have yaw offsets of opposite sign and the same pitch. Heads on
+/// the high side (stage right) keep the offset; the base aim is not
+/// flipped. Without a mirror every head draws the same circle.
+#[test]
+fn a_mirrored_circle_turns_the_other_way_on_each_half() {
+    let cells = long_truss();
+    let mut inputs = preset("Circle");
+    let Value::Vector(base) = inputs["direction"] else {
+        panic!("direction")
+    };
+    set(&mut inputs, "axis", x_axis(true));
+    for beat in [0.0, 0.5, 1.3, 2.7, 3.1] {
+        let phase = beat / 4.0;
+        let (yaw, pitch) = (18.0 * (TAU * phase).cos(), 18.0 * (TAU * phase).sin());
+        let aims = directions(&cells, &inputs, beat);
+        for i in 0..4 {
+            close(aims[i], offset(base, -yaw, pitch));
+            close(aims[7 - i], offset(base, yaw, pitch));
+            close(aims[i], across(aims[7 - i]));
+        }
+    }
+    let aims = directions(&cells, &inputs, 0.0);
+    assert!(degrees(aims[3], aims[4]) > 30.0, "the halves turn apart");
+
+    set(&mut inputs, "axis", x_axis(false));
+    for beat in [0.0, 1.3, 2.7] {
+        let phase = beat / 4.0;
+        let (yaw, pitch) = (18.0 * (TAU * phase).cos(), 18.0 * (TAU * phase).sin());
+        for aim in directions(&cells, &inputs, beat) {
+            close(aim, offset(base, yaw, pitch));
+        }
+    }
+}
+
+/// A mirrored fan opens the same way on both halves: head `i` is the mirror
+/// image of head `7 − i`, and the two end heads lean out. Without a mirror
+/// the fan is unchanged: the heads lean along the axis by `fan × (c − 0.5)`.
+#[test]
+fn a_mirrored_fan_is_symmetric() {
+    let cells = long_truss();
+    let mut inputs = preset("Fan");
+    set(&mut inputs, "axis", x_axis(true));
+    let aims = directions(&cells, &inputs, 0.0);
+    for i in 0..4 {
+        close(aims[i], across(aims[7 - i]));
+    }
+    assert!(
+        aims[0][0] < -0.1 && aims[7][0] > 0.1,
+        "the ends lean out: {aims:?}"
+    );
+    close(aims[7], lean(REST, [1.0, 0.0, 0.0], 20.0));
+    close(aims[0], lean(REST, [-1.0, 0.0, 0.0], 20.0));
+
+    set(&mut inputs, "axis", x_axis(false));
+    let aims = directions(&cells, &inputs, 0.0);
+    for (i, aim) in aims.iter().enumerate() {
+        let c = f64::from(i as u32) / 7.0;
+        close(*aim, lean(REST, [1.0, 0.0, 0.0], 40.0 * (c - 0.5)));
+    }
 }

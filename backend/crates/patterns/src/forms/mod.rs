@@ -1021,6 +1021,7 @@ fn aim() -> Definition {
             ("direction", c("fan", "direction")),
             ("yaw", c("motion", "yaw")),
             ("pitch", c("motion", "pitch")),
+            ("axis", i("axis")),
         ],
     );
     let aim = body.multiply("aim", c("moved", "direction"), i("alpha"));
