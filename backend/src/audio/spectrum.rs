@@ -33,28 +33,8 @@ pub(crate) fn magnitude_spectrum(
     })
 }
 
-pub(crate) fn sample(
-    samples: &[f32],
-    sample_rate: u32,
-    seconds: f64,
-    hold_edges: bool,
-) -> Result<(Vec<f64>, f64), String> {
-    let spectrum = raw(samples, sample_rate, seconds, hold_edges)?;
-    Ok((
-        spectrum
-            .into_iter()
-            .map(|v| f64::from(v / FFT_SIZE as f32 * 4.))
-            .collect(),
-        f64::from(sample_rate) / FFT_SIZE as f64,
-    ))
-}
-
-fn raw(
-    samples: &[f32],
-    sample_rate: u32,
-    seconds: f64,
-    hold_edges: bool,
-) -> Result<Vec<f32>, String> {
+/// The spectrum ending at `seconds`. It is silent outside the audio.
+fn raw(samples: &[f32], sample_rate: u32, seconds: f64) -> Result<Vec<f32>, String> {
     if sample_rate == 0 || samples.is_empty() {
         return Err("audio spectrum needs nonempty audio and a sample rate".into());
     }
@@ -62,11 +42,10 @@ fn raw(
         return Err("audio spectrum time must be finite".into());
     }
     let mut spectrum = vec![0.; FFT_SIZE / 2 + 1];
-    // Preserve the original sample anchoring precision. The hold option makes
-    // old edge behavior explicit; ordinary spectrum nodes are silent outside.
+    // Preserve the original sample anchoring precision.
     let seconds = seconds as f32;
-    if hold_edges || (seconds >= 0. && seconds < samples.len() as f32 / sample_rate as f32) {
-        let anchor = ((seconds.max(0.) * sample_rate as f32).round() as i64)
+    if seconds >= 0. && seconds < samples.len() as f32 / sample_rate as f32 {
+        let anchor = ((seconds * sample_rate as f32).round() as i64)
             .clamp(0, samples.len() as i64 - 1) as usize;
         magnitude_spectrum(samples, anchor, &mut spectrum)?;
     }
@@ -79,7 +58,7 @@ pub(crate) fn sample_band(
     seconds: f64,
     range: [f32; 2],
 ) -> Result<f32, String> {
-    let spectrum = raw(samples, sample_rate, seconds, false)?;
+    let spectrum = raw(samples, sample_rate, seconds)?;
     Ok(band_energy(&spectrum, &[range], sample_rate))
 }
 

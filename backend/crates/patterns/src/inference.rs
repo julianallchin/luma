@@ -102,72 +102,21 @@ impl Library {
                         };
                         let value_type = if matches!(port.value_type, ValueType::Signal(_)) {
                             ValueType::Signal(match op {
-                                Primitive::Envelope | Primitive::FieldEnvelope => SignalType {
+                                Primitive::Envelope => SignalType {
                                     unit: Some(Unit::Proportion),
-                                    channels: signal(if *op == Primitive::Envelope {
-                                        "progress"
-                                    } else {
-                                        "phase"
-                                    })
-                                    .channels,
+                                    channels: signal("progress").channels,
                                 },
-                                Primitive::Power => signal("base").power(signal("exponent"))?,
                                 Primitive::JoinChannels => signal("a").join(signal("b"))?,
-                                Primitive::FieldRank
-                                | Primitive::FieldReduce(
-                                    FieldReduction::Count | FieldReduction::DistinctCount,
-                                ) => SignalType {
-                                    unit: Some(Unit::Number),
-                                    channels: signal("value").channels,
-                                },
-                                Primitive::AlignDomain
-                                | Primitive::FieldFirst
-                                | Primitive::FieldReduce(_) => signal("value"),
-                                Primitive::ValueNoise1d => SignalType {
-                                    unit: Some(Unit::Number),
-                                    channels: signal("position")
-                                        .binary(signal("octaves"), FieldMath::Multiply)?
-                                        .channels,
-                                },
-                                Primitive::ValueNoise3d => SignalType {
-                                    unit: Some(Unit::Number),
-                                    channels: signal("x")
-                                        .binary(signal("y"), FieldMath::Multiply)?
-                                        .binary(signal("z"), FieldMath::Multiply)?
-                                        .binary(signal("octaves"), FieldMath::Multiply)?
-                                        .channels,
-                                },
                                 Primitive::FieldBinary(math) => {
                                     signal("a").binary(signal("b"), *math)?
                                 }
-                                Primitive::FieldUnary(math) => signal("value").unary(*math)?,
-                                Primitive::ChannelIndex => SignalType {
+                                Primitive::Fraction => SignalType {
                                     unit: Some(Unit::Number),
-                                    channels: signal("value")
-                                        .channels
-                                        .map(|c| Channels::components(c.count()))
-                                        .transpose()?,
+                                    channels: signal("value").channels,
                                 },
-                                Primitive::ClipRange
-                                | Primitive::ChannelMaximum
-                                | Primitive::ChannelSum
-                                | Primitive::Channel => SignalType {
+                                Primitive::ClipRange | Primitive::ChannelMaximum => SignalType {
                                     unit: signal("value").unit,
                                     channels: Some(Channels::Value),
-                                },
-                                Primitive::FieldSelect => {
-                                    let result =
-                                        signal("yes").binary(signal("no"), FieldMath::Maximum)?;
-                                    SignalType {
-                                        channels: result
-                                            .binary(signal("condition"), FieldMath::Multiply)?
-                                            .channels,
-                                        ..result
-                                    }
-                                }
-                                Primitive::RandomField => SignalType {
-                                    unit: Some(Unit::Number),
-                                    channels: signal("epoch").channels,
                                 },
                                 Primitive::FieldClamp => SignalType {
                                     unit: Some(Unit::Proportion),

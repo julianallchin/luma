@@ -8,10 +8,7 @@ pub(crate) mod track_features;
 pub use crate::models::node_graph::BlendMode;
 use crate::models::universe::UniverseState;
 pub use scene::{CompiledAnnotation, Scene, Scope};
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Debug, Default)]
 pub struct ResidentAudio {
@@ -29,13 +26,6 @@ pub struct OutputBinding {
     pub speed: bool,
     pub aim: bool,
 }
-#[derive(Clone, Debug)]
-pub struct ViewTap {
-    pub output: String,
-    pub channels: Vec<String>,
-    pub n: usize,
-    pub c: usize,
-}
 /// One prepared canonical graph and its host selection.
 #[derive(Clone, Debug)]
 pub struct Plan {
@@ -44,12 +34,6 @@ pub struct Plan {
     pub outputs: OutputBinding,
     /// The clip's absolute `[start, end]` time span in seconds.
     pub span: (f32, f32),
-    pub views: Vec<(String, ViewTap)>,
-}
-impl Plan {
-    pub fn view_channels(&self, tap: &ViewTap) -> Vec<String> {
-        tap.channels.clone()
-    }
 }
 /// Last batch of canonical values, reusable by output assembly and diagnostics.
 #[derive(Default)]
@@ -70,15 +54,5 @@ pub fn try_eval(
     match &plan.program {
         Some(program) => program.render(times, &plan.outputs, scratch),
         None => Ok(times.iter().map(|_| composite::blank_frame()).collect()),
-    }
-}
-pub fn eval_views(
-    plan: &Plan,
-    times: &[f32],
-    scratch: &mut Arena,
-) -> Result<HashMap<String, crate::models::node_graph::Signal>, String> {
-    match &plan.program {
-        Some(program) => program.views(times, &plan.views, plan.span, scratch),
-        None => Ok(HashMap::new()),
     }
 }

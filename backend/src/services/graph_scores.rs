@@ -22,11 +22,9 @@ pub(crate) async fn prepare_scene(
     )
 }
 
-/// A compiled scene, the track features it reads, and the cells each clip
-/// lights.
+/// A compiled scene and the cells each clip lights.
 struct SceneData {
     scene: crate::eval::Scene,
-    features: Option<std::sync::Arc<crate::eval::track_features::TrackFeatures>>,
     cells: std::collections::BTreeMap<String, Vec<luma_patterns::Cell>>,
 }
 
@@ -75,7 +73,6 @@ async fn prepare_scene_data(
     if score.clips.is_empty() {
         return Ok(SceneData {
             scene: crate::eval::Scene::default(),
-            features: None,
             cells: Default::default(),
         });
     }
@@ -191,7 +188,6 @@ async fn prepare_scene_data(
     };
     Ok(SceneData {
         scene: crate::eval::Scene::new(compiled).with_rig(rig)?,
-        features,
         cells: clip_cells,
     })
 }
@@ -202,7 +198,6 @@ async fn prepare_scene_data(
 pub struct ClipPreview {
     pub scene: crate::eval::Scene,
     pub span: (f32, f32),
-    pub inspection: Result<Option<crate::eval::lighting::Inspection>, String>,
 }
 
 pub(crate) async fn prepare_clip_preview(
@@ -235,11 +230,8 @@ async fn prepare_single_clip(
         .ok_or_else(|| format!("unknown clip {clip_id}"))?;
     let mut single = score.clone();
     single.clips.retain(|id, _| id == clip_id);
-    let SceneData {
-        scene,
-        features,
-        mut cells,
-    } = prepare_scene_data(access, fixtures_root, storage, track_id, &single, true).await?;
+    let SceneData { scene, mut cells } =
+        prepare_scene_data(access, fixtures_root, storage, track_id, &single, true).await?;
     let cells = cells.remove(clip_id).unwrap_or_default();
     let span = if let Some(annotation) = scene.annotations.first() {
         annotation.span
@@ -260,55 +252,7 @@ async fn prepare_single_clip(
     if !span.0.is_finite() || !span.1.is_finite() || span.1 <= span.0 {
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
-    // Build plots once when the clip changes, never on the audio/render tick.
-    // An inspection failure does not prevent transport or a valid earlier seek.
-    let mut inspection = scene
-        .annotations
-        .first()
-        .and_then(|annotation| {
-            annotation
-                .plan
-                .program
-                .as_ref()
-                .map(|program| program.inspect(span))
-        })
-        .unwrap_or(Ok(None));
-    if let Ok(Some(data)) = &mut inspection {
-        let mut audio = features
-            .as_ref()
-            .map(|f| f.inspection_sources())
-            .unwrap_or_default();
-        for (name, value) in &data.values {
-            let Ok(luma_patterns::Value::AudioSource(source)) = value.sample(0) else {
-                continue;
-            };
-            let result = if (1..data.times.len()).any(|i| {
-                value.sample(i).ok() != Some(luma_patterns::Value::AudioSource(source.clone()))
-            }) {
-                Err("spectrogram inspection needs a fixed audio source".into())
-            } else {
-                match audio.load(access, storage, track_id, &source).await {
-                    Ok(()) => audio
-                        .get(&source)
-                        .map_err(|e| e.to_string())
-                        .and_then(|audio| {
-                            crate::audio::melspec::inspect(&audio.samples, audio.sample_rate, span)
-                                .map(std::sync::Arc::new)
-                        }),
-                    Err(error) => Err(error),
-                }
-            };
-            data.spectrograms.insert(name.clone(), result);
-        }
-    }
-    Ok((
-        ClipPreview {
-            scene,
-            span,
-            inspection,
-        },
-        cells,
-    ))
+    Ok((ClipPreview { scene, span }, cells))
 }
 
 pub(crate) async fn preview_clip(

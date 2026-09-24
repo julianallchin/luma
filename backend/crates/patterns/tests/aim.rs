@@ -336,18 +336,7 @@ fn alpha_blends_toward_the_aim_under_along_the_shortest_arc() {
     let top = aims(&cells, &fan, 0.0);
     for (below, above) in under.iter().zip(&top) {
         assert!((above.weight - 0.25).abs() < 1e-12);
-        let mut head = FixtureOutput {
-            aim: Some(*below),
-            ..FixtureOutput::default()
-        };
-        head.composite(
-            &FixtureOutput {
-                aim: Some(*above),
-                ..FixtureOutput::default()
-            },
-            BlendMode::Replace,
-        );
-        let blended = head.aim.unwrap();
+        let blended = blend_aim(Some(*below), *above).unwrap();
         assert_eq!(blended.weight, 1.0);
         close(
             blended.direction,
@@ -358,15 +347,7 @@ fn alpha_blends_toward_the_aim_under_along_the_shortest_arc() {
         assert!((degrees(below.direction, blended.direction) - whole / 4.0).abs() < 1e-6);
     }
     // Over no aim, the clip blends from home: its alpha is its weight.
-    let mut empty = FixtureOutput::default();
-    empty.composite(
-        &FixtureOutput {
-            aim: Some(top[0]),
-            ..FixtureOutput::default()
-        },
-        BlendMode::Replace,
-    );
-    assert_eq!(empty.aim.unwrap().weight, 0.25);
+    assert_eq!(blend_aim(None, top[0]).unwrap().weight, 0.25);
     // Alpha 0 is no clip.
     set(&mut fan, "alpha", Value::Proportion(0.0));
     assert!(aims(&cells, &fan, 0.0).iter().all(|aim| aim.weight == 0.0));

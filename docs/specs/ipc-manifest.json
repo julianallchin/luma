@@ -642,7 +642,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 119
+        "line": 123
       },
       "name": "create_score",
       "prose": {
@@ -728,7 +728,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 156
+        "line": 160
       },
       "name": "delete_score",
       "prose": {
@@ -1043,7 +1043,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 138
+        "line": 142
       },
       "name": "ensure_venue_score",
       "prose": {
@@ -1139,7 +1139,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 706
+        "line": 705
       },
       "name": "generate_venue_groups",
       "prose": {
@@ -1226,19 +1226,6 @@
         ]
       },
       "returns": "Vec<PatchedFixture>"
-    },
-    {
-      "args": [],
-      "domain": "composable_patterns",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
-        "line": 5
-      },
-      "name": "get_pattern_node_library",
-      "prose": {
-        "returns": "Value"
-      },
-      "returns": "Value"
     },
     {
       "args": [
@@ -1803,7 +1790,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 110
+        "line": 114
       },
       "name": "list_scores_across_venues",
       "prose": {
@@ -1826,7 +1813,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 96
+        "line": 100
       },
       "name": "list_scores_for_track",
       "prose": {
@@ -1900,7 +1887,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 51
+        "line": 53
       },
       "name": "midi_create_binding",
       "prose": {
@@ -1922,7 +1909,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 20
+        "line": 22
       },
       "name": "midi_create_modifier",
       "prose": {
@@ -1944,7 +1931,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 73
+        "line": 75
       },
       "name": "midi_delete_binding",
       "prose": {
@@ -1966,7 +1953,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 31
+        "line": 33
       },
       "name": "midi_delete_modifier",
       "prose": {
@@ -1988,7 +1975,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 42
+        "line": 44
       },
       "name": "midi_list_bindings",
       "prose": {
@@ -2008,7 +1995,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 11
+        "line": 13
       },
       "name": "midi_list_modifiers",
       "prose": {
@@ -2028,7 +2015,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 86
+        "line": 88
       },
       "name": "midi_reload_mapping",
       "prose": {
@@ -2053,7 +2040,7 @@
       "domain": "midi",
       "handler": {
         "file": "backend/src/dispatch/handlers/midi.rs",
-        "line": 62
+        "line": 64
       },
       "name": "midi_update_binding",
       "prose": {
@@ -2491,7 +2478,7 @@
       "domain": "composable_patterns",
       "handler": {
         "file": "backend/src/dispatch/handlers/composable_patterns.rs",
-        "line": 9
+        "line": 5
       },
       "name": "preview_composable_pattern",
       "prose": {
@@ -2517,7 +2504,7 @@
       "domain": "scores",
       "handler": {
         "file": "backend/src/dispatch/handlers/scores.rs",
-        "line": 48
+        "line": 52
       },
       "name": "preview_score_clip",
       "prose": {
@@ -3141,7 +3128,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 680
+        "line": 679
       },
       "name": "save_venue_group",
       "prose": {
@@ -3651,7 +3638,7 @@
       "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 2,
+      "commandCount": 1,
       "domain": "composable_patterns",
       "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
     },
@@ -3889,7 +3876,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 150,
+    "commandCount": 149,
     "domainCount": 26,
     "eventCount": 13
   },

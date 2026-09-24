@@ -1,7 +1,4 @@
-mod support;
 use luma_patterns::*;
-#[allow(unused_imports)]
-use support::EvaluateEffect;
 
 #[test]
 fn all_builtins_validate_and_only_forms_play_as_clips() {
@@ -20,43 +17,6 @@ fn all_builtins_validate_and_only_forms_play_as_clips() {
         // Output and the clip forms are the only complete clip graphs.
         assert_eq!(definition.playable(), id == "output" || is_form(id), "{id}");
     }
-}
-
-#[test]
-fn placement_keeps_auxiliary_outputs_and_rejects_mistyped_capabilities() {
-    let mut library = standard_library();
-    for id in ["sample_gradient", "sample_field_gradient", "mix_palette"] {
-        let definition = &library.definitions[id];
-        assert!(definition.placeable());
-        let placed = definition.clip_instance(id).unwrap();
-        assert!(placed.playable());
-        assert!(placed.outputs.contains_key("opacity"));
-        library.definitions.insert("placed".into(), placed);
-        library.validate("placed").unwrap();
-    }
-    let mut invalid = library.definitions["sample_gradient"].clone();
-    invalid
-        .outputs
-        .insert("pan".into(), invalid.outputs["color"].clone());
-    assert!(
-        !invalid.placeable(),
-        "a wrong capability type was treated as auxiliary"
-    );
-    assert!(invalid.clip_instance("sample_gradient").is_err());
-    let mut reserved = library.definitions["sample_gradient"].clone();
-    reserved
-        .outputs
-        .insert("lighting".into(), reserved.outputs["opacity"].clone());
-    assert!(
-        !reserved.placeable(),
-        "placement would overwrite an existing output"
-    );
-    let mut helper = library.definitions["sample_gradient"].clone();
-    helper.outputs.remove("color");
-    assert!(
-        !helper.placeable(),
-        "an auxiliary signal has no implicit capability"
-    );
 }
 
 #[test]
@@ -137,29 +97,4 @@ fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
             .collect::<Vec<_>>(),
         vec![0., 0.25, 0.5, 0.75, 1.]
     );
-}
-
-#[test]
-fn internal_layering_preserves_color_when_only_movement_is_written() {
-    let mut output = FixtureOutput::from_rgb([0.2, 0.4, 0.8]);
-    let original = output.rgb();
-    output.composite(
-        &FixtureOutput {
-            position: Some([0.0, 0.0]),
-            ..Default::default()
-        },
-        BlendMode::Replace,
-    );
-    assert_eq!(output.rgb(), original);
-    assert_eq!(output.position, Some([0.0, 0.0]));
-    assert!(output.strobe.is_none());
-    output.composite(
-        &FixtureOutput {
-            dimmer: Some(0.0),
-            ..Default::default()
-        },
-        BlendMode::Replace,
-    );
-    assert_eq!(output.rgb(), [0.0; 3]);
-    assert_eq!(output.position, Some([0.0, 0.0]));
 }

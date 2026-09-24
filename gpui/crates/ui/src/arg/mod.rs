@@ -1,6 +1,5 @@
-//! The pattern-arg widget kit: the vocabulary a pattern-args inspector (the
-//! track editor's args sheet) and the graph editor's node params both compose
-//! from.
+//! The pattern-arg widget kit: the vocabulary the track editor's args sheet
+//! composes from.
 //!
 //! # One arg per row
 //!
@@ -8,14 +7,13 @@
 //! column of full-width rows ([`arg_row`]), label over control. A row is the
 //! shape that stops being wrong as a schema grows — a horizontal strip of
 //! cells runs a pattern's third arg off the right edge of the window, where no
-//! amount of scrolling makes it a control anybody finds — and it is the shape
-//! a node's params want too, which is why it is stated once here.
+//! amount of scrolling makes it a control anybody finds — which is why it is
+//! stated once here.
 //!
 //! # Values in, typed change events out
 //!
 //! No widget persists anything. Stateless widgets ([`select::luma_arg_select`],
-//! [`palette::luma_palette_row`], [`gradient::luma_gradient_bar`],
-//! [`color::luma_hsv_picker`]) are free
+//! [`gradient::luma_gradient_stops`], [`color::luma_hsv_picker`]) are free
 //! functions in the crate's usual shape: the caller passes the value and a
 //! closure hears a typed event. Widgets that buffer *drafts* — text being
 //! typed is not a value yet — are entities, for the same reason
@@ -33,7 +31,6 @@ pub mod expression;
 pub mod gradient;
 pub mod gradient_editor;
 pub mod number;
-pub mod palette;
 pub mod preset_picker;
 pub mod select;
 pub mod signal;

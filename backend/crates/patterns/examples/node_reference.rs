@@ -17,88 +17,70 @@ struct Category {
     nodes: &'static [(&'static str, &'static str)],
 }
 
-/// Compatibility spellings. The graph editor hides them from its node menu.
-const HIDDEN: &[&str] = &["sample_field_envelope", "sample_field_gradient"];
-
 const CATEGORIES: &[Category] = &[
     Category {
         slug: "time-and-events",
         title: "Time and events",
-        description: "Clocks, triggers and event queries.",
-        intro: "These nodes read musical time and produce events. An event stream is a value of type Events. Nodes such as Pulse, Chase and Dissolve start one response for each event.",
+        description: "Clocks and the life of each event.",
+        intro: "These nodes read musical time. A form counts its events with Event life and reads curves with Curve.",
         nodes: &[
             ("clip_time", "Musical time inside the clip: beats since the clip start, progress from 0 to 1, the clip duration in beats and the absolute beat."),
-            ("core/track_time", "Track time in seconds, the clip start and duration in seconds, and the track BPM. Needs analyzed track timing."),
-            ("rhythm", "A repeating clock. `elapsed` is the beats since the current stroke started. `cycle` is the number of the current stroke, counted from the origin."),
-            ("beat_trigger", "Periodic events: one event every Repeat beats, shifted by Phase delay. The origin is beat 0 when Follow track grid is on, and the clip start when it is off."),
-            ("core/grid_events", "Events on the analyzed beat grid. Subdivision sets events per beat. Only downbeats uses the downbeats instead of all beats. Beat offset shifts every event by a number of beats."),
-            ("drum_trigger", "Events at the analyzed onsets of one drum."),
-            ("drum_time", "The beats since the latest onset of one drum, the index of that onset, and whether an onset exists yet."),
-            ("core/event_ages", "For the events inside the last Duration beats: elapsed beats, progress from 0 to 1, presence, weight and event index. Each event is one channel."),
-            ("core/event_window", "The latest Event count events before the query time. Each event is one channel. Outputs are the event times in seconds, presence, weights and the index of the latest event."),
-            ("core/event_spacing", "The smallest gap between two consecutive events that is larger than the ignore threshold, in seconds. Needs recorded events."),
-            ("core/thin_events", "Removes each event that comes less than Minimum separation seconds after the previous kept event. Needs recorded events."),
-            ("random_subset", "Gives each event a seeded random set of target heads. Proportion sets the fraction of heads. Shuffled cycle walks through a shuffled order to reduce overlap between consecutive events."),
+            ("core/odometer", "Turns counted since the clip start, one turn every Period beats. A period curve changes the period over the clip without a jump."),
+            ("core/event_life", "One event every Every beats. Gives the progress of the current event through its Life, from 0 to 1, and the event index."),
+            ("core/curve", "Samples a keyframe curve at Progress."),
         ],
     },
     Category {
         slug: "audio",
-        title: "Audio and music",
-        description: "Nodes that read the analyzed audio, stems, drums and harmony of the track.",
+        title: "Audio",
+        description: "Nodes that read the analyzed audio of the track.",
         intro: "These nodes read analysis data of the track. A graph that uses them needs that analysis. A missing analysis is an error.",
         nodes: &[
-            ("band_energy", "The energy of an audio source between Low frequency and High frequency."),
-            ("audio_spectrum", "The magnitude spectrum of an audio source, one channel per frequency bin, and the width of one bin in Hz."),
-            ("audio_lowpass", "Adds a lowpass filter to an audio source. Connect the result to Frequency energy or Audio spectrum."),
-            ("audio_highpass", "Adds a highpass filter to an audio source. Connect the result to Frequency energy or Audio spectrum."),
-            ("harmony", "The current pitch class from the chord analysis, from 0 (C) to 11 (B), and whether a pitch class is present."),
+            ("band_energy", "The energy of the full mix between Low frequency and High frequency."),
         ],
     },
     Category {
         slug: "space",
-        title: "Space and geometry",
-        description: "Nodes that read head positions and turn them into coordinates.",
+        title: "Space",
+        description: "Nodes that turn head positions into coordinates.",
         intro: "A head is one independently controllable cell of a fixture. These nodes give values per head. Stage coordinates are U (stage right), V (downstage) and Z (up).",
         nodes: &[
-            ("fixture_geometry", "The world position (XYZ) of each head, and its index in the prepared selection."),
-            ("stage_coordinates", "The U, V and Z stage coordinates of each head, in meters."),
             ("resolve_mapping", "Resolves a mapping to one coordinate from 0 to 1 per head. The mapping sets the source direction, grouping, reversal and an optional mirror plane."),
             ("mapped_position", "The resolved mapping coordinate of each head."),
             ("coordinate_offset", "The distance of each head's mapped coordinate from Position. When the boundary wraps, the distance wraps into the range −0.5 to 0.5. `wrapped` is 1 for heads that wrap."),
-            ("core/radial_coordinates", "The angle in turns and the radius of each point around the centroid of the first two position channels."),
-            ("core/fit_circle", "Fits a circle to 3D points and gives the angle of each point around it, in turns. If the fit fails, it uses the angle around the centroid."),
-            ("core/principal_direction", "The main direction of a 2D point cloud, as a unit vector."),
-            ("core/rank_nearby", "Ranks heads by Sort value. A head within Merge distance of the previous head in that order gets the same rank."),
-            ("wander_points", "Point count seeded points that drift and oscillate inside a box. The output has three channels (XYZ) per point."),
-            ("proximity_weights", "For each position, one weight per point. The weights add up to 1. Nearer points get more weight. Blend distance sets how soft the blend is. At 0 only the nearest point gets weight."),
-            ("core/domain_index", "The index of each head in the prepared selection."),
-            ("core/align_domain", "Puts Value on the heads of Domain. If Domain has no per-head values, it takes the value of the head with the lowest First fixture order."),
-            ("core/field_first", "The value of the head with the lowest Order."),
-            ("core/rank", "The rank of each head by value, from 0. Equal values are ordered by head id."),
         ],
     },
     Category {
         slug: "masks",
-        title: "Masks and motion",
-        description: "Nodes that make per-head brightness masks and movement over time.",
+        title: "Masks",
+        description: "Nodes that make per-head brightness masks.",
         intro: "A mask is a value from 0 to 1 per head. Multiply a mask by a color to make a lit effect.",
         nodes: &[
             ("uniform_mask", "The same coverage on every head, clamped to 0–1."),
             ("envelope", "Samples an editable curve at Progress."),
-            ("soft_edges", "Makes an envelope that rises and falls linearly at both edges. Edge softness sets the width of the edges."),
+            ("core/random_share", "A seeded random share of the heads for each event index. Coverage sets the share. Grain sets how many heads light together."),
+            ("core/path_glides", "Whether a path curve glides: 1 when the curve changes smoothly, 0 when it only jumps."),
+        ],
+    },
+    Category {
+        slug: "aim",
+        title: "Aim",
+        description: "The steps that point moving heads.",
+        intro: "An aim is a direction per head in stage U, V, Z. The aim form builds one from these steps.",
+        nodes: &[
+            ("core/aim_base", "The starting aim: a direction, or the direction from each head to a point."),
+            ("core/aim_fan", "Spreads the aims of the heads across the axis by Fan degrees."),
+            ("core/aim_motion", "Moves each aim along a shape. Spread sets the phase difference across the axis. Size sets the size in degrees."),
+            ("core/aim_offset", "Turns each aim left/right and up/down by a number of degrees."),
         ],
     },
     Category {
         slug: "color",
         title: "Color",
-        description: "Nodes that sample gradients, mix palettes and build or rotate colors.",
+        description: "Gradient sampling.",
         intro: "Colors are normalized RGB from 0 to 1. Gradients interpolate in the OKLab color space.",
         nodes: &[
             ("sample_gradient", "The color and opacity of a gradient at Position."),
-            ("mix_palette", "Mixes the colors of a palette by channel weights. Gives a color and an opacity."),
-            ("palette_fallback", "Gives Palette, or If empty when Palette has no color stops."),
-            ("hsv", "Builds an RGB color from hue in turns, saturation and value."),
-            ("rotate_hue", "Rotates the hue of a color by a number of turns. The largest and smallest RGB channels keep their values."),
         ],
     },
     Category {
@@ -114,12 +96,13 @@ const CATEGORIES: &[Category] = &[
             ("color.sparkle@1", "Each event lights a random share of the heads."),
             ("color.noise@1", "Soft brightness that wanders across space and time."),
             ("strobe.constant@1", "Fixture shutter strobe at Rate × Alpha."),
+            ("aim@1", "Points moving heads: a base aim, a fan across the axis and a motion shape."),
         ],
     },
     Category {
         slug: "math",
         title: "Math and signals",
-        description: "Arithmetic, channel operations, reductions, noise and random values.",
+        description: "Arithmetic, channel operations and noise.",
         intro: "Most of these nodes accept a signal with any unit and any channel layout.",
         nodes: &[
             ("core/add", "A + B."),
@@ -128,36 +111,15 @@ const CATEGORIES: &[Category] = &[
             ("core/divide", "A ÷ B. Division by zero gives 0."),
             ("core/minimum", "The smaller of A and B."),
             ("core/maximum", "The larger of A and B."),
-            ("core/power", "Base raised to Exponent. Both must be dimensionless."),
-            ("core/absolute", "The absolute value."),
-            ("core/floor", "Rounds down to a whole number."),
             ("core/fraction", "Wraps a value into 0 to 1 (value modulo 1)."),
-            ("core/sine", "The sine of a value in turns: sin(2π × value)."),
-            ("core/square_root", "The square root. Negative input is an error."),
-            ("core/float32", "Rounds a value to 32-bit floating-point precision."),
             ("core/greater", "1 where A − B is greater than Tolerance, 0 elsewhere."),
-            ("core/choose", "Yes where Condition is greater than 0, No elsewhere."),
             ("core/choose_number", "Yes when Condition is on, No when it is off."),
             ("core/clamp_coverage", "Clamps a value to 0–1."),
             ("normalize", "Rescales a signal so that its minimum over the clip is 0 and its maximum is 1."),
             ("clip_range", "The minimum and maximum of a signal, sampled at evenly spaced times across the clip."),
-            ("core/field_minimum", "The minimum over all heads."),
-            ("core/field_maximum", "The maximum over all heads."),
-            ("core/field_mean", "The mean over all heads."),
-            ("core/head_count", "The number of heads."),
-            ("core/distinct_count", "The number of different values over all heads."),
-            ("core/channel", "One channel of a signal, by index from 0."),
             ("core/join_channels", "Joins the channels of A and B into one signal."),
-            ("core/channel_sum", "The sum of all channels."),
             ("core/channel_maximum", "The largest channel value."),
-            ("core/channel_argmax", "The index of the largest channel."),
-            ("core/channel_index", "The index of each channel, from 0."),
-            ("core/channel_count", "The number of channels."),
             ("core/noise", "Smooth 3D noise from 0 to 1. The same coordinates always give the same value."),
-            ("core/value_noise_1d", "Seeded 1D value noise with a number of octaves."),
-            ("core/value_noise_3d", "Seeded 3D value noise with a number of octaves."),
-            ("core/random", "A deterministic random value per head. A different Epoch gives different values."),
-            ("core/seed_stream", "Derives a new seed from Seed and Stream."),
         ],
     },
     Category {
@@ -192,7 +154,7 @@ fn main() {
     let missing: Vec<_> = library
         .definitions
         .keys()
-        .filter(|id| !HIDDEN.contains(&id.as_str()) && !category_of.contains_key(id.as_str()))
+        .filter(|id| !category_of.contains_key(id.as_str()))
         .collect();
     assert!(missing.is_empty(), "no category for {missing:?}");
 
@@ -257,7 +219,6 @@ fn value(value: &Value) -> String {
         Value::Degrees(v) => format!("{}°", number(*v)),
         Value::Seconds(v) => format!("{} s", number(*v)),
         Value::Boolean(v) => if *v { "on" } else { "off" }.into(),
-        Value::Seed(v) => v.to_string(),
         Value::Color(rgb) => format!("RGB ({})", numbers(*rgb)),
         Value::Signal(_) => format!(
             "({})",
@@ -269,19 +230,7 @@ fn value(value: &Value) -> String {
                     .map(|v| v.as_f64().unwrap())
             )
         ),
-        Value::AudioSource(_) | Value::Drum(_) | Value::Boundary(_) => match inner.as_str() {
-            Some(name) => name.to_string(),
-            None => "filtered source".into(),
-        },
-        Value::Events(_) => match inner["source"].as_str() {
-            Some("beats") if inner["times"].as_array().is_some_and(Vec::is_empty) => {
-                "no events".into()
-            }
-            Some("periodic") => {
-                format!("every {} beats", number(inner["repeat"].as_f64().unwrap()))
-            }
-            _ => "events".into(),
-        },
+        Value::Boundary(_) => inner.as_str().unwrap().to_string(),
         Value::Gradient(gradient) => match gradient.stops.len() {
             0 => "no color stops".into(),
             1..=3 => gradient
@@ -315,7 +264,6 @@ fn value(value: &Value) -> String {
 fn type_name(kind: luma_patterns::ValueType) -> String {
     use luma_patterns::ValueType::*;
     match kind {
-        AudioSource => "Audio source".into(),
         ColorField => "Color field".into(),
         other => other.to_string(),
     }
@@ -388,11 +336,7 @@ fn category_page(library: &Library, category: &Category) -> String {
     for (id, summary) in category.nodes {
         let definition = &library.definitions[*id];
         writeln!(out, "## {}\n", text(&library.display_name(id))).unwrap();
-        let mut facts = vec![format!("`{id}`"), kind(definition)];
-        if definition.placeable() && !definition.playable() {
-            facts.push("Placeable as a clip".into());
-        }
-        writeln!(out, "{}\n", facts.join(" · ")).unwrap();
+        writeln!(out, "`{id}` · {}\n", kind(definition)).unwrap();
         writeln!(out, "{summary}\n").unwrap();
         inputs_table(&mut out, &definition.inputs);
         outputs_table(&mut out, definition);
@@ -406,13 +350,11 @@ fn index(library: &Library) -> String {
         "Every node in the Luma pattern graph standard library, with its ports, types and defaults.",
     );
     out.push_str(
-        "A pattern is a graph. Each node in the graph uses a definition from the standard library. \
+        "A clip form is a graph. Each node in the graph uses a definition from the standard library. \
 A definition has named inputs, named outputs and a body. \
 The body is a built-in kernel or another graph. \
 Each input of a node is bound to a constant value, to an input of the enclosing graph, or to an output of another node. \
 An unbound input uses its default.\n\n\
-In the graph editor, the node menu also offers **Input**. \
-An Input node adds a named input to the graph.\n\n\
 A clip graph ends in an [Apply](/docs/node-reference/output) node. \
 Apply is the only node that writes lighting.\n\n",
     );
@@ -434,10 +376,6 @@ A signal without a head list is the same for every head.\n\n",
         ("Field", "The same as Number. The name marks a value per head."),
         ("Mask", "A value from 0 to 1 per head."),
         ("Boolean", "On or off."),
-        ("Seed", "A 64-bit integer for seeded random nodes."),
-        ("Audio source", "The full mix or one stem (bass, drums, vocals, other), with optional lowpass and highpass filters."),
-        ("Drum", "One drum class: kick, snare, hi-hat or cymbal."),
-        ("Events", "A stream of events: periodic, or recorded times from analysis. Events can carry target heads."),
         ("Gradient", "Color stops from 0 to 1. Each stop has a color and an alpha."),
         ("Envelope", "An editable curve through points from 0 to 1."),
         ("Mapping", "How to give each head a coordinate: a source direction, per group or not, reversed or not, and an optional mirror plane."),
@@ -457,8 +395,7 @@ Beats, degrees and seconds only connect to the same unit.\n\n",
     out.push_str("### Channels\n\n");
     out.push_str(
         "A channel layout is one channel, RGB, pan/tilt, or a count of unnamed components. \
-A count of components connects to a named layout with the same number of channels. \
-Some nodes, such as Event ages, use channels for a list of events.\n\n",
+A count of components connects to a named layout with the same number of channels.\n\n",
     );
     out.push_str("### Rates\n\n");
     out.push_str(

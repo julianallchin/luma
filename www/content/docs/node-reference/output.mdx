@@ -15,6 +15,7 @@ Writes color, pan, tilt, strobe and movement speed for each head. An unwired inp
 
 | Input | Name | Type | Rate | Default | Description |
 |---|---|---|---|---|---|
+| `aim` | Aim | Signal (number, 3 channels) | per frame | `—` | Where the head points in U, V, Z. The vector's length, at most 1, is its weight over the aim under it |
 | `color` | Color | Signal (0–1, RGB) | per frame | `RGB (1, 1, 1)` | Unwired leaves this capability untouched |
 | `pan` | Pan (degrees) | Signal (degrees, one channel) | per frame | `0°` | Unwired leaves this capability untouched |
 | `speed` | Movement speed | Signal (0–1, one channel) | per frame | `1` | Unwired leaves this capability untouched |
@@ -25,39 +26,9 @@ Writes color, pan, tilt, strobe and movement speed for each head. An unwired inp
 |---|---|---|
 | `lighting` | Lighting | per frame |
 
-## Position
-
-`write_position` · Graph with no nodes · Placeable as a clip
-
-Passes Pan and Tilt through to outputs that connect to Apply.
-
-| Input | Name | Type | Rate | Default | Description |
-|---|---|---|---|---|---|
-| `pan` | Pan | Signal (degrees, one channel) | per frame | `0°` | Absolute angle in degrees |
-| `tilt` | Tilt | Signal (degrees, one channel) | per frame | `0°` | Absolute angle in degrees |
-
-| Output | Type | Rate |
-|---|---|---|
-| `pan` | Signal (degrees, one channel) | per frame |
-| `tilt` | Signal (degrees, one channel) | per frame |
-
-## Movement speed
-
-`write_speed` · Graph with no nodes · Placeable as a clip
-
-Passes a movement speed through to an output that connects to Apply.
-
-| Input | Name | Type | Rate | Default | Description |
-|---|---|---|---|---|---|
-| `value` | Value | Signal (0–1, one channel) | per frame | `1` | Fraction from 0 to 1 |
-
-| Output | Type | Rate |
-|---|---|---|
-| `speed` | Signal (0–1, one channel) | per frame |
-
 ## Strobe output
 
-`write_strobe` · Graph of 3 nodes · Placeable as a clip
+`write_strobe` · Graph of 3 nodes
 
 Gives a strobe value on every head, clamped to 0–1.
 

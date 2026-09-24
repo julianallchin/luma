@@ -1,14 +1,6 @@
 use luma_patterns::*;
 use std::collections::BTreeMap;
 
-fn graph() -> Definition {
-    Definition {
-        name: "Signal graph".into(),
-        inputs: BTreeMap::new(),
-        outputs: BTreeMap::new(),
-        body: Body::Graph(Graph::default()),
-    }
-}
 fn cells() -> Vec<Cell> {
     (0..5)
         .map(|i| Cell {
@@ -35,53 +27,16 @@ fn wire(node: &str, output: &str) -> Binding {
         output: output.into(),
     }
 }
-fn bind(
-    def: &mut Definition,
-    lib: &Library,
-    node: &str,
-    input: &str,
-    binding: Binding,
-) -> Result<()> {
-    def.edit(
-        lib,
-        GraphEdit::Bind {
-            node: node.into(),
-            input: input.into(),
-            binding: Some(binding),
-        },
-    )
-}
-fn add(def: &mut Definition, lib: &Library, id: &str, node: &str) {
-    def.edit(
-        lib,
-        GraphEdit::Add {
-            id: id.into(),
-            definition: node.into(),
-        },
-    )
-    .unwrap();
-}
-
 #[test]
 fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
-    let mut library = standard_library();
-    let mut def = graph();
-    add(&mut def, &library, "output", "output");
-    let before = def.clone();
-    assert!(def
-        .edit(
-            &library,
-            GraphEdit::Add {
-                id: "second".into(),
-                definition: "output".into()
-            }
-        )
-        .is_err());
-    assert_eq!(def, before);
+    let library = standard_library();
     let cells = cells();
-    let sample = |library: &mut Library, def: &Definition| {
-        library.definitions.insert("test".into(), def.clone());
-        PreparedGraph::new(library, "test", &BTreeMap::new(), frame(&cells))
+    let sample = |inputs: &[(&str, Value)]| {
+        let inputs = inputs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        PreparedGraph::new(&library, "output", &inputs, frame(&cells))
             .unwrap()
             .evaluate_batch(&[0.0])
             .unwrap()["lighting"]
@@ -89,200 +44,21 @@ fn optional_output_sockets_distinguish_unwritten_zero_and_clear() {
             .unwrap()
             .clone()
     };
-    assert_eq!(sample(&mut library, &def).writes(), [false; 6]);
-    bind(
-        &mut def,
-        &library,
-        "output",
-        "color",
-        Value::Color([0.0; 3]).into(),
-    )
-    .unwrap();
-    let zero = sample(&mut library, &def);
+    assert_eq!(sample(&[]).writes(), [false; 6]);
+    let zero = sample(&[("color", Value::Color([0.0; 3]))]);
     assert_eq!(zero.writes(), [true, true, false, false, false, false]);
     assert!(zero
         .sample(0)
         .unwrap()
         .values()
         .all(|v| v.dimmer == Some(0.0)));
-    bind(
-        &mut def,
-        &library,
-        "output",
-        "pan",
-        Value::Degrees(42.0).into(),
-    )
-    .unwrap();
-    let pan = sample(&mut library, &def);
+    let pan = sample(&[("pan", Value::Degrees(42.0))]);
+    assert_eq!(pan.writes(), [false, false, true, false, false, false]);
     assert!(pan
         .sample(0)
         .unwrap()
         .values()
         .all(|v| v.position == Some([42.0, 0.0])));
-    def.edit(
-        &library,
-        GraphEdit::Bind {
-            node: "output".into(),
-            input: "color".into(),
-            binding: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        sample(&mut library, &def).writes(),
-        [false, false, true, false, false, false]
-    );
-}
-
-#[test]
-fn generic_input_inherits_a_bound_color_and_keeps_its_label_independent() {
-    let library = standard_library();
-    let mut def = graph();
-    add(&mut def, &library, "multiply", "core/multiply");
-    bind(
-        &mut def,
-        &library,
-        "multiply",
-        "b",
-        Value::Color([0.25, 0.5, 0.75]).into(),
-    )
-    .unwrap();
-    def.edit(
-        &library,
-        GraphEdit::AddInput {
-            key: "tint".into(),
-            name: "Accent".into(),
-            position: Some([0.0, 0.0]),
-        },
-    )
-    .unwrap();
-    bind(
-        &mut def,
-        &library,
-        "multiply",
-        "b",
-        Binding::Input {
-            input: "tint".into(),
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        def.inputs["tint"].value_type,
-        ValueType::Signal(SignalType::new(Unit::Proportion, Channels::Rgb))
-    );
-    assert_eq!(
-        def.inputs["tint"].default,
-        Some(Value::Color([0.25, 0.5, 0.75]))
-    );
-    def.edit(
-        &library,
-        GraphEdit::RenameInput {
-            key: "tint".into(),
-            name: "Snare color".into(),
-        },
-    )
-    .unwrap();
-    assert_eq!(def.inputs["tint"].name, "Snare color");
-    assert!(!def.inputs["tint"].optional);
-}
-
-#[test]
-fn required_numeric_input_gets_an_editable_broadcast_default() {
-    let mut library = standard_library();
-    let mut def = graph();
-    add(&mut def, &library, "clamp", "core/clamp_coverage");
-    add(&mut def, &library, "output", "output");
-    def.edit(
-        &library,
-        GraphEdit::AddInput {
-            key: "level".into(),
-            name: "Level".into(),
-            position: Some([0.0, 0.0]),
-        },
-    )
-    .unwrap();
-    bind(
-        &mut def,
-        &library,
-        "clamp",
-        "value",
-        Binding::Input {
-            input: "level".into(),
-        },
-    )
-    .unwrap();
-    assert_eq!(
-        def.inputs["level"].value_type,
-        ValueType::Signal(SignalType::new(Unit::Number, Channels::Value))
-    );
-    assert_eq!(def.inputs["level"].default, Some(Value::Number(0.0)));
-    add(&mut def, &library, "tint", "core/multiply");
-    bind(&mut def, &library, "tint", "a", wire("clamp", "mask")).unwrap();
-    bind(
-        &mut def,
-        &library,
-        "tint",
-        "b",
-        Value::Color([1.0; 3]).into(),
-    )
-    .unwrap();
-    bind(&mut def, &library, "output", "color", wire("tint", "value")).unwrap();
-    library.definitions.insert("test".into(), def);
-    let cells = cells();
-    let args = BTreeMap::from([("level".into(), Value::Number(0.6))]);
-    let result = PreparedGraph::new(&library, "test", &args, frame(&cells))
-        .unwrap()
-        .evaluate_batch(&[0.0, 2.0])
-        .unwrap();
-    let result = result["lighting"].lighting().unwrap();
-    for time in 0..2 {
-        assert!(result
-            .sample(time)
-            .unwrap()
-            .values()
-            .all(|head| head.dimmer == Some(0.6)));
-    }
-}
-
-#[test]
-fn dimensions_flow_through_generic_nested_graphs_and_fail_at_the_wire() {
-    let mut library = standard_library();
-    let inner = library.definitions["core/multiply"].instance("core/multiply");
-    library.definitions.insert("scaled".into(), inner);
-    let mut def = graph();
-    add(&mut def, &library, "scaled", "scaled");
-    add(&mut def, &library, "output", "output");
-    bind(&mut def, &library, "scaled", "a", Value::Beats(2.0).into()).unwrap();
-    bind(&mut def, &library, "scaled", "b", Value::Number(3.0).into()).unwrap();
-    let Body::Graph(body) = &def.body else {
-        panic!()
-    };
-    assert_eq!(
-        library
-            .binding_type(&def.inputs, body, &wire("scaled", "value"))
-            .unwrap()
-            .0,
-        ValueType::Signal(SignalType::new(Unit::Beats, Channels::Value))
-    );
-    assert!(bind(
-        &mut def,
-        &library,
-        "output",
-        "color",
-        wire("scaled", "value")
-    )
-    .is_err());
-    // Changing an upstream operand also invalidates the typed output rather
-    // than concealing its dimensionality behind a generic Signal label.
-    bind(&mut def, &library, "scaled", "b", Value::Beats(3.0).into()).unwrap();
-    assert!(bind(
-        &mut def,
-        &library,
-        "output",
-        "color",
-        wire("scaled", "value")
-    )
-    .is_err());
 }
 
 #[test]
@@ -331,7 +107,7 @@ fn channel_maximum_reduces_only_channels_and_preserves_negative_values() {
 }
 
 #[test]
-fn channelwise_clamp_comparison_and_choice_keep_tensor_shape() {
+fn channelwise_clamp_and_comparison_keep_tensor_shape() {
     use ndarray::Array3;
     let mut library = standard_library();
     let source = Value::Signal(
@@ -344,7 +120,6 @@ fn channelwise_clamp_comparison_and_choice_keep_tensor_shape() {
         .unwrap(),
     );
     let node = |definition: &str, inputs: Vec<(&str, Binding)>| Node {
-        position: None,
         definition: definition.into(),
         inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
     };
@@ -363,38 +138,12 @@ fn channelwise_clamp_comparison_and_choice_keep_tensor_shape() {
                 vec![("a", source.into()), ("b", Value::Number(0.4).into())],
             ),
         ),
-        (
-            "choose".into(),
-            node(
-                "core/choose",
-                vec![
-                    ("condition", wire("compare", "mask")),
-                    ("yes", Value::Number(8.).into()),
-                    ("no", Value::Number(-3.).into()),
-                ],
-            ),
-        ),
-        (
-            "channel".into(),
-            node(
-                "core/channel",
-                vec![
-                    ("value", wire("clamp", "mask")),
-                    ("index", Value::Number(1.).into()),
-                ],
-            ),
-        ),
     ]);
     let outputs = BTreeMap::from([
         ("clamped".into(), wire("clamp", "mask")),
-        ("chosen".into(), wire("choose", "value")),
-        ("green".into(), wire("channel", "value")),
+        ("compared".into(), wire("compare", "mask")),
     ]);
-    let body = Graph {
-        nodes,
-        outputs,
-        ..Default::default()
-    };
+    let body = Graph { nodes, outputs };
     let outputs = body
         .outputs
         .iter()
@@ -420,8 +169,7 @@ fn channelwise_clamp_comparison_and_choice_keep_tensor_shape() {
     let values = prepared.evaluate_batch(&[0., 1.]).unwrap();
     for (key, expected, channels) in [
         ("clamped", vec![0., 0.5, 1., 0.8, 0.2, 0.], Channels::Rgb),
-        ("chosen", vec![-3., 8., 8., 8., -3., -3.], Channels::Rgb),
-        ("green", vec![0.5, 0.2], Channels::Value),
+        ("compared", vec![0., 1., 1., 1., 0., 0.], Channels::Rgb),
     ] {
         let actual = values[key].signal().unwrap();
         assert_eq!(*actual.channels(), channels);
@@ -434,22 +182,9 @@ fn channelwise_clamp_comparison_and_choice_keep_tensor_shape() {
 }
 
 #[test]
-fn numerical_ports_reject_invalid_channel_indices_and_comparison_units() {
+fn comparison_rejects_mismatched_units() {
     let library = standard_library();
     let cells = cells();
-    for index in [-1., 0.5, 3.] {
-        let error = PreparedGraph::new(
-            &library,
-            "core/channel",
-            &BTreeMap::from([
-                ("value".into(), Value::Color([0.2, 0.4, 0.6])),
-                ("index".into(), Value::Number(index)),
-            ]),
-            frame(&cells),
-        )
-        .unwrap_err();
-        assert!(error.0.contains("channel index"), "{error}");
-    }
     let error = PreparedGraph::new(
         &library,
         "core/greater",

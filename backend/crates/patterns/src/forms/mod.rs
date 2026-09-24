@@ -158,7 +158,6 @@ impl Body {
         self.0.insert(
             id.into(),
             Node {
-                position: None,
                 definition: definition.into(),
                 inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             },
@@ -215,7 +214,6 @@ impl Body {
                 },
             )]),
             body: crate::Body::Graph(Graph {
-                input_nodes: BTreeMap::new(),
                 nodes: self.0,
                 outputs: BTreeMap::from([("lighting".into(), c("output", "lighting"))]),
             }),
@@ -1429,11 +1427,7 @@ pub(crate) fn lower(
                 body.node(
                     &key("energy"),
                     "band_energy",
-                    vec![
-                        ("source", Value::AudioSource(AudioSource::Mix.into()).into()),
-                        ("low_hz", n(low)),
-                        ("high_hz", n(high)),
-                    ],
+                    vec![("low_hz", n(low)), ("high_hz", n(high))],
                 );
                 body.node(
                     &key("level"),

@@ -62,32 +62,6 @@ impl SignalType {
                 .zip(other.channels)
                 .is_none_or(|(a, b)| a.accepts(b))
     }
-    pub(crate) fn unary(self, math: crate::UnaryMath) -> Result<Self> {
-        let unit = match math {
-            crate::UnaryMath::Absolute | crate::UnaryMath::Floor | crate::UnaryMath::Float32 => {
-                self.unit
-            }
-            crate::UnaryMath::Fraction | crate::UnaryMath::Sine => Some(Unit::Number),
-            crate::UnaryMath::SquareRoot => match self.unit {
-                Some(Unit::Number | Unit::Proportion) | None => self.unit,
-                _ => return Err(Error("square root requires a dimensionless signal".into())),
-            },
-        };
-        Ok(Self { unit, ..self })
-    }
-    pub(crate) fn power(self, exponent: Self) -> Result<Self> {
-        if [self.unit, exponent.unit]
-            .into_iter()
-            .flatten()
-            .any(|u| !matches!(u, Unit::Number | Unit::Proportion))
-        {
-            return Err(Error("power requires dimensionless signals".into()));
-        }
-        Ok(Self {
-            unit: Some(Unit::Number),
-            channels: self.binary(exponent, crate::FieldMath::Multiply)?.channels,
-        })
-    }
     pub(crate) fn binary(self, other: Self, math: crate::FieldMath) -> Result<Self> {
         let channels = match (self.channels, other.channels) {
             (None, _) | (_, None) => None,
@@ -327,26 +301,6 @@ impl Signal {
         .and(b.values.broadcast(layout.shape).expect("checked broadcast"))
         .and(c.values.broadcast(layout.shape).expect("checked broadcast"))
         .map_collect(|a, b, c| operation(*a, *b, *c));
-        Self::new(values, unit, layout.channels, layout.fixtures)
-    }
-    pub(crate) fn zip4(
-        &self,
-        b: &Self,
-        c: &Self,
-        d: &Self,
-        unit: Unit,
-        operation: impl Fn(f64, f64, f64, f64) -> f64,
-    ) -> Result<Self> {
-        let layout = self.layout().merge(b)?.merge(c)?.merge(d)?;
-        let values = Zip::from(
-            self.values
-                .broadcast(layout.shape)
-                .expect("checked broadcast"),
-        )
-        .and(b.values.broadcast(layout.shape).expect("checked broadcast"))
-        .and(c.values.broadcast(layout.shape).expect("checked broadcast"))
-        .and(d.values.broadcast(layout.shape).expect("checked broadcast"))
-        .map_collect(|a, b, c, d| operation(*a, *b, *c, *d));
         Self::new(values, unit, layout.channels, layout.fixtures)
     }
     fn layout(&self) -> Layout {

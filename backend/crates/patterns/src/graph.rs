@@ -158,10 +158,7 @@ impl From<Value> for Binding {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Optional editor layout. Omitted by code authors; never read by execution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<[f64; 2]>,
-    /// Definition ID in this document version's fixed library, or a score-local ID.
+    /// Definition ID in the standard library.
     pub definition: String,
     #[serde(default)]
     pub inputs: BTreeMap<String, Binding>,
@@ -169,195 +166,28 @@ pub struct Node {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Graph {
-    /// Named parameter sockets in the editor. Type/default metadata lives in
-    /// Definition::inputs after the first connection; unconnected new sockets
-    /// need no invented value type and do not participate in execution.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub input_nodes: BTreeMap<String, InputNode>,
     pub nodes: BTreeMap<String, Node>,
     pub outputs: BTreeMap<String, Binding>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InputNode {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<[f64; 2]>,
-}
-
-impl Graph {
-    /// Replace the call `node` with the body of `callee`. The body's nodes
-    /// keep their ids where free and otherwise take `{node}/{id}`; its Inputs
-    /// read what the call bound, or their defaults; whatever read the call's
-    /// outputs reads what the body's outputs read.
-    pub fn inline(&mut self, node: &str, callee: &Definition) -> Result<()> {
-        let Body::Graph(body) = &callee.body else {
-            return Err(Error(format!("{node}: only a graph can be inlined")));
-        };
-        let call = self
-            .nodes
-            .get(node)
-            .cloned()
-            .ok_or_else(|| Error(format!("unknown node {node}")))?;
-        let clash = body.nodes.keys().any(|id| self.nodes.contains_key(id));
-        let names: BTreeMap<&str, String> = body
-            .nodes
-            .keys()
-            .map(|id| {
-                let mut name = if clash {
-                    format!("{node}/{id}")
-                } else {
-                    id.clone()
-                };
-                while self.nodes.contains_key(&name) {
-                    name.push('_');
-                }
-                (id.as_str(), name)
-            })
-            .collect();
-        let translate = |binding: &Binding| -> Result<Binding> {
-            Ok(match binding {
-                Binding::Input { input } => match call.inputs.get(input) {
-                    Some(bound) => bound.clone(),
-                    None => callee
-                        .inputs
-                        .get(input)
-                        .and_then(|spec| spec.default.clone())
-                        .map(Binding::from)
-                        .ok_or_else(|| Error(format!("{node}.{input}: nothing to inline")))?,
-                },
-                Binding::Connection {
-                    node: inner,
-                    output,
-                } => Binding::Connection {
-                    node: names[inner.as_str()].clone(),
-                    output: output.clone(),
-                },
-                value => value.clone(),
-            })
-        };
-        self.nodes.remove(node);
-        for (id, inner) in &body.nodes {
-            self.nodes.insert(
-                names[id.as_str()].clone(),
-                Node {
-                    position: None,
-                    definition: inner.definition.clone(),
-                    inputs: inner
-                        .inputs
-                        .iter()
-                        .map(|(key, binding)| Ok((key.clone(), translate(binding)?)))
-                        .collect::<Result<_>>()?,
-                },
-            );
-        }
-        let outputs = body
-            .outputs
-            .iter()
-            .map(|(key, binding)| Ok((key.as_str(), translate(binding)?)))
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        for binding in self
-            .nodes
-            .values_mut()
-            .flat_map(|inner| inner.inputs.values_mut())
-            .chain(self.outputs.values_mut())
-        {
-            if let Binding::Connection {
-                node: source,
-                output,
-            } = binding
-            {
-                if source == node {
-                    *binding = outputs
-                        .get(output.as_str())
-                        .cloned()
-                        .ok_or_else(|| Error(format!("{node}: unknown output {output}")))?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl InputNode {
-    pub(crate) fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty() || self.name.chars().any(char::is_control) {
-            return Err(Error("an Input needs a name".into()));
-        }
-        if self
-            .position
-            .is_some_and(|p| p.iter().any(|v| !v.is_finite()))
-        {
-            return Err(Error("Input position must be finite".into()));
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
     Output,
     FieldBinary(crate::FieldMath),
-    FieldUnary(crate::UnaryMath),
-    Power,
-    FieldRank,
-    FieldFirst,
-    FieldReduce(crate::FieldReduction),
+    Fraction,
     ChannelMaximum,
-    ChannelSum,
-    ChannelArgmax,
-    ChannelIndex,
-    ChannelCount,
-    Channel,
     JoinChannels,
-    StageCoordinates,
-    WorldGeometry,
-    WanderPoints,
-    ProximityWeights,
-    RadialCoordinates,
-    CirclePhase,
-    PrincipalDirection,
-    RankNearby,
     ClipTime,
     ClipRange,
     BandEnergy,
-    AudioSpectrum,
-    FilterAudio { highpass: bool },
-    DrumClock,
-    BeatEvents,
-    DrumEvents,
-    TrackTime,
-    GridEvents,
-    EventWindow,
-    EventSpacing,
-    ThinEvents,
-    RandomEventTargets,
-    EventAges,
-    Harmony,
     Noise,
-    ValueNoise1d,
-    ValueNoise3d,
-    SeedStream,
-    DomainIndex,
-    AlignDomain,
     SampleGradient,
-    SampleGradientField,
-    MixPalette,
-    PaletteFallback,
-    Hsv,
-    RotateHue,
     FieldClamp,
     FieldGreater,
-    FieldSelect,
-    RandomField,
     ChooseNumber,
     ResolveMapping,
-    Rhythm,
     CoordinateOffset,
-    FieldEnvelope,
     Envelope,
-    SoftEdges,
     Odometer,
     EventLife,
     SampleCurve,
@@ -370,35 +200,14 @@ pub enum Primitive {
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {
-        matches!(
-            self,
-            Self::BandEnergy
-                | Self::AudioSpectrum
-                | Self::DrumClock
-                | Self::DrumEvents
-                | Self::TrackTime
-                | Self::GridEvents
-                | Self::EventWindow
-                | Self::EventSpacing
-                | Self::ThinEvents
-                | Self::Harmony
-        )
+        self == Self::BandEnergy
     }
     /// All other primitives are pure functions of inputs and the prepared
     /// head domain/seed, and may be folded when their inputs are constant.
     pub(crate) fn reads_time(self) -> bool {
         matches!(
             self,
-            Self::Rhythm
-                | Self::Odometer
-                | Self::EventLife
-                | Self::ClipTime
-                | Self::EventAges
-                | Self::TrackTime
-                | Self::BandEnergy
-                | Self::AudioSpectrum
-                | Self::DrumClock
-                | Self::Harmony
+            Self::Odometer | Self::EventLife | Self::ClipTime | Self::BandEnergy
         )
     }
 }
@@ -418,71 +227,6 @@ pub struct Definition {
     pub body: Body,
 }
 impl Definition {
-    /// Editor positions and unconnected Input cards do not affect evaluation.
-    pub fn same_computation(&self, other: &Self) -> bool {
-        self.inputs == other.inputs
-            && self.outputs == other.outputs
-            && match (&self.body, &other.body) {
-                (Body::Graph(a), Body::Graph(b)) => {
-                    a.outputs == b.outputs
-                        && a.nodes.len() == b.nodes.len()
-                        && a.nodes.iter().all(|(id, node)| {
-                            b.nodes.get(id).is_some_and(|other| {
-                                node.definition == other.definition && node.inputs == other.inputs
-                            })
-                        })
-                }
-                (a, b) => a == b,
-            }
-    }
-
-    /// A score-local, editable instance of any built-in node. Inputs are bindings,
-    /// not a synthetic node. The label is optional; editors can derive it from
-    /// the referenced node until the author chooses one.
-    pub fn instance(&self, definition: &str) -> Self {
-        Self {
-            name: String::new(),
-            inputs: self
-                .inputs
-                .iter()
-                .map(|(key, input)| {
-                    let mut input = input.clone();
-                    input.optional = false;
-                    (key.clone(), input)
-                })
-                .collect(),
-            outputs: self.outputs.clone(),
-            body: Body::Graph(Graph {
-                input_nodes: BTreeMap::new(),
-                nodes: BTreeMap::from([(
-                    "effect".into(),
-                    Node {
-                        position: None,
-                        definition: definition.into(),
-                        inputs: self
-                            .inputs
-                            .keys()
-                            .map(|key| (key.clone(), Binding::Input { input: key.clone() }))
-                            .collect(),
-                    },
-                )]),
-                outputs: self
-                    .outputs
-                    .keys()
-                    .map(|key| {
-                        (
-                            key.clone(),
-                            Binding::Connection {
-                                node: "effect".into(),
-                                output: key.clone(),
-                            },
-                        )
-                    })
-                    .collect(),
-            }),
-        }
-    }
-
     pub fn lighting_output(&self) -> Option<&str> {
         let mut outputs = self
             .outputs
@@ -493,83 +237,6 @@ impl Definition {
     }
     pub fn playable(&self) -> bool {
         self.lighting_output().is_some()
-    }
-
-    /// A complete numerical effect can be placed by connecting its named
-    /// capability signals to Output. Arbitrary helper signals need explicit wiring.
-    pub fn placeable(&self) -> bool {
-        if self.playable() {
-            return true;
-        }
-        let terminal = crate::output::terminal_definition();
-        !self.outputs.contains_key("lighting")
-            && !self
-                .outputs
-                .values()
-                .any(|output| output.value_type == ValueType::Lighting)
-            && self.outputs.iter().any(|(key, output)| {
-                terminal
-                    .inputs
-                    .get(key)
-                    .is_some_and(|input| input.value_type.accepts(output.value_type))
-            })
-            && self.outputs.iter().all(|(key, output)| {
-                terminal
-                    .inputs
-                    .get(key)
-                    .is_none_or(|input| input.value_type.accepts(output.value_type))
-            })
-    }
-
-    /// A placed effect is its composition, wired to a visible Apply. A
-    /// complete clip graph placed again is called as it is.
-    pub fn clip_instance(&self, definition: &str) -> Result<Definition> {
-        if !self.placeable() {
-            return Err(Error(
-                "connect this graph's signals to Output before placing it".into(),
-            ));
-        }
-        let mut instance = self.instance(definition);
-        if self.playable() {
-            return Ok(instance);
-        }
-        instance.name = self.name.clone();
-        let Body::Graph(graph) = &mut instance.body else {
-            unreachable!()
-        };
-        let terminal = crate::output::terminal_definition();
-        let mut inputs = BTreeMap::new();
-        graph.outputs.retain(|key, binding| {
-            if terminal.inputs.contains_key(key) {
-                inputs.insert(key.clone(), binding.clone());
-                false
-            } else {
-                true
-            }
-        });
-        instance
-            .outputs
-            .retain(|key, _| !terminal.inputs.contains_key(key));
-        graph.nodes.insert(
-            "output".into(),
-            Node {
-                position: None,
-                definition: "output".into(),
-                inputs,
-            },
-        );
-        graph.outputs.insert(
-            "lighting".into(),
-            Binding::Connection {
-                node: "output".into(),
-                output: "lighting".into(),
-            },
-        );
-        instance.outputs.extend(terminal.outputs);
-        if matches!(self.body, Body::Graph(_)) {
-            graph.inline("effect", self)?;
-        }
-        Ok(instance)
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -704,24 +371,6 @@ impl Library {
                             .into(),
                     ));
                 }
-                if graph.input_nodes.len() > MAX_GRAPH_NODES {
-                    return Err(Error(format!(
-                        "a graph supports at most {MAX_GRAPH_NODES} Inputs"
-                    )));
-                }
-                for (key, node) in &graph.input_nodes {
-                    identity(key)?;
-                    node.validate()?;
-                    if def
-                        .inputs
-                        .get(key)
-                        .is_some_and(|spec| spec.name != node.name)
-                    {
-                        return Err(Error(format!(
-                            "Input {key}: name differs from its interface"
-                        )));
-                    }
-                }
                 if graph.nodes.len() > MAX_GRAPH_NODES {
                     return Err(Error(format!(
                         "{id}: a graph supports at most {MAX_GRAPH_NODES} nodes"
@@ -729,12 +378,6 @@ impl Library {
                 }
                 for (name, node) in &graph.nodes {
                     identity(name)?;
-                    if node
-                        .position
-                        .is_some_and(|position| position.iter().any(|value| !value.is_finite()))
-                    {
-                        return Err(Error(format!("{name}: node position must be finite")));
-                    }
                     self.validate_definition(&node.definition, visiting, done)?;
                     let child = self.definition(&node.definition)?;
                     for key in node.inputs.keys() {

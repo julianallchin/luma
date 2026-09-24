@@ -2,10 +2,6 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::models::composable_patterns::ComposablePreviewRequest;
 use serde_json::Value;
 
-pub async fn get_pattern_node_library(_services: &AppServices) -> Result<Value, CommandError> {
-    serde_json::to_value(luma_patterns::standard_library())
-        .map_err(|error| CommandError::Internal(error.to_string()))
-}
 pub async fn preview_composable_pattern(
     services: &AppServices,
     request: Value,

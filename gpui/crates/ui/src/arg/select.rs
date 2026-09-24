@@ -4,7 +4,7 @@
 //! deliberately **not** written down here: the canonical list is
 //! `luma_lib::models::node_graph::BlendMode` (and the score DSL's
 //! `blend_mode_name` beside it), and this crate deliberately does not depend
-//! on Luma's core — the same boundary [`crate::ladder::port`] documents. The
+//! on Luma's core. The
 //! integration matches exhaustively on `BlendMode` to produce `options`, so a
 //! new mode is a compile error there instead of a silent omission here.
 //!

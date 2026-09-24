@@ -20,28 +20,6 @@ fn one(x: f32, seed: u64) -> f32 {
     let b = signed(hash(seed, (lo + 1) as u64));
     a + t * (b - a)
 }
-fn three([x, y, z]: [f32; 3], seed: u64) -> f32 {
-    let low = [x, y, z].map(|v| v.floor() as i64);
-    let t = std::array::from_fn::<_, 3, _>(|i| smooth([x, y, z][i] - low[i] as f32));
-    let at = |dx, dy, dz| {
-        signed(hash(
-            hash(hash(seed, (low[0] + dx) as u64), (low[1] + dy) as u64),
-            (low[2] + dz) as u64,
-        ))
-    };
-    let mix = |a, b, t| a + t * (b - a);
-    let xy0 = mix(
-        mix(at(0, 0, 0), at(1, 0, 0), t[0]),
-        mix(at(0, 1, 0), at(1, 1, 0), t[0]),
-        t[1],
-    );
-    let xy1 = mix(
-        mix(at(0, 0, 1), at(1, 0, 1), t[0]),
-        mix(at(0, 1, 1), at(1, 1, 1), t[0]),
-        t[1],
-    );
-    mix(xy0, xy1, t[2])
-}
 fn fractal(seed: u64, octaves: f64, stride: u64, mut sample: impl FnMut(f32, u64) -> f32) -> f64 {
     let mut total = 0_f32;
     let mut frequency = 1_f32;
@@ -58,10 +36,5 @@ fn fractal(seed: u64, octaves: f64, stride: u64, mut sample: impl FnMut(f32, u64
 pub(crate) fn noise1(x: f64, octaves: f64, seed: u64) -> f64 {
     fractal(seed, octaves, 7919, |frequency, key| {
         one(x as f32 * frequency, key)
-    })
-}
-pub(crate) fn noise3(x: f64, y: f64, z: f64, octaves: f64, seed: u64) -> f64 {
-    fractal(seed, octaves, 12345, |frequency, key| {
-        three([x, y, z].map(|v| v as f32 * frequency), key)
     })
 }

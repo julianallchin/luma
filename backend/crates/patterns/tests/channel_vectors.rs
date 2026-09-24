@@ -142,7 +142,6 @@ fn graph_inference_and_execution_agree_on_joined_channels() {
     graph.nodes.insert(
         "join".into(),
         Node {
-            position: None,
             definition: "core/join_channels".into(),
             inputs: BTreeMap::from([
                 ("a".into(), Value::Number(1.2).into()),

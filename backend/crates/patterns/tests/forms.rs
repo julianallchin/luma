@@ -517,20 +517,6 @@ fn chase_paths_and_direction_following_shapes() {
 }
 
 #[test]
-fn every_takes_no_list_of_hit_times() {
-    // A hit is a clip on the timeline; one clip never holds a list of hits.
-    let (form, mut inputs) = preset("Chase");
-    set(
-        &mut inputs,
-        "every",
-        Value::Events(Events::Beats {
-            times: EventTimes::new(vec![0.0, 3.0]).unwrap(),
-        }),
-    );
-    assert!(prepare(&form, &inputs).is_err());
-}
-
-#[test]
 fn time_curves_on_speed_inputs_are_seek_safe() {
     let (form, mut inputs) = preset("Chase");
     set(
@@ -848,22 +834,10 @@ fn noise_and_audio_sources_stay_in_their_range() {
     #[derive(Debug)]
     struct Mix;
     impl FeatureSource for Mix {
-        fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<FeatureSample> {
-            let FeatureRequest::Band {
-                source,
-                low_hz,
-                high_hz,
-            } = request
-            else {
-                return Err(Error("only band energy".into()));
-            };
-            assert_eq!(source.source(), AudioSource::Mix);
+        fn sample(&self, request: &FeatureRequest, beat: f64) -> Result<f64> {
             // A custom range reaches the analysis as it was set.
-            assert_eq!((*low_hz, *high_hz), (55.0, 130.0));
-            Ok(FeatureSample::Energy(0.5 + 0.4 * beat.sin()))
-        }
-        fn onsets(&self, _: Drum) -> Result<EventTimes> {
-            Err(Error("no drums".into()))
+            assert_eq!((request.low_hz, request.high_hz), (55.0, 130.0));
+            Ok(0.5 + 0.4 * beat.sin())
         }
     }
     set(

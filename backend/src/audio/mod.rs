@@ -14,7 +14,7 @@ pub use cache::{
     CACHE_VERSION, PCM_HEADER_LEN,
 };
 pub use decoder::{decode_track_samples, stereo_to_mono};
-pub use fft::{mel_center_frequencies, FftService};
+pub use fft::FftService;
 pub use filters::{filter_3band, highpass_filter, lowpass_filter, FilteredBands};
 pub use melspec::{generate_melspec, MEL_SPEC_HEIGHT, MEL_SPEC_WIDTH};
 pub use stem_cache::StemCache;
