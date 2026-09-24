@@ -16,6 +16,9 @@ Units: `proportion` is 0..1; `beats` are musical beats; colors are RGB in
 counts. It multiplies brightness and is the clip's opacity. Use it instead of
 a clip fade.
 
+A hit is a clip on the timeline. `every` is a fixed period in beats; to
+light irregular hits (drum hits), place one clip per hit with `every` 0.
+
 ## Sources
 
 An input takes a plain value, or a source where its card allows it. A source
@@ -73,8 +76,8 @@ position. `colors` (gradient), `axis`, `alpha` (T N A). Preset: **Gradient**.
 
 Strokes travel across the heads. Each event starts one stroke.
 
-- `color` (T), `axis` (default `u`), `every` (beats between strokes, or an
-  event list; T), `travel` (beats for one stroke to cross the axis; T),
+- `color` (T), `axis` (default `u`), `every` (beats between strokes; T),
+  `travel` (beats for one stroke to cross the axis; T),
   `width` (0..4; T H) with `width_relative` (true: share of the gap between
   strokes; false: share of the axis), `shape` (brightness across the stroke),
   `path` (position over the stroke's life), `boundary` (`clip` or `wrap`),
@@ -92,11 +95,11 @@ from its middle out to both ends and stays lit; one stroke over the clip).
 
 Each event lights a random share of the heads.
 
-- `color` (T), `every` (beats or event list; T), `duration` (life of one
+- `color` (T), `every` (beats; T), `duration` (life of one
   event; T), `coverage` (share of heads lit, below 1; T H N A), `brightness`
   (T H N A), `grain` (what one head is), `alpha` (T N A).
-- Sparkle is random heads only. A fixed coverage of 1 on paced events is
-  rejected: all heads on each hit is a `color.constant@1` Pulse.
+- Sparkle is random heads only. A fixed coverage of 1 is rejected: all heads
+  on each hit is a `color.constant@1` Pulse.
 - A new random set per event, from the clip seed. Overlapping events keep the
   maximum.
 
