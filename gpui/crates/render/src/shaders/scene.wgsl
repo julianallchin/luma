@@ -286,10 +286,11 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     // Depth bias in metres along the light, not in NDC. The cascade's depth
-    // range runs 25 m past each end of its view slice, so a fixed NDC bias
-    // was 10 to 30 cm of light leak: the sun lit a beam's side deep under a
-    // deck plate, with a stepped edge where the leak ran out, and nothing
-    // on a table cast a shadow under itself. The normal offset above already
+    // range runs from the furthest caster toward the sun to 25 m past its
+    // view slice, so a fixed NDC bias was 10 cm of light leak or more: the
+    // sun lit a beam's side deep under a deck plate, with a stepped edge
+    // where the leak ran out, and nothing on a table cast a shadow under
+    // itself. The normal offset above already
     // clears the receiver's own texels; this only covers depth rounding.
     let depth_per_metre = length(vec3<f32>(matrix[0].z, matrix[1].z, matrix[2].z));
     let depth_bias = (0.002 + 0.5 * world_texel) * depth_per_metre;
