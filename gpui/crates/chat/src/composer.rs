@@ -480,7 +480,8 @@ fn input_style(theme: &Theme) -> text_input::Style {
     }
 }
 
-/// The composer plate: the field, and send or stop.
+/// The composer plate: the field, the model picker, the context gauge, and
+/// send or stop.
 ///
 /// Takes the composer by `&mut` rather than reaching for it through `chat`:
 /// this runs *inside* the panel's own render, so re-entering the entity to
@@ -490,6 +491,7 @@ pub fn composer(
     chat: &Entity<AgentChat>,
     streaming: bool,
     picker: Option<gpui::AnyElement>,
+    gauge: Option<gpui::AnyElement>,
     theme: &Theme,
     window: &mut Window,
     cx: &mut Context<AgentChat>,
@@ -541,6 +543,9 @@ pub fn composer(
         .items_center()
         .gap(px(theme::SPACE_SM))
         .children(picker)
+        // The context gauge sits between the picker and send: both are facts
+        // about the next request, and send keeps the trailing edge.
+        .children(gauge)
         .child(send(chat, action, theme));
 
     let body = if layout.expanded {
@@ -621,7 +626,8 @@ pub fn composer(
     div()
         .flex()
         .flex_col()
-        .py(px(theme::SPACE_MD))
+        .pt(px(theme::SPACE_MD))
+        .pb(px(theme::SPACE_LG + theme::SPACE_SM))
         .child(dialog::frosted(
             luma_ui::radius::PILL,
             theme::PILL_BLUR,

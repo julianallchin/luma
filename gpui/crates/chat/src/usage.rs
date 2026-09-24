@@ -1,4 +1,4 @@
-//! How full the context window is, under the composer.
+//! How full the context window is, in the composer beside send.
 //!
 //! # What it measures
 //!
