@@ -27,6 +27,12 @@ pub const MAX_FIXTURE_CONES: usize = 512;
 /// Indoor ground extent, beyond the artistic distance dissolve.
 const FLOOR_EXTENT_M: f32 = 2000.0;
 
+/// Whether `mesh_key` names the ground plane, indoors or out. The ground only
+/// receives: everything it could shade stands on it.
+pub(crate) fn is_ground(mesh_key: &str) -> bool {
+    matches!(mesh_key, "::floor" | "::outdoor-floor")
+}
+
 /// One uploadable triangle list.
 ///
 /// Cloning shares the data: both buffers are `Arc`s, so a cached mesh is

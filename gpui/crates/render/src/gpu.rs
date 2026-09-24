@@ -233,7 +233,8 @@ struct Instance {
     normal_matrix: [[f32; 4]; 4],
     base_color: [f32; 4],
     emissive: [f32; 4],
-    /// x: unused, y: normal-map scale, z: AO strength.
+    /// x: 1 for the ground, which casts no sun shadow; y: normal-map scale;
+    /// z: AO strength.
     flags: [f32; 4],
 }
 
@@ -5464,6 +5465,7 @@ impl Renderer {
                     .bounds;
                 let casters: Vec<_> = frame.draws[..opaque]
                     .iter()
+                    .filter(|draw| !crate::frame::is_ground(&frame.meshes[draw.mesh].key))
                     .map(|draw| world_sphere(draw, bounds[draw.mesh]))
                     .collect();
                 cascade_matrices(
@@ -5927,7 +5929,11 @@ impl Renderer {
             "ambient-visibility-params",
         );
 
-        let instances: Vec<Instance> = frame.draws.iter().map(instance_of).collect();
+        let instances: Vec<Instance> = frame
+            .draws
+            .iter()
+            .map(|draw| instance_of(frame, draw))
+            .collect();
         let overlay_instances: Vec<OverlayInstance> = frame
             .overlays
             .iter()
@@ -6498,7 +6504,11 @@ impl Renderer {
             // Depth shaders do not sample materials. Consecutive instances
             // of one mesh can share a draw without changing primitive order,
             // including the order of coplanar receivers in the MSAA pass.
-            let draw_depth = |pass: &mut wgpu::RenderPass| {
+            //
+            // The sun cascades leave the ground out (`with_ground` false): it
+            // only receives, and its own depth in the map was what a grazing
+            // sun needed a large receiver offset against.
+            let draw_depth = |pass: &mut wgpu::RenderPass, with_ground: bool| {
                 pass.set_vertex_buffer(0, vertex_buf.slice(..));
                 pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_bind_group(1, &self.gpu.white_material, &[]);
@@ -6509,8 +6519,10 @@ impl Renderer {
                     while end < opaque && frame.draws[end].mesh == mesh {
                         end += 1;
                     }
-                    let (first, last, base) = ranges[mesh];
-                    pass.draw_indexed(first..last, base, start as u32..end as u32);
+                    if with_ground || !crate::frame::is_ground(&frame.meshes[mesh].key) {
+                        let (first, last, base) = ranges[mesh];
+                        pass.draw_indexed(first..last, base, start as u32..end as u32);
+                    }
                     start = end;
                 }
             };
@@ -6595,7 +6607,7 @@ impl Renderer {
                     pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_depth(&mut pass);
+                    draw_depth(&mut pass, false);
                 }
             }
 
@@ -6662,7 +6674,7 @@ impl Renderer {
                 pass.set_bind_group(0, &unlit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
                 pass.set_bind_group(3, &cluster_bg, &[]);
-                draw_depth(&mut pass);
+                draw_depth(&mut pass, true);
             }
 
             if surface_depth_cull {
@@ -6689,7 +6701,7 @@ impl Renderer {
                     pass.set_bind_group(0, &lit_bg, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_depth(&mut pass);
+                    draw_depth(&mut pass, true);
                 }
                 self.light_index.refine_surface(
                     &self.gpu.light_index_pipelines,
@@ -13312,7 +13324,7 @@ impl PendingFrame {
     }
 }
 
-fn instance_of(draw: &Draw) -> Instance {
+fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
     Instance {
         model: draw.model.to_cols_array_2d(),
         normal_matrix: draw.model.inverse().transpose().to_cols_array_2d(),
@@ -13327,7 +13339,9 @@ fn instance_of(draw: &Draw) -> Instance {
             .extend(draw.material.roughness)
             .to_array(),
         flags: [
-            0.0,
+            f32::from(u8::from(crate::frame::is_ground(
+                &frame.meshes[draw.mesh].key,
+            ))),
             if draw.textures.normal.is_some() {
                 draw.material.normal_scale
             } else {
