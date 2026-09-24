@@ -57,9 +57,10 @@ audio, **—** plain only.
   sheet. Every input is still stored, as for every form.
 - `axis` is the same axis as Chase and Gradient: `order`, `x`, `y`, `z`,
   `radial`, `angle`, `vector` or `random`, with spans (`selection`,
-  `fixture`, `group`), a mirror (not for radial, angle or random) and, for
-  radial and angle, a plane. One axis serves both fan and spread. See
-  [clip-forms.md](./clip-forms.md#colorchase1) for the axis rules.
+  `fixture`, `group`), a mirror (only `x`, `y`, `z` and `vector`) and, for
+  radial and angle, a plane. One axis serves fan, spread and the mirror. See
+  [clip-forms.md](./clip-forms.md#colorchase1) for the axis rules and
+  [Mirror](#mirror) below for what a mirror does to an aim.
 - `every` exists even when motion is `none`, because fan per hit uses it.
   It must be more than 0 when motion is `shape` or fan is per hit.
 - Direction is edited as **Turn** (0° = downstage, + toward stage right)
@@ -87,10 +88,7 @@ applies within each span, so a fixture span fans every bar on its own.
 A lean rotates the aim `d` toward the lean direction `L` around the axis
 `d × L`. If `L` is parallel to `d`, the head does not lean.
 
-With a mirror, `c` is the folded coordinate (0 in the middle, 1 at both
-ends) and the lean direction stays the axis direction. So a mirrored fan is
-a V: the middle heads lean `fan / 2` one way and both end heads `fan / 2`
-the other way.
+With a mirror, see [Mirror](#mirror).
 
 ### Motion
 
@@ -116,11 +114,43 @@ applied at the fanned aim with the frame above.
 
   Spread 0: all heads move together (sweep, circle). Spread above 0: the
   motion travels across the heads along the axis (wave). With a mirror, the
-  wave starts in the middle and runs out to both ends. With a random axis,
+  wave starts at the plane and runs out to both ends. With a random axis,
   each head takes one of the evenly spaced phases, shuffled.
 - `noise`: yaw and pitch each wander smoothly between −size and +size, one
   new value about every `speed` beats. Each head has its own noise, from the
   clip's seed and the head, so no two heads move alike.
+
+### Mirror
+
+A mirror on the axis makes the two halves of each span mirror images: the
+timing and the movement. Let `n` be the plane's unit normal and
+`R(v) = v − 2 (v · n) n` the reflection across the plane: the component of
+`v` along `n` flips.
+
+- **Timing.** `c` is the folded coordinate, as for every form: the heads on
+  the low side are reflected onto the high side before the axis reads them.
+  So `c` is 0 for the heads nearest the plane and 1 for the heads farthest
+  from it, on both sides.
+- **Movement.** A head on the low side of the plane (signed distance below
+  0; for Left–right, the stage-left half) takes the mirror image of its fan
+  and its motion:
+  - its fan leans it toward `R(L)` instead of the lean direction `L`;
+  - its motion offset is applied in the mirror: the aim is
+    `R(offset(R(d), yaw, pitch))`, with `d` the fanned aim.
+
+  A head on the plane or on the high side is unchanged. The base aim is not
+  flipped: with fan 0 and no motion, a mirror changes nothing.
+- With a level normal (Left–right, Front–back, or any custom normal with no
+  Z part), the mirrored offset has the opposite yaw and the same pitch. With
+  Up–down, it has the same yaw and the opposite pitch.
+- So on a truss along the plane's normal, with a base that is symmetric
+  about the plane (for Left–right, a direction with no U part): a mirrored
+  circle turns the other way on each half; a mirrored left–right swing
+  moves both halves toward the middle together and away from it together;
+  a mirrored fan fans each half out from the plane, and the halves are
+  mirror images. The two end heads lean out by `fan / 2`, and the heads
+  next to the plane lean in by `fan / 2`.
+- Radial, angle, order and random take no mirror.
 
 ### Alpha and layers
 

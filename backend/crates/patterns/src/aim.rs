@@ -103,6 +103,13 @@ pub fn lean(d: [f64; 3], toward: [f64; 3], degrees: f64) -> [f64; 3] {
     unit(std::array::from_fn(|i| cos * d[i] + sin * across[i]))
 }
 
+/// `v` reflected across the plane through the origin with unit normal `n`:
+/// the component along `n` flips.
+pub fn reflect(v: [f64; 3], n: [f64; 3]) -> [f64; 3] {
+    let along = dot(v, n);
+    std::array::from_fn(|i| v[i] - 2.0 * along * n[i])
+}
+
 /// The unit vector of `v`, or straight down when `v` has no direction.
 pub fn unit(v: [f64; 3]) -> [f64; 3] {
     let length = dot(v, v).sqrt();

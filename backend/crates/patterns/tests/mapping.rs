@@ -198,7 +198,7 @@ fn mirror_offset_moves_the_plane_without_changing_the_direction() {
 }
 
 #[test]
-fn mirror_rejects_radial_angle_random_and_invalid_planes() {
+fn a_mirror_needs_a_spatial_axis_and_a_valid_plane() {
     let mut mapping = MappingSpec {
         span: Default::default(),
         plane: None,
@@ -218,8 +218,9 @@ fn mirror_rejects_radial_angle_random_and_invalid_planes() {
     }
     mapping.plane = None;
     mapping.source = MappingSource::Order;
-    assert!(mapping.validate().is_ok());
+    assert!(mapping.validate().is_err());
     mapping.source = MappingSource::U;
+    assert!(mapping.validate().is_ok());
     for plane in [
         MirrorPlane {
             normal: [0.; 3],
@@ -233,54 +234,6 @@ fn mirror_rejects_radial_angle_random_and_invalid_planes() {
         mapping.mirror = Some(plane);
         assert!(mapping.validate().is_err());
     }
-}
-
-/// A mirror on selection order folds the coordinate from the middle,
-/// `c → |2c − 1|`, whatever the plane, within each span.
-#[test]
-fn a_mirror_on_order_folds_from_the_middle() {
-    let folded = |count: usize, span: Span| {
-        let cells: Vec<Cell> = (0..count)
-            .map(|n| cell(&format!("bar{}:{n}", n % 2), "rig", [0., n as f64, 0.]))
-            .collect();
-        MappingSpec {
-            span,
-            plane: None,
-            source: MappingSource::Order,
-            mirror: Some(MirrorPlane {
-                normal: [0., 0., 1.],
-                offset: 3.,
-            }),
-            reverse: false,
-            per_group: false,
-        }
-        .resolve(&cells, 0)
-        .unwrap()
-        .coordinates
-        .into_iter()
-        .map(|c| (c.cell, c.position))
-        .collect::<BTreeMap<_, _>>()
-    };
-    let five = folded(5, Span::Selection);
-    close(
-        &(0..5)
-            .map(|n| five[&format!("bar{}:{n}", n % 2)])
-            .collect::<Vec<_>>(),
-        &[1., 0.5, 0., 0.5, 1.],
-    );
-    let four = folded(4, Span::Selection);
-    close(
-        &(0..4)
-            .map(|n| four[&format!("bar{}:{n}", n % 2)])
-            .collect::<Vec<_>>(),
-        &[1., 1. / 3., 1. / 3., 1.],
-    );
-    // Each fixture folds on its own: bar0 holds heads 0, 2, 4 and bar1 1, 3.
-    let spans = folded(5, Span::Fixture);
-    close(
-        &["bar0:0", "bar0:2", "bar0:4", "bar1:1", "bar1:3"].map(|id| spans[id]),
-        &[1., 0., 1., 1., 1.],
-    );
 }
 
 /// A random axis gives each span the evenly spaced coordinates in a

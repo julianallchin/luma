@@ -1,4 +1,4 @@
-use crate::{Coordinate, Error, Mapping, Result};
+use crate::{Error, Mapping, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -49,9 +49,14 @@ impl MappingSource {
         ("random", "Random"),
     ];
 
-    /// Whether the source takes a mirror; see [`MirrorPlane`].
+    /// Whether the source takes a mirror: a mirror needs a spatial axis
+    /// along a line. Order and random have no spatial axis, and radial and
+    /// angle are measured around a center. See [`MirrorPlane`].
     pub fn takes_mirror(&self) -> bool {
-        !matches!(self, Self::Radial | Self::Angle | Self::Random)
+        !matches!(
+            self,
+            Self::Order | Self::Radial | Self::Angle | Self::Random
+        )
     }
 
     pub fn key(&self) -> &'static str {
@@ -220,13 +225,11 @@ impl AxisPlane {
     }
 }
 
-/// A mirror folds the axis from the middle, so both halves of a span do
-/// the same. A spatial axis reflects the heads on the low side of the plane
-/// onto the high side before it reads them. Selection order has no space to
-/// reflect in: it ignores the plane and folds the coordinate itself,
-/// `c → |2c − 1|` (0 in the middle, 1 at both ends). Radial, angle and
-/// random take no mirror: radial already runs from the middle, and angle
-/// and random have no middle to fold at.
+/// A mirror reflects the heads on the low side of the plane onto the high
+/// side before the axis reads them, so both halves of a span do the same.
+/// The plane goes through the middle of the span's extent along the normal,
+/// moved by `offset`. Only a spatial axis along a line takes a mirror; see
+/// [`MappingSource::takes_mirror`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MirrorPlane {
@@ -237,14 +240,6 @@ pub struct MirrorPlane {
 }
 
 impl MirrorPlane {
-    /// The planes an editor offers, each through the middle of the span,
-    /// with their labels.
-    pub const FIXED: [(&'static str, [f64; 3]); 3] = [
-        ("Left–right (from the middle)", [1., 0., 0.]),
-        ("Front–back (from the middle)", [0., 1., 0.]),
-        ("Up–down (from the middle)", [0., 0., 1.]),
-    ];
-
     pub fn validate(&self) -> Result<()> {
         unit_direction(self.normal)?;
         if !self.offset.is_finite() {
@@ -253,7 +248,9 @@ impl MirrorPlane {
         Ok(())
     }
 
-    fn fold(&self, cells: &[&Cell]) -> Result<Vec<[f64; 3]>> {
+    /// The unit normal and each head's signed distance from the plane, in
+    /// metres; the low side is negative.
+    fn distances(&self, cells: &[&Cell]) -> Result<([f64; 3], Vec<f64>)> {
         let normal = unit_direction(self.normal)?;
         let (min, max) = cells
             .iter()
@@ -264,10 +261,22 @@ impl MirrorPlane {
         // Use the extent, not the centroid: fixture density on one side must
         // not move the symmetry plane of an otherwise unchanged selection.
         let center = min * 0.5 + max * 0.5 + self.offset;
+        Ok((
+            normal,
+            cells
+                .iter()
+                .map(|cell| dot(cell.uvz, normal) - center)
+                .collect(),
+        ))
+    }
+
+    fn fold(&self, cells: &[&Cell]) -> Result<Vec<[f64; 3]>> {
+        let (normal, distances) = self.distances(cells)?;
         Ok(cells
             .iter()
-            .map(|cell| {
-                let distance = (dot(cell.uvz, normal) - center).min(0.);
+            .zip(distances)
+            .map(|(cell, distance)| {
+                let distance = distance.min(0.);
                 std::array::from_fn(|axis| cell.uvz[axis] - 2. * distance * normal[axis])
             })
             .collect())
@@ -293,7 +302,7 @@ impl MappingSpec {
             mirror.validate()?;
             if !self.source.takes_mirror() {
                 return Err(Error(
-                    "radial, angle and random take no mirror; radial already runs from the middle"
+                    "a mirror plane requires a spatial axis along a line; order, radial, angle and random take no mirror"
                         .into(),
                 ));
             }
@@ -410,40 +419,38 @@ impl MappingSpec {
         Ok(result)
     }
 
+    /// The heads an aim mirrors: for each head on the low side of the
+    /// mirror plane, the plane's unit normal. Such a head takes the mirror
+    /// image of its fan and motion. Heads on the plane or above it, and
+    /// every head without a mirror, are not in the map.
+    pub(crate) fn mirrored(&self, cells: &[Cell]) -> Result<BTreeMap<String, [f64; 3]>> {
+        let mut result = BTreeMap::new();
+        let Some(plane) = &self.mirror else {
+            return Ok(result);
+        };
+        for group in self.spans(cells)?.values() {
+            let (normal, distances) = plane.distances(group)?;
+            for (cell, distance) in group.iter().zip(distances) {
+                if distance < -1e-9 {
+                    result.insert(cell.id.clone(), normal);
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// Each head's coordinate 0–1. `seed` orders a random axis; the other
     /// sources ignore it.
     pub fn resolve(&self, cells: &[Cell], seed: u64) -> Result<Mapping> {
         let groups = self.spans(cells)?;
         let mut result = Mapping::default();
         for group in groups.values() {
-            let folded = match (&self.source, &self.mirror) {
-                (MappingSource::Order, _) | (_, None) => None,
-                (_, Some(plane)) => Some(plane.fold(group)?),
-            };
+            let folded = self
+                .mirror
+                .as_ref()
+                .map(|plane| plane.fold(group))
+                .transpose()?;
             let mapped = match &self.source {
-                MappingSource::Order if self.mirror.is_some() => {
-                    // From the middle: the order coordinate folded, c → |2c − 1|.
-                    let last = (group.len() - 1).max(1) as f64;
-                    Mapping {
-                        coordinates: group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| {
-                                let folded = if group.len() == 1 {
-                                    0.
-                                } else {
-                                    // |2i − last| / last: exact, so both halves match.
-                                    (2. * i as f64 - last).abs() / last
-                                };
-                                Coordinate {
-                                    cell: c.id.clone(),
-                                    position: if self.reverse { 1. - folded } else { folded },
-                                    closed: false,
-                                }
-                            })
-                            .collect(),
-                    }
-                }
                 MappingSource::Random => {
                     let mut shuffled: Vec<(f64, &str)> = group
                         .iter()

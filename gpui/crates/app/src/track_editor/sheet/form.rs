@@ -769,7 +769,47 @@ pub(super) fn widget(
                 subs.push(on_number(&u, cx, |value, n| set_normal(value, 0, n)));
                 subs.push(on_number(&v, cx, |value, n| set_normal(value, 1, n)));
                 subs.push(on_number(&z, cx, |value, n| set_normal(value, 2, n)));
-                return Widget::Axis([u, v, z]);
+                let mirror = mirror_plane(mapping);
+                let normal: [_; 3] = std::array::from_fn(|axis| {
+                    number(
+                        format!("{name}: Mirror {}", ["U", "V", "Z"][axis]),
+                        mirror.normal[axis],
+                        [-1e9, 1e9],
+                        third,
+                        None,
+                        window,
+                        cx,
+                    )
+                });
+                subs.push(on_number(&normal[0], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[0] = n)
+                }));
+                subs.push(on_number(&normal[1], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[1] = n)
+                }));
+                subs.push(on_number(&normal[2], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[2] = n)
+                }));
+                let offset = number(
+                    format!("{name}: Mirror offset"),
+                    mirror.offset,
+                    [-1e9, 1e9],
+                    FIELD_W,
+                    Some("m"),
+                    window,
+                    cx,
+                );
+                subs.push(on_number(&offset, cx, |value, n| {
+                    set_mirror(value, |plane| plane.offset = n)
+                }));
+                return Widget::Axis(AxisFields {
+                    plane: [u, v, z],
+                    normal,
+                    offset,
+                    custom_mirror: Rc::new(std::cell::Cell::new(
+                        mirror_index(mapping.mirror.as_ref()) == CUSTOM_MIRROR,
+                    )),
+                });
             }
             if let Some(p::Author::Choice { options, .. }) = &spec.author {
                 // A choice of curves edits a custom curve in the envelope editor.
@@ -888,9 +928,16 @@ pub(super) fn resync(
         }
         (Widget::Preset(..), _) => {}
         (Widget::Axis(fields), Some(p::Value::Mapping(mapping))) => {
-            for (field, n) in fields.iter().zip(plane_normal(&mapping)) {
+            for (field, n) in fields.plane.iter().zip(plane_normal(&mapping)) {
                 field.update(cx, |field, cx| field.set_value(n, cx));
             }
+            let mirror = mirror_plane(&mapping);
+            for (field, n) in fields.normal.iter().zip(mirror.normal) {
+                field.update(cx, |field, cx| field.set_value(n, cx));
+            }
+            fields
+                .offset
+                .update(cx, |field, cx| field.set_value(mirror.offset, cx));
         }
         _ => return false,
     }
@@ -1152,32 +1199,38 @@ fn set_normal(value: &mut p::Value, axis: usize, n: f64) {
     }
 }
 
-/// The mirror choices of an axis from `source`, and the one `mirror` is.
-/// Selection order has one: from the middle. A spatial axis offers the
-/// fixed planes, and a stored plane that is none of them reads Custom.
-fn mirror_choices(
-    source: &p::MappingSource,
-    mirror: Option<&p::MirrorPlane>,
-) -> (Vec<&'static str>, &'static str) {
-    const OFF: &str = "Off";
-    if matches!(source, p::MappingSource::Order) {
-        const MIDDLE: &str = "From the middle";
-        return (
-            vec![OFF, MIDDLE],
-            if mirror.is_some() { MIDDLE } else { OFF },
-        );
+/// The mirror choices: a plane through the middle of the span, left–right
+/// (normal U), front–back (V) or up–down (Z), or a custom plane.
+const MIRRORS: [&str; 5] = ["Off", "Left–right", "Front–back", "Up–down", "Custom plane"];
+/// The index of Custom plane in [`MIRRORS`].
+const CUSTOM_MIRROR: usize = 4;
+
+/// Which of [`MIRRORS`] `mirror` is: a normal that is none of the fixed
+/// planes is a custom plane.
+fn mirror_index(mirror: Option<&p::MirrorPlane>) -> usize {
+    match mirror.map(|plane| plane.normal) {
+        None => 0,
+        Some([1., 0., 0.]) => 1,
+        Some([0., 1., 0.]) => 2,
+        Some([0., 0., 1.]) => 3,
+        Some(_) => CUSTOM_MIRROR,
     }
-    let labels = std::iter::once(OFF)
-        .chain(p::MirrorPlane::FIXED.iter().map(|(label, _)| *label))
-        .collect();
-    let current = match mirror {
-        None => OFF,
-        Some(plane) => p::MirrorPlane::FIXED
-            .iter()
-            .find(|(_, normal)| plane.offset == 0. && plane.normal == *normal)
-            .map_or("Custom", |(label, _)| *label),
-    };
-    (labels, current)
+}
+
+/// The mirror plane, or the left–right plane to start from.
+fn mirror_plane(mapping: &p::MappingSpec) -> p::MirrorPlane {
+    mapping.mirror.clone().unwrap_or(p::MirrorPlane {
+        normal: [1., 0., 0.],
+        offset: 0.,
+    })
+}
+
+fn set_mirror(value: &mut p::Value, edit: impl FnOnce(&mut p::MirrorPlane)) {
+    if let p::Value::Mapping(mapping) = value {
+        if let Some(plane) = &mut mapping.mirror {
+            edit(plane);
+        }
+    }
 }
 
 /// The axis row: which way, what one axis spans, the mirror where the axis
@@ -1191,7 +1244,7 @@ fn axis_control(
     def: PatternArgDef,
     spec: &'static p::Input,
     mapping: p::MappingSpec,
-    normal: &[Entity<DraftedNumber>; 3],
+    fields: &AxisFields,
 ) -> Div {
     let Some(p::Author::Choice { options, .. }) = &spec.author else {
         return div();
@@ -1217,7 +1270,11 @@ fn axis_control(
     let pick_mirror = edit.clone();
     let pick_plane = edit;
     let mirrors = mapping.source.takes_mirror();
-    let (mirror_labels, mirror) = mirror_choices(&mapping.source, mapping.mirror.as_ref());
+    let mirror = match mapping.mirror.as_ref() {
+        Some(_) if fields.custom_mirror.get() => CUSTOM_MIRROR,
+        plane => mirror_index(plane),
+    };
+    let custom_mirror = fields.custom_mirror.clone();
     let round = mapping.plane.is_some();
     let plane = mapping.plane.as_ref().map_or(0, p::AxisPlane::index);
     let spans: Vec<&str> = p::Span::OPTIONS.iter().map(|(_, label)| *label).collect();
@@ -1280,18 +1337,43 @@ fn axis_control(
                     app,
                     Menu::Mirror(index),
                     format!("{name}: Mirror"),
-                    mirror,
-                    &mirror_labels,
+                    MIRRORS[mirror],
+                    &MIRRORS,
                     move |picked, this, cx| {
-                        // Order ignores the plane; it stores left–right.
-                        let normal = picked.checked_sub(1).map(|at| p::MirrorPlane::FIXED[at].1);
+                        custom_mirror.set(picked == CUSTOM_MIRROR);
+                        // A new plane keeps the offset; Custom plane starts
+                        // from the plane there is.
                         pick_mirror(this, cx, &|mapping| {
-                            mapping.mirror =
-                                normal.map(|normal| p::MirrorPlane { normal, offset: 0. });
+                            let kept = mirror_plane(mapping);
+                            mapping.mirror = match picked {
+                                0 => None,
+                                1 => Some([1., 0., 0.]),
+                                2 => Some([0., 1., 0.]),
+                                3 => Some([0., 0., 1.]),
+                                _ => Some(kept.normal),
+                            }
+                            .map(|normal| p::MirrorPlane {
+                                normal,
+                                offset: kept.offset,
+                            });
                         });
                     },
                 ),
             ))
+            .when(mirror == CUSTOM_MIRROR, |el| {
+                el.child(arg_row(
+                    "Normal · U, V, Z",
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .children(fields.normal.iter().cloned()),
+                ))
+            })
+            .when(mirror != 0, |el| {
+                el.child(arg_row("Offset", fields.offset.clone()))
+            })
         })
         .when(round, |el| {
             el.child(arg_row(
@@ -1326,7 +1408,7 @@ fn axis_control(
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
-                    .children(normal.iter().cloned()),
+                    .children(fields.plane.iter().cloned()),
             ))
         })
 }
@@ -1538,11 +1620,11 @@ fn control(
                 )
             }))
         }
-        Widget::Axis(normal) => {
+        Widget::Axis(fields) => {
             let Some(p::Value::Mapping(mapping)) = value.or_else(|| spec.default.clone()) else {
                 return None;
             };
-            axis_control(state, app, index, name, def, spec, mapping, normal)
+            axis_control(state, app, index, name, def, spec, mapping, fields)
         }
         Widget::Preset(options, editor) => {
             let options: &'static [p::Preset] = options;

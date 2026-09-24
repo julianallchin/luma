@@ -175,9 +175,8 @@ enum Widget {
     Noise([Entity<DraftedNumber>; 3]),
     /// An audio source: from and to in Hz, then the floor in percent.
     Audio([Entity<DraftedNumber>; 4]),
-    /// A form's axis: its presets, spans and plane; holds the custom plane
-    /// axis U, V, Z.
-    Axis([Entity<DraftedNumber>; 3]),
+    /// A form's axis: its presets, spans, mirror and plane.
+    Axis(AxisFields),
     /// An aim direction, as turn and tilt: one pair for a fixed value, one
     /// for each end of a curve over the clip. Holds each pair's turn, which
     /// a direction straight up or down does not say.
@@ -185,6 +184,19 @@ enum Widget {
     /// A point in metres: U, V and Z fields, one set for a fixed value, one
     /// for each end of a curve over the clip.
     Point(Vec<[Entity<DraftedNumber>; 3]>),
+}
+
+/// The number fields of a form's axis.
+struct AxisFields {
+    /// The custom plane's axis, U, V, Z.
+    plane: [Entity<DraftedNumber>; 3],
+    /// The custom mirror plane's normal, U, V, Z.
+    normal: [Entity<DraftedNumber>; 3],
+    /// How far the mirror plane is from the middle, in metres.
+    offset: Entity<DraftedNumber>,
+    /// Custom plane was picked, so its normal shows even when it is one of
+    /// the fixed planes.
+    custom_mirror: Rc<std::cell::Cell<bool>>,
 }
 
 // -- wire codecs --------------------------------------------------------------

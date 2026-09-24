@@ -1255,41 +1255,6 @@ fn round_axes_need_a_plane_and_axes_have_no_per_group() {
     }
 }
 
-/// A mirror on an order axis runs the chase from the middle out to both
-/// ends: the two halves are mirror images.
-#[test]
-fn a_mirror_on_order_chases_from_the_middle() {
-    let (form, mut inputs) = preset("Chase");
-    set(
-        &mut inputs,
-        "axis",
-        Value::Mapping(MappingSpec {
-            source: MappingSource::Order,
-            per_group: false,
-            reverse: false,
-            mirror: Some(MirrorPlane {
-                normal: [1.0, 0.0, 0.0],
-                offset: 0.0,
-            }),
-            span: Span::Selection,
-            plane: None,
-        }),
-    );
-    let mut first = None;
-    for step in 0..40 {
-        let beat = f64::from(step) * 0.1 + 0.05;
-        let values = render(&form, &inputs, beat);
-        let mirrored: Vec<f64> = values.iter().rev().copied().collect();
-        assert_eq!(values, mirrored, "{beat}");
-        if first.is_none() && values.iter().any(|v| *v > 0.0) {
-            first = Some(values);
-        }
-    }
-    // The stroke enters in the middle: heads 3 and 4 light before the ends.
-    let first = first.expect("the chase lights");
-    assert!(first[3] > 0.0 && first[0] == 0.0, "{first:?}");
-}
-
 /// A random axis chases every head once per stroke, in a shuffled order
 /// that stays the same from stroke to stroke.
 #[test]
