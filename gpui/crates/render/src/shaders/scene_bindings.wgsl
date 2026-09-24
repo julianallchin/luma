@@ -46,7 +46,7 @@ struct Instance {
     base_color: vec4<f32>,
     // rgb: emissive radiance, a: roughness.
     emissive: vec4<f32>,
-    // x: flat shading, y: normal-map scale, z: occlusion strength.
+    // x: unused, y: normal-map scale, z: occlusion strength.
     flags: vec4<f32>,
 };
 

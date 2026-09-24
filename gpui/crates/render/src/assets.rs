@@ -64,12 +64,6 @@ pub struct Material {
     pub normal_scale: f32,
     /// Strength of the occlusion map's red channel on ambient contribution.
     pub occlusion_strength: f32,
-    /// three's `flatShading`. `GLTFLoader` sets it on any primitive that ships
-    /// without a `NORMAL` attribute — every `stage_lab` GLB — and the shader
-    /// then takes the normal from screen-space derivatives, ignoring whatever
-    /// is in the attribute. Smoothing those normals instead is the difference
-    /// between a faceted cabinet and a lit blob.
-    pub flat_shading: bool,
 }
 
 impl Default for Material {
@@ -83,7 +77,6 @@ impl Default for Material {
             emissive: Vec3::ZERO,
             normal_scale: 1.0,
             occlusion_strength: 1.0,
-            flat_shading: false,
         }
     }
 }
@@ -391,28 +384,74 @@ fn to_rgba8(data: &gltf::image::Data) -> Image {
     }
 }
 
-fn generated_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
-    let mut normals = vec![Vec3::ZERO; positions.len()];
-    for triangle in indices.chunks_exact(3) {
-        let [a, b, c] = [
-            triangle[0] as usize,
-            triangle[1] as usize,
-            triangle[2] as usize,
-        ];
-        let [pa, pb, pc] = [
-            Vec3::from(positions[a]),
-            Vec3::from(positions[b]),
-            Vec3::from(positions[c]),
-        ];
-        let face = (pb - pa).cross(pc - pa);
-        normals[a] += face;
-        normals[b] += face;
-        normals[c] += face;
+/// Faces meeting at less than this share a smoothed normal; a sharper edge
+/// stays hard. Wide enough to round a 12-sided knob or a tube, narrow enough
+/// that a cabinet's 90 degree corners and 45 degree chamfers stay crisp.
+const CREASE_DEG: f32 = 40.0;
+
+/// Positions, UVs, normals and indices of a re-split primitive.
+type Creased = (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 3]>, Vec<u32>);
+
+/// Vertex normals for a primitive that ships without `NORMAL`, smoothed across
+/// every edge flatter than [`CREASE_DEG`].
+///
+/// Every `stage_lab` GLB is such a primitive (a `SketchUp` export). Drawing
+/// them flat-shaded, as three's `GLTFLoader` does, facets every platter, knob,
+/// foot and truss tube; averaging every face that shares a vertex instead turns
+/// a cabinet into a lit blob. A crease angle is the standard middle: faces are
+/// welded by position, and a corner averages only the faces around it that are
+/// within the crease of its own face. A vertex whose corners disagree is split,
+/// so the result is a new vertex list with the input's UVs carried over.
+fn creased_normals(positions: &[[f32; 3]], uvs: &[[f32; 2]], indices: &[u32]) -> Creased {
+    let cos_crease = CREASE_DEG.to_radians().cos();
+    let unit_faces: Vec<Vec3> = indices
+        .chunks_exact(3)
+        .map(|t| {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| Vec3::from(positions[i as usize]));
+            (b - a).cross(c - a).normalize_or_zero()
+        })
+        .collect();
+    // Each corner's contribution is weighted by its angle, so how a quad was
+    // split into triangles does not tilt the average.
+    let corner_angle = |corner: usize| {
+        let t = corner / 3 * 3;
+        let at = |k: usize| Vec3::from(positions[indices[t + (corner - t + k) % 3] as usize]);
+        (at(1) - at(0)).angle_between(at(2) - at(0))
+    };
+    // Weld by position: SketchUp splits vertices along every face boundary,
+    // smooth or not, so shared indices alone say nothing about smoothness.
+    let quantize = |p: [f32; 3]| p.map(|c| (c * 1e5).round() as i64);
+    let mut welded: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+    for (corner, &vertex) in indices.iter().enumerate() {
+        welded
+            .entry(quantize(positions[vertex as usize]))
+            .or_default()
+            .push(corner);
     }
-    normals
-        .into_iter()
-        .map(|normal| normal.try_normalize().unwrap_or(Vec3::Z).to_array())
-        .collect()
+    let mut out_positions = Vec::new();
+    let mut out_uvs = Vec::new();
+    let mut out_normals = Vec::new();
+    let mut out_indices = Vec::with_capacity(indices.len());
+    let mut seen: HashMap<(u32, [i32; 3]), u32> = HashMap::new();
+    for (corner, &vertex) in indices.iter().enumerate() {
+        let own = unit_faces[corner / 3];
+        let normal = welded[&quantize(positions[vertex as usize])]
+            .iter()
+            .filter(|&&other| own.dot(unit_faces[other / 3]) >= cos_crease)
+            .map(|&other| unit_faces[other / 3] * corner_angle(other))
+            .sum::<Vec3>()
+            .try_normalize()
+            .unwrap_or(if own == Vec3::ZERO { Vec3::Z } else { own });
+        let key = (vertex, normal.to_array().map(|c| (c * 1e4).round() as i32));
+        let index = *seen.entry(key).or_insert_with(|| {
+            out_positions.push(positions[vertex as usize]);
+            out_uvs.push(uvs[vertex as usize]);
+            out_normals.push(normal.to_array());
+            (out_positions.len() - 1) as u32
+        });
+        out_indices.push(index);
+    }
+    (out_positions, out_uvs, out_normals, out_indices)
 }
 
 /// Generate a stable tangent frame using the glTF reference accumulation
@@ -486,16 +525,13 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
         Some(i) => i.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
     };
-    // No `NORMAL` attribute means flat shading (see `Material::flat_shading`);
-    // the attribute is then never read, so it stays zero rather than being
-    // filled with a smoothing the shader would discard.
-    let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(Iterator::collect);
-    let flat_shading = normals.is_none();
-    let normals = normals.unwrap_or_else(|| generated_normals(&positions, &indices));
-
     let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
         Some(t) => t.into_f32().collect(),
         None => vec![[0.0, 0.0]; positions.len()],
+    };
+    let (positions, uvs, normals, indices) = match reader.read_normals() {
+        Some(normals) => (positions, uvs, normals.collect(), indices),
+        None => creased_normals(&positions, &uvs, &indices),
     };
     let tangents: Vec<[f32; 4]> = reader
         .read_tangents()
@@ -542,14 +578,44 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
             emissive: Vec3::from(emissive),
             normal_scale: normal.map_or(1.0, |texture| texture.scale()),
             occlusion_strength: occlusion.map_or(1.0, |texture| texture.strength()),
-            flat_shading,
         },
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::generated_tangents;
+    use super::{creased_normals, generated_tangents};
+
+    /// Two unwelded quads meeting along x = 0: a shallow fold shares one
+    /// normal along the seam, a right angle keeps both faces' own.
+    #[test]
+    fn creased_normals_smooth_shallow_folds_and_keep_hard_edges() {
+        let fold = |z: f32| {
+            let positions = [
+                [-1.0, 0.0, z],
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [-1.0, 1.0, z],
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, z],
+                [1.0, 1.0, z],
+                [0.0, 1.0, 0.0],
+            ];
+            let indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+            let (positions, _, normals, _) = creased_normals(&positions, &[[0.0; 2]; 8], &indices);
+            let seam: Vec<_> = positions
+                .iter()
+                .zip(&normals)
+                .filter(|(p, _)| p[0] == 0.0)
+                .map(|(_, n)| *n)
+                .collect();
+            seam
+        };
+        // 0.2 rise over 1: each face is 11 degrees off flat.
+        assert!(fold(0.2).iter().all(|n| (n[2] - 1.0).abs() < 1e-5));
+        // A 90 degree ridge: the seam carries each face's own normal.
+        assert!(fold(1.0).iter().all(|n| n[0].abs() > 0.7));
+    }
 
     #[test]
     fn generated_tangents_pin_orientation_and_uv_handedness() {

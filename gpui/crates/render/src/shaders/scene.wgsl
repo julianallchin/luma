@@ -386,29 +386,18 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let inst = instances[in.instance];
     let v = normalize(globals.camera_pos.xyz - in.world);
 
-    // three's `normal_fragment_begin`: a flat-shaded material takes the
-    // geometric normal from screen-space derivatives and never consults
-    // `gl_FrontFacing`, so the result always faces the viewer.
-    var n: vec3<f32>;
-    if inst.flags.x > 0.5 {
-        n = normalize(cross(dpdx(in.world), dpdy(in.world)));
-        if dot(n, v) < 0.0 {
-            n = -n;
-        }
-    } else {
-        n = normalize(in.normal);
-        if !front {
-            n = -n;
-        }
-        var t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
-        if !front {
-            t = -t;
-        }
-        let b = cross(n, t) * in.tangent.w;
-        var mapped = textureSample(normal_map, material_sampler, in.uv).xyz * 2.0 - 1.0;
-        mapped = vec3<f32>(mapped.xy * inst.flags.y, mapped.z);
-        n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
+    var n = normalize(in.normal);
+    if !front {
+        n = -n;
     }
+    var t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
+    if !front {
+        t = -t;
+    }
+    let b = cross(n, t) * in.tangent.w;
+    var mapped = textureSample(normal_map, material_sampler, in.uv).xyz * 2.0 - 1.0;
+    mapped = vec3<f32>(mapped.xy * inst.flags.y, mapped.z);
+    n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
 
     let base_color = inst.base_color.rgb
         * textureSample(base_color_map, material_sampler, in.uv).rgb;

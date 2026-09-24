@@ -172,7 +172,7 @@ struct Instance {
     normal_matrix: [[f32; 4]; 4],
     base_color: [f32; 4],
     emissive: [f32; 4],
-    /// x: `flat_shading`, y: normal-map scale, z: AO strength.
+    /// x: unused, y: normal-map scale, z: AO strength.
     flags: [f32; 4],
 }
 
@@ -13052,7 +13052,7 @@ fn instance_of(draw: &Draw) -> Instance {
             .extend(draw.material.roughness)
             .to_array(),
         flags: [
-            f32::from(u8::from(draw.material.flat_shading)),
+            0.0,
             if draw.textures.normal.is_some() {
                 draw.material.normal_scale
             } else {
