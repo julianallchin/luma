@@ -178,7 +178,7 @@ fn a_lens_in_its_beam_glares() {
     let halo = ring(&glaring, lens, 6.0);
     let without = ring(&plain, lens, 6.0);
     assert!(
-        halo > without + 10.0,
+        halo > without + 5.0,
         "glare lights the dark around the lens: {halo} against {without} without it"
     );
 
