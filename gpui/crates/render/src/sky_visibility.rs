@@ -141,10 +141,8 @@ impl FieldLayout {
 /// cue and are too small to shade a sky.
 pub(crate) fn in_field(frame: &Frame, index: usize) -> bool {
     let draw = &frame.draws[index];
-    let key = frame.meshes[draw.mesh].key.as_str();
     !matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
-        && key != "::floor"
-        && key != "::outdoor-floor"
+        && !crate::frame::is_ground(&frame.meshes[draw.mesh].key)
 }
 
 /// Consecutive runs `(start, end)` of opaque draws of one mesh that stand in
