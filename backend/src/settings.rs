@@ -61,6 +61,11 @@ pub struct AppSettings {
     /// Whether the window may present HDR where the display supports it.
     /// Device-global: it is a fact about this machine's display.
     pub hdr_output: bool,
+    /// The visualizer's camera — exposure, tone curve and glare — as the
+    /// renderer's `Look` in JSON. Empty means the renderer's default. Kept
+    /// opaque here: the backend has no renderer types, and a value the
+    /// renderer cannot parse falls back to its default there.
+    pub stage_look: String,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -82,6 +87,7 @@ impl Default for AppSettings {
             stage_gizmos: true,
             render_scale: 100,
             hdr_output: true,
+            stage_look: String::new(),
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -146,6 +152,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .map(|v| v.clamp(25, 100))
             .unwrap_or(100),
         hdr_output: map.get("hdr_output").map(|v| v == "true").unwrap_or(true),
+        stage_look: map.get("stage_look").cloned().unwrap_or_default(),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,

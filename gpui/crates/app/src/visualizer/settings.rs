@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 pub(super) struct DockMotion {
     popup: Transition,
     tooltip: Transition,
-    pub(super) switches: [Transition; 4],
+    pub(super) switches: [Transition; 5],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -441,6 +441,7 @@ impl Luma {
             // coalescing the scrubs need would buy nothing here.
             ViewToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
             ViewToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
+            ViewToggle::AutoExposure => self.save_look(cx),
             ViewToggle::FixtureShadows => {}
         }
         cx.notify();
@@ -458,10 +459,38 @@ impl Luma {
         };
         state.render_controls.set(control, value);
         match control {
-            ViewValue::RenderScale => self.save_render_scale(cx),
+            ViewValue::RenderScale => {
+                let percent = state.render_controls.render_scale_percent;
+                self.save_view_setting("render_scale", percent.to_string(), cx);
+            }
+            control if control.is_look() => self.save_look(cx),
             _ => self.save_venue_haze(cx),
         }
         cx.notify();
+    }
+
+    /// Choose the tone curve: applied to the stage now, persisted with the
+    /// rest of the look.
+    pub(super) fn set_view_tone(&mut self, tone: scene_desc::ToneCurve, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.render_controls.look.tone = tone;
+        self.save_look(cx);
+        cx.notify();
+    }
+
+    /// Persist the look the render controls now hold, as one setting.
+    fn save_look(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        match serde_json::to_string(&state.render_controls.look) {
+            Ok(json) => self.save_view_setting("stage_look", json, cx),
+            Err(error) => {
+                state.view_setting_error = Some(format!("Could not save stage_look: {error}"))
+            }
+        }
     }
 
     /// One local view setting, written once.
@@ -554,46 +583,43 @@ impl Luma {
         .detach();
     }
 
-    /// Persist the render percent the render controls now hold, coalescing the scrub.
-    fn save_render_scale(&mut self, cx: &mut Context<Self>) {
+    /// Persist one scrubbed device setting, coalescing the scrub: while a
+    /// write is in flight only the newest value per key waits behind it.
+    fn save_view_setting(&mut self, key: &'static str, value: String, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
         state.view_setting_error = None;
-        *state.render_scale_pending.borrow_mut() = Some(state.render_controls.render_scale_percent);
-        if state.render_scale_saving {
+        state.view_setting_pending.borrow_mut().insert(key, value);
+        if state.view_setting_saving {
             return;
         }
-        state.render_scale_saving = true;
-        let queue = state.render_scale_pending.clone();
+        state.view_setting_saving = true;
+        let queue = state.view_setting_pending.clone();
         cx.spawn(async move |this, cx| loop {
-            let Some(percent) = queue.borrow_mut().take() else {
+            let Some((key, value)) = queue.borrow_mut().pop_first() else {
                 break;
             };
-            let Ok(pending) = this.update(cx, |this, _| {
-                this.library
-                    .set_setting("render_scale", &percent.to_string())
-            }) else {
+            let Ok(pending) = this.update(cx, |this, _| this.library.set_setting(key, &value))
+            else {
                 break;
             };
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let Some(state) = this
                     .visualizer_mut()
-                    .filter(|s| Rc::ptr_eq(&s.render_scale_pending, &queue))
+                    .filter(|s| Rc::ptr_eq(&s.view_setting_pending, &queue))
                 else {
                     return;
                 };
-                state.render_scale_saving = queue.borrow().is_some();
-                if !state.render_scale_saving {
-                    state.view_setting_error = result
-                        .err()
-                        .map(|error| format!("Could not save render_scale: {error}"));
+                state.view_setting_saving = !queue.borrow().is_empty();
+                if let Err(error) = result {
+                    state.view_setting_error = Some(format!("Could not save {key}: {error}"));
                 }
                 cx.notify();
             })
             .ok();
-            if queue.borrow().is_none() {
+            if queue.borrow().is_empty() {
                 break;
             }
         })
