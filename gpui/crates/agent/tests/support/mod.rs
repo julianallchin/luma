@@ -755,7 +755,6 @@ impl Fixture {
                 "agentKind": "track_copilot",
                 "subjectKind": "track",
                 "subjectId": TRACK,
-                "implementationId": null,
                 "venueId": VENUE,
                 "scoreId": score,
                 "title": null,

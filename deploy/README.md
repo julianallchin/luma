@@ -18,6 +18,10 @@ Run `supabase db push`. Or paste each file in `../supabase/migrations/` from
 - `20260923200000_drop_score_definitions.sql`
 - `20260924000000_server_history.sql` — after the sync rules below no longer
   name `changes`, and before a client that uploads `scores.authored_at`
+- `20260924100000_drop_dead_midi_and_thread_columns.sql` — after every client
+  runs a build that no longer uploads `agent_threads.implementation_id`,
+  `midi_bindings.mode_json`, `midi_bindings.target_override_json` or
+  `midi_modifiers.groups_json`
 
 `row_model.sql` drops the old sync schema first, so it also runs on a project
 that has been reset.

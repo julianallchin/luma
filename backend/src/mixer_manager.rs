@@ -8,7 +8,7 @@
 //! host event on every CC change.
 //!
 //! Named "mixer_manager" to distinguish from `controller_manager`, which
-//! handles the live pad/cue MIDI controller.
+//! handles the live pad MIDI controller.
 
 use std::sync::{Arc, Mutex};
 

@@ -144,7 +144,7 @@ ambiguous between model tokens and runtime variables.
 
 A thread is an `agent_threads` row (`backend/src/models/agent_threads.rs`). It
 holds the id, the owner `uid`, `agent_kind`, the subject kind and id,
-`implementation_id`, `venue_id`, `score_id`, a title, the fork source
+`venue_id`, `score_id`, a title, the fork source
 (`forked_from_thread_id`, `forked_at_message_id`), and for a subagent
 `parent_thread_id` and `parent_call_id`.
 
@@ -152,9 +152,9 @@ Messages are `agent_thread_messages` rows. Each holds the complete structured
 parts: text, reasoning, tool calls with their inputs, and tool results.
 `agent_thread_transcript_heads` names each thread's last message.
 
-`AgentKind` is `TrackCopilot`, `PatternGraph` or `VenueRig`. `ThreadScope`
-(`backend/src/agent/mod.rs`) is the kind, the subject, the implementation, the
-venue and the score. The subject is metadata, not identity: several threads may
+`AgentKind` is `TrackCopilot` or `VenueRig`. `ThreadScope`
+(`backend/src/agent/mod.rs`) is the kind, the subject, the venue and the
+score. The subject is metadata, not identity: several threads may
 share one track.
 
 The Python workspace belongs to exactly one thread id. The host takes the owner

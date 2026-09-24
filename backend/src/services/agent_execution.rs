@@ -448,7 +448,6 @@ mod tests {
             agent_kind: "track_copilot".into(),
             subject_kind: Some("track".into()),
             subject_id: Some("track".into()),
-            implementation_id: None,
             venue_id: Some("venue".into()),
             score_id: Some("score".into()),
             forked_from_thread_id: None,

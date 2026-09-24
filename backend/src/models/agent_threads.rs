@@ -20,9 +20,6 @@ pub struct AgentThread {
     /// 'track' | 'venue' | null
     pub subject_kind: Option<String>,
     pub subject_id: Option<String>,
-    /// The exact graph implementation this conversation may author. Required
-    /// for pattern-graph threads and absent for every other agent kind.
-    pub implementation_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
     /// Source conversation identity for a transcript fork. The source may be
@@ -109,7 +106,6 @@ pub struct CreateAgentThreadInput {
     pub agent_kind: String,
     pub subject_kind: Option<String>,
     pub subject_id: Option<String>,
-    pub implementation_id: Option<String>,
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
     pub title: Option<String>,
@@ -239,7 +235,6 @@ impl CreateAgentThreadInput {
             &self.agent_kind,
             self.subject_kind.as_deref(),
             self.subject_id.as_deref(),
-            self.implementation_id.as_deref(),
             self.venue_id.as_deref(),
             self.score_id.as_deref(),
         )
@@ -252,7 +247,6 @@ impl AgentThread {
             &self.agent_kind,
             self.subject_kind.as_deref(),
             self.subject_id.as_deref(),
-            self.implementation_id.as_deref(),
             self.venue_id.as_deref(),
             self.score_id.as_deref(),
         )
@@ -263,44 +257,30 @@ fn route<'a>(
     agent_kind: &str,
     subject_kind: Option<&str>,
     subject_id: Option<&'a str>,
-    implementation_id: Option<&'a str>,
     venue_id: Option<&'a str>,
     score_id: Option<&'a str>,
 ) -> Result<ThreadRoute<'a>, String> {
-    match (
-        agent_kind,
-        subject_kind,
-        subject_id,
-        implementation_id,
-        venue_id,
-        score_id,
-    ) {
-        (
-            "track_copilot",
-            Some("track"),
-            Some(track_id),
-            None,
-            Some(venue_id),
-            Some(score_id),
-        ) if !track_id.is_empty() && !venue_id.is_empty() && !score_id.is_empty() => {
+    match (agent_kind, subject_kind, subject_id, venue_id, score_id) {
+        ("track_copilot", Some("track"), Some(track_id), Some(venue_id), Some(score_id))
+            if !track_id.is_empty() && !venue_id.is_empty() && !score_id.is_empty() =>
+        {
             Ok(ThreadRoute::Track {
                 track_id,
                 venue_id,
                 score_id,
             })
         }
-        ("venue_rig", Some("venue"), Some(venue_id), None, Some(subject_venue), None)
+        ("venue_rig", Some("venue"), Some(venue_id), Some(subject_venue), None)
             if !venue_id.is_empty() && subject_venue == venue_id =>
         {
             Ok(ThreadRoute::Venue { venue_id })
         }
-        ("unbound", None, None, None, None, None) => Ok(ThreadRoute::Unbound),
-        ("track_copilot", ..) => Err(
-            "track agent thread requires non-empty track, venue, and score IDs and no graph implementation"
-                .into(),
-        ),
+        ("unbound", None, None, None, None) => Ok(ThreadRoute::Unbound),
+        ("track_copilot", ..) => {
+            Err("track agent thread requires non-empty track, venue, and score IDs".into())
+        }
         ("venue_rig", ..) => Err(
-            "venue agent thread requires a non-empty venue ID as its subject and no track, score, or graph implementation"
+            "venue agent thread requires a non-empty venue ID as its subject and no track or score"
                 .into(),
         ),
         _ => Err(format!("unsupported agent thread kind '{agent_kind}'")),

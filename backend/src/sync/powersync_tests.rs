@@ -404,7 +404,6 @@ const NULLABLE_REFERENCES: &[&str] = &[
     "forked_from_thread_id",
     "forked_at_message_id",
     "parent_thread_id",
-    "implementation_id",
     "subject_id",
 ];
 
