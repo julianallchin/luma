@@ -531,12 +531,13 @@ pub(crate) struct Visualizer {
     /// field for all three because they are one tier and one message: the stage
     /// already shows the value, so the only news is that the database does not.
     view_setting_error: Option<String>,
-    /// And a coalescing pair for the render-scale percent, which is a device
-    /// setting rather than venue data but is scrubbed by the same kind of
-    /// control. `Library::set_setting` keeps ordering, not a bound on how many
-    /// writes are queued behind it.
-    render_scale_saving: bool,
-    render_scale_pending: Rc<RefCell<Option<u8>>>,
+    /// And a coalescing pair for the scrubbed device settings — the render
+    /// percent and the camera look. They are device settings rather than venue
+    /// data but are scrubbed by the same kind of control, and
+    /// `Library::set_setting` keeps ordering, not a bound on how many writes
+    /// are queued behind it. The newest value per key wins.
+    view_setting_saving: bool,
+    view_setting_pending: Rc<RefCell<std::collections::BTreeMap<&'static str, String>>>,
     /// Whether the FPS readout is unfolded into the full frame-stats panel.
     fps_expanded: bool,
     /// The builder. `None` until the rig lands, and the one place a position
@@ -663,6 +664,9 @@ fn display_range(window: &Window) -> luma_render::DisplayRange {
 /// Frames of unchanged inputs the temporal haze needs before its blue-noise
 /// integration is visually converged and the stage may rest.
 const SETTLE_FRAMES: u32 = 16;
+/// The same with auto exposure on: the exposure adapts over a few seconds
+/// (`post.rs`), and a stage that rested sooner would freeze it half way.
+const EXPOSURE_SETTLE_FRAMES: u32 = 180;
 
 /// The most pixels the stage renders, whatever the size of its element.
 ///
@@ -826,6 +830,10 @@ struct RenderControls {
     /// is sampled at, not what is in it, and because sitting here puts it
     /// in [`IdleKey`] for free.
     render_scale_percent: u8,
+    /// The camera: exposure, tone curve and glare. A device setting
+    /// (`stage_look`), like the grid: it is how this machine looks at any
+    /// venue.
+    look: scene_desc::Look,
 }
 
 /// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
@@ -888,6 +896,7 @@ impl RenderControls {
         render.fixture_surface_lighting = self.fixture_surface_lighting;
         render.fixture_shadows = self.fixture_shadows;
         render.geometry_shadows = true;
+        render.look = self.look;
         render
     }
 
@@ -926,6 +935,7 @@ impl RenderControls {
             grid_enabled: true,
             gizmos_enabled: true,
             render_scale_percent: 100,
+            look: scene_desc::Look::STAGE,
         };
         controls.set_environment(environment);
         controls
@@ -975,6 +985,7 @@ enum ViewToggle {
     Haze,
     Grid,
     Gizmos,
+    AutoExposure,
 }
 #[derive(Clone, Copy)]
 enum ViewValue {
@@ -986,6 +997,22 @@ enum ViewValue {
     WindDirection,
     /// Not a haze dial: the fraction of the element's pixels the stage renders.
     RenderScale,
+    /// Camera dials, [`scene_desc::Look`]: exposure (compensation when auto),
+    /// glare strength, glare threshold and star amount.
+    Exposure,
+    Glare,
+    GlareThreshold,
+    Star,
+}
+
+impl ViewValue {
+    /// Whether this dial is part of the camera look rather than the room.
+    fn is_look(self) -> bool {
+        matches!(
+            self,
+            Self::Exposure | Self::Glare | Self::GlareThreshold | Self::Star
+        )
+    }
 }
 
 /// The percent slider's travel. The floor is [`RenderScale::Fixed`]'s own floor
@@ -1003,11 +1030,38 @@ impl RenderControls {
             }
             ViewToggle::Grid => self.grid_enabled = !self.grid_enabled,
             ViewToggle::Gizmos => self.gizmos_enabled = !self.gizmos_enabled,
+            ViewToggle::AutoExposure => {
+                let exposure = &mut self.look.exposure;
+                exposure.auto = !exposure.auto;
+                // The one number means compensation in one mode and the
+                // exposure itself in the other; zero is the tuned exposure in
+                // both, so it is the only value that means the same thing.
+                exposure.ev = 0.0;
+            }
         }
     }
     fn set(&mut self, control: ViewValue, value: f32) {
         if matches!(control, ViewValue::RenderScale) {
             self.render_scale_percent = clamp_render_scale(value.round() as i64);
+            return;
+        }
+        if control.is_look() {
+            let look = &mut self.look;
+            match control {
+                ViewValue::Exposure => {
+                    look.exposure.ev = value.clamp(
+                        *scene_desc::Exposure::RANGE.start(),
+                        *scene_desc::Exposure::RANGE.end(),
+                    );
+                }
+                ViewValue::Glare => look.glare.strength = value.clamp(0.0, GLARE_MAX),
+                ViewValue::GlareThreshold => {
+                    look.glare.threshold =
+                        value.clamp(*GLARE_THRESHOLD.start(), *GLARE_THRESHOLD.end());
+                }
+                ViewValue::Star => look.glare.star = value.clamp(0.0, 1.0),
+                _ => unreachable!(),
+            }
             return;
         }
         match control {
@@ -1017,14 +1071,30 @@ impl RenderControls {
             ViewValue::Turbulence => self.haze.appearance.turbulence = value,
             ViewValue::WindSpeed => self.haze.appearance.wind_speed = value,
             ViewValue::WindDirection => self.haze.appearance.wind_direction = value,
-            // Handled above; it is not part of the room's atmosphere.
-            ViewValue::RenderScale => unreachable!(),
+            // Handled above; they are not part of the room's atmosphere.
+            ViewValue::RenderScale
+            | ViewValue::Exposure
+            | ViewValue::Glare
+            | ViewValue::GlareThreshold
+            | ViewValue::Star => unreachable!(),
         }
         // The whole value, not just the appearance: `sanitized` is what keeps a
         // swept density inside [`scene_desc::VenueHaze::MAX_DENSITY`], which is
         // now the single answer to how dense a room may be.
         self.haze = self.haze.sanitized();
     }
+}
+
+/// The glare strength slider's travel. One is the stage default's full strength;
+/// past it the halo is doubled.
+const GLARE_MAX: f32 = 2.0;
+/// The glare threshold's travel, in multiples of diffuse white.
+const GLARE_THRESHOLD: std::ops::RangeInclusive<f32> = 0.5..=8.0;
+
+/// The stored look, or the stage default when there is none or it no longer
+/// parses (an older build's shape, a hand-edited row).
+fn stored_look(json: &str) -> scene_desc::Look {
+    serde_json::from_str(json).unwrap_or(scene_desc::Look::STAGE)
 }
 
 /// A percent from anywhere — a slider, a stored setting, an older build — held
@@ -1090,6 +1160,7 @@ impl Visualizer {
                 state.render_controls.gizmos_enabled = settings.stage_gizmos;
                 state.render_controls.render_scale_percent =
                     clamp_render_scale(i64::from(settings.render_scale));
+                state.render_controls.look = stored_look(&settings.stage_look);
                 cx.notify();
             })
             .ok();
@@ -1133,8 +1204,8 @@ impl Visualizer {
             haze_edited: false,
             haze_pending: Rc::default(),
             view_setting_error: None,
-            render_scale_saving: false,
-            render_scale_pending: Rc::default(),
+            view_setting_saving: false,
+            view_setting_pending: Rc::default(),
             fps_expanded: false,
             build: None,
             stage: Rc::default(),
@@ -3186,7 +3257,83 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .gap(px(12.))
         .child(settings::section("Haze", haze))
         .child(luma_ui::float::divider())
+        .child(settings::section("Camera", camera_controls(state, app)))
+        .child(luma_ui::float::divider())
         .child(settings::section("Viewport", viewport))
+}
+
+/// The camera: how scene light becomes the picture. Tone curve, exposure and
+/// the glare around hot sources — [`scene_desc::Look`].
+fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+    let look = state.render_controls.look;
+    let mut tone = luma_ui::float::segmented().w_full();
+    for (name, curve) in [
+        ("AgX", scene_desc::ToneCurve::Agx),
+        ("Punchy", scene_desc::ToneCurve::AgxPunchy),
+        ("ACES", scene_desc::ToneCurve::Aces),
+    ] {
+        let app = app.clone();
+        tone = tone.child(
+            luma_ui::float::segment(name, look.tone == curve, name)
+                .id(gpui::ElementId::Name(format!("tone-{name}").into()))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| this.set_view_tone(curve, cx));
+                })
+                .agent_node(Role::Toggle, name),
+        );
+    }
+    let (exposure_min, exposure_max) = (
+        *scene_desc::Exposure::RANGE.start(),
+        *scene_desc::Exposure::RANGE.end(),
+    );
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(tone.agent_node(Role::Card, "Tone curve"))
+        .child(view_toggle(
+            state,
+            app,
+            "Auto exposure",
+            look.exposure.auto,
+            ViewToggle::AutoExposure,
+        ))
+        .child(view_value(
+            app,
+            if look.exposure.auto {
+                "Compensation (EV)"
+            } else {
+                "Exposure (EV)"
+            },
+            look.exposure.ev,
+            exposure_min,
+            exposure_max,
+            ViewValue::Exposure,
+        ))
+        .child(view_value(
+            app,
+            "Glare",
+            look.glare.strength,
+            0.,
+            GLARE_MAX,
+            ViewValue::Glare,
+        ))
+        .child(view_value(
+            app,
+            "Glare threshold",
+            look.glare.threshold,
+            *GLARE_THRESHOLD.start(),
+            *GLARE_THRESHOLD.end(),
+            ViewValue::GlareThreshold,
+        ))
+        .child(view_value(
+            app,
+            "Star",
+            look.glare.star,
+            0.,
+            1.,
+            ViewValue::Star,
+        ))
 }
 
 /// The pixels the stage is actually rendering, under the percent that asks for
@@ -3219,6 +3366,7 @@ fn view_toggle(
         ViewToggle::FixtureShadows => 1,
         ViewToggle::Grid => 2,
         ViewToggle::Gizmos => 3,
+        ViewToggle::AutoExposure => 4,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -3254,6 +3402,9 @@ fn view_value(
         // power curve would only make the number under the hand lie about where
         // the hand is.
         ViewValue::RenderScale => (1.0, 1.0),
+        // A tenth of a stop: finer than anyone can see, coarse enough that a
+        // drag does not stop on 0.37.
+        ViewValue::Exposure => (0.1, 1.0),
         _ => (0.01, 1.0),
     };
     let app = app.clone();
@@ -3931,7 +4082,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     }
                                 },
                                 slot => {
-                                    *slot = Some((key, SETTLE_FRAMES));
+                                    let settle = if key_controls.look.exposure.auto {
+                                        EXPOSURE_SETTLE_FRAMES
+                                    } else {
+                                        SETTLE_FRAMES
+                                    };
+                                    *slot = Some((key, settle));
                                     false
                                 }
                             }
@@ -4493,6 +4649,41 @@ mod view_tests {
         controls.set(ViewValue::RenderScale, 50.0);
         assert_eq!(controls.haze, haze);
     }
+
+    /// The camera dials reach the renderer, stay in range and leave the room
+    /// alone; switching the meter resets the one number that changes meaning.
+    #[test]
+    fn camera_dials_shape_the_look_and_nothing_else() {
+        let mut controls = RenderControls::new(VenueEnvironment::default());
+        assert_eq!(controls.settings(50.0).look, scene_desc::Look::STAGE);
+        let haze = controls.haze;
+        controls.set(ViewValue::Exposure, 9.0);
+        assert_eq!(controls.look.exposure.ev, *scene_desc::Exposure::RANGE.end());
+        controls.set(ViewValue::Glare, -1.0);
+        assert_eq!(controls.look.glare.strength, 0.0);
+        controls.set(ViewValue::GlareThreshold, 100.0);
+        assert_eq!(controls.look.glare.threshold, *GLARE_THRESHOLD.end());
+        controls.set(ViewValue::Star, 0.25);
+        assert_eq!(controls.settings(50.0).look.glare.star, 0.25);
+        assert_eq!(controls.haze, haze);
+
+        controls.toggle(ViewToggle::AutoExposure);
+        assert!(!controls.look.exposure.auto);
+        assert_eq!(controls.look.exposure.ev, 0.0);
+    }
+
+    /// A stored look round-trips, and one that no longer parses falls back to
+    /// the stage default rather than to a black or blinding stage.
+    #[test]
+    fn a_stored_look_is_read_back_or_defaulted() {
+        let mut look = scene_desc::Look::STAGE;
+        look.tone = scene_desc::ToneCurve::Aces;
+        look.exposure.ev = -1.5;
+        let json = serde_json::to_string(&look).unwrap();
+        assert_eq!(stored_look(&json), look);
+        assert_eq!(stored_look(""), scene_desc::Look::STAGE);
+        assert_eq!(stored_look("{\"tone\":\"sepia\"}"), scene_desc::Look::STAGE);
+    }
 }
 
 #[cfg(test)]
@@ -4923,8 +5114,8 @@ mod orbit_selection_tests {
             haze_edited: false,
             haze_pending: Rc::default(),
             view_setting_error: None,
-            render_scale_saving: false,
-            render_scale_pending: Rc::default(),
+            view_setting_saving: false,
+            view_setting_pending: Rc::default(),
             fps_expanded: false,
             build,
             stage: Rc::new(RefCell::new(Stage {
