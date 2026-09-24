@@ -480,6 +480,20 @@ impl Luma {
         cx.notify();
     }
 
+    /// Choose the glare style: applied now, persisted with the look.
+    pub(super) fn set_view_glare_style(
+        &mut self,
+        style: scene_desc::GlareStyle,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        state.render_controls.look.glare.style = style;
+        self.save_look(cx);
+        cx.notify();
+    }
+
     /// Persist the look the render controls now hold, as one setting.
     fn save_look(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
