@@ -325,10 +325,14 @@ fn strip(
 
 /// Heads in the stand-in rig of [`stand_in_strip`].
 const STAND_IN_HEADS: usize = 16;
+/// How far a stand-in head turns, pan then tilt, end to end, in degrees: a
+/// common moving head's.
+const STAND_IN_RANGE: [f64; 2] = [540., 270.];
 
 /// The strip of `preset` over `beats` beats on a stand-in rig: a straight
-/// line of heads at 120 BPM. It needs no venue, track or score, so a preset
-/// browser always has a picture to show before, or without, the real rig's.
+/// line of moving heads at 120 BPM. It needs no venue, track or score, so a
+/// preset browser always has a picture to show before, or without, the real
+/// rig's.
 pub fn stand_in_strip(
     preset: &luma_patterns::FormPreset,
     beats: f64,
@@ -360,8 +364,26 @@ fn line_cells(heads: usize) -> Vec<luma_patterns::Cell> {
         .collect()
 }
 
-/// A single clip's strip over `cells`, on a 120 BPM grid, with no track
-/// features.
+/// Every cell of `cells` as a moving head of [`STAND_IN_RANGE`], hung where
+/// the cell is and pointing straight down at home.
+fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
+    let mut rig = crate::eval::aim::Rig::default();
+    for cell in cells {
+        let mount = fixture_kinematics::Mount::from_frame(
+            glam::DVec3::from(cell.world).as_vec3(),
+            glam::Mat3::IDENTITY,
+        );
+        rig.insert(
+            cell.id.clone(),
+            crate::eval::aim::Head::with_range(mount, STAND_IN_RANGE),
+        );
+    }
+    rig
+}
+
+/// A single clip's strip over `cells` as stand-in heads (see
+/// [`stand_in_rig`]), on a 120 BPM grid, with no track features. Only the
+/// scene is made up: [`strip`] samples it as it does a real clip's.
 fn synthetic_strip(
     clip: &luma_patterns::Clip,
     cells: &[luma_patterns::Cell],
@@ -398,7 +420,8 @@ fn synthetic_strip(
         plan: std::sync::Arc::new(plan),
         z_index: 0,
         blend_mode: clip.blend_mode,
-    }]);
+    }])
+    .with_rig(stand_in_rig(cells))?;
     strip("clip", clip, &scene, span, cells)
 }
 
@@ -484,6 +507,29 @@ mod tests {
         for name in ["Bloom", "Sweep", "Wave", "Circle", "Figure-8", "Ballyhoo"] {
             assert!(moves(&picture(name)), "{name}");
         }
+    }
+
+    #[test]
+    fn an_aim_stand_in_has_pan_and_tilt_curves() {
+        let aim = |name: &str| {
+            let preset = luma_patterns::presets().preset("aim@1", name).unwrap();
+            stand_in_strip(preset, 16.0)
+                .unwrap()
+                .aim
+                .unwrap_or_else(|| panic!("{name} has no curves"))
+        };
+        // A fan leans each head its own way.
+        let fan = aim("Fan");
+        assert!(fan.pan.len() > 1, "{fan:?}");
+        assert!(!fan.tilt.is_empty());
+        // One point: every head the same way, so one curve a band.
+        let position = aim("Position");
+        assert_eq!((position.pan.len(), position.tilt.len()), (1, 1));
+        // A colour preset aims nothing.
+        let wash = luma_patterns::presets()
+            .preset("color.constant@1", "Wash")
+            .unwrap();
+        assert!(stand_in_strip(wash, 16.0).unwrap().aim.is_none());
     }
 
     #[test]

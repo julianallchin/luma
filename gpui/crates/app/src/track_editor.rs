@@ -167,11 +167,11 @@ pub struct Editor {
     /// whole list at once.
     clips: Rc<[Clip]>,
     graph_score: Option<luma_patterns::Score>,
-    /// Heatmap previews by clip id, shared with the frame — the resample
-    /// cache inside each entry is written at paint time, which is why the map
+    /// Previews by clip id, shared with the frame — each entry's `published`
+    /// flag is written at paint time, which is why the map
     /// sits behind the same interior-mutability arrangement as
     /// [`Self::canvas`].
-    previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
+    previews: Rc<RefCell<HashMap<SharedString, Installed>>>,
     /// Clips whose single-clip preview render is in flight.
     preview_inflight: HashSet<SharedString>,
     preview_errors: HashMap<SharedString, String>,
@@ -336,35 +336,27 @@ impl Clip {
     }
 }
 
-/// One clip's preview, ready to paint.
+/// A seam preview, decoded once for painting: a clip's body, a browser
+/// thumbnail and a carried preset's ghost all hold one and draw it with
+/// [`Preview::paint`]. Cheap to clone.
+#[derive(Clone)]
 enum Preview {
-    /// A heatmap, baked for the GPU — see [`bake`].
-    Heatmap {
-        /// Two frames under one identity — frame 0 at [`BODY_ALPHA`], frame
-        /// 1 opaque — so selecting a clip picks a frame instead of a second
-        /// image. The identity is the clip's for as long as it has a
-        /// preview: a re-render refreshes one atlas tile instead of
-        /// abandoning a trail of them — `STAGE_IMAGE_ID`'s trick in
-        /// `visualizer.rs`, one per clip.
-        image: Arc<RenderImage>,
-        /// Whether the atlas has been told about these bytes. False for
-        /// every fresh bake, so the painter refreshes the tile under the
-        /// kept identity before drawing it.
-        published: bool,
-    },
+    /// A heatmap, baked for the GPU — see [`bake`]. Two frames under one
+    /// identity — frame 0 at [`BODY_ALPHA`], frame 1 opaque — so selecting
+    /// a clip picks a frame instead of a second image.
+    Heatmap(Arc<RenderImage>),
     /// An aim clip's pan and tilt curves — see [`paint_aim`].
-    Aim(AimCurves),
+    Aim(Arc<AimCurves>),
 }
 
 impl Preview {
-    /// A seam row baked under `identity` — the retiring preview's, so the
-    /// atlas tile is reused — or a fresh one. `None` for a row that is not
-    /// `width * height` of RGBA: a seam drift this painter cannot draw, and
-    /// skipping it leaves the flat fill, which is already what a missing
-    /// preview means.
-    fn decode(row: AnnotationPreview, identity: Option<ImageId>) -> Option<(SharedString, Self)> {
+    /// A seam row, baked under `identity` when one is given, else under a
+    /// fresh one. `None` for a heatmap that is not `width * height` of RGBA:
+    /// a seam drift this painter cannot draw, and skipping it leaves the flat
+    /// fill, which is already what a missing preview means.
+    fn decode(row: AnnotationPreview, identity: Option<ImageId>) -> Option<Self> {
         if let Some(curves) = row.aim {
-            return Some((row.annotation_id.into(), Self::Aim(curves)));
+            return Some(Self::Aim(Arc::new(curves)));
         }
         if row.width == 0
             || row.height == 0
@@ -376,14 +368,60 @@ impl Preview {
         if let Some(id) = identity {
             image.id = id;
         }
-        Some((
-            row.annotation_id.into(),
-            Self::Heatmap {
-                image: Arc::new(image),
-                published: false,
-            },
-        ))
+        Some(Self::Heatmap(Arc::new(image)))
     }
+
+    /// Stretch the heatmap over `body`, or stroke the curves across it, as
+    /// the resting body (`selected` false) or the opaque one. `corners`
+    /// rounds the picture to a frame it sits in.
+    ///
+    /// Answers whether it painted, so the caller can put the flat fill down
+    /// when there is nothing to draw — a body too narrow to read (under 8px
+    /// the heatmap is noise), or too short for the curves.
+    ///
+    /// One `paint_image` of the whole body, whatever the zoom: the picture
+    /// was baked at [`CELL_TEXELS`] a cell when it arrived, and the GPU does
+    /// the stretching from there. A clip that runs off the canvas is masked
+    /// by the lane band around this call, not trimmed here.
+    fn paint(
+        &self,
+        body: Bounds<Pixels>,
+        selected: bool,
+        corners: Corners<Pixels>,
+        window: &mut Window,
+    ) -> bool {
+        if f32::from(body.size.width) < 8. || f32::from(body.size.height) <= 0. {
+            return false;
+        }
+        match self {
+            Self::Aim(curves) => paint_aim(body, curves, selected, corners, window),
+            Self::Heatmap(image) => {
+                window
+                    .paint_image(
+                        body,
+                        body,
+                        corners,
+                        Arc::clone(image),
+                        usize::from(selected),
+                        false,
+                    )
+                    .ok();
+                true
+            }
+        }
+    }
+}
+
+/// A clip's [`Preview`] in the timeline's map.
+struct Installed {
+    preview: Preview,
+    /// Whether the atlas has been told about a heatmap's bytes. The
+    /// identity is the clip's for as long as it has a preview: a re-render
+    /// refreshes one atlas tile instead of abandoning a trail of them —
+    /// `STAGE_IMAGE_ID`'s trick in `visualizer.rs`, one per clip. False for
+    /// every fresh bake, so the painter refreshes the tile under the kept
+    /// identity before drawing it.
+    published: bool,
 }
 
 /// What a cut or a copy took, in its two shapes.
@@ -1196,12 +1234,22 @@ impl Editor {
     /// Adopt one clip's re-rendered preview — `preview_annotation`'s answer.
     fn install_preview(&mut self, row: AnnotationPreview) {
         let mut previews = self.previews.borrow_mut();
-        let identity = match previews.remove(row.annotation_id.as_str()) {
-            Some(Preview::Heatmap { image, .. }) => Some(image.id),
+        let id: SharedString = row.annotation_id.clone().into();
+        let identity = match previews.remove(&id) {
+            Some(Installed {
+                preview: Preview::Heatmap(image),
+                ..
+            }) => Some(image.id),
             _ => None,
         };
-        if let Some((id, preview)) = Preview::decode(row, identity) {
-            previews.insert(id, preview);
+        if let Some(preview) = Preview::decode(row, identity) {
+            previews.insert(
+                id,
+                Installed {
+                    preview,
+                    published: false,
+                },
+            );
         }
     }
 
@@ -3505,7 +3553,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
 #[derive(Clone)]
 struct Scene {
     clips: Rc<[Clip]>,
-    previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
+    previews: Rc<RefCell<HashMap<SharedString, Installed>>>,
     waveform: Option<Rc<waveform::Painted>>,
     beats: Option<Rc<BeatGrid>>,
     view: View,
@@ -4165,12 +4213,12 @@ fn paint_ghost(
     let previews = RefCell::new(
         ghost
             .strip
-            .as_ref()
-            .map(|image| {
+            .clone()
+            .map(|preview| {
                 (
                     ghost.clip.id.clone(),
-                    Preview::Heatmap {
-                        image: Arc::clone(image),
+                    Installed {
+                        preview,
                         published: true,
                     },
                 )
@@ -4194,7 +4242,7 @@ fn paint_ghost(
 fn paint_clip(
     box_: Bounds<Pixels>,
     clip: &Clip,
-    previews: &RefCell<HashMap<SharedString, Preview>>,
+    previews: &RefCell<HashMap<SharedString, Installed>>,
     selected: bool,
     window: &mut Window,
     cx: &mut App,
@@ -4306,52 +4354,30 @@ fn clip_body(box_: Bounds<Pixels>) -> Bounds<Pixels> {
 /// uploaded once and then only drawn.
 const CELL_TEXELS: u32 = 4;
 
-/// Stretch a clip's heatmap over its body, or stroke an aim clip's curves
-/// across it.
-///
-/// Answers whether it painted, so the caller can put the flat fill down when
-/// there is nothing to stretch — no decoded preview, or a body too narrow to
-/// read (under 8px the heatmap is noise).
-///
-/// One `paint_image` of the whole body, whatever the zoom: the picture was
-/// baked at [`CELL_TEXELS`] a cell when it arrived, and the GPU does the
-/// stretching from there. A clip that runs off the canvas is masked by the
-/// lane band around this call, not trimmed here.
+/// A clip's [`Preview`] over its body — see [`Preview::paint`] — after
+/// telling the atlas about a fresh bake under the clip's kept identity.
 fn paint_preview(
     body: Bounds<Pixels>,
     clip: &Clip,
-    previews: &RefCell<HashMap<SharedString, Preview>>,
+    previews: &RefCell<HashMap<SharedString, Installed>>,
     selected: bool,
     window: &mut Window,
 ) -> bool {
-    if f32::from(body.size.width) < 8. || f32::from(body.size.height) <= 0. {
-        return false;
-    }
     let mut previews = previews.borrow_mut();
-    let (image, published) = match previews.get_mut(&clip.id) {
-        None => return false,
-        Some(Preview::Aim(curves)) => return paint_aim(body, curves, selected, window),
-        Some(Preview::Heatmap { image, published }) => (image, published),
+    let Some(installed) = previews.get_mut(&clip.id) else {
+        return false;
     };
-    if !*published {
+    if let (Preview::Heatmap(image), false) = (&installed.preview, installed.published) {
         // A re-render lands under the clip's kept atlas identity, and the
         // atlas answers paints from its cache, so it has to be told: same-size
         // tiles are refreshed in place, resized ones evicted for the paint
-        // below to re-insert.
+        // to re-insert.
         window.update_image(image).ok();
-        *published = true;
+        installed.published = true;
     }
-    window
-        .paint_image(
-            body,
-            body,
-            Corners::default(),
-            Arc::clone(image),
-            usize::from(selected),
-            false,
-        )
-        .ok();
-    true
+    installed
+        .preview
+        .paint(body, selected, Corners::default(), window)
 }
 
 /// The least body height that holds both of an aim clip's bands.
@@ -4368,13 +4394,14 @@ fn paint_aim(
     body: Bounds<Pixels>,
     curves: &AimCurves,
     selected: bool,
+    corners: Corners<Pixels>,
     window: &mut Window,
 ) -> bool {
     if f32::from(body.size.height) < AIM_BODY {
         return false;
     }
     let alpha = if selected { 1. } else { BODY_ALPHA };
-    window.paint_quad(fill(body, fade(ladder::background(), alpha)));
+    window.paint_quad(fill(body, fade(ladder::background(), alpha)).corner_radii(corners));
     let half = body.size.height / 2.;
     // The line between the bands.
     window.paint_quad(fill(
