@@ -1,4 +1,5 @@
 //! Host boundary for the shared tensor evaluator: fixture output and scene compositing.
+pub mod aim;
 pub mod composite;
 pub mod context;
 pub mod lighting;

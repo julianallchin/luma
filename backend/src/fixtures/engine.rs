@@ -397,18 +397,7 @@ pub fn generate_dmx(
 
         let has_color_wheel = def.has_color_wheel(mode);
 
-        let pan_max = def
-            .physical
-            .as_ref()
-            .and_then(|p| p.focus.as_ref())
-            .and_then(|f| f.pan_max)
-            .unwrap_or(540) as f32;
-        let tilt_max = def
-            .physical
-            .as_ref()
-            .and_then(|p| p.focus.as_ref())
-            .and_then(|f| f.tilt_max)
-            .unwrap_or(270) as f32;
+        let [pan_max, tilt_max] = def.focus_range();
 
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
@@ -654,15 +643,16 @@ fn map_value(
             MapAction::Hold
         }
         ChannelType::Speed => {
-            // Pan/Tilt Speed channel
-            // Most fixtures: 0 = fastest, 255 = slowest (inverted)
-            // Our binary: 0.0 = frozen, 1.0 = fast
-            // Map: frozen (0.0) -> 255 (slowest), fast (1.0) -> 0 (fastest)
-            if state.speed > 0.5 {
-                MapAction::Set(0) // Fast = DMX 0 (fastest)
-            } else {
-                MapAction::Set(255) // Frozen = DMX 255 (slowest)
-            }
+            // Pan/tilt motor speed. Binary: 1.0 is fastest, 0.0 slowest. A
+            // `...SlowFast` preset runs slow to fast up the channel; every
+            // other speed channel (the `...FastSlow` presets, and most
+            // fixtures without a preset) runs fast to slow.
+            let rising = channel
+                .preset
+                .as_deref()
+                .is_some_and(|preset| preset.ends_with("SlowFast"));
+            let fastest = state.speed > 0.5;
+            MapAction::Set(if fastest == rising { 255 } else { 0 })
         }
         _ => MapAction::Set(0),
     }
@@ -1841,6 +1831,33 @@ mod tests {
             assert_eq!(buf[1], 255, "head 0 red unchanged at t={t}");
             // Head 1 Red.
             assert_eq!(buf[4], 255, "head 1 red unchanged at t={t}");
+        }
+    }
+
+    #[test]
+    fn speed_presets_are_speed_and_run_fastest_by_their_direction() {
+        let speed = |preset: &str| Channel {
+            name: "Speed".into(),
+            preset: Some(preset.into()),
+            group: None,
+            capabilities: vec![],
+        };
+        let fast = PrimitiveState {
+            speed: 1.0,
+            ..prim(1.0, 1.0, 1.0, 1.0, 0.0)
+        };
+        for (preset, fastest) in [
+            ("SpeedPanTiltFastSlow", 0),
+            ("SpeedPanSlowFast", 255),
+            ("SpeedTiltSlowFast", 255),
+        ] {
+            let channel = speed(preset);
+            assert_eq!(channel.get_type(), ChannelType::Speed, "{preset}");
+            assert_eq!(
+                map_value(&channel, &fast, 540.0, 270.0, 1.0, true, false),
+                MapAction::Set(fastest),
+                "{preset}"
+            );
         }
     }
 }
