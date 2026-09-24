@@ -43,15 +43,13 @@ impl DeviceContext {
                     // The lit-interval cache pool is one storage binding of
                     // roughly 4 B × blocks × shadow slots plus its payload
                     // table; the 128 MiB default caps it below 4K.
-                    max_storage_buffer_binding_size: adapter
-                        .limits()
-                        .max_storage_buffer_binding_size,
+                    max_storage_buffer_binding_size:
+                        adapter.limits().max_storage_buffer_binding_size,
                     max_buffer_size: adapter.limits().max_buffer_size,
                     // The cache adds three storage buffers to the native haze
                     // kernel's eight.
-                    max_storage_buffers_per_shader_stage: adapter
-                        .limits()
-                        .max_storage_buffers_per_shader_stage,
+                    max_storage_buffers_per_shader_stage:
+                        adapter.limits().max_storage_buffers_per_shader_stage,
                     ..wgpu::Limits::default().using_resolution(adapter.limits())
                 },
                 ..Default::default()

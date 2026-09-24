@@ -1111,6 +1111,7 @@ pub struct Renderer {
     /// whatever scene *this* renderer was last asked to draw.
     environment: EnvironmentCache,
     atmosphere: AtmosphereCache,
+    sky_visibility: crate::sky_visibility::SkyVisibility,
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
     fixture_shadow_map: wgpu::TextureView,
@@ -1758,6 +1759,20 @@ fn opaque_depth_hash(frame: &Frame, opaque: usize) -> u64 {
     hash
 }
 
+/// Cache identity of each sun cascade. The cascades rasterise the whole opaque
+/// list — moving heads cast sun shadows — so their caster identity is
+/// [`opaque_depth_hash`], not the fixture maps' caster hash, which leaves
+/// fixture bodies out and would keep a moved head's old shadow.
+fn cascade_cache_keys(
+    light_view_proj: &[Mat4; CASCADE_COUNT],
+    depth_hash: u64,
+) -> [ShadowCacheKey; CASCADE_COUNT] {
+    light_view_proj.map(|matrix| ShadowCacheKey {
+        matrix_bits: shadow_matrix_bits(&matrix.to_cols_array_2d()),
+        caster_hash: depth_hash,
+    })
+}
+
 struct Targets {
     width: u32,
     height: u32,
@@ -2098,6 +2113,7 @@ pub struct Gpu {
     /// Neutral glTF maps, bound by procedural/depth-only draws.
     white_material: wgpu::BindGroup,
     material_defaults: MaterialDefaults,
+    sky_visibility: crate::sky_visibility::Pipelines,
     /// Set from the driver's device-lost callback; see [`Gpu::shared`].
     lost: Arc<AtomicBool>,
     /// Whether `device` is the window compositor's; see [`crate::device::DeviceContext::adopt`].
@@ -2329,6 +2345,17 @@ impl Gpu {
                     count: None,
                 },
                 storage_entry(14, wgpu::ShaderStages::FRAGMENT),
+                // Per-pixel ambient visibility (`sky_visibility.rs`).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -4144,7 +4171,9 @@ impl Gpu {
         );
 
         let shadow_hierarchy_pipelines = crate::shadow_hierarchy::Pipelines::new(&device);
+        let sky_visibility = crate::sky_visibility::Pipelines::new(&device, &queue);
         Ok(Self {
+            sky_visibility,
             device,
             queue,
             adapter_profile,
@@ -4355,6 +4384,7 @@ impl Renderer {
             fog_blocks_valid: false,
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
+            sky_visibility: crate::sky_visibility::SkyVisibility::default(),
             shadow_map,
             shadow_layers,
             fixture_shadow_map,
@@ -5265,6 +5295,9 @@ impl Renderer {
             .collect();
         let opaque = frame.draws.len() - frame.transparent.len();
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
+        // Everything `draw_depth` rasterises, fixture bodies included: the
+        // camera depth and the sun cascades draw the same opaque list.
+        let depth_hash = opaque_depth_hash(frame, opaque);
         let cached_shadows =
             (self.geometry_shadows || frame.geometry_shadows) && !self.visibility_reference;
         let shadow_capacity = frame
@@ -5473,7 +5506,7 @@ impl Renderer {
             SurfaceTransmittance::March.shader_mode()
         };
         let scene_after_fog = surface_mode[0] > 0.0;
-        let globals = Globals {
+        let mut globals = Globals {
             surface_fog: [fog_far, surface_mode[0], surface_mode[1], 0.0],
             viewport: [
                 width as f32,
@@ -5606,6 +5639,41 @@ impl Renderer {
         let index_buf = geometry.indices.clone();
         let ranges = geometry.ranges.clone();
         let mesh_bounds = geometry.bounds.clone();
+
+        // Outdoors, the stage's height field: redrawn only when its geometry
+        // changes. Its presence switches the scene pass's sky term to the
+        // occluded split (`globals.room_falloff.y`).
+        let sky_field_redraw = self.sky_visibility.update_field(
+            &self.gpu.device,
+            frame,
+            opaque,
+            caster_hash,
+            &mesh_bounds,
+            frame.sky.is_some(),
+        );
+        globals.room_falloff[1] = f32::from(u8::from(self.sky_visibility.active()));
+        let sun_direction = frame
+            .directional
+            .map(|light| light.direction.normalize_or_zero());
+        let sky_height_buf = self.storage(
+            &mut encoder,
+            &[self.sky_visibility.height_params(sun_direction)],
+            wgpu::BufferUsages::UNIFORM,
+            "sky-height-params",
+        );
+        let ambient_params_buf = self.storage(
+            &mut encoder,
+            &[crate::sky_visibility::ao_params(
+                frame.camera.eye,
+                camera_forward,
+                frame.camera.fov_y_deg.to_radians(),
+                [width, height],
+                [CAMERA_NEAR, camera_far],
+                self.sky_visibility.active(),
+            )],
+            wgpu::BufferUsages::UNIFORM,
+            "ambient-visibility-params",
+        );
 
         let instances: Vec<Instance> = frame.draws.iter().map(instance_of).collect();
         let overlay_instances: Vec<OverlayInstance> = frame
@@ -5937,6 +6005,7 @@ impl Renderer {
             )
         };
         let targets_done = Instant::now();
+        let ambient_visibility = self.sky_visibility.output(&self.gpu.device, width, height);
         // Built after the targets: binding 13 is this frame's fog prefix.
         let cluster_bg = self
             .gpu
@@ -5964,6 +6033,7 @@ impl Renderer {
                     ),
                     binding(13, wgpu::BindingResource::TextureView(&fog_transmittance)),
                     binding(14, index_bindings.surface_splits.as_entire_binding()),
+                    binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
                 ],
             });
         let history_key =
@@ -6246,11 +6316,7 @@ impl Renderer {
             // casters do, exactly as for a fixture map. Redrawing all three
             // every frame was the sun path missing the check the fixture path
             // already had.
-            let cascade_keys: [ShadowCacheKey; CASCADE_COUNT] =
-                light_view_proj.map(|matrix| ShadowCacheKey {
-                    matrix_bits: shadow_matrix_bits(&matrix.to_cols_array_2d()),
-                    caster_hash,
-                });
+            let cascade_keys = cascade_cache_keys(&light_view_proj, depth_hash);
             if frame.directional.is_some_and(|light| light.shadows) {
                 for (cascade, layer) in self.shadow_layers.iter().enumerate() {
                     if self.cascade_shadow_cache[cascade] == Some(cascade_keys[cascade]) {
@@ -6272,6 +6338,56 @@ impl Renderer {
                     draw_depth(&mut pass);
                 }
             }
+
+            if let Some(redraw) = &sky_field_redraw {
+                for (index, (matrix, layer)) in
+                    redraw.matrices.iter().zip(&redraw.layers).enumerate()
+                {
+                    let mut field_globals = globals;
+                    field_globals.light_view_proj[0] = matrix.to_cols_array_2d();
+                    let buffer = self.storage(
+                        &mut encoder,
+                        &[field_globals],
+                        wgpu::BufferUsages::UNIFORM,
+                        &format!("sky-height-globals-{index}"),
+                    );
+                    let bind_group = self.scene_bind_group(
+                        &buffer,
+                        &instance_buf,
+                        &point_buf,
+                        false,
+                        false,
+                        &aerial,
+                    );
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("sky-height"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(depth_attachment(layer)),
+                        timestamp_writes: pass_queries
+                            .render("sky-height", claim_start_timestamp(&mut pending_start)),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&self.gpu.shadow_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.set_bind_group(1, &self.gpu.white_material, &[]);
+                    pass.set_bind_group(2, &environment_bg, &[]);
+                    pass.set_bind_group(3, &cluster_bg, &[]);
+                    pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                    pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    for &(start, end) in &redraw.runs {
+                        let (first, last, base) = ranges[frame.draws[start].mesh];
+                        pass.draw_indexed(first..last, base, start as u32..end as u32);
+                    }
+                }
+            }
+            self.sky_visibility.encode_field(
+                &self.gpu.sky_visibility,
+                &self.gpu.device,
+                &mut encoder,
+                &sky_height_buf,
+                sun_direction,
+                &mut pass_queries,
+            );
 
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -6323,6 +6439,18 @@ impl Renderer {
                     pass_queries.compute("surface-light-index", None),
                 );
             }
+
+            // Ambient visibility reads the depth prepass; the scene pass
+            // reads it back per pixel through the cluster group.
+            self.sky_visibility.encode_screen(
+                &self.gpu.sky_visibility,
+                &self.gpu.device,
+                &mut encoder,
+                &sky_height_buf,
+                &ambient_params_buf,
+                &depth_view,
+                &mut pass_queries,
+            );
 
             // The scene pass reads nothing the haze chain writes unless the
             // surface transmittance comes from the fog grid; then it is
@@ -6700,7 +6828,7 @@ impl Renderer {
                     fog_far,
                     camera_far,
                     caster_hash,
-                    opaque_depth_hash(frame, opaque),
+                    depth_hash,
                     cached_shadows,
                     self.geometry_shadow_samples,
                     self.gpu.haze_resid_per_resident,
@@ -11241,6 +11369,54 @@ mod tests {
         assert_eq!(cleared, fresh, "removed geometry left a stale haze shadow");
         assert_eq!(renderer.render(&frame, 160, 120, 1)?, fresh);
         assert_eq!(renderer.shadow_stats().hierarchy_layers, 0);
+        Ok(())
+    }
+
+    /// A moving head is opaque geometry in the sun cascades. Its body must
+    /// invalidate them when it moves, or the sun keeps its old shadow.
+    #[test]
+    fn sun_cascades_redraw_when_a_fixture_body_moves() -> anyhow::Result<()> {
+        let mut frame = fixture_surface_frame(0);
+        frame.fixture_shadows = false;
+        frame.fixture_surface_lighting = false;
+        frame.directional = Some(DirectionalLight {
+            direction: Vec3::new(0.3, -0.2, 1.0).normalize(),
+            radiance: Vec3::splat(3.0),
+            shadow_eye: Vec3::ZERO,
+            shadows: true,
+            shadow_softness: 1.0,
+        });
+        let body = frame.meshes.len();
+        frame.meshes.push(MeshData {
+            key: "::moving-head-body".into(),
+            ..frame.meshes[0].clone()
+        });
+        frame.draws.push(Draw {
+            mesh: body,
+            model: Mat4::from_translation(Vec3::new(-2.0, 0.0, 1.0))
+                * Mat4::from_scale(Vec3::new(0.2, 0.2, 1.0)),
+            material: frame.draws[0].material,
+            textures: MaterialTextures::default(),
+            editor_object: Some(crate::frame::EditorObject::Fixture("head".into())),
+        });
+        let opaque = frame.draws.len();
+        let before_hash = super::opaque_depth_hash(&frame, opaque);
+        let fixture_casters = crate::shadow::fixture_shadow_caster_hash(&frame, opaque);
+
+        let mut renderer = Renderer::new()?;
+        let before = renderer.render(&frame, 160, 120, 1)?;
+        frame.draws[1].model = Mat4::from_translation(Vec3::new(2.0, 0.0, 1.0))
+            * Mat4::from_scale(Vec3::new(0.2, 0.2, 1.0));
+        assert_eq!(
+            crate::shadow::fixture_shadow_caster_hash(&frame, opaque),
+            fixture_casters,
+            "fixture maps deliberately ignore fixture bodies"
+        );
+        assert_ne!(super::opaque_depth_hash(&frame, opaque), before_hash);
+        let moved = renderer.render(&frame, 160, 120, 1)?;
+        let fresh = Renderer::new()?.render(&frame, 160, 120, 1)?;
+        assert_ne!(before, fresh, "the moved body must change the picture");
+        assert_eq!(moved, fresh, "a moved fixture body left a stale sun shadow");
         Ok(())
     }
 

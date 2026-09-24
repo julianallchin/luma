@@ -285,3 +285,63 @@ Both native debug and release apps were rebuilt on `agent-code-execution-linux`;
 neither was launched. The release harness executable, code provenance, raw
 summaries, quality measurements, and limitations are recorded in
 [`gasworks-grid-perf-rtx5090.json`](../../gpui/crates/render/goldens/gasworks-grid-perf-rtx5090.json).
+
+## Sky visibility and ambient occlusion
+
+Status: implemented 2026-09-23, not yet accepted on a real venue.
+
+The sky probe used to light every surface as if it stood in the open over sunlit
+ground. Under a deck, the legs and the underside got the full sky and the full
+ground bounce. The ambient terms (house ambient, probe diffuse and probe
+specular) are now scaled by a per-pixel visibility texture
+(`sky_visibility.rs`, `shaders/ambient_occlusion.wgsl`). Sun and fixture light
+are not changed; they have their own shadows.
+
+- **Height field (outdoors).** The stage is rendered from straight above and
+  from straight below, without the ground plane and without fixture bodies.
+  Each texel keeps one slab: its lowest and highest surface. The texel is the
+  stage footprint over 1024, and never less than 5 cm (5 cm up to a 51 m
+  stage, about 10 cm at 100 m). The field is redrawn only when the stage
+  geometry changes, with the fixture maps' caster key. A pixel marches 8
+  azimuths × 12 radii. Standing geometry raises the horizon; an overhang hides
+  a band of elevations. The rest is weighted by the cosine lobe and scales the
+  sky part of the probe irradiance.
+- **Ground bounce (outdoors).** The probe's lower hemisphere is split off as
+  `E(-Z) (1 - n.z) / 2`. It is scaled by the sun and sky visibility of the
+  ground under the point. That comes from a map at twice the field texel
+  (sun marched through the slabs, box-filtered mips), read with nine taps over
+  the lobe's footprint. The sun share uses the sun and sky irradiance on open
+  ground.
+- **GTAO (always).** Jimenez 2016 on the single-sample depth prepass: 3 slices
+  × 4 steps per side, 0.75 m radius, thin-occluder compensation, normalised by
+  the unoccluded arc. A 5×5 depth-aware box removes the per-pixel noise. It
+  multiplies the house ambient and the probe (specular through Lagarde's
+  specular occlusion), together with the material AO map.
+
+RTX 5090, Vulkan, 1920×1080, 8×4 m deck test scene, median GPU time:
+per-pixel visibility 0.29 ms outdoors (0.11 ms indoors, GTAO only), denoise
+0.03 ms, scene pass +0.003 ms. On a stage edit: height maps 2×0.002 ms,
+convert 0.004 ms, ground map 0.05 ms (also on a sun change).
+
+Limits:
+
+- The ground is the plane `z = 0`. Terrain, pits and raised audience floors are
+  not ground for this model.
+- One slab per texel. A deck under another deck, or the space between a roof
+  and a stage under it, reads as solid. Sun under an overhang is marched
+  through the slabs, so low sun reaching under a deck from the side is kept.
+- Geometry outside the stage footprint is open sky. Nothing else occludes it.
+- Overlapping overhang bands are added, not merged, and the radii are sampled,
+  so the edge of an overhang can be off by one radius step.
+- The ground map is blurred wider than the true lobe: near a deck edge the
+  ground bounce is somewhat too bright (in the test scene the lit-ground share
+  under the deck centre is about 0.2, against about 0.12 calculated).
+- GTAO is screen space. It cannot see off-screen or hidden occluders, and it
+  is evaluated per pixel, so MSAA edge samples get their pixel's value.
+- Indoors only GTAO applies. A roof is not a reason to darken house ambient.
+
+The sun cascade normal offset now follows each surface's N·L, not the sun's
+elevation: `0.002 + (r + 1.5) · texel · sin θ`. At high sun this removed the
+acne bands on lit walls (shadow factor 0.6–0.95 before, 1.0 after). Sun
+cascades are keyed by every opaque draw they rasterise, including fixture
+bodies, so a moved head no longer leaves its old sun shadow.
