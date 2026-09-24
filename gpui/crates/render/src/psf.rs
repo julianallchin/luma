@@ -684,6 +684,30 @@ pub(crate) struct Grid {
 const CAMERA_VEIL: f32 = 0.1;
 
 /// Which pattern each style adds to its veil, and the veil's weight.
+/// Aperture diameters, millimetres: a 25 mm video lens near f/5, and a
+/// pupil in a lit room.
+const CAMERA_APERTURE_MM: f32 = 5.0;
+const EYE_PUPIL_MM: f32 = 4.0;
+
+/// How much wider the stored pattern is than the aperture's real one.
+///
+/// A pattern's angles scale as λ/D. The bake's λ/D at 550 nm is
+/// `BAKE / (4·PUPIL)` stored texels, about 0.15°; a 5 mm aperture's is
+/// about 0.006°. Far from the core the pattern's energy per solid angle
+/// falls as 1/θ³, so a pattern stretched `s` times, read at the same angle,
+/// holds `s` times the real light there: its weight is divided by `s`.
+/// Undivided, every hot pixel threw rays and a halo tens of times too
+/// strong, and the sun's rays crossed the whole frame.
+fn stretch(aperture: Aperture) -> f32 {
+    let stored_deg = BAKE as f32 / (4.0 * PUPIL) * (550.0 / REFERENCE_NM) * TEXEL_DEG;
+    let diameter_mm = match aperture {
+        Aperture::Iris | Aperture::Star => CAMERA_APERTURE_MM,
+        Aperture::Eye => EYE_PUPIL_MM,
+    };
+    let real_deg = (550e-9 / (diameter_mm * 1e-3)).to_degrees();
+    stored_deg / real_deg
+}
+
 fn parts(style: GlareStyle) -> (Option<Aperture>, f32) {
     match style {
         GlareStyle::Bloom => (None, 1.0),
@@ -705,7 +729,7 @@ pub(crate) fn kernel(
     patterns: &Patterns,
 ) -> Vec<[f32; 4]> {
     let (aperture, veil_weight) = parts(style);
-    let pattern = aperture.map(|a| (patterns.get(a), diffraction.max(0.0)));
+    let pattern = aperture.map(|a| (patterns.get(a), diffraction.max(0.0) / stretch(a)));
     let norm = veil_weight / vos_total() as f32;
     let (w, h) = (grid.width, grid.height);
     let texel_deg = (1.0 / grid.focal).atan().to_degrees();
@@ -1011,7 +1035,9 @@ mod tests {
         let veil = sum(GlareStyle::Aperture, 0.0);
         let one = sum(GlareStyle::Aperture, 1.0) - veil;
         let two = sum(GlareStyle::Aperture, 2.0) - veil;
-        assert!(one > 0.01 && one < 0.5, "diffraction adds {one}");
+        // Scaled to a real aperture, the pattern sends well under a hundredth
+        // of the light beyond a glare texel.
+        assert!(one > 1e-4 && one < 0.01, "diffraction adds {one}");
         assert!((two - 2.0 * one).abs() < 1e-3 * two.max(1.0));
         // A camera's veil is a tenth of the eye's.
         let eye = sum(GlareStyle::Bloom, 1.0);
