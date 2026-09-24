@@ -1,5 +1,6 @@
 //! Primitives that forms are built from: an odometer clock, event life, a
-//! keyframe curve, a random share of heads and a test for a gliding path. None of them keeps state.
+//! keyframe curve, a random share of heads, a test for a gliding path and
+//! the aim steps (base, fan, motion, offset). None of them keeps state.
 use super::pace::Pace;
 use crate::runtime::{Batch, EvaluatedValue};
 use crate::*;
@@ -35,6 +36,32 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             unit: Some(unit),
             channels: None,
         })
+    };
+    let vector = || ValueType::Signal(SignalType::new(Unit::Number, crate::tensor::VECTOR));
+    let choice_port = |name: &str, description: &str, value: &str| {
+        port(
+            name,
+            description,
+            ValueType::Choice,
+            Rate::Fixed,
+            Some(Value::Choice(value.into())),
+        )
+    };
+    let axis_port = || {
+        port(
+            "Axis",
+            "How the heads are laid out",
+            ValueType::Mapping,
+            Rate::Fixed,
+            Some(Value::Mapping(MappingSpec {
+                span: Default::default(),
+                plane: None,
+                mirror: None,
+                source: MappingSource::Order,
+                per_group: false,
+                reverse: false,
+            })),
+        )
     };
     let (name, inputs, outputs) = match op {
         Primitive::Odometer => (
@@ -171,6 +198,162 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ),
             ],
             vec![("selected", signal(Unit::Proportion))],
+        ),
+        Primitive::AimBase => (
+            "Aim base",
+            vec![
+                (
+                    "base",
+                    choice_port("Base", "direction or point", "direction"),
+                ),
+                (
+                    "direction",
+                    port(
+                        "Direction",
+                        "The aim when base is direction",
+                        vector(),
+                        Rate::Frame,
+                        Some(Value::Vector(crate::aim::DOWN)),
+                    ),
+                ),
+                (
+                    "point",
+                    port(
+                        "Point",
+                        "U, V, Z in metres that every head points at when base is point",
+                        vector(),
+                        Rate::Frame,
+                        Some(Value::Vector([0.0; 3])),
+                    ),
+                ),
+            ],
+            vec![("direction", vector())],
+        ),
+        Primitive::AimFan => (
+            "Aim fan",
+            vec![
+                (
+                    "direction",
+                    port(
+                        "Direction",
+                        "The aim of each head",
+                        vector(),
+                        Rate::Frame,
+                        Some(Value::Vector(crate::aim::DOWN)),
+                    ),
+                ),
+                (
+                    "fan",
+                    port(
+                        "Fan",
+                        "Degrees",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                ("axis", axis_port()),
+            ],
+            vec![("direction", vector())],
+        ),
+        Primitive::AimMotion => (
+            "Aim motion",
+            vec![
+                (
+                    "motion",
+                    choice_port("Motion", "none, shape or noise", "none"),
+                ),
+                (
+                    "shape",
+                    choice_port(
+                        "Shape",
+                        "swing_left_right, swing_up_down, circle or figure_8",
+                        "swing_left_right",
+                    ),
+                ),
+                (
+                    "cycles",
+                    port(
+                        "Cycles",
+                        "Shape cycles counted since the clip start",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "spread",
+                    port(
+                        "Spread",
+                        "Degrees of phase across the axis; 360 is one cycle",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "size",
+                    port(
+                        "Size",
+                        "Degrees",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "wander",
+                    port(
+                        "Wander",
+                        "Noise steps counted since the clip start",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                ("axis", axis_port()),
+            ],
+            vec![
+                ("yaw", signal(Unit::Number)),
+                ("pitch", signal(Unit::Number)),
+            ],
+        ),
+        Primitive::AimOffset => (
+            "Aim offset",
+            vec![
+                (
+                    "direction",
+                    port(
+                        "Direction",
+                        "The aim of each head",
+                        vector(),
+                        Rate::Frame,
+                        Some(Value::Vector(crate::aim::DOWN)),
+                    ),
+                ),
+                (
+                    "yaw",
+                    port(
+                        "Left/right",
+                        "Degrees toward the right of the aim",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "pitch",
+                    port(
+                        "Up/down",
+                        "Degrees toward the up of the aim",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                ("axis", axis_port()),
+            ],
+            vec![("direction", vector())],
         ),
         _ => return None,
     };
@@ -334,8 +517,233 @@ pub(crate) fn run(
                 )?,
             )?]))
         }
+        Primitive::AimBase | Primitive::AimFan | Primitive::AimMotion | Primitive::AimOffset => {
+            aim_step(op, inputs, batch)?
+                .into_iter()
+                .map(|(key, value)| numeric(key, value))
+                .collect()
+        }
         _ => unreachable!("form primitive"),
     }
+}
+
+fn choice<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>, key: &str) -> &'a str {
+    match inputs[key].control(0) {
+        Value::Choice(name) => name,
+        _ => unreachable!("validated choice input"),
+    }
+}
+fn axis<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>) -> &'a MappingSpec {
+    match inputs["axis"].control(0) {
+        Value::Mapping(spec) => spec,
+        _ => unreachable!("validated axis input"),
+    }
+}
+
+/// One aim step over every head and sample. Directions are unit vectors
+/// in U, V, Z; angles are degrees.
+fn aim_step(
+    op: Primitive,
+    inputs: &BTreeMap<String, EvaluatedValue>,
+    batch: Batch<'_>,
+) -> Result<Vec<(&'static str, Signal)>> {
+    use crate::aim;
+    let fixtures = batch.fixtures;
+    let cells: BTreeMap<&str, &Cell> = batch
+        .frame
+        .cells
+        .iter()
+        .map(|cell| (cell.id.as_str(), cell))
+        .collect();
+    let signals: BTreeMap<&str, &Signal> = inputs
+        .iter()
+        .filter_map(|(key, value)| Some((key.as_str(), value.signal()?)))
+        .collect();
+    let times = signals
+        .values()
+        .map(|signal| signal.values().dim().1)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let get = |key: &str, n: usize, t: usize| signals[key].at(n, t, 0);
+    let vector = |key: &str, n: usize, t: usize| -> [f64; 3] {
+        std::array::from_fn(|ch| signals[key].at(n, t, ch))
+    };
+    let position = |n: usize| -> Result<[f64; 3]> {
+        cells
+            .get(fixtures[n].as_str())
+            .map(|cell| cell.uvz)
+            .ok_or_else(|| Error(format!("fixture {} is not in the selection", fixtures[n])))
+    };
+    // A signal row per head in `fixtures`; a broadcast input reads row 0.
+    let row = |key: &str, n: usize| {
+        if signals[key].fixtures().is_some() {
+            n
+        } else {
+            0
+        }
+    };
+    let directions = |at: &dyn Fn(usize, usize) -> Result<[f64; 3]>| -> Result<Signal> {
+        let mut values = Array3::zeros((fixtures.len(), times, 3));
+        for n in 0..fixtures.len() {
+            for t in 0..times {
+                let d = at(n, t)?;
+                for ch in 0..3 {
+                    values[[n, t, ch]] = d[ch];
+                }
+            }
+        }
+        Signal::new(
+            values,
+            Unit::Number,
+            crate::tensor::VECTOR,
+            Some(fixtures.to_vec().into()),
+        )
+    };
+    for key in ["direction", "point"] {
+        if let Some(signal) = signals.get(key) {
+            if signal.values().dim().2 != 3 {
+                return Err(Error(format!("{key} needs three channels: U, V and Z")));
+            }
+        }
+    }
+    let direction = |n: usize, t: usize| vector("direction", row("direction", n), t);
+    Ok(match op {
+        Primitive::AimBase => {
+            let converge = match choice(inputs, "base") {
+                "direction" => false,
+                "point" => true,
+                other => return Err(Error(format!("unknown base {other}"))),
+            };
+            vec![(
+                "direction",
+                directions(&|n, t| {
+                    Ok(if converge {
+                        let head = position(n)?;
+                        let point = vector("point", row("point", n), t);
+                        aim::unit(std::array::from_fn(|a| point[a] - head[a]))
+                    } else {
+                        aim::unit(direction(n, t))
+                    })
+                })?,
+            )]
+        }
+        Primitive::AimFan => {
+            let leans = axis(inputs).leans(batch.frame.cells, batch.frame.seed)?;
+            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
+            vec![(
+                "direction",
+                directions(&|n, t| {
+                    let (share, toward) = leans
+                        .get(fixtures[n].as_str())
+                        .copied()
+                        .unwrap_or((0.0, [0.0; 3]));
+                    // A head on the low side of the mirror leans the mirror
+                    // image of the way it would.
+                    let toward = match mirrored.get(fixtures[n].as_str()) {
+                        Some(normal) => aim::reflect(toward, *normal),
+                        None => toward,
+                    };
+                    let fan = get("fan", row("fan", n), t);
+                    Ok(aim::lean(direction(n, t), toward, fan * share))
+                })?,
+            )]
+        }
+        Primitive::AimOffset => {
+            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
+            vec![(
+                "direction",
+                directions(&|n, t| {
+                    let (yaw, pitch) = (
+                        get("yaw", row("yaw", n), t),
+                        get("pitch", row("pitch", n), t),
+                    );
+                    Ok(match mirrored.get(fixtures[n].as_str()) {
+                        // A head on the low side of the mirror takes the
+                        // mirror image of the offset: reflect its aim, offset
+                        // it there, reflect back. The aim itself is kept.
+                        Some(normal) => aim::reflect(
+                            aim::offset(aim::reflect(direction(n, t), *normal), yaw, pitch),
+                            *normal,
+                        ),
+                        None => aim::offset(direction(n, t), yaw, pitch),
+                    })
+                })?,
+            )]
+        }
+        Primitive::AimMotion => {
+            let motion = choice(inputs, "motion");
+            let shape = choice(inputs, "shape");
+            let coordinates: BTreeMap<String, f64> = axis(inputs)
+                .resolve(batch.frame.cells, batch.frame.seed)?
+                .coordinates
+                .into_iter()
+                .map(|c| (c.cell, c.position))
+                .collect();
+            let tau = std::f64::consts::TAU;
+            let mut yaw = Array3::zeros((fixtures.len(), times, 1));
+            let mut pitch = Array3::zeros((fixtures.len(), times, 1));
+            for (n, id) in fixtures.iter().enumerate() {
+                // Each head wanders on its own, from the clip seed and its identity.
+                let head = crate::value_noise::hash(batch.frame.seed, identity(id));
+                for t in 0..times {
+                    let size = get("size", row("size", n), t);
+                    let (y, p) = match motion {
+                        "none" => (0.0, 0.0),
+                        "shape" => {
+                            let c = coordinates.get(id).copied().unwrap_or(0.0);
+                            // Spread is degrees of phase: 360 is one cycle.
+                            let phase = get("cycles", row("cycles", n), t)
+                                - get("spread", row("spread", n), t) / 360.0 * c;
+                            let (s, c1) = (tau * phase).sin_cos();
+                            match shape {
+                                "swing_left_right" => (size * s, 0.0),
+                                "swing_up_down" => (0.0, size * s),
+                                "circle" => (size * c1, size * s),
+                                "figure_8" => (size * s, size / 2.0 * (2.0 * tau * phase).sin()),
+                                other => return Err(Error(format!("unknown shape {other}"))),
+                            }
+                        }
+                        "noise" => {
+                            let x = get("wander", row("wander", n), t);
+                            (
+                                size * crate::value_noise::noise1(
+                                    x,
+                                    1.0,
+                                    crate::value_noise::hash(head, 1),
+                                ),
+                                size * crate::value_noise::noise1(
+                                    x,
+                                    1.0,
+                                    crate::value_noise::hash(head, 2),
+                                ),
+                            )
+                        }
+                        other => return Err(Error(format!("unknown motion {other}"))),
+                    };
+                    yaw[[n, t, 0]] = y;
+                    pitch[[n, t, 0]] = p;
+                }
+            }
+            let degrees = |values| {
+                Signal::new(
+                    values,
+                    Unit::Number,
+                    Channels::Value,
+                    Some(fixtures.to_vec().into()),
+                )
+            };
+            vec![("yaw", degrees(yaw)?), ("pitch", degrees(pitch)?)]
+        }
+        _ => unreachable!("aim step"),
+    })
+}
+
+/// A stable number per head identity.
+fn identity(id: &str) -> u64 {
+    id.bytes().fold(0xcbf29ce484222325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    })
 }
 
 /// A period of zero beats lasts the whole clip.

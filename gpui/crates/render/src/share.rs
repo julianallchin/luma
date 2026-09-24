@@ -71,7 +71,7 @@ impl Surface {
     /// That copy is the cost this whole module exists to avoid, so this is
     /// for callers that genuinely need bytes — a test, an encoder — and never
     /// for putting a frame on screen.
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         platform::to_bytes(&self.0)
     }
 }

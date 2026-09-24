@@ -9,9 +9,9 @@ fn agent_score_overlaps_have_separate_clickable_rows_and_independent_edits() {
         // Three clips of one form, deliberately: what is under test is that
         // identical spans get separate rows and separate hit targets.
         .with_graph_score(support::score(serde_json::json!({
-            "a": support::preset_clip("Chase", 2., 6., 0),
-            "b": support::preset_clip("Chase", 2., 6., 1),
-            "c": support::preset_clip("Chase", 2., 6., 2),
+            "a": support::preset_clip("color.chase@1", "Chase", 2., 6., 0),
+            "b": support::preset_clip("color.chase@1", "Chase", 2., 6., 1),
+            "c": support::preset_clip("color.chase@1", "Chase", 2., 6., 2),
         })))
         .window(1400., 1000.)
         .open(Mode::Headless);

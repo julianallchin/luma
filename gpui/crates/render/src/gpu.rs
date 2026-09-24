@@ -41,10 +41,10 @@ use crate::viewport::{PRESENTATION_SLOTS, Presented};
 /// Three bounded layers cover the part of a venue in which directional
 /// shadows remain useful. 2048² per layer costs 48 MiB in `Depth32Float`, versus
 /// an unbounded camera-sized allocation or 192 MiB for three legacy 4096 maps.
-const SHADOW_SIZE: u32 = 2048;
-const CASCADE_COUNT: usize = 3;
-const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
-const CASCADE_BLEND: f32 = 0.1;
+pub(crate) const SHADOW_SIZE: u32 = 2048;
+pub(crate) const CASCADE_COUNT: usize = 3;
+pub(crate) const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
+pub(crate) const CASCADE_BLEND: f32 = 0.1;
 
 const HAZE_WORKGROUP: [u32; 2] = [8, 4];
 const _: () = assert!(HAZE_WORKGROUP[0] * HAZE_WORKGROUP[1] == 32);
@@ -72,7 +72,7 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// not — see the resolve in `submit_readback`.
 const QUERY_COUNT: u32 = 10;
 const MSAA_SAMPLES: u32 = 4;
-const CAMERA_NEAR: f32 = 0.1;
+pub(crate) const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
 /// Emitted intensity times the brightest colour channel below which a cone
 /// is dark. The frame builder already drops dimmers under 1%; this catches a
@@ -233,7 +233,8 @@ struct Instance {
     normal_matrix: [[f32; 4]; 4],
     base_color: [f32; 4],
     emissive: [f32; 4],
-    /// x: unused, y: normal-map scale, z: AO strength.
+    /// x: 1 for the ground, which casts no sun shadow; y: normal-map scale;
+    /// z: AO strength.
     flags: [f32; 4],
 }
 
@@ -5384,33 +5385,67 @@ impl Renderer {
                 .filter(|(q, ..)| q.count() > QUERY_COUNT)
                 .map(|(q, ..)| q),
         );
-        let camera_far = if frame.sky.is_some() {
-            crate::atmosphere::MAX_DISTANCE_M
-        } else {
-            CAMERA_FAR
-        };
+        // --- resident geometry ----------------------------------------------
+        // Frame assembly is intentionally cheap and ephemeral, but the meshes
+        // it names are immutable. Upload the combined bank only when those
+        // stable identities change (normally a venue/asset change), never for
+        // camera, transport or fixture-state updates.
+        if self
+            .geometry
+            .as_ref()
+            .is_none_or(|geometry| !geometry.matches(frame))
+        {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let mut ranges = Vec::new();
+            let mut bounds = Vec::new();
+            for mesh in &frame.meshes {
+                bounds.push(local_bounding_sphere(&mesh.vertices));
+                let base_vertex = vertices.len() as i32;
+                let first_index = indices.len() as u32;
+                vertices.extend_from_slice(&mesh.vertices);
+                indices.extend(mesh.indices.iter().copied());
+                ranges.push((first_index, indices.len() as u32, base_vertex));
+            }
+            let geometry = ResidentGeometry {
+                keys: frame.meshes.iter().map(|mesh| mesh.key.clone()).collect(),
+                vertices: self.immutable(&vertices, wgpu::BufferUsages::VERTEX, "vertices"),
+                indices: self.immutable(&indices, wgpu::BufferUsages::INDEX, "indices"),
+                ranges,
+                bounds,
+            };
+            self.geometry = Some(geometry);
+            self.upload_stats.geometry += 1;
+        }
+
         let aspect = width as f32 / height as f32;
-        // Passing the bounds in reverse order produces a finite reverse-Z
-        // projection: near maps to one and the bounded far plane maps to zero.
-        let proj = Mat4::perspective_rh(
-            frame.camera.fov_y_deg.to_radians(),
-            aspect,
-            camera_far,
-            CAMERA_NEAR,
-        );
-        let view = Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z);
+        let CameraMatrices {
+            far: camera_far,
+            view,
+            proj,
+        } = camera_matrices(frame, aspect);
         let view_proj = proj * view;
 
         let camera_forward = (frame.camera.target - frame.camera.eye).normalize_or(Vec3::Y);
+        let opaque = frame.draws.len() - frame.transparent.len();
         let light_view_proj = frame
             .directional
             .map_or([Mat4::IDENTITY; CASCADE_COUNT], |light| {
+                let bounds = &self
+                    .geometry
+                    .as_ref()
+                    .expect("frame geometry uploaded")
+                    .bounds;
+                let casters: Vec<_> = sun_casters(frame, bounds)
+                    .map(|(_, sphere)| sphere)
+                    .collect();
                 cascade_matrices(
                     frame.camera.eye,
                     camera_forward,
                     frame.camera.fov_y_deg.to_radians(),
                     aspect,
                     light.direction,
+                    &casters,
                 )
             });
 
@@ -5440,7 +5475,6 @@ impl Renderer {
         self.last_live_camera = temporal.then_some(camera_bits);
         let budget = QualityBudget::of(frame.quality, camera_moving);
         let fog_tile = budget.fog_tile;
-        let opaque = frame.draws.len() - frame.transparent.len();
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         // Everything `draw_depth` rasterises, fixture bodies included: the
         // camera depth and the sun cascades draw the same opaque list.
@@ -5815,38 +5849,6 @@ impl Renderer {
             &ambient_buf,
         );
 
-        // --- resident geometry ----------------------------------------------
-        // Frame assembly is intentionally cheap and ephemeral, but the meshes
-        // it names are immutable. Upload the combined bank only when those
-        // stable identities change (normally a venue/asset change), never for
-        // camera, transport or fixture-state updates.
-        if self
-            .geometry
-            .as_ref()
-            .is_none_or(|geometry| !geometry.matches(frame))
-        {
-            let mut vertices = Vec::new();
-            let mut indices = Vec::new();
-            let mut ranges = Vec::new();
-            let mut bounds = Vec::new();
-            for mesh in &frame.meshes {
-                bounds.push(local_bounding_sphere(&mesh.vertices));
-                let base_vertex = vertices.len() as i32;
-                let first_index = indices.len() as u32;
-                vertices.extend_from_slice(&mesh.vertices);
-                indices.extend(mesh.indices.iter().copied());
-                ranges.push((first_index, indices.len() as u32, base_vertex));
-            }
-            let geometry = ResidentGeometry {
-                keys: frame.meshes.iter().map(|mesh| mesh.key.clone()).collect(),
-                vertices: self.immutable(&vertices, wgpu::BufferUsages::VERTEX, "vertices"),
-                indices: self.immutable(&indices, wgpu::BufferUsages::INDEX, "indices"),
-                ranges,
-                bounds,
-            };
-            self.geometry = Some(geometry);
-            self.upload_stats.geometry += 1;
-        }
         let geometry = self.geometry.as_ref().expect("frame geometry uploaded");
         let vertex_buf = geometry.vertices.clone();
         let index_buf = geometry.indices.clone();
@@ -5888,7 +5890,11 @@ impl Renderer {
             "ambient-visibility-params",
         );
 
-        let instances: Vec<Instance> = frame.draws.iter().map(instance_of).collect();
+        let instances: Vec<Instance> = frame
+            .draws
+            .iter()
+            .map(|draw| instance_of(frame, draw))
+            .collect();
         let overlay_instances: Vec<OverlayInstance> = frame
             .overlays
             .iter()
@@ -6292,16 +6298,7 @@ impl Renderer {
             let caster_bounds: Vec<_> = if has_fixture_shadow_pass {
                 frame.draws[..opaque]
                     .iter()
-                    .map(|draw| {
-                        let (local, radius) = mesh_bounds[draw.mesh];
-                        let scale = draw
-                            .model
-                            .to_scale_rotation_translation()
-                            .0
-                            .abs()
-                            .max_element();
-                        (draw.model.transform_point3(local), radius * scale)
-                    })
+                    .map(|draw| world_sphere(draw, mesh_bounds[draw.mesh]))
                     .collect()
             } else {
                 Vec::new()
@@ -6442,7 +6439,11 @@ impl Renderer {
             // Depth shaders do not sample materials. Consecutive instances
             // of one mesh can share a draw without changing primitive order,
             // including the order of coplanar receivers in the MSAA pass.
-            let draw_depth = |pass: &mut wgpu::RenderPass| {
+            //
+            // The sun cascades leave the ground out (`with_ground` false): it
+            // only receives, and its own depth in the map was what a grazing
+            // sun needed a large receiver offset against.
+            let draw_depth = |pass: &mut wgpu::RenderPass, with_ground: bool| {
                 pass.set_vertex_buffer(0, vertex_buf.slice(..));
                 pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_bind_group(1, &self.gpu.white_material, &[]);
@@ -6453,8 +6454,10 @@ impl Renderer {
                     while end < opaque && frame.draws[end].mesh == mesh {
                         end += 1;
                     }
-                    let (first, last, base) = ranges[mesh];
-                    pass.draw_indexed(first..last, base, start as u32..end as u32);
+                    if with_ground || !crate::frame::is_ground(&frame.meshes[mesh].key) {
+                        let (first, last, base) = ranges[mesh];
+                        pass.draw_indexed(first..last, base, start as u32..end as u32);
+                    }
                     start = end;
                 }
             };
@@ -6539,7 +6542,7 @@ impl Renderer {
                     pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_depth(&mut pass);
+                    draw_depth(&mut pass, false);
                 }
             }
 
@@ -6600,7 +6603,7 @@ impl Renderer {
                 pass.set_bind_group(0, &unlit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
                 pass.set_bind_group(3, &cluster_bg, &[]);
-                draw_depth(&mut pass);
+                draw_depth(&mut pass, true);
             }
 
             if surface_depth_cull {
@@ -6627,7 +6630,7 @@ impl Renderer {
                     pass.set_bind_group(0, &lit_bg, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_depth(&mut pass);
+                    draw_depth(&mut pass, true);
                 }
                 self.light_index.refine_surface(
                     &self.gpu.light_index_pipelines,
@@ -10240,7 +10243,8 @@ mod tests {
         let eye = Vec3::new(4.5, -5.0, 3.0);
         let forward = (Vec3::new(0.0, 0.8, 0.0) - eye).normalize();
         let to_light = Vec3::new(2.0, -3.0, 6.0).normalize();
-        let matrices = cascade_matrices(eye, forward, 48f32.to_radians(), 16.0 / 9.0, to_light);
+        let matrices =
+            cascade_matrices(eye, forward, 48f32.to_radians(), 16.0 / 9.0, to_light, &[]);
         assert_eq!(matrices.len(), CASCADE_COUNT);
         assert!(matrices.iter().all(Mat4::is_finite));
 
@@ -10253,6 +10257,7 @@ mod tests {
             48f32.to_radians(),
             16.0 / 9.0,
             to_light,
+            &[],
         );
         let max_delta = matrices[0]
             .to_cols_array()
@@ -13265,7 +13270,7 @@ impl PendingFrame {
     }
 }
 
-fn instance_of(draw: &Draw) -> Instance {
+fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
     Instance {
         model: draw.model.to_cols_array_2d(),
         normal_matrix: draw.model.inverse().transpose().to_cols_array_2d(),
@@ -13280,7 +13285,9 @@ fn instance_of(draw: &Draw) -> Instance {
             .extend(draw.material.roughness)
             .to_array(),
         flags: [
-            0.0,
+            f32::from(u8::from(crate::frame::is_ground(
+                &frame.meshes[draw.mesh].key,
+            ))),
             if draw.textures.normal.is_some() {
                 draw.material.normal_scale
             } else {
@@ -13297,7 +13304,7 @@ fn instance_of(draw: &Draw) -> Instance {
 /// Centred on the midpoint of the extent rather than the centroid: a mesh with
 /// most of its vertices clustered at one end would otherwise get a sphere that
 /// has to reach much further to cover the rest.
-fn local_bounding_sphere(vertices: &[crate::assets::Vertex]) -> (Vec3, f32) {
+pub(crate) fn local_bounding_sphere(vertices: &[crate::assets::Vertex]) -> (Vec3, f32) {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for vertex in vertices {
@@ -13843,18 +13850,113 @@ fn specialize_wgsl_overrides(source: &str, values: &[(&str, f64)]) -> String {
         .join("\n")
 }
 
+/// The camera exactly as the scene pass sees it.
+pub(crate) struct CameraMatrices {
+    /// The far plane: bounded under a sky, where the atmosphere ends.
+    pub far: f32,
+    pub view: Mat4,
+    /// Finite reverse-Z: near maps to one, `far` to zero.
+    pub proj: Mat4,
+}
+
+/// The frame's camera matrices at `aspect`. One function, so a debug export
+/// of the camera cannot drift from what the renderer drew.
+pub(crate) fn camera_matrices(frame: &Frame, aspect: f32) -> CameraMatrices {
+    let far = if frame.sky.is_some() {
+        crate::atmosphere::MAX_DISTANCE_M
+    } else {
+        CAMERA_FAR
+    };
+    CameraMatrices {
+        far,
+        // Passing the bounds in reverse order produces a finite reverse-Z
+        // projection: near maps to one and the bounded far plane maps to zero.
+        proj: Mat4::perspective_rh(
+            frame.camera.fov_y_deg.to_radians(),
+            aspect,
+            far,
+            CAMERA_NEAR,
+        ),
+        view: Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z),
+    }
+}
+
+/// The sun's shadow casters: every opaque draw but the ground, with its world
+/// bounding sphere. `mesh_bounds` are the meshes' local spheres, by index.
+pub(crate) fn sun_casters<'a>(
+    frame: &'a Frame,
+    mesh_bounds: &'a [(Vec3, f32)],
+) -> impl Iterator<Item = (&'a Draw, (Vec3, f32))> + 'a {
+    let opaque = frame.draws.len() - frame.transparent.len();
+    frame.draws[..opaque]
+        .iter()
+        .filter(|draw| !crate::frame::is_ground(&frame.meshes[draw.mesh].key))
+        .map(|draw| (draw, world_sphere(draw, mesh_bounds[draw.mesh])))
+}
+
+/// A draw's world-space bounding sphere from its mesh's local one, scaled by
+/// the model's largest axis.
+fn world_sphere(draw: &Draw, (local, radius): (Vec3, f32)) -> (Vec3, f32) {
+    let scale = draw
+        .model
+        .to_scale_rotation_translation()
+        .0
+        .abs()
+        .max_element();
+    (draw.model.transform_point3(local), radius * scale)
+}
+
 /// Fit three stable orthographic sun cameras to bounded view-frustum slices.
 ///
 /// Each slice uses a quantized bounding sphere instead of a tight AABB. Camera
 /// translation then changes only the snapped light-space centre; small camera
 /// rotations cannot resize the projection and make every shadow texel swim.
+///
+/// The slice only bounds the receivers. The near plane reaches back to every
+/// caster (`casters`: world bounding spheres) whose light-space footprint
+/// overlaps the cascade, so the shadow on a receiver is the same from every
+/// camera that sees it.
 fn cascade_matrices(
     eye: Vec3,
     forward: Vec3,
     fov_y: f32,
     aspect: f32,
     to_light: Vec3,
+    casters: &[(Vec3, f32)],
 ) -> [Mat4; CASCADE_COUNT] {
+    cascade_fits(eye, forward, fov_y, aspect, to_light, casters).map(|fit| fit.view_proj)
+}
+
+/// One sun cascade, with the numbers its matrix was built from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CascadeFit {
+    /// Camera distances of the view slice this cascade covers.
+    pub slice: (f32, f32),
+    /// The fixed light frame every cascade shares.
+    pub light_view: Mat4,
+    /// Snapped slice centre in light space, x and y.
+    pub centre: (f32, f32),
+    /// Quantized half-extent of the orthographic square.
+    pub radius: f32,
+    /// Light-space depth of the slice's nearest and furthest corner.
+    pub slice_depth: (f32, f32),
+    /// Nearest depth after reaching back to the casters.
+    pub caster_depth: f32,
+    /// The orthographic near and far planes as passed (far margin, near
+    /// margin applied).
+    pub planes: (f32, f32),
+    pub view_proj: Mat4,
+}
+
+/// Every cascade's fit. See [`cascade_matrices`].
+pub(crate) fn cascade_fits(
+    eye: Vec3,
+    forward: Vec3,
+    fov_y: f32,
+    aspect: f32,
+    to_light: Vec3,
+    casters: &[(Vec3, f32)],
+) -> [CascadeFit; CASCADE_COUNT] {
     let forward = forward.normalize_or(Vec3::Y);
     let world_up = if forward.z.abs() > 0.99 {
         Vec3::Y
@@ -13922,18 +14024,43 @@ fn cascade_matrices(
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), depth| {
                 (min.min(depth), max.max(depth))
             });
-        // Swap near/far to map the nearest receiver to one and the furthest to
-        // zero, matching the scene's GreaterEqual reverse-Z convention. The
-        // signed distances are valid for an orthographic projection and let
-        // this fixed light frame cover venues on either side of its origin.
-        Mat4::orthographic_rh(
-            snapped_x - radius,
-            snapped_x + radius,
-            snapped_y - radius,
-            snapped_y + radius,
-            max_depth + 25.0,
-            min_depth - 25.0,
-        ) * light_view
+        // A caster between the sun and the slice can be far from it along
+        // the light: a truss 10 m up is 140 m from its shadow under a 4
+        // degree sun. A near plane fitted to the slice clipped such casters,
+        // and which ones depended on where the camera stood.
+        let near_depth = casters
+            .iter()
+            .filter_map(|&(centre, reach)| {
+                let centre = light_view.transform_point3(centre);
+                ((centre.x - snapped_x).abs() <= radius + reach
+                    && (centre.y - snapped_y).abs() <= radius + reach)
+                    .then_some(-centre.z - reach)
+            })
+            .fold(min_depth, f32::min);
+        // Swap near/far to map the nearest caster to one and the furthest
+        // receiver to zero, matching the scene's GreaterEqual reverse-Z
+        // convention. The signed distances are valid for an orthographic
+        // projection and let this fixed light frame cover venues on either
+        // side of its origin. The far margin keeps the blend band at the end
+        // of the previous slice, which also samples this map, inside it.
+        let planes = (max_depth + 25.0, near_depth - 1.0);
+        CascadeFit {
+            slice: (near, far),
+            light_view,
+            centre: (snapped_x, snapped_y),
+            radius,
+            slice_depth: (min_depth, max_depth),
+            caster_depth: near_depth,
+            planes,
+            view_proj: Mat4::orthographic_rh(
+                snapped_x - radius,
+                snapped_x + radius,
+                snapped_y - radius,
+                snapped_y + radius,
+                planes.0,
+                planes.1,
+            ) * light_view,
+        }
     })
 }
 

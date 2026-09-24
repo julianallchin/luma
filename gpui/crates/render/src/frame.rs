@@ -27,6 +27,12 @@ pub const MAX_FIXTURE_CONES: usize = 512;
 /// Indoor ground extent, beyond the artistic distance dissolve.
 const FLOOR_EXTENT_M: f32 = 2000.0;
 
+/// Whether `mesh_key` names the ground plane, indoors or out. The ground only
+/// receives: everything it could shade stands on it.
+pub(crate) fn is_ground(mesh_key: &str) -> bool {
+    matches!(mesh_key, "::floor" | "::outdoor-floor")
+}
+
 /// One uploadable triangle list.
 ///
 /// Cloning shares the data: both buffers are `Arc`s, so a cached mesh is
@@ -763,6 +769,58 @@ fn box_mesh(size: Vec3) -> MeshData {
     }
 }
 
+/// The ground: a square `extent` wide in XY, normal +Z, cut into cells that
+/// double in size away from the origin, from 0.5 m at the venue.
+///
+/// Not one quad. The outdoor ground is 400 km wide, and the rasteriser's
+/// interpolation over a triangle that size, clipped at the near plane, put
+/// a ground pixel's world position up to a metre from where it is, and a
+/// different metre for every camera. Every shadow, light pool and fog
+/// lookup on the ground read that position, so the stage's shadows jumped
+/// about as the camera orbited. Small cells near the stage keep the error
+/// to their own, small, size.
+pub(crate) fn ground_mesh(extent: f32) -> MeshData {
+    let half = extent / 2.0;
+    let mut steps = vec![0.0_f32];
+    let mut step = 0.5_f32;
+    while step < half {
+        steps.push(step);
+        step *= 2.0;
+    }
+    steps.push(half);
+    let lines: Vec<f32> = steps
+        .iter()
+        .rev()
+        .map(|s| -s)
+        .chain(steps.iter().skip(1).copied())
+        .collect();
+    let n = lines.len() as u32;
+    let vertices: Vec<Vertex> = lines
+        .iter()
+        .flat_map(|&y| {
+            lines.iter().map(move |&x| Vertex {
+                position: [x, y, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+            })
+        })
+        .collect();
+    let mut indices = Vec::new();
+    for j in 0..n - 1 {
+        for i in 0..n - 1 {
+            let a = j * n + i;
+            let (b, c, d) = (a + 1, a + n + 1, a + n);
+            indices.extend([a, b, c, a, c, d]);
+        }
+    }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
+}
+
 /// XY quad centred on the origin, normal +Z — a three `PlaneGeometry` before
 /// any rotation.
 pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
@@ -859,7 +917,7 @@ pub fn build_with(
     } else {
         ("::floor", FLOOR_EXTENT_M)
     };
-    let floor = bank.insert(floor_key.into(), || plane_mesh(floor_extent, floor_extent));
+    let floor = bank.insert(floor_key.into(), || ground_mesh(floor_extent));
     if scene.render.show_floor {
         draws.push(Draw {
             mesh: floor,

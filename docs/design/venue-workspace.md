@@ -57,7 +57,7 @@ Replacement is `resolve_venue_group`
 (`backend/src/dispatch/handlers/group_references.rs`). It parses selection
 expressions and replaces exact identifiers only. Boolean operators and graph
 labels stay unchanged. Each score is rewritten in its own transaction through
-the score rows. The `changes` log records every row it changes (see
+the score rows. The server's history records every row it changes (see
 [sync.md](sync.md)). A failure stops the batch. Scores already repaired stay
 repaired. A retry skips scores that no longer use the missing name.
 

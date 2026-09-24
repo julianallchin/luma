@@ -285,15 +285,12 @@ impl VenueHost {
             return Ok(described(self.current(&mut access).await?));
         }
 
-        let mut access =
-            self.write_access()
-                .await
-                .map_err(|error| {
-                    HostCallError::new(
-                        "invalid_venue",
-                        format!("the venue is not available: {error}"),
-                    )
-                })?;
+        let mut access = self.write_access().await.map_err(|error| {
+            HostCallError::new(
+                "invalid_venue",
+                format!("the venue is not available: {error}"),
+            )
+        })?;
         let current = self.current(&mut access).await?;
         let wanted = match (dial, mode) {
             (Some(dial), _) => dial,
@@ -343,15 +340,12 @@ impl VenueHost {
             return Ok(described_haze(self.current_haze(&mut access).await?));
         }
 
-        let mut access =
-            self.write_access()
-                .await
-                .map_err(|error| {
-                    HostCallError::new(
-                        "invalid_venue",
-                        format!("the venue is not available: {error}"),
-                    )
-                })?;
+        let mut access = self.write_access().await.map_err(|error| {
+            HostCallError::new(
+                "invalid_venue",
+                format!("the venue is not available: {error}"),
+            )
+        })?;
         let wanted = request.applied_to(self.current_haze(&mut access).await?);
         crate::database::local::venues::set_haze(&mut access, wanted)
             .await
@@ -487,10 +481,10 @@ impl VenueHost {
         crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
-        let mut access =
-            self.write_access()
-                .await
-                .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let mut access = self
+            .write_access()
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
         let group = groups::set_named_group(
             &self.resource_root,
             &mut access,
@@ -513,10 +507,10 @@ impl VenueHost {
         crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
-        let mut access =
-            self.write_access()
-                .await
-                .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let mut access = self
+            .write_access()
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
         groups::snapshot_generated_groups(&self.resource_root, &mut access, true)
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;

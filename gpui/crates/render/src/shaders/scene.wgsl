@@ -257,7 +257,7 @@ fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
 /// Deterministic 3x3 PCF. The authored tap radius is measured in shadow-map
 /// texels, so zero collapses all taps to one hard comparison while larger
 /// values widen the penumbra without changing cascade projection or stability.
-fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
+fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32, ground: bool) -> f32 {
     // Normal offset, per surface. One shadow texel stores one depth for a
     // patch of receiver; a surface tilted `theta` away from the light drifts
     // `tan(theta)` texels of depth across it. Pushing the sample `d` along the
@@ -271,6 +271,13 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     // and gating on elevation left every lit wall at noon striped with acne.
     // A receiver facing the light (floor under a high sun) gets almost no
     // offset, which is what keeps contact shadows attached.
+    //
+    // The ground gets none. It is not in the map, so it has no texels of its
+    // own to clear, and under a low sun the offset was the error: lifting a
+    // ground point `d` moves where it reads the map by `d / tan(elevation)`
+    // along the ground, 14 d at 4 degrees. The offset scales with the
+    // cascade's texel, so every shadow on the ground shortened and changed
+    // shape as the camera moved and a different cascade covered it.
     let matrix = globals.light_view_proj[cascade];
     let texel = globals.params.y;
     let radius = clamp(globals.dir_color.w, 0.0, 3.0);
@@ -281,14 +288,16 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
         2.0 * texel / max(length(vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x)), 1e-6);
     let cos_nl = clamp(dot(n, globals.dir_to_light.xyz), 0.0, 1.0);
     let sin_nl = sqrt(1.0 - cos_nl * cos_nl);
-    let biased = world + n * (0.002 + (radius + 1.5) * world_texel * sin_nl);
+    let offset = select(0.002 + (radius + 1.5) * world_texel * sin_nl, 0.0, ground);
+    let biased = world + n * offset;
     let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     // Depth bias in metres along the light, not in NDC. The cascade's depth
-    // range runs 25 m past each end of its view slice, so a fixed NDC bias
-    // was 10 to 30 cm of light leak: the sun lit a beam's side deep under a
-    // deck plate, with a stepped edge where the leak ran out, and nothing
-    // on a table cast a shadow under itself. The normal offset above already
+    // range runs from the furthest caster toward the sun to 25 m past its
+    // view slice, so a fixed NDC bias was 10 cm of light leak or more: the
+    // sun lit a beam's side deep under a deck plate, with a stepped edge
+    // where the leak ran out, and nothing on a table cast a shadow under
+    // itself. The normal offset above already
     // clears the receiver's own texels; this only covers depth rounding.
     let depth_per_metre = length(vec3<f32>(matrix[0].z, matrix[1].z, matrix[2].z));
     let depth_bias = (0.002 + 0.5 * world_texel) * depth_per_metre;
@@ -329,7 +338,7 @@ fn room_glow(world: vec3<f32>) -> f32 {
     return 1.0 - smoothstep(0.0, margin, length(outside));
 }
 
-fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
+fn shadow_factor(world: vec3<f32>, n: vec3<f32>, ground: bool) -> f32 {
     if globals.params.z < 0.5 {
         return 1.0;
     }
@@ -344,7 +353,7 @@ fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
     if view_depth > globals.cascade_splits.y {
         cascade = 2u;
     }
-    let current = cascade_shadow(world, n, cascade);
+    let current = cascade_shadow(world, n, cascade, ground);
     if cascade == 2u {
         return current;
     }
@@ -355,7 +364,7 @@ fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
     }
     let blend_width = (far - near) * globals.cascade_splits.w;
     let blend = smoothstep(far - blend_width, far, view_depth);
-    return mix(current, cascade_shadow(world, n, cascade + 1u), blend);
+    return mix(current, cascade_shadow(world, n, cascade + 1u, ground), blend);
 }
 
 struct OccludedSky {
@@ -416,7 +425,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let ao = mix(1.0, ao_sample, inst.flags.z);
     let diffuse_color = base_color * (1.0 - metallic);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
-    let shadow = shadow_factor(in.world, n);
+    let shadow = shadow_factor(in.world, n, inst.flags.x > 0.5);
     // View depth for the light index's Z-bin lookup — the same forward-axis
     // distance the index binned the lights with.
     let view_depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);

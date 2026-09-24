@@ -428,8 +428,9 @@ impl InsertChoice {
     fn name(&self) -> &str {
         &self.0.name
     }
+    /// The preset's form and name: a name is unique only within its form.
     fn id(&self) -> String {
-        self.0.name.clone()
+        format!("{}/{}", self.0.form, self.0.name)
     }
     /// The form the preset sets, which the picker shows beside its name.
     fn origin(&self) -> &'static str {

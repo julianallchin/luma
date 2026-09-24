@@ -1,13 +1,17 @@
 use super::*;
 use std::sync::Arc;
 
+/// Channels per head: RGB, dimmer, pan, tilt, strobe, speed, aim U, V, Z
+/// and aim weight.
+const CHANNELS: usize = 12;
+
 /// Internal capability bundle at the output boundary. Numerical graph wires
 /// remain Signals; missing capabilities stay distinct from explicit zeros.
 #[derive(Clone, Debug)]
 pub struct LightingSignal {
     values: Arc<Array3<f64>>,
     fixtures: Arc<[String]>,
-    writes: [bool; 5],
+    writes: [bool; 6],
 }
 impl LightingSignal {
     pub(super) fn terminal(
@@ -31,7 +35,14 @@ impl LightingSignal {
             signals.get(key).map(|v| v.at(n, t, ch)).unwrap_or(default)
         };
         let has_color = signals.contains_key("color");
-        let values = Array3::from_shape_fn((fixtures.len(), times, 8), |(n, t, ch)| {
+        let has_aim = signals.contains_key("aim");
+        // An aim's length is its weight; its direction is the unit vector.
+        let aim = |n, t| {
+            let v: [f64; 3] = std::array::from_fn(|ch| get("aim", n, t, ch, 0.0));
+            let length = crate::aim::dot(v, v).sqrt();
+            (crate::aim::unit(v), length.min(1.0))
+        };
+        let values = Array3::from_shape_fn((fixtures.len(), times, CHANNELS), |(n, t, ch)| {
             // Brightness is the applied color's peak channel. Master/group
             // intensity is applied by the compositor, so headroom above one
             // survives until then and an overdriven pattern is not flattened.
@@ -55,7 +66,11 @@ impl LightingSignal {
                 4 => get("pan", n, t, 0, 0.0),
                 5 => get("tilt", n, t, 0, 0.0),
                 6 => get("strobe", n, t, 0, 0.0).clamp(0.0, 1.0),
-                _ => get("speed", n, t, 0, 1.0).clamp(0.0, 1.0),
+                7 => get("speed", n, t, 0, 1.0).clamp(0.0, 1.0),
+                8..=10 if has_aim => aim(n, t).0[ch - 8],
+                11 if has_aim => aim(n, t).1,
+                8..=10 => crate::aim::DOWN[ch - 8],
+                _ => 0.0,
             }
         });
         Ok(Self {
@@ -67,18 +82,20 @@ impl LightingSignal {
                 signals.contains_key("pan") || signals.contains_key("tilt"),
                 signals.contains_key("strobe"),
                 signals.contains_key("speed"),
+                has_aim,
             ],
         })
     }
     /// Fixture × time × capability samples in RGB, dimmer, pan, tilt, strobe,
-    /// speed order. A singleton time axis broadcasts over the requested batch.
+    /// speed, aim U, V, Z, aim weight order. A singleton time axis broadcasts over the requested batch.
     pub fn values(&self) -> &Array3<f64> {
         &self.values
     }
     pub fn fixtures(&self) -> &[String] {
         &self.fixtures
     }
-    pub fn writes(&self) -> [bool; 5] {
+    /// Color, dimmer, position, strobe, speed and aim.
+    pub fn writes(&self) -> [bool; 6] {
         self.writes
     }
     fn at(&self, n: usize, t: usize, ch: usize) -> f64 {
@@ -88,15 +105,17 @@ impl LightingSignal {
         Value::Lighting(values.clone()).validate()?;
         let fixtures = values.keys().cloned().collect::<Vec<_>>().into();
         let outputs: Vec<_> = values.values().collect();
-        let writes = outputs.first().map(|v| v.writes()).unwrap_or([false; 5]);
-        let values = Array3::from_shape_fn((outputs.len(), 1, 8), |(n, _, ch)| {
+        let writes = outputs.first().map(|v| v.writes()).unwrap_or([false; 6]);
+        let values = Array3::from_shape_fn((outputs.len(), 1, CHANNELS), |(n, _, ch)| {
             let v = outputs[n];
             match ch {
                 0..=2 => v.color.unwrap_or([1.0; 3])[ch],
                 3 => v.dimmer.unwrap_or(0.0),
                 4..=5 => v.position.unwrap_or([0.0; 2])[ch - 4],
                 6 => v.strobe.unwrap_or(0.0),
-                _ => v.speed.unwrap_or(1.0),
+                7 => v.speed.unwrap_or(1.0),
+                8..=10 => v.aim.map_or(crate::aim::DOWN, |aim| aim.direction)[ch - 8],
+                _ => v.aim.map_or(0.0, |aim| aim.weight),
             }
         });
         Ok(Self {
@@ -123,6 +142,10 @@ impl LightingSignal {
                             .then(|| std::array::from_fn(|c| self.at(n, time, c + 4))),
                         strobe: self.writes[3].then(|| self.at(n, time, 6)),
                         speed: self.writes[4].then(|| self.at(n, time, 7)),
+                        aim: self.writes[5].then(|| crate::Aim {
+                            direction: std::array::from_fn(|c| self.at(n, time, c + 8)),
+                            weight: self.at(n, time, 11),
+                        }),
                     },
                 )
             })

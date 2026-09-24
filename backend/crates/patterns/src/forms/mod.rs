@@ -9,7 +9,7 @@ pub(crate) mod ops;
 mod pace;
 
 /// Every form id. An id never changes meaning; a new meaning is a new version.
-pub const FORMS: [&str; 7] = [
+pub const FORMS: [&str; 8] = [
     "color.constant@1",
     "color.time@1",
     "color.space@1",
@@ -17,10 +17,17 @@ pub const FORMS: [&str; 7] = [
     "color.sparkle@1",
     "color.noise@1",
     "strobe.constant@1",
+    "aim@1",
 ];
 
 pub fn is_form(id: &str) -> bool {
     FORMS.contains(&id)
+}
+
+/// Whether clips of form `id` blend with `replace` only. An aim clip always
+/// blends toward the aim under it by alpha.
+pub fn replace_only(id: &str) -> bool {
+    id == "aim@1"
 }
 
 /// A form's inputs in the order an editor shows them. The definition keeps
@@ -53,6 +60,20 @@ pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
         ],
         "color.noise@1" => &["color", "speed", "scale", "contrast", "alpha"],
         "strobe.constant@1" => &["rate", "alpha"],
+        "aim@1" => &[
+            "base",
+            "direction",
+            "point",
+            "fan",
+            "axis",
+            "motion",
+            "shape",
+            "size",
+            "every",
+            "spread",
+            "speed",
+            "alpha",
+        ],
         _ => return None,
     })
 }
@@ -90,6 +111,9 @@ fn input(
         promotable: promotable.to_vec(),
     }
 }
+/// The most degrees of phase an aim's spread puts across the axis: four
+/// cycles, either way.
+pub const MAX_SPREAD: f64 = 1440.0;
 /// The widest chase stroke, in axis lengths.
 pub const MAX_WIDTH: f64 = 4.0;
 
@@ -362,6 +386,7 @@ pub fn axis_presets() -> Vec<(&'static str, Value)> {
         ("Z", axis(MappingSource::Z)),
         ("Radial", axis(MappingSource::Radial)),
         ("Angle", axis(MappingSource::Angle)),
+        ("Random", axis(MappingSource::Random)),
     ]
 }
 fn axis_input(default: MappingSource) -> Input {
@@ -412,6 +437,7 @@ pub(crate) fn definitions() -> Vec<(&'static str, Definition)> {
         ("color.sparkle@1", sparkle()),
         ("color.noise@1", noise()),
         ("strobe.constant@1", strobe()),
+        ("aim@1", aim()),
     ]
 }
 
@@ -926,6 +952,229 @@ fn strobe() -> Definition {
     )
 }
 
+/// The resting aim of `aim@1` and its presets: 40° down toward downstage.
+pub const REST: [f64; 3] = [0.0, 0.766, -0.643];
+
+/// A choice of named options: the stored name and its label, in menu order.
+fn named_choice(mut input: Input, names: &[(&str, &str)]) -> Input {
+    input.author = Some(Author::Choice {
+        options: names
+            .iter()
+            .map(|(name, label)| Preset {
+                label: (*label).into(),
+                value: Value::Choice((*name).into()),
+            })
+            .collect(),
+        custom: false,
+    });
+    input
+}
+
+/// Where the heads of a clip point: a base (one direction, or a point every
+/// head points at), a fan across the axis, and a motion around it. The
+/// output is a direction per head, never pan or tilt; its length is alpha.
+fn aim() -> Definition {
+    let mut body = Body::default();
+    // Shape cycles and hits for a fan per hit count `every`.
+    body.node("clock", "core/odometer", vec![("period", i("every"))]);
+    body.node(
+        "life",
+        "core/fraction",
+        vec![("value", c("clock", "turns"))],
+    );
+    body.node("wander", "core/odometer", vec![("period", i("speed"))]);
+    body.node(
+        "base",
+        "core/aim_base",
+        vec![
+            ("base", i("base")),
+            ("direction", i("direction")),
+            ("point", i("point")),
+        ],
+    );
+    body.node(
+        "fan",
+        "core/aim_fan",
+        vec![
+            ("direction", c("base", "direction")),
+            ("fan", i("fan")),
+            ("axis", i("axis")),
+        ],
+    );
+    body.node(
+        "motion",
+        "core/aim_motion",
+        vec![
+            ("motion", i("motion")),
+            ("shape", i("shape")),
+            ("cycles", c("clock", "turns")),
+            ("spread", i("spread")),
+            ("size", i("size")),
+            ("wander", c("wander", "turns")),
+            ("axis", i("axis")),
+        ],
+    );
+    body.node(
+        "moved",
+        "core/aim_offset",
+        vec![
+            ("direction", c("fan", "direction")),
+            ("yaw", c("motion", "yaw")),
+            ("pitch", c("motion", "pitch")),
+            ("axis", i("axis")),
+        ],
+    );
+    let aim = body.multiply("aim", c("moved", "direction"), i("alpha"));
+    let degrees = |name: &str, description: &str, promotable: &[SourceKind], low: f64| {
+        number(
+            input(
+                name,
+                description,
+                Value::Number(0.0),
+                Rate::Frame,
+                promotable,
+            ),
+            low,
+            90.0,
+        )
+    };
+    body.form_with(
+        "Aim",
+        vec![
+            (
+                "base",
+                named_choice(
+                    input(
+                        "Base",
+                        "What the heads rest on: one direction, or a point they all point at",
+                        Value::Choice("direction".into()),
+                        Rate::Fixed,
+                        &[],
+                    ),
+                    &[("direction", "Direction"), ("point", "Point")],
+                ),
+            ),
+            (
+                "direction",
+                input(
+                    "Direction",
+                    "The aim in U (stage right), V (downstage), Z (up), when base is direction",
+                    Value::Vector(REST),
+                    Rate::Frame,
+                    &[Time, Noise],
+                ),
+            ),
+            (
+                "point",
+                input(
+                    "Point",
+                    "U, V, Z in metres that every head points at, when base is point",
+                    Value::Vector([0.0; 3]),
+                    Rate::Frame,
+                    &[Time],
+                ),
+            ),
+            (
+                "fan",
+                degrees(
+                    "Fan",
+                    "Degrees the heads spread apart across the axis; 0 = all alike",
+                    &[Time, Hit, Noise, Audio],
+                    -90.0,
+                ),
+            ),
+            (
+                "axis",
+                choice(
+                    input(
+                        "Axis",
+                        "How the heads are laid out, for fan and spread",
+                        axis(MappingSource::Order),
+                        Rate::Fixed,
+                        &[],
+                    ),
+                    axis_presets(),
+                    true,
+                ),
+            ),
+            (
+                "motion",
+                named_choice(
+                    input(
+                        "Motion",
+                        "How the heads move around the base",
+                        Value::Choice("none".into()),
+                        Rate::Fixed,
+                        &[],
+                    ),
+                    &[("none", "None"), ("shape", "Shape"), ("noise", "Noise")],
+                ),
+            ),
+            (
+                "shape",
+                named_choice(
+                    input(
+                        "Shape",
+                        "The wobble, when motion is shape",
+                        Value::Choice("swing_left_right".into()),
+                        Rate::Fixed,
+                        &[],
+                    ),
+                    &[
+                        ("swing_left_right", "Swing left–right"),
+                        ("swing_up_down", "Swing up–down"),
+                        ("circle", "Circle"),
+                        ("figure_8", "Figure-8"),
+                    ],
+                ),
+            ),
+            (
+                "size",
+                degrees("Size", "Degrees of the wobble", &[Time, Audio], 0.0),
+            ),
+            (
+                "every",
+                every_input(4.0, "Beats for one wobble cycle, and between hits", &[Time]),
+            ),
+            (
+                "spread",
+                number(
+                    input(
+                        "Spread",
+                        "Degrees of phase the wobble travels across the heads; 360 = one cycle, 0 = all together",
+                        Value::Number(0.0),
+                        Rate::Frame,
+                        &[Time],
+                    ),
+                    -MAX_SPREAD,
+                    MAX_SPREAD,
+                ),
+            ),
+            (
+                "speed",
+                input(
+                    "Speed",
+                    "Beats for the noise to wander one step",
+                    Value::Beats(4.0),
+                    Rate::Fixed,
+                    &[Time],
+                ),
+            ),
+            (
+                "alpha",
+                input(
+                    "Alpha",
+                    "Blend toward the aim under this clip",
+                    Value::Proportion(1.0),
+                    Rate::Frame,
+                    &[Time, Hit, Noise, Audio],
+                ),
+            ),
+        ],
+        vec![("aim", aim)],
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Clip inputs
 
@@ -951,6 +1200,9 @@ pub(crate) fn check_inputs(
             .map_err(|error| Error(format!("{id}.{name}: {error}")))?;
         check_value(name, spec, value).map_err(|error| Error(format!("{id}.{name}: {error}")))?;
     }
+    if id == "aim@1" {
+        check_aim(id, inputs)?;
+    }
     // A sparkle lights a random share. A fixed 100% is a Wash with a
     // brightness per hit.
     if id == "color.sparkle@1"
@@ -958,6 +1210,33 @@ pub(crate) fn check_inputs(
     {
         return Err(Error(format!(
             "{id}.coverage: a fixed 100% lights every head; use a Wash (color.constant@1)"
+        )));
+    }
+    Ok(())
+}
+
+/// A plain direction has a direction, a shape or a fan per hit needs
+/// hits (`every` above 0), and spread is degrees, not a share of a cycle.
+fn check_aim(id: &str, inputs: &BTreeMap<String, Value>) -> Result<()> {
+    if let Some(Value::Proportion(share)) = inputs.get("spread") {
+        return Err(Error(format!(
+            "{id}.spread: spread is now degrees of phase (360° = one cycle across the axis), \
+             not a share of a cycle; store {{\"type\": \"number\", \"value\": {}}}",
+            share * 360.0
+        )));
+    }
+    if let Some(Value::Vector(direction)) = inputs.get("direction") {
+        if direction.iter().all(|v| v.abs() < 1e-9) {
+            return Err(Error(format!(
+                "{id}.direction: a direction must not be zero"
+            )));
+        }
+    }
+    let shape = matches!(inputs.get("motion"), Some(Value::Choice(name)) if name == "shape");
+    let hits = matches!(inputs.get("fan"), Some(Value::Hit(_)));
+    if (shape || hits) && matches!(inputs.get("every"), Some(Value::Beats(v)) if *v <= 0.0) {
+        return Err(Error(format!(
+            "{id}.every: a shape or a fan per hit needs every above 0 beats"
         )));
     }
     Ok(())
@@ -980,12 +1259,26 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
                 return Err(Error(format!("{v} is outside {low} to {high}")));
             }
         }
-        if !spec.value_type.accepts(value.value_type()) {
+        if !spec.value_type.accepts(value.value_type())
+            || (is_vector(spec) && !matches!(value, Value::Vector(_)))
+        {
             return Err(Error(format!(
                 "expected {}, got {:?}",
                 spec.value_type,
                 value.value_type()
             )));
+        }
+        if let (
+            Value::Choice(name),
+            Some(Author::Choice {
+                options,
+                custom: false,
+            }),
+        ) = (value, &spec.author)
+        {
+            if !options.iter().any(|option| option.value == *value) {
+                return Err(Error(format!("{name} is not one of the options")));
+            }
         }
         if let Value::Mapping(mapping) = value {
             if mapping.reverse {
@@ -1008,24 +1301,26 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
     }
     let target = spec.value_type.signal_type().unwrap_or(SignalType::ANY);
     let color = target.channels == Some(Channels::Rgb);
+    // A vector has no range: a direction or a point in metres.
+    let vector = is_vector(spec);
     let speed = SPEEDS.contains(&name);
     let within = |mut values: Box<dyn Iterator<Item = f64> + '_>| {
         values.all(|v| {
             if speed {
                 v > 0.0
             } else {
-                (low..=high).contains(&v)
+                vector || (low..=high).contains(&v)
             }
         })
     };
     let fits = match value {
         Value::Time(curve) | Value::Hit(curve) => {
-            curve.is_color() == color && within(Box::new(curve.values()))
+            curve.is_color() == (color || vector) && within(Box::new(curve.values()))
         }
         Value::Noise(NoiseSource { range, .. }) => {
             !color && !speed && within(Box::new(range.iter().copied()))
         }
-        Value::Audio(_) => !color && !speed,
+        Value::Audio(_) => !color && !vector && !speed,
         _ => false,
     };
     if fits {
@@ -1036,6 +1331,11 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
             spec.value_type
         )))
     }
+}
+
+/// A U, V, Z input: an aim direction or a point.
+fn is_vector(spec: &Input) -> bool {
+    spec.value_type.signal_type().and_then(|t| t.channels) == Some(crate::tensor::VECTOR)
 }
 
 /// The form with every source turned into graph nodes, and the plain values
@@ -1066,7 +1366,7 @@ pub(crate) fn lower(
             plain.insert(name.clone(), value.clone());
             continue;
         }
-        lowered.inputs.remove(name);
+        let spec = lowered.inputs.remove(name).expect("checked input");
         let mut body = Body::default();
         let key = |part: &str| format!("source/{name}/{part}");
         let replacement = match value {
@@ -1095,16 +1395,34 @@ pub(crate) fn lower(
                     "core/odometer",
                     vec![("period", Value::Beats(noise.speed).into())],
                 );
-                body.node(
-                    &key("noise"),
-                    "core/noise",
-                    vec![
-                        ("x", c(&key("clock"), "turns")),
-                        ("y", n(salt(name))),
-                        ("z", n(0.0)),
-                    ],
-                );
-                scale(&mut body, &key, c(&key("noise"), "value"), noise.range)
+                // A vector wanders on each of U, V and Z, apart.
+                let parts = if is_vector(&spec) { 3 } else { 1 };
+                let mut joined: Option<Binding> = None;
+                for part in 0..parts {
+                    let key = |step: &str| format!("source/{name}/{step}{part}");
+                    body.node(
+                        &key("noise"),
+                        "core/noise",
+                        vec![
+                            ("x", c(&format!("source/{name}/clock"), "turns")),
+                            ("y", n(salt(name) + 101.0 * part as f64)),
+                            ("z", n(0.0)),
+                        ],
+                    );
+                    let wander = scale(&mut body, &key, c(&key("noise"), "value"), noise.range);
+                    joined = Some(match joined {
+                        None => wander,
+                        Some(before) => {
+                            body.node(
+                                &key("join"),
+                                "core/join_channels",
+                                vec![("a", before), ("b", wander)],
+                            );
+                            c(&key("join"), "value")
+                        }
+                    });
+                }
+                joined.expect("one part at least")
             }
             Value::Audio(audio) => {
                 let (low, high) = (audio.from_hz, audio.to_hz);
@@ -1130,7 +1448,7 @@ pub(crate) fn lower(
                     [audio.floor, 1.0],
                 );
                 // Below the threshold the level is 0, under the floor too.
-                if audio.threshold > 0.0 {
+                let level = if audio.threshold > 0.0 {
                     body.node(
                         &key("gate"),
                         "core/greater",
@@ -1143,6 +1461,14 @@ pub(crate) fn lower(
                     body.multiply(&key("gated"), level, c(&key("gate"), "mask"))
                 } else {
                     level
+                };
+                // A number input with a top (fan and size, in degrees) reads
+                // 0–1 as 0 to that top.
+                match spec.author {
+                    Some(Author::Number { max: Some(max), .. }) => {
+                        body.multiply(&key("range"), level, n(max))
+                    }
+                    _ => level,
                 }
             }
             _ => unreachable!("checked source"),

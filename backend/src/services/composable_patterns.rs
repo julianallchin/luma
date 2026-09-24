@@ -117,7 +117,7 @@ pub(crate) async fn preview(
         cells,
         beats,
         frames,
-        writes: ["color", "dimmer", "position", "strobe", "speed"]
+        writes: ["color", "dimmer", "position", "strobe", "speed", "aim"]
             .into_iter()
             .zip(writes)
             .map(|(name, written)| (name.to_string(), written))
@@ -173,6 +173,7 @@ fn universe(lighting: BTreeMap<String, luma_patterns::FixtureOutput>) -> Univers
                         position: value.position.unwrap_or([0.0; 2]).map(|v| v as f32),
                         strobe: value.strobe.unwrap_or(0.0) as f32,
                         speed: value.speed.unwrap_or(1.0) as f32,
+                        aim: value.aim.map(crate::models::universe::HeadAim::from_aim),
                     },
                 )
             })

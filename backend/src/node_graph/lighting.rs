@@ -85,6 +85,8 @@ pub fn port_type(kind: ValueType) -> PortType {
         ValueType::Envelope => PortType::Envelope,
         ValueType::Mask => PortType::Signal,
         ValueType::Lighting => PortType::Lighting,
+        ValueType::Vector => PortType::Signal,
+        ValueType::Choice => PortType::Choice,
         // Clip sources; they drive numerical values.
         ValueType::Time | ValueType::Hit | ValueType::Noise | ValueType::Audio => PortType::Signal,
     }
@@ -129,10 +131,16 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
         return Ok(decoded);
     }
     if let ValueType::Signal(spec) = kind {
+        let vector = matches!(spec.channels, Some(p::Channels::Components(n)) if n.get() == 3);
         let decoded = if value.get("values").is_some() {
             p::Value::Signal(
                 serde_json::from_value(value.clone())
                     .map_err(|e| format!("Invalid signal: {e}"))?,
+            )
+        } else if vector && value.is_array() {
+            p::Value::Vector(
+                serde_json::from_value(value.clone())
+                    .map_err(|e| format!("A vector needs U, V and Z: {e}"))?,
             )
         } else if spec.channels == Some(p::Channels::Rgb)
             || value.get("r").is_some()
@@ -300,6 +308,7 @@ pub fn arg_type(kind: ValueType) -> Option<PatternArgType> {
         ValueType::Boundary => PatternArgType::Boundary,
         ValueType::Envelope => PatternArgType::Envelope,
         ValueType::Boolean => PatternArgType::Boolean,
+        ValueType::Choice => PatternArgType::Choice,
         _ => return None,
     })
 }

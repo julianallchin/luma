@@ -97,10 +97,9 @@ impl Luma {
     /// and nothing on this device saw the write.
     ///
     /// `tables` is what moved, and it is only used to skip work — a download of
-    /// `changes` alone is somebody's history following them between devices and
-    /// costs the UI nothing.
+    /// `drafts` alone is a subagent's scratch copy and costs the UI nothing.
     pub(crate) fn replica_changed(&mut self, tables: &[String], cx: &mut Context<Self>) {
-        const UNINTERESTING: &[&str] = &["changes", "drafts"];
+        const UNINTERESTING: &[&str] = &["drafts"];
         if tables
             .iter()
             .all(|table| UNINTERESTING.contains(&table.as_str()))

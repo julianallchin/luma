@@ -25,6 +25,8 @@ const GRAINS: [&str; 3] = ["Head", "Fixture", "Clump"];
 const EVERY: [&str; 2] = ["Once", "Beats"];
 /// The period a switch from "Once" to "Beats" starts at.
 const EVERY_BEATS: f64 = 4.;
+/// How far from the venue's origin a point field reaches, in metres.
+const POINT_REACH: f64 = 100.;
 
 /// A form input's row: what the form says about the input, and which source
 /// the stored value holds.
@@ -80,13 +82,43 @@ impl Slot {
         }
     }
 
-    /// The span a number curve's value axis covers, in the input's unit.
+    /// The span a number curve's value axis covers, in the input's unit. A
+    /// vector's noise wanders on each of U, V and Z within −1 to 1.
     fn range(&self) -> [f64; 2] {
         if self.speed {
             [0., CURVE_BEATS]
+        } else if self.vector() {
+            [-1., 1.]
         } else {
             self.bounds().unwrap_or([0., 1.])
         }
+    }
+
+    /// A U, V, Z input: an aim direction or a point.
+    fn vector(&self) -> bool {
+        matches!(self.spec.default, Some(p::Value::Vector(_)))
+    }
+
+    /// The unit a number field of this input shows: beats for a speed,
+    /// degrees for an aim's fan, size and spread.
+    fn unit(&self) -> Option<&'static str> {
+        if self.speed {
+            Some("beats")
+        } else if self.form == "aim@1" && matches!(self.key, "fan" | "size" | "spread") {
+            Some("°")
+        } else {
+            None
+        }
+    }
+
+    /// `low–high` in the input's unit, for a caption.
+    fn span_text(&self, [low, high]: [f64; 2]) -> String {
+        let unit = match self.unit() {
+            Some("°") => "°".to_string(),
+            Some(unit) => format!(" {unit}"),
+            None => String::new(),
+        };
+        format!("{}–{}{unit}", format_value(low), format_value(high))
     }
 
     /// The shipped curve presets this input offers.
@@ -138,33 +170,47 @@ fn level(value: &p::Value) -> Option<f64> {
 /// `value` converted to `to`. A plain value becomes a source that starts at
 /// it; a source becomes the plain value it starts at.
 fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value {
-    let color = match value {
-        p::Value::Color(rgb) => Some(*rgb),
+    // A color or a vector: three channels.
+    let triple = match value {
+        p::Value::Color(rgb) | p::Value::Vector(rgb) => Some(*rgb),
         p::Value::Time(curve) | p::Value::Hit(curve) if curve.is_color() => Some(curve.sample(0.)),
         _ => None,
-    };
+    }
+    .or_else(|| match (slot.vector(), &slot.spec.default) {
+        (true, Some(p::Value::Vector(v))) => Some(*v),
+        _ => None,
+    });
     let number = match value {
         p::Value::Time(curve) | p::Value::Hit(curve) => Some(curve.sample(0.)[0]),
         p::Value::Noise(p::NoiseSource { range, .. }) => Some(range[1]),
-        // Audio at its loudest gives 1.
-        p::Value::Audio(_) => Some(1.),
+        // Audio at its loudest gives the top of the input: 1, or the most
+        // degrees of a fan or a size.
+        p::Value::Audio(_) => Some(slot.range()[1]),
         other => level(other),
     }
     .or_else(|| slot.spec.default.as_ref().and_then(level))
     .unwrap_or(1.);
     let number = slot.fit(number);
-    let key = color.map_or(p::Key::Number(number), p::Key::Color);
+    let key = triple.map_or(p::Key::Number(number), p::Key::Color);
     let flat = || p::Keyframes {
         points: vec![(0., key), (1., key)],
         segments: vec![p::Segment::Linear],
     };
     match to {
-        None => color.map_or_else(|| slot.plain(number), p::Value::Color),
+        None => match triple {
+            Some(v) if slot.vector() => p::Value::Vector(v),
+            Some(rgb) => p::Value::Color(rgb),
+            None => slot.plain(number),
+        },
         Some(p::SourceKind::Time) => p::Value::Time(flat()),
         Some(p::SourceKind::Hit) => p::Value::Hit(flat()),
         Some(p::SourceKind::Noise) => p::Value::Noise(p::NoiseSource {
             speed: NOISE_SPEED,
-            range: [0., number],
+            range: if slot.vector() {
+                slot.range()
+            } else {
+                [number.min(0.), number.max(0.)]
+            },
         }),
         Some(p::SourceKind::Audio) => {
             let first = &p::presets().frequencies[0];
@@ -361,6 +407,77 @@ fn color_keys(gradient: &Gradient) -> p::Keyframes {
     }
 }
 
+/// A direction as turn and tilt, in degrees. Turn 0 is downstage and grows
+/// toward stage right; tilt 0 is level and −90 is straight down. A direction
+/// straight up or down has no turn: `None`.
+fn turn_tilt([u, v, z]: [f64; 3]) -> (Option<f64>, f64) {
+    let flat = u.hypot(v);
+    let tilt = z.atan2(flat).to_degrees();
+    let turn = (flat > 1e-6).then(|| u.atan2(v).to_degrees());
+    (turn, tilt)
+}
+
+/// The unit direction at `turn` and `tilt` degrees, to four places.
+fn direction_at(turn: f64, tilt: f64) -> [f64; 3] {
+    let (turn, tilt) = (turn.to_radians(), tilt.to_radians());
+    [tilt.cos() * turn.sin(), tilt.cos() * turn.cos(), tilt.sin()]
+        .map(|v| (v * 1e4).round() / 1e4 + 0.)
+}
+
+/// A stored vector, spelled for a caption: "U 0.00 · V 0.77 · Z −0.64".
+fn vector_text(v: [f64; 3]) -> String {
+    let part = |name: &str, v: f64| {
+        let text = format!("{:.2}", v.abs());
+        let sign = if v < 0. && text != "0.00" { "−" } else { "" };
+        format!("{name} {sign}{text}")
+    };
+    format!(
+        "{} · {} · {}",
+        part("U", v[0]),
+        part("V", v[1]),
+        part("Z", v[2])
+    )
+}
+
+/// The vectors a vector input shows: its value when fixed, the start and
+/// the end of a curve over the clip.
+fn vector_ends(value: &p::Value) -> Vec<[f64; 3]> {
+    let key = |key: &p::Key| match key {
+        p::Key::Color(v) => *v,
+        p::Key::Number(n) => [*n; 3],
+    };
+    match value {
+        p::Value::Vector(v) => vec![*v],
+        p::Value::Time(curve) => match (curve.points.first(), curve.points.last()) {
+            (Some((_, first)), Some((_, last))) => vec![key(first), key(last)],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// `value` with end `end` (see [`vector_ends`]) passed through `edit`: the
+/// vector itself, or the first or last point of a curve over the clip.
+fn edit_vector_end(
+    value: &p::Value,
+    end: usize,
+    edit: impl FnOnce([f64; 3]) -> [f64; 3],
+) -> Option<p::Value> {
+    match value {
+        p::Value::Vector(v) => Some(p::Value::Vector(edit(*v))),
+        p::Value::Time(curve) if curve.is_color() => {
+            let mut curve = curve.clone();
+            let at = if end == 0 { 0 } else { curve.points.len() - 1 };
+            let p::Key::Color(v) = curve.points[at].1 else {
+                return None;
+            };
+            curve.points[at].1 = p::Key::Color(edit(v));
+            Some(p::Value::Time(curve))
+        }
+        _ => None,
+    }
+}
+
 // -- widgets ------------------------------------------------------------------
 
 /// The control for a form input's current value.
@@ -377,19 +494,16 @@ pub(super) fn widget(
     let name = spec.name.clone();
     let number = |label: String,
                   value: f64,
-                  min: f64,
-                  max: f64,
+                  [min, max]: [f64; 2],
                   width: f32,
+                  unit: Option<&'static str>,
                   window: &mut Window,
                   cx: &mut Context<Luma>| {
-        // A field named for beats says so.
-        let beats = label.ends_with(": Speed") || label.ends_with(": Beats");
         cx.new(|cx| {
             let field = DraftedNumber::new(label, value, min, max, width, window, cx);
-            if beats {
-                field.with_unit("beats")
-            } else {
-                field
+            match unit {
+                Some(unit) => field.with_unit(unit),
+                None => field,
             }
         })
     };
@@ -407,6 +521,55 @@ pub(super) fn widget(
             })
         };
     match value {
+        // A direction is edited as turn and tilt, which the row draws; a
+        // point as U, V and Z in metres. A curve edits its two ends.
+        Some(value) if slot.vector() && !vector_ends(&value).is_empty() => {
+            let ends = vector_ends(&value);
+            if slot.key == "direction" {
+                return Widget::Direction(
+                    ends.iter().map(|v| turn_tilt(*v).0.unwrap_or(0.)).collect(),
+                );
+            }
+            let names = if ends.len() == 1 {
+                vec![""]
+            } else {
+                vec!["Start ", "End "]
+            };
+            let third = (FIELD_W - 16.) / 3.;
+            Widget::Point(
+                ends.iter()
+                    .zip(names)
+                    .enumerate()
+                    .map(|(end, (v, prefix))| {
+                        std::array::from_fn(|axis| {
+                            let field = number(
+                                format!("{name}: {prefix}{}", ["U", "V", "Z"][axis]),
+                                v[axis],
+                                [-POINT_REACH, POINT_REACH],
+                                third,
+                                Some("m"),
+                                window,
+                                cx,
+                            );
+                            let def = def.clone();
+                            subs.push(cx.subscribe(
+                                &field,
+                                move |this: &mut Luma, _, event: &NumberEvent, cx| {
+                                    let NumberEvent::Committed(n) = *event;
+                                    this.form_edit(&def, spec, cx, |value| {
+                                        edit_vector_end(value, end, |mut v| {
+                                            v[axis] = n;
+                                            v
+                                        })
+                                    });
+                                },
+                            ));
+                            field
+                        })
+                    })
+                    .collect(),
+            )
+        }
         Some(p::Value::Time(curve) | p::Value::Hit(curve)) if curve.is_color() => {
             let hit = slot.mode == Some(p::SourceKind::Hit);
             let entity =
@@ -451,27 +614,27 @@ pub(super) fn widget(
             let speed = number(
                 format!("{name}: Speed"),
                 noise.speed,
-                MIN_BEATS,
-                1e9,
+                [MIN_BEATS, 1e9],
                 FIELD_W,
+                Some("beats"),
                 window,
                 cx,
             );
             let low = number(
                 format!("{name}: Low"),
                 noise.range[0],
-                0.,
-                1.,
+                slot.range(),
                 half,
+                slot.unit(),
                 window,
                 cx,
             );
             let high = number(
                 format!("{name}: High"),
                 noise.range[1],
-                0.,
-                1.,
+                slot.range(),
                 half,
+                slot.unit(),
                 window,
                 cx,
             );
@@ -547,9 +710,9 @@ pub(super) fn widget(
                 let entity = number(
                     format!("{name}: Clump size"),
                     current.filter(|n| *n >= 2.).unwrap_or(2.),
-                    2.,
-                    64.,
+                    [2., 64.],
                     FIELD_W,
+                    None,
                     window,
                     cx,
                 );
@@ -562,9 +725,9 @@ pub(super) fn widget(
                 let entity = number(
                     format!("{name}: Beats"),
                     current.unwrap_or(0.),
-                    0.,
-                    1e9,
+                    [0., 1e9],
                     FIELD_W,
+                    Some("beats"),
                     window,
                     cx,
                 );
@@ -573,6 +736,22 @@ pub(super) fn widget(
                 }));
                 return Widget::Every(entity);
             }
+            if slot.speed {
+                // A speed stays above zero.
+                let entity = number(
+                    name,
+                    slot.fit(current.unwrap_or(MIN_BEATS)),
+                    [MIN_BEATS, 1e9],
+                    FIELD_W,
+                    Some("beats"),
+                    window,
+                    cx,
+                );
+                subs.push(on_number(&entity, cx, |value, v| {
+                    *value = p::Value::Beats(v)
+                }));
+                return Widget::Scalar(entity);
+            }
             if let Some(p::Value::Mapping(mapping)) = &value {
                 let normal = plane_normal(mapping);
                 let third = (FIELD_W - 16.) / 3.;
@@ -580,9 +759,9 @@ pub(super) fn widget(
                     number(
                         format!("{name}: Plane {}", ["U", "V", "Z"][axis]),
                         normal[axis],
-                        -1e9,
-                        1e9,
+                        [-1e9, 1e9],
                         third,
+                        None,
                         window,
                         cx,
                     )
@@ -590,7 +769,47 @@ pub(super) fn widget(
                 subs.push(on_number(&u, cx, |value, n| set_normal(value, 0, n)));
                 subs.push(on_number(&v, cx, |value, n| set_normal(value, 1, n)));
                 subs.push(on_number(&z, cx, |value, n| set_normal(value, 2, n)));
-                return Widget::Axis([u, v, z]);
+                let mirror = mirror_plane(mapping);
+                let normal: [_; 3] = std::array::from_fn(|axis| {
+                    number(
+                        format!("{name}: Mirror {}", ["U", "V", "Z"][axis]),
+                        mirror.normal[axis],
+                        [-1e9, 1e9],
+                        third,
+                        None,
+                        window,
+                        cx,
+                    )
+                });
+                subs.push(on_number(&normal[0], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[0] = n)
+                }));
+                subs.push(on_number(&normal[1], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[1] = n)
+                }));
+                subs.push(on_number(&normal[2], cx, |value, n| {
+                    set_mirror(value, |plane| plane.normal[2] = n)
+                }));
+                let offset = number(
+                    format!("{name}: Mirror offset"),
+                    mirror.offset,
+                    [-1e9, 1e9],
+                    FIELD_W,
+                    Some("m"),
+                    window,
+                    cx,
+                );
+                subs.push(on_number(&offset, cx, |value, n| {
+                    set_mirror(value, |plane| plane.offset = n)
+                }));
+                return Widget::Axis(AxisFields {
+                    plane: [u, v, z],
+                    normal,
+                    offset,
+                    custom_mirror: Rc::new(std::cell::Cell::new(
+                        mirror_index(mapping.mirror.as_ref()) == CUSTOM_MIRROR,
+                    )),
+                });
             }
             if let Some(p::Author::Choice { options, .. }) = &spec.author {
                 // A choice of curves edits a custom curve in the envelope editor.
@@ -622,9 +841,9 @@ pub(super) fn widget(
                 let entity = number(
                     name,
                     slot.fit(current.unwrap_or(min)),
-                    min,
-                    max,
+                    [min, max],
                     FIELD_W,
+                    slot.unit(),
                     window,
                     cx,
                 );
@@ -657,7 +876,22 @@ pub(super) fn resync(
         *widget = self::widget(slot, def, stored, window, cx, subs);
         return true;
     }
-    match (&*widget, value) {
+    match (&mut *widget, value) {
+        (Widget::Direction(turns), Some(value)) => {
+            // A direction straight up or down keeps the turn it had.
+            for (held, v) in turns.iter_mut().zip(vector_ends(&value)) {
+                if let (Some(turn), _) = turn_tilt(v) {
+                    *held = turn;
+                }
+            }
+        }
+        (Widget::Point(sets), Some(value)) => {
+            for (fields, v) in sets.iter().zip(vector_ends(&value)) {
+                for (field, n) in fields.iter().zip(v) {
+                    field.update(cx, |field, cx| field.set_value(n, cx));
+                }
+            }
+        }
         (Widget::Envelope(entity), Some(p::Value::Time(curve) | p::Value::Hit(curve))) => {
             let envelope = envelope_of(slot, &curve);
             entity.update(cx, |editor, cx| editor.set_value(envelope, cx));
@@ -694,9 +928,16 @@ pub(super) fn resync(
         }
         (Widget::Preset(..), _) => {}
         (Widget::Axis(fields), Some(p::Value::Mapping(mapping))) => {
-            for (field, n) in fields.iter().zip(plane_normal(&mapping)) {
+            for (field, n) in fields.plane.iter().zip(plane_normal(&mapping)) {
                 field.update(cx, |field, cx| field.set_value(n, cx));
             }
+            let mirror = mirror_plane(&mapping);
+            for (field, n) in fields.normal.iter().zip(mirror.normal) {
+                field.update(cx, |field, cx| field.set_value(n, cx));
+            }
+            fields
+                .offset
+                .update(cx, |field, cx| field.set_value(mirror.offset, cx));
         }
         _ => return false,
     }
@@ -728,7 +969,8 @@ impl Luma {
 // -- rendering ----------------------------------------------------------------
 
 /// The rows of a form clip: the selection, then each input in the form's
-/// order. The rare ones sit under "Advanced".
+/// order. The rare ones sit under "Advanced". An aim shows its base, then
+/// its motion, each without the rows that do not apply.
 pub(super) fn rows(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     let mut rows = Vec::new();
     for (index, cell) in built.cells.iter().enumerate() {
@@ -736,9 +978,16 @@ pub(super) fn rows(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<Any
             rows.extend(arg_rows(state, app, index, cell));
             continue;
         };
+        if slot.form == "aim@1" && aim_hides(built, slot.key) {
+            continue;
+        }
         match cell.def.id.as_str() {
             // Width's own row carries it.
             "width_relative" => continue,
+            // An aim's motion group.
+            "motion" if slot.form == "aim@1" => {
+                rows.push(luma_ui::float::divider().into_any_element())
+            }
             "boundary" => rows.push(
                 div()
                     .pt(px(8.))
@@ -754,6 +1003,38 @@ pub(super) fn rows(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<Any
         }
     }
     rows
+}
+
+/// Whether an `aim@1` row does not apply to the clip's base and motion: the
+/// direction or the point by the base; shape, size, spread and speed by the
+/// motion. `every` paces a shape and a fan per hit.
+fn aim_hides(built: &Built, key: &str) -> bool {
+    let stored = |key: &str| {
+        built
+            .cells
+            .iter()
+            .find(|cell| cell.def.id == key)
+            .map(|cell| &cell.synced)
+    };
+    let choice = |key: &str| {
+        stored(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+    };
+    let (base, motion) = (choice("base"), choice("motion"));
+    let fan_per_hit = stored("fan")
+        .and_then(|fan| fan.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("hit");
+    match key {
+        "direction" => base != "direction",
+        "point" => base != "point",
+        "shape" | "spread" => motion != "shape",
+        "size" => motion == "none",
+        "speed" => motion != "noise",
+        "every" => motion != "shape" && !fan_per_hit,
+        _ => false,
+    }
 }
 
 /// A labelled form row. The header line carries the promote menu, and for a
@@ -918,8 +1199,42 @@ fn set_normal(value: &mut p::Value, axis: usize, n: f64) {
     }
 }
 
-/// The axis row: which way, what one axis spans and, for radial and angle,
-/// the plane.
+/// The mirror choices: a plane through the middle of the span, left–right
+/// (normal U), front–back (V) or up–down (Z), or a custom plane.
+const MIRRORS: [&str; 5] = ["Off", "Left–right", "Front–back", "Up–down", "Custom plane"];
+/// The index of Custom plane in [`MIRRORS`].
+const CUSTOM_MIRROR: usize = 4;
+
+/// Which of [`MIRRORS`] `mirror` is: a normal that is none of the fixed
+/// planes is a custom plane.
+fn mirror_index(mirror: Option<&p::MirrorPlane>) -> usize {
+    match mirror.map(|plane| plane.normal) {
+        None => 0,
+        Some([1., 0., 0.]) => 1,
+        Some([0., 1., 0.]) => 2,
+        Some([0., 0., 1.]) => 3,
+        Some(_) => CUSTOM_MIRROR,
+    }
+}
+
+/// The mirror plane, or the left–right plane to start from.
+fn mirror_plane(mapping: &p::MappingSpec) -> p::MirrorPlane {
+    mapping.mirror.clone().unwrap_or(p::MirrorPlane {
+        normal: [1., 0., 0.],
+        offset: 0.,
+    })
+}
+
+fn set_mirror(value: &mut p::Value, edit: impl FnOnce(&mut p::MirrorPlane)) {
+    if let p::Value::Mapping(mapping) = value {
+        if let Some(plane) = &mut mapping.mirror {
+            edit(plane);
+        }
+    }
+}
+
+/// The axis row: which way, what one axis spans, the mirror where the axis
+/// takes one and, for radial and angle, the plane.
 #[allow(clippy::too_many_arguments)]
 fn axis_control(
     state: &Editor,
@@ -929,7 +1244,7 @@ fn axis_control(
     def: PatternArgDef,
     spec: &'static p::Input,
     mapping: p::MappingSpec,
-    normal: &[Entity<DraftedNumber>; 3],
+    fields: &AxisFields,
 ) -> Div {
     let Some(p::Author::Choice { options, .. }) = &spec.author else {
         return div();
@@ -952,7 +1267,14 @@ fn axis_control(
     let edit = Rc::new(edit);
     let pick_axis = edit.clone();
     let pick_span = edit.clone();
+    let pick_mirror = edit.clone();
     let pick_plane = edit;
+    let mirrors = mapping.source.takes_mirror();
+    let mirror = match mapping.mirror.as_ref() {
+        Some(_) if fields.custom_mirror.get() => CUSTOM_MIRROR,
+        plane => mirror_index(plane),
+    };
+    let custom_mirror = fields.custom_mirror.clone();
     let round = mapping.plane.is_some();
     let plane = mapping.plane.as_ref().map_or(0, p::AxisPlane::index);
     let spans: Vec<&str> = p::Span::OPTIONS.iter().map(|(_, label)| *label).collect();
@@ -976,10 +1298,14 @@ fn axis_control(
                 let p::Value::Mapping(preset) = &options[picked].value else {
                     return;
                 };
-                // A new direction keeps the spans; radial and angle keep
-                // their plane, Auto when they had none.
+                // A new direction keeps the spans and, where it takes one,
+                // the mirror; radial and angle keep their plane, Auto when
+                // they had none.
                 pick_axis(this, cx, &|mapping| {
                     mapping.source = preset.source.clone();
+                    if !mapping.source.takes_mirror() {
+                        mapping.mirror = None;
+                    }
                     mapping.plane = match (&preset.plane, &mapping.plane) {
                         (None, _) => None,
                         (Some(_), Some(kept)) => Some(kept.clone()),
@@ -1003,6 +1329,52 @@ fn axis_control(
                 },
             ),
         ))
+        .when(mirrors, |el| {
+            el.child(arg_row(
+                "Mirror",
+                menu_select(
+                    state,
+                    app,
+                    Menu::Mirror(index),
+                    format!("{name}: Mirror"),
+                    MIRRORS[mirror],
+                    &MIRRORS,
+                    move |picked, this, cx| {
+                        custom_mirror.set(picked == CUSTOM_MIRROR);
+                        // A new plane keeps the offset; Custom plane starts
+                        // from the plane there is.
+                        pick_mirror(this, cx, &|mapping| {
+                            let kept = mirror_plane(mapping);
+                            mapping.mirror = match picked {
+                                0 => None,
+                                1 => Some([1., 0., 0.]),
+                                2 => Some([0., 1., 0.]),
+                                3 => Some([0., 0., 1.]),
+                                _ => Some(kept.normal),
+                            }
+                            .map(|normal| p::MirrorPlane {
+                                normal,
+                                offset: kept.offset,
+                            });
+                        });
+                    },
+                ),
+            ))
+            .when(mirror == CUSTOM_MIRROR, |el| {
+                el.child(arg_row(
+                    "Normal · U, V, Z",
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .children(fields.normal.iter().cloned()),
+                ))
+            })
+            .when(mirror != 0, |el| {
+                el.child(arg_row("Offset", fields.offset.clone()))
+            })
+        })
         .when(round, |el| {
             el.child(arg_row(
                 "Plane",
@@ -1036,7 +1408,7 @@ fn axis_control(
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
-                    .children(normal.iter().cloned()),
+                    .children(fields.plane.iter().cloned()),
             ))
         })
 }
@@ -1171,11 +1543,88 @@ fn control(
     let value = decode(spec.value_type, &cell.synced).ok();
     let column = || div().w_full().flex().flex_col().gap(px(6.));
     Some(match &cell.widget {
-        Widget::Axis(normal) => {
+        Widget::Direction(turns) => {
+            let ends = vector_ends(value.as_ref()?);
+            let timed = ends.len() > 1;
+            column().children(ends.into_iter().enumerate().map(|(end, v)| {
+                let (turn, tilt) = turn_tilt(v);
+                let turn = turn.unwrap_or_else(|| turns.get(end).copied().unwrap_or(0.));
+                let [turn_label, tilt_label] = match (timed, end) {
+                    (false, _) => ["Turn", "Tilt"],
+                    (true, 0) => ["Start turn", "Start tilt"],
+                    (true, _) => ["End turn", "End tilt"],
+                };
+                let turned = app.clone();
+                let turn_def = def.clone();
+                let turn_scrub = direction_scrub(
+                    &format!("{name}: {turn_label}"),
+                    turn,
+                    [-180., 180.],
+                    move |turn, cx| {
+                        turned.update(cx, |this, cx| {
+                            edit_widget(this, index, cx, |widget| {
+                                if let Widget::Direction(turns) = widget {
+                                    if let Some(held) = turns.get_mut(end) {
+                                        *held = turn;
+                                    }
+                                }
+                            });
+                            this.form_edit(&turn_def, spec, cx, |value| {
+                                edit_vector_end(value, end, |v| direction_at(turn, turn_tilt(v).1))
+                            });
+                        });
+                    },
+                );
+                let tilted = app.clone();
+                let tilt_def = def.clone();
+                let tilt_scrub = direction_scrub(
+                    &format!("{name}: {tilt_label}"),
+                    tilt,
+                    [-90., 90.],
+                    move |tilt, cx| {
+                        tilted.update(cx, |this, cx| {
+                            this.form_edit(&tilt_def, spec, cx, |value| {
+                                edit_vector_end(value, end, |_| direction_at(turn, tilt))
+                            });
+                        });
+                    },
+                );
+                column()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .child(arg_row(turn_label, turn_scrub))
+                            .child(arg_row(tilt_label, tilt_scrub)),
+                    )
+                    .child(luma_ui::caption(vector_text(v)))
+            }))
+        }
+        Widget::Point(sets) => {
+            let timed = sets.len() > 1;
+            column().children(sets.iter().enumerate().map(|(end, fields)| {
+                let label = match (timed, end) {
+                    (false, _) => "U, V, Z",
+                    (true, 0) => "Start · U, V, Z",
+                    (true, _) => "End · U, V, Z",
+                };
+                arg_row(
+                    label,
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .children(fields.iter().cloned()),
+                )
+            }))
+        }
+        Widget::Axis(fields) => {
             let Some(p::Value::Mapping(mapping)) = value.or_else(|| spec.default.clone()) else {
                 return None;
             };
-            axis_control(state, app, index, name, def, spec, mapping, normal)
+            axis_control(state, app, index, name, def, spec, mapping, fields)
         }
         Widget::Preset(options, editor) => {
             let options: &'static [p::Preset] = options;
@@ -1287,8 +1736,7 @@ fn control(
             );
             let current = curve.and_then(|curve| curve_preset(slot, curve));
             let shape = *slot;
-            let [low, high] = slot.range();
-            let unit = if slot.speed { " beats" } else { "" };
+            let span = slot.span_text(slot.range());
             let custom = slot.editing || current.is_none();
             column()
                 .child(choice_presets(
@@ -1312,11 +1760,8 @@ fn control(
                     },
                 ))
                 .when(custom, |el| {
-                    el.child(entity.clone()).child(luma_ui::caption(format!(
-                        "Values {}–{}{unit}",
-                        format_value(low),
-                        format_value(high)
-                    )))
+                    el.child(entity.clone())
+                        .child(luma_ui::caption(format!("Values {span}")))
                 })
         }
         Widget::Gradient(entity) if slot.mode.is_some() => column().child(entity.clone()).child(
@@ -1324,7 +1769,12 @@ fn control(
         ),
         Widget::Noise([speed, low, high]) => column()
             .child(arg_row("Speed (beats)", speed.clone()))
-            .child(arg_row("Range", range_row(low, high))),
+            .child(arg_row("Range", range_row(low, high)))
+            .when(slot.vector(), |el| {
+                el.child(luma_ui::caption(
+                    "U, V and Z each wander in this range".to_string(),
+                ))
+            }),
         Widget::Audio([from, to, floor, threshold]) => {
             // Named ranges only fill the two frequency fields.
             let named = &p::presets().frequencies;
@@ -1366,12 +1816,39 @@ fn control(
                 .child(arg_row("Floor", floor.clone()))
                 // Energy below the threshold gives 0; 0% is no gate.
                 .child(arg_row("Threshold", threshold.clone()))
+                // The engine reads the level as a share of the input's top.
+                .when(slot.unit() == Some("°"), |el| {
+                    el.child(luma_ui::caption(format!(
+                        "Level 0–100% gives {}",
+                        slot.span_text([0., slot.range()[1]])
+                    )))
+                })
         }
         Widget::Color(entity) => div().child(entity.clone()),
         Widget::Scalar(entity) => div().child(entity.clone()),
         Widget::Gradient(entity) => div().child(entity.clone()),
         _ => return None,
     })
+}
+
+/// A turn or a tilt: a scrub in whole degrees, half the column wide, so the
+/// two sit side by side.
+fn direction_scrub(
+    id: &str,
+    value: f64,
+    [min, max]: [f64; 2],
+    on_change: impl Fn(f64, &mut App) + 'static,
+) -> Stateful<Div> {
+    luma_ui::float::scrub_with_unit(
+        id.to_string(),
+        value,
+        min,
+        max,
+        1.,
+        (FIELD_W - 8.) / 2.,
+        "°",
+        move |value, _, cx| on_change(value, cx),
+    )
 }
 
 fn range_row(low: &Entity<DraftedNumber>, high: &Entity<DraftedNumber>) -> Div {
@@ -1387,8 +1864,9 @@ fn range_row(low: &Entity<DraftedNumber>, high: &Entity<DraftedNumber>) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{
-        curve_options, curve_preset, envelope_of, envelope_options, keyframes_of, promote,
-        same_curve, scaled, Slot, Thumb, CURVE_BEATS, MIN_BEATS,
+        curve_options, curve_preset, direction_at, edit_vector_end, envelope_of, envelope_options,
+        keyframes_of, promote, same_curve, scaled, turn_tilt, vector_ends, vector_text, Slot,
+        Thumb, CURVE_BEATS, MIN_BEATS,
     };
     use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
     use luma_patterns as p;
@@ -1601,5 +2079,44 @@ mod tests {
         if let Some(p::Author::Choice { options, .. }) = &axis.author {
             assert!(envelope_options(options).is_none(), "axis stays a select");
         }
+    }
+
+    #[test]
+    fn a_direction_reads_as_turn_and_tilt() {
+        // The resting aim: 40° down toward downstage.
+        let rest = [0., 0.766, -0.643];
+        let (turn, tilt) = turn_tilt(rest);
+        assert!(
+            turn.unwrap().abs() < 1e-9 && (tilt + 40.).abs() < 0.02,
+            "{tilt}"
+        );
+        assert_eq!(direction_at(0., -40.), [0., 0.766, -0.6428]);
+        // Turn grows toward stage right.
+        assert_eq!(direction_at(90., 0.), [1., 0., 0.]);
+        // Straight down says no turn.
+        assert_eq!(turn_tilt([0., 0., -1.]), (None, -90.));
+        assert_eq!(vector_text(rest), "U 0.00 · V 0.77 · Z −0.64");
+    }
+
+    #[test]
+    fn a_vector_promotes_to_a_curve_whose_ends_edit_apart() {
+        let direction = slot("aim@1", "direction");
+        let rest = p::Value::Vector([0., 0.766, -0.643]);
+        let curve = promote(&direction, &rest, Some(p::SourceKind::Time));
+        assert_eq!(vector_ends(&curve), vec![[0., 0.766, -0.643]; 2]);
+        let moved = edit_vector_end(&curve, 1, |_| [0., 0., -1.]).unwrap();
+        assert_eq!(
+            vector_ends(&moved),
+            vec![[0., 0.766, -0.643], [0., 0., -1.]]
+        );
+        assert_eq!(promote(&direction, &moved, None), rest);
+        let p::Value::Noise(noise) = promote(&direction, &rest, Some(p::SourceKind::Noise)) else {
+            panic!("noise")
+        };
+        assert_eq!(noise.range, [-1., 1.]);
+        // Audio reads 0–1 as 0 to the most degrees; fixed again, it is the top.
+        let fan = slot("aim@1", "fan");
+        let audio = promote(&fan, &p::Value::Number(30.), Some(p::SourceKind::Audio));
+        assert_eq!(promote(&fan, &audio, None), p::Value::Number(90.));
     }
 }

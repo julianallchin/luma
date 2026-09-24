@@ -233,7 +233,7 @@ fn sampled_opacity_keeps_its_domain_and_can_drive_intensity_independently_of_rgb
             .unwrap();
         assert_eq!(
             values["lighting"].lighting().unwrap().writes(),
-            [true, true, false, false, false]
+            [true, true, false, false, false, false]
         );
         for (time, expected) in [[0.5, 0.2], [0.35, 0.8]].into_iter().enumerate() {
             let lit = values["lighting"].lighting().unwrap().sample(time).unwrap();

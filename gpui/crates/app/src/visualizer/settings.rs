@@ -96,7 +96,9 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
             card.child(float::divider()).child(section("Sun", sun))
         })
         .child(float::divider())
-        .child(super::view_controls(state, app));
+        .child(super::view_controls(state, app))
+        .child(float::divider())
+        .child(section("Debug", export_camera(app)));
     for error in [
         &state.environment_error,
         &state.haze_error,
@@ -179,6 +181,24 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 ),
             )
         })
+        .into_any_element()
+}
+
+/// Write the view's camera, sun and shadow cascades to a file. The same
+/// action as the stage's Ctrl+Shift+E (Cmd on macOS).
+fn export_camera(app: &Entity<Luma>) -> AnyElement {
+    let app = app.clone();
+    luma_ui::button("Export camera", luma_ui::Enabled::Yes)
+        .id("export-camera")
+        .on_click(move |_, _, cx| {
+            app.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.export_camera();
+                }
+                cx.notify();
+            });
+        })
+        .agent_node(Role::Button, "Export camera")
         .into_any_element()
 }
 

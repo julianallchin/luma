@@ -3018,7 +3018,7 @@ impl Rig {
 
 /// The app config directory: the stable platform location, with
 /// the same escape hatch the headless harness has.
-fn config_dir() -> Result<StorageRoot, String> {
+pub(crate) fn config_dir() -> Result<StorageRoot, String> {
     match luma_ui::runtime::Runtime::with(|runtime| runtime.config_dir.clone()) {
         Some(path) => Ok(StorageRoot::from_path(path)),
         None => StorageRoot::from_env_default(),

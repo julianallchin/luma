@@ -109,7 +109,7 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
    `processor_version`, `created_at`, `updated_at`, the `updated_at` trigger,
    and a generated `id` column (`GENERATED ALWAYS AS (track_id) VIRTUAL`) with a
    unique index. Do not add `synced_at`, `origin`, `version` or sync triggers.
-   The sync and `changes` triggers are TEMP triggers that
+   The upload triggers are TEMP triggers that
    `backend/src/sync/triggers.rs` generates from `backend/src/sync/schema.rs`.
    If the table syncs, add it to `schema.rs`. Also add a Supabase migration
    with the table, its row-level security policies and the `powersync`

@@ -188,9 +188,30 @@ Strokes travel across the heads. Each event starts one stroke.
 | alpha | proportion | T H N A | |
 | Advanced: boundary | clip / wrap | — | What happens at the ends |
 
-- **axis** is `order`, `x`, `y`, `z`, `radial`, `angle` or a custom
-  `vector(u, v, z)`, with an optional `mirror`. Axis has no `reverse`; path
-  owns direction. Every axis (chase, `color.space`) also has:
+- **axis** is `order`, `x`, `y`, `z`, `radial`, `angle`, `random` or a
+  custom `vector(u, v, z)`, with an optional `mirror`. Axis has no
+  `reverse`; path owns direction. Every axis (chase, `color.space`, aim)
+  also has:
+  - **Random**: each head's coordinate comes from the clip's seed and the
+    head id. Within each span the heads take the evenly spaced values
+    `i / (n − 1)` (one head: 0.5) in a shuffled order, not independent
+    random values, so path, width and an aim's spread still cover the whole
+    range evenly. The order is the same on every frame and after a seek; a
+    new seed gives a new order. Stored as `"source": {"kind": "random"}`.
+  - **Mirror** reflects the heads on the low side of a plane onto the
+    high side before the axis reads them, so both halves of a span do the
+    same. The sheet's Mirror row is the old mapping editor's control:
+    `Off`, `Left–right`, `Front–back`, `Up–down` (planes through the middle
+    of the span, with normal U, V or Z) and `Custom plane`, which shows the
+    plane's normal as U, V, Z fields. With a mirror on, an `Offset` field
+    moves the plane along its normal, in metres. A stored normal that is
+    none of the three fixed ones reads `Custom plane`. A mirror needs a
+    spatial axis along a line: `x`, `y`, `z` or `vector`. Order, radial,
+    angle and random take no mirror; the sheet hides the row for them, and
+    picking one of them drops a mirror. Stored as
+    `"mirror": {"normal": [1, 0, 0], "offset": 0}`. For color forms the
+    folded coordinate is the whole mirror. An aim also mirrors its fan and
+    motion; see [aim.md](./aim.md#mirror).
   - **Spans**: `selection` (default: one axis 0–1 across the whole
     selection), `fixture` (each fixture, the head id before its last `:`,
     gets its own axis 0–1, so a chase runs along every pixel bar or LED ring

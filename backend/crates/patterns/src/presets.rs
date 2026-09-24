@@ -62,8 +62,12 @@ pub fn presets() -> &'static Presets {
 }
 
 impl Presets {
-    pub fn preset(&self, name: &str) -> Option<&FormPreset> {
-        self.presets.iter().find(|preset| preset.name == name)
+    /// The preset of `form` called `name`. A name is unique within its form
+    /// only: Chase and Aim each have a Wave.
+    pub fn preset(&self, form: &str, name: &str) -> Option<&FormPreset> {
+        self.presets
+            .iter()
+            .find(|preset| preset.form == form && preset.name == name)
     }
     /// The general curve called `name`.
     pub fn curve(&self, name: &str) -> Option<&Keyframes> {

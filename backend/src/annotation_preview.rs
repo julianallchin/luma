@@ -38,10 +38,10 @@ pub(crate) fn head_order(clip: &p::Clip, cells: &[p::Cell]) -> HashMap<String, f
         mirror: None,
     };
     let axis = match clip.inputs.get("axis") {
-        Some(p::Value::Mapping(spec)) => spec.resolve(cells).ok(),
+        Some(p::Value::Mapping(spec)) => spec.resolve(cells, clip.seed).ok(),
         _ => None,
     };
-    match axis.or_else(|| major.resolve(cells).ok()) {
+    match axis.or_else(|| major.resolve(cells, clip.seed).ok()) {
         Some(mapping) => mapping
             .coordinates
             .into_iter()
@@ -179,6 +179,115 @@ pub(crate) fn render_preview(
     }
 }
 
+/// The size of an aim clip's picture: the shape of a preset tile's strip.
+const AIM_PREVIEW: (u32, u32) = (128, 28);
+/// Where in the clip an aim picture shows the beams, as a share of it.
+const AIM_MOMENT: f64 = 0.375;
+
+/// An aim clip's picture. An aim has no light for a strip to show, so this
+/// is the rig seen from above, the audience at the bottom. Each beam is
+/// drawn a fixed length from its head: bright where it points at one moment
+/// of the clip, and dim along the path its tip takes over the whole clip. A
+/// fan, a wave and a circle each keep their shapes. `frames` are samples
+/// across the clip, in order.
+pub(crate) fn render_aim_preview(
+    annotation_id: String,
+    frames: &[UniverseState],
+    cells: &[p::Cell],
+) -> AnnotationPreview {
+    let (width, height) = AIM_PREVIEW;
+    let heads: Vec<[f64; 2]> = cells
+        .iter()
+        .map(|cell| [cell.uvz[0], cell.uvz[1]])
+        .collect();
+    let spread = |axis: usize| {
+        let values = heads.iter().map(|at| at[axis]);
+        values.clone().fold(f64::MIN, f64::max) - values.fold(f64::MAX, f64::min)
+    };
+    let beam = 0.15 * spread(0).max(spread(1)).max(0.5);
+    // Each head's beam tip at every frame, in metres; `None` with no aim.
+    let tips: Vec<Vec<Option<[f64; 2]>>> = cells
+        .iter()
+        .zip(&heads)
+        .map(|(cell, at)| {
+            frames
+                .iter()
+                .map(|frame| {
+                    let [du, dv, _] = frame.primitives.get(&cell.id)?.aim?.direction;
+                    Some([at[0] + f64::from(du) * beam, at[1] + f64::from(dv) * beam])
+                })
+                .collect()
+        })
+        .collect();
+    let drawn: Vec<[f64; 2]> = heads
+        .iter()
+        .copied()
+        .chain(tips.iter().flatten().flatten().copied())
+        .collect();
+    if drawn.is_empty() {
+        return empty_preview(annotation_id);
+    }
+    let low = |axis: usize| drawn.iter().map(|at| at[axis]).fold(f64::MAX, f64::min);
+    let high = |axis: usize| drawn.iter().map(|at| at[axis]).fold(f64::MIN, f64::max);
+    // One scale for both axes, so shapes are not squashed; 2 px of air.
+    let scale = ((f64::from(width) - 4.) / (high(0) - low(0)).max(1e-6))
+        .min((f64::from(height) - 4.) / (high(1) - low(1)).max(1e-6));
+    let middle = [(low(0) + high(0)) / 2., (low(1) + high(1)) / 2.];
+    let pixel = |at: [f64; 2]| {
+        [
+            f64::from(width) / 2. + (at[0] - middle[0]) * scale,
+            f64::from(height) / 2. + (at[1] - middle[1]) * scale,
+        ]
+    };
+    let mut level = vec![0f32; (width * height) as usize];
+    let plot = |level: &mut [f32], [x, y]: [f64; 2], value: f32| {
+        let (col, row) = (x.floor(), y.floor());
+        if col >= 0. && row >= 0. && col < f64::from(width) && row < f64::from(height) {
+            let at = (row as u32 * width + col as u32) as usize;
+            level[at] = level[at].max(value);
+        }
+    };
+    let line = |level: &mut [f32], a: [f64; 2], b: [f64; 2], value: f32| {
+        let (a, b) = (pixel(a), pixel(b));
+        let steps = (b[0] - a[0]).abs().max((b[1] - a[1]).abs()).ceil().max(1.);
+        for step in 0..=steps as usize {
+            let t = step as f64 / steps;
+            plot(
+                level,
+                [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
+                value,
+            );
+        }
+    };
+    let moment = ((frames.len().saturating_sub(1)) as f64 * AIM_MOMENT).round() as usize;
+    for (head, path) in heads.iter().zip(&tips) {
+        for pair in path.windows(2) {
+            if let [Some(a), Some(b)] = pair {
+                line(&mut level, *a, *b, 0.35);
+            }
+        }
+        if let Some(Some(tip)) = path.get(moment) {
+            line(&mut level, *head, *tip, 1.);
+        }
+        plot(&mut level, pixel(*head), 0.5);
+    }
+    let mean = level.iter().sum::<f32>() / level.len() as f32;
+    let pixels = level
+        .iter()
+        .flat_map(|value| {
+            let v = (value * 255.).round() as u8;
+            [v, v, v, 255]
+        })
+        .collect();
+    AnnotationPreview {
+        annotation_id,
+        width,
+        height,
+        pixels,
+        dominant_color: [mean; 3],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -197,6 +306,7 @@ mod tests {
                     strobe: 0.0,
                     position: [0.0; 2],
                     speed: 1.0,
+                    aim: None,
                 },
             );
         }

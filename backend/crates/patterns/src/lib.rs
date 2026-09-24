@@ -1,5 +1,6 @@
 //! Typed, composable pattern graphs. No database, UI, or playback-device state.
 //! A frame is evaluated in musical time over resolved independently controllable cells.
+pub mod aim;
 mod blend;
 mod catalog;
 pub mod circle_fit;
@@ -31,6 +32,7 @@ mod tensor;
 mod value;
 mod value_noise;
 
+pub use aim::{blend_aim, Aim};
 pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
 pub use clock::*;
@@ -45,8 +47,8 @@ mod event_timing;
 pub use event_timing::TrackTiming;
 pub use field_ops::FieldMath;
 pub use forms::{
-    axis_presets, input_order, is_form, palette_steps, path_presets, shape_presets, steps_path,
-    FORMS, MAX_WIDTH,
+    axis_presets, input_order, is_form, palette_steps, path_presets, replace_only, shape_presets,
+    steps_path, FORMS, MAX_WIDTH,
 };
 pub use graph::*;
 pub use mapping::*;

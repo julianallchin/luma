@@ -14,8 +14,8 @@
 //! [`OutputBinding`]: only capabilities the plan actually binds get blended.
 
 use crate::eval::{BlendMode, OutputBinding};
-use crate::models::universe::{PrimitiveState, UniverseState};
-use luma_patterns::{blend_light, blend_value};
+use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
+use luma_patterns::{blend_aim, blend_light, blend_value};
 
 /// A fresh, empty base frame: no head holds light yet.
 pub fn blank_frame() -> UniverseState {
@@ -25,13 +25,14 @@ pub fn blank_frame() -> UniverseState {
 }
 
 /// A head that no layer has written: no light, no strobe, speed fast.
-fn nothing() -> PrimitiveState {
+pub(crate) fn nothing() -> PrimitiveState {
     PrimitiveState {
         dimmer: 0.0,
         color: [1.0, 1.0, 1.0],
         strobe: 0.0,
         position: [0.0, 0.0],
         speed: 1.0,
+        aim: None,
     }
 }
 
@@ -44,6 +45,10 @@ fn nothing() -> PrimitiveState {
 /// - strobe: scalar `blend_value`, against 0 where `base` has no head
 /// - position: winner-takes-all when the top drives it
 /// - speed: binary (threshold 0.5)
+/// - aim: whatever the mode, blends toward the aim under it by alpha along
+///   the shortest arc ([`blend_aim`]). With no aim under it, the clip blends
+///   from the head's home: its alpha becomes the aim's weight, and the
+///   solver aims at `slerp(home, direction, weight)`.
 pub fn composite_frame(
     base: &mut UniverseState,
     top: &UniverseState,
@@ -70,6 +75,9 @@ pub fn composite_frame(
         if bindings.speed {
             bp.speed = if tp.speed > 0.5 { 1.0 } else { 0.0 };
         }
+        if let (true, Some(top)) = (bindings.aim, tp.aim) {
+            bp.aim = blend_aim(bp.aim.map(HeadAim::to_aim), top.to_aim()).map(HeadAim::from_aim);
+        }
     }
 }
 
@@ -87,12 +95,19 @@ mod tests {
         mode: p::BlendMode,
         z: i64,
     ) -> CompiledAnnotation {
-        let mut clip = p::presets().preset("Wash").unwrap().clip(0.0, 4.0);
+        let mut clip = p::presets()
+            .preset("color.constant@1", "Wash")
+            .unwrap()
+            .clip(0.0, 4.0);
         clip.inputs.insert("color".into(), p::Value::Color(color));
         clip.inputs
             .insert("brightness".into(), p::Value::Proportion(brightness));
         clip.inputs
             .insert("alpha".into(), p::Value::Proportion(alpha));
+        compile(clip, mode, z)
+    }
+
+    fn compile(clip: p::Clip, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
         let cells = vec![p::Cell {
             id: "head".into(),
             group: "wash".into(),
@@ -123,6 +138,20 @@ mod tests {
         }
     }
 
+    /// One `aim@1` Position clip on the head over beats 0–4, aimed at
+    /// `direction` at `alpha`.
+    fn aim(direction: [f64; 3], alpha: f64, z: i64) -> CompiledAnnotation {
+        let mut clip = p::presets()
+            .preset("aim@1", "Position")
+            .unwrap()
+            .clip(0.0, 4.0);
+        clip.inputs
+            .insert("direction".into(), p::Value::Vector(direction));
+        clip.inputs
+            .insert("alpha".into(), p::Value::Proportion(alpha));
+        compile(clip, p::BlendMode::Replace, z)
+    }
+
     /// The head's light (color × dimmer) at beat 1; no head is no light.
     fn light(layers: Vec<CompiledAnnotation>) -> [f32; 3] {
         let frame = Scene::new(layers).render(&[1.0], Scope::Composite, &mut Arena::default());
@@ -142,6 +171,48 @@ mod tests {
 
     const RED: [f64; 3] = [1.0, 0.0, 0.0];
     const BLUE: [f64; 3] = [0.0, 0.0, 1.0];
+
+    fn head(layers: Vec<CompiledAnnotation>) -> crate::models::universe::PrimitiveState {
+        Scene::new(layers).render(&[1.0], Scope::Composite, &mut Arena::default())[0].primitives
+            ["head"]
+            .clone()
+    }
+
+    #[test]
+    fn aim_clips_blend_by_alpha_along_the_shortest_arc() {
+        const REST: [f64; 3] = [0.0, 0.766, -0.643];
+        const RIGHT: [f64; 3] = [1.0, 0.0, 0.0];
+        let blended = head(vec![aim(REST, 1.0, 0), aim(RIGHT, 0.25, 1)])
+            .aim
+            .unwrap();
+        let expected = p::aim::slerp(REST, RIGHT, 0.25).map(|v| v as f32);
+        assert_eq!(blended.weight, 1.0);
+        assert!(
+            blended
+                .direction
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-5),
+            "{blended:?}"
+        );
+        // Over no aim, the clip blends from home: alpha is the weight.
+        let alone = head(vec![aim(RIGHT, 0.25, 0)]).aim.unwrap();
+        assert_eq!(alone.weight, 0.25);
+        // Alpha 0 is no clip; a head with no aim clip has no aim.
+        let under = head(vec![aim(REST, 1.0, 0)]).aim;
+        assert_eq!(head(vec![aim(REST, 1.0, 0), aim(RIGHT, 0.0, 1)]).aim, under);
+        assert_eq!(
+            head(vec![wash(RED, 1.0, 1.0, p::BlendMode::Replace, 0)]).aim,
+            None
+        );
+        // Aim and light composite apart.
+        let both = head(vec![
+            wash(RED, 1.0, 1.0, p::BlendMode::Replace, 0),
+            aim(RIGHT, 1.0, 1),
+        ]);
+        assert_eq!(both.dimmer, 1.0);
+        assert_eq!(both.aim.unwrap().direction, [1.0, 0.0, 0.0]);
+    }
 
     #[test]
     fn add_and_screen_over_black_equal_over_nothing() {
