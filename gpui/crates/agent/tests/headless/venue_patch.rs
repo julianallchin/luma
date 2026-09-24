@@ -732,7 +732,8 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
         const trigger = app.snapshot().find({role:"toggle",label:"Render settings"});
         app.click(trigger);
         until("camera closes settings", s => !s.find({role:"card",label:"Render settings"}));
-        nav.step("view settings again", "toggle", "Render settings");
+        // The room is venue truth: it sits on the venue page, not in the
+        // render settings.
         nav.step("outdoor", "toggle", "Outdoor");
         until("sun", s => sun() !== undefined);
         const before = sun().label;
@@ -798,7 +799,7 @@ fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
         &mut harness,
         r#"
         nav.patch("Test Venue");
-        nav.step("view settings", "toggle", "Render settings");
+        until("environment", s => s.find({role:"card",label:"Venue environment"}));
         function field(name) {
             return app.snapshot().findAll({role:"slider"}).find(n => n.label.startsWith(name + " = "));
         }
@@ -821,8 +822,7 @@ fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
         nav.step("outdoor", "toggle", "Outdoor");
         app.frames(4);
         const outdoor = names.map(n => field(n).label);
-        app.key("escape");
-        nav.step("reopen", "toggle", "Render settings");
+        nav.step("indoor", "toggle", "Indoor");
         app.frames(4);
         ({densityRange, before, changed, outdoor, reopened:names.map(n => field(n).label)})
     "#,
@@ -890,6 +890,12 @@ fn view_settings_persist_per_device_and_per_venue() {
         openView();
         const before = all();
 
+        // Haze is on the venue page, outside the popover: pressing it closes
+        // the popover, so it goes first.
+        const density = scrub("Haze density").bounds;
+        app.drag({x:density.x + 2, y:density.y + density.height / 2},
+                 {dx:(density.width - 4) * 0.8, dy:0}, {steps:8});
+        openView();
         nav.step("grid off", "toggle", "Grid");
         nav.step("gizmos off", "toggle", "Gizmos");
         // Leftwards from the right edge: the mapping is absolute, so the value
@@ -897,15 +903,13 @@ fn view_settings_persist_per_device_and_per_venue() {
         const scale = scrub("Render scale (%)").bounds;
         app.drag({x:scale.x + scale.width - 2, y:scale.y + scale.height / 2},
                  {dx:-(scale.width - 4) * 0.6, dy:0}, {steps:8});
-        const density = scrub("Haze density").bounds;
-        app.drag({x:density.x + 2, y:density.y + density.height / 2},
-                 {dx:(density.width - 4) * 0.8, dy:0}, {steps:8});
         app.frames(4);
         const changed = all();
 
         // The room changes under them. This is what used to put the grid back.
         nav.step("outdoor", "toggle", "Outdoor");
         app.frames(4);
+        openView();
         const relit = all();
 
         app.key("escape");

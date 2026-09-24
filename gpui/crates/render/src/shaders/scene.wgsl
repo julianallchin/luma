@@ -415,10 +415,36 @@ fn occluded_sky(n: vec3<f32>, open: vec3<f32>, visibility: vec4<f32>) -> Occlude
     return OccludedSky(sky * visibility.g + ground * lit, lit);
 }
 
+/// One opaque surface point, ready to light: what `fs_main` reads from a
+/// glTF material and `fs_ground` from a floor material.
+struct Surface {
+    base_color: vec3<f32>,
+    metallic: f32,
+    // Perceptual roughness, already widened for the pixel's footprint.
+    roughness: f32,
+    // The material's own ambient occlusion.
+    ao: f32,
+    emissive: vec3<f32>,
+    n: vec3<f32>,
+    // Height-field slope spread of the surface at scales above its texture,
+    // as a GGX alpha, or zero. Only the ground has any: a field of grass or
+    // gravel is uneven by centimetres over metres, and at a grazing view and
+    // a low sun those bumps mask the sheen a flat plane would show. Without
+    // it the last row of ground before the horizon, where the view grazes
+    // the plane, lit up as a sun-coloured line.
+    unevenness: f32,
+};
+
+/// Smith's masking for GGX, from one direction.
+fn smith_g1(cos_theta: f32, alpha: f32) -> f32 {
+    let c = max(cos_theta, 0.0);
+    let a2 = alpha * alpha;
+    return 2.0 * c / max(c + sqrt(a2 + (1.0 - a2) * c * c), 1e-6);
+}
+
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let inst = instances[in.instance];
-    let v = normalize(globals.camera_pos.xyz - in.world);
 
     var n = normalize(in.normal);
     if !front {
@@ -433,17 +459,60 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     mapped = vec3<f32>(mapped.xy * inst.flags.y, mapped.z);
     n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
 
-    let base_color = inst.base_color.rgb
-        * textureSample(base_color_map, material_sampler, in.uv).rgb;
     let mr = textureSample(metallic_roughness_map, material_sampler, in.uv);
-    let metallic = inst.base_color.a * mr.b;
+    var surface: Surface;
+    surface.base_color = inst.base_color.rgb
+        * textureSample(base_color_map, material_sampler, in.uv).rgb;
+    surface.metallic = inst.base_color.a * mr.b;
     // three clamps roughness to 0.0525 before squaring.
-    let roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
-    let ao_sample = textureSample(occlusion_map, material_sampler, in.uv).r;
-    let ao = mix(1.0, ao_sample, inst.flags.z);
+    surface.roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
+    surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
+    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
+    surface.n = n;
+    surface.unevenness = 0.0;
+    return shade(in, surface, dpdx(in.world), dpdy(in.world));
+}
+
+/// Light one surface point: the ambient, the sky probe, the sun and every
+/// fixture cone, then the air between it and the camera. `dx` and `dy` are
+/// the point's screen derivatives, taken by the caller in uniform control
+/// flow.
+fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec4<f32> {
+    let inst = instances[fragment.instance];
+    var in = fragment;
+    if inst.flags.x > 0.5 {
+        in.world = ground_fragment(fragment.world);
+    }
+    let v = normalize(globals.camera_pos.xyz - in.world);
+    let n = surface.n;
+    let base_color = surface.base_color;
+    let metallic = surface.metallic;
+    let roughness = surface.roughness;
+    let ao = surface.ao;
     let diffuse_color = base_color * (1.0 - metallic);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
-    let shadow = shadow_factor(in.world, n, inst.flags.x > 0.5);
+    // The share of a light's specular lobe the surface's unevenness lets
+    // past, toward the viewer; the light's own share is taken per light
+    // below. The sky's reflection keeps all of it: the split-sum table
+    // already masks its lobe, and at a grazing view the ground's reflection
+    // of the horizon sky is what joins the far ground to the sky. Masked,
+    // the ground darkened a few hundred metres out and the air brightened
+    // it again beyond: a dark row under an even sky.
+    var masking = 1.0;
+    if surface.unevenness > 0.0 {
+        masking = smith_g1(dot(n, v), surface.unevenness);
+    }
+    // The stage's own shadow, and the cloud layer's: the sun reaches a
+    // surface through both.
+    let ground = inst.flags.x > 0.5;
+    let span = ground_span(in.world);
+    var cloud_shadow: f32;
+    if ground && span.valid {
+        cloud_shadow = ground_cloud_shadow(span);
+    } else {
+        cloud_shadow = surface_cloud_shadow(in.world, dx, dy);
+    }
+    let shadow = shadow_factor(in.world, n, ground) * cloud_shadow;
     // View depth for the light index's Z-bin lookup — the same forward-axis
     // distance the index binned the lights with.
     let view_depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);
@@ -475,7 +544,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         return vec4<f32>(vec3<f32>(shadow), 1.0);
     }
 
-    var out = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
+    var out = surface.emissive;
     // The house's reach. Applied to the fill and the key and to nothing else:
     // every fixture cone already falls off with distance, and an emissive
     // surface is its own source.
@@ -527,8 +596,12 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         let dot_nl = saturate(dot(n, l));
         if dot_nl > 0.0 {
             let irradiance = dot_nl * globals.dir_color.rgb * shadow * glow;
+            var sheen = masking;
+            if surface.unevenness > 0.0 {
+                sheen *= smith_g1(dot_nl, surface.unevenness);
+            }
             out += irradiance * diffuse_color * RECIPROCAL_PI;
-            out += irradiance * brdf_ggx(n, v, l, f0, roughness);
+            out += irradiance * brdf_ggx(n, v, l, f0, roughness) * sheen;
         }
     }
 
@@ -601,14 +674,131 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             let irradiance =
                 dot_nl * rest.color * rest.intensity * beam_gain * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
-            out += irradiance * brdf_ggx(n, v, l, f0, roughness);
+            out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
         }
     }
 
     // This opaque pipeline replaces the target, so write premultiplied
     // radiance directly. Depth still occludes geometry behind the surface.
     let coverage = horizon_coverage(view_depth);
-    return vec4<f32>(surface_radiance(out, in.world - globals.camera_pos.xyz, in.clip.xy) * coverage, coverage);
+    let delta = in.world - globals.camera_pos.xyz;
+    var radiance: vec3<f32>;
+    if ground && span.valid {
+        radiance = surface_haze(ground_aerial(out, span), delta, in.clip.xy);
+    } else {
+        radiance = surface_radiance(out, delta, in.clip.xy);
+    }
+    return vec4<f32>(radiance * coverage, coverage);
+}
+
+/// The ground one pixel covers, along its view.
+///
+/// Toward the horizon a pixel of flat ground runs from where its lower edge
+/// meets the ground out to where its upper edge does, and in the last row
+/// that is from a kilometre or so to the end of the ground. Shaded at its
+/// centre, that row showed whatever lay a kilometre out: one cloud's shadow
+/// or the sun between two, drawn as a line along the horizon, and the air
+/// of a kilometre where the pixel shows a hundred. So the ground reads the
+/// cloud shadow and the air over the whole span, in steps of equal angle,
+/// the share of the pixel each covers. A pixel near the camera spans a few
+/// centimetres and takes one step, the centre, as before.
+struct GroundSpan {
+    valid: bool,
+    // The view's heading across the ground, world XY.
+    heading: vec2<f32>,
+    // The camera's height above the ground, metres, and the ground's Z.
+    height: f32,
+    z: f32,
+    // Depression below the horizontal of the pixel's lower and upper edges,
+    // radians; the upper stops where the ground ends.
+    near: f32,
+    far: f32,
+};
+
+/// Where a ground fragment really is. Along the horizon a pixel is part
+/// ground and part sky, and with MSAA the shader runs once, at the pixel's
+/// centre, which may lie above the horizon. There the plane's interpolated
+/// position is where the centre's ray, run backwards, meets the ground:
+/// behind the camera, so the pixel was lit and hazed as if looking back.
+/// With the sun behind the camera that drew a sun-coloured line one pixel
+/// high along the whole horizon. The ground that pixel covers is the
+/// farthest drawn, in the ray's own heading.
+fn ground_fragment(world: vec3<f32>) -> vec3<f32> {
+    let camera = globals.camera_pos.xyz;
+    let rel = world - camera;
+    let run = length(rel.xy);
+    let ahead = dot(rel, globals.camera_forward.xyz) > 0.0;
+    if ahead && run <= AERIAL_MAX_M {
+        return world;
+    }
+    let heading = select(-rel.xy, rel.xy, ahead) / max(run, 1e-6);
+    return vec3<f32>(camera.xy + heading * AERIAL_MAX_M, world.z);
+}
+
+fn ground_span(world: vec3<f32>) -> GroundSpan {
+    var span: GroundSpan;
+    let camera = globals.camera_pos.xyz;
+    let rel = world - camera;
+    let run = length(rel.xy);
+    span.height = camera.z - world.z;
+    span.z = world.z;
+    span.valid = span.height > 1e-3 && run > 1e-3;
+    if !span.valid {
+        return span;
+    }
+    span.heading = rel.xy / run;
+    // One pixel's angle: the projection's vertical scale, which the view's
+    // rotation leaves as the length of the matrix's second row.
+    let scale = length(vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]));
+    let pixel = 2.0 / max(scale * globals.viewport.y, 1.0);
+    let centre = atan2(span.height, run);
+    let end = atan2(span.height, AERIAL_MAX_M);
+    span.near = centre + 0.5 * pixel;
+    span.far = max(centre - 0.5 * pixel, end);
+    return span;
+}
+
+/// The ground point of step `i` of `count` across the span.
+fn ground_span_point(span: GroundSpan, i: u32, count: u32) -> vec3<f32> {
+    let angle = mix(span.near, span.far, (f32(i) + 0.5) / f32(count));
+    let run = span.height / tan(angle);
+    return vec3<f32>(globals.camera_pos.xy + span.heading * run, span.z);
+}
+
+fn ground_span_run(span: GroundSpan, angle: f32) -> f32 {
+    return span.height / tan(angle);
+}
+
+/// The air in front of the span: a step per half octave of distance, up to
+/// eight, since the aerial volume's slices are spaced by the distance's
+/// logarithm. The haze is left to the pixel's centre, the depth the
+/// composite takes the haze's shafts off at (`composite.wgsl`).
+fn ground_aerial(color: vec3<f32>, span: GroundSpan) -> vec3<f32> {
+    let ratio = ground_span_run(span, span.far) / ground_span_run(span, span.near);
+    let count = u32(clamp(ceil(2.0 * log2(max(ratio, 1.0))), 1.0, 8.0));
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < count; i++) {
+        sum += aerial_radiance(color, ground_span_point(span, i, count) - globals.camera_pos.xyz);
+    }
+    return sum / f32(count);
+}
+
+/// The cloud shadow over the span: a step per map texel of depth, up to
+/// sixteen.
+fn ground_cloud_shadow(span: GroundSpan) -> f32 {
+    let shadow = aerial_sky.shadow;
+    if shadow.z <= 0.0 {
+        return 1.0;
+    }
+    let texel = shadow.z * 1000.0 / f32(textureDimensions(aerial_cloud_shadow).x);
+    let depth = ground_span_run(span, span.far) - ground_span_run(span, span.near);
+    let count = u32(clamp(ceil(depth / texel), 1.0, 16.0));
+    var sum = 0.0;
+    for (var i = 0u; i < count; i++) {
+        let at = ground_span_point(span, i, count);
+        sum += cloud_shadow_at(aerial_cloud_shadow, aerial_sampler, shadow, aerial_sky.sun.xyz, at);
+    }
+    return sum / f32(count);
 }
 
 // Store the shading invocation's centre depth separately in every covered

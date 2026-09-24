@@ -97,6 +97,9 @@ fn adopt_a_compositor_device() -> bool {
             max_buffer_size: adapter.limits().max_buffer_size,
             max_storage_buffers_per_shader_stage:
                 adapter.limits().max_storage_buffers_per_shader_stage,
+            max_sampled_textures_per_shader_stage: adapter
+                .limits()
+                .max_sampled_textures_per_shader_stage,
             ..wgpu::Limits::default().using_resolution(adapter.limits())
         },
         ..Default::default()

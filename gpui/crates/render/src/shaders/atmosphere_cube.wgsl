@@ -15,6 +15,8 @@
 @group(0) @binding(1) var lut_sampler: sampler;
 @group(0) @binding(2) var output_tex: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(3) var<uniform> cfg: SkyUniform;
+@group(0) @binding(4) var clouds_tex: texture_2d<f32>;
+@group(0) @binding(5) var clouds_sampler: sampler;
 
 fn face_direction(face: u32, uv: vec2<f32>) -> vec3<f32> {
     let p = uv * 2.0 - 1.0;
@@ -47,5 +49,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         skyview_uv(radius, coords.y, coords.x),
         0.0,
     ).rgb;
-    textureStore(output_tex, vec2<i32>(id.xy), i32(id.z), vec4<f32>(sky * sky_exposure(cfg), 1.0));
+    // The clouds are in the probe: under a deck, the ambient is the deck.
+    let clouds = textureSampleLevel(clouds_tex, clouds_sampler, cloud_panorama_uv(dir), 0.0);
+    let clouded = sky * clouds.a + clouds.rgb;
+    textureStore(output_tex, vec2<i32>(id.xy), i32(id.z), vec4<f32>(clouded * sky_exposure(cfg), 1.0));
 }

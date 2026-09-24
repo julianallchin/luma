@@ -47,7 +47,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             radius,
             dir,
             sun,
-            GROUND_ALBEDO_REFERENCE,
+            vec3<f32>(GROUND_ALBEDO_REFERENCE),
             MARCH_STEPS,
             vec3<f32>(0.0),
             true,

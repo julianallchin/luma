@@ -217,6 +217,7 @@ pub struct Library {
     loaded: HashMap<String, Glb>,
     environments: HashMap<String, HdrImage>,
     procedural: HashMap<String, crate::frame::MeshData>,
+    floors: HashMap<(String, bool), crate::floor::Maps>,
 }
 
 impl Library {
@@ -228,6 +229,7 @@ impl Library {
             loaded: HashMap::new(),
             environments: HashMap::new(),
             procedural: HashMap::new(),
+            floors: HashMap::new(),
         }
     }
 
@@ -262,6 +264,20 @@ impl Library {
             self.loaded.insert(rel.to_string(), glb);
         }
         Ok(&self.loaded[rel])
+    }
+
+    /// Floor material set `name`, decoded and packed once, at half size when
+    /// `half` (see [`crate::floor`]).
+    ///
+    /// # Errors
+    /// Fails if the set's images are missing or unreadable.
+    pub fn floor(&mut self, name: &str, half: bool) -> anyhow::Result<crate::floor::Maps> {
+        let key = (name.to_string(), half);
+        if !self.floors.contains_key(&key) {
+            let maps = crate::floor::load(&self.root, name, half)?;
+            self.floors.insert(key.clone(), maps);
+        }
+        Ok(self.floors[&key].clone())
     }
 
     /// Decode and cache a Radiance HDR environment by stable relative path.

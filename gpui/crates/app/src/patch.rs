@@ -313,8 +313,9 @@ impl Luma {
         self.open_patch(cx);
     }
 
-    /// Reveal the selected venue's patch: the venue page's one body.
-    fn open_patch(&mut self, cx: &mut Context<Self>) {
+    /// Reveal the selected venue's patch: the venue page's one body, or a
+    /// tab beside a track's editor when the `+` menu asks for it.
+    pub(crate) fn open_patch(&mut self, cx: &mut Context<Self>) {
         let Some(browser) = &self.sidebar else {
             return;
         };

@@ -1448,6 +1448,7 @@ fn frame_with_lights(
         transparent: base.transparent.clone(),
         gizmo_pivot: base.gizmo_pivot,
         overlays: Vec::new(),
+        floor: None,
         fixture_cones: Vec::with_capacity(count),
         fixture_shadow_capacity_hint: 0,
         fixture_lighting_domain: None,

@@ -48,6 +48,7 @@
 mod camera_export;
 mod motors;
 mod settings;
+pub(crate) use settings::environment_panel;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -3410,9 +3411,10 @@ pub(crate) fn visualizer(
         )
 }
 
-fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+/// The room's haze: venue truth, set on the venue page.
+fn haze_rows(state: &Visualizer, app: &Entity<Luma>) -> Div {
     let controls = &state.render_controls;
-    let haze = div()
+    div()
         .flex()
         .flex_col()
         .gap(px(8.))
@@ -3470,7 +3472,11 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             0.,
             360.,
             ViewValue::WindDirection,
-        ));
+        ))
+}
+
+fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+    let controls = &state.render_controls;
     let viewport = div()
         .flex()
         .flex_col()
@@ -3512,8 +3518,6 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(12.))
-        .child(settings::section("Haze", haze))
-        .child(luma_ui::float::divider())
         .child(settings::section("Camera", camera_controls(state, app)))
         .child(luma_ui::float::divider())
         .child(settings::section("Viewport", viewport))

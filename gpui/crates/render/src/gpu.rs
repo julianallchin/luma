@@ -157,6 +157,8 @@ struct Globals {
     surface_fog: [f32; 4],
     /// xy: output size in pixels, zw: reciprocal.
     viewport: [f32; 4],
+    /// The ground's floor material; see `floor.wgsl`.
+    floor: [[f32; 4]; 4],
 }
 
 /// Where the opaque scene pass takes outdoor camera transmittance from.
@@ -851,7 +853,8 @@ struct CompositeUniform {
     camera_pos: [f32; 4],
     outdoor_sun: [f32; 4],
     /// x: display headroom, the brightest output as a multiple of SDR white.
-    /// Read only by the [`Channels::Hdr`] pipeline.
+    /// Read only by the [`Channels::Hdr`] pipeline. y: 1 when the sun
+    /// shaft texture (`sun_shafts.rs`) holds this frame; zw: its size.
     display: [f32; 4],
 }
 
@@ -1227,6 +1230,7 @@ pub struct Renderer {
     /// whatever scene *this* renderer was last asked to draw.
     environment: EnvironmentCache,
     atmosphere: AtmosphereCache,
+    sun_shafts: crate::sun_shafts::Cache,
     sky_visibility: crate::sky_visibility::SkyVisibility,
     /// Exposure state and post-chain targets (`post.rs`).
     post: crate::post::Post,
@@ -1794,6 +1798,9 @@ struct MaterialKey {
     metallic_roughness: Option<TextureKey>,
     occlusion: Option<TextureKey>,
     emissive: Option<TextureKey>,
+    /// The ground's floor material, which samples anisotropically: it is
+    /// seen at grazing angles out to the horizon.
+    floor: bool,
 }
 
 impl MaterialKey {
@@ -1810,6 +1817,7 @@ impl MaterialKey {
             metallic_roughness: key(draw.textures.metallic_roughness, TextureEncoding::Linear),
             occlusion: key(draw.textures.occlusion, TextureEncoding::Linear),
             emissive: key(draw.textures.emissive, TextureEncoding::Srgb),
+            floor: frame.floor.is_some() && crate::frame::is_ground(&frame.meshes[draw.mesh].key),
         }
     }
 
@@ -2149,6 +2157,7 @@ pub struct Gpu {
     adapter_profile: RendererProfile,
     environment: EnvironmentPipelines,
     atmosphere: AtmospherePipelines,
+    sun_shafts: crate::sun_shafts::Pipelines,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     cluster_layout: wgpu::BindGroupLayout,
@@ -2265,6 +2274,9 @@ pub struct Gpu {
     dummy_shadow: wgpu::TextureView,
     linear_sampler: wgpu::Sampler,
     texture_sampler: wgpu::Sampler,
+    /// The floor material's sampler: [`Self::texture_sampler`] with 16x
+    /// anisotropy.
+    floor_sampler: wgpu::Sampler,
     /// Neutral glTF maps, bound by procedural/depth-only draws.
     white_material: wgpu::BindGroup,
     material_defaults: MaterialDefaults,
@@ -2680,6 +2692,8 @@ impl Gpu {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // The sun-shaft fraction (`sun_shafts.rs`).
+                texture_entry(7),
             ],
         });
 
@@ -2695,6 +2709,11 @@ impl Gpu {
             include_str!("shaders/haze_daylight.wgsl"),
             include_str!("shaders/outdoor_surface.wgsl"),
         );
+        let sun_shafts = crate::sun_shafts::Pipelines::new(
+            &device,
+            &queue,
+            &format!("{bindings}{}", include_str!("shaders/sun_shafts.wgsl")),
+        );
         let fixture_light = include_str!("shaders/fixture_light.wgsl");
         let visibility = include_str!("shaders/visibility.wgsl");
         let haze_visibility = visibility.replace("@group(3) @binding(11)", "@group(0) @binding(8)");
@@ -2707,8 +2726,9 @@ impl Gpu {
             &device,
             "scene",
             &format!(
-                "{bindings}{scene_light_index_prelude}{fixture_light}{visibility}{}",
-                include_str!("shaders/scene.wgsl")
+                "{bindings}{scene_light_index_prelude}{fixture_light}{visibility}{}{}",
+                include_str!("shaders/scene.wgsl"),
+                include_str!("shaders/floor.wgsl")
             ),
         );
         // The transport (ray reconstruction + per-light integral + group-0
@@ -4198,6 +4218,16 @@ impl Gpu {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let floor_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("floor"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..Default::default()
+        });
         let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -4257,6 +4287,7 @@ impl Gpu {
             adapter_profile,
             environment,
             atmosphere,
+            sun_shafts,
             scene_layout,
             material_layout,
             cluster_layout,
@@ -4326,6 +4357,7 @@ impl Gpu {
             dummy_shadow,
             linear_sampler,
             texture_sampler,
+            floor_sampler,
             white_material,
             material_defaults,
             lost,
@@ -4464,6 +4496,7 @@ impl Renderer {
             fog_blocks_valid: false,
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
+            sun_shafts: crate::sun_shafts::Cache::default(),
             sky_visibility: crate::sky_visibility::SkyVisibility::default(),
             post,
             shadow_map,
@@ -5796,6 +5829,7 @@ impl Renderer {
                 )),
                 frame.debug_view.shader_code() as f32,
             ],
+            floor: frame.floor.map_or([[0.0; 4]; 4], |floor| floor.uniform()),
         };
         if self.environment.prepare(
             &self.gpu.environment,
@@ -5817,19 +5851,32 @@ impl Renderer {
         // resolves and the probe the scene pass is lit by. Its tables are
         // rebuilt only when the sun moves, so this is a cache hit for every
         // frame of a fixed hour.
+        // The clouds are traced here too, from the unjittered camera: they
+        // are the background, and the composite reads them.
         let (sky_bg, sky_probe) = self.atmosphere.prepare(
             &self.gpu.atmosphere,
             &self.gpu.environment,
             &self.gpu.device,
+            &self.gpu.queue,
             &mut encoder,
             frame.sky.as_ref(),
+            &crate::atmosphere::CloudFrame {
+                view_proj,
+                eye: frame.camera.eye,
+                width,
+                height,
+                time: frame.time,
+                temporal,
+                quality: frame.quality,
+            },
+            &mut pass_queries,
         );
         let aerial = self.atmosphere.prepare_aerial(
             &self.gpu.atmosphere,
             &self.gpu.device,
             &mut encoder,
             frame.sky.as_ref(),
-            frame.camera.eye.z,
+            frame.camera.eye,
             &mut pass_queries,
         );
         if let Some(probe) = &sky_probe {
@@ -5956,7 +6003,11 @@ impl Renderer {
             let bind_group = material_bind_group(
                 &self.gpu.device,
                 &self.gpu.material_layout,
-                &self.gpu.texture_sampler,
+                if key.floor {
+                    &self.gpu.floor_sampler
+                } else {
+                    &self.gpu.texture_sampler
+                },
                 view(
                     key.base_color.as_ref(),
                     &self.gpu.material_defaults.base_color,
@@ -6276,6 +6327,12 @@ impl Renderer {
         {
             let mut pending_start = profile_resources.as_ref().map(|(queries, ..)| queries);
             let all_opaque: Vec<usize> = (0..opaque).collect();
+            // Under a floor material the ground has its own fragment shader.
+            let (floor_draws, lit_draws): (Vec<usize>, Vec<usize>) =
+                all_opaque.iter().partition(|&&index| {
+                    frame.floor.is_some()
+                        && crate::frame::is_ground(&frame.meshes[frame.draws[index].mesh].key)
+                });
             let transparent: Vec<usize> = (opaque..frame.draws.len()).collect();
             // Which casters each shadow map actually needs.
             //
@@ -6690,11 +6747,15 @@ impl Renderer {
                         ..Default::default()
                     });
                     let pipelines = gpu.scene_pipelines(samples);
-                    pass.set_pipeline(&pipelines.scene);
                     pass.set_bind_group(0, &lit_bg, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_range(&mut pass, &all_opaque);
+                    if !floor_draws.is_empty() {
+                        pass.set_pipeline(&pipelines.ground);
+                        draw_range(&mut pass, &floor_draws);
+                    }
+                    pass.set_pipeline(&pipelines.scene);
+                    draw_range(&mut pass, &lit_draws);
                     for (slot, kind) in frame.transparent.iter().enumerate() {
                         pass.set_pipeline(match kind {
                             crate::frame::Transparent::Grid => &pipelines.grid,
@@ -8150,6 +8211,31 @@ impl Renderer {
                 haze_view.clone()
             };
 
+            // --- sun shafts ------------------------------------------------------
+            // Outdoor haze with a sun: how much of each ray's haze the sun
+            // reaches past the stage and the clouds. Reads the scene's depth
+            // and the shadow cascades, so it runs after both.
+            let shafts = (frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
+                self.sun_shafts.encode(
+                    &self.gpu.sun_shafts,
+                    &self.gpu.device,
+                    &mut encoder,
+                    &crate::sun_shafts::FrameInput {
+                        globals: &globals_buf,
+                        shadow_map: &self.shadow_map,
+                        shadow_sampler: &self.gpu.hard_shadow_sampler,
+                        haze_field: (&self.gpu.haze_field.view, &self.gpu.haze_field.sampler),
+                        aerial: &aerial,
+                        depth: &depth_view,
+                        inv_view_proj,
+                        width: t_width,
+                        height: t_height,
+                        quality: frame.quality,
+                    },
+                    &mut pass_queries,
+                )
+            });
+
             // --- composite + readback --------------------------------------------
             let composite_uniform = CompositeUniform {
                 medium,
@@ -8170,7 +8256,12 @@ impl Renderer {
                     Transport::PHASE_G,
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
-                display: [destination.headroom(), 0.0, 0.0, 0.0],
+                display: [
+                    destination.headroom(),
+                    f32::from(u8::from(shafts.is_some())),
+                    shafts.as_ref().map_or(1.0, |(_, size)| size.0 as f32),
+                    shafts.as_ref().map_or(1.0, |(_, size)| size.1 as f32),
+                ],
             };
             let composite_buf = self.storage(
                 &mut encoder,
@@ -8198,6 +8289,14 @@ impl Renderer {
                         ),
                         binding(3, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
                         binding(4, wgpu::BindingResource::TextureView(&depth_view)),
+                        binding(
+                            7,
+                            wgpu::BindingResource::TextureView(
+                                shafts
+                                    .as_ref()
+                                    .map_or(&self.gpu.sun_shafts.off, |(view, _)| view),
+                            ),
+                        ),
                     ],
                 });
             {
@@ -8270,10 +8369,18 @@ impl Renderer {
                             headroom: destination.headroom(),
                             output: channels.index(),
                             temporal,
-                            sun: frame
-                                .sky
-                                .as_ref()
-                                .map(|sky| (sky.sun_direction, sky.sun_radiance)),
+                            // The lens's veil from a sun off the frame is
+                            // the sun's light through the clouds, or under
+                            // a deck the veil glows from a sun nobody sees.
+                            sun: frame.sky.as_ref().map(|sky| {
+                                let through = crate::atmosphere::clouds::sun_visibility(
+                                    sky.clouds,
+                                    frame.camera.eye,
+                                    sky.sun_direction,
+                                    frame.time,
+                                );
+                                (sky.sun_direction, sky.sun_radiance * through)
+                            }),
                         },
                         &depth_view,
                         &output_view,
@@ -12381,6 +12488,7 @@ mod tests {
             transparent: Vec::new(),
             gizmo_pivot: None,
             overlays: Vec::new(),
+            floor: None,
             fixture_cones,
             fixture_shadow_capacity_hint: 0,
             fixture_lighting_domain: None,
@@ -12488,7 +12596,8 @@ mod tests {
             sun_direction: Vec3::Z,
             sun_radiance: Vec3::ONE,
             exposure: 1.0,
-            ground_albedo: 0.1,
+            ground_albedo: Vec3::splat(0.1),
+            clouds: crate::scene_desc::CloudCover::Clear,
         });
         let active = crate::medium::Uniform::new(&frame, 0.3, 17.0);
         let active_far = frame.camera.eye.distance(frame.fixture_cones[0].position)
@@ -12524,7 +12633,8 @@ mod tests {
             sun_direction: Vec3::Z,
             sun_radiance: Vec3::ONE,
             exposure: 1.0,
-            ground_albedo: 0.1,
+            ground_albedo: Vec3::splat(0.1),
+            clouds: crate::scene_desc::CloudCover::Clear,
         });
         frame.fixture_lighting_domain = Some(FixtureLightingDomain {
             bounds: luma_scene::Aabb::new(Vec3::splat(-0.01), Vec3::splat(0.01)),
@@ -12550,7 +12660,8 @@ mod tests {
             sun_direction: Vec3::Z,
             sun_radiance: Vec3::ONE,
             exposure: 1.0,
-            ground_albedo: 0.1,
+            ground_albedo: Vec3::splat(0.1),
+            clouds: crate::scene_desc::CloudCover::Clear,
         });
         let active = crate::medium::Uniform::new(&frame, 0.3, 17.0);
         let active_far = frame.camera.eye.distance(frame.fixture_cones[0].position)
@@ -12751,7 +12862,8 @@ mod tests {
             sun_direction: Vec3::Z,
             sun_radiance: Vec3::ONE,
             exposure: 1.0,
-            ground_albedo: 0.1,
+            ground_albedo: Vec3::splat(0.1),
+            clouds: crate::scene_desc::CloudCover::Clear,
         });
         frame.fixture_cones[0].position = Vec3::new(2.0, 3.0, 4.0);
         frame.fixture_cones[0].range = 5.0;
@@ -12842,7 +12954,8 @@ mod tests {
             sun_direction: Vec3::Z,
             sun_radiance: Vec3::ONE,
             exposure: 1.0,
-            ground_albedo: 0.1,
+            ground_albedo: Vec3::splat(0.1),
+            clouds: crate::scene_desc::CloudCover::Clear,
         });
         let medium = crate::medium::Uniform::new(&frame, 0.3, 0.0);
         DiagnosticLightingDomain {
@@ -12915,6 +13028,7 @@ mod tests {
             draws,
             transparent: Vec::new(),
             gizmo_pivot: None,
+            floor: None,
             overlays: vec![Overlay {
                 mesh: 0,
                 model: Mat4::from_translation(Vec3::Y * overlay_y),
@@ -13407,6 +13521,8 @@ fn select_fixture_lighting_domain(
 /// sampled, and the sample count is baked into a pipeline.
 struct ScenePipelines {
     scene: wgpu::RenderPipeline,
+    /// The ground under a floor material: `scene.wgsl`'s `fs_ground`.
+    ground: wgpu::RenderPipeline,
     surface_depth: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
     compass: wgpu::RenderPipeline,
@@ -13457,37 +13573,41 @@ fn mesh_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 
 impl ScenePipelineSource {
     fn build(&self, device: &wgpu::Device, samples: u32) -> ScenePipelines {
-        let scene = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene"),
-            layout: Some(&self.layout),
-            vertex: wgpu::VertexState {
-                module: &self.scene,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(mesh_vertex_layout())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &self.scene,
-                entry_point: Some("fs_main"),
-                targets: &[Some(SCENE_FORMAT.into())],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[
-                        ("PROFILE_SKIP_SURFACE_CLOUDS", self.skips[0]),
-                        ("PROFILE_SKIP_FIXTURES", self.skips[1]),
-                        ("PROFILE_SKIP_SURFACE_SHADOWS", self.skips[2]),
-                    ],
+        let lit = |label: &str, entry_point: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&self.layout),
+                vertex: wgpu::VertexState {
+                    module: &self.scene,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(mesh_vertex_layout())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.scene,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(SCENE_FORMAT.into())],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[
+                            ("PROFILE_SKIP_SURFACE_CLOUDS", self.skips[0]),
+                            ("PROFILE_SKIP_FIXTURES", self.skips[1]),
+                            ("PROFILE_SKIP_SURFACE_SHADOWS", self.skips[2]),
+                        ],
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(depth_state(true)),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
                     ..Default::default()
                 },
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(depth_state(true)),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let scene = lit("scene", "fs_main");
+        let ground = lit("ground", "fs_ground");
 
         let surface_depth = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("surface-depth"),
@@ -13613,6 +13733,7 @@ impl ScenePipelineSource {
 
         ScenePipelines {
             scene,
+            ground,
             surface_depth,
             grid,
             compass,

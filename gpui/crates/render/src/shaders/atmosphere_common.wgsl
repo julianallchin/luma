@@ -13,19 +13,30 @@
 // is the one scalar that carries that into display range.
 
 const PI: f32 = 3.14159265358979;
+const INV_PI: f32 = 0.318309886183791;
 const INV_4PI: f32 = 0.0795774715459;
 
 struct SkyUniform {
     // xyz: unit world direction from the ground toward the sun. w: 1 when the
     // sky is the frame's background, 0 when it is off.
     sun: vec4<f32>,
-    // x: exposure, y: ground albedo, z: view height above ground in km,
-    // w: cosine of the sun's angular radius.
+    // x: exposure, y unused, z: view height above ground in km, w: cosine
+    // of the sun's angular radius.
     params: vec4<f32>,
+    // y: the clear sky's diffuse light reaching the air under the cloud
+    // layer, 1 under a clear sky. xzw unused.
+    clouds: vec4<f32>,
+    // The cloud shadow map (`cloud_shadow.wgsl`): xy centre, km, z side,
+    // km, w 1 when there is one.
+    shadow: vec4<f32>,
+    // xyz: the camera, km, in the venue frame.
+    camera: vec4<f32>,
+    // rgb: the ground's albedo, the floor's mean colour. w unused.
+    ground: vec4<f32>,
 };
 
 fn sky_exposure(cfg: SkyUniform) -> f32 { return cfg.params.x; }
-fn sky_ground_albedo(cfg: SkyUniform) -> f32 { return cfg.params.y; }
+fn sky_ground_albedo(cfg: SkyUniform) -> vec3<f32> { return cfg.ground.rgb; }
 fn sky_view_radius(cfg: SkyUniform) -> f32 { return GROUND_RADIUS_KM + cfg.params.z; }
 
 /// Rayleigh scattering, Mie scattering and total extinction at height `h`.
@@ -200,7 +211,7 @@ fn integrate_scattered(
     view_radius: f32,
     dir: vec3<f32>,
     sun: vec3<f32>,
-    ground_albedo: f32,
+    ground_albedo: vec3<f32>,
     steps: u32,
     psi_ms: vec3<f32>,
     isotropic: bool,
@@ -262,7 +273,7 @@ fn integrate_scattered(
         throughput *= step_transmittance;
     }
 
-    if hits_ground && ground_albedo > 0.0 {
+    if hits_ground && any(ground_albedo > vec3<f32>(0.0)) {
         let p = vec3<f32>(dir.xy * length_km, view_radius + dir.z * length_km);
         let up = p / length(p);
         let mu_sun = dot(up, sun);
@@ -281,4 +292,25 @@ fn integrate_scattered(
         result.luminance += throughput * irradiance * ground_albedo / PI;
     }
     return result;
+}
+
+// --- cloud panorama --------------------------------------------------------
+//
+// The cloud layer by world direction, upper hemisphere only
+// (`atmosphere_clouds.wgsl`). `u` is the world azimuth, wrapping; `v` is the
+// square root of the elevation's fraction of a right angle, so rows crowd
+// toward the horizon, where a cloud is small and the eye looks most. `v = 0`
+// is the horizon, and a ray below it reads that row.
+
+fn cloud_panorama_uv(dir: vec3<f32>) -> vec2<f32> {
+    let u = atan2(dir.y, dir.x) * (0.5 * INV_PI) + 0.5;
+    let elevation = asin(clamp(dir.z, 0.0, 1.0));
+    return vec2<f32>(u, sqrt(elevation / (0.5 * PI)));
+}
+
+fn cloud_panorama_direction(uv: vec2<f32>) -> vec3<f32> {
+    let azimuth = (uv.x - 0.5) * 2.0 * PI;
+    let elevation = uv.y * uv.y * 0.5 * PI;
+    let c = cos(elevation);
+    return vec3<f32>(cos(azimuth) * c, sin(azimuth) * c, sin(elevation));
 }

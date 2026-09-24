@@ -2,3 +2,6 @@
 # over GitHub's 100 MB hard cap; LFS handles it transparently — cloners get
 # the bytes via the standard `git lfs install` + `git clone` path.
 backend/python/n2n/weights.pt filter=lfs diff=lfs merge=lfs -text
+
+# Floor PBR maps (~60 MB of JPEGs), fetched by resources/meshes/floors/fetch.py.
+resources/meshes/floors/**/*.jpg filter=lfs diff=lfs merge=lfs -text

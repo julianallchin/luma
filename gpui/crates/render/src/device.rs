@@ -50,6 +50,11 @@ impl DeviceContext {
                     // kernel's eight.
                     max_storage_buffers_per_shader_stage:
                         adapter.limits().max_storage_buffers_per_shader_stage,
+                    // The scene pass reads seventeen textures once the cloud
+                    // shadow map is among them; the default allows sixteen.
+                    max_sampled_textures_per_shader_stage: adapter
+                        .limits()
+                        .max_sampled_textures_per_shader_stage,
                     ..wgpu::Limits::default().using_resolution(adapter.limits())
                 },
                 ..Default::default()

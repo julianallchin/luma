@@ -26,8 +26,9 @@ fn mapping_prelude() -> String {
 
 pub(crate) fn surface_prelude() -> String {
     format!(
-        "{}{}",
+        "{}{}{}",
         mapping_prelude(),
+        include_str!("../shaders/cloud_shadow.wgsl"),
         include_str!("../shaders/atmosphere_aerial_sample.wgsl"),
     )
 }
@@ -38,10 +39,12 @@ pub(crate) struct Textures {
     pub transmittance: wgpu::TextureView,
     sky: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    /// The cloud shadow map the surfaces read the sun through.
+    cloud_shadow: wgpu::TextureView,
 }
 
 impl Textures {
-    pub(crate) fn layout_entries() -> [wgpu::BindGroupLayoutEntry; 4] {
+    pub(crate) fn layout_entries() -> [wgpu::BindGroupLayoutEntry; 5] {
         let sampled = |binding| wgpu::BindGroupLayoutEntry {
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -55,15 +58,17 @@ impl Textures {
             sampled(7),
             sampler_entry(8),
             uniform_entry(9, wgpu::ShaderStages::FRAGMENT),
+            sampled_2d(20),
         ]
     }
 
-    pub(crate) fn entries(&self) -> [wgpu::BindGroupEntry<'_>; 4] {
+    pub(crate) fn entries(&self) -> [wgpu::BindGroupEntry<'_>; 5] {
         [
             binding(6, wgpu::BindingResource::TextureView(&self.radiance)),
             binding(7, wgpu::BindingResource::TextureView(&self.transmittance)),
             binding(8, wgpu::BindingResource::Sampler(&self.sampler)),
             binding(9, self.sky.as_entire_binding()),
+            binding(20, wgpu::BindingResource::TextureView(&self.cloud_shadow)),
         ]
     }
 }
@@ -75,7 +80,12 @@ pub(crate) struct Pipelines {
 }
 
 impl Pipelines {
-    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue, sampler: &wgpu::Sampler) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sampler: &wgpu::Sampler,
+        no_clouds: &wgpu::TextureView,
+    ) -> Self {
         let storage = |binding| wgpu::BindGroupLayoutEntry {
             ty: wgpu::BindingType::StorageTexture {
                 access: wgpu::StorageTextureAccess::WriteOnly,
@@ -93,6 +103,7 @@ impl Pipelines {
                 storage(3),
                 storage(4),
                 uniform_entry(5, wgpu::ShaderStages::COMPUTE),
+                sampled_2d(6),
             ],
         ));
         let pipeline = compute(
@@ -100,9 +111,10 @@ impl Pipelines {
             "atmosphere-aerial",
             &layout,
             &format!(
-                "{}{}{}{}",
+                "{}{}{}{}{}",
                 prelude(),
                 include_str!("../shaders/atmosphere_common.wgsl"),
+                include_str!("../shaders/cloud_shadow.wgsl"),
                 mapping_prelude(),
                 include_str!("../shaders/atmosphere_aerial.wgsl"),
             ),
@@ -130,6 +142,7 @@ impl Pipelines {
             transmittance: placeholder("aerial-off-transmittance", [f16::ONE; 4]),
             sky: buffer(device, SkyUniform::of(None), "aerial-off-sky"),
             sampler: sampler.clone(),
+            cloud_shadow: no_clouds.clone(),
         };
         Self {
             layout,
@@ -151,13 +164,24 @@ impl Cache {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         sky: Option<&SkyFrame>,
-        height_m: f32,
+        eye_m: glam::Vec3,
+        shadow: Option<&(wgpu::TextureView, [f32; 4])>,
         profile: &mut crate::pass_profile::PassQueries<'_>,
     ) -> Textures {
         let Some(sky) = sky else {
             return pipelines.aerial.off.clone();
         };
+        let height_m = eye_m.z;
         let mut cfg = SkyUniform::of(Some(sky));
+        // Under clouds the volume depends on where the camera stands in the
+        // layer's shadow, so it follows the camera; under a clear sky only
+        // its altitude matters, and the camera's ground position is left out
+        // of the key.
+        let cloud_shadow = shadow.map_or(&pipelines.no_clouds, |(view, _)| view);
+        if let Some((_, params)) = shadow {
+            cfg.shadow = *params;
+            cfg.camera = (eye_m * 0.001).extend(0.0).to_array();
+        }
         // Clamp underground orbit views to the surface atmosphere. Do not
         // quantize altitude: that would make slow vertical motion step.
         cfg.params[2] = if height_m.is_finite() {
@@ -200,6 +224,7 @@ impl Cache {
                 binding(3, wgpu::BindingResource::TextureView(&radiance)),
                 binding(4, wgpu::BindingResource::TextureView(&transmittance)),
                 binding(5, sky.as_entire_binding()),
+                binding(6, wgpu::BindingResource::TextureView(cloud_shadow)),
             ],
         });
         {
@@ -216,6 +241,7 @@ impl Cache {
             transmittance,
             sky,
             sampler: pipelines.sampler.clone(),
+            cloud_shadow: cloud_shadow.clone(),
         };
         self.resident = Some((cfg, textures.clone()));
         textures

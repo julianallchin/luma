@@ -53,6 +53,8 @@ mod track_overlaps;
 mod track_playback_sessions;
 mod tracks;
 mod venue_builder;
+mod venue_clouds;
+mod venue_floor;
 mod venue_patch;
 mod venues;
 mod visualizer_fullscreen;
