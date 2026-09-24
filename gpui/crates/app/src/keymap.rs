@@ -169,6 +169,9 @@ actions!(
         /// Frame the stage selection: put the camera's target on it and dolly
         /// to a radius that fits it.
         FocusStageSelection,
+        /// Write the stage camera, sun and shadow cascades of the next frame
+        /// to a JSON file, for reproducing a view in a render test.
+        ExportStageCamera,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Undo / redo the track editor's last edit.
@@ -283,6 +286,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("space", PlayPause, Some(&viewing)),
         KeyBinding::new("=", ZoomStageIn, Some(&viewing)),
         KeyBinding::new("-", ZoomStageOut, Some(&viewing)),
+        KeyBinding::new("secondary-shift-e", ExportStageCamera, Some(&viewing)),
         KeyBinding::new("f", FocusStageSelection, Some(&staging)),
         KeyBinding::new("delete", DeleteStageElement, Some(&staging)),
         KeyBinding::new("backspace", DeleteStageElement, Some(&staging)),

@@ -45,6 +45,7 @@
 //! space by [`luma_scene::Camera`] and converted at exactly one boundary,
 //! [`coords::three_from_world`].
 
+mod camera_export;
 mod motors;
 mod settings;
 
@@ -636,6 +637,8 @@ struct Stage {
     /// card holds still under it, so a control being scrubbed never moves
     /// away from the pointer.
     selection_card_held: bool,
+    /// The camera export in flight, and its result.
+    exports: camera_export::Exports,
 }
 
 /// Everything a live frame is a function of.
@@ -1486,6 +1489,7 @@ impl Visualizer {
             picks: PickTimeline::default(),
             pick_cache: PickCache::default(),
             haze_started_at: Instant::now(),
+            exported: None,
         });
         true
     }
@@ -1639,6 +1643,18 @@ impl Visualizer {
         let at = Point::new(px(at.x), px(at.y));
         self.selection_card_last = Some(at);
         at
+    }
+
+    /// Export the next frame's camera, sun and shadow cascades — see
+    /// [`camera_export`]. Wakes a resting stage, so the frame is drawn.
+    pub(crate) fn export_camera(&mut self) {
+        let mut stage = self.stage.borrow_mut();
+        stage.exports.request = Some(camera_export::Request {
+            venue_id: self.venue_id.clone(),
+            venue_name: self.venue_name.clone(),
+            score_id: self.lit.as_ref().map(|lit| lit.score.clone()),
+        });
+        stage.idle = None;
     }
 
     /// Fit the selected objects' combined geometry bounds into the usable viewport.
@@ -2460,6 +2476,9 @@ pub(crate) fn scene(
 /// The renderer and the meshes it has loaded.
 struct Gpu {
     viewport: AsyncViewport,
+    /// The camera export recorded with the last submission, and its serial.
+    /// Taken by the prepaint, which writes it.
+    exported: Option<(u64, luma_render::camera_export::CameraExport)>,
     /// The UI-thread cost of the most recent [`Self::frame`] call.
     ///
     /// Held here rather than returned because these phases run on every call
@@ -2506,6 +2525,8 @@ struct LiveFrameInputs<'a> {
     /// Measured in the prepaint that is submitting this frame, so they come
     /// back paired with its own presentation interval.
     spans: UiSpans,
+    /// Record this frame's camera and sun for a camera export.
+    export: Option<luma_render::camera_export::Context>,
 }
 
 /// What one frame cost the **UI thread**, split by phase.
@@ -2539,6 +2560,8 @@ impl StageWork {
 
 struct CompletedFrame {
     serial: u64,
+    /// Physical pixels of `frame`.
+    size: (u32, u32),
     timings_serial: Option<u64>,
     frame: StageFrame,
     pick: PickSnapshot,
@@ -2895,6 +2918,7 @@ impl Gpu {
             size: (width, height),
             camera,
             spans,
+            export,
         } = input;
         let built = std::time::Instant::now();
         let mut frame = build_frame_with(
@@ -2918,7 +2942,10 @@ impl Gpu {
             .take_latest()
             .transpose()
             .map_err(|error| format!("Could not render the frame: {error}"))?;
+        let exported = export
+            .map(|context| luma_render::camera_export::CameraExport::capture(&frame, context));
         let (serial, outcome, occupancy) = self.viewport.submit_numbered(frame, width, height);
+        self.exported = exported.map(|export| (serial, export));
         let (finished, last_signalled) = self.viewport.finished();
         self.submission = Submission {
             serial,
@@ -2964,6 +2991,7 @@ impl Gpu {
             .ok_or_else(|| format!("presentation {} lost its pick snapshot", presented.serial))?;
         Ok(Some(CompletedFrame {
             serial: presented.serial,
+            size: (width, height),
             timings_serial: presented.timings_serial,
             frame,
             pick: submitted.pick,
@@ -3309,6 +3337,7 @@ pub(crate) fn visualizer(
                 .children(marquee)
                 .children(builder)
                 .child(fps)
+                .children(state.stage.borrow().exports.notice())
                 .children(floating)
                 .child(fullscreen_button(state.presentation, app))
                 .when(matches!(state.status, Status::Live), |d| {
@@ -4414,6 +4443,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 size: (width, height),
                                 camera,
                                 spans,
+                                export: stage.exports.request.take().map(|request| {
+                                    request.context(time, camera, (width, height), scale)
+                                }),
                             }) {
                                 Err(error) => {
                                     // Drop the last good frame with the error. A
@@ -4427,6 +4459,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     None
                                 }
                                 outcome => {
+                                    if let Some((serial, export)) = gpu.exported.take() {
+                                        stage.exports.written(serial, &export);
+                                    }
                                     stage.last_work = StageWork {
                                         sample_ms,
                                         ..gpu.work
@@ -4482,6 +4517,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     };
                                     let painted = match outcome {
                                         Ok(Some(completed)) => {
+                                            stage.exports.presented(
+                                                completed.serial,
+                                                &completed.frame,
+                                                completed.size,
+                                            );
                                             stage.last_draw_ms = Some(completed.draw_ms);
                                             if let Some(timings) = &completed.timings {
                                                 stage.last_cpu_ms =
