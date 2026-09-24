@@ -239,6 +239,7 @@ pub async fn render_composite_deck(
         crate::database::local::scores::list_scores_for_track(&mut access, &track_id).await?;
     drop(access);
     let mut annotations = Vec::new();
+    let mut rig = crate::eval::aim::Rig::default();
     for score in scores {
         let scene = crate::compositor::build_score_scene(
             &services.db.0,
@@ -248,10 +249,14 @@ pub async fn render_composite_deck(
             None,
         )
         .await?;
+        if let Some(aimed) = scene.rig() {
+            rig.extend(aimed);
+        }
         annotations.extend(scene.annotations);
     }
-    services
-        .render_engine
-        .finish_scene_update(update, crate::eval::Scene::new(annotations));
+    let scene = crate::eval::Scene::new(annotations)
+        .with_rig(rig)
+        .map_err(CommandError::from)?;
+    services.render_engine.finish_scene_update(update, scene);
     Ok(())
 }

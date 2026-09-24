@@ -25,7 +25,7 @@ pub fn blank_frame() -> UniverseState {
 }
 
 /// A head that no layer has written: no light, no strobe, speed fast.
-fn nothing() -> PrimitiveState {
+pub(crate) fn nothing() -> PrimitiveState {
     PrimitiveState {
         dimmer: 0.0,
         color: [1.0, 1.0, 1.0],

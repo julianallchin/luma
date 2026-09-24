@@ -130,8 +130,18 @@ async fn prepare_scene_data(
             blend_mode: clip.blend_mode,
         });
     }
+    let aimed: std::collections::BTreeSet<&str> = compiled
+        .iter()
+        .filter(|annotation| annotation.plan.outputs.aim)
+        .flat_map(|annotation| annotation.plan.primitive_ids.iter().map(String::as_str))
+        .collect();
+    let rig = if aimed.is_empty() {
+        crate::eval::aim::Rig::default()
+    } else {
+        crate::eval::aim::Rig::load(access, fixtures_root, aimed).await?
+    };
     Ok(SceneData {
-        scene: crate::eval::Scene::new(compiled),
+        scene: crate::eval::Scene::new(compiled).with_rig(rig)?,
         features,
         cells: clip_cells,
     })

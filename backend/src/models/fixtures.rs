@@ -47,6 +47,30 @@ pub struct FixtureDefinition {
 }
 
 impl FixtureDefinition {
+    /// The full pan and tilt travel in degrees, from the profile's focus
+    /// block: 540 and 270 when it says nothing. Centred on home, so a head
+    /// reaches half of each either way.
+    pub fn focus_range(&self) -> [f32; 2] {
+        let focus = self.physical.as_ref().and_then(|p| p.focus.as_ref());
+        [
+            focus.and_then(|f| f.pan_max).unwrap_or(540) as f32,
+            focus.and_then(|f| f.tilt_max).unwrap_or(270) as f32,
+        ]
+    }
+
+    /// Whether `mode` has a pan channel and a tilt channel.
+    pub fn moves(&self, mode: &Mode) -> [bool; 2] {
+        let has = |kind: ChannelType| {
+            mode.channels.iter().any(|mode_channel| {
+                self.channels
+                    .iter()
+                    .find(|c| c.name == mode_channel.name)
+                    .is_some_and(|c| c.get_type() == kind)
+            })
+        };
+        [has(ChannelType::Pan), has(ChannelType::Tilt)]
+    }
+
     /// Returns true if the given mode has a color wheel (Colour or Gobo channel with color capabilities).
     /// Color wheel fixtures need the color's luminance applied to the dimmer since
     /// the wheel can only select discrete colors, not brightness.
@@ -88,6 +112,11 @@ impl Channel {
             if preset.starts_with("Color") || preset.starts_with("Colour") {
                 return ChannelType::Colour;
             } // Generic color
+            if preset.starts_with("Speed") {
+                // `SpeedPanTiltFastSlow` and its kin name pan and tilt too,
+                // but they are the motor speed, not a position.
+                return ChannelType::Speed;
+            }
             if preset.contains("Pan") {
                 return ChannelType::Pan;
             }
