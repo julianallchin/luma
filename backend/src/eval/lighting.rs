@@ -1,7 +1,7 @@
 //! Canonical graph preparation and fixture/diagnostic output adapters.
 use super::{Arena, OutputBinding, Plan, ViewTap};
 use crate::models::node_graph::Signal;
-use crate::models::universe::{PrimitiveState, UniverseState};
+use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
 use luma_patterns as p;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -75,6 +75,7 @@ fn plan(
             position: writes[2],
             strobe: writes[3],
             speed: writes[4],
+            aim: writes[5],
         },
         span,
         views,
@@ -216,6 +217,10 @@ impl Program {
                                 },
                                 strobe: if bindings.strobe { v(6) } else { 0. },
                                 speed: if bindings.speed { v(7) } else { 1. },
+                                aim: bindings.aim.then(|| HeadAim {
+                                    direction: [v(8), v(9), v(10)],
+                                    weight: v(11),
+                                }),
                             },
                         )
                     })

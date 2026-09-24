@@ -26,6 +26,7 @@ pub struct OutputBinding {
     pub position: bool,
     pub strobe: bool,
     pub speed: bool,
+    pub aim: bool,
 }
 #[derive(Clone, Debug)]
 pub struct ViewTap {

@@ -197,6 +197,7 @@ mod tests {
                     strobe: 0.0,
                     position: [0.0; 2],
                     speed: 1.0,
+                    aim: None,
                 },
             );
         }

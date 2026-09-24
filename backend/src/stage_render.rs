@@ -378,6 +378,7 @@ const MARKED: PrimitiveState = PrimitiveState {
     strobe: 0.0,
     position: [0.0, 0.0],
     speed: 0.0,
+    aim: None,
 };
 
 /// The universe that *is* the answer to "what does this selection resolve to":
@@ -1034,6 +1035,7 @@ mod tests {
                 strobe: 0.0,
                 position: [0.0, 0.0],
                 speed: 1.0,
+                aim: None,
             },
         );
         assert_eq!(
