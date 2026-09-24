@@ -28,7 +28,7 @@ use luma_render::{
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 120;
 const HEADROOM: f32 = 4.0;
-/// `HDR_KNEE` in `composite.wgsl`: up to here HDR is SDR exactly.
+/// `HDR_KNEE` in `tone.wgsl`: up to here HDR is SDR exactly.
 const KNEE: f32 = 0.6;
 
 /// A dark stage with one bright hazy beam, so the frame has both a range the

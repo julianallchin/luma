@@ -330,6 +330,8 @@ pub struct Frame {
     pub time: f32,
     /// Diagnostic output. `Pbr` is the display path.
     pub debug_view: crate::scene_desc::DebugView,
+    /// Exposure, tone curve and glare.
+    pub look: crate::scene_desc::Look,
     /// Where the frame is seen from.
     pub camera: Camera,
 }
@@ -1268,6 +1270,7 @@ pub fn build_with(
         haze_resolution: scene.render.haze.resolution,
         time,
         debug_view: scene.render.debug_view,
+        look: scene.render.look,
         camera,
         overlays,
     })

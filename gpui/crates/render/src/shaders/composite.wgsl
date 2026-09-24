@@ -24,6 +24,10 @@ struct Composite {
 // light where 1.0 is SDR white, and highlights may go up to the headroom.
 override HDR_OUTPUT: bool = false;
 
+// Set when the post chain (`post.rs`) follows: the target is half-float
+// scene-linear light, before exposure and before any display transform.
+override LINEAR_OUTPUT: bool = false;
+
 @group(0) @binding(0) var<uniform> cfg: Composite;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
@@ -94,80 +98,6 @@ fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
     }
     let haze = w00 * s00.rgb + w10 * s10.rgb + w01 * s01.rgb + w11 * s11.rgb;
     return haze / total;
-}
-
-const LINEAR_SRGB_TO_LINEAR_REC2020 = mat3x3<f32>(
-    vec3<f32>(0.6274, 0.0691, 0.0164),
-    vec3<f32>(0.3293, 0.9195, 0.0880),
-    vec3<f32>(0.0433, 0.0113, 0.8956),
-);
-const LINEAR_REC2020_TO_LINEAR_SRGB = mat3x3<f32>(
-    vec3<f32>(1.6605, -0.1246, -0.0182),
-    vec3<f32>(-0.5876, 1.1329, -0.1006),
-    vec3<f32>(-0.0728, -0.0083, 1.1187),
-);
-const AGX_INSET = mat3x3<f32>(
-    vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
-    vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-    vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
-);
-const AGX_OUTSET = mat3x3<f32>(
-    vec3<f32>(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-    vec3<f32>(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
-    vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
-);
-
-fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
-}
-
-/// three's `AgXToneMapping` at exposure 1, term for term. This is the pairing
-/// the haze's HDR core was designed against: white-hot is the display
-/// transform's answer, not a shader gate.
-fn agx(color_in: vec3<f32>) -> vec3<f32> {
-    let min_ev = -12.47393;
-    let max_ev = 4.026069;
-    var color = LINEAR_SRGB_TO_LINEAR_REC2020 * color_in;
-    color = AGX_INSET * color;
-    color = log2(max(color, vec3<f32>(1e-10)));
-    color = clamp((color - min_ev) / (max_ev - min_ev), vec3<f32>(0.0), vec3<f32>(1.0));
-    color = agx_contrast(color);
-    color = AGX_OUTSET * color;
-    color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(2.2));
-    color = LINEAR_REC2020_TO_LINEAR_SRGB * color;
-    return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-/// Display value where the HDR expansion starts. AgX puts scene-linear 1.0
-/// (diffuse white) at about 0.59, so everything up to diffuse white keeps
-/// exactly its SDR value; only the shoulder above it changes.
-const HDR_KNEE: f32 = 0.6;
-
-/// AgX for a display with `headroom` times SDR white to spare.
-///
-/// The SDR transform first, unchanged, so the picture below the knee is the
-/// SDR picture and the UI around it keeps its meaning. AgX's shoulder then
-/// holds everything from diffuse white up to its white point in the last
-/// 0.4 of the range; that span is re-expanded into [knee, headroom]:
-///
-///   m' = m + (headroom - 1) * t^2,   t = (m - knee) / (1 - knee)
-///
-/// on the pixel's largest channel m, and the pixel is scaled by m' / m. The
-/// curve meets the SDR one at the knee with the same value and slope (no
-/// visible seam in a gradient), rises monotonically (slope >= 1), and sends
-/// AgX's white to the headroom. Scaling all three channels by one factor
-/// keeps AgX's hue and its highlight desaturation. With headroom 1 it is
-/// the SDR transform exactly.
-fn agx_hdr(color_in: vec3<f32>, headroom: f32) -> vec3<f32> {
-    let sdr = agx(color_in);
-    let peak = max(max(sdr.r, sdr.g), sdr.b);
-    if headroom <= 1.0 || peak <= HDR_KNEE {
-        return sdr;
-    }
-    let t = (peak - HDR_KNEE) / (1.0 - HDR_KNEE);
-    return sdr * ((peak + (headroom - 1.0) * t * t) / peak);
 }
 
 /// The display transform for this pipeline's target.
@@ -268,6 +198,9 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     }
     if debug == 7u { return vec4<f32>(display_transform(haze), 1.0); }
     if outdoor { scene = texel.rgb + (1.0 - texel.a) * background; }
+    if LINEAR_OUTPUT {
+        return vec4<f32>(scene * medium + haze, 1.0);
+    }
     let display = display_transform(scene * medium + haze);
     if HDR_OUTPUT {
         // A half-float target has no 8-bit steps to break up.
@@ -280,25 +213,14 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
 ///
 /// An atmosphere is a smooth gradient across hundreds of rows, and eight bits
 /// quantise it into visible steps — the one artefact that gives a physically
-/// integrated sky away as a shader. Every other frame this renderer draws is
+/// integrated sky away as a shader. Every other frame this pass draws is
 /// high-contrast stage light where a step has nowhere to show, and the tracked
 /// contract images have to stay byte-exact, so the noise is spent exactly where
-/// it buys something.
-///
-/// The amplitude is in *display* code values, not in the linear ones this
-/// shader returns. The target is sRGB-encoded, so a fixed linear step is a
-/// dozen code values in the shadows and a third of one in the highlights —
-/// grain at one end and banding still at the other. Dividing by the encoder's
-/// slope makes it one code value everywhere.
+/// it buys something. (The post chain dithers every frame: its glare halos
+/// are smooth gradients too.)
 fn sky_dither(display: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     if sky.sun.w < 0.5 {
         return vec3<f32>(0.0);
     }
-    // Two decorrelated hashes make a triangular distribution, which has no DC
-    // term: a uniform one would lift the whole frame by half a bit.
-    let a = fract(sin(dot(frag, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    let b = fract(sin(dot(frag, vec2<f32>(63.7264, 10.873))) * 32361.4771);
-    // Inverse slope of the sRGB transfer curve, 2.4 / 1.055 * L^(1 - 1/2.4).
-    let step = 2.2749 * pow(max(display, vec3<f32>(1e-4)), vec3<f32>(0.58333)) / 255.0;
-    return (a - b) * step;
+    return display_dither(display, frag);
 }
