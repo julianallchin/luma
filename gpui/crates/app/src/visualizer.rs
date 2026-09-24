@@ -45,6 +45,7 @@
 //! space by [`luma_scene::Camera`] and converted at exactly one boundary,
 //! [`coords::three_from_world`].
 
+mod motors;
 mod settings;
 
 use std::cell::RefCell;
@@ -471,6 +472,9 @@ pub(crate) struct Visualizer {
     /// A preset the track editor's browser is playing in place of the score,
     /// while the pointer is over its tile.
     audition: Option<crate::track_editor::Audition>,
+    /// Where the preview draws each head while its motors turn toward the
+    /// score's pan and tilt.
+    motors: motors::Motors,
     /// The score whose composite has actually *landed* on the render engine.
     ///
     /// Distinct from [`Self::subject`], which is what this stage has asked
@@ -1261,6 +1265,7 @@ impl Visualizer {
             subject,
             lit: None,
             audition: None,
+            motors: Default::default(),
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
             camera: opening_camera(
@@ -4194,6 +4199,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         let universe = library.sample_universe(time);
         (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
     });
+    // The drawn heads lag the score the way motors would; the output does not.
+    let (universe, aim_targets) = state.motors.follow(time, universe);
+    let aim_targets = if state.presentation {
+        Vec::new()
+    } else {
+        aim_targets
+    };
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
@@ -4391,6 +4403,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 gizmo_space,
                                 hover: gizmo_hover,
                                 build: build_affordances.clone(),
+                                aim_targets: aim_targets.clone(),
                             };
                             gpu.viewport.set_display_range(display);
                             match gpu.frame(LiveFrameInputs {
@@ -5443,6 +5456,7 @@ mod orbit_selection_tests {
             subject: None,
             lit: None,
             audition: None,
+            motors: Default::default(),
             gpu_enabled: false,
             status: Status::Loading,
             camera,
