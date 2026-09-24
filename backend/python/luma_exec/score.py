@@ -83,8 +83,6 @@ def _typed(kind, value):
                                    for stop in value["stops"]])
     if kind == "mapping" and isinstance(value, str):
         source = {"kind": value}
-        if value == "circle":
-            source["origin"] = 0.0
         if value == "major_axis":
             source["toward"] = [0.0, 0.0, 1.0]
         if value == "vector":

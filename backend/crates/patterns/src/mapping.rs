@@ -1,4 +1,4 @@
-use crate::{circle_fit, Error, Mapping, Result};
+use crate::{Error, Mapping, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -23,13 +23,9 @@ pub enum MappingSource {
     MajorAxis {
         toward: [f64; 3],
     },
-    Circle {
-        origin: f64,
-    },
-    /// Distance from the middle of the selection's U/V extent.
+    /// Distance from the span's centroid within its plane.
     Radial,
-    /// Turns around the middle of the selection's U/V extent, from stage right
-    /// (U+) toward downstage (V+). It needs no solved circle.
+    /// Turns around the span's centroid within its plane.
     Angle,
     /// Direction in stage coordinates: U right, V downstage, Z up.
     Vector {
@@ -37,12 +33,11 @@ pub enum MappingSource {
     },
 }
 impl MappingSource {
-    pub const OPTIONS: [(&'static str, &'static str); 9] = [
+    pub const OPTIONS: [(&'static str, &'static str); 8] = [
         ("z", "Up (Z+)"),
         ("u", "Stage right (U+)"),
         ("v", "Downstage (V+)"),
         ("major_axis", "Major axis"),
-        ("circle", "Solved circle"),
         ("order", "Selection order"),
         ("radial", "Radial"),
         ("angle", "Angle"),
@@ -56,7 +51,6 @@ impl MappingSource {
             Self::Z => "z",
             Self::Order => "order",
             Self::MajorAxis { .. } => "major_axis",
-            Self::Circle { .. } => "circle",
             Self::Radial => "radial",
             Self::Angle => "angle",
             Self::Vector { .. } => "vector",
@@ -72,7 +66,6 @@ impl MappingSource {
             "major_axis" => Self::MajorAxis {
                 toward: [0., 0., 1.],
             },
-            "circle" => Self::Circle { origin: 0. },
             "radial" => Self::Radial,
             "angle" => Self::Angle,
             "vector" => Self::Vector {
@@ -96,8 +89,7 @@ pub struct MappingSpec {
     #[serde(default, skip_serializing_if = "Span::is_selection")]
     pub span: Span,
     /// The plane radial and angle read in, around the centroid of the span.
-    /// `None` is the old graphs' reading: the stage U/V plane around the
-    /// middle of the extent.
+    /// Radial and angle require it; other sources have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plane: Option<AxisPlane>,
 }
@@ -259,6 +251,14 @@ impl MappingSpec {
         if self.per_group && self.span != Span::Selection {
             return Err(Error("per_group is the group span; set only one".into()));
         }
+        let planar = matches!(self.source, MappingSource::Radial | MappingSource::Angle);
+        if planar != self.plane.is_some() {
+            return Err(Error(if planar {
+                "radial and angle need a plane".into()
+            } else {
+                "only radial and angle take a plane".into()
+            }));
+        }
         if let Some(AxisPlane::Custom { normal }) = &self.plane {
             unit_direction(*normal)?;
         }
@@ -270,9 +270,6 @@ impl MappingSpec {
         }
         match &self.source {
             MappingSource::Vector { direction } => unit_direction(*direction).map(|_| ()),
-            MappingSource::Circle { origin } if !origin.is_finite() => {
-                Err(Error("circle origin must be finite".into()))
-            }
             MappingSource::MajorAxis { toward }
                 if toward.iter().any(|v| !v.is_finite()) || dot(*toward, *toward) < 1e-12 =>
             {
@@ -311,37 +308,8 @@ impl MappingSpec {
                 .map(|plane| plane.fold(group))
                 .transpose()?;
             let mapped = match &self.source {
-                MappingSource::Circle { origin } => {
-                    let positions: Vec<_> = group
-                        .iter()
-                        .map(|c| (c.world[0] as f32, c.world[1] as f32, c.world[2] as f32))
-                        .collect();
-                    let fit = circle_fit::fit_circle_3d(&positions)
-                        .ok_or_else(|| Error("selection does not define a solved circle".into()))?;
-                    if fit.is_inlier.iter().any(|v| !*v) {
-                        return Err(Error(
-                            "circle mapping contains outliers; refine the selection".into(),
-                        ));
-                    }
-                    Mapping::circle(
-                        group.iter().enumerate().map(|(index, c)| {
-                            let position =
-                                folded
-                                    .as_ref()
-                                    .map_or(fit.angular_positions[index], |folded| {
-                                        fit.angular_position(
-                                            Cell::stage_coordinates(folded[index])
-                                                .map(|v| v as f32),
-                                        )
-                                    });
-                            (c.id.clone(), f64::from(position))
-                        }),
-                        *origin,
-                        self.reverse,
-                    )?
-                }
-                MappingSource::Angle | MappingSource::Radial if self.plane.is_some() => {
-                    let plane = self.plane.as_ref().expect("checked");
+                MappingSource::Angle | MappingSource::Radial => {
+                    let plane = self.plane.as_ref().expect("validated");
                     let points: Vec<[f64; 3]> = group
                         .iter()
                         .enumerate()
@@ -369,29 +337,6 @@ impl MappingSpec {
                             self.reverse,
                         )?
                     }
-                }
-                MappingSource::Angle => {
-                    let points = planar(group, folded.as_deref());
-                    let center = extent_center(&points);
-                    Mapping::circle(
-                        group.iter().zip(&points).map(|(c, p)| {
-                            let turns =
-                                (p[1] - center[1]).atan2(p[0] - center[0]) / std::f64::consts::TAU;
-                            (c.id.clone(), turns.rem_euclid(1.0))
-                        }),
-                        0.0,
-                        self.reverse,
-                    )?
-                }
-                MappingSource::Radial => {
-                    let points = planar(group, folded.as_deref());
-                    let center = extent_center(&points);
-                    Mapping::linear(
-                        group.iter().zip(&points).map(|(c, p)| {
-                            (c.id.clone(), (p[0] - center[0]).hypot(p[1] - center[1]))
-                        }),
-                        self.reverse,
-                    )?
                 }
                 source => {
                     let axis = match source {
@@ -429,30 +374,6 @@ impl MappingSpec {
         result.validate()?;
         Ok(result)
     }
-}
-/// Stage U/V of each cell, after an optional mirror fold.
-fn planar(cells: &[&Cell], folded: Option<&[[f64; 3]]>) -> Vec<[f64; 2]> {
-    cells
-        .iter()
-        .enumerate()
-        .map(|(index, c)| {
-            let uvz = folded.map_or(c.uvz, |folded| folded[index]);
-            [uvz[0], uvz[1]]
-        })
-        .collect()
-}
-/// The middle of the extent, like the mirror plane: fixture density on one
-/// side does not move it.
-fn extent_center(points: &[[f64; 2]]) -> [f64; 2] {
-    std::array::from_fn(|axis| {
-        let (min, max) = points
-            .iter()
-            .map(|p| p[axis])
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), v| {
-                (min.min(v), max.max(v))
-            });
-        min * 0.5 + max * 0.5
-    })
 }
 /// The fixture part of a head identity (`fixture:head`).
 pub(crate) fn fixture_of(id: &str) -> &str {

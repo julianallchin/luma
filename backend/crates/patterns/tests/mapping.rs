@@ -196,36 +196,6 @@ fn mirror_offset_moves_the_plane_without_changing_the_direction() {
 }
 
 #[test]
-fn mirror_retains_the_original_circle_frame_and_wrapping_topology() {
-    let cells: Vec<_> = (0..16)
-        .map(|index| {
-            let angle = index as f64 * std::f64::consts::TAU / 16.;
-            cell(&index.to_string(), "circle", [angle.cos(), 0., angle.sin()])
-        })
-        .collect();
-    let mapping = MappingSpec {
-        span: Default::default(),
-        plane: None,
-        source: MappingSource::Circle { origin: 0.125 },
-        mirror: Some(MirrorPlane {
-            normal: [1., 0., 0.],
-            offset: 0.,
-        }),
-        reverse: false,
-        per_group: false,
-    };
-    let resolved = mapping.resolve(&cells).expect("mirrored circle");
-    for index in 0..16 {
-        let reflected = (24 - index) % 16;
-        let a = resolved.coordinates[index].position;
-        let b = resolved.coordinates[reflected].position;
-        let distance = (a - b).abs();
-        assert!(distance.min(1. - distance) < 1e-6, "{index}: {a} != {b}");
-        assert!(resolved.coordinates[index].closed);
-    }
-}
-
-#[test]
 fn plane_mirror_rejects_nonspatial_order_and_invalid_planes() {
     let mut mapping = MappingSpec {
         span: Default::default(),
@@ -399,9 +369,19 @@ fn radial_and_angle_center_on_the_centroid() {
             radial[id]
         );
     }
-    // Without a plane the old reading stays: around the middle of the extent.
-    let old = by_id(MappingSource::Radial, Span::Selection, None, &cells);
-    assert!((old["a"] - 1.0).abs() < 1e-12 && (old["d"] - 1.0).abs() < 1e-12);
+    // Radial and angle need a plane.
+    let mut unplaned = MappingSpec {
+        span: Span::Selection,
+        plane: None,
+        mirror: None,
+        source: MappingSource::Radial,
+        per_group: false,
+        reverse: false,
+    };
+    assert!(unplaned.resolve(&cells).is_err());
+    unplaned.source = MappingSource::U;
+    unplaned.plane = Some(AxisPlane::Auto);
+    assert!(unplaned.resolve(&cells).is_err());
     // Angle around the centroid: a and c sit on opposite sides.
     let angle = by_id(
         MappingSource::Angle,

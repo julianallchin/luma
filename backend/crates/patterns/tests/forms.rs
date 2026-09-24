@@ -858,7 +858,7 @@ fn radial_and_angle_axes_need_no_solved_circle() {
         .collect();
     let spec = |source| MappingSpec {
         span: Default::default(),
-        plane: None,
+        plane: Some(AxisPlane::UpDown),
         source,
         per_group: false,
         reverse: false,

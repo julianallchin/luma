@@ -23,7 +23,6 @@ pub struct MappingEditor {
     name: SharedString,
     value: MappingSpec,
     direction: [Entity<DraftedNumber>; 3],
-    origin: Entity<DraftedNumber>,
     normal: [Entity<DraftedNumber>; 3],
     offset: Entity<DraftedNumber>,
     menu: Option<Menu>,
@@ -71,24 +70,6 @@ impl MappingEditor {
             }));
             field
         });
-        let origin = cx.new(|cx| {
-            DraftedNumber::new(
-                format!("{name}: Circle origin"),
-                circle_origin(&value.source),
-                -1e9,
-                1e9,
-                width,
-                window,
-                cx,
-            )
-        });
-        subscriptions.push(cx.subscribe(&origin, |this, _, event, cx| {
-            let NumberEvent::Committed(value) = *event;
-            if let MappingSource::Circle { origin } = &mut this.value.source {
-                *origin = value;
-                this.publish(cx);
-            }
-        }));
         let normal = std::array::from_fn(|axis| {
             let field = cx.new(|cx| {
                 DraftedNumber::new(
@@ -136,7 +117,6 @@ impl MappingEditor {
             name,
             value,
             direction,
-            origin,
             normal,
             offset,
             menu: None,
@@ -161,9 +141,6 @@ impl MappingEditor {
         for (field, value) in self.direction.iter().zip(direction(&self.value.source)) {
             field.update(cx, |field, cx| field.set_value(value, cx));
         }
-        self.origin.update(cx, |field, cx| {
-            field.set_value(circle_origin(&self.value.source), cx)
-        });
         let normal = self
             .value
             .mirror
@@ -204,13 +181,6 @@ fn direction(source: &MappingSource) -> [f64; 3] {
         MappingSource::Vector { direction } => *direction,
         MappingSource::MajorAxis { toward } => Cell::stage_coordinates(*toward),
         _ => [0., 0., 1.],
-    }
-}
-
-fn circle_origin(source: &MappingSource) -> f64 {
-    match source {
-        MappingSource::Circle { origin } => *origin,
-        _ => 0.,
     }
 }
 
@@ -296,13 +266,6 @@ impl Render for MappingEditor {
                             .gap(px(6.))
                             .children(self.direction.iter().cloned()),
                     )
-                },
-            )
-            .when(
-                matches!(self.value.source, MappingSource::Circle { .. }),
-                |el| {
-                    el.child(div().text_size(px(11.)).child("Circle origin (turns)"))
-                        .child(self.origin.clone())
                 },
             )
             .child(div().text_size(px(11.)).child("Mirror"))
