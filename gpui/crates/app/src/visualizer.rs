@@ -644,6 +644,20 @@ struct IdleKey {
     gizmo_mode: GizmoMode,
     gizmo_hover: Option<GizmoHandle>,
     universe: Option<UniverseState>,
+    /// The window's luminance range: a switch between SDR and HDR must redraw
+    /// a resting stage, whose last frame was made for the other one.
+    display: luma_render::DisplayRange,
+}
+
+/// The luminance range `window` presents in, as the renderer takes it.
+fn display_range(window: &Window) -> luma_render::DisplayRange {
+    window
+        .hdr_output()
+        .map_or(luma_render::DisplayRange::Sdr, |output| {
+            luma_render::DisplayRange::Hdr {
+                headroom: output.headroom(),
+            }
+        })
 }
 
 /// Frames of unchanged inputs the temporal haze needs before its blue-noise
@@ -3880,6 +3894,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             // operator's percent, so the percent alone would mislead and this
             // is the only place the effective answer exists.
             stage.borrow_mut().render_size = Some((width, height));
+            let display = display_range(window);
 
             let image = {
                 let mut stage = stage.borrow_mut();
@@ -3896,6 +3911,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             gizmo_mode,
                             gizmo_hover,
                             universe: universe.clone(),
+                            display,
                         };
                         let moving_haze = key_controls.haze.enabled
                             && key_controls.haze.density > 0.0
@@ -3947,6 +3963,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 hover: gizmo_hover,
                                 build: build_affordances.clone(),
                             };
+                            gpu.viewport.set_display_range(display);
                             match gpu.frame(LiveFrameInputs {
                                 scene,
                                 definitions: &stage.definitions,
@@ -4933,6 +4950,7 @@ mod orbit_selection_tests {
             gizmo_mode: Default::default(),
             gizmo_hover: None,
             universe: None,
+            display: luma_render::DisplayRange::Sdr,
         };
         view.stage.borrow_mut().scene = Some(scene_desc::Scene {
             id: "height-preview".into(),

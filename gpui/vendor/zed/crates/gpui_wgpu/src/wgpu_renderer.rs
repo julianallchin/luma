@@ -1,10 +1,11 @@
 use crate::backdrop::{Backdrop, batch_first_order};
+use crate::hdr::{self, HdrEncoder};
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
-    ScaledPixels, Scene, Size, get_gamma_correction_ratios,
+    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, HdrOutput, Path, Point,
+    PrimitiveBatch, ScaledPixels, Scene, Size, get_gamma_correction_ratios,
 };
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
@@ -23,6 +24,7 @@ const INSTANCE_TEXTURE_TEXEL_SIZE: u64 = 16;
 /// logic plus the storage-buffer instance transport.
 const STORAGE_BUFFER_SHADERS: &str = concat!(
     include_str!("shaders.wgsl"),
+    include_str!("srgb_extended.wgsl"),
     include_str!("shaders_storage.wgsl"),
 );
 
@@ -30,6 +32,7 @@ const STORAGE_BUFFER_SHADERS: &str = concat!(
 /// logic plus the texture-based instance transport.
 const WEBGL_SHADERS: &str = concat!(
     include_str!("shaders.wgsl"),
+    include_str!("srgb_extended.wgsl"),
     include_str!("shaders_webgl.wgsl"),
 );
 
@@ -39,6 +42,7 @@ const WEBGL_SHADERS: &str = concat!(
 const SUBPIXEL_SHADERS: &str = concat!(
     "enable dual_source_blending;\n",
     include_str!("shaders.wgsl"),
+    include_str!("srgb_extended.wgsl"),
     include_str!("shaders_storage.wgsl"),
     include_str!("shaders_subpixel.wgsl"),
 );
@@ -137,6 +141,8 @@ struct WgpuPipelines {
     poly_sprites: wgpu::RenderPipeline,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
+    /// LUMA LOCAL EDIT: `surfaces` for a linear-light (`Rgba16Float`) source.
+    surfaces_linear: wgpu::RenderPipeline,
 }
 
 /// One frame allocation of instance data, ready to bind.
@@ -198,6 +204,10 @@ struct WgpuResources {
     path_msaa_texture: Option<wgpu::Texture>,
     path_msaa_view: Option<wgpu::TextureView>,
     backdrop: Option<Backdrop>,
+    /// LUMA LOCAL EDIT: the HDR scene target and its encode pass, built on
+    /// the first HDR frame and kept until the swapchain format changes. The
+    /// target follows the frame size by itself. See `hdr.rs`.
+    hdr: Option<HdrEncoder>,
 }
 
 impl WgpuResources {
@@ -238,6 +248,15 @@ pub struct WgpuRenderer {
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     surface_configured: bool,
     needs_redraw: bool,
+    // LUMA LOCAL EDIT: HDR output. See `hdr.rs`.
+    /// The swapchain format SDR output uses.
+    sdr_format: wgpu::TextureFormat,
+    /// The swapchain format that presents BT.2100 PQ, if the surface has one.
+    pq_format: Option<wgpu::TextureFormat>,
+    /// The display's luminance range.
+    hdr_display: HdrOutput,
+    /// The user's preference: HDR when the surface can present it.
+    hdr_allowed: bool,
 }
 
 impl WgpuRenderer {
@@ -418,7 +437,7 @@ impl WgpuRenderer {
             );
         }
 
-        let surface_config = wgpu::SurfaceConfiguration {
+        let mut surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: clamped_width.max(1),
@@ -432,9 +451,33 @@ impl WgpuRenderer {
             view_formats: vec![],
             color_space: wgpu::SurfaceColorSpace::Srgb,
         };
-        // Configure the surface immediately. The adapter selection process already validated
-        // that this adapter can successfully configure this surface.
-        surface.configure(&context.device, &surface_config);
+        // LUMA LOCAL EDIT: present HDR10 where the surface offers it. HDR is
+        // allowed until the caller says otherwise
+        // (`set_hdr_output_allowed`); a surface that refuses the PQ
+        // configuration keeps the SDR one and never offers it again.
+        #[cfg(not(target_family = "wasm"))]
+        let mut pq_format = hdr::pq_surface_format(&surface_caps);
+        #[cfg(target_family = "wasm")]
+        let mut pq_format = None;
+        if let Some(format) = pq_format {
+            let hdr_config = wgpu::SurfaceConfiguration {
+                format,
+                color_space: wgpu::SurfaceColorSpace::Bt2100Pq,
+                ..surface_config.clone()
+            };
+            if try_configure(&context.device, &surface, &hdr_config) {
+                surface_config = hdr_config;
+            } else {
+                warn!("Surface refused {format:?} in BT.2100 PQ; presenting SDR.");
+                pq_format = None;
+            }
+        }
+        if pq_format.is_none() {
+            // Configure the surface immediately. The adapter selection process already validated
+            // that this adapter can successfully configure this surface.
+            surface.configure(&context.device, &surface_config);
+        }
+        let hdr_active = pq_format.is_some();
 
         let queue = Arc::clone(&context.queue);
         let rendering_params = RenderingParameters::new(&context.adapter, surface_format);
@@ -445,9 +488,9 @@ impl WgpuRenderer {
         let pipelines = Self::create_pipelines(
             &device,
             &bind_group_layouts,
-            surface_format,
+            scene_format(&surface_config),
             alpha_mode,
-            rendering_params.path_sample_count,
+            rendering_params.path_sample_count(hdr_active),
             dual_source_blending,
             uses_webgl_instance_data,
         );
@@ -587,6 +630,7 @@ impl WgpuRenderer {
             path_msaa_texture: None,
             path_msaa_view: None,
             backdrop: None,
+            hdr: None,
         };
 
         Ok(Self {
@@ -613,6 +657,10 @@ impl WgpuRenderer {
             device_lost: context.device_lost_flag(),
             surface_configured: true,
             needs_redraw: false,
+            sdr_format: surface_format,
+            pq_format,
+            hdr_display: hdr::display_from_env(),
+            hdr_allowed: true,
         })
     }
 
@@ -1013,6 +1061,19 @@ impl WgpuRenderer {
             &layouts.instances,
             Some(&layouts.texture),
             wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let surfaces_linear = create_pipeline(
+            "surfaces_linear",
+            "vs_surface",
+            "fs_surface_linear",
+            &layouts.globals,
+            &layouts.instances,
+            Some(&layouts.texture),
+            wgpu::PrimitiveTopology::TriangleStrip,
             &[Some(color_target)],
             1,
             &shader_module,
@@ -1028,6 +1089,7 @@ impl WgpuRenderer {
             subpixel_sprites,
             poly_sprites,
             surfaces,
+            surfaces_linear,
         }
     }
 
@@ -1139,10 +1201,10 @@ impl WgpuRenderer {
             return;
         }
 
-        let format = self.surface_config.format;
+        let format = scene_format(&self.surface_config);
         let width = self.surface_config.width;
         let height = self.surface_config.height;
-        let path_sample_count = self.rendering_params.path_sample_count;
+        let path_sample_count = self.rendering_params.path_sample_count(self.hdr_active());
         let resources = self.resources_mut();
 
         let (t, v) = Self::create_path_intermediate(&resources.device, format, width, height);
@@ -1176,7 +1238,7 @@ impl WgpuRenderer {
         if new_alpha_mode != self.surface_config.alpha_mode {
             self.surface_config.alpha_mode = new_alpha_mode;
             let surface_config = self.surface_config.clone();
-            let path_sample_count = self.rendering_params.path_sample_count;
+            let path_sample_count = self.rendering_params.path_sample_count(self.hdr_active());
             let dual_source_blending = self.dual_source_blending;
             let uses_webgl_instance_data = self.uses_webgl_instance_data;
             let Some(resources) = self.resources.as_mut() else {
@@ -1188,13 +1250,79 @@ impl WgpuRenderer {
             resources.pipelines = Self::create_pipelines(
                 &resources.device,
                 &resources.bind_group_layouts,
-                surface_config.format,
+                scene_format(&surface_config),
                 surface_config.alpha_mode,
                 path_sample_count,
                 dual_source_blending,
                 uses_webgl_instance_data,
             );
         }
+    }
+
+    /// LUMA LOCAL EDIT: whether frames are presented as BT.2100 PQ.
+    fn hdr_active(&self) -> bool {
+        self.surface_config.color_space == wgpu::SurfaceColorSpace::Bt2100Pq
+    }
+
+    /// See [`gpui::Window::hdr_output`].
+    // LUMA LOCAL EDIT: not upstream.
+    pub fn hdr_output(&self) -> Option<HdrOutput> {
+        self.hdr_active().then_some(self.hdr_display)
+    }
+
+    /// See [`gpui::Window::set_hdr_output_allowed`]. Reconfigures the
+    /// swapchain and rebuilds the pipelines when the mode changes, so the
+    /// change shows from the next frame.
+    // LUMA LOCAL EDIT: not upstream.
+    pub fn set_hdr_output_allowed(&mut self, allowed: bool) {
+        self.hdr_allowed = allowed;
+        let want_hdr = allowed && self.pq_format.is_some();
+        if want_hdr == self.hdr_active() {
+            return;
+        }
+        let mut surface_config = self.surface_config.clone();
+        (surface_config.format, surface_config.color_space) = match self.pq_format {
+            Some(format) if want_hdr => (format, wgpu::SurfaceColorSpace::Bt2100Pq),
+            _ => (self.sdr_format, wgpu::SurfaceColorSpace::Srgb),
+        };
+        let Some(resources) = self.resources.as_mut() else {
+            self.surface_config = surface_config;
+            return;
+        };
+        // The swapchain's images and every target sized or formatted for it
+        // go; nothing may still be drawing into them.
+        if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        }) {
+            warn!("Failed to poll device before switching HDR output: {e:?}");
+        }
+        if !try_configure(&resources.device, &resources.surface, &surface_config) {
+            if !want_hdr {
+                // SDR was configured at creation; a refusal now is a device
+                // problem the next frame's error path reports.
+                return;
+            }
+            warn!("Surface refused BT.2100 PQ; presenting SDR.");
+            self.pq_format = None;
+            resources
+                .surface
+                .configure(&resources.device, &self.surface_config);
+            return;
+        }
+        resources.pipelines = Self::create_pipelines(
+            &resources.device,
+            &resources.bind_group_layouts,
+            scene_format(&surface_config),
+            surface_config.alpha_mode,
+            self.rendering_params.path_sample_count(want_hdr),
+            self.dual_source_blending,
+            self.uses_webgl_instance_data,
+        );
+        resources.invalidate_intermediate_textures();
+        resources.hdr = None;
+        self.surface_config = surface_config;
+        self.needs_redraw = true;
     }
 
     #[allow(dead_code)]
@@ -1364,7 +1492,42 @@ impl WgpuRenderer {
             );
         }
 
-        if let Err(error) = self.record_frame(scene, &frame_view) {
+        // LUMA LOCAL EDIT: an HDR frame is drawn into the scene target and
+        // then encoded into the swapchain. See `hdr.rs`.
+        let recorded = if self.hdr_active() {
+            let size = [self.surface_config.width, self.surface_config.height];
+            let swapchain_format = self.surface_config.format;
+            let resources = self.resources_mut();
+            let device = Arc::clone(&resources.device);
+            let scene_view = resources
+                .hdr
+                .get_or_insert_with(|| HdrEncoder::new(&device, swapchain_format))
+                .scene_view(&device, size)
+                .clone();
+            self.record_frame(scene, &scene_view).map(|()| {
+                let resources = self.resources();
+                let mut encoder =
+                    resources
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("hdr_encoder"),
+                        });
+                if let Some(hdr) = &resources.hdr {
+                    hdr.encode(
+                        &resources.device,
+                        &resources.queue,
+                        &mut encoder,
+                        &frame_view,
+                        self.hdr_display,
+                        self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
+                    );
+                }
+                resources.queue.submit(std::iter::once(encoder.finish()));
+            })
+        } else {
+            self.record_frame(scene, &frame_view)
+        };
+        if let Err(error) = recorded {
             log::error!("{error:#}");
             self.resources().queue.submit(std::iter::empty());
             return false;
@@ -1377,7 +1540,7 @@ impl WgpuRenderer {
     fn record_frame(&mut self, scene: &Scene, frame_view: &wgpu::TextureView) -> Result<()> {
         let has_backdrop = !scene.backdrop_blurs.is_empty();
         let size = [self.surface_config.width, self.surface_config.height];
-        let format = self.surface_config.format;
+        let format = scene_format(&self.surface_config);
         let resources = self.resources_mut();
         if has_backdrop && resources.backdrop.is_none() {
             resources.backdrop = Some(Backdrop::new(&resources.device, format));
@@ -1551,6 +1714,10 @@ impl WgpuRenderer {
                         // how the atlas serves the same bytes, and it is what
                         // makes a shared frame and an uploaded frame one
                         // picture.
+                        //
+                        // LUMA LOCAL EDIT: except a half-float source, which
+                        // holds linear light and is encoded as it is sampled
+                        // (`fs_surface_linear`).
                         for (index, surface) in scene.surfaces[range.clone()].iter().enumerate() {
                             let view = surface.source.create_view(&wgpu::TextureViewDescriptor {
                                 format: Some(surface.source.format().remove_srgb_suffix()),
@@ -1560,7 +1727,14 @@ impl WgpuRenderer {
                                 self.create_texture_bind_group("surface_bind_group", &view);
                             let instance = instance_bindings.surfaces.first_instance
                                 + (range.start + index) as u32;
-                            pass.set_pipeline(&self.resources().pipelines.surfaces);
+                            let pipelines = &self.resources().pipelines;
+                            pass.set_pipeline(
+                                if surface.source.format() == wgpu::TextureFormat::Rgba16Float {
+                                    &pipelines.surfaces_linear
+                                } else {
+                                    &pipelines.surfaces
+                                },
+                            );
                             pass.set_bind_group(0, &self.resources().globals_bind_group, &[]);
                             pass.set_bind_group(1, &instance_bindings.surfaces.bind_group, &[]);
                             pass.set_bind_group(2, &texture, &[]);
@@ -2175,6 +2349,7 @@ impl WgpuRenderer {
         self.resources = None;
         self.atlas.handle_device_lost(context);
 
+        let hdr_allowed = self.hdr_allowed;
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -2183,9 +2358,49 @@ impl WgpuRenderer {
             self.compositor_gpu,
             self.atlas.clone(),
         )?;
+        self.set_hdr_output_allowed(hdr_allowed);
 
         log::info!("GPU recovery complete");
         Ok(())
+    }
+}
+
+/// LUMA LOCAL EDIT: the format the compositor's pipelines draw into. The
+/// swapchain itself in SDR; in HDR the scene target, which `HdrEncoder` then
+/// encodes into the swapchain.
+fn scene_format(config: &wgpu::SurfaceConfiguration) -> wgpu::TextureFormat {
+    if config.color_space == wgpu::SurfaceColorSpace::Bt2100Pq {
+        hdr::SCENE_FORMAT
+    } else {
+        config.format
+    }
+}
+
+/// LUMA LOCAL EDIT: configure `surface`, reporting a refusal instead of
+/// raising it. A surface may list a format and colour space the driver still
+/// refuses to build a swapchain for.
+fn try_configure(
+    device: &wgpu::Device,
+    surface: &wgpu::Surface<'_>,
+    config: &wgpu::SurfaceConfiguration,
+) -> bool {
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let validation = pollster::block_on(validation.pop());
+        let internal = pollster::block_on(internal.pop());
+        if let Some(error) = validation.or(internal) {
+            warn!("Surface configuration failed: {error}");
+            return false;
+        }
+        true
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        drop((validation, internal));
+        true
     }
 }
 
@@ -2211,6 +2426,8 @@ fn create_surface(
 
 struct RenderingParameters {
     path_sample_count: u32,
+    /// LUMA LOCAL EDIT: `path_sample_count` for the HDR scene format.
+    hdr_path_sample_count: u32,
     gamma_ratios: [f32; 4],
     grayscale_enhanced_contrast: f32,
     subpixel_enhanced_contrast: f32,
@@ -2220,11 +2437,15 @@ impl RenderingParameters {
     fn new(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> Self {
         use std::env;
 
-        let format_features = adapter.get_texture_format_features(surface_format);
-        let path_sample_count = [4, 2, 1]
-            .into_iter()
-            .find(|&n| format_features.flags.sample_count_supported(n))
-            .unwrap_or(1);
+        let sample_count = |format| {
+            let format_features = adapter.get_texture_format_features(format);
+            [4, 2, 1]
+                .into_iter()
+                .find(|&n| format_features.flags.sample_count_supported(n))
+                .unwrap_or(1)
+        };
+        let path_sample_count = sample_count(surface_format);
+        let hdr_path_sample_count = sample_count(hdr::SCENE_FORMAT);
 
         let gamma = env::var("ZED_FONTS_GAMMA")
             .ok()
@@ -2247,9 +2468,18 @@ impl RenderingParameters {
 
         Self {
             path_sample_count,
+            hdr_path_sample_count,
             gamma_ratios,
             grayscale_enhanced_contrast,
             subpixel_enhanced_contrast,
+        }
+    }
+
+    fn path_sample_count(&self, hdr: bool) -> u32 {
+        if hdr {
+            self.hdr_path_sample_count
+        } else {
+            self.path_sample_count
         }
     }
 }

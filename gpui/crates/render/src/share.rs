@@ -36,7 +36,7 @@
 //! place that knows which frame reached the screen. On one wgpu device the
 //! reservation is harmless and unnecessary.
 
-use crate::gpu::Gpu;
+use crate::gpu::{Channels, Gpu};
 
 /// Set to refuse every shared surface, leaving the CPU readback path.
 ///
@@ -65,7 +65,8 @@ impl Surface {
         platform::source(&self.0)
     }
 
-    /// Copy the texels out, unpadded: BGRA8, sRGB-encoded, row-major.
+    /// Copy the texels out, unpadded, row-major: BGRA8 sRGB-encoded for an
+    /// SDR frame, RGBA half-float linear for an HDR one.
     ///
     /// That copy is the cost this whole module exists to avoid, so this is
     /// for callers that genuinely need bytes — a test, an encoder — and never
@@ -92,8 +93,12 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    /// Allocate a shareable BGRA8 target, or `None` when `gpu` cannot produce
-    /// one the compositor could see.
+    /// Allocate a shareable target in `channels`' format, or `None` when
+    /// `gpu` cannot produce one the compositor could see.
+    ///
+    /// [`Channels::Bgra`] is the SDR target described below.
+    /// [`Channels::Hdr`] is half-float linear light, which a compositor that
+    /// presents HDR samples as it is (see `gpui::Window::hdr_output`).
     ///
     /// `None` is not an error: it is the honest answer on a device the
     /// compositor does not share (a headless harness, a software fallback, a
@@ -108,8 +113,15 @@ impl Shared {
     /// bytes unchanged — which is what its sprite atlas does with the same
     /// bytes. The asymmetry is the point: it is how the two paths produce one
     /// picture.
-    pub(crate) fn new(gpu: &Gpu, width: u32, height: u32) -> Option<Self> {
-        Self::on(gpu.device(), gpu.queue(), gpu.is_adopted(), width, height)
+    pub(crate) fn new(gpu: &Gpu, width: u32, height: u32, channels: Channels) -> Option<Self> {
+        Self::on(
+            gpu.device(),
+            gpu.queue(),
+            gpu.is_adopted(),
+            width,
+            height,
+            channels,
+        )
     }
 
     pub(crate) fn on(
@@ -118,11 +130,13 @@ impl Shared {
         adopted: bool,
         width: u32,
         height: u32,
+        channels: Channels,
     ) -> Option<Self> {
         if std::env::var_os(WITHHOLD).is_some() {
             return None;
         }
-        let (view, handle) = platform::allocate(device, queue, adopted, width, height)?;
+        let (view, handle) =
+            platform::allocate(device, queue, adopted, &descriptor(width, height, channels))?;
         Some(Self {
             view,
             surface: Surface(handle),
@@ -150,7 +164,7 @@ impl std::fmt::Debug for Shared {
 ///
 /// No `COPY_SRC` by default: the point of this target is that nothing copies
 /// out of it. A platform adds it only if its [`Surface::to_bytes`] needs it.
-fn descriptor(width: u32, height: u32) -> wgpu::TextureDescriptor<'static> {
+fn descriptor(width: u32, height: u32, channels: Channels) -> wgpu::TextureDescriptor<'static> {
     wgpu::TextureDescriptor {
         label: Some("shared-output"),
         size: wgpu::Extent3d {
@@ -161,7 +175,7 @@ fn descriptor(width: u32, height: u32) -> wgpu::TextureDescriptor<'static> {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        format: channels.format(),
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     }
@@ -218,16 +232,24 @@ mod platform {
 
     /// Any Metal device can back a texture with an `IOSurface`, so this does
     /// not care whether `gpu` is adopted — only that it is Metal.
+    ///
+    /// BGRA8 only. TODO(macOS HDR): an `'RGhA'` half-float surface for EDR,
+    /// once gpui's Metal compositor presents extended range (see
+    /// `gpui::Window::hdr_output`); until then an HDR request answers `None`
+    /// and the frame is read back as SDR.
     pub fn allocate(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _adopted: bool,
-        width: u32,
-        height: u32,
+        descriptor: &wgpu::TextureDescriptor<'static>,
     ) -> Option<(wgpu::TextureView, Handle)> {
+        if descriptor.format != wgpu::TextureFormat::Bgra8UnormSrgb {
+            return None;
+        }
+        let (width, height) = (descriptor.size.width, descriptor.size.height);
         let surface = io_surface(width, height);
         let buffer = CVPixelBuffer::from_io_surface(&surface, None).ok()?;
-        let texture = import(device, &surface, &super::descriptor(width, height))?;
+        let texture = import(device, &surface, descriptor)?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Some((view, Handle(buffer)))
     }
@@ -407,21 +429,26 @@ mod platform {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         adopted: bool,
-        width: u32,
-        height: u32,
+        descriptor: &wgpu::TextureDescriptor<'static>,
     ) -> Option<(wgpu::TextureView, Handle)> {
         if !adopted {
             return None;
         }
+        // The compositor reads through a view with the sRGB suffix removed.
+        // For the BGRA8 target that is the raw-byte view; a half-float target
+        // has no suffix, and its one view is the one it is created with.
+        let raw = descriptor.format.remove_srgb_suffix();
         let descriptor = wgpu::TextureDescriptor {
-            // Sampled by the compositor, and readable for `to_bytes`. The
-            // non-sRGB view format is what the compositor's raw-byte read
-            // view is created as.
+            // Sampled by the compositor, and readable for `to_bytes`.
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[wgpu::TextureFormat::Bgra8Unorm],
-            ..super::descriptor(width, height)
+            view_formats: if raw == descriptor.format {
+                &[]
+            } else {
+                std::slice::from_ref(&BGRA8_RAW)
+            },
+            ..descriptor.clone()
         };
         let texture = device.create_texture(&descriptor);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -435,11 +462,19 @@ mod platform {
         ))
     }
 
+    /// The raw-byte view format of the BGRA8 target.
+    const BGRA8_RAW: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+
     /// A synchronous copy-and-map: the staged path's readback, done once on
     /// demand instead of every frame.
     pub fn to_bytes(handle: &Handle) -> Vec<u8> {
         let size = handle.texture.size();
-        let row_bytes = size.width * 4;
+        let texel_bytes = handle
+            .texture
+            .format()
+            .block_copy_size(None)
+            .expect("a colour target has one block size");
+        let row_bytes = size.width * texel_bytes;
         let bytes_per_row = row_bytes.div_ceil(256) * 256;
         let readback = handle.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shared-readback"),
@@ -500,8 +535,7 @@ mod platform {
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _adopted: bool,
-        _width: u32,
-        _height: u32,
+        _descriptor: &wgpu::TextureDescriptor<'static>,
     ) -> Option<(wgpu::TextureView, Handle)> {
         None
     }
@@ -557,7 +591,7 @@ mod tests {
         let Ok(gpu) = crate::Gpu::build() else {
             return;
         };
-        let Some(shared) = Shared::new(&gpu, 8, 4) else {
+        let Some(shared) = Shared::new(&gpu, 8, 4, super::Channels::Bgra) else {
             assert!(
                 !cfg!(any(
                     target_os = "macos",

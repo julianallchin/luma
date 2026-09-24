@@ -64,8 +64,8 @@ pub use metrics::MetricSummary;
 pub use scene_desc::Catalogue;
 pub use share::Surface;
 pub use viewport::{
-    AsyncPresentation, AsyncViewport, Occupancy, Pacing, Presentation, Presented, SubmitOutcome,
-    Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
+    AsyncPresentation, AsyncViewport, DisplayRange, Occupancy, Pacing, Presentation, Presented,
+    SubmitOutcome, Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
 };
 pub use warmup::{warm, warming, Warming};
 

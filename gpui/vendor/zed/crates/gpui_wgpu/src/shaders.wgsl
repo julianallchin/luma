@@ -1351,3 +1351,16 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
     }
     return sample;
 }
+
+// LUMA LOCAL EDIT: a frame in linear light — an `Rgba16Float` surface, which
+// only an HDR-aware renderer paints (see `hdr.rs`). Its values may exceed 1.0;
+// they are encoded to extended sRGB, unclamped, so they reach the target in
+// the encoding every other primitive is drawn in.
+@fragment
+fn fs_surface_linear(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    let sample = textureSample(t_surface, s_surface, input.texture_position);
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(linear_to_srgb_extended(sample.rgb), sample.a);
+}

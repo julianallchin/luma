@@ -15,7 +15,14 @@ struct Composite {
     medium: ProceduralMedium,
     camera_pos: vec4<f32>,
     outdoor_sun: vec4<f32>,
+    // x: display headroom, the brightest output as a multiple of SDR white.
+    // Read only when HDR_OUTPUT is set.
+    display: vec4<f32>,
 };
+
+// Set for a compositor that presents HDR: the target is half-float linear
+// light where 1.0 is SDR white, and highlights may go up to the headroom.
+override HDR_OUTPUT: bool = false;
 
 @group(0) @binding(0) var<uniform> cfg: Composite;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
@@ -133,6 +140,44 @@ fn agx(color_in: vec3<f32>) -> vec3<f32> {
     return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+/// Display value where the HDR expansion starts. AgX puts scene-linear 1.0
+/// (diffuse white) at about 0.59, so everything up to diffuse white keeps
+/// exactly its SDR value; only the shoulder above it changes.
+const HDR_KNEE: f32 = 0.6;
+
+/// AgX for a display with `headroom` times SDR white to spare.
+///
+/// The SDR transform first, unchanged, so the picture below the knee is the
+/// SDR picture and the UI around it keeps its meaning. AgX's shoulder then
+/// holds everything from diffuse white up to its white point in the last
+/// 0.4 of the range; that span is re-expanded into [knee, headroom]:
+///
+///   m' = m + (headroom - 1) * t^2,   t = (m - knee) / (1 - knee)
+///
+/// on the pixel's largest channel m, and the pixel is scaled by m' / m. The
+/// curve meets the SDR one at the knee with the same value and slope (no
+/// visible seam in a gradient), rises monotonically (slope >= 1), and sends
+/// AgX's white to the headroom. Scaling all three channels by one factor
+/// keeps AgX's hue and its highlight desaturation. With headroom 1 it is
+/// the SDR transform exactly.
+fn agx_hdr(color_in: vec3<f32>, headroom: f32) -> vec3<f32> {
+    let sdr = agx(color_in);
+    let peak = max(max(sdr.r, sdr.g), sdr.b);
+    if headroom <= 1.0 || peak <= HDR_KNEE {
+        return sdr;
+    }
+    let t = (peak - HDR_KNEE) / (1.0 - HDR_KNEE);
+    return sdr * ((peak + (headroom - 1.0) * t * t) / peak);
+}
+
+/// The display transform for this pipeline's target.
+fn display_transform(color: vec3<f32>) -> vec3<f32> {
+    if HDR_OUTPUT {
+        return agx_hdr(color, cfg.display.x);
+    }
+    return agx(color);
+}
+
 /// What stands behind the geometry along this pixel's ray: the environment
 /// probe when one is meant to be seen, otherwise the frame's clear colour.
 /// Also fills the coverage relinquished by distant surfaces at the horizon.
@@ -221,9 +266,13 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
             medium = transmission;
         }
     }
-    if debug == 7u { return vec4<f32>(agx(haze), 1.0); }
+    if debug == 7u { return vec4<f32>(display_transform(haze), 1.0); }
     if outdoor { scene = texel.rgb + (1.0 - texel.a) * background; }
-    let display = agx(scene * medium + haze);
+    let display = display_transform(scene * medium + haze);
+    if HDR_OUTPUT {
+        // A half-float target has no 8-bit steps to break up.
+        return vec4<f32>(display, 1.0);
+    }
     return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
 }
 
