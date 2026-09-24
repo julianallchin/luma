@@ -11962,6 +11962,7 @@ mod tests {
                     gobo: 0,
                     gobo_rotation: 0.0,
                     haze_gain: 1.0,
+                    lens: crate::luminaire::Lens::POINT,
                 }
             })
             .collect();
@@ -13004,6 +13005,9 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         gobo: light.gobo.min(2),
         gobo_rotation: finite(light.gobo_rotation, 0.0).rem_euclid(std::f32::consts::TAU),
         haze_gain: finite(light.haze_gain, 1.0).clamp(0.0, 1.0),
+        lens: crate::luminaire::Lens {
+            radius: finite(light.lens.radius, 0.0).clamp(0.0, crate::luminaire::Lens::MAX_RADIUS_M),
+        },
     }
 }
 

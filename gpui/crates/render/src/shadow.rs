@@ -292,6 +292,7 @@ mod tests {
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
+                lens: crate::luminaire::Lens::POINT,
             })
             .collect();
 
@@ -331,6 +332,7 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
+            lens: crate::luminaire::Lens::POINT,
         };
         let eye = Vec3::new(0.0, -12.0, 0.0);
 
