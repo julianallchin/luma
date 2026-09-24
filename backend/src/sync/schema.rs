@@ -422,7 +422,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "venue_id",
             "name",
             "input_json",
-            "groups_json",
             "created_at",
             "updated_at"
         ]
@@ -438,9 +437,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "trigger_json",
             "required_modifiers_json",
             "exclusive",
-            "mode_json",
             "action_json",
-            "target_override_json",
             "display_order",
             "created_at",
             "updated_at"
@@ -460,7 +457,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "score_id",
             "title",
             "lifecycle_state",
-            "implementation_id",
             "forked_from_thread_id",
             "forked_at_message_id",
             "actor",

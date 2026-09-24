@@ -41,10 +41,8 @@ pub struct PerformDeckInput {
 pub struct ManualLayerState {
     /// Whether the manual layer is composited on top of the score
     pub active: bool,
-    /// Modifier names currently held (used for target resolution)
+    /// Modifier names currently held (used for binding resolution)
     pub held_modifiers: HashSet<String>,
-    /// Master intensity (0.0–1.0). Reported to the host; no output reads it.
-    pub master_intensity: f32,
     /// Per-group intensity (0.0–1.0). Key = group_id.
     pub per_group: HashMap<String, f32>,
 }
@@ -54,7 +52,6 @@ impl Default for ManualLayerState {
         Self {
             active: false,
             held_modifiers: HashSet::new(),
-            master_intensity: 1.0,
             per_group: HashMap::new(),
         }
     }
@@ -278,18 +275,13 @@ impl RenderEngine {
         guard.manual_layer.active = active;
     }
 
-    /// Set per-group intensity (0.0–1.0). None = master.
-    pub fn set_group_intensity(&self, group_id: Option<String>, intensity: f32) {
+    /// Set one group's intensity (0.0–1.0).
+    pub fn set_group_intensity(&self, group_id: String, intensity: f32) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
-        match group_id {
-            None => guard.manual_layer.master_intensity = intensity.clamp(0.0, 1.0),
-            Some(gid) => {
-                guard
-                    .manual_layer
-                    .per_group
-                    .insert(gid, intensity.clamp(0.0, 1.0));
-            }
-        }
+        guard
+            .manual_layer
+            .per_group
+            .insert(group_id, intensity.clamp(0.0, 1.0));
     }
 
     /// Hold modifier pressed.
@@ -312,7 +304,6 @@ impl RenderEngine {
 
         crate::models::midi::ControllerState {
             active: ml.active,
-            master_intensity: ml.master_intensity,
             held_modifiers: ml.held_modifiers.iter().cloned().collect(),
             group_intensities,
         }

@@ -46,7 +46,6 @@ fn apply(thread: &mut AgentThread, context: &TurnContext) {
         .into();
     thread.subject_kind = scope.map(|scope| scope.subject_kind.as_str().into());
     thread.subject_id = scope.map(|scope| scope.subject_id.clone());
-    thread.implementation_id = None;
     thread.venue_id = scope.and_then(|scope| scope.venue_id.clone());
     thread.score_id = scope.and_then(|scope| scope.score_id.clone());
 }

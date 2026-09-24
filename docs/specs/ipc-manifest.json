@@ -44,8 +44,8 @@
       "name": "agent_thread_create",
       "prose": {
         "callerUsage": "createThread(input) wraps it as `{ input }`; createScopedThread builds requestId=crypto.randomUUID(), never sends the principal, retries once with the SAME payload on failure (relying on requestId idempotency), then fail-closed validates the returned row with threadMatchesScope().",
-        "notes": "Owner is derived from auth::admitted_principal(db) — the caller CANNOT set ownerUserId; `null` owner is the signed-out principal, a real value, not 'unknown'. agentKind/subjectKind are plain strings on the wire but the backend enforces a closed routing invariant (models/agent_threads.rs authored_route): track_copilot requires subjectKind=\"track\" + non-empty subjectId/venueId/scoreId and NO implementationId; pattern_graph requires subjectKind=\"pattern\" + non-empty subjectId/implementationId and NO scoreId. Anything else errors.",
-        "returns": "AgentThread { id, ownerUserId, agentKind, subjectKind, subjectId, implementationId, venueId, scoreId, forkedFromThreadId, forkedAtMessageId, parentThreadId, parentCallId, title, actor, createdAt, updatedAt }",
+        "notes": "Owner is derived from auth::admitted_principal(db) — the caller CANNOT set ownerUserId; `null` owner is the signed-out principal, a real value, not 'unknown'. agentKind/subjectKind are plain strings on the wire but the backend enforces a closed routing invariant (models/agent_threads.rs route): track_copilot requires subjectKind=\"track\" + non-empty subjectId/venueId/scoreId; venue_rig requires subjectKind=\"venue\" + subjectId equal to venueId and no scoreId; unbound has no subject. Anything else errors.",
+        "returns": "AgentThread { id, ownerUserId, agentKind, subjectKind, subjectId, venueId, scoreId, forkedFromThreadId, forkedAtMessageId, parentThreadId, parentCallId, title, actor, createdAt, updatedAt }",
         "sideEffects": [
           "inserts the thread row (SQLite) AND initializes/attaches its authored document in the same operation",
           "idempotent on requestId — a retried identical payload returns the previously created thread instead of a duplicate",
@@ -101,8 +101,8 @@
       },
       "name": "agent_thread_list",
       "prose": {
-        "callerUsage": "listThreads() explicitly sends `?? null` for each filter (never omits them); listScopedThreads() then re-filters client-side on the full ExactThreadScope (principal, implementationId, venueId, scoreId) because the command has no filter for those fields.",
-        "notes": "Each filter is an independent AND; null = wildcard for that field. Backend orders newest-first but the frontend deliberately re-picks with newestThread() (updatedAt desc, createdAt tiebreak) so behavior doesn't depend on SQL ordering — a port should not rely on the server order. No pagination. Three of the seven identity fields are NOT filterable server-side; that filtering must happen in the client.",
+        "callerUsage": "listThreads() explicitly sends `?? null` for each filter (never omits them); listScopedThreads() then re-filters client-side on the full ExactThreadScope (principal, venueId, scoreId) because the command has no filter for those fields.",
+        "notes": "Each filter is an independent AND; null = wildcard for that field. Backend orders newest-first but the frontend deliberately re-picks with newestThread() (updatedAt desc, createdAt tiebreak) so behavior doesn't depend on SQL ordering — a port should not rely on the server order. No pagination. Two of the six identity fields are NOT filterable server-side; that filtering must happen in the client.",
         "returns": "AgentThread[]",
         "sideEffects": [
           "read-only SQLite query scoped to the admitted principal"
@@ -390,8 +390,6 @@
         "returns": "void",
         "sideEffects": [
           "render_engine.set_active_scene(Some(scene)) — replaces the live render scene; set_active_scene(None) when annotations are empty or the built scene is empty",
-          "clear_plan_cache() when the annotation list is empty",
-          "reads/writes the process-global PLAN_CACHE (per-annotation compiled plan keyed by id + signature over pattern_id, venue_id, implementation_id, graph_revision, start/end, args) — incremental recompile",
           "checks COMPOSITING_GENERATION before and after building; a concurrent leave_track/cancel_compositing makes the pass a no-op",
           "resolves fixtures root + StorageRoot from AppHandle"
         ]
@@ -520,8 +518,8 @@
       },
       "name": "controller_get_state",
       "prose": {
-        "notes": "Snapshot-then-subscribe: the UI calls this once on mount to seed state, then keeps it live via the `controller_state` Tauri event which carries the identical payload. A port must emit that event on every manual-layer mutation or the UI goes stale. groupIntensities only includes groups with a non-default intensity — absent key means default, not zero. activeCueIds = latched, flashCueIds = held.",
-        "returns": "ControllerState { active: boolean, masterIntensity: number, activeCueIds: string[], flashCueIds: string[], heldModifiers: string[], groupIntensities: Record<string, number> } (camelCase)",
+        "notes": "Snapshot-then-subscribe: the UI calls this once on mount to seed state, then keeps it live via the `controller_state` Tauri event which carries the identical payload. A port must emit that event on every manual-layer mutation or the UI goes stale. groupIntensities only includes groups with a non-default intensity — absent key means default, not zero.",
+        "returns": "ControllerState { active: boolean, heldModifiers: string[], groupIntensities: Record<string, number> } (camelCase)",
         "sideEffects": [
           "none — snapshot read"
         ]
@@ -1139,7 +1137,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 705
+        "line": 708
       },
       "name": "generate_venue_groups",
       "prose": {
@@ -3128,7 +3126,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 679
+        "line": 682
       },
       "name": "save_venue_group",
       "prose": {

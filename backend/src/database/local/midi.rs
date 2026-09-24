@@ -5,7 +5,6 @@ use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::midi::{
     CreateBindingInput, CreateModifierInput, MidiBinding, ModifierDef, UpdateBindingInput,
-    UpdateModifierInput,
 };
 
 // ============================================================================
@@ -31,7 +30,6 @@ struct ModifierRow {
     venue_id: String,
     name: String,
     input_json: String,
-    groups_json: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -44,7 +42,6 @@ impl ModifierRow {
             venue_id: self.venue_id,
             name: self.name,
             input: from_json(&self.input_json)?,
-            groups: self.groups_json.as_deref().map(from_json).transpose()?,
             created_at: self.created_at,
             updated_at: self.updated_at,
         })
@@ -59,9 +56,7 @@ struct BindingRow {
     trigger_json: String,
     required_modifiers_json: String,
     exclusive: i64,
-    mode_json: String,
     action_json: String,
-    target_override_json: Option<String>,
     display_order: i64,
     created_at: String,
     updated_at: String,
@@ -76,13 +71,7 @@ impl BindingRow {
             trigger: from_json(&self.trigger_json)?,
             required_modifiers: from_json(&self.required_modifiers_json)?,
             exclusive: self.exclusive != 0,
-            mode: from_json(&self.mode_json)?,
             action: from_json(&self.action_json)?,
-            target_override: self
-                .target_override_json
-                .as_deref()
-                .map(from_json)
-                .transpose()?,
             display_order: self.display_order,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -96,7 +85,7 @@ impl BindingRow {
 
 pub async fn list_modifiers(access: &mut impl AuthorizedVenue) -> Result<Vec<ModifierDef>, String> {
     sqlx::query_as::<_, ModifierRow>(
-        "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
+        "SELECT id, uid, venue_id, name, input_json, created_at, updated_at
          FROM midi_modifiers WHERE venue_id = ? ORDER BY name ASC",
     )
     .bind(access.venue_id().to_owned())
@@ -113,7 +102,7 @@ pub async fn get_modifier(
     id: &str,
 ) -> Result<ModifierDef, String> {
     sqlx::query_as::<_, ModifierRow>(
-        "SELECT id, uid, venue_id, name, input_json, groups_json, created_at, updated_at
+        "SELECT id, uid, venue_id, name, input_json, created_at, updated_at
          FROM midi_modifiers WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
@@ -131,52 +120,21 @@ pub async fn create_modifier(
     access.require_venue(&input.venue_id)?;
     let id = Uuid::new_v4().to_string();
     let input_json = to_json(&input.input)?;
-    let groups_json: Option<String> = input.groups.as_ref().map(to_json).transpose()?;
 
     sqlx::query(
-        "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json, groups_json)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO midi_modifiers (id, uid, venue_id, name, input_json)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(access.principal().map(str::to_owned))
     .bind(access.venue_id().to_owned())
     .bind(&input.name)
     .bind(&input_json)
-    .bind(&groups_json)
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("create_modifier: {}", e))?;
 
     get_modifier(access, &id).await
-}
-
-pub async fn update_modifier(
-    access: &mut VenueAccess<'_, Write>,
-    input: UpdateModifierInput,
-) -> Result<ModifierDef, String> {
-    let existing = get_modifier(access, &input.id).await?;
-    let midi_input = input.input.unwrap_or(existing.input);
-    let input_json = to_json(&midi_input)?;
-    let groups = match input.groups {
-        Some(g) => g,
-        None => existing.groups,
-    };
-    let groups_json: Option<String> = groups.as_ref().map(to_json).transpose()?;
-
-    sqlx::query(
-        "UPDATE midi_modifiers SET name = ?, input_json = ?, groups_json = ?
-         WHERE id = ? AND venue_id = ?",
-    )
-    .bind(input.name.unwrap_or(existing.name))
-    .bind(&input_json)
-    .bind(&groups_json)
-    .bind(&input.id)
-    .bind(access.venue_id().to_owned())
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("update_modifier: {}", e))?;
-
-    get_modifier(access, &input.id).await
 }
 
 pub async fn delete_modifier(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
@@ -198,8 +156,8 @@ pub async fn delete_modifier(access: &mut VenueAccess<'_, Write>, id: &str) -> R
 
 pub async fn list_bindings(access: &mut impl AuthorizedVenue) -> Result<Vec<MidiBinding>, String> {
     sqlx::query_as::<_, BindingRow>(
-        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
-                action_json, target_override_json, display_order, created_at, updated_at
+        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive,
+                action_json, display_order, created_at, updated_at
          FROM midi_bindings WHERE venue_id = ? ORDER BY display_order ASC",
     )
     .bind(access.venue_id().to_owned())
@@ -216,8 +174,8 @@ pub async fn get_binding(
     id: &str,
 ) -> Result<MidiBinding, String> {
     sqlx::query_as::<_, BindingRow>(
-        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
-                action_json, target_override_json, display_order, created_at, updated_at
+        "SELECT id, uid, venue_id, trigger_json, required_modifiers_json, exclusive,
+                action_json, display_order, created_at, updated_at
          FROM midi_bindings WHERE id = ? AND venue_id = ?",
     )
     .bind(id)
@@ -237,16 +195,13 @@ pub async fn create_binding(
     let trigger_json = to_json(&input.trigger)?;
     let required_modifiers_json = to_json(&input.required_modifiers)?;
     let exclusive: i64 = if input.exclusive { 1 } else { 0 };
-    let mode_json = to_json(&input.mode.unwrap_or_default())?;
     let action_json = to_json(&input.action)?;
-    let target_override_json: Option<String> =
-        input.target_override.as_ref().map(to_json).transpose()?;
 
     sqlx::query(
         "INSERT INTO midi_bindings
-             (id, uid, venue_id, trigger_json, required_modifiers_json, exclusive, mode_json,
-              action_json, target_override_json, display_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, uid, venue_id, trigger_json, required_modifiers_json, exclusive,
+              action_json, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(access.principal().map(str::to_owned))
@@ -254,9 +209,7 @@ pub async fn create_binding(
     .bind(&trigger_json)
     .bind(&required_modifiers_json)
     .bind(exclusive)
-    .bind(&mode_json)
     .bind(&action_json)
-    .bind(&target_override_json)
     .bind(input.display_order)
     .execute(&mut *access.connection())
     .await
@@ -281,27 +234,18 @@ pub async fn update_binding(
     } else {
         0
     };
-    let mode_json = to_json(&input.mode.unwrap_or(existing.mode))?;
     let action_json = to_json(&input.action.unwrap_or(existing.action))?;
-    let target_override = match input.target_override {
-        Some(t) => t,
-        None => existing.target_override,
-    };
-    let target_override_json: Option<String> = target_override.as_ref().map(to_json).transpose()?;
     let display_order = input.display_order.unwrap_or(existing.display_order);
 
     sqlx::query(
         "UPDATE midi_bindings SET trigger_json = ?, required_modifiers_json = ?,
-                                  exclusive = ?, mode_json = ?, action_json = ?,
-                                  target_override_json = ?, display_order = ?
+                                  exclusive = ?, action_json = ?, display_order = ?
          WHERE id = ? AND venue_id = ?",
     )
     .bind(&trigger_json)
     .bind(&required_modifiers_json)
     .bind(exclusive_i)
-    .bind(&mode_json)
     .bind(&action_json)
-    .bind(&target_override_json)
     .bind(display_order)
     .bind(&input.id)
     .bind(access.venue_id().to_owned())

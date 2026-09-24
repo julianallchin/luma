@@ -18,7 +18,7 @@ use crate::models::agent_threads::{
 };
 
 const THREAD_COLUMNS: &str =
-    "id, uid, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, effort, created_at, updated_at";
+    "id, uid, agent_kind, subject_kind, subject_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, effort, created_at, updated_at";
 
 /// The FROM/WHERE every thread *read* shares: active threads, admitted by the
 /// write-admission singleton, owned by the bound principal (one `?`).
@@ -73,8 +73,8 @@ pub(crate) async fn create_thread_with_id(
         .await
         .map_err(|e| format!("Failed to begin agent thread creation: {e}"))?;
     sqlx::query(
-        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider, effort)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider, effort)
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?,
              COALESCE(parent.engine, ?),
              CASE WHEN parent.id IS NOT NULL THEN parent.model ELSE ? END,
              CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END,
@@ -89,7 +89,6 @@ pub(crate) async fn create_thread_with_id(
     .bind(&input.agent_kind)
     .bind(&input.subject_kind)
     .bind(&input.subject_id)
-    .bind(&input.implementation_id)
     .bind(&input.venue_id)
     .bind(&input.score_id)
     .bind(&input.title)
@@ -191,9 +190,9 @@ pub(crate) async fn fork_thread_for_connection(
     sqlx::query(
         "INSERT INTO agent_threads
          (id, uid, agent_kind, subject_kind, subject_id,
-          implementation_id, venue_id, score_id, forked_from_thread_id,
+          venue_id, score_id, forked_from_thread_id,
           forked_at_message_id, title, engine, model, provider, effort)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM auth_write_admission AS admission
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
@@ -203,7 +202,6 @@ pub(crate) async fn fork_thread_for_connection(
     .bind(&source.agent_kind)
     .bind(&source.subject_kind)
     .bind(&source.subject_id)
-    .bind(&source.implementation_id)
     .bind(&source.venue_id)
     .bind(&source.score_id)
     .bind(source_thread_id)

@@ -456,7 +456,6 @@ fn child_thread_input(
         agent_kind: parent.agent_kind.clone(),
         subject_kind: parent.subject_kind.clone(),
         subject_id: parent.subject_id.clone(),
-        implementation_id: parent.implementation_id.clone(),
         venue_id: parent.venue_id.clone(),
         score_id: parent.score_id.clone(),
         title: Some(description.to_owned()),

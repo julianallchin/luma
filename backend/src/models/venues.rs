@@ -56,20 +56,3 @@ impl Venue {
         self.role == ROLE_MEMBER
     }
 }
-
-/// Per-venue override of which implementation to use for a pattern
-#[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct VenueImplementationOverride {
-    #[sqlx(rename = "venue_id")]
-    pub venue_id: String,
-    #[sqlx(rename = "pattern_id")]
-    pub pattern_id: String,
-    #[sqlx(rename = "implementation_id")]
-    pub implementation_id: String,
-    pub uid: Option<String>,
-    #[sqlx(rename = "created_at")]
-    pub created_at: String,
-    #[sqlx(rename = "updated_at")]
-    pub updated_at: String,
-}

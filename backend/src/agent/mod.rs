@@ -380,7 +380,6 @@ impl ThreadScope {
         thread.agent_kind == self.agent_kind.as_str()
             && thread.subject_kind.as_deref() == Some(self.subject_kind.as_str())
             && thread.subject_id.as_deref() == Some(self.subject_id.as_str())
-            && thread.implementation_id.is_none()
             && thread.venue_id == self.venue_id
             && thread.score_id == self.score_id
     }
@@ -391,7 +390,6 @@ impl ThreadScope {
             agent_kind: self.agent_kind.as_str().to_string(),
             subject_kind: Some(self.subject_kind.as_str().to_string()),
             subject_id: Some(self.subject_id.clone()),
-            implementation_id: None,
             venue_id: self.venue_id.clone(),
             score_id: self.score_id.clone(),
             title: None,

@@ -909,7 +909,6 @@ fn history_thread(id: &str, title: Option<&str>) -> crate::models::agent_threads
         agent_kind: "track_copilot".into(),
         subject_kind: Some("track".into()),
         subject_id: Some("track-1".into()),
-        implementation_id: None,
         venue_id: Some("venue-1".into()),
         score_id: None,
         forked_from_thread_id: None,
