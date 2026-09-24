@@ -9,7 +9,7 @@
     edit.apply()
 
 A clip plays one form: color.constant@1, color.time@1, color.space@1,
-color.chase@1, color.sparkle@1, color.noise@1 or strobe.constant@1. It holds
+color.chase@1, color.sparkle@1, color.noise@1, strobe.constant@1 or aim@1. It holds
 a value for every input of its form. source() is the exact score document,
 suitable for an agent workspace or a one-shot model.
 
@@ -32,8 +32,9 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from .track import (Track, TrackOutput, TrackError, TrackReadOnlyError,
-                    TrackClosedError, _ImmutableSnapshot, _field, _items,
+from .track import (TrackOutput, TrackError, TrackReadOnlyError,
+                    TrackClosedError, TrackHostUnavailableError,
+                    _ImmutableSnapshot, _field, _items,
                     _freeze, _range_pair, _selection, _blend, _z,
                     _downbeat_values, _check_result, _pattern_color, BLEND_MODES)
 
@@ -128,10 +129,6 @@ class Clip:
 
 class GraphTrack(_ImmutableSnapshot):
     """The current score. An edit captures a copy; apply advances this object."""
-    __getattr__ = Track.__getattr__
-    __dir__ = Track.__dir__
-    _luma_catalog_items = Track._luma_catalog_items
-    _bar_time = Track._bar_time
 
     def __init__(self, values, *, nodes, features=None, host_call=None, artifact_store=None):
         self._values, self._features = values, features
@@ -153,7 +150,53 @@ class GraphTrack(_ImmutableSnapshot):
 
     def _call(self, method, payload):
         self._require_active()
-        return Track._call(self, method, payload)
+        if self._host_call is None:
+            raise TrackHostUnavailableError(
+                f"{method} requires Luma's host; this track has no host_call capability"
+            )
+        return self._host_call(method, payload)
+
+    def __getattr__(self, name):
+        """Preserve ordinary scalar track bindings (album, bpm, key, ...)."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        missing = object()
+        value = _field(self._values, name, default=missing)
+        if value is missing:
+            raise AttributeError(f"luma.track has no binding {name!r}")
+        return value
+
+    def __dir__(self):
+        names = set(object.__dir__(self))
+        try:
+            names.update(str(key) for key, _ in _items(self._values))
+        except TrackError:
+            pass
+        return sorted(names)
+
+    def _luma_catalog_items(self):
+        """Binding inventory hook; keeps ``luma.catalog()`` domain-neutral."""
+        return _items(self._values)
+
+    def _bar_time(self, bar):
+        """1-indexed fractional bar boundary -> seconds, with edge extrapolation."""
+        downbeats = self._downbeats
+        index = math.floor(bar - 1.0)
+        fraction = bar - 1.0 - index
+        if len(downbeats) == 1:
+            bpm = float(_field(self._features, "bpm", default=120.0) or 120.0)
+            beats_per_bar = float(
+                _field(self._features, "beats_per_bar", "beatsPerBar", default=4.0)
+                or 4.0
+            )
+            span = beats_per_bar * 60.0 / bpm
+            return downbeats[0] + (index + fraction) * span
+        if index < 0:
+            return downbeats[0] + (index + fraction) * (downbeats[1] - downbeats[0])
+        if index + 1 < len(downbeats):
+            return downbeats[index] + fraction * (downbeats[index + 1] - downbeats[index])
+        span = downbeats[-1] - downbeats[-2]
+        return downbeats[-1] + (index - (len(downbeats) - 1) + fraction) * span
 
     def _refresh(self, snapshot):
         # An edit owns its candidate; only this live facade advances when the

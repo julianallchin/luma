@@ -80,7 +80,7 @@ PCM_HEADER_BYTES = 18
 MMAP_THRESHOLD_BYTES = 4 << 20
 
 #: Ordinary record reprs are an orientation surface, not a catalog dump. Keep
-#: them small even for keyed families such as hundreds of pattern schemas; the
+#: them small even for keyed families such as the node library; the
 #: explicit ``luma.catalog(path, depth=None)`` expands a complete subtree.
 RECORD_REPR_ITEM_LIMIT = 8
 

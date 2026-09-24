@@ -1,6 +1,6 @@
 //! Assembles a `BindingManifest` from independent domain providers.
 //!
-//! Providers (track, audio, features, venue, patterns, graph run, …) each write
+//! Providers (track, audio, features, nodes, venue) each write
 //! into one builder using dotted paths; the builder owns the invariants that no
 //! single provider can see: no two providers may claim the same path, and every
 //! tensor must be structurally consistent with the artifact it points at.

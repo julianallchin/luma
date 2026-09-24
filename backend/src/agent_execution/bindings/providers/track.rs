@@ -1,9 +1,8 @@
 //! `luma.track` — track identity plus its authored lighting timeline.
 //!
 //! A score is persistence vocabulary, not an agent concept. When a concrete
-//! score is in scope its clips live directly under `luma.track`, beside the
-//! stable semantic revision used by `luma.track.edit()`. Times remain absolute
-//! seconds; musical coordinates come from `luma.features`.
+//! score is in scope, `luma.track.document` holds it and `luma.track.edit()`
+//! edits it. Musical coordinates come from `luma.features`.
 
 use super::{inline, unavailable, ProviderCtx, NO_TRACK};
 use crate::agent_execution::bindings::assembler::BindingBuilder;
