@@ -15,7 +15,7 @@ use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{
     CameraPose, DebugView, Environment, Exposure, Glare, GlareStyle, Look, Piece, Quality,
-    RenderSettings, Scene, ToneCurve,
+    RenderSettings, Scene, ToneCurve, VenueEnvironment, VenueHaze,
 };
 use luma_render::{build_frame_with, Frame, Renderer};
 
@@ -359,5 +359,75 @@ fn live_exposure_adapts_rather_than_jumps() {
     assert!(
         current > target + 1.0 && current <= dim,
         "one live frame later the exposure is still on its way: {current}, from {dim} to {target}"
+    );
+}
+
+/// Open ground under a low sun, looking `away_deg` to the side of it, level.
+fn sun_frame(away_deg: f32, look: Look) -> Frame {
+    let mut render = RenderSettings::room(
+        VenueEnvironment::outdoor(4.0),
+        VenueHaze::default(),
+        45.0,
+        1.0,
+    );
+    render.haze.enabled = false;
+    render.show_grid = false;
+    render.show_gizmos = false;
+    render.look = look;
+    let scene = Scene {
+        id: "post-look-sun".into(),
+        times: vec![0.0],
+        camera: CameraPose {
+            position: [0.0, 1.6, 0.0],
+            target: [0.0, 1.6, -10.0],
+        },
+        editing: false,
+        aim_arrows: false,
+        render,
+        selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
+        fixtures: Vec::new(),
+        pieces: Vec::<Piece>::new(),
+        state: BTreeMap::new(),
+    };
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let mut frame =
+        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut Library::new(meshes))
+            .unwrap();
+    let sun = frame.sky.as_ref().expect("an outdoor frame has a sky").sun_direction;
+    let level = Vec3::new(sun.x, sun.y, 0.0).normalize();
+    let turn = glam::Quat::from_rotation_z(away_deg.to_radians());
+    frame.camera.target = frame.camera.eye + turn * level * 10.0;
+    frame
+}
+
+/// Mean luma of one image column.
+fn column(pixels: &[u8], x: u32) -> f32 {
+    (0..HEIGHT).map(|y| luma(pixels, x, y)).sum::<f32>() / HEIGHT as f32
+}
+
+/// A sun just past the frame's edge still veils it, as it veils a real
+/// lens; the convolution alone sees only the light inside the frame.
+#[test]
+fn a_sun_off_the_frame_still_glares() {
+    let mut renderer = Renderer::new().unwrap();
+    let eye = Glare {
+        style: GlareStyle::Eye,
+        ..Glare::STAGE
+    };
+    let look = |glare| Look {
+        tone: ToneCurve::Agx,
+        exposure: Exposure::STAGE,
+        glare,
+    };
+    // The frame spans about ±32° across; the sun is 40° to one side.
+    let glaring = render(&mut renderer, &sun_frame(40.0, look(eye)));
+    let plain = render(&mut renderer, &sun_frame(40.0, look(Glare::OFF)));
+    let near = |p: &[u8]| column(p, 0).max(column(p, WIDTH - 1));
+    assert!(
+        near(&glaring) > near(&plain) + 3.0,
+        "the edge nearer the sun is veiled: {} against {} without glare",
+        near(&glaring),
+        near(&plain)
     );
 }

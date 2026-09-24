@@ -8270,6 +8270,10 @@ impl Renderer {
                             headroom: destination.headroom(),
                             output: channels.index(),
                             temporal,
+                            sun: frame
+                                .sky
+                                .as_ref()
+                                .map(|sky| (sky.sun_direction, sky.sun_radiance)),
                         },
                         &depth_view,
                         &output_view,

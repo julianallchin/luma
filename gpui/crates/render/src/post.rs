@@ -129,6 +129,12 @@ struct FftUniform {
 struct TonemapUniform {
     params: [f32; 4],
     glare: [f32; 4],
+    /// xyz: toward the sun in camera space (x right, y up, z forward),
+    /// w: how much of its glare the tonemap draws (0 while the frame holds it).
+    sun: [f32; 4],
+    /// rgb: the sun's light times the veil's scale, in exposed light ·
+    /// square degrees. w: focal length, output pixels.
+    sun_veil: [f32; 4],
 }
 
 /// Everything the chain needs from the frame.
@@ -151,6 +157,9 @@ pub(crate) struct PostFrame<'a> {
     /// Whether the exposure adapts from the previous frame's. A standalone
     /// capture snaps.
     pub temporal: bool,
+    /// Direction toward the sun and its disc's light (radiance × solid
+    /// angle), when the sky draws one.
+    pub sun: Option<(Vec3, Vec3)>,
 }
 
 /// The glare's compute pipelines for one grid size.
@@ -942,7 +951,9 @@ impl Post {
         }
         let glare = targets.glare.as_mut().filter(|_| glare_on);
         let mut uv_scale = [1.0f32; 2];
+        let mut texel_px = 1.0f32;
         if let Some(glare) = glare {
+            texel_px = glare.scale;
             let frame_texels = [
                 targets.size[0] as f32 / glare.scale,
                 targets.size[1] as f32 / glare.scale,
@@ -1054,21 +1065,24 @@ impl Post {
         }
 
         // --- tonemap ----------------------------------------------------------
+        let sun_glare = if glare_on {
+            off_frame_sun(frame, texel_px)
+        } else {
+            ([0.0; 4], [0.0; 4])
+        };
         queue.write_buffer(
             &self.tonemap,
             0,
             bytemuck::bytes_of(&TonemapUniform {
                 params: [
                     look.tone.shader_code() as f32,
-                    if glare_on {
-                        look.glare.strength
-                    } else {
-                        0.0
-                    },
+                    if glare_on { look.glare.strength } else { 0.0 },
                     0.0,
                     frame.headroom,
                 ],
                 glare: [uv_scale[0], uv_scale[1], 0.0, 0.0],
+                sun: sun_glare.0,
+                sun_veil: sun_glare.1,
             }),
         );
         let glare_view = targets
@@ -1129,4 +1143,45 @@ fn attachment(view: &wgpu::TextureView, clear: bool) -> wgpu::RenderPassColorAtt
             store: wgpu::StoreOp::Store,
         },
     }
+}
+
+/// The sun's glare while it is off the frame, for the tonemap to draw.
+///
+/// The convolution only sees light in the frame, so a sun just past its
+/// edge would take all its glare with it; a real lens is still lit by it.
+/// The tonemap draws the sun's veil (not its diffraction rays) from its
+/// direction, and fades that in over a few glare texels as the disc leaves
+/// the frame, as the convolution's own copy fades out.
+fn off_frame_sun(frame: &PostFrame<'_>, texel_px: f32) -> ([f32; 4], [f32; 4]) {
+    let Some((direction, light)) = frame.sun else {
+        return ([0.0; 4], [0.0; 4]);
+    };
+    let inverse = frame.view_proj.inverse();
+    let at = |x: f32, y: f32| inverse.project_point3(Vec3::new(x, y, 1.0));
+    let centre = at(0.0, 0.0);
+    let forward = (centre - frame.eye).normalize();
+    let right = (at(1.0, 0.0) - centre).normalize();
+    let up = (at(0.0, 1.0) - centre).normalize();
+    let s = direction.normalize();
+    let camera = Vec3::new(s.dot(right), s.dot(up), s.dot(forward));
+    let (w, h) = (frame.width as f32, frame.height as f32);
+    let focal = h * 0.5 / (frame.fov_y_deg.to_radians() * 0.5).tan();
+    // Signed distance of the sun's centre inside the frame, pixels.
+    let inside = if camera.z > 1e-4 {
+        let x = w * 0.5 + focal * camera.x / camera.z;
+        let y = h * 0.5 - focal * camera.y / camera.z;
+        x.min(w - x).min(y).min(h - y)
+    } else {
+        -f32::INFINITY
+    };
+    // Two glare texels.
+    let margin = 2.0 * texel_px;
+    let off = 1.0 - ((inside + margin) / (2.0 * margin)).clamp(0.0, 1.0);
+    let scale =
+        crate::psf::veil_scale(frame.look.glare.style) * (180.0 / std::f32::consts::PI).powi(2);
+    let veil = light * scale;
+    (
+        camera.extend(off).to_array(),
+        [veil.x, veil.y, veil.z, focal],
+    )
 }

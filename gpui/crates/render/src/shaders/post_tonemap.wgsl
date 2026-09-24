@@ -9,6 +9,11 @@ struct Tonemap {
     // xy: the frame's extent in the glare texture's uv (the glare grid
     // rounds the frame up to whole texels).
     glare: vec4<f32>,
+    // xyz: toward the sun in camera space (x right, y up, z forward), w: how
+    // much of its veil to draw here (0 while the frame holds the sun).
+    sun: vec4<f32>,
+    // rgb: the sun's light times the veil's scale, w: focal length, pixels.
+    sun_veil: vec4<f32>,
 };
 
 // Set for a compositor that presents HDR: half-float linear light where 1.0
@@ -55,6 +60,30 @@ fn bspline(uv: vec2<f32>) -> vec3<f32> {
     return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
 }
 
+/// Vos's glare spread function per square degree, unnormalised (`psf.rs`).
+fn vos(theta: f32) -> f32 {
+    let t = theta + 0.02;
+    return 0.384 * 2.61e6 * exp(-(theta / 0.02) * (theta / 0.02))
+        + 0.478 * 20.91 / (t * t * t)
+        + 0.138 * 72.37 / (t * t);
+}
+
+/// The veil of a sun off the frame (`post.rs`, `off_frame_sun`): the
+/// convolution sees only light inside the frame, and a lens is lit by the
+/// sun past its edge too.
+fn sun_veil(frag: vec2<f32>, size: vec2<f32>) -> vec3<f32> {
+    if cfg.sun.w <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let ray = normalize(vec3<f32>(
+        (frag.x - 0.5 * size.x) / cfg.sun_veil.w,
+        (0.5 * size.y - frag.y) / cfg.sun_veil.w,
+        1.0,
+    ));
+    let theta = degrees(acos(clamp(dot(ray, cfg.sun.xyz), -1.0, 1.0)));
+    return cfg.sun.w * vos(theta) * cfg.sun_veil.rgb * exposure.w;
+}
+
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(scene_tex));
@@ -63,7 +92,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let headroom = select(1.0, max(cfg.params.w, 1.0), HDR_OUTPUT);
     var display = hdr_expand(tone_curve(scene, u32(cfg.params.x + 0.5)), headroom);
     if cfg.params.y > 0.0 {
-        let glare = cfg.params.y * bspline(uv * cfg.glare.xy);
+        let glare = cfg.params.y * (bspline(uv * cfg.glare.xy) + sun_veil(frag.xy, size));
         // Light added over the picture, saturating at the display's white:
         // faint glare keeps its colour, a strong one burns to white.
         display += (vec3<f32>(headroom) - display) * (vec3<f32>(1.0) - exp(-glare));
