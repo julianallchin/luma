@@ -12,8 +12,8 @@ use glam::{Mat4, Vec3};
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
 use crate::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use crate::luminaire::{
-    beam_direction, cone_from_opening, is_procedural, lens_for, luminaire_for, model_kind,
-    pixel_lens, Lens, ModelKind, PIXEL,
+    Lens, ModelKind, PIXEL, beam_direction, cone_from_opening, is_procedural, lens_for,
+    luminaire_for, model_kind, pixel_lens,
 };
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
@@ -160,20 +160,6 @@ impl FixtureCone {
     }
 }
 
-/// A fixture's face light: lights its own housing from behind the lens and
-/// nothing else. Three's punctual falloff with `decay = 2`.
-#[derive(Debug, Clone, Copy)]
-pub struct PointLight {
-    /// World position, just behind the lens.
-    pub position: Vec3,
-    /// Emitted colour, linear.
-    pub color: Vec3,
-    /// three's `light.intensity`.
-    pub intensity: f32,
-    /// three's `light.distance`; the falloff is cut to zero here.
-    pub cutoff_distance: f32,
-}
-
 /// Resolved directional light submitted to the scene and optional shadow pass.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectionalLight {
@@ -258,8 +244,6 @@ pub struct Frame {
     /// drawn. The picker takes its pivot from here rather than deriving one
     /// again — see `overlay::pivot`.
     pub gizmo_pivot: Option<Vec3>,
-    /// Fixture face lights, in submission order.
-    pub point_lights: Vec<PointLight>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
     /// Supported fixture and house-light cones the venue can produce, capped
@@ -488,7 +472,7 @@ pub(crate) fn piece_draws(
 }
 
 /// The draws of one fixture *housing* at `base` — the body alone, no pixel
-/// quads, face lights or cones. One implementation shared by the frame
+/// quads or cones. One implementation shared by the frame
 /// builder's fixture pass and the overlay's placement ghost, so a held light
 /// previews exactly the body its commit will draw — the ghost used to stand a
 /// scaled truss corner in for every fixture, which said "something is held"
@@ -847,7 +831,6 @@ pub fn build_with(
     let r = three_to_world_basis();
     let mut bank = Bank::default();
     let mut draws = Vec::new();
-    let mut point_lights = Vec::new();
     let mut fixture_cones = Vec::new();
     let mut fixture_shadow_capacity_hint: usize = 0;
     let mut fixture_lighting_domain = None;
@@ -1038,20 +1021,8 @@ pub fn build_with(
         let mesh_rel = format!("qlc/{}", kind.mesh());
         let glb = lib.get(&mesh_rel)?;
         // The same articulated worlds the body was drawn with, to seat the
-        // face light and the lens on the drawn head.
+        // lens on the drawn head.
         let worlds = housing_worlds(glb, def, kind, base, head_state.position);
-
-        if kind.emits_beam() {
-            // Face light, parented to `head` when the mesh has one.
-            let host = glb.node_index("head").unwrap_or(0);
-            let local = Vec3::new(0.0, -kind.face_light_offset(), 0.0);
-            point_lights.push(PointLight {
-                position: worlds[host].transform_point3(local),
-                color: Vec3::from(head_state.color),
-                intensity: intensity * kind.face_light_intensity(),
-                cutoff_distance: (def.dimensions_m()[1] * 0.9).max(0.12),
-            });
-        }
 
         if !kind.emits_beam() || intensity < 0.01 || fixture_cones.len() >= MAX_FIXTURE_CONES {
             continue;
@@ -1210,7 +1181,6 @@ pub fn build_with(
         draws,
         transparent,
         gizmo_pivot,
-        point_lights,
         fixture_cones,
         fixture_shadow_capacity_hint,
         fixture_lighting_domain,

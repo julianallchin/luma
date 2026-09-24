@@ -7,7 +7,7 @@
 //! fallback for definitions that omit it, and it is the only such table.
 
 use crate::scene_desc::Definition;
-use fixture_kinematics::{aim, Articulation, Mount};
+use fixture_kinematics::{Articulation, Mount, aim};
 use glam::Vec3;
 
 /// A fixture's optics, reduced to the two numbers the cone model needs.
@@ -390,30 +390,6 @@ impl ModelKind {
     #[must_use]
     pub fn emits_beam(self) -> bool {
         !matches!(self, Self::Hazer | Self::Smoke)
-    }
-
-    /// Face point-light intensity — lights the housing from behind the lens.
-    #[must_use]
-    pub fn face_light_intensity(self) -> f32 {
-        match self {
-            Self::MovingHead | Self::Scanner => 50.0,
-            Self::Strobe => 40.0,
-            // Pars and the beamless kinds share the default.
-            _ => 30.0,
-        }
-    }
-
-    /// Distance from the head origin down to the face light:
-    /// `originOffset + 0.3`.
-    #[must_use]
-    pub fn face_light_offset(self) -> f32 {
-        let origin_offset = match self {
-            Self::Par => 0.1,
-            Self::MovingHead | Self::Scanner => 0.15,
-            Self::Strobe => 0.05,
-            _ => 0.12,
-        };
-        origin_offset + 0.3
     }
 }
 

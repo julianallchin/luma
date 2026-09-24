@@ -13,7 +13,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
@@ -32,11 +32,11 @@ use crate::light_index::{
 };
 use crate::overlay::{Overlay, OverlayDepth};
 use crate::shadow::{
-    assign_shadow_slots, fixture_shadow_caster_hash, fixture_shadow_matrix, fixture_shadow_planes,
-    fixture_shadow_texture_array, shadow_matrix_bits, ShadowCacheKey, FIXTURE_SHADOW_SIZE,
-    MAX_FIXTURE_SHADOWS,
+    FIXTURE_SHADOW_SIZE, MAX_FIXTURE_SHADOWS, ShadowCacheKey, assign_shadow_slots,
+    fixture_shadow_caster_hash, fixture_shadow_matrix, fixture_shadow_planes,
+    fixture_shadow_texture_array, shadow_matrix_bits,
 };
-use crate::viewport::{Presented, PRESENTATION_SLOTS};
+use crate::viewport::{PRESENTATION_SLOTS, Presented};
 
 /// Three bounded layers cover the part of a venue in which directional
 /// shadows remain useful. 2048² per layer costs 48 MiB in `Depth32Float`, versus
@@ -244,13 +244,6 @@ struct OverlayInstance {
     color: [f32; 4],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PointLightGpu {
-    position: [f32; 4],
-    color: [f32; 4],
-}
-
 /// Mirrors `IntervalCacheParams` in `haze.wgsl`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -411,11 +404,7 @@ fn compact_rebuild_reasons(input: CompactRebuildInputs) -> u32 {
 /// Scalar temporal transport retains one coefficient per residual entry;
 /// the control path retains the original RGB result.
 fn residual_value_stride(temporal_period: u32) -> u32 {
-    if temporal_period == 0 {
-        3
-    } else {
-        1
-    }
+    if temporal_period == 0 { 3 } else { 1 }
 }
 
 fn residual_value_bytes(capacity: u32, temporal_period: u32) -> u64 {
@@ -2399,7 +2388,6 @@ impl Gpu {
                 "" | "surface-clouds"
                     | "surface-lighting"
                     | "surface-shadows"
-                    | "face-lights"
                     | "native-shadows"
                     | "native-integrals"
                     | "native-clouds"
@@ -2431,7 +2419,6 @@ impl Gpu {
         let mut scene_entries = vec![
             uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
             storage_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
-            storage_entry(2, wgpu::ShaderStages::FRAGMENT),
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -2922,7 +2909,6 @@ impl Gpu {
                 omitted("surface-clouds"),
                 omitted("surface-lighting"),
                 omitted("surface-shadows"),
-                omitted("face-lights"),
             ],
         };
         let scene_pipelines = scene_source.build(&device, MSAA_SAMPLES);
@@ -3026,8 +3012,8 @@ impl Gpu {
             &device,
             "fog-prepare",
             &format!(
-            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
-            include_str!("shaders/haze_prepare.wgsl")
+                "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
+                include_str!("shaders/haze_prepare.wgsl")
             ),
         );
         let fog_prepare_pipeline =
@@ -3080,8 +3066,8 @@ impl Gpu {
             &device,
             "fog-classify",
             &format!(
-            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
-            include_str!("shaders/haze_classify.wgsl")
+                "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
+                include_str!("shaders/haze_classify.wgsl")
             ),
         );
         let fog_classify_pipeline =
@@ -3256,8 +3242,8 @@ impl Gpu {
                 &device,
                 "fog-integrate",
                 &format!(
-                "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}const FOG_TAU_MODE: u32 = {mode}u;\n{tau}{}",
-                include_str!("shaders/haze_integrate.wgsl")
+                    "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}const FOG_TAU_MODE: u32 = {mode}u;\n{tau}{}",
+                    include_str!("shaders/haze_integrate.wgsl")
                 ),
             )
         };
@@ -3763,11 +3749,7 @@ impl Gpu {
                 })
             };
             let counted = |plain: &'static str, counted: &'static str| {
-                if haze_work_counts {
-                    counted
-                } else {
-                    plain
-                }
+                if haze_work_counts { counted } else { plain }
             };
             let residual_draw = std::array::from_fn(|segment| {
                 let constants = haze_constants(&[
@@ -5432,16 +5414,6 @@ impl Renderer {
                 )
             });
 
-        let point_lights: Vec<PointLightGpu> = frame
-            .point_lights
-            .iter()
-            .filter(|l| l.intensity > 0.0)
-            .map(|l| PointLightGpu {
-                position: l.position.extend(l.cutoff_distance).to_array(),
-                color: (l.color * l.intensity).extend(0.0).to_array(),
-            })
-            .collect();
-
         // A cone that emits nothing visible (a black colour at any dimmer)
         // gets no shadow map, no light-index entry and no beam work.
         let fixture_cones: Vec<_> = frame
@@ -5783,7 +5755,7 @@ impl Renderer {
                 })
                 .to_array(),
             params: [
-                point_lights.len() as f32,
+                0.0,
                 1.0 / SHADOW_SIZE as f32,
                 f32::from(u8::from(
                     frame.directional.is_some_and(|light| light.shadows),
@@ -6007,12 +5979,6 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             "instances",
         );
-        let point_buf = self.storage(
-            &mut encoder,
-            &pad_at_least_one(point_lights),
-            wgpu::BufferUsages::STORAGE,
-            "point-lights",
-        );
         let globals_buf = self.storage(
             &mut encoder,
             &[globals],
@@ -6088,22 +6054,9 @@ impl Renderer {
         let hard_shadows = frame
             .directional
             .is_some_and(|light| light.shadow_softness == 0.0);
-        let lit_bg = self.scene_bind_group(
-            &globals_buf,
-            &instance_buf,
-            &point_buf,
-            true,
-            hard_shadows,
-            &aerial,
-        );
-        let unlit_bg = self.scene_bind_group(
-            &globals_buf,
-            &instance_buf,
-            &point_buf,
-            false,
-            false,
-            &aerial,
-        );
+        let lit_bg =
+            self.scene_bind_group(&globals_buf, &instance_buf, true, hard_shadows, &aerial);
+        let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, false, false, &aerial);
         let shadow_bgs: Vec<_> = light_view_proj
             .iter()
             .enumerate()
@@ -6119,14 +6072,7 @@ impl Renderer {
                 );
                 (
                     buffer.clone(),
-                    self.scene_bind_group(
-                        &buffer,
-                        &instance_buf,
-                        &point_buf,
-                        false,
-                        false,
-                        &aerial,
-                    ),
+                    self.scene_bind_group(&buffer, &instance_buf, false, false, &aerial),
                 )
             })
             .collect();
@@ -6609,14 +6555,8 @@ impl Renderer {
                         wgpu::BufferUsages::UNIFORM,
                         &format!("sky-height-globals-{index}"),
                     );
-                    let bind_group = self.scene_bind_group(
-                        &buffer,
-                        &instance_buf,
-                        &point_buf,
-                        false,
-                        false,
-                        &aerial,
-                    );
+                    let bind_group =
+                        self.scene_bind_group(&buffer, &instance_buf, false, false, &aerial);
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("sky-height"),
                         color_attachments: &[],
@@ -9271,7 +9211,7 @@ impl Renderer {
         rests: &[LightRest],
         retain_inactive: bool,
     ) -> Option<(wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer)> {
-        use crate::interval_cache::{block_rect, FrameKey, SlotKey};
+        use crate::interval_cache::{FrameKey, SlotKey, block_rect};
         if !self.gpu.interval_cache {
             self.interval_cache.forget();
             return None;
@@ -9436,7 +9376,6 @@ impl Renderer {
         &self,
         globals: &wgpu::Buffer,
         instances: &wgpu::Buffer,
-        point_lights: &wgpu::Buffer,
         shadows: bool,
         hard_shadows: bool,
         aerial: &crate::atmosphere::AerialTextures,
@@ -9451,7 +9390,6 @@ impl Renderer {
         let mut entries = vec![
             binding(0, globals.as_entire_binding()),
             binding(1, instances.as_entire_binding()),
-            binding(2, point_lights.as_entire_binding()),
             binding(3, wgpu::BindingResource::TextureView(map)),
             binding(
                 4,
@@ -9690,18 +9628,17 @@ mod tests {
     use crate::scene_desc::DebugView;
 
     use super::{
+        CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, COMPACT_REBUILD_ARGS_ABSENT,
+        COMPACT_REBUILD_COUNTERS_ABSENT, COMPACT_REBUILD_DIRTY_THRESHOLD, COMPACT_REBUILD_GROWN,
+        COMPACT_REBUILD_POOL_STALE, COMPACT_REBUILD_REUSE_OFF, Channels, CompactRebuildInputs,
+        CompositeUniform, DiagnosticLightingDomain, FixtureShadowMatrix, Globals, Gpu, HazeUniform,
+        LightCore, LightRest, RESID_BUCKETS, RESID_TEMPORAL_RESET_CLASSIFY,
+        RESID_TEMPORAL_RESET_KEY, RESID_TEMPORAL_RESET_TIME, Renderer, ResidualGlobalKey,
+        ResidualTemporalState, SHADOW_SIZE, SurfaceClusterUniform, TextureEncoding, Transport,
         bucket_kind_sums, bucket_offsets, cascade_matrices, compact_rebuild_reasons, downsample,
         normalized_interval_identity, phased_residual_groups, resident_transport_dirty,
         residual_resident_key, residual_transport_key, sanitize_fixture_cone,
         select_fixture_lighting_domain, shader, specialize_wgsl_overrides, supports_haze_subgroups,
-        Channels, CompactRebuildInputs, CompositeUniform, DiagnosticLightingDomain,
-        FixtureShadowMatrix, Globals, Gpu, HazeUniform, LightCore, LightRest, Renderer,
-        ResidualGlobalKey, ResidualTemporalState, SurfaceClusterUniform, TextureEncoding,
-        Transport, CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, COMPACT_REBUILD_ARGS_ABSENT,
-        COMPACT_REBUILD_COUNTERS_ABSENT, COMPACT_REBUILD_DIRTY_THRESHOLD, COMPACT_REBUILD_GROWN,
-        COMPACT_REBUILD_POOL_STALE, COMPACT_REBUILD_REUSE_OFF, RESID_BUCKETS,
-        RESID_TEMPORAL_RESET_CLASSIFY, RESID_TEMPORAL_RESET_KEY, RESID_TEMPORAL_RESET_TIME,
-        SHADOW_SIZE,
     };
 
     fn residual_key(seed: u32) -> ResidualGlobalKey {
@@ -10005,9 +9942,11 @@ mod tests {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let view = readback.slice(..).get_mapped_range().unwrap();
         let values: &[[f32; 2]] = bytemuck::cast_slice(&view);
-        assert!(values
-            .iter()
-            .all(|v| v.iter().all(|x| (0.0..1.0).contains(x))));
+        assert!(
+            values
+                .iter()
+                .all(|v| v.iter().all(|x| (0.0..1.0).contains(x)))
+        );
         assert!(
             values.iter().all(|v| (v[0] - v[1]).abs() > 0.01),
             "the shadow integration repeats its samples after eight frames"
@@ -10289,9 +10228,11 @@ mod tests {
         assert!((depth(CAMERA_NEAR) - 1.0).abs() < 1e-5);
         assert!(depth(CAMERA_FAR).abs() < 1e-6);
         let samples = [CAMERA_NEAR, 1.0, 10.0, 100.0, CAMERA_FAR];
-        assert!(samples
-            .windows(2)
-            .all(|pair| depth(pair[0]) > depth(pair[1])));
+        assert!(
+            samples
+                .windows(2)
+                .all(|pair| depth(pair[0]) > depth(pair[1]))
+        );
     }
 
     #[test]
@@ -10337,8 +10278,8 @@ mod tests {
     }
 
     #[test]
-    fn post_agx_overlay_keeps_authored_srgb_across_scene_lighting_and_output_formats(
-    ) -> anyhow::Result<()> {
+    fn post_agx_overlay_keeps_authored_srgb_across_scene_lighting_and_output_formats()
+    -> anyhow::Result<()> {
         const AUTHORED: [u8; 3] = [0x33, 0x99, 0xe6];
         let mut renderer = Renderer::new()?;
         let dark = overlay_test_frame(true, OverlayDepth::Tested, -1.0, Vec3::ZERO);
@@ -10664,9 +10605,11 @@ mod tests {
         assert!(stable.cache_hits > initial.cache_hits, "{stable:?}");
         assert_eq!(stable.raw_mismatches, 0, "{stable:?}");
 
-        assert!(renderer
-            .fog_visibility
-            .poison_payload_prefix(&renderer.gpu.queue, stable.payload_used));
+        assert!(
+            renderer
+                .fog_visibility
+                .poison_payload_prefix(&renderer.gpu.queue, stable.payload_used)
+        );
         renderer.render(&frame, 160, 120, 1)?;
         let poisoned = renderer.fog_visibility_cache_stats()?;
         assert!(poisoned.cache_hits > stable.cache_hits);
@@ -12085,10 +12028,12 @@ mod tests {
             first_blocks.into_iter().product::<u32>() as usize
         );
         assert!(first.counts.iter().any(|counts| counts[0] > 0));
-        assert!(first
-            .counts
-            .iter()
-            .all(|counts| counts[1] <= counts[0] && counts[0] <= 3));
+        assert!(
+            first
+                .counts
+                .iter()
+                .all(|counts| counts[1] <= counts[0] && counts[0] <= 3)
+        );
         assert_eq!(renderer.fog_block_stats()?.unwrap().counts, first.counts);
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
         assert_eq!(renderer.fog_block_stats()?.unwrap().counts, first.counts);
@@ -12098,12 +12043,14 @@ mod tests {
         frame.fixture_cones[1].gobo = 1;
         frame.fixture_cones[2].haze_gain = 0.0;
         renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
-        assert!(renderer
-            .fog_block_stats()?
-            .unwrap()
-            .counts
-            .iter()
-            .all(|counts| *counts == [0, 0]));
+        assert!(
+            renderer
+                .fog_block_stats()?
+                .unwrap()
+                .counts
+                .iter()
+                .all(|counts| *counts == [0, 0])
+        );
         frame.fixture_cones[0].wash = 1.0;
         frame.fixture_cones[1].gobo = 0;
         frame.fixture_cones[2].haze_gain = 1.0;
@@ -12220,12 +12167,14 @@ mod tests {
     fn surface_depth_culling_preserves_subpixel_and_coplanar_receivers() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
         renderer.render(&fixture_surface_frame(16), 127, 97, 1)?;
-        assert!(renderer
-            .targets
-            .as_ref()
-            .unwrap()
-            .msaa_surface_depth
-            .is_none());
+        assert!(
+            renderer
+                .targets
+                .as_ref()
+                .unwrap()
+                .msaa_surface_depth
+                .is_none()
+        );
         let mut frame = fixture_surface_frame(64);
         let receiver = || Draw {
             mesh: 0,
@@ -12423,7 +12372,6 @@ mod tests {
             transparent: Vec::new(),
             gizmo_pivot: None,
             overlays: Vec::new(),
-            point_lights: Vec::new(),
             fixture_cones,
             fixture_shadow_capacity_hint: 0,
             fixture_lighting_domain: None,
@@ -12966,7 +12914,6 @@ mod tests {
                 opacity: 1.0,
                 depth,
             }],
-            point_lights: Vec::new(),
             fixture_cones: Vec::new(),
             fixture_shadow_capacity_hint: 0,
             fixture_lighting_domain: None,
@@ -13204,8 +13151,18 @@ impl PendingFrame {
             // Consecutive end samples partition the frame, per `QUERY_COUNT`.
             // A zero haze end means haze did not run; a whole-frame zero means
             // the driver dropped the samples.
-            let [start, scene_end, haze_end, composite_end, index0, index1, grid0, grid1, prepared, lit] =
-                <[u64; 10]>::try_from(&timestamps[..10]).expect("base queries");
+            let [
+                start,
+                scene_end,
+                haze_end,
+                composite_end,
+                index0,
+                index1,
+                grid0,
+                grid1,
+                prepared,
+                lit,
+            ] = <[u64; 10]>::try_from(&timestamps[..10]).expect("base queries");
             let haze_ran = haze_end > 0;
             // The composite pass samples both of its predecessors' outputs, so
             // it is the frame's sink and its completion is the frame's end.
@@ -13453,7 +13410,7 @@ struct ScenePipelineSource {
     grid: wgpu::ShaderModule,
     cables: wgpu::ShaderModule,
     /// `LUMA_PROFILE_OMIT` switches of the scene shader.
-    skips: [f64; 4],
+    skips: [f64; 3],
 }
 
 const MESH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
@@ -13507,7 +13464,6 @@ impl ScenePipelineSource {
                         ("PROFILE_SKIP_SURFACE_CLOUDS", self.skips[0]),
                         ("PROFILE_SKIP_FIXTURES", self.skips[1]),
                         ("PROFILE_SKIP_SURFACE_SHADOWS", self.skips[2]),
-                        ("PROFILE_SKIP_FACE_LIGHTS", self.skips[3]),
                     ],
                     ..Default::default()
                 },

@@ -3,7 +3,7 @@
 //! Spec §1 gives this its own crate (`luma-assets`) once there is a second
 //! consumer; it is a module here so the first one can exist. The node tree is
 //! kept rather than flattened because fixture articulation is expressed in it —
-//! `arm` takes pan, `head` takes tilt, and the face light hangs off `head`.
+//! `arm` takes pan and `head` takes tilt.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -364,7 +364,7 @@ fn to_rgba8(data: &gltf::image::Data) -> Image {
                 width: 1,
                 height: 1,
                 rgba: Arc::from([255; 4]),
-            }
+            };
         }
     };
     let mut rgba = Vec::with_capacity((data.width * data.height * 4) as usize);

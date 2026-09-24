@@ -211,7 +211,7 @@ const DECK_PARTS: &[(&str, Material)] = &[
 
 /// Every fixture body is one bundled mesh under this directory, and every one
 /// is a black powder-coated housing. The lens is not a separate material; its
-/// light is the fixture's face light and emissive, which this does not touch.
+/// light is the fixture's emissive, which this does not touch.
 const FIXTURE_MESHES: &str = "qlc/";
 
 /// The preset for material `name` of the bundled mesh at `asset`, if the table
@@ -311,11 +311,7 @@ fn mean_linear(image: &Image) -> Vec3 {
         sum += Vec3::new(decode(pixel[0]), decode(pixel[1]), decode(pixel[2]));
         count += 1.0;
     }
-    if count > 0.0 {
-        sum / count
-    } else {
-        Vec3::ONE
-    }
+    if count > 0.0 { sum / count } else { Vec3::ONE }
 }
 
 #[cfg(test)]
@@ -324,7 +320,7 @@ mod tests {
 
     use glam::Vec3;
 
-    use super::{mean_linear, ALUMINIUM, CARPET, FIXTURE_MESHES, MESHES, POWDER_COAT};
+    use super::{ALUMINIUM, CARPET, FIXTURE_MESHES, MESHES, POWDER_COAT, mean_linear};
     use crate::assets::Library;
 
     fn meshes() -> PathBuf {
