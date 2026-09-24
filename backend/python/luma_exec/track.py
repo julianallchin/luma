@@ -1,10 +1,8 @@
-"""The agent-facing lighting-track editor.
+"""Shared pieces of the agent-facing score editor in ``score.py``.
 
-This module is deliberately independent of the worker protocol and of Luma's
-database.  ``Track`` is built from ordinary binding values and a synchronous
-``host_call(method, payload)`` capability.  The Python object owns the cheap,
-local work (candidate editing, windows, diffs, and figures); the host owns the
-authoritative work (compilation, compositing, validation, and atomic apply).
+This module is independent of the worker protocol and of Luma's database. It
+holds the errors, the immutable-snapshot guard, check results, the lazily
+loaded composited output of a window, and small value helpers.
 
 Host calls
 ----------
@@ -18,9 +16,9 @@ The canonical render response reuses the normal Luma artifact system::
                    "rel_path": ..., "byte_len": ...}
     }
 
-The tensor is registered into the ``ArtifactStore`` passed to ``Track`` and
-materialized as the ordinary lazy, read-only ``LumaTensor``.  Tests and other
-in-process callers may return an ndarray, a LumaTensor, or
+The tensor is registered into the track's ``ArtifactStore`` and materialized
+as the ordinary lazy, read-only ``LumaTensor``. Tests and other in-process
+callers may return an ndarray, a LumaTensor, or
 ``{"values": array, "lightIds": [...], "timesS": [...]}`` instead.
 """
 
@@ -29,13 +27,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-
-HostCall = Callable[[str, Any], Any]
 
 BLEND_MODES = frozenset(
     {
@@ -102,76 +98,6 @@ class _ImmutableSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class Clip:
-    """One immutable authored clip in absolute track time."""
-
-    id: str
-    pattern_id: str
-    pattern_name: str | None
-    start_s: float
-    end_s: float
-    z: int
-    blend: str
-    # Persisted legacy rows may contain any JSON value. New/edited argument
-    # sets are objects, but merely viewing or moving a legacy clip must remain
-    # lossless.
-    args: Any
-
-    @classmethod
-    def from_value(cls, value: Any) -> "Clip":
-        return cls(
-            id=str(_required(value, "id")),
-            pattern_id=str(_required(value, "pattern_id", "patternId")),
-            pattern_name=_optional_string(value, "pattern_name", "patternName"),
-            start_s=float(
-                _required(value, "start_s", "startTime", "start_time_s", "start_time")
-            ),
-            end_s=float(
-                _required(value, "end_s", "endTime", "end_time_s", "end_time")
-            ),
-            z=int(_required(value, "z", "zIndex", "z_index")),
-            blend=str(_field(value, "blend", "blendMode", "blend_mode", default="replace")),
-            args=_freeze(_field(value, "args", default={})),
-        )
-
-    def to_wire(self) -> dict[str, Any]:
-        """The sole candidate representation accepted by the Rust transaction."""
-        return {
-            "id": self.id,
-            "patternId": self.pattern_id,
-            "startTime": self.start_s,
-            "endTime": self.end_s,
-            "zIndex": self.z,
-            "blendMode": self.blend,
-            "args": _thaw(self.args),
-        }
-
-    @property
-    def selection(self) -> str | None:
-        """The group expression this clip targets, if it has exactly one
-        Selection argument."""
-        value = self._selection_value()
-        return None if value is None else str(_field(value, "expression", default=""))
-
-    def _selection_value(self) -> Mapping[str, Any] | None:
-        if not isinstance(self.args, Mapping):
-            return None
-        found = [
-            value
-            for value in self.args.values()
-            if isinstance(value, Mapping) and "expression" in value
-        ]
-        return found[0] if len(found) == 1 else None
-
-    def __repr__(self) -> str:
-        name = self.pattern_name or self.pattern_id
-        return (
-            f"<Clip {self.id!r} {name!r} {self.start_s:g}..{self.end_s:g}s "
-            f"z={self.z} {self.blend}>"
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class CheckResult:
     ok: bool
     errors: tuple[str, ...] = ()
@@ -188,235 +114,6 @@ class CheckResult:
         lines.extend(f"  error: {message}" for message in self.errors)
         lines.extend(f"  warning: {message}" for message in self.warnings)
         return "\n".join(lines)
-
-
-class _PatternCatalog:
-    def __init__(self, patterns: Any) -> None:
-        summaries = _field(patterns, "summaries", default=[]) if patterns is not None else []
-        schemas = (
-            _field(patterns, "argument_schemas", "argumentSchemas", default={})
-            if patterns is not None
-            else {}
-        )
-
-        self._by_id: dict[str, Any] = {}
-        self._ids_by_name: dict[str, list[str]] = {}
-        for summary in _sequence(summaries):
-            pattern_id = str(_required(summary, "id"))
-            self._by_id[pattern_id] = summary
-            name = str(_field(summary, "name", default=pattern_id))
-            self._ids_by_name.setdefault(name.casefold(), []).append(pattern_id)
-
-        self._schemas = dict(_items(schemas))
-
-    def resolve(self, reference: str) -> tuple[str, str | None]:
-        reference = str(reference)
-        if reference in self._by_id:
-            return reference, self.name(reference)
-        matches = self._ids_by_name.get(reference.casefold(), [])
-        if len(matches) == 1:
-            pattern_id = matches[0]
-            return pattern_id, self.name(pattern_id)
-        if len(matches) > 1:
-            raise TrackError(
-                f"pattern name {reference!r} is ambiguous; use one of these ids: "
-                + ", ".join(matches)
-            )
-        raise TrackError(f"unknown pattern {reference!r}; use a pattern id or unique name")
-
-    def name(self, pattern_id: str) -> str | None:
-        summary = self._by_id.get(pattern_id)
-        if summary is None:
-            return None
-        return str(_field(summary, "name", default=pattern_id))
-
-    def selection_arg_id(self, pattern_id: str) -> str:
-        """The pattern's sole Selection argument id.  A pattern with none, or
-        with several, cannot take the ``selection=`` shorthand at all."""
-        ids = [
-            str(_required(d, "id"))
-            for d in _sequence(self._schemas.get(pattern_id, []))
-            if str(_field(d, "arg_type", "argType", default="")).casefold() == "selection"
-        ]
-        if len(ids) != 1:
-            detail = "none" if not ids else "more than one"
-            raise TrackError(
-                f"pattern {pattern_id!r} has {detail} Selection argument; "
-                "put the value in args by argument id"
-            )
-        return ids[0]
-
-    def normalize_args(
-        self,
-        pattern_id: str,
-        args: Mapping[str, Any] | None,
-        selection: str | None,
-    ) -> dict[str, Any]:
-        definitions = list(_sequence(self._schemas.get(pattern_id, [])))
-        by_id = {str(_required(d, "id")): d for d in definitions}
-        ids_by_name: dict[str, list[str]] = {}
-        for definition in definitions:
-            arg_id = str(_required(definition, "id"))
-            name = str(_field(definition, "name", default=arg_id))
-            ids_by_name.setdefault(name.casefold(), []).append(arg_id)
-
-        normalized: dict[str, Any] = {}
-        for raw_key, value in (args or {}).items():
-            key = str(raw_key)
-            if key not in by_id:
-                matches = ids_by_name.get(key.casefold(), [])
-                if len(matches) == 1:
-                    key = matches[0]
-                elif len(matches) > 1:
-                    raise TrackError(
-                        f"argument name {raw_key!r} is ambiguous for pattern "
-                        f"{pattern_id!r}; use an argument id"
-                    )
-                else:
-                    raise TrackError(
-                        f"unknown argument {raw_key!r} for pattern {pattern_id!r}; "
-                        "use an argument id or unique display name"
-                    )
-            normalized[key] = self._normalize_arg_value(by_id.get(key), value)
-
-        if selection is not None:
-            normalized[self.selection_arg_id(pattern_id)] = _selection(selection)
-        return normalized
-
-    @staticmethod
-    def _normalize_arg_value(definition: Any, value: Any) -> Any:
-        if definition is None:
-            return _thaw(value)
-        arg_type = str(_field(definition, "arg_type", "argType", default=""))
-        if arg_type.casefold() == "selection" and isinstance(value, str):
-            return _selection(value)
-        return _thaw(value)
-
-
-class Track(_ImmutableSnapshot):
-    """The current authored lighting track.
-
-    Immutable except through `Edit.apply`, which advances it to the revision
-    it just committed: `luma.track` always names the live score, whether the
-    host installed it at the start of the cell or an apply moved it forward
-    mid-cell.
-    """
-
-    __slots__ = (
-        "_values",
-        "_patterns",
-        "_features",
-        "_host_call",
-        "_artifact_store",
-        "id",
-        "title",
-        "artist",
-        "duration_s",
-        "revision",
-        "editable",
-        "clips",
-        "_downbeats",
-        "_sealed",
-    )
-
-    def __init__(
-        self,
-        values: Any,
-        *,
-        patterns: Any = None,
-        features: Any = None,
-        host_call: HostCall | None = None,
-        artifact_store: Any = None,
-    ) -> None:
-        self._values = values
-        self._patterns = _PatternCatalog(patterns)
-        self._features = features
-        self._host_call = host_call
-        self._artifact_store = artifact_store
-
-        self.id = str(_field(values, "id", default=""))
-        self.title = str(_field(values, "title", default=""))
-        self.artist = str(_field(values, "artist", default=""))
-        self.duration_s = float(_field(values, "duration_s", default=0.0) or 0.0)
-        self.revision = str(_required(values, "revision"))
-        self.editable = bool(_field(values, "editable", default=False))
-        self.clips = _canonical_clips(
-            self._clip(value)
-            for value in _sequence(_field(values, "clips", default=[]))
-        )
-        self._downbeats = _downbeat_values(features)
-        self._seal()
-
-    def _bar_time(self, bar: float) -> float:
-        """1-indexed fractional bar boundary -> seconds, with edge extrapolation."""
-        downbeats = self._downbeats
-        index = math.floor(bar - 1.0)
-        fraction = bar - 1.0 - index
-        if len(downbeats) == 1:
-            bpm = float(_field(self._features, "bpm", default=120.0) or 120.0)
-            beats_per_bar = float(
-                _field(self._features, "beats_per_bar", "beatsPerBar", default=4.0)
-                or 4.0
-            )
-            span = beats_per_bar * 60.0 / bpm
-            return downbeats[0] + (index + fraction) * span
-        if index < 0:
-            return downbeats[0] + (index + fraction) * (downbeats[1] - downbeats[0])
-        if index + 1 < len(downbeats):
-            return downbeats[index] + fraction * (downbeats[index + 1] - downbeats[index])
-        span = downbeats[-1] - downbeats[-2]
-        return downbeats[-1] + (index - (len(downbeats) - 1) + fraction) * span
-
-    def _clip(self, value: Any) -> Clip:
-        clip = Clip.from_value(value)
-        pattern_name = clip.pattern_name or self._patterns.name(clip.pattern_id)
-        if pattern_name == clip.pattern_name:
-            return clip
-        return Clip(
-            id=clip.id,
-            pattern_id=clip.pattern_id,
-            pattern_name=pattern_name,
-            start_s=clip.start_s,
-            end_s=clip.end_s,
-            z=clip.z,
-            blend=clip.blend,
-            args=clip.args,
-        )
-
-    def _call(self, method: str, payload: Any) -> Any:
-        if self._host_call is None:
-            raise TrackHostUnavailableError(
-                f"{method} requires Luma's host; this Track has no host_call capability"
-            )
-        return self._host_call(method, payload)
-
-    def __getattr__(self, name: str) -> Any:
-        """Preserve ordinary scalar track bindings (album, bpm, key, ...)."""
-        if name.startswith("_"):
-            raise AttributeError(name)
-        missing = object()
-        value = _field(self._values, name, default=missing)
-        if value is missing:
-            raise AttributeError(f"luma.track has no binding {name!r}")
-        return value
-
-    def __dir__(self) -> list[str]:
-        names = set(object.__dir__(self))
-        try:
-            names.update(str(key) for key, _ in _items(self._values))
-        except TrackError:
-            pass
-        return sorted(names)
-
-    def _luma_catalog_items(self) -> list[tuple[Any, Any]]:
-        """Binding inventory hook; keeps ``luma.catalog()`` domain-neutral."""
-        return _items(self._values)
-
-    def __repr__(self) -> str:
-        return (
-            f"<luma.track {self.title!r} revision={self.revision!r} "
-            f"clips={len(self.clips)} editable={self.editable}>"
-        )
 
 
 class TrackOutput:
@@ -459,7 +156,7 @@ class TrackOutput:
             values = np.repeat(values[..., None], 3, axis=2)
         if values.ndim != 3 or values.shape[2] < 3:
             raise TrackError(
-                "track.render tensor must have shape [light, time, channel>=3]"
+                "track.score_render tensor must have shape [light, time, channel>=3]"
             )
         rgb = np.clip(values[:, :, :3], 0.0, 1.0)
         light_count = rgb.shape[0]
@@ -505,15 +202,15 @@ class TrackOutput:
                 store = self._window._track._artifact_store
                 if store is None:
                     raise TrackHostUnavailableError(
-                        "track.render returned an artifact tensor, but Track has no artifact_store"
+                        "track.score_render returned an artifact tensor, but the track has no artifact_store"
                     )
                 artifact_id = str(
                     _field(tensor_spec, "artifact_id", "artifactId", default="")
                 )
                 if not artifact_id:
-                    raise RuntimeError("track.render tensor has no artifact_id")
+                    raise RuntimeError("track.score_render tensor has no artifact_id")
                 if not isinstance(artifact, Mapping):
-                    raise RuntimeError("track.render tensor has no artifact descriptor")
+                    raise RuntimeError("track.score_render tensor has no artifact descriptor")
                 descriptor = dict(artifact)
                 descriptor.pop("id", None)
                 store.artifacts[artifact_id] = descriptor
@@ -565,10 +262,6 @@ def _check_result(response: Any) -> CheckResult:
     warnings = tuple(str(x) for x in _sequence(_field(response, "warnings", default=[])))
     ok = bool(_field(response, "ok", default=not errors))
     return CheckResult(ok=ok and not errors, errors=errors, warnings=warnings)
-
-
-def _canonical_clips(clips: Iterable[Clip]) -> tuple[Clip, ...]:
-    return tuple(sorted(clips, key=lambda clip: (clip.start_s, clip.z, clip.id)))
 
 
 def _selection(expression: str) -> dict[str, Any]:
@@ -694,19 +387,6 @@ def _field(value: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
-def _required(value: Any, *names: str) -> Any:
-    missing = object()
-    result = _field(value, *names, default=missing)
-    if result is missing:
-        raise TrackError(f"missing required field {names[0]!r}")
-    return result
-
-
-def _optional_string(value: Any, *names: str) -> str | None:
-    result = _field(value, *names, default=None)
-    return None if result is None else str(result)
-
-
 def _items(value: Any) -> list[tuple[Any, Any]]:
     if value is None:
         return []
@@ -733,12 +413,4 @@ def _freeze(value: Any) -> Any:
         return tuple(_freeze(item) for item in value)
     if isinstance(value, tuple):
         return tuple(_freeze(item) for item in value)
-    return copy.deepcopy(value)
-
-
-def _thaw(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_thaw(item) for item in value]
     return copy.deepcopy(value)

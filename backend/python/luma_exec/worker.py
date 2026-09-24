@@ -46,7 +46,7 @@ During an `exec`, a Python binding may synchronously call the host through the
 private `_luma_host_call(method, payload)` capability. The worker emits:
 
     {"id":"c-1","type":"host_call","call_id":"h-1",
-     "method":"track.apply","payload":{...}}
+     "method":"track.score_apply","payload":{...}}
 
 and waits for exactly one correlated line on stdin:
 
