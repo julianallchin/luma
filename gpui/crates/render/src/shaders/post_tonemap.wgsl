@@ -3,11 +3,11 @@
 // and its halo spreads over what is around it.
 
 struct Tonemap {
-    // x: tone curve (`ToneCurve::shader_code`), y: glare strength,
-    // z: star amount, w: display headroom (1 in SDR).
+    // x: tone curve (`ToneCurve::shader_code`), y: glare gain (0 for none),
+    // z: unused, w: display headroom (1 in SDR).
     params: vec4<f32>,
-    // x: bloom normalisation (1 / pyramid levels), y: streak normalisation
-    // (1 / streak lines).
+    // xy: the frame's extent in the glare texture's uv (the glare grid
+    // rounds the frame up to whole texels).
     glare: vec4<f32>,
 };
 
@@ -17,15 +17,42 @@ override HDR_OUTPUT: bool = false;
 
 @group(0) @binding(0) var<uniform> cfg: Tonemap;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
-@group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-@group(0) @binding(3) var streak_tex: texture_2d<f32>;
-@group(0) @binding(4) var linear_clamp: sampler;
-@group(0) @binding(5) var<storage, read> exposure: vec4<f32>;
+// The convolved glare (`post_glare.wgsl`), at the glare grid's resolution.
+@group(0) @binding(2) var glare_tex: texture_2d<f32>;
+@group(0) @binding(3) var linear_clamp: sampler;
+@group(0) @binding(4) var<storage, read> exposure: vec4<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let xy = vec2<f32>(f32((vi << 1u) & 2u) * 2.0 - 1.0, f32(vi & 2u) * 2.0 - 1.0);
     return vec4<f32>(xy, 0.0, 1.0);
+}
+
+/// The glare texture read through a cubic B-spline, in four bilinear taps
+/// (Sigg and Hadwiger, GPU Gems 2 ch. 20). Bilinear alone would show the
+/// glare grid's texels as diamonds around a small source; the B-spline is
+/// smooth to its second derivative, so it adds no edge for the eye to
+/// sharpen into a band.
+fn bspline(uv: vec2<f32>) -> vec3<f32> {
+    let size = vec2<f32>(textureDimensions(glare_tex));
+    let p = uv * size - 0.5;
+    let i = floor(p);
+    let f = p - i;
+    let f2 = f * f;
+    let f3 = f2 * f;
+    let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    let w3 = f3 / 6.0;
+    let g0 = w0 + w1;
+    let g1 = w2 + w3;
+    let h0 = (i - 0.5 + w1 / g0) / size;
+    let h1 = (i + 1.5 + w3 / g1) / size;
+    let a = textureSampleLevel(glare_tex, linear_clamp, vec2<f32>(h0.x, h0.y), 0.0).rgb;
+    let b = textureSampleLevel(glare_tex, linear_clamp, vec2<f32>(h1.x, h0.y), 0.0).rgb;
+    let c = textureSampleLevel(glare_tex, linear_clamp, vec2<f32>(h0.x, h1.y), 0.0).rgb;
+    let d = textureSampleLevel(glare_tex, linear_clamp, vec2<f32>(h1.x, h1.y), 0.0).rgb;
+    return g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
 }
 
 @fragment
@@ -36,9 +63,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let headroom = select(1.0, max(cfg.params.w, 1.0), HDR_OUTPUT);
     var display = hdr_expand(tone_curve(scene, u32(cfg.params.x + 0.5)), headroom);
     if cfg.params.y > 0.0 {
-        let bloom = textureSampleLevel(bloom_tex, linear_clamp, uv, 0.0).rgb * cfg.glare.x;
-        let streak = textureSampleLevel(streak_tex, linear_clamp, uv, 0.0).rgb * cfg.glare.y;
-        let glare = cfg.params.y * (bloom + cfg.params.z * streak);
+        let glare = cfg.params.y * bspline(uv * cfg.glare.xy);
         // Light added over the picture, saturating at the display's white:
         // faint glare keeps its colour, a strong one burns to white.
         display += (vec3<f32>(headroom) - display) * (vec3<f32>(1.0) - exp(-glare));

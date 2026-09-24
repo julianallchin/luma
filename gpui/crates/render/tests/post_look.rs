@@ -14,8 +14,8 @@ use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{
-    CameraPose, DebugView, Environment, Exposure, Glare, Look, Piece, RenderSettings, Scene,
-    ToneCurve,
+    CameraPose, DebugView, Environment, Exposure, Glare, GlareStyle, Look, Piece, Quality,
+    RenderSettings, Scene, ToneCurve,
 };
 use luma_render::{build_frame_with, Frame, Renderer};
 
@@ -174,8 +174,9 @@ fn a_lens_in_its_beam_glares() {
         "the lens on its beam's axis is white: {}",
         luma(&glaring, lens.0, lens.1)
     );
-    let halo = ring(&glaring, lens, 12.0);
-    let without = ring(&plain, lens, 12.0);
+    // Two degrees out.
+    let halo = ring(&glaring, lens, 6.0);
+    let without = ring(&plain, lens, 6.0);
     assert!(
         halo > without + 10.0,
         "glare lights the dark around the lens: {halo} against {without} without it"
@@ -186,11 +187,64 @@ fn a_lens_in_its_beam_glares() {
         &mut renderer,
         &hazy_frame(0.5, 0.0, 0.0, manual(Glare::STAGE)),
     );
-    let away_halo = ring(&away, lens, 12.0);
+    let away_halo = ring(&away, lens, 6.0);
     assert!(
         away_halo < halo * 0.5,
         "the glow falls off out of the beam: {away_halo} against {halo} on axis"
     );
+}
+
+/// The veil is a long power-law tail: from one lens it still lights the dark
+/// a quarter of the frame away, and it falls smoothly all the way out, with no
+/// bright ring where a kernel or a fade might end.
+#[test]
+fn the_veil_reaches_far_without_a_ring() {
+    let mut renderer = Renderer::new().unwrap();
+    let bloom = Glare {
+        style: GlareStyle::Bloom,
+        ..Glare::STAGE
+    };
+    let glaring = render(&mut renderer, &hazy_frame(0.5, 1.0, 0.0, manual(bloom)));
+    let plain = render(
+        &mut renderer,
+        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::OFF)),
+    );
+    let lens = lens_pixel(&glaring);
+    let far = ring(&glaring, lens, 30.0);
+    assert!(
+        far > ring(&plain, lens, 30.0) + 1.0,
+        "the veil reaches 30 px out: {far}"
+    );
+    let profile: Vec<f32> = (3..60).map(|r| ring(&glaring, lens, r as f32)).collect();
+    for (i, pair) in profile.windows(2).enumerate() {
+        assert!(
+            pair[1] <= pair[0] + 0.5,
+            "the veil rises at {} px: {profile:?}",
+            i + 4
+        );
+    }
+}
+
+/// Low quality convolves on a coarser grid; the glare around a lens is much
+/// the same.
+#[test]
+fn low_quality_glares_alike() {
+    let mut renderer = Renderer::new().unwrap();
+    let high = render(
+        &mut renderer,
+        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
+    );
+    let mut frame = hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE));
+    frame.quality = Quality::Low;
+    let low = render(&mut renderer, &frame);
+    let lens = lens_pixel(&high);
+    for radius in [4.0, 8.0, 16.0] {
+        let (h, l) = (ring(&high, lens, radius), ring(&low, lens, radius));
+        assert!(
+            (h - l).abs() < 0.3 * h.max(l) + 2.0,
+            "at {radius} px: high {h}, low {l}"
+        );
+    }
 }
 
 /// With glare off and a neutral tone curve, manual 0 EV through the post
