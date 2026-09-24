@@ -14,25 +14,6 @@ pub enum FieldMath {
     Maximum,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScalarKind {
-    Number,
-    Beats,
-    Proportion,
-    Position,
-}
-impl ScalarKind {
-    pub fn value_type(self) -> ValueType {
-        match self {
-            Self::Number => ValueType::Number,
-            Self::Beats => ValueType::Beats,
-            Self::Proportion => ValueType::Proportion,
-            Self::Position => ValueType::Position,
-        }
-    }
-}
-
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
     let port = |name: &str, kind: ValueType| Input {
         optional: false,
@@ -113,12 +94,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             "value",
             ValueType::Signal(SignalType::ANY),
         ),
-        Primitive::Broadcast(kind) => (
-            "Broadcast",
-            vec![("value", port("Value", kind.value_type()))],
-            "value",
-            ValueType::Field,
-        ),
         Primitive::FieldClamp => (
             "Clamp coverage",
             vec![("value", port("Value", ValueType::Signal(SignalType::ANY)))],
@@ -127,12 +102,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 unit: Some(Unit::Proportion),
                 channels: None,
             }),
-        ),
-        Primitive::MaskToField => (
-            "Coverage values",
-            vec![("mask", port("Mask", ValueType::Mask))],
-            "value",
-            ValueType::Field,
         ),
         Primitive::FieldGreater => (
             "Greater than",

@@ -26,7 +26,6 @@ pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input
     }
 }
 pub(crate) fn definition(op: Primitive) -> Option<Definition> {
-    let number = |name| port(name, ValueType::Number, Some(Value::Number(0.0)));
     let field = |name| port(name, ValueType::Field, None);
     let (name, inputs, outputs) = match op {
         Primitive::ClipTime => (
@@ -38,23 +37,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ("duration", ValueType::Beats),
                 ("beat", ValueType::Number),
             ],
-        ),
-        Primitive::ScalarBinary(math) => (
-            match math {
-                FieldMath::Add => "Add numbers",
-                FieldMath::Subtract => "Subtract numbers",
-                FieldMath::Multiply => "Multiply numbers",
-                FieldMath::Divide => "Divide numbers",
-                FieldMath::Minimum => "Minimum number",
-                FieldMath::Maximum => "Maximum number",
-            },
-            vec![("a", number("A")), ("b", number("B"))],
-            vec![("value", ValueType::Number)],
-        ),
-        Primitive::ScalarConvert { from, to } => (
-            "Convert units",
-            vec![("value", port("Value", from.value_type(), None))],
-            vec![("value", to.value_type())],
         ),
         Primitive::FieldUnary(math) => (
             match math {
@@ -183,15 +165,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 ("z", field("Z / time")),
             ],
             vec![("value", ValueType::Field)],
-        ),
-        Primitive::WriteMask | Primitive::WriteStrobeMask => (
-            if op == Primitive::WriteMask {
-                "Dimmer mask output"
-            } else {
-                "Strobe mask output"
-            },
-            vec![("mask", port("Mask", ValueType::Mask, None))],
-            vec![("lighting", ValueType::Lighting)],
         ),
         _ => return None,
     };

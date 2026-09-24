@@ -1543,8 +1543,6 @@ the complete saved score. All changes stay local until `apply()`.
 - `edit.graph(...)` builds or opens a score-local graph.
   `make_independent(clip)` copies a clip's local subgraphs, so later edits do
   not change other clips.
-- A score saved with an older document version is upgraded in the candidate
-  (`track.score_upgrade`). The upgrade is saved with the next apply.
 
 ### 18.3 Views and preview
 

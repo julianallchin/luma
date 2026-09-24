@@ -128,7 +128,6 @@ pub fn definition(name: &str) -> Value {
 #[must_use]
 pub fn score(definitions: Value, clips: Value) -> Value {
     json!({
-        "version": luma_patterns::Score::VERSION,
         "definitions": definitions,
         "clips": clips,
     })

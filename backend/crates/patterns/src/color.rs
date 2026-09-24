@@ -197,21 +197,6 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             "color",
             ValueType::ColorField,
         ),
-        Primitive::ColorField => (
-            "Broadcast color",
-            vec![(
-                "color",
-                port("Color", ValueType::Color, Some(Value::Color([1.0; 3]))),
-            )],
-            "color",
-            ValueType::ColorField,
-        ),
-        Primitive::WriteColor => (
-            "Color output",
-            vec![("color", port("Color", ValueType::ColorField, None))],
-            "lighting",
-            ValueType::Lighting,
-        ),
         Primitive::Hsv => (
             "HSV color per head",
             vec![

@@ -65,15 +65,6 @@ fn primitive_definition(p: Primitive) -> Definition {
             None,
         )
     };
-    let lighting = || {
-        input(
-            "Lighting",
-            "Lighting contribution keyed by cell identity",
-            ValueType::Lighting,
-            Frame,
-            None,
-        )
-    };
     let proportion = |name, default| {
         field(
             name,
@@ -139,42 +130,6 @@ fn primitive_definition(p: Primitive) -> Definition {
                 ("cycle", ValueType::Number, Frame),
             ],
         ),
-        Primitive::TravelClock => (
-            "Travel time",
-            vec![
-                (
-                    "elapsed",
-                    field(
-                        "Elapsed",
-                        "Musical time since this stroke began",
-                        Value::Beats(0.0),
-                        Frame,
-                    ),
-                ),
-                (
-                    "travel",
-                    field(
-                        "Travel time",
-                        "Complete start-to-end journey, in beats",
-                        Value::Beats(2.0),
-                        Fixed,
-                    ),
-                ),
-                (
-                    "repeat",
-                    field(
-                        "Repeat",
-                        "Travel plus dark rest, in beats",
-                        Value::Beats(4.0),
-                        Fixed,
-                    ),
-                ),
-            ],
-            vec![
-                ("progress", ValueType::Proportion, Frame),
-                ("active", ValueType::Proportion, Frame),
-            ],
-        ),
         Primitive::CoordinateOffset => (
             "Coordinate offset",
             vec![
@@ -238,40 +193,6 @@ fn primitive_definition(p: Primitive) -> Definition {
                 ),
             ],
             vec![("mask", ValueType::Mask, Frame)],
-        ),
-        Primitive::WritePosition => (
-            "Position output",
-            vec![
-                (
-                    "pan",
-                    field(
-                        "Pan (degrees)",
-                        "Absolute pan angle in degrees",
-                        Value::Number(0.0),
-                        Frame,
-                    ),
-                ),
-                (
-                    "tilt",
-                    field(
-                        "Tilt (degrees)",
-                        "Absolute tilt angle in degrees",
-                        Value::Number(0.0),
-                        Frame,
-                    ),
-                ),
-            ],
-            vec![("lighting", ValueType::Lighting, Frame)],
-        ),
-        Primitive::WriteSpeed => (
-            "Movement speed output",
-            vec![("value", proportion("Value", 1.0))],
-            vec![("lighting", ValueType::Lighting, Frame)],
-        ),
-        Primitive::AddLighting => (
-            "Add Lighting",
-            vec![("a", lighting()), ("b", lighting())],
-            vec![("lighting", ValueType::Lighting, Frame)],
         ),
         Primitive::SoftEdges => (
             "Soft Edges",

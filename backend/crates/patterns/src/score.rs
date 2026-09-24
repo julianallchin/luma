@@ -45,37 +45,21 @@ fn replace_blend() -> crate::BlendMode {
 }
 
 /// Canonical score document. Local definitions and stable clip identities travel
-/// with the score; historical versions are converted at the host migration seam.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// with the score.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Score {
-    pub(crate) version: u32,
     pub definitions: BTreeMap<String, Definition>,
     pub clips: BTreeMap<String, Clip>,
 }
-impl Default for Score {
-    fn default() -> Self {
-        Self {
-            version: Self::VERSION,
-            definitions: BTreeMap::new(),
-            clips: BTreeMap::new(),
-        }
-    }
-}
 impl Score {
-    /// The document version written by this crate.
-    pub const VERSION: u32 = 7;
     pub fn same_computation(&self, other: &Self) -> bool {
-        self.version == other.version
-            && self.clips == other.clips
+        self.clips == other.clips
             && definitions_have_same_computation(&self.definitions, &other.definitions)
     }
 
-    pub fn version(&self) -> u32 {
-        self.version
-    }
     pub fn validate(&self, base: &Library) -> Result<()> {
-        let library = self.validate_using(base, &crate::catalog::primitive)?;
+        let library = self.validate_structure(base)?;
         for (id, clip) in &self.clips {
             // Check fixed timing/value relationships without binding venue geometry.
             // Actual domain requirements (e.g. a solved circle) are host checks.
@@ -96,16 +80,8 @@ impl Score {
         }
         Ok(())
     }
-    /// Structural/value validation uses a document's frozen vocabulary. It
-    /// must not execute old kernels merely to read or restore historical bytes.
-    pub(crate) fn validate_using(
-        &self,
-        base: &Library,
-        interface: &impl Fn(crate::Primitive) -> Definition,
-    ) -> Result<Library> {
-        if !(2..=Self::VERSION).contains(&self.version) {
-            return Err(Error(format!("unsupported score version {}", self.version)));
-        }
+    /// Structural and value checks, without binding venue geometry.
+    fn validate_structure(&self, base: &Library) -> Result<Library> {
         if self
             .definitions
             .values()
@@ -122,12 +98,11 @@ impl Score {
                 )));
             }
         }
-        library.validate_many_using(
+        library.validate_many(
             self.definitions
                 .keys()
                 .map(String::as_str)
                 .chain(self.clips.values().map(|clip| clip.graph.as_str())),
-            interface,
         )?;
         for definition in self.definitions.values() {
             for input in definition.inputs.values() {

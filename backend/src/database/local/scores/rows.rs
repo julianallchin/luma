@@ -166,8 +166,6 @@ pub async fn load_score(
             .definitions
             .insert(key_of(score_id, &id)?, from_json::<Definition>(&source)?);
     }
-    // Rows carry no version; renames inside the current version repair here.
-    luma_patterns::migration::lit_heads_density(&mut score);
     Ok(score)
 }
 

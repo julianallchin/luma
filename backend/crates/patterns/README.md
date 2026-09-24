@@ -8,11 +8,8 @@ playback-device state or separate scalar execution engine.
   Events determine journey starts; travel sets each journey's duration. Longer
   journeys overlap with Max, and completed journeys contribute zero. A snare
   trigger and a periodic trigger connect to the same Chase input.
-  `dissolve_flash` is an old name. `migration::upgrade` rewrites it to
-  `dissolve` or `beat_dissolve`.
 - `src/recipes.json` is the editable source of built-in graph recipes. Primitive
-  signatures live in Rust and are the only kernel registry. The catalog does
-  not depend on the migration catalog or reconstruct old graphs at startup.
+  signatures live in Rust and are the only kernel registry.
 - Numbers, colors and masks use the same numerical operations, with channel,
   unit and fixture-domain metadata. Scalar axes broadcast. Structured values
   such as envelopes, mapping specifications and event sources remain controls.
@@ -83,7 +80,7 @@ playback-device state or separate scalar execution engine.
   callers can add a color input on Output without changing the Chase node.
 - Color-only Output extracts brightness. Color plus an explicit dimmer keeps
   the two independent. Perceptual gradient interpolation remains OKLab.
-- `Score::VERSION` is 7. Named Input nodes preserve stable keys while
+- Named Input nodes preserve stable keys while
   exposing destination-inferred controls; renaming a label does not lose clip
   overrides. Timing, selection, layering and the overall random seed belong to
   the clip; individual noise operations can also expose an explicit seed.
@@ -158,28 +155,13 @@ older rules.
 - `presets()` reads `src/presets.json`: named presets (a form and every
   input value) and named curves for `time` and `hit` sources.
 
-## Host integration and migration
+## Host integration
 
 `PreparedGraph` flattens once and executes each operation once per requested time
 batch. Event kernels form a temporary event axis and reduce it; they do not
 retain journeys or replay a graph for each event. `Score::prepare_clip` freezes
 clip inputs and enforces the clip span. Native visualizer previews share this
 path, including real track audio, beat-grid interpolation and argument overrides.
-
-`migration::upgrade` brings a score of version 2 or later to version 7.
-Playback and previews upgrade a copy in memory
-(`backend/src/services/graph_scores.rs`). Referenced standalone patterns become
-score-owned graphs, preserving names, controls, overrides and layout. Clip
-seconds map through the real tempo grid. A selection seed stays separate from
-effect randomness.
-
-Frozen vocabularies live under `migrations/`; see its README.
-`migration::validate` checks an old document against its own vocabulary without
-running retired kernels.
-
-Preserve legacy Major Span/Count behavior in migration: those old operators pick
-a world axis, whereas the new Major Axis fits a principal direction. Do not
-reinterpret one as the other.
 
 `scripts/library/ebf_graph_reset.py` holds manually rebuilt EBF graph recipes
 and compares them with recorded output. It calls `score_dsl_export`,

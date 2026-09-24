@@ -27,9 +27,6 @@ import bisect
 import copy
 import json
 import math
-
-# The document version Rust writes; anything older is upgraded on open.
-SCORE_VERSION = 7
 import re
 import uuid
 from dataclasses import dataclass
@@ -283,10 +280,6 @@ class Edit:
         self._track = track
         self._base = copy.deepcopy(track._document)
         self._candidate = copy.deepcopy(self._base)
-        if self._candidate.get("version") != SCORE_VERSION:
-            # This is a working copy. The live rows remain the
-            # base; migration is saved together with the eventual authored edit.
-            self._candidate = track._host_call("track.score_upgrade", {"candidate": self._candidate})
         self._closed = False
 
     def _open(self):
@@ -340,8 +333,8 @@ class Edit:
         """Stage an exact score.luma source. check/apply run Rust's validator."""
         self._open()
         candidate = json.loads(source)
-        if not isinstance(candidate, dict) or candidate.get("version") not in (2, 3, 4, 5, 6, 7):
-            raise TrackError("expected a score document of version 2 to 6")
+        if not isinstance(candidate, dict) or set(candidate) != {"definitions", "clips"}:
+            raise TrackError("expected a score document with definitions and clips")
         self._candidate = candidate
 
     def source(self):
