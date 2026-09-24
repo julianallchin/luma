@@ -42,7 +42,13 @@ const ACTOR_TABLE: &str = "CREATE TEMP TABLE IF NOT EXISTS luma_actor (actor TEX
 /// If a trigger cannot be created — which means the table is missing, i.e. the
 /// migration and [`SYNCED_TABLES`] have drifted.
 pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
-    run(&mut *connection, ACTOR_TABLE, "the actor table", "luma_actor").await?;
+    run(
+        &mut *connection,
+        ACTOR_TABLE,
+        "the actor table",
+        "luma_actor",
+    )
+    .await?;
     for table in SYNCED_TABLES {
         for statement in upload_queue(table) {
             run(&mut *connection, &statement, "the upload queue", table.name).await?;
@@ -59,7 +65,13 @@ pub async fn install(connection: &mut SqliteConnection) -> Result<(), String> {
 ///
 /// If the statement fails.
 pub async fn attribute(connection: &mut SqliteConnection, actor: &str) -> Result<(), String> {
-    run(&mut *connection, ACTOR_TABLE, "the actor table", "luma_actor").await?;
+    run(
+        &mut *connection,
+        ACTOR_TABLE,
+        "the actor table",
+        "luma_actor",
+    )
+    .await?;
     sqlx::query("INSERT INTO temp.luma_actor (actor) VALUES (?)")
         .bind(actor)
         .execute(&mut *connection)
