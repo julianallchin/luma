@@ -65,6 +65,12 @@ impl Score {
                 .ok_or_else(|| Error(format!("clip {id}: unknown form {}", clip.graph)))?;
             crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
                 .map_err(|error| Error(format!("clip {id}: {error}")))?;
+            // Aim always blends toward the aim under it by alpha.
+            if clip.graph == "aim@1" && clip.blend_mode != crate::BlendMode::Replace {
+                return Err(Error(format!(
+                    "clip {id}: an aim clip blends with replace only"
+                )));
+            }
             // Check fixed timing/value relationships without binding venue geometry.
             PreparedGraph::new_validated(
                 base,

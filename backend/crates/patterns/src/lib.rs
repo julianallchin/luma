@@ -1,5 +1,6 @@
 //! Typed, composable pattern graphs. No database, UI, or playback-device state.
 //! A frame is evaluated in musical time over resolved independently controllable cells.
+pub mod aim;
 mod blend;
 mod catalog;
 pub mod circle_fit;
@@ -31,6 +32,7 @@ mod tensor;
 mod value;
 mod value_noise;
 
+pub use aim::{blend_aim, Aim};
 pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
 pub use clock::*;

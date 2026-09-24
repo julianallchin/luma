@@ -16,6 +16,12 @@ pub enum Unit {
     Seconds,
 }
 
+/// The channels of a stage vector (U, V, Z), such as an aim direction.
+pub const VECTOR: Channels = Channels::Components(match std::num::NonZeroU16::new(3) {
+    Some(count) => count,
+    None => unreachable!(),
+});
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channels {

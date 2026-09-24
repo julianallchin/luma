@@ -30,6 +30,10 @@ pub enum ValueType {
     Hit,
     Noise,
     Audio,
+    /// A named option of a choice input; the input's options list the names.
+    Choice,
+    /// A vector in stage U, V, Z: an aim direction or a point in metres.
+    Vector,
 }
 impl std::fmt::Display for ValueType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,6 +71,7 @@ impl ValueType {
             Self::Position => SignalType::new(Unit::Position, Channels::Value),
             Self::Proportion | Self::Mask => SignalType::new(Unit::Proportion, Channels::Value),
             Self::Color | Self::ColorField => SignalType::new(Unit::Proportion, Channels::Rgb),
+            Self::Vector => SignalType::new(Unit::Number, crate::tensor::VECTOR),
             _ => return None,
         })
     }
@@ -146,6 +151,10 @@ pub enum Value {
     Hit(crate::Keyframes),
     Noise(crate::NoiseSource),
     Audio(crate::AudioLevel),
+    /// One named option, such as `"figure_8"`.
+    Choice(String),
+    /// U, V, Z: stage right, downstage, up.
+    Vector([f64; 3]),
 }
 impl Value {
     pub fn value_type(&self) -> ValueType {
@@ -184,6 +193,8 @@ impl Value {
             Self::Hit(_) => ValueType::Hit,
             Self::Noise(_) => ValueType::Noise,
             Self::Audio(_) => ValueType::Audio,
+            Self::Choice(_) => ValueType::Choice,
+            Self::Vector(_) => ValueType::Vector,
         }
     }
     /// The source kind of a non-plain form input value.
@@ -205,6 +216,8 @@ impl Value {
             Self::Beats(v) => v.is_finite() && *v >= 0.0,
             Self::Proportion(v) => v.is_finite() && (0.0..=1.0).contains(v),
             Self::Color(c) => c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            Self::Vector(v) => v.iter().all(|v| v.is_finite()),
+            Self::Choice(name) => !name.is_empty(),
             Self::Gradient(g) => return g.validate(),
             Self::AudioSource(audio) => return audio.validate(),
             Self::ColorField(colors) => {

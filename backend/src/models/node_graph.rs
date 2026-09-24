@@ -25,6 +25,8 @@ pub enum PortType {
     Signal,
     Events,
     Stops,
+    /// A named option, such as an aim's motion.
+    Choice,
 }
 
 impl PortType {
@@ -55,6 +57,7 @@ impl PortType {
             PortType::Signal => "Signal",
             PortType::Events => "Events",
             PortType::Stops => "Stops",
+            PortType::Choice => "Choice",
         }
     }
 }

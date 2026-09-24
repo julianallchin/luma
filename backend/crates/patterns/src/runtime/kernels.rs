@@ -126,7 +126,11 @@ pub(crate) fn run(
         | Primitive::EventLife
         | Primitive::SampleCurve
         | Primitive::RandomShare
-        | Primitive::PathGlides => crate::forms::ops::run(op, inputs, outputs, batch),
+        | Primitive::PathGlides
+        | Primitive::AimBase
+        | Primitive::AimFan
+        | Primitive::AimMotion
+        | Primitive::AimOffset => crate::forms::ops::run(op, inputs, outputs, batch),
         Primitive::ChannelCount => numeric(
             "value",
             Signal::scalar(signal("value").channels().count() as f64, Unit::Number)?,
