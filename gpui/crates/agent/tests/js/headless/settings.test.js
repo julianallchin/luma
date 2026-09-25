@@ -66,7 +66,7 @@ test("HDR output is a General setting", () => {
 });
 
 // The door a person can see: the account foot's menu, then its Settings row.
-test.skip("the account foot opens settings — bug: the account menu closes a frame after it opens", () => {
+test("the account foot opens settings", () => {
   nav.venue("Test Venue");
   nav.settings();
   until("the settings screen", (s) => s.find({ role: "toggle", label: "AI" }));

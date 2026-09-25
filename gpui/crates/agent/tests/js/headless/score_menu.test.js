@@ -26,12 +26,6 @@ const dialog = (s) => s.find({ role: "card", label: "Confirm dialog" });
 // is painted last.
 const lastDelete = (s) => s.findAll({ role: "button", label: "Delete score" }).at(-1);
 
-// Every test here needs the menu, and the menu does not stay up: after a
-// right-click, `app.painted()` shows it in two or three frames, then gone
-// before the command returns. The account foot's menu does the same (see
-// settings.test.js). Skipped until that is fixed; the bodies are current.
-const BUG = "bug: the context menu closes a few frames after it opens";
-
 function openMenu(row) {
   app.click(row, { button: "right" });
   return until("the score menu", (s) => menu(s) !== undefined);
@@ -43,7 +37,7 @@ function toScores() {
   return app.snapshot();
 }
 
-test.skip(`a right-click on a score raises a findable menu and escape takes it away — ${BUG}`, () => {
+test(`a right-click on a score raises a findable menu and escape takes it away`, () => {
   const level = toScores();
   expect(menu(level)).toBe(undefined);
   const row = withClips(level);
@@ -63,7 +57,7 @@ test.skip(`a right-click on a score raises a findable menu and escape takes it a
   until("the menu to close", (s) => menu(s) === undefined);
 });
 
-test.skip(`deleting a score with clips asks first and the answer decides — ${BUG}`, () => {
+test(`deleting a score with clips asks first and the answer decides`, () => {
   const level = toScores();
   const listed = labels(level);
 
@@ -82,7 +76,7 @@ test.skip(`deleting a score with clips asks first and the answer decides — ${B
   expect(labels(after).length).toBe(listed.length - 1);
 });
 
-test.skip(`deleting the open score leaves the editor with no score — ${BUG}`, () => {
+test(`deleting the open score leaves the editor with no score`, () => {
   const ordinal = (s) => s.findAll({ role: "text" }).find((n) => n.label.startsWith("Score #"));
   const level = toScores();
   const before = labels(level);
@@ -98,15 +92,16 @@ test.skip(`deleting the open score leaves the editor with no score — ${BUG}`, 
   const next = app.snapshot();
   // Either door: a score with clips asks, an empty one does not.
   if (dialog(next) !== undefined) app.click(lastDelete(next));
-  const gone = until("the editor off the score", (s) =>
-    s.findAll({ role: "text" }).some((n) => n.label === "No score"));
+  // The editor lets go at once; the list is re-read when the seam answers.
+  const gone = until("the editor off the score and the list re-read", (s) =>
+    s.findAll({ role: "text" }).some((n) => n.label === "No score")
+      && rows(s).length === before.length - 1);
 
   expect(ordinal(gone)).toBe(undefined);
-  expect(labels(gone).length).toBe(before.length - 1);
   assert(withClips(gone) === undefined, `the deleted score is still listed: ${labels(gone)}`);
 });
 
-test.skip(`deleting an empty score does not ask — ${BUG}`, () => {
+test(`deleting an empty score does not ask`, () => {
   const level = toScores();
   const before = labels(level);
   app.click(openMenu(empty(level)).find({ role: "button", label: "Delete score" }));
