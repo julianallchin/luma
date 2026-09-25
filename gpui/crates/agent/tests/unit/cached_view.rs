@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{canvas, div, px, App, Context, Entity, StyleRefinement, Window};
+use gpui::{canvas, deferred, div, px, App, Context, Entity, StyleRefinement, Window};
 use gpui_agent::{Config, Harness};
 use luma_ui::node::{agent_paint_node, cached_view, Instrument, Role};
 
@@ -45,6 +45,14 @@ impl Render for Child {
                 .w(px(100.))
                 .h(px(40.)),
             )
+            // A float, as every menu is: gpui prepaints it in its deferred
+            // phase, after the cached view's own prepaint has returned.
+            .child(deferred(
+                div()
+                    .w(px(80.))
+                    .h(px(30.))
+                    .agent_node(Role::Card, format!("float {}", self.count)),
+            ))
     }
 }
 
@@ -92,7 +100,7 @@ fn cached_nodes_survive_parent_frames_and_update_on_child_notifications() {
         "parent frames rebuilt the child"
     );
     let nodes = nodes.as_array().unwrap();
-    for label in ["count 0", "painted 0"] {
+    for label in ["count 0", "painted 0", "float 0"] {
         assert_eq!(
             nodes.iter().filter(|n| n["label"] == label).count(),
             1,
@@ -114,5 +122,8 @@ fn cached_nodes_survive_parent_frames_and_update_on_child_notifications() {
     let labels = updated.as_array().unwrap();
     assert!(labels.iter().any(|v| v == "count 1"), "{labels:?}");
     assert!(labels.iter().any(|v| v == "painted 1"), "{labels:?}");
-    assert!(!labels.iter().any(|v| v == "count 0" || v == "painted 0"));
+    assert!(labels.iter().any(|v| v == "float 1"), "{labels:?}");
+    assert!(!labels
+        .iter()
+        .any(|v| v == "count 0" || v == "painted 0" || v == "float 0"));
 }

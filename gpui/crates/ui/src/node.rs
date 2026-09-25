@@ -205,7 +205,7 @@ pub fn agent_paint_node_focused(
     cx: &mut gpui::App,
 ) {
     let bounds = bounds.intersect(&window.content_mask().bounds);
-    imp::push_painted(cx, role, label.into(), bounds, focused);
+    imp::push_painted(window, cx, role, label.into(), bounds, focused);
 }
 
 /// See the `agent`-enabled twin. Without the feature there is no registry, so
@@ -267,9 +267,11 @@ pub fn cached_view<T: gpui::Render>(
     entity: gpui::Entity<T>,
     style: gpui::StyleRefinement,
 ) -> impl IntoElement {
+    #[cfg(feature = "agent")]
+    let view = entity.entity_id();
     let element = entity.cached(style);
     #[cfg(feature = "agent")]
-    let element = imp::CachedView { element };
+    let element = imp::CachedView { element, view };
     element
 }
 
@@ -279,8 +281,12 @@ pub use imp::{Instrumented, NodeRegistry};
 #[cfg(feature = "agent")]
 mod imp {
     use super::{Instrument, Node, Role};
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    use std::rc::Rc;
+
     use gpui::{
-        App, Bounds, Element, ElementId, Global, GlobalElementId, Hitbox, HitboxBehavior,
+        App, Bounds, Element, ElementId, EntityId, Global, GlobalElementId, Hitbox, HitboxBehavior,
         InspectorElementId, IntoElement, LayoutId, Pixels, SharedString, Window,
     };
 
@@ -300,9 +306,30 @@ mod imp {
         /// see the frames *between* its commands turns it on, and nothing else
         /// pays for the retention.
         keep: usize,
+        /// Parallel to `nodes`: the view gpui was rendering when each one was
+        /// pushed. A deferred draw carries the view that deferred it, which
+        /// is how [`CachedView`] tells its own floats from everyone else's.
+        views: Vec<EntityId>,
+        /// Where the root's prepaint ended: every node from here up to the
+        /// root's paint was pushed by a deferred draw.
+        deferred_from: Option<usize>,
+        /// Cached views' work on their deferred nodes, done at the root's
+        /// paint — the first moment every deferred draw has prepainted.
+        pending: Vec<Pending>,
     }
 
     impl Global for NodeRegistry {}
+
+    /// What a [`CachedView`] asked of this frame's deferred phase.
+    enum Pending {
+        /// Rendered: keep the deferred nodes drawn from any of these views.
+        Capture(HashSet<EntityId>, Deferred),
+        /// Reused: gpui reused its deferred draws without prepainting them,
+        /// so push what they registered last time.
+        Replay(Deferred),
+    }
+
+    type Deferred = Rc<RefCell<Vec<(Node, EntityId)>>>;
 
     impl NodeRegistry {
         /// Which frame the current [`Self::nodes`] belong to. Monotonic across
@@ -353,37 +380,85 @@ mod imp {
             }
             registry.frame += 1;
             registry.nodes.clear();
+            registry.views.clear();
+            registry.deferred_from = None;
+            registry.pending.clear();
         }
 
-        fn push(cx: &mut App, node: impl FnOnce(usize) -> Node) {
+        fn push(window: &Window, cx: &mut App, node: impl FnOnce(usize) -> Node) {
+            let view = window.current_view();
             let registry = cx.default_global::<NodeRegistry>();
-            let id = registry.nodes.len();
-            let node = node(id);
-            registry.nodes.push(node);
+            let node = node(registry.nodes.len());
+            registry.push_from(node, view);
+        }
+
+        /// Push with this frame's id, whatever id `node` had before.
+        fn push_from(&mut self, mut node: Node, view: EntityId) {
+            node.id = self.nodes.len();
+            self.nodes.push(node);
+            self.views.push(view);
+        }
+
+        /// The root's paint: every deferred draw has prepainted. Replays go
+        /// first so that a rendered view around a reused one captures them.
+        fn settle_deferred(cx: &mut App) {
+            let registry = cx.default_global::<NodeRegistry>();
+            let Some(from) = registry.deferred_from else {
+                return;
+            };
+            let pending = std::mem::take(&mut registry.pending);
+            for work in &pending {
+                if let Pending::Replay(deferred) = work {
+                    for (node, view) in deferred.borrow().iter() {
+                        registry.push_from(node.clone(), *view);
+                    }
+                }
+            }
+            for work in &pending {
+                if let Pending::Capture(views, deferred) = work {
+                    *deferred.borrow_mut() = (from..registry.nodes.len())
+                        .filter(|&ix| views.contains(&registry.views[ix]))
+                        .map(|ix| (registry.nodes[ix].clone(), registry.views[ix]))
+                        .collect();
+                }
+            }
         }
     }
 
     /// GPUI replays its own prepaint/paint data on a cache hit. Replay the
     /// corresponding external node records alongside it, with this frame's IDs.
+    ///
+    /// That includes the view's deferred draws — its menus and popovers.
+    /// gpui reuses those too, but in its deferred phase, after this element's
+    /// prepaint has returned, so their nodes are not in the range this
+    /// element sees. They are matched by the view that deferred them and
+    /// handled at the root's paint instead; see [`Pending`].
     pub(super) struct CachedView<T: gpui::Render> {
         pub(super) element: gpui::ViewElement<gpui::Entity<T>>,
+        pub(super) view: EntityId,
     }
 
     #[derive(Default)]
     struct CachedNodes {
-        prepaint: Vec<Node>,
-        paint: Vec<Node>,
+        prepaint: Vec<(Node, EntityId)>,
+        deferred: Deferred,
+        paint: Vec<(Node, EntityId)>,
     }
 
-    fn retain_or_replay(nodes: &mut Vec<Node>, start: usize, rendered: bool, cx: &mut App) {
+    fn retain_or_replay(
+        nodes: &mut Vec<(Node, EntityId)>,
+        start: usize,
+        rendered: bool,
+        cx: &mut App,
+    ) {
         let registry = cx.default_global::<NodeRegistry>();
         if rendered {
-            *nodes = registry.nodes[start..].to_vec();
+            *nodes = (start..registry.nodes.len())
+                .map(|ix| (registry.nodes[ix].clone(), registry.views[ix]))
+                .collect();
         } else {
-            for node in nodes.iter() {
-                let mut node = node.clone();
-                node.id = registry.nodes.len();
-                registry.nodes.push(node);
+            for (node, view) in nodes.iter() {
+                registry.push_from(node.clone(), *view);
             }
         }
     }
@@ -436,6 +511,16 @@ mod imp {
                 |nodes: Option<CachedNodes>, _| {
                     let mut nodes = nodes.unwrap_or_default();
                     retain_or_replay(&mut nodes.prepaint, start, rendered.is_some(), cx);
+                    let deferred = nodes.deferred.clone();
+                    let work = if rendered.is_some() {
+                        let views = std::iter::once(self.view)
+                            .chain(nodes.prepaint.iter().map(|(_, view)| *view))
+                            .collect();
+                        Pending::Capture(views, deferred)
+                    } else {
+                        Pending::Replay(deferred)
+                    };
+                    cx.default_global::<NodeRegistry>().pending.push(work);
                     ((), nodes)
                 },
             );
@@ -555,7 +640,7 @@ mod imp {
                 // and clicking its nominal bounds would hit whatever is really
                 // there. An empty intersection means there is nothing to click.
                 let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-                NodeRegistry::push(cx, |id| Node {
+                NodeRegistry::push(window, cx, |id| Node {
                     id,
                     role,
                     label,
@@ -568,6 +653,10 @@ mod imp {
             let inner = self
                 .element
                 .prepaint(id, inspector_id, bounds, request_layout, window, cx);
+            if self.root {
+                let registry = cx.default_global::<NodeRegistry>();
+                registry.deferred_from = Some(registry.nodes.len());
+            }
             (hitbox, inner)
         }
 
@@ -581,6 +670,9 @@ mod imp {
             window: &mut Window,
             cx: &mut App,
         ) {
+            if self.root {
+                NodeRegistry::settle_deferred(cx);
+            }
             self.element.paint(
                 id,
                 inspector_id,
@@ -625,13 +717,14 @@ mod imp {
     /// No hitbox: a painted control was never laid out, so there is nothing
     /// for gpui to hit-test against.
     pub(super) fn push_painted(
+        window: &Window,
         cx: &mut App,
         role: Role,
         label: SharedString,
         bounds: Bounds<Pixels>,
         focused: bool,
     ) {
-        NodeRegistry::push(cx, |id| Node {
+        NodeRegistry::push(window, cx, |id| Node {
             id,
             role,
             label,
