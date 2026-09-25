@@ -2,7 +2,6 @@
 #![cfg(feature = "pixel")]
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::{fs, path::PathBuf};
 
 use gpui::{div, prelude::*, px, AnyView, App, Context, Render, Window};
@@ -145,6 +144,7 @@ fn edge_energy(image: &image::RgbaImage) -> f32 {
 }
 
 #[test]
+#[ignore = "gap: the wgpu headless renderer draws no backdrop or content blur"]
 fn the_card_frost_and_the_filtered_layer_reduce_real_pixel_edges() {
     let mut harness = harness();
     let shots = run(
