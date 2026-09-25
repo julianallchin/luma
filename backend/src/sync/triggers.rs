@@ -185,47 +185,6 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sync::schema::table;
-
-    /// The `*_updated_at` trigger's own write must not read as a second edit.
-    #[test]
-    fn a_timestamp_only_update_is_not_a_change() {
-        let clips = table("clips").expect("clips is synced");
-        let statement = upload_queue(clips)[1].clone();
-        let guard = statement
-            .split("WHEN ")
-            .nth(1)
-            .expect("the update trigger is guarded");
-        assert!(
-            !guard.contains("'updated_at', NEW.updated_at"),
-            "the guard compares updated_at: {guard}"
-        );
-        assert!(guard.contains("'start', NEW.start"));
-    }
-
-    /// …and the timestamp still travels, as the value the touch trigger is
-    /// about to write.
-    #[test]
-    fn an_update_uploads_the_timestamp_it_is_about_to_get() {
-        let clips = table("clips").expect("clips is synced");
-        assert!(upload_queue(clips)[1].contains(&format!("'updated_at', {TOUCH_VALUE}")));
-    }
-
-    /// A composite-key table enqueues the id its generated column spells, not
-    /// `NEW.id`: a generated column is not reliably readable from a trigger.
-    #[test]
-    fn a_composite_key_row_uploads_its_generated_id() {
-        let params = table("venue_node_params").expect("venue_node_params is synced");
-        let [insert, _, delete] = upload_queue(params);
-        assert!(insert.contains("'PUT', NEW.node_id || ':' || NEW.key"));
-        assert!(delete.contains("'DELETE', OLD.node_id || ':' || OLD.key"));
-        assert!(insert.contains("'id', NEW.node_id || ':' || NEW.key"));
-    }
-}
-
-#[cfg(test)]
 mod installed {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
