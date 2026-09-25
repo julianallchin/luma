@@ -2,7 +2,7 @@
 //! for the distance that fits it.
 //!
 //! One rig has one framing, and every camera that looks at it — the opening
-//! pose, the orbit's dolly limits, each of the named [`View`]s — is derived
+//! pose, the zoom's limits, each of the named [`View`]s — is derived
 //! from it. Keeping the rule here rather than at the call sites is what makes
 //! "the same venue from the front" mean the same thing in the desktop viewport
 //! and in an agent's `luma.venue.render(view="front")`.
@@ -31,6 +31,7 @@ use glam::Vec3;
 
 use crate::aabb::Aabb;
 use crate::camera::{Camera, MIN_EYE_Z};
+use crate::navigate::ZoomLimits;
 
 /// The extent a camera has to fit, in render-world space (Z-up): the cloud of
 /// points every view has to keep on screen, and the box that summarises them.
@@ -68,8 +69,11 @@ impl Framing {
     /// both axes, so a 16:9 frame gets more absolute margin horizontally than vertically —
     /// which is what "a margin" looks like to an eye.
     pub const MARGIN: f32 = 0.08;
-    /// Furthest out a dolly may go, as a multiple of the distance it opened at.
+    /// Furthest out a zoom may go, as a multiple of the distance it opened at.
     const FAR_MULTIPLE: f32 = 6.0;
+    /// Share of the rig's size a zoom step is sized from at the least. See
+    /// [`ZoomLimits::reach`].
+    const REACH_SHARE: f32 = 0.1;
     /// Smallest half-diagonal a rig is treated as having. A one-fixture venue
     /// still needs a scale.
     const MIN_RADIUS: f32 = 1.0;
@@ -269,13 +273,22 @@ impl Framing {
         distance >= self.required_distance(target, offset / distance.max(1e-6), view)
     }
 
-    /// Radii a dolly may reach, given the distance the view opened at.
-    /// Close inspection can enter the rig, down to the camera's minimum
-    /// distance from its target. The far limit scales with the opening view.
+    /// How far a zoom may go, given the distance the view opened at.
+    ///
+    /// There is no near stop: the eye comes to the camera's minimum distance
+    /// from a pivot and then dollies through it (see
+    /// [`Camera::zoom_toward`]). A step is sized from no less than a tenth
+    /// of the rig's size, so it keeps a pace a person can see at any rig
+    /// scale. The far limit scales with the opening view.
     #[must_use]
-    pub fn radius_bounds(&self, fitted: f32) -> (f32, f32) {
+    pub fn zoom_limits(&self, fitted: f32) -> ZoomLimits {
         let near = Camera::MIN_RADIUS;
-        (near, (fitted * Self::FAR_MULTIPLE).max(near * 2.0))
+        ZoomLimits {
+            near,
+            far: (fitted * Self::FAR_MULTIPLE).max(near * 2.0),
+            reach: (self.radius() * Self::REACH_SHARE).max(near),
+            floor_z: self.floor_z(),
+        }
     }
 
     /// The polar range an *orbit* may reach — off the pole, and with the eye
@@ -670,8 +683,11 @@ mod tests {
             .is_finite());
     }
 
+    /// A zoom can get inside any rig, and its smallest step keeps pace with
+    /// the rig's size: a tenth of a metre in a booth, metres in a stadium.
     #[test]
-    fn dolly_can_inspect_inside_rigs_of_any_size() {
+    fn zoom_can_inspect_inside_rigs_of_any_size() {
+        let mut last_reach = 0.0;
         for extent in [1.0, 10.0, 100.0] {
             let framing = Framing::of([], [Aabb::new(Vec3::splat(-extent), Vec3::splat(extent))]);
             let fitted = framing.required_distance(
@@ -679,11 +695,14 @@ mod tests {
                 Vec3::NEG_Y,
                 &Viewfinder::new(50.0, 1.0),
             );
-            let (near, far) = framing.radius_bounds(fitted);
-            assert_eq!(near, Camera::MIN_RADIUS);
-            assert!(near < framing.radius());
-            assert!(near > Camera::default().znear);
-            assert_eq!(far, fitted * Framing::FAR_MULTIPLE);
+            let limits = framing.zoom_limits(fitted);
+            assert!(limits.near < framing.radius());
+            assert!(limits.near > Camera::default().znear);
+            assert!(limits.far > fitted);
+            assert!(limits.reach < framing.radius());
+            assert!(limits.reach >= limits.near);
+            assert!(limits.reach >= last_reach);
+            last_reach = limits.reach;
         }
     }
 
