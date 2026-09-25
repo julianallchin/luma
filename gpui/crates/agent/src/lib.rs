@@ -227,4 +227,14 @@ impl Harness {
     pub fn reset(&mut self) -> Result<(), HarnessError> {
         self.interpreter.reset()
     }
+
+    /// A global function `name` for scripts, backed by `function`. See
+    /// [`interp::Interpreter::bind`].
+    pub fn bind(
+        &mut self,
+        name: &str,
+        function: impl Fn(String) -> Result<String, String> + 'static,
+    ) -> Result<(), HarnessError> {
+        self.interpreter.bind(name, std::rc::Rc::new(function))
+    }
 }
