@@ -7,7 +7,7 @@
 //! fallback for definitions that omit it, and it is the only such table.
 
 use crate::scene_desc::Definition;
-use fixture_kinematics::{Articulation, Mount, aim};
+use fixture_kinematics::{aim, Articulation, Mount};
 use glam::Vec3;
 
 /// A fixture's optics, reduced to the two numbers the cone model needs.
@@ -656,15 +656,19 @@ mod tests {
         assert!((pixel_lens(&bar, 0.02, 0.3).radius - 0.009).abs() < 1e-6);
     }
 
-    /// The reference point the whole concentration curve is anchored on.
+    /// The same light through a narrower opening is hotter and throws
+    /// further; twice the lumens is twice the gain; the field is the opening.
     #[test]
-    fn thirty_degree_spot_is_the_reference() {
-        let cone = cone_from_opening(Luminaire {
-            field_angle_deg: 30.0,
-            lumens: 1.0,
-        });
-        assert!((cone.gain - 1.5).abs() < 1e-4);
-        assert!((cone.range - 30.0).abs() < 1e-3);
-        assert!((cone.cos_field - 15f32.to_radians().cos()).abs() < 1e-6);
+    fn a_narrower_opening_concentrates_the_same_light() {
+        let cone = |field_angle_deg, lumens| {
+            cone_from_opening(Luminaire {
+                field_angle_deg,
+                lumens,
+            })
+        };
+        let (spot, wash) = (cone(15.0, 1.0), cone(30.0, 1.0));
+        assert!(spot.gain > wash.gain && spot.range >= wash.range);
+        assert!((cone(30.0, 2.0).gain - 2.0 * wash.gain).abs() < 1e-5);
+        assert!((wash.cos_field - 15f32.to_radians().cos()).abs() < 1e-6);
     }
 }

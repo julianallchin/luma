@@ -230,8 +230,14 @@ mod tests {
     #[test]
     fn the_word_holds_for_its_rotation_and_then_moves_on() {
         let seed = flavour_seed("thread-1");
-        assert_eq!(flavour_word(seed, 0), flavour_word(seed, 6));
-        assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
+        assert_eq!(
+            flavour_word(seed, 0),
+            flavour_word(seed, FLAVOUR_ROTATE_SECS - 1)
+        );
+        assert_ne!(
+            flavour_word(seed, 0),
+            flavour_word(seed, FLAVOUR_ROTATE_SECS)
+        );
         // …and it wraps rather than running off the end.
         let long = FLAVOUR_ROTATE_SECS * FLAVOUR_WORDS.len() as u64;
         assert_eq!(flavour_word(seed, 0), flavour_word(seed, long));
@@ -246,8 +252,6 @@ mod tests {
     /// The name a driver waits on does not rotate with the word it paints.
     #[test]
     fn the_reported_state_is_stable_while_the_word_turns() {
-        let seed = flavour_seed("thread-1");
-        assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
         assert_eq!(Working::Thinking.label(), "Working");
         assert_eq!(Working::Sending.label(), "Sending");
     }

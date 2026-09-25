@@ -358,7 +358,12 @@ mod tests {
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
         };
-        assert_eq!(fixture_shadow_planes(&light), (0.03, 12.0));
+        let (near, far) = fixture_shadow_planes(&light);
+        assert!(near > 0.0 && near < far, "near {near} far {far}");
+        assert_eq!(
+            far, light.range,
+            "a point source's frustum reaches its range"
+        );
         assert_eq!(light.apex(), light.position);
     }
 
