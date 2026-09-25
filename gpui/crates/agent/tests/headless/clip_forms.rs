@@ -205,7 +205,7 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
     assert_eq!(out["fixed"], true, "{out}");
     assert_eq!(
         out["every"],
-        serde_json::json!(["Every: Beats = 0.0625"]),
+        serde_json::json!(["Every: Beats = 32"]),
         "back to fixed takes the curve's first value: {out}"
     );
 
@@ -224,7 +224,7 @@ fn the_sheet_edits_a_choice_and_promotes_an_input_to_a_curve_and_back() {
     );
     assert_eq!(
         clip["inputs"]["every"],
-        serde_json::json!({"type": "beats", "value": 0.0625}),
+        serde_json::json!({"type": "beats", "value": 0.03125}),
         "the promotion went to a curve and came back plain"
     );
 }
