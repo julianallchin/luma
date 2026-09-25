@@ -32,6 +32,22 @@ gpui = { path = "vendor/zed/crates/gpui", version = "=0.2.2" }
 gpui_macros = { path = "vendor/zed/crates/gpui_macros", version = "=0.1.0" }
 gpui_platform = { path = "vendor/zed/crates/gpui_platform", version = "=0.1.0" }
 
+# wgpu 30.0.1 plus one fix: `configure_surface` fails when another thread
+# submits during its wait, and then drops the collected callbacks. The stage
+# thread submits on gpui's device, so this lost stage frames. Trunk fixes it
+# in gfx-rs/wgpu#10296. Remove this block when a wgpu release includes it.
+[patch.crates-io]
+naga = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-core = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-core-deps-apple = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-core-deps-emscripten = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-core-deps-wasm = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-hal = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-naga-bridge = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+wgpu-types = { git = "https://github.com/julianallchin/wgpu", rev = "815ad0d4e727a647bdf6cf28853649590b0cdd1b" }
+
 # Line tables, not full DWARF. Backtraces through Luma's own crates keep
 # `file:line`, which is all a test failure needs; what goes is the type and
 # variable detail a stepping debugger would use. Measured at 60% off `deps/`
