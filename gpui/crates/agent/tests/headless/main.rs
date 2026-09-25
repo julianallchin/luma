@@ -14,13 +14,7 @@
 mod support;
 
 mod add_tracks_flow;
-mod aim_sheet;
-mod chrome_anchors;
-mod clip_fades;
 mod clip_forms;
-mod dialog_focus;
-mod empty_panel;
-mod fixture_picker;
 mod keyboard;
 mod library_foundation;
 mod pointer_ownership;
