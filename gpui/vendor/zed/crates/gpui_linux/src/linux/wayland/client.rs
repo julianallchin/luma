@@ -36,6 +36,9 @@ use wayland_client::{
         wl_shm_pool, wl_surface,
     },
 };
+use wayland_protocols::wp::pointer_constraints::zv1::client::{
+    zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
+};
 use wayland_protocols::wp::pointer_gestures::zv1::client::{
     zwp_pointer_gesture_pinch_v1, zwp_pointer_gestures_v1,
 };
@@ -45,6 +48,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection
 use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
     zwp_primary_selection_source_v1,
+};
+use wayland_protocols::wp::relative_pointer::zv1::client::{
+    zwp_relative_pointer_manager_v1, zwp_relative_pointer_v1,
 };
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
     ContentHint, ContentPurpose,
@@ -219,6 +225,9 @@ pub struct Globals {
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
+    pub pointer_constraints: Option<zwp_pointer_constraints_v1::ZwpPointerConstraintsV1>,
+    pub relative_pointer_manager:
+        Option<zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
     pub executor: ForegroundExecutor,
@@ -261,6 +270,8 @@ impl Globals {
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
+            pointer_constraints: globals.bind(&qh, 1..=1, ()).ok(),
+            relative_pointer_manager: globals.bind(&qh, 1..=1, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
@@ -310,6 +321,7 @@ pub(crate) struct WaylandClientState {
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
     pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
+    pointer_lock: Option<PointerLock>,
     pinch_scale: f32,
     wl_keyboard: Option<wl_keyboard::WlKeyboard>,
     cursor_shape_device: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
@@ -425,12 +437,72 @@ impl WaylandClientState {
     }
 }
 
+/// A pointer locked in place for a window, and the relative motion it has
+/// made since the window last asked.
+struct PointerLock {
+    locked: zwp_locked_pointer_v1::ZwpLockedPointerV1,
+    relative: zwp_relative_pointer_v1::ZwpRelativePointerV1,
+    delta: Point<Pixels>,
+}
+
 /// This struct is required to conform to Rust's orphan rules, so we can dispatch on the state but hand the
 /// window to GPUI.
 #[derive(Clone)]
 pub struct WaylandClientStatePtr(Weak<RefCell<WaylandClientState>>);
 
 impl WaylandClientStatePtr {
+    /// Lock the pointer over `surface` where it is and hide it, or release it
+    /// where it was locked. Needs both `zwp_pointer_constraints_v1` and
+    /// `zwp_relative_pointer_manager_v1`: a locked pointer sends no absolute
+    /// motion, so without relative motion a lock would only freeze it.
+    pub fn set_pointer_lock(&self, surface: &wl_surface::WlSurface, locked: bool) -> bool {
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        if !locked {
+            if let Some(lock) = state.pointer_lock.take() {
+                lock.relative.destroy();
+                lock.locked.destroy();
+                state.restore_cursor_after_hide();
+            }
+            return false;
+        }
+        if state.pointer_lock.is_some() {
+            return true;
+        }
+        let (Some(constraints), Some(relative), Some(pointer)) = (
+            state.globals.pointer_constraints.clone(),
+            state.globals.relative_pointer_manager.clone(),
+            state.wl_pointer.clone(),
+        ) else {
+            return false;
+        };
+        let qh = state.globals.qh.clone();
+        state.pointer_lock = Some(PointerLock {
+            locked: constraints.lock_pointer(
+                surface,
+                &pointer,
+                None,
+                zwp_pointer_constraints_v1::Lifetime::Oneshot,
+                &qh,
+                (),
+            ),
+            relative: relative.get_relative_pointer(&pointer, &qh, ()),
+            delta: Point::default(),
+        });
+        state.hide_cursor_until_mouse_moves();
+        true
+    }
+
+    /// Relative motion since the previous call, while the pointer is locked.
+    pub fn take_pointer_delta(&self) -> Point<Pixels> {
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        state
+            .pointer_lock
+            .as_mut()
+            .map_or_else(Point::default, |lock| std::mem::take(&mut lock.delta))
+    }
+
     pub fn get_client(&self) -> Rc<RefCell<WaylandClientState>> {
         self.0
             .upgrade()
@@ -846,6 +918,7 @@ impl WaylandClient {
             wl_pointer: None,
             wl_keyboard: None,
             pinch_gesture: None,
+            pointer_lock: None,
             pinch_scale: 1.0,
             cursor_shape_device: None,
             data_device,
@@ -1379,6 +1452,32 @@ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextI
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_pointer_constraints_v1::ZwpPointerConstraintsV1);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1);
+// `locked` and `unlocked` need no answer: a lock the compositor ends (focus
+// moved away) is a oneshot, and the window releases it when it is done.
+delegate_noop!(WaylandClientStatePtr: ignore zwp_locked_pointer_v1::ZwpLockedPointerV1);
+
+impl Dispatch<zwp_relative_pointer_v1::ZwpRelativePointerV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _: &zwp_relative_pointer_v1::ZwpRelativePointerV1,
+        event: zwp_relative_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let zwp_relative_pointer_v1::Event::RelativeMotion { dx, dy, .. } = event else {
+            return;
+        };
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+        if let Some(lock) = state.pointer_lock.as_mut() {
+            lock.delta.x += px(dx as f32);
+            lock.delta.y += px(dy as f32);
+        }
+    }
+}
 
 impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
     fn event(

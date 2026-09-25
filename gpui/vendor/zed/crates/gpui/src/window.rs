@@ -1180,6 +1180,7 @@ pub struct Window {
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
     pub(crate) input_rate_tracker: Rc<RefCell<InputRateTracker>>,
+    input_load: InputLoad,
     #[cfg(feature = "profiler")]
     window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
@@ -1209,6 +1210,23 @@ pub struct Window {
 struct ModifierState {
     modifiers: Modifiers,
     saw_other_input: bool,
+}
+
+/// What input dispatch cost the thread since the last [`Window::take_input_load`].
+///
+/// Always on and cheap (two clock reads per event), so an app can put it in a
+/// frame trace: a pointer at 1000 Hz dispatches many events per frame, and
+/// their cost is otherwise invisible time between frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InputLoad {
+    /// Events dispatched.
+    pub events: u32,
+    /// Of those, mouse moves.
+    pub mouse_moves: u32,
+    /// Wall time spent dispatching them.
+    pub busy: Duration,
+    /// The longest single dispatch.
+    pub longest: Duration,
 }
 
 /// Tracks input event timestamps to determine if input is arriving at a high rate.
@@ -1866,6 +1884,7 @@ impl Window {
             hovered,
             needs_present,
             input_rate_tracker,
+            input_load: InputLoad::default(),
             #[cfg(feature = "profiler")]
             window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
             last_input_modality: InputModality::Mouse,
@@ -5176,6 +5195,38 @@ impl Window {
     /// Dispatch a mouse or keyboard event on the window.
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
+        let started = Instant::now();
+        let mouse_move = matches!(event, PlatformInput::MouseMove(_));
+        let result = self.dispatch_event_inner(event, cx);
+        let spent = started.elapsed();
+        let load = &mut self.input_load;
+        load.events += 1;
+        load.mouse_moves += u32::from(mouse_move);
+        load.busy += spent;
+        load.longest = load.longest.max(spent);
+        result
+    }
+
+    /// Lock the pointer in place and hide it, as a game or an editor's fly
+    /// camera does, or release it where it was locked. Whether it is now
+    /// locked: `false` where the platform cannot lock one. Read the motion
+    /// with [`Window::take_pointer_delta`]; a locked pointer sends no moves.
+    pub fn set_pointer_lock(&self, locked: bool) -> bool {
+        self.platform_window.set_pointer_lock(locked)
+    }
+
+    /// Relative pointer motion since the previous call, while the pointer is
+    /// locked. Zero otherwise.
+    pub fn take_pointer_delta(&self) -> Point<Pixels> {
+        self.platform_window.take_pointer_delta()
+    }
+
+    /// The input dispatch cost since the previous call, and reset it.
+    pub fn take_input_load(&mut self) -> InputLoad {
+        std::mem::take(&mut self.input_load)
+    }
+
+    fn dispatch_event_inner(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_input(event.kind_name());
         let update_count_before = self.invalidator.update_count();

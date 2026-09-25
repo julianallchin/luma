@@ -1432,6 +1432,18 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().bounds
     }
 
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        let state = self.borrow();
+        let (client, surface) = (state.client.clone(), state.surface.clone());
+        drop(state);
+        client.set_pointer_lock(&surface, locked)
+    }
+
+    fn take_pointer_delta(&self) -> Point<Pixels> {
+        let client = self.borrow().client.clone();
+        client.take_pointer_delta()
+    }
+
     fn is_maximized(&self) -> bool {
         self.borrow().maximized
     }
