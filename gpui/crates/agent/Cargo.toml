@@ -20,6 +20,7 @@ app = [
     "dep:tokio",
     "dep:base64",
     "dep:sha2",
+    "dep:async-trait",
 ]
 # Real text metrics and a real GPU renderer behind the same test platform, so
 # frames can be read back as images. Off by default: it links the platform
@@ -60,6 +61,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "time"], optional = true
 # base64url JWT claims; minting one the production way needs Supabase.
 base64 = { version = "0.21", optional = true }
 sha2 = { version = "0.10", optional = true }
+# A fixture's scripted agent tools implement the backend's async `Tool` trait.
+async-trait = { version = "0.1", optional = true }
 
 [[bin]]
 name = "gpui-agent-mcp"
@@ -79,4 +82,3 @@ luma-chat = { path = "../chat" }
 # it needs the same camera and the same gizmo scale the renderer uses.
 luma-scene = { path = "../scene" }
 glam = "0.30"
-async-trait = "0.1"

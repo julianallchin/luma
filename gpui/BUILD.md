@@ -176,7 +176,9 @@ changes.
 
 A file calls `fixture({...})` once, with the options of
 `gpui_agent::fixture::Fixture` (`track: false`, `seconds`, `clips`, `rig`,
-`extra_scores`, …), then `test(name, fn)` for each test. `expect`, `assert`,
+`extra_scores`, `model`, `tools`, …), then `test(name, fn)` for each test.
+`model` replays the agent's turns (see `src/fixture/agent.rs`; example:
+`tests/js/headless/chat.test.js`). `expect`, `assert`,
 `nav`, `until` and the `app` API are available. `src/api.d.ts` declares `app`
 and `image`. `src/runner.js` declares the rest.
 
