@@ -49,6 +49,7 @@ pub mod metrics;
 pub mod overlay;
 mod pass_profile;
 mod post;
+mod probes;
 mod psf;
 pub mod scene_desc;
 mod shadow;

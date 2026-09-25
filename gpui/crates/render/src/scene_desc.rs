@@ -95,19 +95,6 @@ pub struct Editor {
     /// What the builder is about to do, drawn over the room it would change.
     /// Empty on every screen that is not the stage page.
     pub build: Build,
-    /// Where the score wants heads the preview's motors have not reached yet,
-    /// each drawn as a faint line along its beam.
-    pub aim_targets: Vec<AimTarget>,
-}
-
-/// A head's pan and tilt as the score sends them, while the previewed head
-/// is still turning toward them.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AimTarget {
-    /// The primitive key, `"<fixtureId>:<head>"`.
-    pub head: String,
-    /// `[pan, tilt]` in degrees, as [`PrimitiveState::position`].
-    pub position: [f32; 2],
 }
 
 /// The builder's uncommitted intent: the piece under the cursor, the run being
@@ -273,6 +260,10 @@ pub struct RenderSettings {
     pub geometry_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
+    /// The local reflection probes: a view choice for this session, never
+    /// saved. Defaults from `LUMA_PROBES` and `LUMA_PROBE_DEBUG`.
+    #[serde(skip)]
+    pub probes: ProbeView,
     /// Vertical field of view, degrees.
     pub fov: f32,
     /// How much work the renderer may spend per frame. A device choice, not
@@ -285,6 +276,37 @@ pub struct RenderSettings {
     /// orthographic shadow projection of those captures stays byte-exact.
     #[serde(skip)]
     pub(crate) golden_shadow_eye: Option<[f32; 3]>,
+}
+
+/// The local reflection probes (`probes.rs`), as the view shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProbeView {
+    /// Light surfaces from the probes over the stage, not the sky probe
+    /// alone.
+    pub enabled: bool,
+    /// Draw each probe as a small ball showing its cube.
+    pub debug: bool,
+}
+
+impl ProbeView {
+    /// On, balls off: the constant constructors' view, which no start-up
+    /// variable changes.
+    pub const PLAIN: Self = Self {
+        enabled: true,
+        debug: false,
+    };
+}
+
+impl Default for ProbeView {
+    /// On, balls off, unless `LUMA_PROBES=0` or `LUMA_PROBE_DEBUG=1` say
+    /// otherwise at start-up.
+    fn default() -> Self {
+        static DEFAULT: std::sync::OnceLock<ProbeView> = std::sync::OnceLock::new();
+        *DEFAULT.get_or_init(|| Self {
+            enabled: std::env::var_os("LUMA_PROBES").is_none_or(|value| value != "0"),
+            debug: std::env::var_os("LUMA_PROBE_DEBUG").is_some_and(|value| value == "1"),
+        })
+    }
 }
 
 /// The renderer's cost level.
@@ -1429,6 +1451,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
+            probes: ProbeView::PLAIN,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -1465,6 +1488,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
+            probes: ProbeView::PLAIN,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -1517,6 +1541,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
+            probes: ProbeView::default(),
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -1613,6 +1638,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
+                probes: ProbeView::default(),
                 fov: wire.fov,
                 quality: wire.quality,
                 golden_shadow_eye: None,

@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 pub(super) struct DockMotion {
     popup: Transition,
     tooltip: Transition,
-    pub(super) switches: [Transition; 5],
+    pub(super) switches: [Transition; 7],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -90,7 +90,7 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .child(float::label("View settings"))
         .child(super::view_controls(state, app))
         .child(float::divider())
-        .child(section("Debug", export_camera(app)));
+        .child(section("Debug", debug_rows(state, app)));
     if let Some(error) = &state.view_setting_error {
         content = content.child(float::error_row(error.clone()));
     }
@@ -223,6 +223,42 @@ pub(crate) fn environment_panel(state: &Visualizer, app: &Entity<Luma>) -> AnyEl
         )
         .child(rows)
         .agent_node(Role::Card, "Venue environment")
+        .into_any_element()
+}
+
+/// The Debug section: the reflection probes, their debug balls, and the
+/// camera export.
+fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
+    let probes = state.render_controls.probes;
+    // What the renderer is handed, read back from the settings it is sent.
+    let sent = state.render_settings().probes;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(super::view_toggle(
+            state,
+            app,
+            "Reflection probes",
+            probes.enabled,
+            ViewToggle::ReflectionProbes,
+        ))
+        .child(super::view_toggle(
+            state,
+            app,
+            "Show probes",
+            probes.debug,
+            ViewToggle::ShowProbes,
+        ))
+        .child(div().size_0().agent_node(
+            Role::Text,
+            format!(
+                "Renderer probes = {}, balls {}",
+                if sent.enabled { "on" } else { "off" },
+                if sent.debug { "on" } else { "off" }
+            ),
+        ))
+        .child(export_camera(app))
         .into_any_element()
 }
 
@@ -506,7 +542,8 @@ impl Luma {
             ViewToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
             ViewToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
             ViewToggle::AutoExposure => self.save_look(cx),
-            ViewToggle::FixtureShadows => {}
+            // Session dials: they outlive nothing.
+            ViewToggle::FixtureShadows | ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
         }
         cx.notify();
     }
