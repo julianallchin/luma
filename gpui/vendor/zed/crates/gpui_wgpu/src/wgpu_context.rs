@@ -141,6 +141,38 @@ impl WgpuContext {
         })
     }
 
+    /// LUMA LOCAL EDIT: a context with no surface and no display, for
+    /// `WgpuHeadlessRenderer`. It takes the adapter wgpu ranks first for
+    /// high performance; there is no surface to test it against.
+    #[cfg(all(not(target_family = "wasm"), feature = "test-support"))]
+    pub fn new_headless() -> anyhow::Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
+        });
+        let adapter = gpui::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .context("no GPU adapter for headless rendering")?;
+        let (device, queue, dual_source_blending, color_texture_format) =
+            gpui::block_on(Self::create_device(&adapter))?;
+        let backend = WgpuBackend::Native(adapter.get_info().backend);
+        Ok(Self {
+            instance,
+            adapter,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+            backend,
+            dual_source_blending,
+            color_texture_format,
+            device_lost: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
     #[cfg(target_family = "wasm")]
     pub async fn new_web(
         canvas: &web_sys::HtmlCanvasElement,

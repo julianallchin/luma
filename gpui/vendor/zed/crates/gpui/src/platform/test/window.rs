@@ -420,6 +420,13 @@ impl PlatformWindow for TestWindow {
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         None
     }
+
+    // LUMA LOCAL EDIT: a window drawn by a wgpu headless renderer shares its
+    // device, as a real window shares its compositor's.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn wgpu_device(&self) -> Option<crate::WgpuDevice> {
+        self.0.lock().renderer.as_ref()?.wgpu_device()
+    }
 }
 
 pub(crate) struct TestAtlasState {

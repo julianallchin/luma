@@ -26,6 +26,7 @@ license = "Apache-2.0"
 [features]
 default = []
 font-kit = ["dep:font-kit"]
+test-support = ["gpui/test-support"]
 
 [lib]
 name = "gpui_wgpu"

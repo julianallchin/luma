@@ -15,9 +15,9 @@
 //! linking the platform crate and creating a GPU device, and a `cargo test`
 //! that quietly did that would not be a headless test any more.
 //!
-//! Only macOS has a headless renderer at the pinned rev; elsewhere
-//! `current_headless_renderer` returns `None` and `app.screenshot()` reports
-//! that there is no renderer rather than pretending.
+//! macOS draws with Metal; Linux with `gpui_wgpu`, offscreen, on a GPU but no
+//! display server. Elsewhere `current_headless_renderer` returns `None` and
+//! `app.screenshot()` reports that there is no renderer rather than pretending.
 
 use std::sync::{Arc, OnceLock};
 

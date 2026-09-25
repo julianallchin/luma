@@ -1052,6 +1052,13 @@ pub trait PlatformHeadlessRenderer {
     fn scratch_diagnostics(&self) -> Option<RendererScratchDiagnostics> {
         None
     }
+
+    /// See [`crate::Window::wgpu_device`].
+    // LUMA LOCAL EDIT: not upstream.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn wgpu_device(&self) -> Option<crate::WgpuDevice> {
+        None
+    }
 }
 
 /// Type alias for runnables with metadata.

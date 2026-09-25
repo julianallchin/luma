@@ -36,6 +36,7 @@ screen-capture = [
 test-support = [
     "gpui/test-support",
     "gpui_macos/test-support",
+    "gpui_linux/test-support",
 ]
 wayland = ["gpui_linux/wayland"]
 x11 = ["gpui_linux/x11"]

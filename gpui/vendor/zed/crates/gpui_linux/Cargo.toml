@@ -32,7 +32,10 @@ screen-capture = [
     "gpui/screen-capture",
     "scap",
 ]
-test-support = ["gpui/test-support"]
+test-support = [
+    "gpui/test-support",
+    "gpui_wgpu?/test-support",
+]
 wayland = [
     "bitflags",
     "gpui_wgpu",
