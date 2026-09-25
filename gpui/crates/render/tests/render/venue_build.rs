@@ -200,6 +200,39 @@ fn a_portal_closes_where_it_was_asked_to() {
     close(extent.size[2], 8.0 + 2.0 * 0.17, "portal height");
 }
 
+/// A corner on top of a standing leg turns the chain flat, whichever level way
+/// the next piece names. The block offers all six plates, so the free end it
+/// hands on has to be its other way, not the plate straight up the leg.
+#[test]
+fn a_corner_turns_a_vertical_run_horizontal() {
+    for way in [
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+    ] {
+        let mut room = Room::new();
+        let (_, tip) = room.expect(truss(4.0, [0.0, 0.0, 1.0]));
+        let (_, tip) = room.expect(Request {
+            piece: "corner".into(),
+            from: tip,
+            ..Request::default()
+        });
+        let (beam, tip) = room.expect(Request {
+            from: tip,
+            ..truss(4.0, way)
+        });
+        let print = room.scene().footprint(&beam).expect("the beam is placed");
+        let run = print.size[0].max(print.size[1]);
+        assert!(run > 3.9 && print.size[2] < 0.5, "{way:?}: beam {print:?}");
+        let end = tip.expect("the beam has a far end").direction;
+        assert!(
+            DVec3::from(end).dot(DVec3::from(way)) > 0.99,
+            "{way:?}: the chain leaves toward {end:?}"
+        );
+    }
+}
+
 /// `on=` reframes `at=` into the host's own plane, and the query side answers
 /// absolutely — the two readings agree on the floor, which is where almost
 /// every placement happens, and differ exactly where a caller means them to.
