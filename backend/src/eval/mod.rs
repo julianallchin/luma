@@ -10,11 +10,8 @@ use crate::models::universe::UniverseState;
 pub use scene::{CompiledAnnotation, Scene, Scope};
 use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Clone, Debug, Default)]
-pub struct ResidentAudio {
-    pub samples: std::sync::Arc<Vec<f32>>,
-    pub sample_rate: u32,
-}
+/// A track's mono audio at [`crate::audio::SAMPLE_RATE`], shared.
+pub type ResidentAudio = Arc<Vec<f32>>;
 
 /// Capabilities authored by a graph. Unwritten channels preserve lower layers.
 #[derive(Clone, Debug, Default)]

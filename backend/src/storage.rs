@@ -71,7 +71,7 @@ impl StorageRoot {
     // -- PCM caches -----------------------------------------------------------
 
     /// `<root>/tracks/cache/<hash>.pcm` — the full stereo-interleaved decode at
-    /// [`crate::services::tracks::TARGET_SAMPLE_RATE`].
+    /// [`crate::audio::SAMPLE_RATE`].
     ///
     /// Note this is also what [`crate::audio::cache`] derives file-relatively
     /// from a track under `tracks/` — see that module's `cache_dir_for_track`.
@@ -81,8 +81,9 @@ impl StorageRoot {
             .join(format!("{track_hash}.pcm"))
     }
 
-    /// `<root>/tracks/cache/<hash>_eval_mono.pcm` — mono-at-analysis-rate audio
-    /// for the eval engine (skips decode + downmix on subsequent sessions).
+    /// `<root>/tracks/cache/<hash>_eval_mono.pcm` — mono audio at
+    /// [`crate::audio::SAMPLE_RATE`] for the eval engine (skips decode + downmix
+    /// on subsequent sessions).
     pub fn eval_mono_pcm_path(&self, track_hash: &str) -> PathBuf {
         self.tracks_dir()
             .join("cache")
