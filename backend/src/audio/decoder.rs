@@ -8,14 +8,15 @@ use symphonia::core::{
 };
 use symphonia::default::{get_codecs, get_probe};
 
-use super::resample::resample_stereo_to_target;
+/// The one sample rate of decoded audio. Every decode, every `.pcm` cache and
+/// every analysis consumer is at this rate; playback converts to the device's
+/// rate in its output stream and nowhere else.
+pub const SAMPLE_RATE: u32 = 48_000;
 
-/// Decoded audio data with channel information
+/// Decoded audio data with channel information, at [`SAMPLE_RATE`].
 pub struct DecodedAudio {
     /// Interleaved stereo samples [L0, R0, L1, R1, ...]
     pub samples: Vec<f32>,
-    /// Sample rate in Hz
-    pub sample_rate: u32,
     /// Number of channels (always 2 for stereo output)
     pub channels: u16,
 }
@@ -36,14 +37,11 @@ pub fn stereo_to_mono(stereo_samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// Decode audio file to stereo interleaved samples at 48kHz.
+/// Decode audio file to stereo interleaved samples at [`SAMPLE_RATE`].
 /// All audio is output as stereo - mono sources are duplicated to both channels.
-pub fn decode_track_samples(
-    path: &Path,
-    max_frames: Option<usize>,
-) -> Result<DecodedAudio, String> {
+pub fn decode_track_samples(path: &Path) -> Result<DecodedAudio, String> {
     // Try ffmpeg first (Hybrid Approach)
-    if let Ok(audio) = decode_ffmpeg(path, max_frames) {
+    if let Ok(audio) = decode_ffmpeg(path) {
         return Ok(audio);
     }
 
@@ -75,9 +73,8 @@ pub fn decode_track_samples(
 
     // Output is always stereo interleaved
     let mut samples = Vec::new();
-    let mut frame_count = 0usize;
 
-    'outer: loop {
+    loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
             Err(symphonia::core::errors::Error::IoError(err))
@@ -120,13 +117,6 @@ pub fn decode_track_samples(
 
                     samples.push(left);
                     samples.push(right);
-                    frame_count += 1;
-
-                    if let Some(limit) = max_frames {
-                        if frame_count >= limit {
-                            break 'outer;
-                        }
-                    }
                 }
             }
             Err(err) => {
@@ -139,36 +129,13 @@ pub fn decode_track_samples(
         return Err("Audio file produced no samples".into());
     }
 
-    // Resample to 48kHz if needed (stereo-aware)
-    let (final_samples, final_rate) = if sample_rate != 48000 {
-        (
-            resample_stereo_to_target(&samples, sample_rate, 48000),
-            48000,
-        )
-    } else {
-        (samples, sample_rate)
-    };
-
-    // Truncate to max_frames if specified (in stereo samples = frames * 2)
-    let final_samples = if let Some(limit) = max_frames {
-        let max_samples = limit * 2;
-        if final_samples.len() > max_samples {
-            final_samples[..max_samples].to_vec()
-        } else {
-            final_samples
-        }
-    } else {
-        final_samples
-    };
-
     Ok(DecodedAudio {
-        samples: final_samples,
-        sample_rate: final_rate,
+        samples: resample(samples, sample_rate),
         channels: 2,
     })
 }
 
-fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio, String> {
+fn decode_ffmpeg(path: &Path) -> Result<DecodedAudio, String> {
     let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
     let mut cmd = Command::new(&ffmpeg);
     crate::cmd_util::no_window(&mut cmd);
@@ -183,7 +150,7 @@ fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio,
             "-acodec",
             "pcm_f32le",
             "-ar",
-            "48000", // Force 48k
+            SAMPLE_RATE.to_string().as_str(),
             "pipe:1",
         ])
         .output()
@@ -197,7 +164,7 @@ fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio,
     }
 
     let data = output.stdout;
-    let mut samples: Vec<f32> = data
+    let samples: Vec<f32> = data
         .chunks_exact(4)
         .map(|chunk| {
             let arr: [u8; 4] = chunk.try_into().unwrap();
@@ -205,17 +172,53 @@ fn decode_ffmpeg(path: &Path, max_frames: Option<usize>) -> Result<DecodedAudio,
         })
         .collect();
 
-    // Truncate to max_frames if specified (stereo = 2 samples per frame)
-    if let Some(limit) = max_frames {
-        let max_samples = limit * 2;
-        if samples.len() > max_samples {
-            samples.truncate(max_samples);
+    Ok(DecodedAudio {
+        samples,
+        channels: 2,
+    })
+}
+
+/// Resample stereo interleaved audio [L0, R0, L1, R1, ...] from `src_rate` to
+/// [`SAMPLE_RATE`] using linear interpolation, each channel independently.
+fn resample(samples: Vec<f32>, src_rate: u32) -> Vec<f32> {
+    if src_rate == 0 || src_rate == SAMPLE_RATE {
+        return samples;
+    }
+
+    // Number of stereo frames
+    let src_frames = samples.len() / 2;
+    if src_frames == 0 {
+        return Vec::new();
+    }
+
+    let ratio = SAMPLE_RATE as f64 / src_rate as f64;
+    let new_frames = ((src_frames as f64) * ratio).ceil() as usize;
+    let mut output = Vec::with_capacity(new_frames * 2);
+
+    for i in 0..new_frames {
+        let src_pos = (i as f64) / ratio;
+        let lower_frame = src_pos.floor() as usize;
+        let frac = (src_pos - lower_frame as f64) as f32;
+
+        if lower_frame >= src_frames - 1 {
+            // At or past the end - use last frame
+            let last_idx = (src_frames - 1) * 2;
+            output.push(samples[last_idx]); // L
+            output.push(samples[last_idx + 1]); // R
+        } else {
+            // Linear interpolation for each channel independently
+            let lower_idx = lower_frame * 2;
+            let upper_idx = (lower_frame + 1) * 2;
+
+            // Left channel
+            let left = samples[lower_idx] * (1.0 - frac) + samples[upper_idx] * frac;
+            // Right channel
+            let right = samples[lower_idx + 1] * (1.0 - frac) + samples[upper_idx + 1] * frac;
+
+            output.push(left);
+            output.push(right);
         }
     }
 
-    Ok(DecodedAudio {
-        samples,
-        sample_rate: 48000,
-        channels: 2,
-    })
+    output
 }

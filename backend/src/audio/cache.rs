@@ -5,8 +5,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-use super::decoder::DecodedAudio;
-use super::resample::resample_stereo_to_target;
+use super::decoder::{decode_track_samples, DecodedAudio, SAMPLE_RATE};
 
 /// Cache file format version - increment when format changes.
 /// Every writer emits this; [`read_pcm_file`] accepts 1 or 2 (both describe the
@@ -30,22 +29,6 @@ pub struct PcmData {
     /// inspect it. [`write_pcm_file`] ignores it and always writes
     /// [`CACHE_VERSION`], so a read→write round trip upgrades in place.
     pub version: u32,
-}
-
-impl From<PcmData> for DecodedAudio {
-    fn from(p: PcmData) -> Self {
-        let PcmData {
-            samples,
-            sample_rate,
-            channels,
-            ..
-        } = p;
-        Self {
-            samples,
-            sample_rate,
-            channels,
-        }
-    }
 }
 
 /// Read a `.pcm` cache file. The one reader for this format — the eval engine,
@@ -130,9 +113,9 @@ pub fn write_pcm_file(
         .map_err(|e| format!("Failed to flush pcm {}: {e}", path.display()))
 }
 
-/// Process-wide RAM cache of fully-decoded tracks, keyed by `"{hash}@{rate}"`, so
-/// a track's expensive decode/disk-read happens **once** and every later consumer
-/// (playback *and* analysis — they hit the same `(hash, rate)`) reuses it. Without
+/// Process-wide RAM cache of fully-decoded tracks, keyed by hash, so a track's
+/// expensive decode/disk-read happens **once** and every later consumer
+/// (playback *and* analysis) reuses it. Without
 /// this, opening a track for playback and then compositing it decodes the same
 /// audio twice. Bounded LRU; entries are `Arc` so a hit is an O(1) clone.
 #[derive(Default)]
@@ -180,11 +163,9 @@ const DECODE_RAM_CACHE_MAX: usize = 3;
 pub fn load_or_decode_audio_shared(
     track_path: &Path,
     track_hash: &str,
-    target_rate: u32,
 ) -> Result<Arc<DecodedAudio>, String> {
-    let key = format!("{track_hash}@{target_rate}");
-    load_or_decode_audio_shared_by_key(key, || {
-        load_or_decode_audio(track_path, track_hash, target_rate)
+    load_or_decode_audio_shared_by_key(track_hash.to_owned(), || {
+        load_or_decode_audio(track_path, track_hash)
     })
 }
 
@@ -257,83 +238,36 @@ fn cache_dir_for_track(track_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_dir)
 }
 
-/// Load audio from cache or decode from file.
-/// Returns stereo interleaved samples at the target sample rate.
-pub fn load_or_decode_audio(
-    track_path: &Path,
-    track_hash: &str,
-    target_rate: u32,
-) -> Result<DecodedAudio, String> {
-    use super::decoder::decode_track_samples;
-
-    if let Ok(cache_dir) = cache_dir_for_track(track_path) {
-        let cache_file = cache_dir.join(format!("{}.pcm", track_hash));
-        if cache_file.exists() {
-            // `read_pcm_file` accepts v1 for the eval engine's mono caches, but
-            // the *stereo decode* cache treats v1 as stale: a v1 file at this
-            // path is the old mono format and must be re-decoded, not
-            // reinterpreted as interleaved stereo.
-            match read_pcm_file(&cache_file).and_then(|p| {
-                if p.version == CACHE_VERSION {
-                    Ok(DecodedAudio::from(p))
-                } else {
-                    Err(format!("stale decode cache (version {})", p.version))
-                }
-            }) {
-                Ok(cached) => {
-                    if cached.sample_rate == target_rate || target_rate == 0 {
-                        return Ok(cached);
-                    }
-                    // Resample cached audio (stereo-aware)
-                    let resampled =
-                        resample_stereo_to_target(&cached.samples, cached.sample_rate, target_rate);
-                    return Ok(DecodedAudio {
-                        samples: resampled,
-                        sample_rate: target_rate,
-                        channels: cached.channels,
-                    });
-                }
-                Err(_) => {
-                    // Cache is stale or corrupt - delete it
-                    let _ = std::fs::remove_file(&cache_file);
-                }
-            }
+/// Load audio from cache or decode from file, as stereo at [`SAMPLE_RATE`].
+///
+/// The cache is `<dir of the audio file>/cache/<hash>.pcm`. Only a current-format
+/// stereo file at [`SAMPLE_RATE`] is a hit; anything else — an older version
+/// (v1 at this path is the old mono format), another rate, a corrupt file — is
+/// re-decoded and overwritten.
+pub fn load_or_decode_audio(track_path: &Path, track_hash: &str) -> Result<DecodedAudio, String> {
+    let Ok(cache_dir) = cache_dir_for_track(track_path) else {
+        return decode_track_samples(track_path);
+    };
+    let cache_file = cache_dir.join(format!("{track_hash}.pcm"));
+    if let Ok(cached) = read_pcm_file(&cache_file) {
+        if (cached.version, cached.sample_rate, cached.channels) == (CACHE_VERSION, SAMPLE_RATE, 2)
+        {
+            return Ok(DecodedAudio {
+                samples: cached.samples,
+                channels: cached.channels,
+            });
         }
-
-        // Decode fresh
-        let decoded = decode_track_samples(track_path, None)?;
-
-        // Optionally resample if needed
-        let final_audio = if target_rate > 0 && decoded.sample_rate != target_rate {
-            let resampled =
-                resample_stereo_to_target(&decoded.samples, decoded.sample_rate, target_rate);
-            DecodedAudio {
-                samples: resampled,
-                sample_rate: target_rate,
-                channels: decoded.channels,
-            }
-        } else {
-            decoded
-        };
-
-        // Cache the result
-        if let Err(err) = write_pcm_file(
-            &cache_file,
-            &final_audio.samples,
-            final_audio.sample_rate,
-            final_audio.channels,
-        ) {
-            eprintln!(
-                "[audio-cache] failed to write cache {}: {}",
-                cache_file.display(),
-                err
-            );
-        }
-
-        return Ok(final_audio);
     }
 
-    decode_track_samples(track_path, None)
+    let decoded = decode_track_samples(track_path)?;
+    if let Err(err) = write_pcm_file(&cache_file, &decoded.samples, SAMPLE_RATE, decoded.channels) {
+        eprintln!(
+            "[audio-cache] failed to write cache {}: {}",
+            cache_file.display(),
+            err
+        );
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -356,7 +290,6 @@ mod tests {
     fn decoded(sample: f32) -> DecodedAudio {
         DecodedAudio {
             samples: vec![sample, sample],
-            sample_rate: 48_000,
             channels: 2,
         }
     }
@@ -445,6 +378,48 @@ mod tests {
         let err = read_pcm_file(&path).unwrap_err();
         assert!(err.contains("Failed to read pcm samples"), "{err}");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// One second of 8 kHz mono 16-bit silence.
+    fn write_wav(path: &Path) {
+        let data_len = 8_000_u32 * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&8_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&16_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize((44 + data_len) as usize, 0);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// A cache left at another rate (playback used to write the device's) is a
+    /// miss: the track is re-decoded and the file rewritten at [`SAMPLE_RATE`].
+    #[test]
+    fn an_off_rate_cache_is_redecoded_and_rewritten_at_the_one_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let track = dir.path().join("track.wav");
+        write_wav(&track);
+        let cache = dir.path().join("cache").join("hash.pcm");
+        write_pcm_file(&cache, &[0.5; 8], 44_100, 2).unwrap();
+
+        let audio = load_or_decode_audio(&track, "hash").unwrap();
+        let frames = audio.samples.len() / 2;
+        assert!(frames.abs_diff(SAMPLE_RATE as usize) < 100, "{frames}");
+
+        let rewritten = read_pcm_file(&cache).unwrap();
+        assert_eq!(
+            (rewritten.version, rewritten.sample_rate, rewritten.channels),
+            (CACHE_VERSION, SAMPLE_RATE, 2)
+        );
+        assert_eq!(rewritten.samples, audio.samples);
     }
 
     #[test]

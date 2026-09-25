@@ -3,9 +3,8 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct StemCache {
-    // Key: (track_id, stem_name)
-    // Value: (samples, sample_rate)
-    cache: Arc<Mutex<HashMap<(String, String), (Arc<Vec<f32>>, u32)>>>,
+    // Key: (track_id, stem_name); value: mono samples at `audio::SAMPLE_RATE`.
+    cache: Arc<Mutex<HashMap<(String, String), Arc<Vec<f32>>>>>,
     /// Per-key loading locks to prevent thundering herd when multiple tasks
     /// try to load the same stem concurrently.
     loading: Arc<Mutex<HashMap<(String, String), Arc<tokio::sync::Mutex<()>>>>>,
@@ -25,22 +24,16 @@ impl StemCache {
         Self::default()
     }
 
-    pub fn get(&self, track_id: &str, stem_name: &str) -> Option<(Arc<Vec<f32>>, u32)> {
+    pub fn get(&self, track_id: &str, stem_name: &str) -> Option<Arc<Vec<f32>>> {
         let cache = self.cache.lock().unwrap();
         cache
             .get(&(track_id.to_string(), stem_name.to_string()))
             .cloned()
     }
 
-    pub fn insert(
-        &self,
-        track_id: &str,
-        stem_name: String,
-        samples: Arc<Vec<f32>>,
-        sample_rate: u32,
-    ) {
+    pub fn insert(&self, track_id: &str, stem_name: String, samples: Arc<Vec<f32>>) {
         let mut cache = self.cache.lock().unwrap();
-        cache.insert((track_id.to_string(), stem_name), (samples, sample_rate));
+        cache.insert((track_id.to_string(), stem_name), samples);
     }
 
     pub fn remove_track(&self, track_id: &str) {

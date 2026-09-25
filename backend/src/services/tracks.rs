@@ -27,8 +27,6 @@ use crate::node_graph::BeatGrid;
 use crate::preprocessing::{registry, scheduler, AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
 
-pub const TARGET_SAMPLE_RATE: u32 = 48_000;
-
 /// Maximum track duration allowed for import (10 minutes).
 const MAX_TRACK_DURATION_SECS: f64 = 600.0;
 

@@ -16,7 +16,6 @@ use crate::audio::{load_or_decode_audio, stereo_to_mono};
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
-use crate::services::tracks::TARGET_SAMPLE_RATE;
 use crate::stem_worker;
 
 /// Stem names we must verify on disk. Mirrors the Demucs `htdemucs` outputs.
@@ -86,17 +85,13 @@ impl Preprocessor for StemsPreprocessor {
         for stem in &stem_files {
             ctx.checkpoint()?;
             let cache_tag = format!("{}_stem_{}", track.track_hash, stem.name);
-            if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag, TARGET_SAMPLE_RATE) {
-                if !audio.samples.is_empty() && audio.sample_rate > 0 {
+            if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag) {
+                if !audio.samples.is_empty() {
                     ctx.checkpoint()?;
                     let mono = stereo_to_mono(&audio.samples);
                     ctx.checkpoint()?;
-                    ctx.stem_cache().insert(
-                        track_id,
-                        stem.name.clone(),
-                        mono.into(),
-                        audio.sample_rate,
-                    );
+                    ctx.stem_cache()
+                        .insert(track_id, stem.name.clone(), mono.into());
                 }
             }
         }

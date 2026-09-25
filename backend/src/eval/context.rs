@@ -7,12 +7,13 @@
 //! Geometry mirrors the legacy mapping exactly via `fixtures::layout`
 //! (`head_geometry` + `fixture_kinematics::rig_position`).
 
-use crate::audio::{load_or_decode_audio_shared, read_pcm_file, stereo_to_mono, write_pcm_file};
+use crate::audio::{
+    load_or_decode_audio_shared, read_pcm_file, stereo_to_mono, write_pcm_file, SAMPLE_RATE,
+};
 use crate::eval::ResidentAudio;
 use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser::parse_definition;
 use crate::models::selection::Selection;
-use crate::services::tracks::TARGET_SAMPLE_RATE;
 use crate::storage::StorageRoot;
 use fixture_kinematics::{rig_position, FixtureGeometry};
 use once_cell::sync::Lazy;
@@ -160,8 +161,8 @@ pub(crate) async fn resolve_selection_primitives_with_access(
 }
 
 /// Decode a track's mono resident audio. Three tiers: process-wide in-memory
-/// cache (O(1) Arc clone) → on-disk mono PCM (fast read, skips decode/resample/
-/// downmix) → full decode (first time only, then written to disk).
+/// cache (O(1) Arc clone) → on-disk mono PCM (fast read, skips decode/downmix)
+/// → the shared stereo decode cache (then written to disk as mono).
 pub(crate) fn load_track_audio_cached(
     storage: &StorageRoot,
     file_path: &str,
@@ -174,20 +175,14 @@ pub(crate) fn load_track_audio_cached(
     }
     let mono_path = storage.eval_mono_pcm_path(track_hash);
 
-    // Disk tier: a small mono-at-analysis-rate file from a previous session.
-    let audio = match read_mono_pcm(&mono_path)
-        .or_else(|| read_mono_pcm(&storage.mix_pcm_path(track_hash)))
-    {
+    // Disk tier: a small mono file from a previous session.
+    let audio = match read_mono_pcm(&mono_path) {
         Some(audio) => audio,
         None => {
-            let decoded =
-                load_or_decode_audio_shared(Path::new(file_path), track_hash, TARGET_SAMPLE_RATE)
-                    .map_err(|error| format!("track audio unavailable at {file_path}: {error}"))?;
-            let audio = ResidentAudio {
-                samples: Arc::new(stereo_to_mono(&decoded.samples)),
-                sample_rate: decoded.sample_rate,
-            };
-            if let Err(e) = write_pcm_file(&mono_path, &audio.samples, audio.sample_rate, 1) {
+            let decoded = load_or_decode_audio_shared(Path::new(file_path), track_hash)
+                .map_err(|error| format!("track audio unavailable at {file_path}: {error}"))?;
+            let audio = Arc::new(stereo_to_mono(&decoded.samples));
+            if let Err(e) = write_pcm_file(&mono_path, &audio, SAMPLE_RATE, 1) {
                 log::warn!("[ctx] failed to write mono audio cache: {e}");
             }
             audio
@@ -206,9 +201,8 @@ pub(crate) fn load_track_audio_cached(
     Ok(audio)
 }
 
-/// Eval-side adapter over the shared PCM reader: the engine's `ResidentAudio` is
-/// always mono, so a stereo cache file is downmixed on the way in. A missing or
-/// unreadable file is a cache miss, not an error.
+/// Eval-side adapter over the shared PCM reader. A missing or unreadable file,
+/// or anything but mono at [`SAMPLE_RATE`], is a cache miss, not an error.
 fn read_mono_pcm(path: &Path) -> Option<ResidentAudio> {
     if !path.exists() {
         return None;
@@ -220,15 +214,7 @@ fn read_mono_pcm(path: &Path) -> Option<ResidentAudio> {
             return None;
         }
     };
-    let mono = if pcm.channels >= 2 {
-        stereo_to_mono(&pcm.samples)
-    } else {
-        pcm.samples
-    };
-    Some(ResidentAudio {
-        samples: Arc::new(mono),
-        sample_rate: pcm.sample_rate,
-    })
+    ((pcm.sample_rate, pcm.channels) == (SAMPLE_RATE, 1)).then(|| Arc::new(pcm.samples))
 }
 
 #[cfg(test)]
