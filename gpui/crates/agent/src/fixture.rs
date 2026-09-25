@@ -65,7 +65,8 @@ pub fn seeded_prompt(index: usize) -> String {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
-    /// The clip's id in the score. Every clip plays the Wash preset.
+    /// The clip's id in the score. A clip plays the Wash preset unless it
+    /// names another.
     pub pattern: String,
     /// What the test calls the clip. The editor labels a clip by its form.
     pub name: String,
@@ -74,6 +75,12 @@ pub struct Clip {
     pub end: f64,
     #[serde(default, rename = "lane")]
     pub z_index: i64,
+    /// A shipped `[form, preset]` to play instead of Wash, e.g.
+    /// `["color.chase@1", "Chase"]`.
+    #[serde(default)]
+    pub preset: Option<(String, String)>,
+    #[serde(default)]
+    pub seed: u64,
 }
 
 impl Clip {
@@ -84,6 +91,8 @@ impl Clip {
             start,
             end,
             z_index: 0,
+            preset: None,
+            seed: 0,
         }
     }
 
@@ -138,6 +147,11 @@ pub struct Fixture {
     extra_scores: usize,
     seeded_threads: bool,
     graph_score: Option<Value>,
+    /// Statements run on the seeded library after its rows and before the
+    /// score: what no option models (a second venue, a clashing patch, an
+    /// output binding). Owned rows need `uid` = [`session::PRINCIPAL`] or
+    /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it.
+    sql: Vec<String>,
 }
 
 impl Default for Fixture {
@@ -165,6 +179,7 @@ impl Default for Fixture {
             extra_scores: 0,
             seeded_threads: false,
             graph_score: None,
+            sql: Vec::new(),
         }
     }
 }
@@ -532,6 +547,14 @@ impl Fixture {
         if self.rig > 0 {
             self.seed_rig(pool, config_dir).await;
         }
+        for statement in &self.sql {
+            sqlx::query(sqlx::AssertSqlSafe(
+                statement.replace("$PRINCIPAL", session::PRINCIPAL),
+            ))
+            .execute(pool)
+            .await
+            .unwrap_or_else(|error| panic!("fixture sql failed: {error}\n{statement}"));
+        }
 
         // Then the score, through the seam.
         session::signed_in(config_dir).await;
@@ -644,19 +667,25 @@ impl Fixture {
         }
     }
 
-    /// One Wash clip per entry, keyed by its pattern. Times are beats: the
+    /// One clip per entry, keyed by its pattern. Times are beats: the
     /// seeded grid is 120 bpm, so a beat is half a second.
     fn timeline(&self) -> Value {
-        let wash = luma_patterns::presets()
-            .preset("color.constant@1", "Wash")
-            .expect("a shipped preset");
         let mut clips = serde_json::Map::new();
         for clip in &self.clips {
-            let mut placed = wash.clip(
-                clip.start * BEATS_PER_SECOND,
-                (clip.end - clip.start) * BEATS_PER_SECOND,
-            );
-            placed.seed = 0;
+            let (form, preset) = clip
+                .preset
+                .as_ref()
+                .map_or(("color.constant@1", "Wash"), |(form, preset)| {
+                    (form.as_str(), preset.as_str())
+                });
+            let mut placed = luma_patterns::presets()
+                .preset(form, preset)
+                .unwrap_or_else(|| panic!("no shipped preset {form} / {preset}"))
+                .clip(
+                    clip.start * BEATS_PER_SECOND,
+                    (clip.end - clip.start) * BEATS_PER_SECOND,
+                );
+            placed.seed = clip.seed;
             placed.z_index = clip.z_index;
             clips.insert(
                 clip.pattern.clone(),
@@ -833,6 +862,77 @@ impl Fixture {
 #[must_use]
 pub fn config_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("luma-gpui-{name}-{}", std::process::id()))
+}
+
+/// What a test script may read back from its library: `{"op": "query",
+/// "sql": …}` gives rows as objects (a blob as its length), `{"op": "score"}`
+/// the score that holds clips as the document the editor saved. Read-only: a
+/// test writes through the app.
+pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
+    let request: Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let url = format!("sqlite:{}?mode=ro", dir.join("luma.db").display());
+    runtime.block_on(async {
+        let pool = SqlitePool::connect(&url)
+            .await
+            .map_err(|error| error.to_string())?;
+        let out = match request["op"].as_str() {
+            Some("query") => {
+                let sql = request["sql"].as_str().ok_or("query needs sql")?;
+                query_rows(&pool, sql).await
+            }
+            Some("score") => {
+                let mut connection = pool.acquire().await.map_err(|error| error.to_string())?;
+                let id: String = sqlx::query_scalar("SELECT score_id FROM clips LIMIT 1")
+                    .fetch_one(&mut *connection)
+                    .await
+                    .map_err(|error| format!("no score holds a clip: {error}"))?;
+                let score =
+                    luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                serde_json::to_value(score).map_err(|error| error.to_string())
+            }
+            other => Err(format!("unknown library op {other:?}")),
+        };
+        pool.close().await;
+        out.map(|value| value.to_string())
+    })
+}
+
+async fn query_rows(pool: &SqlitePool, sql: &str) -> Result<Value, String> {
+    use sqlx::{Column as _, Row as _, TypeInfo as _, ValueRef as _};
+    // A test's own statement against its own disposable library.
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        .fetch_all(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut object = serde_json::Map::new();
+        for (index, column) in row.columns().iter().enumerate() {
+            let raw = row.try_get_raw(index).map_err(|error| error.to_string())?;
+            let value = if raw.is_null() {
+                Value::Null
+            } else {
+                match raw.type_info().name() {
+                    "INTEGER" => json!(row.try_get::<i64, _>(index).map_err(|e| e.to_string())?),
+                    "REAL" => json!(row.try_get::<f64, _>(index).map_err(|e| e.to_string())?),
+                    "BLOB" => json!(row
+                        .try_get::<Vec<u8>, _>(index)
+                        .map_err(|e| e.to_string())?
+                        .len()),
+                    _ => json!(row.try_get::<String, _>(index).map_err(|e| e.to_string())?),
+                }
+            };
+            object.insert(column.name().to_string(), value);
+        }
+        out.push(Value::Object(object));
+    }
+    Ok(Value::Array(out))
 }
 
 /// A migrated, empty library to start every seed from.

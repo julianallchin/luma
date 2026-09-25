@@ -6,7 +6,8 @@
 //! every step re-derive its own world. `globalThis` is the scratchpad;
 //! [`Interpreter::reset`] is the only thing that clears it.
 //!
-//! Only three bindings cross into JavaScript: `__call`, `__log` and `__help`.
+//! Only three bindings cross into JavaScript: `__call`, `__log` and `__help`
+//! — plus any a host adds with [`Interpreter::bind`].
 //! The API a script actually sees is `prelude.js`, written in JavaScript,
 //! because a surface the model reads should be in the language the model
 //! writes.
@@ -58,7 +59,13 @@ pub struct Interpreter {
     /// 0 for "no deadline". Read by the interrupt handler, which QuickJS calls
     /// between bytecode operations — the only way to stop a `while (true)`.
     deadline: Arc<AtomicU64>,
+    /// Host functions added with [`Self::bind`], kept so a reset rebinds them.
+    bindings: Vec<(String, Binding)>,
 }
+
+/// A host function a script can call: one string in, one string out, and an
+/// `Err` thrown as a JavaScript error.
+pub type Binding = Rc<dyn Fn(String) -> Result<String, String>>;
 
 impl Interpreter {
     pub fn new(client: PumpClient) -> Result<Self, HarnessError> {
@@ -78,6 +85,7 @@ impl Interpreter {
             client,
             stdout: Rc::new(RefCell::new(Vec::new())),
             deadline,
+            bindings: Vec::new(),
         };
         interpreter.install()?;
         Ok(interpreter)
@@ -90,6 +98,32 @@ impl Interpreter {
         self.context = Context::full(&self.runtime).map_err(js_setup_error)?;
         self.stdout.borrow_mut().clear();
         self.install()
+    }
+
+    /// Make `function` a global named `name`, now and after every reset.
+    /// The runner uses this for what only the host can see, such as the
+    /// fixture library on disk.
+    pub fn bind(&mut self, name: &str, function: Binding) -> Result<(), HarnessError> {
+        self.bindings.push((name.to_string(), function));
+        self.install_bindings()
+    }
+
+    fn install_bindings(&mut self) -> Result<(), HarnessError> {
+        let bindings = self.bindings.clone();
+        self.context
+            .with(|ctx| -> rquickjs::Result<()> {
+                for (name, function) in bindings {
+                    ctx.globals().set(
+                        name.as_str(),
+                        Function::new(ctx.clone(), move |ctx: Ctx<'_>, arg: String| {
+                            function(arg)
+                                .map_err(|error| throw(&ctx, &HarnessError::BadCall(error)))
+                        })?,
+                    )?;
+                }
+                Ok(())
+            })
+            .map_err(js_setup_error)
     }
 
     /// Bind the three Rust functions and run the prelude over them.
@@ -129,7 +163,8 @@ impl Interpreter {
                 )?;
                 ctx.eval::<(), _>(PRELUDE)
             })
-            .map_err(js_setup_error)
+            .map_err(js_setup_error)?;
+        self.install_bindings()
     }
 
     /// Run one script. Never fails: a thrown exception is part of the result,

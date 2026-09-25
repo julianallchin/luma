@@ -365,6 +365,15 @@ fn one(job: Job, id: usize) -> Outcome {
         Err(error) => return fail(format!("the app did not open: {error}")),
     };
 
+    // `library.query(sql)` and `library.score()` in runner.js: what the app
+    // wrote, read from the disk it wrote to.
+    let dir = library.clone();
+    if let Err(error) = harness.bind("__library", move |request| {
+        gpui_agent::fixture::read_library(&dir, &request)
+    }) {
+        return fail(format!("could not bind the library reader: {error}"));
+    }
+
     let only = json!(job.test).to_string();
     let setup = harness.exec(
         &format!("globalThis.__only = {only};"),

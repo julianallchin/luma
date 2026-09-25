@@ -1,5 +1,8 @@
 // What a `.test.js` file is written against: `fixture`, `test`, `expect`,
-// `assert`. `luma-test` loads this twice per file.
+// `assert`, and `library` — reads of the test's own library on disk:
+// `library.query(sql)` returns rows as objects, `library.score()` the score
+// that holds clips as the document the editor saved. Read-only; a test
+// changes the library through the app. `luma-test` loads this twice per file.
 //
 // First with no app and `__only` unset: `test(...)` only records, so the
 // runner learns the file's fixture and test names — and a syntax error fails
@@ -106,6 +109,13 @@
   // -- what a failure report reads back --------------------------------------
 
   // Only in a harness: registration has no app to wrap.
+  if (typeof __library === "function") {
+    const read = (request) => JSON.parse(__library(JSON.stringify(request)));
+    globalThis.library = {
+      query: (sql) => read({ op: "query", sql }),
+      score: () => read({ op: "score" }),
+    };
+  }
   if (typeof app !== "undefined") {
     const snapshot = app.snapshot;
     app.snapshot = (options) => (globalThis.__lastFrame = snapshot(options));
