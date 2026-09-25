@@ -3,7 +3,7 @@
 //! The shipped presets, grouped by form, one row each: the name, and a
 //! strip of the preset (time across, heads down along the form's axis). The
 //! strip is the timeline's clip strip on this rig, rendered once per preset
-//! and target selection. Until that lands, or when there is no score to
+//! on every head. Until that lands, or when there is no score to
 //! render it against, the row shows the same strip on a stand-in rig, a
 //! straight line of heads that needs no venue or score.
 //!
@@ -42,9 +42,10 @@ const PREPARED: usize = 8;
 pub(crate) struct State {
     search: Option<Entity<TextInput>>,
     query: String,
-    /// Thumbnails by preset key (see [`key`]) and target selection
-    /// expression.
-    thumbs: HashMap<(String, String), Thumbnail>,
+    /// Thumbnails by preset key (see [`key`]), each on every head of the
+    /// rig — not the target selection, so a tile holds still as the
+    /// playhead moves.
+    thumbs: HashMap<String, Thumbnail>,
     /// A thumbnail is being rendered. One at a time.
     thumbing: bool,
     /// Every preset's strip on the stand-in rig, by key, once rendered.
@@ -211,20 +212,16 @@ impl Editor {
                 ),
                 core: None,
             },
-            strip: strip(
-                &self.sheet.browser,
-                preset,
-                &target_selection(self).expression,
-            ),
+            strip: strip(&self.sheet.browser, preset),
             insert: menu.insert,
         })
     }
 }
 
-/// A preset's strip: on the real rig when it has rendered for `selection`,
-/// else on the stand-in rig.
-fn strip(browser: &State, preset: &FormPreset, selection: &str) -> Option<Preview> {
-    match browser.thumbs.get(&(key(preset), selection.to_owned())) {
+/// A preset's strip: on the real rig once it has rendered, else on the
+/// stand-in rig.
+fn strip(browser: &State, preset: &FormPreset) -> Option<Preview> {
+    match browser.thumbs.get(&key(preset)) {
         Some(Thumbnail::Ready(preview)) => Some(preview.clone()),
         _ => browser
             .stand_ins
@@ -318,8 +315,7 @@ fn target(editor: &Editor) -> Target {
     }
 }
 
-/// Render the first shown tile that has no thumbnail yet for the current
-/// target selection.
+/// Render the first shown tile that has no thumbnail yet, on every head.
 fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
     if editor.sheet.browser.thumbing || editor.graph_score.is_none() || editor.beats.is_none() {
         return;
@@ -327,16 +323,15 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
         return;
     };
-    let selection = target_selection(editor);
+    let selection = luma_patterns::Selection::all();
     let browser = &editor.sheet.browser;
-    let Some(preset) = matching(&browser.query).into_iter().find(|preset| {
-        !browser
-            .thumbs
-            .contains_key(&(key(preset), selection.expression.clone()))
-    }) else {
+    let Some(preset) = matching(&browser.query)
+        .into_iter()
+        .find(|preset| !browser.thumbs.contains_key(&key(preset)))
+    else {
         return;
     };
-    let key = (key(preset), selection.expression.clone());
+    let key = key(preset);
     let score = match single_clip_score(editor, preset, 0., THUMB_BEATS, &selection) {
         Ok(score) => score,
         Err(_) => {
@@ -563,7 +558,6 @@ impl Luma {
 pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
     let pad = px(luma_ui::sheet::PAD);
     let browser = &state.sheet.browser;
-    let selection = target_selection(state).expression;
     let groups = grouped(&browser.query);
     div()
         .size_full()
@@ -601,9 +595,9 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
                                     .child(luma_ui::caption(form)),
                             )
                             .children(
-                                presets.into_iter().map(|preset| {
-                                    row(preset, strip(browser, preset, &selection), app)
-                                }),
+                                presets
+                                    .into_iter()
+                                    .map(|preset| row(preset, strip(browser, preset), app)),
                             )
                     }))
                     .child(div().h(pad).flex_none()),
