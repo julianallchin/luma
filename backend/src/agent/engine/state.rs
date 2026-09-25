@@ -23,10 +23,38 @@ struct Checkpoint {
     session: NativeSession,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct NativeSession {
     pub id: String,
     pub usage: Usage,
+}
+
+/// Why a checkpointed native session could not be resumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResumeMiss {
+    /// No checkpoint on this machine — the thread's first turn, or one run
+    /// somewhere else (this state is deliberately machine-local; see the
+    /// module doc).
+    NoCheckpoint,
+    EngineChanged,
+    ModelChanged,
+    /// The transcript moved since the checkpoint completed: a steered
+    /// message, a concurrent writer, or the checkpoint simply being stale.
+    HeadMoved,
+    /// The system prompt, tool set, or effort changed since the checkpoint.
+    ContextChanged,
+}
+
+impl std::fmt::Display for ResumeMiss {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoCheckpoint => "no checkpoint for this thread on this machine",
+            Self::EngineChanged => "engine changed since the checkpoint",
+            Self::ModelChanged => "model changed since the checkpoint",
+            Self::HeadMoved => "transcript head moved since the checkpoint",
+            Self::ContextChanged => "system prompt/tools/effort changed since the checkpoint",
+        })
+    }
 }
 
 impl RunLease {
@@ -51,24 +79,36 @@ impl RunLease {
         &self.directory
     }
 
+    /// `Ok` names the session to resume; `Err` says why not, for the caller to
+    /// log before it pays for the expensive `continuation()` fallback.
     pub fn resume(
         &self,
         engine: Engine,
         model: &Option<String>,
         head: Option<&str>,
         context: &str,
-    ) -> Result<Option<NativeSession>, AgentError> {
+    ) -> Result<Result<NativeSession, ResumeMiss>, AgentError> {
         let data = match std::fs::read(self.directory.join("session.json")) {
             Ok(data) => data,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Err(ResumeMiss::NoCheckpoint))
+            }
             Err(e) => return Err(storage(e)),
         };
         let checkpoint: Checkpoint = serde_json::from_slice(&data).map_err(storage)?;
-        Ok((checkpoint.context == context
-            && checkpoint.engine == engine
-            && &checkpoint.model == model
-            && Some(checkpoint.head.as_str()) == head)
-            .then_some(checkpoint.session))
+        if checkpoint.engine != engine {
+            return Ok(Err(ResumeMiss::EngineChanged));
+        }
+        if &checkpoint.model != model {
+            return Ok(Err(ResumeMiss::ModelChanged));
+        }
+        if Some(checkpoint.head.as_str()) != head {
+            return Ok(Err(ResumeMiss::HeadMoved));
+        }
+        if checkpoint.context != context {
+            return Ok(Err(ResumeMiss::ContextChanged));
+        }
+        Ok(Ok(checkpoint.session))
     }
 
     /// Invalidate before launching: an interrupted native session may contain
@@ -142,34 +182,44 @@ mod tests {
                 .resume(Engine::Codex, &None, Some("head"), "context")
                 .unwrap()
                 .map(|s| s.id),
-            Some("session".into())
+            Ok("session".into())
         );
-        assert!(lease
-            .resume(Engine::Claude, &None, Some("head"), "context")
-            .unwrap()
-            .is_none());
-        assert!(lease
-            .resume(Engine::Codex, &None, Some("other"), "context")
-            .unwrap()
-            .is_none());
-        assert!(lease
-            .resume(
-                Engine::Codex,
-                &Some("other-model".into()),
-                Some("head"),
-                "context"
-            )
-            .unwrap()
-            .is_none());
-        assert!(lease
-            .resume(Engine::Codex, &None, Some("head"), "changed-tools")
-            .unwrap()
-            .is_none());
+        assert_eq!(
+            lease
+                .resume(Engine::Claude, &None, Some("head"), "context")
+                .unwrap(),
+            Err(ResumeMiss::EngineChanged)
+        );
+        assert_eq!(
+            lease
+                .resume(Engine::Codex, &None, Some("other"), "context")
+                .unwrap(),
+            Err(ResumeMiss::HeadMoved)
+        );
+        assert_eq!(
+            lease
+                .resume(
+                    Engine::Codex,
+                    &Some("other-model".into()),
+                    Some("head"),
+                    "context"
+                )
+                .unwrap(),
+            Err(ResumeMiss::ModelChanged)
+        );
+        assert_eq!(
+            lease
+                .resume(Engine::Codex, &None, Some("head"), "changed-tools")
+                .unwrap(),
+            Err(ResumeMiss::ContextChanged)
+        );
         lease.invalidate().unwrap();
-        assert!(lease
-            .resume(Engine::Codex, &None, Some("head"), "context")
-            .unwrap()
-            .is_none());
+        assert_eq!(
+            lease
+                .resume(Engine::Codex, &None, Some("head"), "context")
+                .unwrap(),
+            Err(ResumeMiss::NoCheckpoint)
+        );
         drop(lease);
         assert!(RunLease::acquire(root.path(), "../thread", Some("a")).is_ok());
     }
