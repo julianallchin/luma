@@ -130,7 +130,7 @@ gizmo on snapped pieces**; controls may live in the 3D picture (`scene_desc::Edi
 
 **Evidence and acceptance.** `tests/headless/venue_builder.rs` (`mod` into `main.rs`) drives `+`
 → place → snap → extend → duplicate → distribute through the tree and `app.painted()`, `CAMERA`
-pinning that build gestures never move the camera; `app_pixel/venue_builder_pixels.rs` covers
+pinning that build gestures never move the camera; `tests/js/pixel/venue_builder.test.js` covers
 the ghosts, gizmos and popover. An empty venue paints the grid and the first piece lands from
 `+` alone. Two placements happen without reopening the dialog, the second's params equalling the
 first's untouched ones. The popover anchors within **32 px** of the projected face point; a
