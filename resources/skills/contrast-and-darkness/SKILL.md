@@ -34,7 +34,8 @@ add impact at the peak; you can only avoid spending it early.
   If two sections argue over the top step, demote one.
 - **Blackouts are punctuation.** A one-beat cut on a producer's silence is an
   exclamation mark; a two-bar near-black before a drop is a held breath. Match
-  the audio: when the music actually cuts, hard blackout; when it filters
+  the audio: when the music actually cuts (`luma.music.deviations` gives the
+  exact 16ths), hard blackout; when it filters
   down, fade with it. (Silence is dark — always.)
 - **Floors matter more than ceilings.** The dim state between hits decides how
   the hits read. Accents over a 10% floor punch; the same accents over a 50%

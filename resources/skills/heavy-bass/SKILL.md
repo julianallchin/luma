@@ -14,8 +14,8 @@ The kick and snare are scaffolding. The event is the bass: its rhythm, its
 texture, how fast it moves, when it changes. Two bars with identical drums can
 be a slow neck-snap growl or a triplet screech, and lighting them the same is
 the most common failure in this genre. So the work is per-phrase: measure the
-bass (the modulation recipe in `finding-things-in-audio`), then light what you
-measured.
+bass (`luma.music.modulation`, the loop in `finding-things-in-audio`), then
+light what you measured.
 
 - Accents go on the **measured bass onsets**, not on eighth notes. Wubs swing,
   drag, and go triplet. Snapping them to the grid is exactly the mistake.
@@ -25,16 +25,17 @@ measured.
 
 ## Feel
 
-- Felt tempo is half the BPM. 140 is felt at 70. A pulse on every snare is
-  glacial — the snare gets one hit: short, hard, high contrast.
+- Halftime drums: at 140 the snare lands every fourth felt beat, so the
+  track is still 140 (`luma.music.feel` says "halftime drums"). A pulse on
+  every snare is glacial — the snare gets one hit: short, hard, high contrast.
 - Hats and rides do the subdivision. Give them something dim and small. Texture,
   not statement.
 - Empty beats stay empty. Space is part of this genre. Don't fill it.
 
 ## Reading the intensity
 
-Measure snare hardness (see `finding-things-in-audio`). When the snare is
-artillery and the bars read intense:
+When the snare is artillery (high `level_db` on `luma.music.onsets["snare"]`)
+and the bars read intense:
 
 - Think **vertical**. Up/down punches, ceiling-to-floor drops of light, whole-rig
   slams. This music moves heads, and heads move up and down.
@@ -47,7 +48,7 @@ artillery and the bars read intense:
 ## The drops tell a story
 
 Compare the drops before scoring any of them (spectral character, wub rate and
-depth — `finding-things-in-audio` has both). What you're looking for:
+depth from `modulation`, `similar(mode="sound")`). What you're looking for:
 
 - **Drop 2 goes absurd.** First drop melodic, second drop suddenly noisy,
   distorted, stupid — flatness way up, rate faster or uglier. That contrast is
@@ -67,15 +68,23 @@ sixteenth — brightness terracing up, timed to where the riser actually peaks
 in the audio. Then the bar before the drop goes near-black. One or two bars of
 almost nothing makes the drop free. Do not decorate that bar; the snare rolls
 and vocal one-shots in it get nothing. And check the drop is real before you
-spend all this (fake-drop check, `finding-things-in-audio`) — a feint gets a dry cut, and the
-real drop gets the payload.
+spend all this: `listen` the first bars after the build for sub and low at
+full level — a feint gets a dry cut, and the real drop gets the payload.
 
-## How deep to go
+## Listening
 
-Deep. This genre earns per-phrase work, and it's the genre where subagents pay:
-map the sections and fix the palette and group roles yourself, then split the
-deep work along whatever seams the track actually has and give each child one
-piece it can obsess over — with the bass measurement and your arc decisions in
-its brief. Stitch, then walk the seams and confirm the drops outrank everything
-else on the heatmap. If the track is small enough to hold in your head at full
-depth, skip the fan-out and just do the work.
+Depth: maximum. Intricate detail that mirrors the audio is the product here.
+
+- Listen for: the growl's rate and every rate switch, scoops (pitch or
+  filter? check), womps per bar, cuts where the bass drops out for a 16th, and
+  what the second half of a 2-bar phrase changes.
+- Detail: 16th resolution on every drop phrase. Run the full loop, the
+  skeptic pass, and parallel listeners (bass, drums and cuts, vocals,
+  transitions) on each distinct drop phrase.
+- LDs love: a light that switches rate exactly when the LFO does, and a
+  blackout on the one 16th the bass cuts.
+
+To design, map sections and fix palette and group roles yourself, then give
+each child one drop phrase with the bass evidence rows and your arc decisions
+in its brief. Stitch, walk the seams, and confirm the drops outrank everything
+else on the heatmap.
