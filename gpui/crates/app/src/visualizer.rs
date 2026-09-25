@@ -69,10 +69,11 @@ use luma_render::{
     scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, SubmitOutcome,
 };
 use luma_scene::{
-    apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, Aabb, Camera, ClickOrbit,
-    ClickOrbitRelease, ClickOrbitUpdate, Framing, GizmoHandle, GizmoMode, Insets, Marquee,
-    MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph, Selection,
-    Transform, TransformTarget, TriMesh, View, Viewfinder,
+    apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, navigate, Aabb, Camera,
+    ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, FlyKeys, Framing, GizmoHandle, GizmoMode,
+    Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph,
+    Selection, Surface, SurfaceHit, Transform, TransformTarget, TriMesh, View, Viewfinder,
+    ZoomLimits,
 };
 use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
@@ -100,28 +101,56 @@ const TOOLBAR_OVERLAY_BOTTOM: Pixels = px(16.);
 /// span the toolbar occupies, and so the band the fit keeps clear.
 const OVERLAY_BAND: Pixels = px(30.);
 
-/// Wheel zoom: the orbit distance scales by
-/// `ZOOM_BASE ** (ZOOM_SPEED · distance · 0.01)`.
+/// Wheel zoom: one wheel event's factor is
+/// `ZOOM_BASE ** (ZOOM_SPEED · distance · 0.05)`, and the eye moves that share
+/// of the distance to the pivot — see [`Camera::zoom_toward`].
 const ZOOM_SPEED: f32 = 0.5;
 const ZOOM_BASE: f32 = 0.95;
 
-/// The dolly factors of the toolbar's zoom-in and zoom-out buttons.
-pub(crate) const DOLLY_IN: f32 = 0.8;
-pub(crate) const DOLLY_OUT: f32 = 1.25;
+/// The zoom factors of the toolbar's zoom-in and zoom-out buttons and of the
+/// `=` and `-` keys.
+pub(crate) const ZOOM_IN: f32 = 0.8;
+pub(crate) const ZOOM_OUT: f32 = 1.25;
+
+/// How long the pivot dot shows after an orbit starts or a wheel step.
+const PIVOT_DOT: Duration = Duration::from_millis(600);
+/// Diameter of the pivot dot.
+const PIVOT_DOT_SIZE: Pixels = px(7.);
+
+/// A fly's look turns half a turn per pane height: half the orbit's rate,
+/// because the whole room swings past a look and only the rig past an orbit.
+const LOOK_RATE: f32 = std::f32::consts::PI;
+/// The range the wheel may set the fly speed multiple in.
+const FLY_SPEED_MULTIPLE: (f32, f32) = (0.05, 20.0);
 
 /// What the pointer is doing to the camera.
 ///
 /// Named states rather than a button plus a flag: the three are exclusive and
 /// each consumes the pointer delta differently, so a call site holding "this
 /// button, but panning" could say something the camera has no answer for.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Drag {
-    /// Left button: spherical rotation about the target.
-    Orbit,
-    /// Right button: slide the target across the view plane.
+    /// Left button: turn the eye and the target about the point that was
+    /// under the pointer when the drag started.
+    Orbit { pivot: Vec3 },
+    /// Middle button: slide the target across the view plane.
     Pan,
-    /// Middle button: in and out along the view ray.
-    Dolly,
+    /// Right button: turn in place, and fly on the keys — see [`Fly`].
+    Fly,
+}
+
+/// A fly in progress: the right button is held.
+///
+/// W and S move along the view, A and D sideways, Q and E down and up, Shift
+/// faster, and the wheel sets the speed. The stage's own letters are off
+/// while it lasts — see the key context in [`visualizer`].
+struct Fly {
+    keys: FlyKeys,
+    /// The previous frame's step, which the next one measures its time from.
+    last: Instant,
+    /// Whether the camera moved or turned. A right click that did neither
+    /// leaves the camera exactly as it was.
+    moved: bool,
 }
 
 /// The hit-test geometry itself: what a ray can hit and which authored object
@@ -250,11 +279,7 @@ impl PickSnapshot {
     }
 
     fn ray(&self, at: Vec2, viewport: Vec2) -> luma_scene::Ray {
-        let ndc = Vec2::new(
-            at.x / viewport.x.max(1.0) * 2.0 - 1.0,
-            1.0 - at.y / viewport.y.max(1.0) * 2.0,
-        );
-        self.camera.ray(ndc, viewport.x / viewport.y.max(1.0))
+        self.camera.pixel_ray(at, viewport)
     }
 
     fn pick(&self, at: Vec2, viewport: Vec2) -> Option<EditorObject> {
@@ -429,12 +454,13 @@ struct SubmittedFrame {
 type PickTimeline = SerialPairing<SubmittedFrame>;
 
 impl Drag {
-    /// three's `OrbitControls` defaults: LEFT rotate, MIDDLE dolly, RIGHT pan.
+    /// The drag a button other than the left starts: the middle pans and the
+    /// right flies, as in Unity and Unreal. The left orbits, through
+    /// [`EditorDrag::ClickOrbit`], because a left click also selects.
     fn of(button: MouseButton) -> Option<Self> {
         match button {
-            MouseButton::Left => Some(Self::Orbit),
-            MouseButton::Right => Some(Self::Pan),
-            MouseButton::Middle => Some(Self::Dolly),
+            MouseButton::Middle => Some(Self::Pan),
+            MouseButton::Right => Some(Self::Fly),
             _ => None,
         }
     }
@@ -502,6 +528,15 @@ pub(crate) struct Visualizer {
     /// The button held, and where the pointer last was — `MouseMoveEvent`
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
+    /// The held right button's fly. Beside [`Self::drag`] rather than in it,
+    /// because keys change it and a pointer anchor does not.
+    fly: Option<Fly>,
+    /// The operator's fly speed multiple, which the wheel sets during a fly.
+    /// Kept from one fly to the next.
+    fly_speed: f32,
+    /// Where the camera last pivoted, and when: the dot that shows it for
+    /// [`PIVOT_DOT`].
+    pivot_dot: Option<(Vec3, Instant)>,
     editor_drag: Option<EditorDrag>,
     selection: Selection<EditorObject>,
     gizmo_mode: GizmoMode,
@@ -1289,6 +1324,9 @@ impl Visualizer {
             framing: Framing::default(),
             owes_opening_pose: false,
             drag: None,
+            fly: None,
+            fly_speed: 1.0,
+            pivot_dot: None,
             editor_drag: None,
             selection: Selection::default(),
             gizmo_mode: GizmoMode::Translate,
@@ -1505,15 +1543,16 @@ impl Visualizer {
         true
     }
 
-    /// Dolly all the way in, for the launch-time reproduction driver.
+    /// Zoom in at the pane's centre, for the launch-time reproduction driver.
     ///
-    /// Steps rather than a target radius: the near bound is
-    /// [`Framing::radius_bounds`] and only the camera knows it, so repeating
-    /// the same gesture the operator makes is both simpler and more faithful
-    /// than computing where they would have ended up.
-    pub(crate) fn dolly_in(&mut self, steps: usize) {
+    /// Steps rather than a target distance: a step depends on what is under
+    /// the pointer, so repeating the gesture the operator makes is both
+    /// simpler and more faithful than computing where they would have ended
+    /// up. There is no near stop any more — enough steps dolly through the
+    /// rig.
+    pub(crate) fn zoom_in(&mut self, steps: usize) {
         for _ in 0..steps {
-            self.dolly(DOLLY_IN);
+            self.zoom(ZOOM_IN, None);
         }
     }
 
@@ -1588,11 +1627,7 @@ impl Visualizer {
         if viewport.x <= 1.0 || viewport.y <= 1.0 {
             return None;
         }
-        let ndc = Vec2::new(
-            point.x / viewport.x * 2.0 - 1.0,
-            1.0 - point.y / viewport.y * 2.0,
-        );
-        Some(self.camera.ray(ndc, viewport.x / viewport.y))
+        Some(self.camera.pixel_ray(point, viewport))
     }
 
     fn selection_card_position(&mut self, size: gpui::Size<Pixels>) -> Point<Pixels> {
@@ -1694,12 +1729,172 @@ impl Visualizer {
         true
     }
 
-    /// Dolly by a factor, shared by the toolbar, wheel and middle-button drag.
-    pub(crate) fn dolly(&mut self, factor: f32) {
-        let (near, far) = self
-            .framing
-            .radius_bounds(opening_camera(&self.framing, &self.view_finder()).radius);
-        self.camera.radius = (self.camera.radius * factor).clamp(near, far);
+    /// Zoom by a factor at a window point, or at the pane's centre — the
+    /// wheel, the toolbar buttons and the `=`/`-` keys. The step aims at the
+    /// point [`Self::surface_under`] finds there; see [`Camera::zoom_toward`].
+    pub(crate) fn zoom(&mut self, factor: f32, at: Option<Point<Pixels>>) {
+        let viewport = self.viewport_size();
+        let at = at.map_or(viewport / 2.0, |point| self.viewport_point(point));
+        let hit = self.surface_under(at).map(|hit| hit.point);
+        let ray = self.pointer_ray(at);
+        let limits = self.zoom_limits();
+        let pivot = self.camera.zoom_toward(factor, ray, hit, &limits);
+        self.pivot_dot = Some((pivot, Instant::now()));
+    }
+
+    fn zoom_limits(&self) -> ZoomLimits {
+        self.framing
+            .zoom_limits(opening_camera(&self.framing, &self.view_finder()).radius)
+    }
+
+    /// The ray through a viewport point, off the live camera. Before the pane
+    /// has a size — the headless path — every point is the centre's ray.
+    fn pointer_ray(&self, at: Vec2) -> luma_scene::Ray {
+        let viewport = self.viewport_size();
+        if viewport.min_element() <= 1.0 {
+            return self.camera.ray(Vec2::ZERO, DEFAULT_ASPECT);
+        }
+        self.camera.pixel_ray(at, viewport)
+    }
+
+    /// What is under a viewport point, from a small area around it: see
+    /// [`navigate::area_pick`]. Cast against the displayed frame's pick
+    /// geometry, which is world space, through the *live* camera, which may
+    /// have moved since that frame. Fixtures and pieces are the rig; a deck
+    /// and the ground plane the renderer draws at `z = 0` are floor.
+    fn surface_under(&self, at: Vec2) -> Option<SurfaceHit> {
+        if self.viewport_size().min_element() <= 1.0 {
+            return None;
+        }
+        let stage = self.stage.borrow();
+        let pick = stage.displayed_pick.as_ref();
+        let is_floor = |id: &str| {
+            stage.scene.as_ref().is_some_and(|scene| {
+                scene
+                    .pieces
+                    .iter()
+                    .any(|piece| piece.id == id && piece.is_floor())
+            })
+        };
+        let rays = navigate::pick_offsets().map(|offset| self.pointer_ray(at + offset));
+        navigate::area_pick(rays, |ray| {
+            let mesh = pick.and_then(|pick| {
+                let hit = pick
+                    .geometry
+                    .graph
+                    .raycast(ray, Default::default(), pick)
+                    .into_iter()
+                    .next()?;
+                let surface = match pick.geometry.objects.get(hit.node.0 as usize)? {
+                    Some(EditorObject::StagePiece(id)) if is_floor(id) => Surface::Floor,
+                    _ => Surface::Rig,
+                };
+                Some(SurfaceHit {
+                    point: hit.point,
+                    distance: hit.t,
+                    surface,
+                })
+            });
+            [mesh, navigate::ground_hit(ray, 0.0)]
+                .into_iter()
+                .flatten()
+                .min_by(|a, b| a.distance.total_cmp(&b.distance))
+        })
+    }
+
+    /// The pivot for an orbit starting at a viewport point: what is under it,
+    /// or the point the current distance reaches along its ray.
+    fn pivot_at(&mut self, at: Vec2) -> Vec3 {
+        let pivot = self.surface_under(at).map_or_else(
+            || self.camera.position() + self.pointer_ray(at).dir * self.camera.radius,
+            |hit| hit.point,
+        );
+        self.pivot_dot = Some((pivot, Instant::now()));
+        pivot
+    }
+
+    /// The pivot dot's viewport position and opacity, while it shows.
+    fn pivot_dot_at(&self, now: Instant) -> Option<(Vec2, f32)> {
+        let (pivot, since) = self.pivot_dot?;
+        let age = now.saturating_duration_since(since).as_secs_f32() / PIVOT_DOT.as_secs_f32();
+        let viewport = self.viewport_size();
+        if age >= 1.0 || viewport.min_element() <= 1.0 {
+            return None;
+        }
+        let ndc = self.camera.project(pivot, viewport.x / viewport.y);
+        if !(0.0..=1.0).contains(&ndc.z) {
+            return None;
+        }
+        let at = Vec2::new(
+            (ndc.x + 1.0) * 0.5 * viewport.x,
+            (1.0 - ndc.y) * 0.5 * viewport.y,
+        );
+        // Holds, then fades out.
+        Some((at, 1.0 - age * age))
+    }
+
+    /// Start the drag a non-left button makes.
+    fn begin_drag(&mut self, drag: Drag, at: Point<Pixels>) {
+        if drag == Drag::Fly {
+            self.fly = Some(Fly {
+                keys: FlyKeys::default(),
+                last: Instant::now(),
+                moved: false,
+            });
+        }
+        self.drag = Some((drag, at));
+    }
+
+    /// End whatever drag is live. A fly that moved hands back an orbit whose
+    /// target is what the view is centred on, or the old distance ahead.
+    fn end_drag(&mut self) {
+        self.drag = None;
+        let Some(fly) = self.fly.take() else { return };
+        if !fly.moved {
+            return;
+        }
+        let eye = self.camera.position();
+        let limits = self.zoom_limits();
+        let distance = self
+            .surface_under(self.viewport_size() / 2.0)
+            .map_or(self.camera.radius, |hit| hit.point.distance(eye));
+        self.camera.refocus(distance.clamp(limits.near, limits.far));
+    }
+
+    /// A key while the right button is held. Whether the fly took it.
+    pub(crate) fn fly_key(&mut self, key: &str, down: bool) -> bool {
+        self.fly
+            .as_mut()
+            .is_some_and(|fly| fly.keys.set(&key.to_ascii_lowercase(), down))
+    }
+
+    /// One frame of the fly, if one is live.
+    fn fly_tick(&mut self, now: Instant, fast: bool) {
+        let Some(fly) = self.fly.as_mut() else { return };
+        // Capped, so a frame that stalled does not throw the eye across the room.
+        let dt = now
+            .saturating_duration_since(fly.last)
+            .as_secs_f32()
+            .min(0.1);
+        fly.last = now;
+        let keys = FlyKeys { fast, ..fly.keys };
+        if !keys.moving() {
+            return;
+        }
+        fly.moved = true;
+        let speed = navigate::fly_speed(&self.framing) * self.fly_speed;
+        self.camera.fly(keys, speed, dt, self.framing.floor_z());
+    }
+
+    /// A wheel event: a zoom at the pointer, or during a fly its speed.
+    fn wheel(&mut self, wheel: f32, at: Point<Pixels>) {
+        let factor = zoom_scale(-wheel);
+        if self.fly.is_some() {
+            let (lo, hi) = FLY_SPEED_MULTIPLE;
+            self.fly_speed = (self.fly_speed / factor).clamp(lo, hi);
+        } else {
+            self.zoom(factor, Some(at));
+        }
     }
 
     /// Consume one pointer step, in logical pixels.
@@ -1711,21 +1906,23 @@ impl Visualizer {
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
         match drag {
             // `rotateLeft(2π·dx/H)` and `rotateUp(2π·dy/H)`, both of which
-            // *subtract* from the spherical angle. Our azimuth is three's theta
-            // less a quarter turn and our polar is its phi exactly — both are
-            // `world_from_three` of the same point — so the deltas carry over
-            // unchanged and only the parameterisation differs.
-            Drag::Orbit => {
+            // *subtract* from the spherical angle, turned about the picked
+            // pivot rather than the target. The polar keeps the orbit clamp,
+            // so the eye stays above the floor and can still look up.
+            Drag::Orbit { pivot } => {
                 let turn = std::f32::consts::TAU / height;
-                self.camera.azimuth -= turn * dx;
-                // Three lets phi run the full half-turn, which on a stage means
-                // orbiting under the floor and out the other side. Clamped to
-                // keep the eye above the floor, which still lets it look up.
-                self.camera.polar = self.framing.clamp_orbit_polar(
-                    self.camera.polar - turn * dy,
-                    self.camera.target.z,
-                    self.camera.radius,
-                );
+                self.camera
+                    .orbit_about(pivot, -turn * dx, -turn * dy, &self.framing);
+            }
+            // The same turn about the eye: a look.
+            Drag::Fly => {
+                let turn = LOOK_RATE / height;
+                let eye = self.camera.position();
+                self.camera
+                    .orbit_about(eye, -turn * dx, -turn * dy, &self.framing);
+                if let Some(fly) = self.fly.as_mut() {
+                    fly.moved = true;
+                }
             }
             // three's perspective pan: one screen height of drag moves the
             // target by the full visible extent at the target's depth, so a
@@ -1737,7 +1934,6 @@ impl Visualizer {
                 let up = right.cross(forward);
                 self.camera.target += (right * -dx + up * dy) * (extent / height);
             }
-            Drag::Dolly => self.dolly(zoom_scale(-dy)),
         }
     }
 
@@ -1912,10 +2108,19 @@ impl Visualizer {
                         interaction = EditorDrag::Marquee(marquee);
                     }
                 } else {
-                    match gesture.moved(at) {
+                    let update = gesture.moved(at);
+                    match update {
                         ClickOrbitUpdate::Pending => {}
                         ClickOrbitUpdate::BeginOrbit(delta) | ClickOrbitUpdate::Orbit(delta) => {
-                            self.drag = Some((Drag::Orbit, point));
+                            // The pivot is picked once, where the press
+                            // landed, and held for the whole drag.
+                            let pivot = match (update, self.drag) {
+                                (ClickOrbitUpdate::Orbit(_), Some((Drag::Orbit { pivot }, _))) => {
+                                    pivot
+                                }
+                                _ => self.pivot_at(*start),
+                            };
+                            self.drag = Some((Drag::Orbit { pivot }, point));
                             self.dragged(Point::new(px(delta.x), px(delta.y)));
                         }
                     }
@@ -1935,8 +2140,11 @@ impl Visualizer {
         let at = self.viewport_point(point);
         let viewport = self.viewport_size();
         // A release ends the camera drag whatever else this function decides:
-        // the selection paths below can bail before reaching the end.
-        self.drag = None;
+        // the selection paths below can bail before reaching the end. A fly
+        // is the right button's, and outlives a left release.
+        if self.fly.is_none() {
+            self.drag = None;
+        }
         let interaction = self.editor_drag.take()?;
         if self.presentation {
             return None;
@@ -2094,7 +2302,7 @@ impl Visualizer {
 
     pub(crate) fn prepare_presentation(&mut self) {
         self.settings_open = false;
-        self.drag = None;
+        self.end_drag();
         // A shortcut can arrive before mouse-up. Cancel an unfinished pose
         // preview before parking the editor, so it cannot survive without a commit.
         if let Some(EditorDrag::Gizmo { originals, .. }) = self.editor_drag.take() {
@@ -2154,11 +2362,7 @@ impl Visualizer {
             }
             return crate::stage::hand::floor_point(&ray).map(|world| (world, None));
         }
-        let ndc = Vec2::new(
-            f32::from(point.x) / viewport.x * 2.0 - 1.0,
-            1.0 - f32::from(point.y) / viewport.y * 2.0,
-        );
-        crate::stage::hand::floor_point(&self.camera.ray(ndc, viewport.x / viewport.y))
+        crate::stage::hand::floor_point(&self.camera.pixel_ray(point, viewport))
             .map(|world| (world, None))
     }
 
@@ -2403,7 +2607,7 @@ fn opening_camera(framing: &Framing, view: &Viewfinder) -> Camera {
 }
 
 /// three's `getZoomScale`: exponential in the scroll distance, so ten small
-/// notches and one big flick land in the same place.
+/// notches and one big flick land in the same place. Below one zooms in.
 fn zoom_scale(distance: f32) -> f32 {
     ZOOM_BASE.powf(ZOOM_SPEED * distance * 0.05)
 }
@@ -3247,6 +3451,7 @@ pub(crate) fn visualizer(
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
     state.presentation = matches!(&chrome, Chrome::Fullscreen { .. });
+    state.fly_tick(Instant::now(), window.modifiers().shift);
     let (venue_tools, transport) = match chrome {
         Chrome::Embedded { venue_tools } => (venue_tools, None),
         Chrome::Fullscreen { transport } => (None, transport),
@@ -3325,16 +3530,52 @@ pub(crate) fn visualizer(
         state.stage.borrow_mut().selection_card_held = false;
         selection_target
     };
+    // The pivot of the last orbit or wheel step, fading out.
+    let pivot_dot = state.pivot_dot_at(Instant::now()).map(|(at, fade)| {
+        let radius = PIVOT_DOT_SIZE / 2.;
+        div()
+            .absolute()
+            .left(px(at.x) - radius)
+            .top(px(at.y) - radius)
+            .size(PIVOT_DOT_SIZE)
+            .rounded_full()
+            .bg(luma_ui::glass::ink(0.9 * fade))
+            .border_1()
+            .border_color(luma_ui::glass::scrim(0.5 * fade))
+    });
     let mut keys = gpui::KeyContext::default();
     keys.add(crate::keymap::context::VISUALIZER);
-    if venue {
+    // A fly takes W, A, S, D, Q and E, so the stage's own letters — W and E
+    // among them — are off while the right button is held.
+    if venue && state.fly.is_none() {
         keys.add(crate::keymap::context::STAGE);
         keys.add(crate::keymap::context::PATCH);
     }
+    let fly_key = |down: bool| {
+        let app = app.clone();
+        move |key: &str, cx: &mut gpui::App| {
+            app.update(cx, |this, cx| {
+                if this
+                    .visualizer_mut()
+                    .is_some_and(|state| state.fly_key(key, down))
+                {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        }
+    };
+    let (pressed, released) = (fly_key(true), fly_key(false));
     div()
         .size_full()
         .key_context(keys)
         .track_focus(focus)
+        .on_key_down(move |event: &gpui::KeyDownEvent, _, cx| {
+            pressed(&event.keystroke.key, cx);
+        })
+        .on_key_up(move |event: &gpui::KeyUpEvent, _, cx| {
+            released(&event.keystroke.key, cx);
+        })
         .flex()
         .flex_col()
         .bg(ladder::background())
@@ -3346,6 +3587,7 @@ pub(crate) fn visualizer(
                 .child(body)
                 .child(measure)
                 .children(marquee)
+                .children(pivot_dot)
                 .children(builder)
                 .child(fps)
                 .children(state.stage.borrow().exports.notice())
@@ -4714,7 +4956,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 /// only because every surface that floats over this one says so with
 /// `occlude` / `block_mouse_except_scroll`. A new overlay that forgets is not
 /// a bug in *this* function: pressing it would also orbit the camera, and a
-/// wheel over it would also dolly.
+/// wheel over it would also zoom.
 fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gpui::App) {
     let pressed = app.clone();
     let inside = hitbox.clone();
@@ -4730,7 +4972,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                 if event.button == MouseButton::Left {
                     state.editor_press(at, shift);
                 } else if let Some(drag) = Drag::of(event.button) {
-                    state.drag = Some((drag, at));
+                    state.begin_drag(drag, at);
                 }
                 cx.notify();
             }
@@ -4757,7 +4999,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                 // so a stale anchor cannot turn a hover into an orbit.
                 match held {
                     None => {
-                        state.drag = None;
+                        state.end_drag();
                         // Nothing pressed: the move is a hover — over the
                         // gizmo, or aiming the held ghost.
                         let hover = over.then(|| state.hover_gizmo(at)).flatten();
@@ -4820,7 +5062,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                         );
                     }
                 } else {
-                    state.drag = None;
+                    state.end_drag();
                 }
                 cx.notify();
             }
@@ -4855,7 +5097,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         let wheel = f32::from(event.delta.pixel_delta(window.line_height()).y);
         zoomed.update(cx, |this, cx| {
             if let Some(state) = this.visualizer_mut() {
-                state.dolly(zoom_scale(-wheel));
+                state.wheel(wheel, event.position);
                 cx.notify();
             }
         });
@@ -5513,6 +5755,9 @@ mod orbit_selection_tests {
             framing: Default::default(),
             owes_opening_pose: false,
             drag: None,
+            fly: None,
+            fly_speed: 1.0,
+            pivot_dot: None,
             editor_drag: None,
             selection: Default::default(),
             gizmo_mode: Default::default(),

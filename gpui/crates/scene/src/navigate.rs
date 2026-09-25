@@ -147,7 +147,9 @@ impl FlyKeys {
         true
     }
 
-    fn moving(self) -> bool {
+    /// Whether any movement key is held.
+    #[must_use]
+    pub fn moving(self) -> bool {
         self.forward || self.back || self.left || self.right || self.down || self.up
     }
 }
@@ -477,7 +479,7 @@ mod tests {
         let mut camera = start;
         camera.orbit_about(start.target, 0.3, -0.2, &framing);
         let azimuth = (camera.azimuth - (start.azimuth + 0.3)).rem_euclid(std::f32::consts::TAU);
-        assert!(azimuth < 1e-4 || azimuth > std::f32::consts::TAU - 1e-4);
+        assert!(!(1e-4..=std::f32::consts::TAU - 1e-4).contains(&azimuth));
         assert!((camera.polar - (start.polar - 0.2)).abs() < 1e-4);
         assert!((camera.radius - start.radius).abs() < 1e-4);
         assert!(camera.target.abs_diff_eq(start.target, 1e-4));
