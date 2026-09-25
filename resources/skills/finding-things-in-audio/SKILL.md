@@ -1,93 +1,99 @@
 ---
 name: finding-things-in-audio
-description: The shared Python detective kit. How to measure what the feature tags can't tell you — envelopes, bass modulation, brightness vs noisiness, snare hardness, real silence, fake drops. Genre skills say WHAT to find; this is HOW.
+description: How to hear a track before lighting it — pick a phrase, find its most distinctive sound, see how it moves across the beats with luma.music, then give each event one motion. Genre skills say WHAT to light; this is HOW to listen. Load before designing any section.
 ---
 # Finding things in audio
 
-The tags and features are a sketch. When a moment matters, measure it yourself.
-Everything here runs in your Python surface. Always plot what you measure and
-look at it — the plot comes back as an image, and your eyes are better than a
-threshold.
+Listen like the designer: focus on one phrase, narrow in on its most
+distinctive sound, watch how the beats and sounds change across the beats,
+then design motion that highlights the subtle parts.
 
-## The amplitude envelope
+Positions everywhere are `bar.beat.16th`: UI bar from 1, UI beat from 0, felt
+16th inside that beat. Check `luma.music.feel` first: grids are often stored
+at half the felt tempo (70 for a 140 track), so a UI beat can hold eight felt
+16ths.
 
-The basic move. How loud is this stem, over time?
+## Procedure
+
+1. **Pick a phrase.** `luma.music.sections()` gives boundaries, drops and
+   repeats (`41-64 ≈ 9-32`). Light one phrase fully, then reuse it on its
+   repeats. Watch for 2-bar inserts that shift the phrase grid.
+2. **Look at it.** `luma.music.listen("9-12")`: the mix without vocals in four
+   bands (sub, low, mid, high), n2n kick/snare/hat, and vocals, per felt 16th.
+3. **Find the most distinctive sound.** The ear goes to rate and tone, not
+   loudness. `luma.music.modulation("9-16")` lists wobble and sweep peaks per
+   felt bar and flags every rate change (`! mid 1/8 wobble (was kick-gap
+   sweeps)`). A 3 dB change of rate is louder to the ear than a 10 dB change
+   of level. Name the sound in the room's words: growl, womp, scoop, wipe,
+   pulse.
+4. **Find what breaks the loop.** `luma.music.deviations("9-32")` compares
+   each bar with its same-parity neighbours: a missing kick, hats cut for a
+   beat, a hole in the bass. Its first line is the 2-bar cycle itself (odd
+   bars against even bars), where scoops and 2-bar stabs live.
+5. **Find where else it happens.** `luma.music.similar("13")` ranks places
+   that share what is special about a beat, bar or phrase. Use
+   `mode="rhythm"` for the same rhythm in a different sound, `mode="sound"`
+   for the reverse.
+6. **Design.** Light the most distinctive sound in the most detail, then the
+   loop around it.
+
+## Motion rules
+
+- One motion per event: three womps are three chase bounces, not one long
+  chase.
+- Clip length = sound length. Read it off the peaks and gaps, not the grid.
+- Direction is choreography, not pan. Drops are usually mono; choose a
+  direction and keep it meaningful (a sweep up can travel up the rig).
+- Dark by default. Light what you heard; leave the rest dark.
+- The subtle part is the point: a rate switch, a missing kick, a scoop. A
+  change the loop doesn't make deserves a change the lights don't make
+  anywhere else.
+
+## Don't
+
+- Don't trust stem labels. One sound spreads across demucs stems; only
+  `vocals` is exposed, and everything else is `rest`, split by frequency.
+- Don't transcribe pitch only. A "held" note can carry a filter wobble;
+  `modulation` sees it and a pitch track doesn't.
+- Don't average whole bars. Rate switches and one-16th notches vanish in bar
+  means. Stay at 16th resolution.
+- Don't explain every event as drums. Some events exist only in the mix: a
+  missing kick exposes the bass duck and makes a hole.
+
+## Recipes
+
+The text tools are short functions over arrays you can use directly.
+
+Cosine similarity of one bar against every bar (MERT, bar-pooled):
 
 ```python
 import numpy as np
-from scipy.signal import hilbert, butter, sosfiltfilt
-
-sig = luma.audio.stems["bass"]        # or "drums", "vocals", "other", or luma.audio.mix
-x = sig.values.mean(axis=1)           # mono
-t = sig.times_s
-sr = 1.0 / float(np.median(np.diff(t)))
-
-env = np.abs(hilbert(x[::8]))         # decimate first; full-rate hilbert is wasteful
-fs = sr / 8
-env_t = t[::8][: len(env)]
+bars = luma.music.mert.bars                 # rows: bar, fullmix[768], drum[768]
+v = bars.fullmix - bars.fullmix.mean(0)
+v /= np.linalg.norm(v, axis=1, keepdims=True)
+score = v @ v[list(bars.bar).index(13)]
+[(int(b), round(float(s), 2)) for b, s in sorted(zip(bars.bar, score), key=lambda x: -x[1])[:8]]
 ```
 
-## Bass modulation (wubs, and everything like them)
-
-Band-limit the envelope to modulation rates. 0.5–8 Hz is where rhythmic bass
-movement lives: below is section dynamics, above is timbre.
+Felt 16ths with a kick in at least 90% of drop bars, but not in this one:
 
 ```python
-sos = butter(4, [0.5, 8.0], btype="band", fs=fs, output="sos")
-lfo = sosfiltfilt(sos, env - env.mean())
+kick = luma.music.onsets["kick"]            # rows: time_s, bar, beat, sixteenth, slot, level_db
+drop = range(9, 33)
+per_bar = 4 * luma.features.beats_per_bar * luma.music.feel.ratio
+grid = np.zeros((len(drop), per_bar), bool)
+for bar, slot in zip(kick.bar, kick.slot % per_bar):
+    if bar in drop:
+        grid[bar - drop.start, slot] = True
+usual = grid.mean(0) >= 0.9
+[luma.music.label((13 - 1) * per_bar + s) for s in np.flatnonzero(usual & ~grid[13 - drop.start])]
 ```
 
-Per phrase (4 or 8 bars, from `features.bars.starts_s`):
-- **Rate**: dominant frequency of `lfo` (FFT peak, or mean spacing from
-  `scipy.signal.find_peaks`). Convert to a musical unit: `rate * 60 / bpm` beats.
-  2.33 Hz at 140 BPM is triplet-eighths — a nameable rhythm.
-- **Onsets**: `find_peaks(lfo)` gives the actual accent times. They are often
-  off-grid. That's the point.
-- **Depth**: peak-to-trough ratio. Deep and gated wants on/off lighting; shallow
-  wants a breathe.
-
-Stem separation smears aggressive bass into "other" — cross-check the mix when
-a phrase looks emptier than it sounds.
-
-## Character: bright, noisy, warm
-
-Compare two sections (two drops, drop vs breakdown) with two numbers per section:
+The mid-band envelope of one bar at 5 ms, to see a wobble for yourself:
 
 ```python
-from scipy.signal import stft
-f, tt, Z = stft(x_section, fs=sr, nperseg=2048)
-mag = np.abs(Z)
-centroid = (f[:, None] * mag).sum(0) / (mag.sum(0) + 1e-9)   # brightness
-flatness = np.exp(np.log(mag + 1e-9).mean(0)) / (mag.mean(0) + 1e-9)  # noisiness
+rest = luma.music.envelopes.rest            # rows: time_s, sub, low, mid, high (dB)
+t0, t1 = luma.music.beats.time_s[luma.music.beats.bar == 10][[0, -1]]
+window = (rest.time_s >= t0) & (rest.time_s < t1)
+rest.mid[window]
 ```
-
-Higher centroid = brighter, screechier. Higher flatness = noisier, more
-distorted. A second drop with clearly higher flatness than the first is a track
-saying "now it gets ugly" — genre skills tell you what to do with that.
-
-## How hard does it hit
-
-Snare (or any onset) hardness: take `features.drum_onsets["snare"]` times, read
-the mix envelope at each, and compare the onset peak to the surrounding second
-of audio. A snare 12 dB over its surroundings is artillery; 3 dB is texture.
-This is how you tell punch-you halftime from flowy halftime at the same BPM.
-
-## Real silence and fake drops
-
-- **Silence**: RMS of the mix in short windows. Where it falls to the track's
-  noise floor for more than a beat, the music stopped. Lights follow.
-- **Fake drops**: at the end of a build, look at the first bar after: did bass
-  energy actually arrive (bass-stem RMS jump), or did everything cut? A cut,
-  a filtered stall, or another riser = feint. Check before you spend the hit.
-
-## Phrases
-
-Diff `features.bars.intensity` between consecutive bars; big jumps land on a
-consistent multiple — 8, 16, or 32. That multiple is the phrase, and phrase
-lines are where wholesale changes belong.
-
-## Vocals
-
-`vocal_lead` / `vocal_chop` tags say where; the vocal stem envelope says how
-much. A cappella moments (vocal energy high, everything else at the floor) are
-gift moments — genre skills spend them differently, but always find them.
