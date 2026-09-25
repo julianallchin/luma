@@ -81,6 +81,9 @@ pub struct Clip {
     pub preset: Option<(String, String)>,
     #[serde(default)]
     pub seed: u64,
+    /// The clip's selection expression, when not the whole venue.
+    #[serde(default)]
+    pub selection: Option<String>,
 }
 
 impl Clip {
@@ -93,6 +96,7 @@ impl Clip {
             z_index: 0,
             preset: None,
             seed: 0,
+            selection: None,
         }
     }
 
@@ -152,6 +156,10 @@ pub struct Fixture {
     /// output binding). Owned rows need `uid` = [`session::PRINCIPAL`] or
     /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it.
     sql: Vec<String>,
+    /// Files written into the library directory after the rows, by path
+    /// relative to it: a fixture definition with a second mode over the rig's
+    /// (`fixtures/Luma/Mover.qxf`), say.
+    files: HashMap<String, String>,
 }
 
 impl Default for Fixture {
@@ -180,6 +188,7 @@ impl Default for Fixture {
             seeded_threads: false,
             graph_score: None,
             sql: Vec::new(),
+            files: HashMap::new(),
         }
     }
 }
@@ -547,6 +556,14 @@ impl Fixture {
         if self.rig > 0 {
             self.seed_rig(pool, config_dir).await;
         }
+        for (path, contents) in &self.files {
+            let path = config_dir.join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .expect("failed to create a fixture file's directory");
+            }
+            std::fs::write(&path, contents).expect("failed to write a fixture file");
+        }
         for statement in &self.sql {
             sqlx::query(sqlx::AssertSqlSafe(
                 statement.replace("$PRINCIPAL", session::PRINCIPAL),
@@ -686,6 +703,10 @@ impl Fixture {
                     (clip.end - clip.start) * BEATS_PER_SECOND,
                 );
             placed.seed = clip.seed;
+            if let Some(expression) = &clip.selection {
+                placed.selection = serde_json::from_value(json!({ "expression": expression }))
+                    .expect("a selection expression");
+            }
             placed.z_index = clip.z_index;
             clips.insert(
                 clip.pattern.clone(),
