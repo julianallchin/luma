@@ -1,8 +1,8 @@
 ---
-name: listening-music
+name: live-music
 description: Live bands, acoustic, jazz, singer-songwriter, ambient, downtempo. The music is the show — lighting supports and never steals. Section-level moves, no beat-locking, silence respected.
 ---
-# Listening music
+# Live music
 
 A live band is a live band for a reason. People came for the music, and the
 lighting's job is to make the room feel right while staying out of the way. If
