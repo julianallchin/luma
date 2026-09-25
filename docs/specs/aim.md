@@ -203,10 +203,8 @@ setting and no clip.
 The score and the DMX output are never slowed down. The stage preview shows
 what a real head can do:
 
-- Each previewed head turns toward the solver's target at most at its motor
-  speed: 180° per second by default, or the profile's value when it has one.
-- When the previewed beam is more than 3° from the target, the stage also
-  draws a faint line where the score wants it.
+Each previewed head turns toward the solver's target at most at its motor
+speed: 180° per second by default, or the profile's value when it has one.
 
 ## Presets
 
