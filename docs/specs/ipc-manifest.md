@@ -335,13 +335,13 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | --- | ---: | ---: | --- |
 | `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
 | `controller_state` | 1 | 0 | **orphan** |
-| `library-changed` | 3 | 0 | **orphan** |
-| `midi_learn_captured` | 2 | 0 | **orphan** |
+| `library-changed` | 2 | 0 | **orphan** |
+| `midi_learn_captured` | 1 | 0 | **orphan** |
 | `mixer_learned` | 1 | 0 | **orphan** |
-| `mixer_state` | 2 | 0 | **orphan** |
+| `mixer_state` | 1 | 0 | **orphan** |
 | `perform_event` | 2 | 0 | **orphan** |
-| `python-env-progress` | 5 | 0 | **orphan** |
-| `track-import-state` | 8 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
+| `python-env-progress` | 1 | 0 | **orphan** |
+| `track-import-state` | 2 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 0 | **orphan** |
 | `universe-state-update` | 1 | 0 | **orphan** |
 | `upload-progress-start` | 1 | 0 | **orphan** |
