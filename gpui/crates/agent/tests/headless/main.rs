@@ -18,7 +18,6 @@ mod clip_forms;
 mod library_foundation;
 mod signin;
 mod venue_builder;
-mod venue_patch;
 mod venues;
 
 mod sync_status;
