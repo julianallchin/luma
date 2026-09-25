@@ -24,9 +24,12 @@
 //! (`~/.claude/projects/*/*.jsonl`): every `user`/`assistant` line's key set,
 //! and in particular the exact `tool_result` → `image` → `source` shape
 //! (`{"type":"image","source":{"type":"base64","media_type":...,"data":...}}`)
-//! a real transcript uses for a figure. `continuation()` stays as the last
-//! resort for whatever this can't cover (a non-Claude engine, or a write
-//! failure).
+//! a real transcript uses for a figure.
+//!
+//! `continuation()` stays only as Codex's fallback, which has no hydration
+//! path yet. A hydration failure here is not routed to it: Luma does not
+//! silently eat a bad hydration by falling back to the expensive text
+//! replay — the caller fails the turn loudly instead (see `turn.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -434,5 +437,109 @@ mod tests {
         let body = std::fs::read_to_string(path).unwrap();
         assert_eq!(body.lines().count(), 1);
         std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+}
+
+/// Proof against the real CLI, not just against our own reading of its
+/// on-disk format. `#[ignore]`d: these spawn the installed `claude` binary
+/// under the caller's own login and spend a small amount of quota.
+#[cfg(test)]
+mod live_cli_tests {
+    use super::*;
+    use crate::agent::tools::python::PythonTool;
+    use crate::agent::transcript::{AgentChatMessage, AgentChatPart, Role, ToolPart, ToolState};
+    use std::sync::Arc;
+
+    /// A genuine 1x1 red PNG (69 bytes), not a placeholder string — the
+    /// model has to actually see a picture to answer about its colour.
+    const RED_PNG_BASE64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC";
+
+    /// Hydrates a two-turn history — a number to remember, plus a tool call
+    /// whose result carries a real image — then asks a brand-new
+    /// `claude -p --resume` about both. If the CLI rejects the file, this
+    /// fails loudly with its own message (and, via `claude.rs`, its
+    /// version); a passing run is what actually justifies trusting the
+    /// on-disk shape `to_session_entries` produces.
+    #[tokio::test]
+    #[ignore = "spawns the real claude CLI; needs `claude auth login` and spends a small amount of quota"]
+    async fn a_hydrated_session_resumes_against_the_real_cli() {
+        let cwd = tempfile::tempdir().unwrap();
+        let transcript = Transcript {
+            messages: vec![
+                AgentChatMessage::user(
+                    "u1",
+                    "Remember the number 7291. Then call the python tool to render a colour swatch.",
+                ),
+                AgentChatMessage {
+                    id: "a1".into(),
+                    role: Role::Assistant,
+                    parts: vec![
+                        AgentChatPart::Text {
+                            text: "Got it — 7291. Rendering the swatch now.".into(),
+                        },
+                        AgentChatPart::Tool(ToolPart {
+                            name: Some("python".into()),
+                            dynamic: false,
+                            call_id: "call-1".into(),
+                            state: ToolState::OutputAvailable,
+                            input: Some(json!({
+                                "purpose": "render a colour swatch",
+                                "code": "plt.imshow([[(1, 0, 0)]])",
+                            })),
+                            output: Some(json!({
+                                "status": "ok", "stdout": "", "stderr": "", "repr": null,
+                                "traceback": null, "notices": [], "durationMs": 5,
+                                "figures": [{"width": 1, "height": 1, "base64Png": RED_PNG_BASE64}],
+                            })),
+                            error_text: None,
+                        }),
+                    ],
+                },
+            ],
+        };
+        let registry = ToolRegistry::new(vec![Arc::new(PythonTool)]);
+        let session = hydrate(
+            &transcript,
+            "not-a-real-turn-id",
+            &registry,
+            Some("claude-haiku-4-5"),
+            cwd.path(),
+        )
+        .expect("hydration should build and write a session file");
+        let session_path = project_dir(cwd.path()).join(format!("{}.jsonl", session.id));
+
+        let output = tokio::process::Command::new("claude")
+            .current_dir(cwd.path())
+            .args([
+                "-p",
+                "--resume",
+                &session.id,
+                "--model",
+                "haiku",
+                "what number did I ask you to remember, and what colour was the image?",
+            ])
+            .output()
+            .await
+            .expect("could not run the claude CLI");
+
+        // Clean up the throwaway session regardless of the outcome below.
+        let _ = std::fs::remove_file(&session_path);
+
+        assert!(
+            output.status.success(),
+            "claude CLI exited with {:?}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reply = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            reply.contains("7291"),
+            "expected the remembered number in the reply: {reply}"
+        );
+        assert!(
+            reply.to_lowercase().contains("red"),
+            "expected the image's colour in the reply: {reply}"
+        );
     }
 }

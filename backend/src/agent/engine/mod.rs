@@ -171,12 +171,23 @@ impl Replier {
     }
 }
 
-/// Hydrate a fresh native session for `engine` from `transcript`, for a turn
-/// whose checkpointed process is not resumable (a different engine or model
-/// ran last, the transcript moved, or this machine never ran one for this
-/// thread). `Err` means this engine has no hydration path — only Claude does
-/// so far, see `claude_session` — or the session file could not be written;
-/// either way the caller falls back to `continuation()`.
+/// What hydrating a fresh native session from the transcript produced, for an
+/// engine whose checkpoint could not be literally resumed (a crash, a head
+/// mismatch, a model change, or the first native run for this thread on this
+/// machine — never an engine change: see [`state::ResumeMiss::EngineChanged`],
+/// which the caller must refuse rather than route here).
+pub(super) enum Hydration {
+    Session(state::NativeSession),
+    /// This engine has no hydration path — only Claude does, see
+    /// `claude_session`. The caller falls back to `continuation()`, the one
+    /// remaining reason it still exists.
+    Unsupported,
+}
+
+/// `Err` means hydration was attempted and failed — a real problem (the
+/// session file could not be built or written), not a missing capability.
+/// The caller must fail the turn rather than silently fall back: a bad
+/// hydration is a bug to see and fix, not a cost to eat quietly.
 pub(super) fn hydrate_session(
     engine: Engine,
     transcript: &Transcript,
@@ -184,14 +195,13 @@ pub(super) fn hydrate_session(
     registry: &ToolRegistry,
     model: Option<&str>,
     cwd: &Path,
-) -> Result<state::NativeSession, AgentError> {
+) -> Result<Hydration, AgentError> {
     match engine {
         Engine::Claude => {
             claude_session::hydrate(transcript, turn_message_id, registry, model, cwd)
+                .map(Hydration::Session)
         }
-        Engine::Codex => Err(AgentError::Invalid(
-            "session hydration is not implemented for the Codex engine yet".into(),
-        )),
+        Engine::Codex => Ok(Hydration::Unsupported),
         Engine::Api => unreachable!("API execution has no native session"),
     }
 }
@@ -252,13 +262,8 @@ mod tests {
         }
     }
 
-    /// Conversion-level check for a thread that switches engines mid-run: the
-    /// same Luma transcript hydrates a fresh Claude session both before and
-    /// after an attempt to hydrate it for Codex, and that attempt fails
-    /// cleanly rather than writing anything — Codex hydration is a documented
-    /// gap (see `claude_session`'s module doc), not a silent no-op.
     #[test]
-    fn hydrate_session_supports_claude_but_not_yet_codex_on_the_same_transcript() {
+    fn hydrate_session_dispatches_claude_and_reports_codex_unsupported() {
         use crate::agent::tools::ToolRegistry;
         use crate::agent::transcript::{AgentChatMessage, Transcript};
 
@@ -267,48 +272,33 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         let transcript = Transcript {
             messages: vec![
-                AgentChatMessage::user("u1", "start on the claude engine"),
+                AgentChatMessage::user("u1", "hello"),
                 AgentChatMessage::user("u2", "and then?"),
             ],
         };
         let registry = ToolRegistry::new(vec![]);
 
-        let before = hydrate_session(
+        let claude = hydrate_session(
             Engine::Claude,
             &transcript,
             "u2",
             &registry,
             None,
             cwd.path(),
-        );
-        let claude_session = before.expect("claude hydration should succeed");
+        )
+        .expect("claude hydration should succeed");
+        assert!(matches!(claude, Hydration::Session(_)));
 
-        let codex_attempt = hydrate_session(
+        let codex = hydrate_session(
             Engine::Codex,
             &transcript,
             "u2",
             &registry,
             None,
             cwd.path(),
-        );
-        assert!(
-            codex_attempt.is_err(),
-            "Codex hydration is not implemented yet"
-        );
-
-        let after = hydrate_session(
-            Engine::Claude,
-            &transcript,
-            "u2",
-            &registry,
-            None,
-            cwd.path(),
-        );
-        let claude_session_again = after.expect("claude hydration should still succeed");
-        assert_ne!(
-            claude_session.id, claude_session_again.id,
-            "each hydration mints its own fresh session"
-        );
+        )
+        .expect("Codex being unsupported is not an error");
+        assert!(matches!(codex, Hydration::Unsupported));
 
         std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
