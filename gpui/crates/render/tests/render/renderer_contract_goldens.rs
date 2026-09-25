@@ -100,7 +100,10 @@ fn tracked_contract_frames_match_their_canonical_descriptors() {
         captured["sun-direction-left"],
         captured["sun-direction-right"]
     );
-    assert!(mean_rgb(&captured["sun-off"]) < mean_rgb(&captured["sun-direction-left"]));
+    assert!(
+        crate::common::mean_rgb(&captured["sun-off"])
+            < crate::common::mean_rgb(&captured["sun-direction-left"])
+    );
     let changed_shadow_pixels = captured["sun-shadow-hard"]
         .chunks_exact(4)
         .zip(captured["sun-shadow-soft"].chunks_exact(4))
@@ -126,7 +129,7 @@ fn tracked_contract_frames_match_their_canonical_descriptors() {
         "fixture-cast volumetric shadows changed only {fixture_shadow_pixels} pixels"
     );
     assert!(
-        mean_rgb(shadowed) < mean_rgb(open),
+        crate::common::mean_rgb(shadowed) < crate::common::mean_rgb(open),
         "fixture shadows must remove occluded in-scatter"
     );
 }
@@ -140,12 +143,4 @@ fn read_png(path: &Path) -> Vec<u8> {
     let info = reader.next_frame(&mut pixels).unwrap();
     pixels.truncate(info.buffer_size());
     pixels
-}
-
-fn mean_rgb(pixels: &[u8]) -> f64 {
-    pixels
-        .chunks_exact(4)
-        .map(|pixel| f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2]))
-        .sum::<f64>()
-        / (pixels.len() / 4 * 3) as f64
 }

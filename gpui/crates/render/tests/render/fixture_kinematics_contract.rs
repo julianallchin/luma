@@ -15,7 +15,6 @@
 //!    cannot share a test crate, so the file is included by path from both.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use glam::{Mat3, Mat4, Vec3};
 use luma_render::assets::Library;
@@ -26,7 +25,7 @@ use luma_render::scene_desc::{
 };
 use luma_render::{build_frame, Frame};
 
-#[path = "../../../../backend/crates/fixture-kinematics/contract_vectors.rs"]
+#[path = "../../../../../backend/crates/fixture-kinematics/contract_vectors.rs"]
 mod contract_vectors;
 
 /// The pose the characterization frame uses: nothing symmetric, so a dropped
@@ -98,7 +97,7 @@ fn characterization_frame() -> Frame {
     let mut definitions = BTreeMap::new();
     definitions.insert("mover.qxf".to_string(), mover_definition());
 
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     build_frame(&scene, &definitions, 0.0, &mut Library::new(meshes))
         .expect("characterization scene should build")
 }
@@ -106,7 +105,7 @@ fn characterization_frame() -> Frame {
 /// The bundled moving-head mesh's tilt pivot below the clamp, in the mount's
 /// own data frame (`-Z` is the rest beam), at the mover definition's size.
 fn mesh_pivot_offset() -> Vec3 {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let glb = library.get("qlc/moving_head.glb").unwrap();
     let (lo, hi) = glb.bounds();

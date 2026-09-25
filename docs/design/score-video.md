@@ -352,7 +352,7 @@ of a bake actually exists.
 8. **Verify §2 before committing to the dials.** The numbers in the throughput table
    are extrapolated from the volumetrics goldens, not measured. The instruments already
    exist: `compositor.rs::profile_a_real_score_across_a_window` for the eval side,
-   `gpui/crates/render/tests/stall_probe.rs` for the GPU side. A `bench_record` bin that
+   `gpui/crates/render/tests/render/stall_probe.rs` for the GPU side. A `bench_record` bin that
    renders 300 frames of a real score at both resolutions and both subframe counts
    settles it in an afternoon, and should exist before the quality presets are named.
 

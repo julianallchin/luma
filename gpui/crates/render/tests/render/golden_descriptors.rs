@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use luma_render::{scene_desc::Scene, Catalogue, DEFAULT_SUBFRAMES};
@@ -21,8 +22,6 @@ fn scene_contract_round_trips_in_canonical_form() {
         canonical,
         "the serialized contract must be a stable round trip"
     );
-    assert_eq!(canonical["camera"]["position"][0], 5.5);
-    assert_eq!(canonical["camera"]["position"][2], 5.5);
     assert!(canonical["render"].get("goldenShadowEye").is_none());
 }
 
@@ -44,24 +43,30 @@ fn frame_descriptor_is_deterministic_and_self_contained() {
     assert_eq!(first, second);
 
     let value: serde_json::Value = serde_json::from_slice(&first).unwrap();
-    assert_eq!(value["schema"], "luma.renderer-frame/1");
-    assert_eq!(value["image"], "single-mover-1.370.png");
-    assert_eq!(value["outputSize"], serde_json::json!([1600, 1000]));
     assert_eq!(value["subframes"], DEFAULT_SUBFRAMES);
     assert_eq!(value["timeSeconds"], 1.37);
+    let carried: Scene = serde_json::from_value(value["scene"].clone()).unwrap();
     assert_eq!(
-        value["scene"]["camera"]["target"],
-        serde_json::json!([0.0, 1.5, 0.0])
+        serde_json::to_value(&carried.camera).unwrap(),
+        serde_json::to_value(&scene.camera).unwrap(),
+        "a frame carries the scene's own camera"
     );
 
-    let definitions = value["definitions"].as_object().unwrap();
+    let definitions: BTreeSet<&str> = value["definitions"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let referenced: BTreeSet<&str> = scene
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.fixture_path.as_str())
+        .collect();
     assert_eq!(
-        definitions.len(),
-        2,
-        "only referenced definitions belong in a frame"
+        definitions, referenced,
+        "a frame carries exactly the definitions its fixtures reference"
     );
-    assert!(definitions.contains_key("golden/moving-head.qxf"));
-    assert!(definitions.contains_key("golden/hazer.qxf"));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The pinned vectors, checked on the `backend` side.
 //!
-//! `gpui/crates/render/tests/fixture_kinematics_contract.rs` includes the same
+//! `gpui/crates/render/tests/render/fixture_kinematics_contract.rs` includes the same
 //! file and runs the same assertion. Two workspaces, one set of numbers.
 
 #[path = "../contract_vectors.rs"]

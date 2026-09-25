@@ -63,7 +63,7 @@ partition the **light set**, never the screen and never the medium.
 ## 0.5. Falsification, 2026-08-25: the proxy's ceiling is 2 % of the pass
 
 Phase 2 was shelved on 2026-08-24 against GPU timestamps that under-reported by up to
-8489× (`crates/render/tests/timestamp_lie.rs`), and un-shelved on 2026-08-25 when honest
+8489× (`crates/render/tests/render/timestamp_lie.rs`), and un-shelved on 2026-08-25 when honest
 timestamps showed the volumetric march is the whole lit-frame cost. **The un-shelving was
 also wrong, and this section is why.** The march is indeed the cost; the proxy does not
 address the part of it that costs.

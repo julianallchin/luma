@@ -10,7 +10,7 @@
 //! `timestamp_lie.rs` covers it instead, at a viewport size where the renderer
 //! drops tail samples deterministically without it.
 //!
-//! Run: cargo test -p luma-render --release --test timestamp_query_contract
+//! Run: cargo test -p luma-render --release --test render timestamp_query_contract::
 
 use std::sync::mpsc;
 

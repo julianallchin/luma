@@ -2,7 +2,7 @@
 //!
 //! ```sh
 //! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p luma-render --release \
-//!     --test resize_probe -- --nocapture
+//!     --test render resize_probe:: -- --nocapture
 //! ```
 //!
 //! Scratch instrument, not a gate. The reported symptom is that ⌘B — which
@@ -19,7 +19,6 @@
 //! above by that difference.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use glam::Vec3;
@@ -79,7 +78,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize) -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let scene = scene();
     let mut frame = build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library)

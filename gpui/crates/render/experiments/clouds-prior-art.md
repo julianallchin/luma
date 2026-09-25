@@ -217,7 +217,7 @@ PDF: https://research.nvidia.com/labs/rtr/approximate-mie/publications/approxima
 
 ## What we took for Luma
 
-The implementation is `src/atmosphere/clouds.rs` (presets, weather map, blue noise), `src/atmosphere/cloud_gpu.rs` (passes), `src/shaders/atmosphere_cloud_*.wgsl`, `src/shaders/cloud_shadow.wgsl` and `src/sun_shafts.rs` with `src/shaders/sun_shafts.wgsl`. Tests: `tests/sky_clouds.rs`, `tests/horizon_seam.rs`, the unit tests in `clouds.rs`.
+The implementation is `src/atmosphere/clouds.rs` (presets, weather map, blue noise), `src/atmosphere/cloud_gpu.rs` (passes), `src/shaders/atmosphere_cloud_*.wgsl`, `src/shaders/cloud_shadow.wgsl` and `src/sun_shafts.rs` with `src/shaders/sun_shafts.wgsl`. Tests: `tests/render/sky_clouds.rs`, `tests/render/horizon_seam.rs`, the unit tests in `clouds.rs`.
 
 An earlier version baked a direction-only panorama when the sun or preset changed. It was rejected: it read as a skybox, with no parallax and no moving shadows. The design below is the Unreal and HDRP structure.
 

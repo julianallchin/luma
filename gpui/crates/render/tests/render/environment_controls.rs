@@ -84,14 +84,6 @@ fn probe_settings(direction: [f32; 3], intensity: f32, shadows: bool) -> RenderS
     settings
 }
 
-fn mean_rgb(pixels: &[u8]) -> f64 {
-    pixels
-        .chunks_exact(4)
-        .map(|pixel| f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2]))
-        .sum::<f64>()
-        / (pixels.len() / 4 * 3) as f64
-}
-
 fn shadow_centroid(shadowed: &[u8], direct: &[u8], width: usize) -> (f64, f64) {
     let mut weight = 0.0;
     let mut x_sum = 0.0;
@@ -115,7 +107,7 @@ fn shadow_centroid(shadowed: &[u8], direct: &[u8], width: usize) -> (f64, f64) {
 fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
     const WIDTH: u32 = 192;
     const HEIGHT: u32 = 144;
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let piece = || Piece {
         id: "shadow-caster".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
@@ -157,10 +149,10 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
     let dim = render(probe_settings(left, 0.4, false));
     let bright = render(probe_settings(left, 2.0, false));
     assert!(
-        mean_rgb(&bright) > mean_rgb(&dim) + 1.0,
+        crate::common::mean_rgb(&bright) > crate::common::mean_rgb(&dim) + 1.0,
         "sun intensity was not energy-monotonic: {:.3} -> {:.3}",
-        mean_rgb(&dim),
-        mean_rgb(&bright)
+        crate::common::mean_rgb(&dim),
+        crate::common::mean_rgb(&bright)
     );
 
     let ambient_only = render(probe_settings(left, 0.0, false));
@@ -176,15 +168,15 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
             .zip(dark.chunks_exact(4))
             .any(|(ambient, dark)| (0..3).any(|channel| ambient[channel] > dark[channel])),
         "ambient did not remain independently controllable with the sun off: {:.4} vs {:.4}",
-        mean_rgb(&ambient_visible),
-        mean_rgb(&dark),
+        crate::common::mean_rgb(&ambient_visible),
+        crate::common::mean_rgb(&dark),
     );
     assert!(
-        mean_rgb(&left_direct) > mean_rgb(&ambient_only) + 1.0,
+        crate::common::mean_rgb(&left_direct) > crate::common::mean_rgb(&ambient_only) + 1.0,
         "disabling shadows also removed direct light"
     );
     assert!(
-        mean_rgb(&left_direct) > mean_rgb(&left_shadow),
+        crate::common::mean_rgb(&left_direct) > crate::common::mean_rgb(&left_shadow),
         "disabling shadows did not remove shadow darkening"
     );
 }
@@ -193,7 +185,7 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
 fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 192;
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let piece = || Piece {
         id: "softness-caster".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
@@ -274,7 +266,7 @@ fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
 fn gpu_far_cascade_keeps_directional_occlusion() {
     const WIDTH: u32 = 160;
     const HEIGHT: u32 = 120;
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let definitions = BTreeMap::new();
     let mut library = Library::new(meshes);
     let mut renderer = luma_render::Renderer::new().unwrap();
@@ -413,7 +405,7 @@ fn frame_resolves_sun_environment_and_haze_independently() {
 
 #[test]
 fn textured_pbr_proof_scene_resolves_deterministically() {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let proof_piece = || Piece {
         id: "proof-cdj".into(),
         geometry: Geometry::mesh("stage_lab/cdj_3000x.glb"),
@@ -705,7 +697,7 @@ fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
 
     frame.environment.as_mut().unwrap().intensity = 1.0;
     let high = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-    assert!(mean_rgb(&high) > mean_rgb(&low) + 2.0);
+    assert!(crate::common::mean_rgb(&high) > crate::common::mean_rgb(&low) + 2.0);
     assert!(
         high.chunks_exact(4)
             .any(|pixel| pixel[..3].iter().copied().max().unwrap() > 32),
@@ -719,7 +711,7 @@ fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
     let enabled_again = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     assert_eq!(renderer.upload_stats().environments, 1);
     assert_eq!(high, enabled_again);
-    assert!(mean_rgb(&ambient_fallback) < mean_rgb(&high));
+    assert!(crate::common::mean_rgb(&ambient_fallback) < crate::common::mean_rgb(&high));
 
     frame.environment.as_mut().unwrap().rotation = 90f32.to_radians();
     let rotated = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
@@ -731,7 +723,7 @@ fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
 #[test]
 fn procedural_emissive_survives_the_absent_texture_identity() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens/scenes.json");
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut catalogue = luma_render::Catalogue::load(&path).unwrap();
     let scene = catalogue
         .scenes
@@ -773,7 +765,7 @@ fn procedural_emissive_survives_the_absent_texture_identity() {
 fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
     const WIDTH: u32 = 96;
     const HEIGHT: u32 = 72;
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let proof_piece = || Piece {
         id: "async-proof".into(),
         geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),

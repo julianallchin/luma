@@ -7,7 +7,7 @@
 //! measured GLB, so "does `direction=(0, 0, 1)` build a tower" cannot be
 //! answered without both.
 //!
-//! Run `cargo test -p luma-render --test venue_build`.
+//! Run `cargo test -p luma-render --test render venue_build::`.
 
 use std::path::{Path, PathBuf};
 
