@@ -854,7 +854,7 @@ async fn a_python_call_is_attributed_to_the_durable_user_turn() {
                 },
                 ModelEvent::ToolCallArgsDelta {
                     id: "call_1".into(),
-                    json: r#"{"purpose":"section energy","code":"1 + 1"}"#.into(),
+                    json: r#"{"verb":"Measuring","verbPast":"Measured","purpose":"section energy","code":"1 + 1"}"#.into(),
                 },
                 ModelEvent::ToolCallEnded {
                     id: "call_1".into(),
