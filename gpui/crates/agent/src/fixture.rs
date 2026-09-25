@@ -914,9 +914,11 @@ pub fn config_dir(name: &str) -> PathBuf {
 
 /// What a test script may read back from its library: `{"op": "query",
 /// "sql": …}` gives rows as objects (a blob as its length), `{"op": "score"}`
-/// the score that holds clips as the document the editor saved, and
-/// `{"op": "presets"}` the shipped form presets. Read-only: a test writes
-/// through the app.
+/// the score that holds clips as the document the editor saved,
+/// `{"op": "presets"}` the shipped form presets, `{"op": "curves", "input":
+/// …}` the curve presets an input offers, `{"op": "gradients"}` the named
+/// gradients and `{"op": "shapes"}` the named chase shapes. Read-only: a test
+/// writes through the app.
 pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
     let request: Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -948,6 +950,20 @@ pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
             // The shipped catalogue a placed clip copies from, in menu order.
             Some("presets") => serde_json::to_value(&luma_patterns::presets().presets)
                 .map_err(|error| error.to_string()),
+            // As shipped, 0–1: the sheet scales a pick to the input's range.
+            Some("curves") => {
+                let input = request["input"].as_str().ok_or("curves needs an input")?;
+                let curves: Vec<_> = luma_patterns::presets().curves_for(input).collect();
+                serde_json::to_value(curves).map_err(|error| error.to_string())
+            }
+            Some("gradients") => serde_json::to_value(&luma_patterns::presets().gradients)
+                .map_err(|error| error.to_string()),
+            Some("shapes") => Ok(Value::Array(
+                luma_patterns::shape_presets()
+                    .into_iter()
+                    .map(|(name, value)| json!({ "name": name, "value": value }))
+                    .collect(),
+            )),
             other => Err(format!("unknown library op {other:?}")),
         };
         pool.close().await;
