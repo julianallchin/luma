@@ -1860,6 +1860,13 @@ impl Piece {
         matches!(self.kind.as_str(), "truss" | "stand")
     }
 
+    /// Whether this piece is floor the rig stands on — a deck — rather than
+    /// something on it. The stage camera pivots on the rig before a floor.
+    #[must_use]
+    pub fn is_floor(&self) -> bool {
+        self.kind == "floor"
+    }
+
     /// Half-width of the box [`Scene::framing`] stands on this piece's origin.
     ///
     /// An authored piece's real size is in its mesh, which is loaded
