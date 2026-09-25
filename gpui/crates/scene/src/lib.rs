@@ -32,6 +32,7 @@ pub mod framing;
 pub mod gesture;
 pub mod gizmo;
 pub mod graph;
+pub mod navigate;
 pub mod patch;
 pub mod selection;
 pub mod snap;
@@ -53,6 +54,7 @@ pub use gizmo::{
 pub use graph::{
     MaterialHandle, MeshHandle, Node, NodeContent, NodeFlags, NodeId, SceneGraph, Transform,
 };
+pub use navigate::{FlyKeys, Surface, SurfaceHit, ZoomLimits};
 pub use selection::Selection;
 pub use snap::{solve_snap, Aim, ScenePiece, SnapInput, SnapMatch, SnapResult, SnapSurface};
 pub use sockets::{
