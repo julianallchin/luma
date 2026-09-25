@@ -767,22 +767,24 @@ legs = luma.venue.nodes(label="*leg")
         out.stdout
     );
 
-    // And the sets: nobody grouped anything by hand, so every one of these is
-    // derived from where the movers ended up. A venue with lights in it has
-    // groups, which is the whole point of deriving them.
+    // And the sets: placing lights makes none. `generate_groups()` saves
+    // suggestions derived from where the movers ended up, and `groups()` reads
+    // them back by the same names.
     let out = f
         .run_in_venue(
             &thread,
             &venue_id,
-            "g = luma.venue.groups()\n(len(g) > 0, any(len(n) == 6 for n in g), \
-             all(n.name for n in g), all(n.origin == 'derived' for n in g), \
-             len(g[0].heads) > 0)",
+            "before = len(luma.venue.groups())\n\
+             g = luma.venue.generate_groups()\n\
+             (before, len(g) > 0, any(len(n) == 6 for n in g), \
+             all(n.name for n in g), \
+             [n.name for n in luma.venue.groups()] == [n.name for n in g])",
         )
         .await;
-    expect_ok(&out, "read the group tree");
+    expect_ok(&out, "generate the group tree");
     assert_eq!(
         out.repr.as_deref(),
-        Some("(True, True, True, True, True)"),
+        Some("(0, True, True, True, True)"),
         "{}",
         out.stdout
     );
