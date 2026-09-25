@@ -335,6 +335,26 @@ fn round(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
 }
 
+/// Rebuilds every object with its keys sorted, so a golden's bytes do not
+/// depend on whether a workspace build turned on serde_json's
+/// `preserve_order` for everyone.
+fn sorted_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k, sorted_keys(v)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted_keys).collect()),
+        other => other,
+    }
+}
+
 fn golden() -> String {
     let graph = venue();
     let solved = resolve(&graph, catalog());
@@ -402,13 +422,13 @@ fn golden() -> String {
         })
         .collect();
 
-    let mut out = serde_json::to_string_pretty(&json!({
+    let mut out = serde_json::to_string_pretty(&sorted_keys(json!({
         "nodes": nodes,
         "constraints": constraints,
         "dangling": dangling,
         "unplaced": unplaced,
         "warnings": solved.warnings().len(),
-    }))
+    })))
     .expect("the capture serializes");
     out.push('\n');
     out
@@ -497,10 +517,10 @@ fn tiles_golden() -> String {
             "map": text.lines().collect::<Vec<_>>(),
         })
     };
-    let mut out = serde_json::to_string_pretty(&json!({
+    let mut out = serde_json::to_string_pretty(&sorted_keys(json!({
         "venue-poses": map(0.5),
         "venue-poses-coarse": map(1.0),
-    }))
+    })))
     .expect("the capture serializes");
     out.push('\n');
     out
