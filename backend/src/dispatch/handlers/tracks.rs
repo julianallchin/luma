@@ -186,7 +186,6 @@ pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result
     let storage = services.storage.clone();
     let workers = services.workers.clone();
     let events = services.events.clone();
-    let cache = services.stem_cache.clone();
     let context = ImportEventContext {
         import_id: uuid::Uuid::new_v4().to_string(),
         source: "reprocess".to_string(),
@@ -201,7 +200,6 @@ pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result
                 storage,
                 workers,
                 events,
-                cache,
                 vec![track_id],
                 analysis,
                 context,
@@ -289,7 +287,6 @@ pub(crate) async fn finish_fast_import(
     let storage = services.storage.clone();
     let workers = services.workers.clone();
     let events = services.events.clone();
-    let cache = services.stem_cache.clone();
     let context = ImportEventContext {
         import_id: import_id.to_string(),
         source: source.to_string(),
@@ -301,7 +298,7 @@ pub(crate) async fn finish_fast_import(
         .analysis_tasks
         .spawn(epoch, move |analysis| async move {
             track_service::run_background_analysis(
-                pool, storage, workers, events, cache, new_ids, analysis, context,
+                pool, storage, workers, events, new_ids, analysis, context,
             )
             .await;
         })
@@ -321,14 +318,9 @@ pub(crate) async fn rollback_imports(
 ) -> Result<(), String> {
     let mut failures = Vec::new();
     for track_id in track_ids.iter().rev() {
-        if let Err(error) = track_service::delete_track(
-            &services.db.0,
-            &services.storage,
-            &services.stem_cache,
-            track_id,
-            principal,
-        )
-        .await
+        if let Err(error) =
+            track_service::delete_track(&services.db.0, &services.storage, track_id, principal)
+                .await
         {
             failures.push(format!("{track_id}: {error}"));
         }

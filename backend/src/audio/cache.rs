@@ -5,7 +5,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-use super::decoder::{decode_track_samples, DecodedAudio, SAMPLE_RATE};
+use super::decoder::{decode_track_samples, SAMPLE_RATE};
 
 /// Cache file format version - increment when format changes.
 /// Every writer emits this; [`read_pcm_file`] accepts 1 or 2 (both describe the
@@ -31,34 +31,74 @@ pub struct PcmData {
     pub version: u32,
 }
 
+/// A `.pcm` file's header. `len` is the interleaved sample count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PcmHeader {
+    pub version: u32,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub len: u64,
+}
+
+/// Parse and validate the header. Accepts format versions 1 and 2, a nonzero
+/// rate and channel count, and a sample count that is whole frames.
+fn parse_pcm_header(reader: &mut impl Read, path: &Path) -> Result<PcmHeader, String> {
+    let mut buf = [0u8; PCM_HEADER_LEN];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| format!("Failed to read pcm header {}: {e}", path.display()))?;
+    let header = PcmHeader {
+        version: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+        sample_rate: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+        channels: u16::from_le_bytes(buf[8..10].try_into().unwrap()),
+        len: u64::from_le_bytes(buf[10..18].try_into().unwrap()),
+    };
+    let problem = if header.version == 0 || header.version > CACHE_VERSION {
+        format!("unsupported pcm version {}", header.version)
+    } else if header.sample_rate == 0 || header.channels == 0 {
+        "pcm header declares a zero sample rate or channel count".into()
+    } else if !header.len.is_multiple_of(u64::from(header.channels)) {
+        "pcm sample count is not whole frames".into()
+    } else {
+        return Ok(header);
+    };
+    Err(format!("{problem} in {}", path.display()))
+}
+
+/// Read a `.pcm` file's header, checking the file holds exactly the samples it
+/// declares. For callers that hand the payload on without loading it.
+pub fn read_pcm_header(path: &Path) -> Result<PcmHeader, String> {
+    let mut file =
+        File::open(path).map_err(|e| format!("Failed to open pcm {}: {e}", path.display()))?;
+    let header = parse_pcm_header(&mut file, path)?;
+    let actual = file.metadata().map_err(|e| e.to_string())?.len();
+    let expected = PCM_HEADER_LEN as u64 + header.len * 4;
+    if actual != expected {
+        return Err(format!(
+            "pcm {} is {actual} bytes, its header declares {expected}",
+            path.display()
+        ));
+    }
+    Ok(header)
+}
+
 /// Read a `.pcm` cache file. The one reader for this format — the eval engine,
-/// the golden harness and the decode cache all go through here.
+/// the golden harness, the agent and the decode cache all go through here.
 ///
-/// Accepts format versions 1 and 2. Anything else, a truncated header, or a
-/// payload shorter than the declared length is an error (callers treat a failed
-/// read as "cache miss, re-derive").
+/// A header [`parse_pcm_header`] rejects or a payload shorter than the declared
+/// length is an error (callers treat a failed read as "cache miss, re-derive").
 pub fn read_pcm_file(path: &Path) -> Result<PcmData, String> {
     let mut reader = BufReader::new(
         File::open(path).map_err(|e| format!("Failed to open pcm {}: {e}", path.display()))?,
     );
+    let PcmHeader {
+        version,
+        sample_rate,
+        channels,
+        len,
+    } = parse_pcm_header(&mut reader, path)?;
 
-    let mut header = [0u8; PCM_HEADER_LEN];
-    reader
-        .read_exact(&mut header)
-        .map_err(|e| format!("Failed to read pcm header {}: {e}", path.display()))?;
-
-    let version = u32::from_le_bytes(header[0..4].try_into().unwrap());
-    if version == 0 || version > CACHE_VERSION {
-        return Err(format!(
-            "Unsupported pcm version {version} in {} (expected 1..={CACHE_VERSION})",
-            path.display()
-        ));
-    }
-    let sample_rate = u32::from_le_bytes(header[4..8].try_into().unwrap());
-    let channels = u16::from_le_bytes(header[8..10].try_into().unwrap());
-    let len = u64::from_le_bytes(header[10..18].try_into().unwrap()) as usize;
-
-    let mut bytes = vec![0u8; len * 4];
+    let mut bytes = vec![0u8; len as usize * 4];
     reader
         .read_exact(&mut bytes)
         .map_err(|e| format!("Failed to read pcm samples {}: {e}", path.display()))?;
@@ -120,18 +160,18 @@ pub fn write_pcm_file(
 /// audio twice. Bounded LRU; entries are `Arc` so a hit is an O(1) clone.
 #[derive(Default)]
 struct SharedDecodeState {
-    cache: Vec<(String, Arc<DecodedAudio>)>,
+    cache: Vec<(String, Arc<Vec<f32>>)>,
     in_flight: HashMap<String, Arc<DecodeFlight>>,
 }
 
 #[derive(Default)]
 struct DecodeFlight {
-    result: Mutex<Option<Result<Arc<DecodedAudio>, String>>>,
+    result: Mutex<Option<Result<Arc<Vec<f32>>, String>>>,
     ready: Condvar,
 }
 
 impl DecodeFlight {
-    fn wait(&self) -> Result<Arc<DecodedAudio>, String> {
+    fn wait(&self) -> Result<Arc<Vec<f32>>, String> {
         let mut result = lock(&self.result);
         while result.is_none() {
             result = self
@@ -142,7 +182,7 @@ impl DecodeFlight {
         result.as_ref().expect("decode flight was signaled").clone()
     }
 
-    fn publish(&self, result: Result<Arc<DecodedAudio>, String>) {
+    fn publish(&self, result: Result<Arc<Vec<f32>>, String>) {
         *lock(&self.result) = Some(result);
         self.ready.notify_all();
     }
@@ -163,7 +203,7 @@ const DECODE_RAM_CACHE_MAX: usize = 3;
 pub fn load_or_decode_audio_shared(
     track_path: &Path,
     track_hash: &str,
-) -> Result<Arc<DecodedAudio>, String> {
+) -> Result<Arc<Vec<f32>>, String> {
     load_or_decode_audio_shared_by_key(track_hash.to_owned(), || {
         load_or_decode_audio(track_path, track_hash)
     })
@@ -171,8 +211,8 @@ pub fn load_or_decode_audio_shared(
 
 fn load_or_decode_audio_shared_by_key(
     key: String,
-    decode: impl FnOnce() -> Result<DecodedAudio, String>,
-) -> Result<Arc<DecodedAudio>, String> {
+    decode: impl FnOnce() -> Result<Vec<f32>, String>,
+) -> Result<Arc<Vec<f32>>, String> {
     let (flight, leader) = {
         let mut shared = lock(&SHARED_DECODES);
         if let Some(index) = shared.cache.iter().position(|(cached, _)| cached == &key) {
@@ -238,13 +278,14 @@ fn cache_dir_for_track(track_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_dir)
 }
 
-/// Load audio from cache or decode from file, as stereo at [`SAMPLE_RATE`].
+/// Load audio from cache or decode from file, as stereo interleaved samples at
+/// [`SAMPLE_RATE`].
 ///
 /// The cache is `<dir of the audio file>/cache/<hash>.pcm`. Only a current-format
 /// stereo file at [`SAMPLE_RATE`] is a hit; anything else — an older version
 /// (v1 at this path is the old mono format), another rate, a corrupt file — is
 /// re-decoded and overwritten.
-pub fn load_or_decode_audio(track_path: &Path, track_hash: &str) -> Result<DecodedAudio, String> {
+fn load_or_decode_audio(track_path: &Path, track_hash: &str) -> Result<Vec<f32>, String> {
     let Ok(cache_dir) = cache_dir_for_track(track_path) else {
         return decode_track_samples(track_path);
     };
@@ -252,15 +293,12 @@ pub fn load_or_decode_audio(track_path: &Path, track_hash: &str) -> Result<Decod
     if let Ok(cached) = read_pcm_file(&cache_file) {
         if (cached.version, cached.sample_rate, cached.channels) == (CACHE_VERSION, SAMPLE_RATE, 2)
         {
-            return Ok(DecodedAudio {
-                samples: cached.samples,
-                channels: cached.channels,
-            });
+            return Ok(cached.samples);
         }
     }
 
     let decoded = decode_track_samples(track_path)?;
-    if let Err(err) = write_pcm_file(&cache_file, &decoded.samples, SAMPLE_RATE, decoded.channels) {
+    if let Err(err) = write_pcm_file(&cache_file, &decoded, SAMPLE_RATE, 2) {
         eprintln!(
             "[audio-cache] failed to write cache {}: {}",
             cache_file.display(),
@@ -287,11 +325,8 @@ mod tests {
         )
     }
 
-    fn decoded(sample: f32) -> DecodedAudio {
-        DecodedAudio {
-            samples: vec![sample, sample],
-            channels: 2,
-        }
+    fn decoded(sample: f32) -> Vec<f32> {
+        vec![sample, sample]
     }
 
     fn tmp(name: &str) -> PathBuf {
@@ -355,7 +390,7 @@ mod tests {
         stamp_version(&path, 99);
 
         let err = read_pcm_file(&path).unwrap_err();
-        assert!(err.contains("Unsupported pcm version 99"), "{err}");
+        assert!(err.contains("unsupported pcm version 99"), "{err}");
         std::fs::remove_file(&path).ok();
     }
 
@@ -377,6 +412,36 @@ mod tests {
 
         let err = read_pcm_file(&path).unwrap_err();
         assert!(err.contains("Failed to read pcm samples"), "{err}");
+        let err = read_pcm_header(&path).unwrap_err();
+        assert!(err.contains("its header declares 30"), "{err}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn header_rejects_degenerate_fields_and_trailing_bytes() {
+        let path = tmp("header.pcm");
+        write_pcm_file(&path, &[0.0; 4], 48_000, 2).unwrap();
+        let header = read_pcm_header(&path).unwrap();
+        assert_eq!(
+            (header.sample_rate, header.channels, header.len),
+            (48_000, 2, 4)
+        );
+
+        for (rate, channels, samples, problem) in [
+            (0, 2, 4, "zero sample rate"),
+            (48_000, 0, 4, "zero sample rate or channel count"),
+            (48_000, 3, 4, "not whole frames"),
+        ] {
+            write_pcm_file(&path, &vec![0.0; samples], rate, channels).unwrap();
+            let err = read_pcm_header(&path).unwrap_err();
+            assert!(err.contains(problem), "{err}");
+        }
+
+        write_pcm_file(&path, &[0.0; 2], 48_000, 1).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.push(0);
+        std::fs::write(&path, bytes).unwrap();
+        assert!(read_pcm_header(&path).is_err());
         std::fs::remove_file(&path).ok();
     }
 
@@ -411,7 +476,7 @@ mod tests {
         write_pcm_file(&cache, &[0.5; 8], 44_100, 2).unwrap();
 
         let audio = load_or_decode_audio(&track, "hash").unwrap();
-        let frames = audio.samples.len() / 2;
+        let frames = audio.len() / 2;
         assert!(frames.abs_diff(SAMPLE_RATE as usize) < 100, "{frames}");
 
         let rewritten = read_pcm_file(&cache).unwrap();
@@ -419,7 +484,7 @@ mod tests {
             (rewritten.version, rewritten.sample_rate, rewritten.channels),
             (CACHE_VERSION, SAMPLE_RATE, 2)
         );
-        assert_eq!(rewritten.samples, audio.samples);
+        assert_eq!(rewritten.samples, audio);
     }
 
     #[test]
@@ -527,6 +592,6 @@ mod tests {
         assert_eq!(waiter_error, leader_error);
 
         let retry = load_or_decode_audio_shared_by_key(key, || Ok(decoded(0.75))).unwrap();
-        assert_eq!(retry.samples, vec![0.75, 0.75]);
+        assert_eq!(*retry, vec![0.75, 0.75]);
     }
 }

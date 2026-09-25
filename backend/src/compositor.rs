@@ -7,7 +7,6 @@
 
 use std::path::Path;
 
-use crate::audio::StemCache;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
 use crate::models::node_graph::BeatGrid;
@@ -24,13 +23,11 @@ pub(crate) async fn leave_track(
     pool: &sqlx::SqlitePool,
     render_engine: &RenderEngine,
     host_audio: &crate::host_audio::HostAudioState,
-    stem_cache: &StemCache,
     score_id: &str,
 ) -> Result<(), String> {
-    let (_access, track_id) = score_scope(pool, score_id).await?;
+    score_scope(pool, score_id).await?;
     render_engine.set_active_scene(None);
     host_audio.unload();
-    stem_cache.remove_track(&track_id);
     Ok(())
 }
 

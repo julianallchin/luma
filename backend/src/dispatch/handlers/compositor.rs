@@ -31,7 +31,7 @@ pub async fn composite_track(
 }
 
 /// Leave the track editor: abort any in-flight composite, drop the active
-/// scene, unload host audio, and evict the track's stems.
+/// scene, and unload host audio.
 ///
 /// Takes the *score* id — the track is resolved under the score's venue
 /// authorization, so this must be called before the score row is deleted.
@@ -40,7 +40,6 @@ pub async fn leave_track(services: &AppServices, score_id: String) -> Result<(),
         &services.db.0,
         &services.render_engine,
         &services.host_audio,
-        &services.stem_cache,
         &score_id,
     )
     .await?;

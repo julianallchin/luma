@@ -13,22 +13,6 @@ use symphonia::default::{get_codecs, get_probe};
 /// rate in its output stream and nowhere else.
 pub const SAMPLE_RATE: u32 = 48_000;
 
-/// Decoded audio data with channel information, at [`SAMPLE_RATE`].
-pub struct DecodedAudio {
-    /// Interleaved stereo samples [L0, R0, L1, R1, ...]
-    pub samples: Vec<f32>,
-    /// Number of channels (always 2 for stereo output)
-    pub channels: u16,
-}
-
-impl DecodedAudio {
-    /// Convert stereo to mono by averaging L and R channels.
-    /// Useful for analysis functions (waveforms, mel specs, beat detection).
-    pub fn to_mono(&self) -> Vec<f32> {
-        stereo_to_mono(&self.samples)
-    }
-}
-
 /// Convert stereo interleaved samples to mono by averaging L and R channels.
 pub fn stereo_to_mono(stereo_samples: &[f32]) -> Vec<f32> {
     stereo_samples
@@ -37,9 +21,10 @@ pub fn stereo_to_mono(stereo_samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// Decode audio file to stereo interleaved samples at [`SAMPLE_RATE`].
-/// All audio is output as stereo - mono sources are duplicated to both channels.
-pub fn decode_track_samples(path: &Path) -> Result<DecodedAudio, String> {
+/// Decode audio file to stereo interleaved samples [L0, R0, L1, R1, ...] at
+/// [`SAMPLE_RATE`]. Mono sources are duplicated to both channels. Only the
+/// decode cache calls this; everything else goes through it.
+pub(super) fn decode_track_samples(path: &Path) -> Result<Vec<f32>, String> {
     // Try ffmpeg first (Hybrid Approach)
     if let Ok(audio) = decode_ffmpeg(path) {
         return Ok(audio);
@@ -129,13 +114,10 @@ pub fn decode_track_samples(path: &Path) -> Result<DecodedAudio, String> {
         return Err("Audio file produced no samples".into());
     }
 
-    Ok(DecodedAudio {
-        samples: resample(samples, sample_rate),
-        channels: 2,
-    })
+    Ok(resample(samples, sample_rate))
 }
 
-fn decode_ffmpeg(path: &Path) -> Result<DecodedAudio, String> {
+fn decode_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
     let ffmpeg = crate::ffmpeg_env::ffmpeg_path();
     let mut cmd = Command::new(&ffmpeg);
     crate::cmd_util::no_window(&mut cmd);
@@ -163,19 +145,11 @@ fn decode_ffmpeg(path: &Path) -> Result<DecodedAudio, String> {
         ));
     }
 
-    let data = output.stdout;
-    let samples: Vec<f32> = data
+    Ok(output
+        .stdout
         .chunks_exact(4)
-        .map(|chunk| {
-            let arr: [u8; 4] = chunk.try_into().unwrap();
-            f32::from_le_bytes(arr)
-        })
-        .collect();
-
-    Ok(DecodedAudio {
-        samples,
-        channels: 2,
-    })
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect())
 }
 
 /// Resample stereo interleaved audio [L0, R0, L1, R1, ...] from `src_rate` to

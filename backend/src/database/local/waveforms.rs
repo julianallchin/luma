@@ -16,7 +16,6 @@ pub struct StoredWaveform<'a> {
     pub bands_blob: &'a [u8],
     pub preview_bands_blob: &'a [u8],
     pub band_gains: BandGains,
-    pub sample_rate: i64,
     pub decoded_duration: f64,
 }
 
@@ -50,8 +49,8 @@ pub async fn upsert_track_waveform_for_connection(
     waveform: &StoredWaveform<'_>,
 ) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, bands_blob, preview_bands_blob, band_gain_low, band_gain_mid, band_gain_high, sample_rate, decoded_duration)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO track_waveforms (track_id, uid, preview_samples_blob, full_samples_blob, bands_blob, preview_bands_blob, band_gain_low, band_gain_mid, band_gain_high, decoded_duration)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(track_id) DO UPDATE SET
             uid = excluded.uid,
             preview_samples_blob = excluded.preview_samples_blob,
@@ -61,7 +60,6 @@ pub async fn upsert_track_waveform_for_connection(
             band_gain_low = excluded.band_gain_low,
             band_gain_mid = excluded.band_gain_mid,
             band_gain_high = excluded.band_gain_high,
-            sample_rate = excluded.sample_rate,
             decoded_duration = excluded.decoded_duration,
             updated_at = datetime('now')",
     )
@@ -74,7 +72,6 @@ pub async fn upsert_track_waveform_for_connection(
     .bind(f64::from(waveform.band_gains.low))
     .bind(f64::from(waveform.band_gains.mid))
     .bind(f64::from(waveform.band_gains.high))
-    .bind(waveform.sample_rate)
     .bind(waveform.decoded_duration)
     .execute(connection)
     .await
@@ -102,7 +99,7 @@ pub async fn fetch_track_waveform_for_connection(
 ) -> Result<Option<TrackWaveform>, String> {
     sqlx::query_as::<_, TrackWaveform>(
         "SELECT track_id, uid, preview_samples_blob, full_samples_blob,
-         bands_blob, preview_bands_blob, sample_rate, decoded_duration
+         bands_blob, preview_bands_blob, decoded_duration
          FROM track_waveforms WHERE track_id = ?",
     )
     .bind(track_id)

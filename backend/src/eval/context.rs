@@ -181,7 +181,7 @@ pub(crate) fn load_track_audio_cached(
         None => {
             let decoded = load_or_decode_audio_shared(Path::new(file_path), track_hash)
                 .map_err(|error| format!("track audio unavailable at {file_path}: {error}"))?;
-            let audio = Arc::new(stereo_to_mono(&decoded.samples));
+            let audio = Arc::new(stereo_to_mono(&decoded));
             if let Err(e) = write_pcm_file(&mono_path, &audio, SAMPLE_RATE, 1) {
                 log::warn!("[ctx] failed to write mono audio cache: {e}");
             }

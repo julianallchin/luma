@@ -10,7 +10,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::audio::{decode_track_samples, filter_3band, FilteredBands, SAMPLE_RATE};
+use crate::audio::{filter_3band, stereo_to_mono, FilteredBands, SAMPLE_RATE};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::database::local::waveforms::StoredWaveform;
@@ -55,7 +55,7 @@ pub(crate) async fn ensure_track_waveform(
             .map_err(|error| format!("Failed to load waveform source: {error}"))?;
     drop(initial);
 
-    let computed = compute_waveform_payload(Path::new(&file_path), track_id, analysis).await?;
+    let computed = compute_waveform_payload(file_path, &track_hash, track_id, analysis).await?;
     analysis.checkpoint()?;
 
     // Publication and the identity transition use the same SQLite write lock.
@@ -91,7 +91,6 @@ pub(crate) async fn ensure_track_waveform(
             bands_blob: &bands_blob,
             preview_bands_blob: &preview_bands_blob,
             band_gains: computed.gains,
-            sample_rate: SAMPLE_RATE as i64,
             decoded_duration: computed.duration_seconds,
         },
     )
@@ -108,7 +107,6 @@ pub(crate) async fn ensure_track_waveform(
             full_samples: Some(computed.full_samples),
             bands: Some(computed.bands),
             preview_bands: Some(computed.preview_bands),
-            sample_rate: SAMPLE_RATE,
             duration_seconds: computed.duration_seconds,
         },
         computed.gains,
@@ -116,7 +114,8 @@ pub(crate) async fn ensure_track_waveform(
 }
 
 async fn compute_waveform_payload(
-    track_path: &Path,
+    file_path: String,
+    track_hash: &str,
     track_id: &str,
     analysis: &AnalysisGuard,
 ) -> Result<ComputedWaveform, String> {
@@ -124,12 +123,12 @@ async fn compute_waveform_payload(
 
     eprintln!("[waveform] computing waveforms for track {}", track_id);
 
-    // Decode audio samples (returns stereo, convert to mono for waveform analysis)
+    // Decode through the shared cache (stereo), then downmix for analysis.
     let t0 = Instant::now();
-    let path = track_path.to_path_buf();
+    let track_hash = track_hash.to_owned();
     let samples = tokio::task::spawn_blocking(move || -> Result<Vec<f32>, String> {
-        // Convert stereo to mono for waveform analysis
-        Ok(decode_track_samples(&path)?.to_mono())
+        let audio = crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash)?;
+        Ok(stereo_to_mono(&audio))
     })
     .await
     .map_err(|e| format!("Waveform decode task failed: {}", e))??;
@@ -272,7 +271,7 @@ pub async fn get_track_waveform_signal(
     .map_err(|error| format!("Waveform decode task failed: {error}"))??;
 
     tokio::task::spawn_blocking(move || {
-        let mono = audio.to_mono();
+        let mono = stereo_to_mono(&audio);
         let filtered = filter_3band(&mono, SAMPLE_RATE as f32);
         WaveformSignal {
             bands: [filtered.low, filtered.mid, filtered.high],

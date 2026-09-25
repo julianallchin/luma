@@ -15,10 +15,7 @@ use crate::agent_execution::bindings::manifest::{
     Coordinates, TensorRef, SCHEMA_VERSION,
 };
 use crate::agent_execution::error::{err, Result};
-
-/// The `pcm_f32` header is 18 bytes; a tensor into a PCM artifact must start at
-/// or after it (contract C1).
-pub const PCM_HEADER_LEN: u64 = 18;
+use crate::audio::PCM_HEADER_LEN;
 
 #[derive(Debug)]
 pub struct BindingBuilder {
@@ -256,7 +253,8 @@ fn validate_tensor(
                 tensor.byte_offset
             ));
         }
-        ArtifactEncoding::PcmF32 if tensor.byte_offset < PCM_HEADER_LEN => {
+        // A tensor into a PCM artifact must start at or after the header (contract C1).
+        ArtifactEncoding::PcmF32 if tensor.byte_offset < PCM_HEADER_LEN as u64 => {
             return err(format!(
                 "tensor '{path}': pcm_f32 byte_offset {} is inside the {PCM_HEADER_LEN}-byte header",
                 tensor.byte_offset
