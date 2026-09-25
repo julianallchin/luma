@@ -395,7 +395,10 @@ mod tests {
                 .fetch_one(&services.db.0)
                 .await
                 .unwrap();
-        assert!(authored.is_some(), "a repair is an edit, and the score says so");
+        assert!(
+            authored.is_some(),
+            "a repair is an edit, and the score says so"
+        );
     }
     #[tokio::test]
     async fn legacy_conversion_preserves_overridden_names_and_member_sets() {
