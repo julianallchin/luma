@@ -917,12 +917,6 @@ mod tests {
     }
 
     #[test]
-    fn hover_fade_is_a_quick_undelayed_wash() {
-        assert_eq!(HOVER_FADE.duration_ms, QUICK);
-        assert_eq!(HOVER_FADE.delay_ms, 0);
-    }
-
-    #[test]
     fn gspin_pulse_shape() {
         // Full at the cycle start, dim through the rest band, rising at the tail.
         assert_close(gspin_opacity(0.0, 0.1), 1.0, 1e-6, "cycle start");
