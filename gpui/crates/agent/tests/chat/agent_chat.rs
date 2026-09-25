@@ -97,7 +97,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     );
     assert_eq!(
         labels(&streaming, "chip"),
-        vec!["Running ramp peak check"],
+        vec!["Checking ramp peak"],
         "the tool call has no chip"
     );
 
@@ -105,7 +105,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     let settled = run(
         &mut session,
         r#"
-            until("the turn end", (s) => chips(s).some((c) => c === "ramp peak check")
+            until("the turn end", (s) => chips(s).some((c) => c === "Checked ramp peak")
                 && !s.findAll({ role: "text" }).some((n) => n.label === "Working")).nodes
         "#,
     );
@@ -120,7 +120,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     );
     assert_eq!(
         labels(&settled, "chip"),
-        vec!["ramp peak check"],
+        vec!["Checked ramp peak"],
         "the chip did not settle"
     );
     assert!(

@@ -1,6 +1,6 @@
 //! The `python` tool: one persistent kernel per agent thread.
 //!
-//! The model supplies a purpose and the code. Workspace, thread, binding
+//! The model supplies a verb, a purpose and the code. Workspace, thread, binding
 //! revision, scope ids and the graph snapshot come from the host-selected turn
 //! context, never from model tool arguments.
 
@@ -34,11 +34,18 @@ const MAX_MODEL_FIGURE_BYTES: usize = 6_000_000;
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PythonArgs {
-    /// A short noun phrase describing the intended outcome; it must read
-    /// naturally after "Running".
+    /// The verb for the cell's work, ending in -ing, for example "Measuring".
     ///
-    /// Never read on this side: the chat titles a chip from the *persisted*
-    /// input, so this field's whole job is to put itself in the schema.
+    /// Never read on this side, like the two fields after it: the chat titles
+    /// a chip from the *persisted* input, so their whole job is to put
+    /// themselves in the schema.
+    #[allow(dead_code)]
+    verb: String,
+    /// The past tense of `verb`, for example "Measured".
+    #[allow(dead_code)]
+    verb_past: String,
+    /// A short phrase that follows the verb, for example "beat energy in bars
+    /// 7–13".
     #[allow(dead_code)]
     purpose: String,
     /// Python cell source.
@@ -59,7 +66,10 @@ impl Tool for PythonTool {
 
     fn schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(PythonArgs)).unwrap_or_else(
-            |_| serde_json::json!({ "type": "object", "required": ["purpose", "code"] }),
+            |_| serde_json::json!({
+                "type": "object",
+                "required": ["verb", "verbPast", "purpose", "code"],
+            }),
         )
     }
 
@@ -278,8 +288,10 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_names_both_arguments() {
+    fn the_schema_names_every_argument() {
         let schema = PythonTool.schema();
+        assert!(schema["properties"]["verb"].is_object());
+        assert!(schema["properties"]["verbPast"].is_object());
         assert!(schema["properties"]["purpose"].is_object());
         assert!(schema["properties"]["code"].is_object());
     }

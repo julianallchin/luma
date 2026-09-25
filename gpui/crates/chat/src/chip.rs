@@ -77,11 +77,46 @@ fn verb(tool: &str) -> Verb {
 /// same shape.
 const DETAIL_MAX: usize = 48;
 
-/// The chip's label — also what the automation tree reports, which is why the
-/// phrasing lives in one function rather than being assembled at the element.
+/// A chip's label in its two tones: the verb, which is brighter, and the
+/// detail after it, which is darker.
+pub struct Label {
+    /// The verb, with its noun for a tool that names one ("Read skill").
+    pub verb: String,
+    /// Everything after the verb, including its leading separator.
+    pub detail: Option<String>,
+    /// The call failed. The chip shows a red dot; the text does not change.
+    pub failed: bool,
+    /// The call has not settled yet.
+    pub running: bool,
+}
+
+impl Label {
+    /// The label as one line, without the failure mark.
+    #[must_use]
+    pub fn text(&self) -> String {
+        format!("{}{}", self.verb, self.detail.as_deref().unwrap_or(""))
+    }
+}
+
+/// The chip's label as the automation tree reports it — the painted text, with
+/// the red dot spelled out, because a driver cannot see a colour.
 pub fn label(tool: &ToolPart) -> SharedString {
+    let parts = label_parts(tool);
+    if parts.failed {
+        format!("{} · Failed", parts.text()).into()
+    } else {
+        parts.text().into()
+    }
+}
+
+/// The phrasing lives in this one function rather than being assembled at the
+/// element, so the painted chip and the automation tree cannot drift.
+pub fn label_parts(tool: &ToolPart) -> Label {
+    let running = matches!(
+        tool.state,
+        ToolState::InputStreaming | ToolState::InputAvailable
+    );
     if tool.tool_name() == "python" {
-        let purpose = detail(tool).unwrap_or_else(|| "Analysis".into());
         let failed = matches!(tool.state, ToolState::OutputError)
             || tool.error_text.is_some()
             || tool
@@ -90,26 +125,44 @@ pub fn label(tool: &ToolPart) -> SharedString {
                 .and_then(|output| output.get("status"))
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|status| matches!(status, "error" | "failed" | "interrupted"));
-        if failed {
-            return format!("{purpose} · Failed").into();
+        // The model writes its own verb in both tenses. A call made before
+        // the schema asked for one falls back to the default verb, which
+        // reads well before the noun phrase those calls were asked for.
+        let verb = if running {
+            string_arg(tool, "verb")
+        } else {
+            string_arg(tool, "verbPast").or_else(|| string_arg(tool, "verb"))
         }
-        return match tool.state {
-            ToolState::InputStreaming | ToolState::InputAvailable => {
-                format!("Running {purpose}").into()
-            }
-            _ => purpose.into(),
+        .map(|verb| clip(&one_line(&verb), VERB_MAX))
+        .unwrap_or_else(|| {
+            let tense = if running {
+                DEFAULT_VERB.running
+            } else {
+                DEFAULT_VERB.past
+            };
+            tense.to_string()
+        });
+        let detail = detail(tool).unwrap_or_else(|| "analysis".into());
+        return Label {
+            verb,
+            detail: Some(format!(" {detail}")),
+            failed,
+            running,
         };
     }
     let verb = verb(tool.tool_name());
-    let tense = match tool.state {
-        ToolState::InputStreaming | ToolState::InputAvailable => verb.running,
-        _ => verb.past,
-    };
-    match detail(tool) {
-        Some(detail) => format!("{tense} {} · {detail}", verb.noun).into(),
-        None => format!("{tense} {}", verb.noun).into(),
+    let tense = if running { verb.running } else { verb.past };
+    Label {
+        verb: format!("{tense} {}", verb.noun),
+        detail: detail(tool).map(|detail| format!(" · {detail}")),
+        failed: matches!(tool.state, ToolState::OutputError),
+        running,
     }
 }
+
+/// Longest verb a chip shows before it is clipped, in characters. The model
+/// writes the verb, so it needs a bound of its own.
+const VERB_MAX: usize = 24;
 
 /// One clipped line of narration after the verb.
 ///
@@ -160,13 +213,13 @@ fn clip(line: &str, max: usize) -> String {
 }
 
 /// Consecutive calls share a compact stack aligned with the transcript.
-pub fn rail(tools: &[&ToolPart], ctx: &RowCtx, window: &Window) -> AnyElement {
+pub fn rail(tools: &[&ToolPart], ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> AnyElement {
     div()
         .flex()
         .flex_none()
         .flex_col()
         .min_w_0()
-        .children(tools.iter().map(|tool| row(tool, ctx, window)))
+        .children(tools.iter().map(|tool| row(tool, ctx, window, cx)).collect::<Vec<_>>())
         .into_any_element()
 }
 
@@ -360,7 +413,7 @@ const PILL_MAX_WIDTH: f32 = 256.0;
 
 /// One tool call: a compact purpose label and disclosure chevron,
 /// and its detail card when the chevron has been answered.
-fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window) -> AnyElement {
+fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> AnyElement {
     if tool.tool_name() == "subagent" {
         return subagent_pill(tool, ctx);
     }
@@ -374,19 +427,18 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window) -> AnyElement {
     let call_id = SharedString::from(tool.call_id.clone());
     let id = SharedString::from(format!("chat-chip-{call_id}"));
     let row_ix = ctx.ix;
-    let tint = match tool.state {
-        ToolState::OutputError => theme.danger,
-        _ if cell.as_ref().is_some_and(|cell| {
+    let parts = label_parts(tool);
+    let failed = parts.failed
+        || cell.as_ref().is_some_and(|cell| {
             matches!(
                 cell.status(),
                 crate::python_cell::Status::Raised | crate::python_cell::Status::Stopped
             )
-        }) =>
-        {
-            theme.danger
-        }
-        _ => theme.text_muted,
-    };
+        });
+    // A call left running in a settled turn was interrupted: it is not
+    // working, so it does not shimmer.
+    let phase = (parts.running && ctx.live)
+        .then(|| luma_ui::motion::pulse_delta(&SHIMMER, ctx.chat.entity_id(), cx));
     div()
         .flex()
         .flex_none()
@@ -414,9 +466,18 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window) -> AnyElement {
                         .min_w_0()
                         .truncate()
                         .text_size(px(13.0))
-                        .text_color(tint)
-                        .child(text.clone()),
+                        .text_color(theme.text_muted)
+                        .child(two_tone(&parts, phase, theme)),
                 )
+                .when(failed, |el| {
+                    el.child(
+                        div()
+                            .size(px(FAILED_DOT))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(theme.danger),
+                    )
+                })
                 .child(
                     div()
                         .size(px(theme::CHIP_CHEVRON))
@@ -454,6 +515,59 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window) -> AnyElement {
             })
         })
         .into_any_element()
+}
+
+/// The red dot beside a failed call's label.
+const FAILED_DOT: f32 = 6.0;
+
+/// One pass of the shimmer across a running call's label.
+const SHIMMER: luma_ui::motion::MotionSpec =
+    luma_ui::motion::MotionSpec::new(1800, luma_ui::motion::ROOT);
+
+/// Half-width of the shimmer's bright band, in characters.
+const SHIMMER_BAND: f32 = 6.0;
+
+/// The label in its two tones, with the shimmer over it while `phase` runs.
+///
+/// The shimmer is a band of brighter text that moves left to right once per
+/// pass. It is a colour per character, not a gradient mask: text here has one
+/// colour per run, so the band is drawn as runs.
+fn two_tone(parts: &Label, phase: Option<f32>, theme: &Theme) -> gpui::StyledText {
+    let text = parts.text();
+    let verb_len = parts.verb.len();
+    let tone = |ix: usize| {
+        if ix < verb_len {
+            theme.text_muted
+        } else {
+            theme.text_faint
+        }
+    };
+    let chars = text.char_indices().collect::<Vec<_>>();
+    // The band starts before the first character and ends after the last,
+    // so each pass enters and leaves the label rather than jumping in it.
+    let center = phase.map(|phase| {
+        phase * (chars.len() as f32 + 2.0 * SHIMMER_BAND) - SHIMMER_BAND
+    });
+    let highlights = chars
+        .iter()
+        .enumerate()
+        .map(|(n, &(ix, ch))| {
+            let mut color = tone(ix);
+            if let Some(center) = center {
+                let lift = (1.0 - (n as f32 - center).abs() / SHIMMER_BAND).max(0.0);
+                let lift = lift * lift * (3.0 - 2.0 * lift);
+                color = color.blend(theme.text.opacity(lift));
+            }
+            (
+                ix..ix + ch.len_utf8(),
+                gpui::HighlightStyle {
+                    color: Some(color),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    gpui::StyledText::new(text).with_highlights(highlights)
 }
 
 /// What the call actually was: its input, and what came back.
@@ -634,9 +748,9 @@ mod tests {
     #[test]
     fn the_verb_carries_the_tense() {
         let running = part("python", ToolState::InputAvailable, None);
-        assert_eq!(label(&running), "Running Analysis");
+        assert_eq!(label(&running), "Running analysis");
         let done = part("python", ToolState::OutputAvailable, None);
-        assert_eq!(label(&done), "Analysis");
+        assert_eq!(label(&done), "Ran analysis");
     }
 
     /// A tool the vocabulary does not know narrates as prose, not as its wire
@@ -718,11 +832,33 @@ mod tests {
         assert_eq!(openness(false, Some(1.0)), 0.0);
     }
 
-    /// The chip is titled by the model-authored purpose. This is the whole
-    /// point of the tool asking for one.
+    /// The chip is titled by the model's own verb, in the tense of the call's
+    /// state, followed by its purpose.
     #[test]
-    fn a_python_chip_is_titled_by_its_purpose() {
-        let tool = part(
+    fn a_python_chip_is_titled_by_its_verb_and_purpose() {
+        let mut tool = part(
+            "python",
+            ToolState::InputAvailable,
+            Some(json!({
+                "verb": "Finding",
+                "verbPast": "Found",
+                "purpose": "section boundaries",
+                "code": "luma.features.sections",
+            })),
+        );
+        let parts = label_parts(&tool);
+        assert_eq!(parts.verb, "Finding");
+        assert!(parts.running);
+        assert_eq!(label(&tool), "Finding section boundaries");
+        tool.state = ToolState::OutputAvailable;
+        assert_eq!(label(&tool), "Found section boundaries");
+    }
+
+    /// A call made before the schema asked for a verb reads with the default
+    /// one, which fits the noun phrase those calls were asked for.
+    #[test]
+    fn a_python_chip_without_a_verb_uses_the_default() {
+        let mut tool = part(
             "python",
             ToolState::OutputAvailable,
             Some(json!({
@@ -730,7 +866,9 @@ mod tests {
                 "code": "kicks = luma.features.drum_onsets",
             })),
         );
-        assert_eq!(label(&tool), "an onset analysis");
+        assert_eq!(label(&tool), "Ran an onset analysis");
+        tool.state = ToolState::InputAvailable;
+        assert_eq!(label(&tool), "Running an onset analysis");
     }
 
     /// …and **never** falls back to the code. A call with no purpose is titled
@@ -743,11 +881,12 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "code": "print(luma.catalog())" })),
         );
-        assert_eq!(label(&tool), "Analysis");
+        assert_eq!(label(&tool), "Ran analysis");
         assert!(!label(&tool).contains("print"));
     }
 
-    /// Failure remains visible without expanding the details.
+    /// Failure remains visible without expanding the details: the chip paints
+    /// a red dot, and the automation tree spells it out.
     #[test]
     fn a_failed_cell_is_still_titled_by_its_purpose() {
         let mut tool = part(
@@ -757,10 +896,11 @@ mod tests {
         );
         tool.state = ToolState::OutputAvailable;
         tool.output = Some(json!({ "status": "error", "durationMs": 1500 }));
-        assert_eq!(label(&tool), "a validation pass · Failed");
+        assert!(label_parts(&tool).failed);
+        assert_eq!(label(&tool), "Ran a validation pass · Failed");
         tool.state = ToolState::OutputError;
         tool.output = Some(json!({ "status": "ok", "durationMs": 1500 }));
-        assert_eq!(label(&tool), "a validation pass · Failed");
+        assert_eq!(label(&tool), "Ran a validation pass · Failed");
     }
 
     /// A skill is titled by the skill it read — its own argument, not python's.
@@ -796,7 +936,7 @@ mod tests {
             Some(json!({ "purpose": format!("a\n  {}", "x".repeat(200)) })),
         );
         let label = label(&tool);
-        assert!(label.starts_with("a x"), "{label}");
+        assert!(label.starts_with("Ran a x"), "{label}");
         assert!(label.ends_with('…'));
         assert!(!label.contains('\n'));
     }

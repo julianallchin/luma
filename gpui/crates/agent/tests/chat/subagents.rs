@@ -151,7 +151,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
     // rail the parent's do — which is the whole claim of "no second renderer".
     let child_chips = strings("child_chips");
     assert!(
-        child_chips.iter().any(|chip| chip == "ramp bounds"),
+        child_chips.iter().any(|chip| chip == "Measured ramp bounds"),
         "the child's own transcript is missing its tool call: {child_chips:?}"
     );
 
