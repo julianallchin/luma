@@ -1,7 +1,7 @@
 //! The camera look: exposure, lens glow and glare (`post.rs`).
 //!
 //! ```sh
-//! cargo test -p luma-render --test post_look -- --test-threads=1
+//! cargo test -p luma-render --test render post_look:: -- --test-threads=1
 //! ```
 //!
 //! One light aimed at the camera over a dark stage. Each test renders the
@@ -31,7 +31,7 @@ fn frame(intensity: f32, aim: f32, look: Look) -> Frame {
 }
 
 fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let mut render = RenderSettings::dark_stage(40.0, 1.0);
     render.environment = Environment::DARK;
@@ -133,14 +133,6 @@ fn ring(pixels: &[u8], centre: (u32, u32), radius: f32) -> f32 {
         }
     }
     sum / n
-}
-
-fn mean(pixels: &[u8]) -> f32 {
-    pixels
-        .chunks_exact(4)
-        .map(|px| 0.2126 * f32::from(px[0]) + 0.7152 * f32::from(px[1]) + 0.0722 * f32::from(px[2]))
-        .sum::<f32>()
-        / (WIDTH * HEIGHT) as f32
 }
 
 fn manual(glare: Glare) -> Look {
@@ -390,11 +382,20 @@ fn sun_frame(away_deg: f32, look: Look) -> Frame {
         pieces: Vec::<Piece>::new(),
         state: BTreeMap::new(),
     };
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
-    let mut frame =
-        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut Library::new(meshes))
-            .unwrap();
-    let sun = frame.sky.as_ref().expect("an outdoor frame has a sky").sun_direction;
+    let meshes = crate::common::meshes();
+    let mut frame = build_frame_with(
+        &scene,
+        &BTreeMap::new(),
+        &|_, _| None,
+        0.0,
+        &mut Library::new(meshes),
+    )
+    .unwrap();
+    let sun = frame
+        .sky
+        .as_ref()
+        .expect("an outdoor frame has a sky")
+        .sun_direction;
     let level = Vec3::new(sun.x, sun.y, 0.0).normalize();
     let turn = glam::Quat::from_rotation_z(away_deg.to_radians());
     frame.camera.target = frame.camera.eye + turn * level * 10.0;

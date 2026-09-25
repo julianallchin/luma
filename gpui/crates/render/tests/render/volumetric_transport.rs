@@ -62,7 +62,7 @@ fn light(gobo: u32) -> FixtureCone {
 }
 
 fn frame(pieces: Vec<Piece>, lights: Vec<FixtureCone>) -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let mut frame = build_frame_with(
         &scene(pieces),
@@ -86,14 +86,6 @@ fn blocker() -> Piece {
         rot: [0.0; 3],
         scale: 4.0,
     }
-}
-
-fn mean_rgb(pixels: &[u8]) -> f64 {
-    pixels
-        .chunks_exact(4)
-        .map(|pixel| f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2]))
-        .sum::<f64>()
-        / (pixels.len() / 4 * 3) as f64
 }
 
 fn hash(pixels: &[u8]) -> u64 {
@@ -192,7 +184,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
         pieces: Vec::new(),
         state: BTreeMap::new(),
     };
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let mut frame =
         build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
@@ -315,7 +307,7 @@ fn house_lights_illuminate_haze_as_the_level_rises() {
         let pixels = renderer
             .render(&frame(Vec::new(), vec![cone]), WIDTH, HEIGHT, 4)
             .unwrap();
-        brightness.push(mean_rgb(&pixels));
+        brightness.push(crate::common::mean_rgb(&pixels));
     }
     assert!(brightness[1] > brightness[0], "{brightness:?}");
     assert!(brightness[2] > brightness[1], "{brightness:?}");
@@ -349,8 +341,8 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
         "one/overlap/gobo transport golden drifted"
     );
 
-    assert!(mean_rgb(&overlap) > mean_rgb(&one));
-    assert!(mean_rgb(&gobo) < mean_rgb(&one));
+    assert!(crate::common::mean_rgb(&overlap) > crate::common::mean_rgb(&one));
+    assert!(crate::common::mean_rgb(&gobo) < crate::common::mean_rgb(&one));
     assert_ne!(hash(&gobo), hash(&one));
     assert_eq!(
         one,
@@ -378,7 +370,7 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
         (0x3f77aea731776a3e, 0xde5cee70c24880b),
         "depth-occlusion transport golden drifted"
     );
-    assert!(mean_rgb(&blocked) < mean_rgb(&open));
+    assert!(crate::common::mean_rgb(&blocked) < crate::common::mean_rgb(&open));
 
     let mut invalid = light(7);
     invalid.position.x = f32::NAN;
@@ -708,7 +700,7 @@ fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
         fresh.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
         "blackout retained grid lighting"
     );
-    assert!(mean_rgb(&dark) < mean_rgb(&green));
+    assert!(crate::common::mean_rgb(&dark) < crate::common::mean_rgb(&green));
     frame.fixture_cones = cones;
     frame.time += 1.0 / 60.0;
     assert_eq!(
@@ -735,7 +727,10 @@ fn deterministic_haze_is_independent_of_live_subframe_budget() {
     let expected = renderer
         .render_next(&input, WIDTH + 3, HEIGHT + 1, 1)
         .unwrap();
-    assert!(mean_rgb(&expected) > 1.0, "test requires a visible volume");
+    assert!(
+        crate::common::mean_rgb(&expected) > 1.0,
+        "test requires a visible volume"
+    );
     for samples in [2, 4, 1] {
         assert_eq!(
             expected,

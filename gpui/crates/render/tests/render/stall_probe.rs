@@ -7,7 +7,6 @@
 //! count. Delete once the stall is understood.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -48,7 +47,7 @@ fn scene() -> Scene {
 }
 
 fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
-    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let meshes = crate::common::meshes();
     let mut library = Library::new(meshes);
     let mut scene = scene();
     scene.render.haze.enabled = haze;

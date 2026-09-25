@@ -9,10 +9,10 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use luma_render::{
-    Frame, Renderer,
     assets::Library,
     build_frame_with,
     scene_desc::{CameraPose, CloudCover, RenderSettings, Scene, VenueEnvironment, VenueHaze},
+    Frame, Renderer,
 };
 
 const WIDTH: u32 = 640;
@@ -54,9 +54,7 @@ fn frame_in(environment: VenueEnvironment, haze: Option<VenueHaze>, eye_y: f32) 
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
-        ),
+        &mut Library::new(crate::common::meshes()),
     )
     .unwrap()
 }
@@ -64,7 +62,11 @@ fn frame_in(environment: VenueEnvironment, haze: Option<VenueHaze>, eye_y: f32) 
 /// The row the horizon crosses: level at head height, and about eleven
 /// and a half degrees down from twelve metres at 45 degrees of view.
 fn horizon_row(eye_y: f32) -> u32 {
-    if eye_y > 2.0 { 89 } else { 180 }
+    if eye_y > 2.0 {
+        89
+    } else {
+        180
+    }
 }
 
 fn row_luma(pixels: &[u8], y: u32) -> f32 {
@@ -227,9 +229,7 @@ fn low_sun(clouds: CloudCover, haze: Option<f32>, fov: f32) -> Frame {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
-        ),
+        &mut Library::new(crate::common::meshes()),
     )
     .unwrap()
 }
@@ -384,9 +384,7 @@ fn gasworks() -> (Frame, u32, u32) {
         &BTreeMap::new(),
         &|_, _| None,
         0.0,
-        &mut Library::new(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
-        ),
+        &mut Library::new(crate::common::meshes()),
     )
     .unwrap();
     export.apply(&mut frame);

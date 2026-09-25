@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Vec3, Vec4};
 use luma_render::{
-    assets::{Library, Material, Vertex},
+    assets::{Library, Material},
     build_frame_with,
-    frame::{Draw, MaterialTextures, MeshData},
+    frame::{Draw, MaterialTextures},
     scene_desc::{CameraPose, DebugView, RenderSettings, Scene, VenueEnvironment, VenueHaze},
     Frame, Renderer,
 };
@@ -23,37 +23,6 @@ const HEIGHT: u32 = 270;
 const SUN_ELEVATION: f32 = 6.0;
 const BOX_CENTRE: Vec3 = Vec3::new(0.0, 0.0, 8.0);
 const BOX_SIZE: f32 = 2.0;
-
-fn cube() -> MeshData {
-    let faces: [(Vec3, Vec3, Vec3); 6] = [
-        (Vec3::X, Vec3::Y, Vec3::Z),
-        (Vec3::NEG_X, Vec3::NEG_Y, Vec3::Z),
-        (Vec3::Y, Vec3::NEG_X, Vec3::Z),
-        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
-        (Vec3::Z, Vec3::X, Vec3::Y),
-        (Vec3::NEG_Z, Vec3::X, Vec3::NEG_Y),
-    ];
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    for (n, u, w) in faces {
-        let base = vertices.len() as u32;
-        for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-            let p = n * 0.5 + u * 0.5 * a + w * 0.5 * b;
-            vertices.push(Vertex {
-                position: p.to_array(),
-                normal: n.to_array(),
-                uv: [0.0; 2],
-                tangent: [u.x, u.y, u.z, 1.0],
-            });
-        }
-        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-    MeshData {
-        key: "::sun-shadow-orbit-cube".into(),
-        vertices: vertices.into(),
-        indices: indices.into(),
-    }
-}
 
 /// A 2 m box flown 8 m over open ground under a 6 degree sun.
 fn frame(eye: Vec3, target: Vec3) -> Frame {
@@ -94,7 +63,9 @@ fn frame(eye: Vec3, target: Vec3) -> Frame {
     )
     .unwrap();
     let mesh = frame.meshes.len();
-    frame.meshes.push(cube());
+    frame
+        .meshes
+        .push(crate::common::cube("::sun-shadow-orbit-cube"));
     let at = frame.draws.len() - frame.transparent.len();
     frame.draws.insert(
         at,

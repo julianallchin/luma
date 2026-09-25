@@ -20,12 +20,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use glam::{Mat4, Vec3};
-use luma_render::assets::Library;
 use luma_render::build_frame_with;
 use luma_render::coords;
 use luma_render::scene_desc::{
     CameraPose, Editor, Fixture, Geometry, Piece, RenderSettings, Scene,
 };
+
+use crate::common::library;
 
 /// A piece whose local origin is nowhere near the centre of its footprint.
 const DECK: &str = "stage_lab/stage_praticavel_2x1x1.glb";
@@ -39,10 +40,6 @@ const MOVER_POS: [f32; 3] = [1.5, 2.0, 3.0];
 /// composed in the wrong space lands somewhere else entirely.
 const DECK_POS: [f32; 3] = [-2.0, 4.0, 0.0];
 const DECK_ROT: [f32; 3] = [0.0, 0.0, 0.7];
-
-fn library() -> Library {
-    Library::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"))
-}
 
 fn scene() -> Scene {
     Scene {

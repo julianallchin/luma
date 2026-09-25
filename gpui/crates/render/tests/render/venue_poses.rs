@@ -12,7 +12,7 @@
 //! stubbed either would pin half the answer. That makes this the one place the
 //! whole chain — catalog, generator, sockets, solve — is pinned numerically.
 //!
-//! Run `cargo test -p luma-render --test venue_poses`. It rewrites the golden
+//! Run `cargo test -p luma-render --test render venue_poses::`. It rewrites the golden
 //! and then fails if it changed, so a stale capture cannot be committed
 //! silently.
 
