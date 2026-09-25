@@ -29,6 +29,7 @@
 
 use gpui::{div, prelude::*, px, Entity, Hsla, PathBuilder, Pixels, Point, SharedString, Window};
 use luma_lib::agent::RequestUsage;
+use luma_ui::arg::select::MenuVisibility;
 use luma_ui::float;
 use luma_ui::node::{Instrument as _, Role as NodeRole};
 
@@ -52,10 +53,11 @@ const SEGMENTS: usize = 48;
 pub fn gauge(
     request: &RequestUsage,
     chat: &Entity<AgentChat>,
-    open: bool,
-    closing: Option<f32>,
+    visibility: MenuVisibility,
     theme: &Theme,
 ) -> impl IntoElement {
+    let open = visibility.is_open();
+    let closing = visibility.exit();
     let fraction = request.fraction();
     let clicked = chat.clone();
     let dismissed = chat.clone();
@@ -69,6 +71,9 @@ pub fn gauge(
         .size(px(DIAMETER + 8.0))
         .p_0()
         .flex_none()
+        // A pointer press on the open gauge lands outside its card, so the card's
+        // dismissal swallows it and this click never runs; the toggle only
+        // sees the open state from the keyboard.
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             clicked.update(cx, |chat, cx| chat.set_usage_open(!open, cx));

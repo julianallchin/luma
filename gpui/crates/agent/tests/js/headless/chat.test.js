@@ -1,8 +1,8 @@
 // The unified chat, seen from the outside: a turn, its chrome, its history
 // and its dialogs.
 //
-// Motion is on: under reduced motion a sent turn is never painted (see the
-// skipped test at the end), which would fail every test here for one reason.
+// Motion is on, so the send flight and the spring are exercised; the last
+// test covers the reduced-motion path.
 //
 // Only the model is scripted; the turn under it is real — a real thread, real
 // rows — because the panel reads what the loop persisted. The `python` tool
@@ -326,9 +326,9 @@ test("the context gauge reports the whole prompt and its card names every field"
   assert(rows.some((l) => /^Took .+ (ms|s)$/.test(l)), "the card does not say how long the request took");
 });
 
-// The card's press-out dismiss closes it on the press, and the gauge's own
-// click then toggles it from the re-rendered (closed) state back open.
-test.skip("bug: clicking the context gauge again reopens its card instead of closing it", () => {
+// The second press closes the card, and its exit finishes: the card leaves the
+// frame instead of staying at the end of its fade.
+test("clicking the context gauge again closes its card", () => {
   openChat();
   send();
   const gauge = turnEnd().find((n) => n.role === "button" && n.label.startsWith("Context "));
@@ -352,7 +352,7 @@ test("escape closes the history picker the thread opened", () => {
   until("the picker to close", (s) => !s.find({ role: "card", label: "Chat history dialog" }));
 });
 
-test.skip("bug: under reduced motion a sent turn is never painted until the thread is reopened",
+test("under reduced motion a sent turn is painted as it lands",
   { fixture: { motion: false } }, () => {
   openChat();
   send();
