@@ -571,7 +571,10 @@ pub struct Library {
     lapsed: Option<String>,
     /// Owns the reactor every dispatched command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
-    runtime: tokio::runtime::Runtime,
+    ///
+    /// An `Option` only so [`Drop`] can take it and shut it down with a time
+    /// limit. It is `Some` for the whole life of the `Library`.
+    runtime: Option<tokio::runtime::Runtime>,
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
     /// Whether this library talks to the cloud — see `Runtime::cloud`.
     cloud: bool,
@@ -617,6 +620,10 @@ struct SessionWrite {
 }
 
 impl Library {
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime.as_ref().expect("the runtime lives as long as the library")
+    }
+
     /// Open the library in the app's real config directory — the same
     /// platform config directory that backend tools use, honouring the
     /// `LUMA_CONFIG_DIR` / `LUMA_FIXTURES_ROOT` overrides so a disposable
@@ -867,7 +874,7 @@ impl Library {
             account: Arc::new(Mutex::new(account)),
             fixtures_indexed: Arc::default(),
             lapsed,
-            runtime,
+            runtime: Some(runtime),
             import_progress: progress_tx,
             cloud,
             #[cfg(feature = "agent")]
@@ -905,7 +912,7 @@ impl Library {
         if let Some(tools) = &self.tools {
             service = service.with_tools(tools.clone());
         }
-        luma_chat::Agent::new(service, self.runtime.handle().clone())
+        luma_chat::Agent::new(service, self.runtime().handle().clone())
     }
 
     /// Drive agent turns with `model`. Call before the first turn — an
@@ -1069,7 +1076,7 @@ impl Library {
     ) -> impl Future<Output = Result<Option<Account>, LibraryError>> + use<> {
         let services = self.services.clone();
         let cache = Arc::clone(&self.account);
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             command::<Option<String>>(
                 &services,
                 "get_session_item",
@@ -1105,7 +1112,7 @@ impl Library {
     pub fn sign_out(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         let services = self.services.clone();
         let cache = Arc::clone(&self.account);
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             command::<Value>(&services, "wipe_database", &json!({})).await?;
             command::<Value>(
                 &services,
@@ -1362,7 +1369,7 @@ impl Library {
     ) -> impl Future<Output = Result<SourceLibrary, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
         let fixture_delay = self.source_fixture_delay.map(|delay| {
-            self.runtime.spawn(async move {
+            self.runtime().spawn(async move {
                 tokio::time::sleep(delay).await;
             })
         });
@@ -1576,7 +1583,7 @@ impl Library {
         };
         #[cfg(feature = "agent")]
         let sequenced = sequenced.map(|response| {
-            let delay = self.runtime.spawn(async move {
+            let delay = self.runtime().spawn(async move {
                 tokio::time::sleep(response.delay).await;
             });
             (
@@ -1783,7 +1790,7 @@ impl Library {
         let services = self.services.clone();
         let score_id = score_id.to_owned();
         let track_id = track_id.to_owned();
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             let score: Option<luma_patterns::Score> = command(
                 &services,
                 "get_score_document",
@@ -1840,7 +1847,7 @@ impl Library {
     {
         let services = self.services.clone();
         let (score_id, clip_id, score) = (score_id.to_owned(), clip_id.to_owned(), score.clone());
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             luma_lib::dispatch::prepare_score_clip_preview(&services, score_id, clip_id, score)
                 .await
                 .map_err(|error| {
@@ -1884,7 +1891,7 @@ impl Library {
     ) -> impl Future<Output = Result<WaveformSignal, LibraryError>> + use<> {
         let services = self.services.clone();
         let track_id = track_id.to_owned();
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             luma_lib::dispatch::get_track_waveform_signal(&services, track_id)
                 .await
                 .map_err(|error| {
@@ -2000,7 +2007,7 @@ impl Library {
         region: Option<(f32, f32)>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         let services = self.services.clone();
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             command::<()>(
                 &services,
                 "host_seek",
@@ -2044,7 +2051,7 @@ impl Library {
     /// it, while this runtime keeps real time on both hosts, exactly as the
     /// transport poll's `after` does.
     pub fn debounce(&self, wait: Duration) -> impl Future<Output = ()> + use<> {
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             tokio::time::sleep(wait).await;
         });
         async move {
@@ -2188,7 +2195,7 @@ impl Library {
         let services = self.services.clone();
         let venue_id = venue_id.to_string();
         let venue = json!({ "venueId": venue_id });
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             let fixtures: Vec<PatchedFixture> =
                 command(&services, "get_patched_fixtures", &venue).await?;
             let venue_graph: ResolvedVenue =
@@ -2260,7 +2267,7 @@ impl Library {
         let services = self.services.clone();
         let indexed = Arc::clone(&self.fixtures_indexed);
         let args = json!({ "query": query, "offset": offset, "limit": limit });
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             if !indexed.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 let built: Result<usize, LibraryError> =
                     command(&services, "initialize_fixtures", &json!({})).await;
@@ -2625,7 +2632,7 @@ impl Library {
     pub fn patch_data(&self, venue_id: &str) -> impl Future<Output = Result<Patch, LibraryError>> {
         let services = self.services.clone();
         let venue = json!({ "venueId": venue_id });
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             let fixtures: Vec<PatchedFixture> =
                 command(&services, "get_patched_fixtures", &venue).await?;
             let solved: ResolvedVenue = command(&services, "get_resolved_venue", &venue).await?;
@@ -2794,7 +2801,7 @@ impl Library {
     ) -> impl Future<Output = Result<Vec<PatchedFixture>, LibraryError>> {
         let services = self.services.clone();
         let venue_id = venue_id.to_string();
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             let slots: Vec<PatchAddress> = command(
                 &services,
                 "next_addresses",
@@ -2903,7 +2910,7 @@ impl Library {
         after: Duration,
     ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
         let services = self.services.clone();
-        let task = self.runtime.spawn(async move {
+        let task = self.runtime().spawn(async move {
             if !after.is_zero() {
                 tokio::time::sleep(after).await;
             }
@@ -3053,5 +3060,15 @@ fn repo_fixtures_root() -> Option<PathBuf> {
 impl Drop for Library {
     fn drop(&mut self) {
         let _ = self.sync_shutdown.send(true);
+        // A plain drop waits with no limit for every blocking task. PowerSync
+        // runs its actors as blocking tasks that stop only when the last
+        // handle to its database goes, and a handle that outlives the library
+        // made quitting hang. Give them a moment, then let the process go.
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
+        }
     }
 }
+
+/// How long quitting waits for background work before it leaves it behind.
+const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(2);
