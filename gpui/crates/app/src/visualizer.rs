@@ -133,8 +133,9 @@ enum Drag {
     /// Left button: turn the eye and the target about the point that was
     /// under the pointer when the drag started.
     Orbit { pivot: Vec3 },
-    /// Middle button: slide the target across the view plane.
-    Pan,
+    /// Middle button: slide the eye and the target across the view plane, at
+    /// the depth of what was under the pointer when the drag started.
+    Pan { depth: f32 },
     /// Right button: turn in place, and fly on the keys — see [`Fly`].
     Fly,
 }
@@ -472,7 +473,7 @@ impl Drag {
     /// [`EditorDrag::ClickOrbit`], because a left click also selects.
     fn of(button: MouseButton) -> Option<Self> {
         match button {
-            MouseButton::Middle => Some(Self::Pan),
+            MouseButton::Middle => Some(Self::Pan { depth: 0.0 }),
             MouseButton::Right => Some(Self::Fly),
             _ => None,
         }
@@ -1830,6 +1831,18 @@ impl Visualizer {
         pivot
     }
 
+    /// How deep a pan starting at a viewport point grabs: the view-axis
+    /// distance to what is under it, or the target's when nothing is.
+    fn pan_depth(&mut self, at: Vec2) -> f32 {
+        let Some(hit) = self.surface_under(at) else {
+            return self.camera.radius;
+        };
+        self.pivot_dot = Some((hit.point, Instant::now()));
+        let eye = self.camera.position();
+        let forward = (self.camera.target - eye).normalize();
+        (hit.point - eye).dot(forward).max(self.zoom_limits().near)
+    }
+
     /// The pivot dot's viewport position and opacity, while it shows.
     fn pivot_dot_at(&self, now: Instant) -> Option<(Vec2, f32)> {
         let (pivot, since) = self.pivot_dot?;
@@ -1852,6 +1865,12 @@ impl Visualizer {
 
     /// Start the drag a non-left button makes.
     fn begin_drag(&mut self, drag: Drag, at: Point<Pixels>) {
+        let drag = match drag {
+            Drag::Pan { .. } => Drag::Pan {
+                depth: self.pan_depth(self.viewport_point(at)),
+            },
+            drag => drag,
+        };
         if drag == Drag::Fly {
             self.fly = Some(Fly {
                 keys: FlyKeys::default(),
@@ -1993,11 +2012,13 @@ impl Visualizer {
             }
             // The same turn about the eye: a look.
             Drag::Fly => self.look(dx, dy),
-            // three's perspective pan: one screen height of drag moves the
-            // target by the full visible extent at the target's depth, so a
-            // point under the cursor stays under it.
-            Drag::Pan => {
-                let extent = 2.0 * self.camera.radius * (FOV_Y_DEG.to_radians() / 2.0).tan();
+            // three's perspective pan, at the grabbed depth rather than the
+            // target's: one screen height of drag moves the view by the full
+            // visible extent there, so the grabbed point stays under the
+            // cursor. The target's depth was too fast whenever the target lay
+            // beyond what the pointer held.
+            Drag::Pan { depth } => {
+                let extent = 2.0 * depth * (FOV_Y_DEG.to_radians() / 2.0).tan();
                 let forward = (self.camera.target - self.camera.position()).normalize();
                 let right = forward.cross(Vec3::Z).normalize();
                 let up = right.cross(forward);
