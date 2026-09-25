@@ -1861,6 +1861,21 @@ impl Visualizer {
         self.camera.refocus(distance.clamp(limits.near, limits.far));
     }
 
+    /// Whether pointer and key input must invalidate the window to be seen.
+    ///
+    /// Not during a fly. The fly redraws every display frame anyway (the
+    /// stage asks for the next frame on every render), and each frame reads
+    /// the look and the keys. An invalidation between frames is worse than
+    /// useless: gpui draws a dirty window *synchronously* before it
+    /// dispatches a key event, so with a mouse look dirtying the window at
+    /// pointer rate, every key repeat of a held A or W ran an extra draw —
+    /// a whole stage frame built and submitted, and the fly stepped, at the
+    /// key event's moment rather than the display's. That was the stutter of
+    /// looking while strafing.
+    fn input_redraws(&self) -> bool {
+        self.fly.is_none()
+    }
+
     /// A key while the right button is held. Whether the fly took it.
     pub(crate) fn fly_key(&mut self, key: &str, down: bool) -> bool {
         self.fly
@@ -3555,12 +3570,12 @@ pub(crate) fn visualizer(
         let app = app.clone();
         move |key: &str, cx: &mut gpui::App| {
             app.update(cx, |this, cx| {
+                // No notify: see `Visualizer::input_redraws`.
                 if this
                     .visualizer_mut()
                     .is_some_and(|state| state.fly_key(key, down))
                 {
                     cx.stop_propagation();
-                    cx.notify();
                 }
             });
         }
@@ -5024,7 +5039,9 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                         if let Some((drag, was)) = state.drag {
                             state.drag = Some((drag, at));
                             state.dragged(at - was);
-                            cx.notify();
+                            if state.input_redraws() {
+                                cx.notify();
+                            }
                         }
                     }
                 }
@@ -5738,6 +5755,36 @@ mod orbit_selection_tests {
             gizmo_pivot: None,
             gizmo_space: Default::default(),
         }
+    }
+
+    /// Looking while strafing must not invalidate the window: a dirty window
+    /// is drawn synchronously on every key repeat, which stepped the fly and
+    /// submitted a stage frame off the display's beat. The fly's own frames
+    /// still carry the look and the keys.
+    #[test]
+    fn a_fly_takes_look_and_keys_without_invalidating_the_window() {
+        let mut state = visualizer(None, empty_pick(Camera::default()));
+        state.size = gpui::size(px(800.), px(600.));
+        assert!(state.input_redraws());
+        state.begin_drag(Drag::Fly, gpui::point(px(400.), px(300.)));
+        assert!(state.fly_key("d", true));
+        let start = state.camera;
+        let t0 = Instant::now();
+        for frame in 1..=10u32 {
+            state.dragged(gpui::point(px(3.), px(0.)));
+            assert!(!state.input_redraws(), "a look invalidated the window");
+            state.fly_tick(t0 + Duration::from_millis(16 * u64::from(frame)), false);
+        }
+        assert!(
+            state.camera.azimuth != start.azimuth,
+            "the look did not turn"
+        );
+        assert!(
+            state.camera.position().distance(start.position()) > 0.0,
+            "the strafe did not move"
+        );
+        state.end_drag();
+        assert!(state.input_redraws());
     }
 
     fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot) -> Visualizer {

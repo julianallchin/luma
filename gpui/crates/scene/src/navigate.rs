@@ -538,6 +538,34 @@ mod tests {
         assert!(!FlyKeys::default().set("x", true));
     }
 
+    /// Looking while strafing, frame after frame: a look never moves the
+    /// eye, so the eye's path is the strafe alone — every frame the same
+    /// step, however the view turns between them.
+    #[test]
+    fn look_and_strafe_together_keep_the_eye_on_an_even_path() {
+        let framing = Framing::default();
+        let mut camera = at(Vec3::new(0.0, -5.0, 2.0), Vec3::new(0.0, 0.0, 2.0));
+        let mut keys = FlyKeys::default();
+        keys.set("d", true);
+        let (speed, dt) = (2.0, 1.0 / 60.0);
+        for frame in 0..120 {
+            let eye = camera.position();
+            camera.orbit_about(eye, 0.01, 0.002 * ((frame % 7) as f32 - 3.0), &framing);
+            assert!(
+                camera.position().abs_diff_eq(eye, 1e-4),
+                "frame {frame}: a look moved the eye {:?} -> {:?}",
+                eye,
+                camera.position()
+            );
+            camera.fly(keys, speed, dt, 0.0);
+            let step = camera.position().distance(eye);
+            assert!(
+                (step - speed * dt).abs() < 1e-4,
+                "frame {frame}: step {step}"
+            );
+        }
+    }
+
     /// Looking turns in place, and releasing puts the target in front.
     #[test]
     fn looking_turns_the_camera_in_place() {
