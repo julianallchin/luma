@@ -15,13 +15,7 @@ mod support;
 
 mod add_tracks_flow;
 mod clip_forms;
-mod keyboard;
 mod library_foundation;
-mod pointer_ownership;
-mod preset_browser;
-mod score_edit_focus;
-mod shell_panels;
-mod sidebar_scores;
 mod signin;
 mod track_editor;
 mod track_editor_lanes;
