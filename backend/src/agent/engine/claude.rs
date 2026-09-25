@@ -33,6 +33,12 @@ impl Session {
         }
         let mut cmd = stream_command(&request.cwd);
         cmd.arg("--system-prompt").arg(&request.system);
+        // Without this, the CLI freezes the system prompt at a conversation's
+        // first turn and reuses that snapshot verbatim on every later resume
+        // — including a hydrated one — no matter what `--system-prompt` this
+        // call passed. Luma's system prompt carries this turn's editor
+        // context, so a resumed turn needs it applied, not the first turn's.
+        cmd.arg("--system-prompt-snapshot").arg("off");
         cmd.arg("--mcp-config")
             .arg(json!({"mcpServers":{"luma":{"type":"sdk","name":"luma"}}}).to_string());
         if let Some(effort) = &request.effort {
@@ -72,8 +78,14 @@ impl Session {
             match frame["type"].as_str().unwrap_or("") {
                 "control_response" if frame["response"]["request_id"] == "initialize" => {
                     if frame["response"]["subtype"] != "success" {
+                        // Naming the installed CLI version turns a rejected
+                        // `--resume` (a hydrated session's on-disk shape is
+                        // reverse-engineered, not documented — see
+                        // `claude_session`) into something a human can act
+                        // on immediately, without a separate version check.
+                        let version = cli_version(&self.request.cwd).await;
                         return Err(protocol(format!(
-                            "Claude initialization: {}",
+                            "Claude CLI {version} rejected session initialization: {}",
                             frame["response"]
                         )));
                     }
@@ -303,6 +315,18 @@ pub(super) async fn models(
 
 async fn initialize(process: &mut Process) -> Result<(), AgentError> {
     process.send(json!({"type":"control_request","request_id":"initialize","request":{"subtype":"initialize","hooks":null}})).await
+}
+
+/// The installed CLI's own `--version` output, best-effort. Only called on
+/// an initialization-failure path, so a slow or failing version check never
+/// costs the happy path anything.
+async fn cli_version(cwd: &std::path::Path) -> String {
+    let mut cmd = claude_command(cwd);
+    cmd.arg("--version").kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
+        Ok(Ok(output)) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        _ => "(version unknown)".into(),
+    }
 }
 
 fn claude_command(cwd: &std::path::Path) -> tokio::process::Command {
