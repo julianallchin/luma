@@ -5,15 +5,15 @@ description: House, techno, trance and their families — kick on every beat, ph
 # Four on the floor
 
 Kick on every beat, phrases that line up, structure that almost never lies.
-The grid carries you here — if you're doing heavy signal analysis to find the
-accents, you took a wrong turn. Confirm the kick (`four_four` tag is reliable,
+The grid carries the structure; save close listening for motifs and drops
+(see Listening). Confirm the kick (`four_four` tag is reliable,
 or kick onsets against the beats) and work structurally.
 
 ## The one idea
 
 **Terrace.** Read the track as blocks — intro, build, main, breakdown, riser,
 drop, outro — and give each block a level. Hold the level for the whole block.
-Change only on phrase lines (find the phrase length once — `finding-things-in-audio`). Discrete
+Change only on phrase lines (find the phrase length once with `luma.music.sections()`). Discrete
 steps read as arrangement; continuous drifting reads as a screensaver.
 
 - Each drop sits at least one step above every block before it.
@@ -26,7 +26,8 @@ steps read as arrangement; continuous drifting reads as a screensaver.
 The kick is constant, so lighting it constantly is numbing. Kick gets a low,
 dim foundation pulse at most. **Hats carry the motion** — their density is
 what actually changes across the track, so your fastest, lightest element
-follows them. When hats arrive in a bar that lacked them, that's the
+follows them. Read hat density from the `high` band; n2n hat onsets are
+low-confidence. When hats arrive in a bar that lacked them, that's the
 arrangement telling you to lift.
 
 The chord/pad layer gets slow counter-motion: a sweep or color drift over 8 or
@@ -46,8 +47,8 @@ Same shape every time, and it's the one moment that needs real care:
 4. Drop: everything on the downbeat, then settle into the block's held state
    within a bar or two. Impact is a moment, not a section.
 
-Check it's real (fake-drop check — `finding-things-in-audio`). This genre feints with filtered
-stalls constantly.
+Check it's real: `listen` the first bars after the riser for kick and full low
+band. This genre feints with filtered stalls constantly.
 
 ## Subgenre inflections
 
@@ -77,8 +78,22 @@ restraint:
   dubstep; borrow the bass-measurement from `heavy-bass` for drop sections and
   keep house terracing everywhere else.
 
-## How deep to go
+## Listening
 
-One coherent pass. Terracing lives or dies on consistency, and one hand keeps
-it consistent. Delegate only a 10-minute-plus multi-part arrangement, split on
-musical identities, and re-terrace the whole arc yourself after the merge.
+Depth depends on the subgenre. Minimal techno is pattern and hypnosis; big
+room and festival house still hide small motifs.
+
+- Listen for: phrase length, the bar where hats or a percussion layer enter or
+  leave, filter openings over 8-16 bars, and the one-bar motif (a vocal stab,
+  a pluck riff, a fill) that returns every phrase. Kick and bass are constant;
+  they carry no news.
+- Detail: techno, deep and progressive: one pass of the loop per section, at
+  bar resolution; find the pattern, not the notes. Big room, festival, tech
+  and bass house: the full loop on each drop and on every recurring motif.
+  Parallel listeners only for bass-house drops.
+- LDs love: a motif that gets the same small light answer every time it
+  returns, and the one new element in a long techno section getting a change.
+
+Terrace in one coherent pass; one hand keeps it consistent. Delegate only a
+10-minute-plus multi-part arrangement, split on musical identities, and
+re-terrace the whole arc yourself after the merge.

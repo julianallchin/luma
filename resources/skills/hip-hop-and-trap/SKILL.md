@@ -28,7 +28,7 @@ frames rather than competes:
 ## The 808 and the hats
 
 - The 808 slide is this genre's wub. When the bass slides or stutters
-  (measure the bass envelope — `finding-things-in-audio`), a slow brightness or color bend on
+  (low band in `listen`, pitch recipe in `finding-things-in-audio`), a slow brightness or color bend on
   the foundation follows it. It's a lean, not a hit.
 - Trap hats are the texture layer: rolls and triplet bursts. A dim shimmer can
   follow hat density, but never let hat rolls trigger bright strobes — that
@@ -43,14 +43,22 @@ color cycling reads cheap here faster than in any other genre.
 
 ## Structure
 
-Map verses and hooks first (vocal tags + vocal-stem energy — `finding-things-in-audio`), then
+Map verses and hooks first (vocal tags + the `vocals` row of `listen`), then
 beat-switches: many rap tracks flip the entire instrumental mid-song. A beat
 switch is a full palette change, the biggest visual event of the track —
 bigger than any hook. Find it by listening for the bass and drum character
 changing wholesale, not by trusting the grid.
 
-## How deep to go
+## Listening
 
-Light-to-moderate. Section-level work plus a handful of placed accents.
-The craft is in choosing the right dozen moments — a punchline cut, a beat
-switch, the a cappella — not in density. Single pass, no fan-out.
+Depth: light to moderate. The vocal leads.
+
+- Listen for: where the vocal starts and stops, cuts to silence after a line,
+  808 slides, hook returns, and the beat switch.
+- Detail: one pass of the loop per section; 16th resolution only on the
+  dozen moments you will light. Hat rolls are low-confidence in n2n; confirm
+  them in the high band before lighting one. No parallel listeners.
+- LDs love: a blackout on the silence after a punchline, and a full palette
+  change on the beat switch.
+
+Section-level work plus a handful of placed accents, single pass, no fan-out.

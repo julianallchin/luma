@@ -20,7 +20,7 @@ Between changes, hold still. Stillness is not laziness here; it's trust.
   move rhythmically, make it slow enough (whole-bar breathing) that drift is
   invisible.
 - Follow dynamics, not onsets. The band getting louder is your cue to warm or
-  widen — track the mix envelope (`finding-things-in-audio`) at the scale of phrases.
+  widen — track the mix envelope (RMS of `luma.audio.mix`) at the scale of phrases.
 - Quiet is quiet. A hushed verse can sit in near-dark. An ambient passage can
   be one color barely on. Let the room be dim enough that people listen.
 
@@ -52,9 +52,18 @@ shapes everything around it.
 - Solos: warm the palette toward the soloist's register (bright for a lead
   line, deep for a bass feature) and hold it for the whole solo.
 
-## How deep to go
+## Listening
 
-Shallow, deliberately. A dozen well-placed section states and one held-back
-gesture beat any amount of intricacy. This is the genre where over-detailing
-is the cardinal failure — every extra cue you author is attention stolen from
-the band. Single pass, no subagents, and when in doubt: less.
+Depth: shallow, deliberately. Listen for sections, not notes.
+
+- Listen for: dynamics per phrase, instrumentation changes, solos, the quiet
+  bridge, and the one transcendent moment.
+- Detail: one pass of the loop per section, at bar resolution. The grid
+  drifts here, so n2n positions are low-confidence. No skeptic subagent, no
+  parallel listeners.
+- LDs love: a state change exactly on the section boundary, and the held-back
+  gesture on the moment that earns it.
+
+A dozen well-placed section states and one held-back gesture beat any amount
+of intricacy. Over-detailing is the cardinal failure here; single pass, no
+subagents, and when in doubt: less.
