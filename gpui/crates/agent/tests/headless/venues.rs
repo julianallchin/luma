@@ -1,4 +1,9 @@
 //! Venue launch, selection and onboarding through the production app tree.
+//!
+//! These stay in Rust: they inject catalogue and track read delays
+//! (`NavigationFixture`), relaunch the app on one library, and read the
+//! remembered venue from the state database. The venue-switch test that needs
+//! none of that is `tests/js/headless/venues.test.js`.
 
 #![cfg(feature = "app")]
 
@@ -571,102 +576,4 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     assert_eq!(out["error"], true);
     assert_eq!(out["retry"], true);
     assert_eq!(out["empty"], false);
-}
-
-/// Leaving a room revokes its track as a *subject* without throwing the work
-/// away.
-///
-/// Both halves matter and they pull in opposite directions: whichever surface
-/// is offering new tabs must stop offering a track the current browser cannot
-/// honestly open, while the tabs that were open under that track have to
-/// survive — parked under it, and back on screen the moment it is picked
-/// again. Asserting only the first half would pass a shell that closed those
-/// tabs outright.
-#[test]
-fn switching_venues_parks_the_track_subject_and_revokes_it_from_the_new_tab_menu() {
-    let dir = fixture_dir(
-        "tab-subject",
-        &[("alpha", "Alpha Hall"), ("beta", "Beta Room")],
-        None,
-        true,
-    );
-    let mut app = harness(&dir, luma_app::NavigationFixture::default());
-    let out = exec(
-        &mut app,
-        r#"
-        let picker = until("the two venues", (s) =>
-            s.find({ role: "card", label: "Alpha Hall" }) !== undefined
-                && s.find({ role: "card", label: "Beta Room" }) !== undefined);
-        app.click(picker.find({ role: "card", label: "Alpha Hall" }));
-        until("Alpha's track", (s) =>
-            s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined ? s : undefined);
-        // Two gestures now: the row goes to the track's scores, and one of
-        // them is the timeline. `nav.track` is that walk, and it comes back
-        // out to the list.
-        nav.track("Alpha Hall Track");
-        until("the selected Alpha tab", (s) =>
-            s.find({ role: "button", label: "Alpha Hall Track" }) !== undefined);
-
-        app.click(app.snapshot().find({ role: "button", label: "Alpha Hall" }));
-        picker = until("the venue switcher", (s) =>
-            s.find({ role: "card", label: "Beta Room" }) !== undefined ? s : undefined);
-        app.click(picker.find({ role: "card", label: "Beta Room" }));
-        until("Beta's track", (s) =>
-            s.find({ role: "row", label: "Beta Room Track" }) !== undefined);
-        // Beta has nothing open, so the offer is the panel's empty state
-        // rather than the `+` menu — same three choices, same reasons, and
-        // with no tabs there is no `+` for them to hang off.
-        const offer = until("the empty panel's offer", (s) =>
-            s.find({ role: "card", label: "Empty panel" }) !== undefined ? s : undefined);
-        const track = offer.find({ role: "button", label: "Track editor" });
-        const reason = offer.find({ role: "text", label: "Select a track first" }) !== undefined;
-        // The strip belongs to the picked track, so leaving Alpha parks its
-        // tabs instead of keeping them on screen beside Beta's.
-        const oldTabParked = offer.find({ role: "button", label: "Alpha Hall Track" }) === undefined;
-
-        // Parked is not closed: go back and re-pick the track, and the set
-        // that was open under it comes back with it.
-        // Polled clicks from here: swapping the strip is itself a re-render, so
-        // a node found in a snapshot taken before it lands is a stale frame.
-        nav.step("the venue switcher", "button", "Beta Room");
-        nav.venue("Alpha Hall");
-        until("Alpha's track again", (s) =>
-            s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined);
-        // Its tabs are parked under the *track*, not the room, so landing back
-        // in Alpha is not yet enough to bring them back.
-        const parkedUntilRepicked =
-            app.snapshot().find({ role: "button", label: "Alpha Hall Track" }) === undefined;
-        nav.track("Alpha Hall Track");
-        const restored = until("the restored Alpha tab", (s) =>
-            s.find({ role: "button", label: "Alpha Hall Track" }) !== undefined ? s : undefined);
-        ({
-            enabled: track.enabled,
-            reason,
-            oldTabParked,
-            parkedUntilRepicked,
-            restored: restored.find({ role: "button", label: "Alpha Hall Track" }) !== undefined,
-        })
-        "#,
-    );
-    assert_eq!(
-        out["enabled"], false,
-        "stale track stayed actionable: {out:#}"
-    );
-    assert_eq!(
-        out["reason"], true,
-        "stale track had no honest reason: {out:#}"
-    );
-    assert_eq!(
-        out["oldTabParked"], true,
-        "another room's track tab is still in the strip: {out:#}"
-    );
-    assert_eq!(
-        out["parkedUntilRepicked"], true,
-        "returning to the room restored a tab before its track was picked: {out:#}"
-    );
-    assert_eq!(
-        out["restored"], true,
-        "venue switch destroyed an open track tab: re-picking it did not bring \
-         its tabs back, so the work was thrown away rather than parked: {out:#}"
-    );
 }
