@@ -6,7 +6,7 @@ use crate::profiler;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AtlasTile, AvailableSpace, BackdropBlur, Background, BorderStyle, Bounds,
-    BoxShadow, Capslock, ContentFilter, Context, Corners, CursorHideMode, CursorStyle, Decorations,
+    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations,
     DevicePixels, DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
     Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
     GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
@@ -4025,7 +4025,7 @@ impl Window {
             child.finish();
 
             let scale_factor = self.scale_factor();
-            self.next_frame.scene.insert_content_filter(ContentFilter {
+            self.next_frame.scene.insert_content_filter(crate::ContentFilter {
                 order: 0,
                 blur_radius: blur_radius.scale(scale_factor),
                 bounds: bounds.scale(scale_factor),
