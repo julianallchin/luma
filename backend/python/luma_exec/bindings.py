@@ -911,6 +911,14 @@ def build_namespace(
                 host_call=host_call, artifact_store=store,
             )
 
+    # How the track sounds: felt tempo, text views and the arrays behind them,
+    # derived lazily from the same feature and audio snapshots.
+    features, audio = items.get("features"), items.get("audio")
+    if isinstance(features, LumaRecord) and isinstance(audio, LumaRecord):
+        from .music import Music
+
+        items["music"] = Music.from_bindings(features, audio)
+
     # The room is a binding record plus one capability: a camera over it. Every
     # thread with a venue in scope gets it, track and venue alike — looking at a
     # room is not an authored-track privilege.
