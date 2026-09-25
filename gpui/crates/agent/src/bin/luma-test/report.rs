@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use crate::capture::say;
 use crate::run::{Outcome, Status};
 
 /// Lines of detail under a failure, at most.
@@ -42,7 +43,7 @@ impl Reporter {
             self.timed.push((name.clone(), outcome.duration));
         }
         if self.json {
-            println!("{}", as_json(&outcome));
+            say(&as_json(&outcome).to_string());
             return;
         }
         let status = match outcome.status {
@@ -52,18 +53,18 @@ impl Reporter {
         };
         match outcome.status {
             Status::Skip => match &outcome.error {
-                Some(reason) => println!("{status:<4} {name}  ({reason})"),
-                None => println!("{status:<4} {name}"),
+                Some(reason) => say(&format!("{status:<4} {name}  ({reason})")),
+                None => say(&format!("{status:<4} {name}")),
             },
-            _ => println!(
+            _ => say(&format!(
                 "{status:<4} {name}  {:.1}s (setup {:.1}s)",
                 outcome.duration.as_secs_f64(),
                 outcome.setup.as_secs_f64()
-            ),
+            )),
         }
         if outcome.status == Status::Fail {
             for line in details(&outcome).into_iter().take(DETAIL_LINES) {
-                println!("     {line}");
+                say(&format!("     {line}"));
             }
         }
     }
@@ -71,28 +72,26 @@ impl Reporter {
     /// Print the summary; true if anything failed.
     pub fn finish(&mut self, elapsed: Duration, slowest: usize) -> bool {
         if self.json {
-            println!(
-                "{}",
-                json!({ "summary": {
-                    "passed": self.passed,
-                    "failed": self.failed,
-                    "skipped": self.skipped,
-                    "ms": elapsed.as_millis() as u64,
-                }})
-            );
+            say(&json!({ "summary": {
+                "passed": self.passed,
+                "failed": self.failed,
+                "skipped": self.skipped,
+                "ms": elapsed.as_millis() as u64,
+            }})
+            .to_string());
         } else {
-            println!(
+            say(&format!(
                 "{} passed, {} failed, {} skipped in {:.1}s",
                 self.passed,
                 self.failed,
                 self.skipped,
                 elapsed.as_secs_f64()
-            );
+            ));
             if slowest > 0 {
                 self.timed.sort_by(|a, b| b.1.cmp(&a.1));
-                println!("slowest:");
+                say("slowest:");
                 for (name, duration) in self.timed.iter().take(slowest) {
-                    println!("  {:>6.1}s  {name}", duration.as_secs_f64());
+                    say(&format!("  {:>6.1}s  {name}", duration.as_secs_f64()));
                 }
             }
         }
@@ -159,6 +158,13 @@ fn details(outcome: &Outcome) -> Vec<String> {
             lines.extend(wrap(&format!("  {line}"), 2));
         }
     }
+    // The app's own output while this test ran; see `capture`.
+    if !outcome.log.is_empty() {
+        lines.push("app log (tests running alongside write here too):".into());
+        for line in &outcome.log {
+            lines.push(clip(&format!("  {line}")));
+        }
+    }
     lines
 }
 
@@ -179,5 +185,6 @@ fn as_json(outcome: &Outcome) -> serde_json::Value {
         "shot": outcome.shot,
         "console": outcome.console,
         "library": outcome.library,
+        "log": outcome.log,
     })
 }

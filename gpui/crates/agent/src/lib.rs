@@ -150,6 +150,22 @@ pub struct Harness {
     /// pump runs on the caller's thread (the MCP binary), which is one app in
     /// a process that exists to hold it and has nothing to contend with.
     _slot: Option<Slot>,
+    /// Last, so it drops after the app: see [`Harness::remove_on_drop`].
+    library: Option<Library>,
+}
+
+/// A seeded library that goes when its harness does, unless the thread is
+/// panicking — a failed test's library is the evidence for it, so it stays.
+struct Library(std::path::PathBuf);
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!("kept the failed test's library: {}", self.0.display());
+        } else {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
 }
 
 impl Harness {
@@ -157,6 +173,7 @@ impl Harness {
         Ok(Self {
             interpreter: Interpreter::new(client)?,
             _slot: None,
+            library: None,
         })
     }
 
@@ -184,7 +201,17 @@ impl Harness {
         Ok(Self {
             interpreter: Interpreter::new(pump::spawn(config, root))?,
             _slot: Some(slot),
+            library: None,
         })
+    }
+
+    /// Delete `dir` when this harness drops, unless the thread is panicking
+    /// (a failed test keeps its library, and says where). Removing files
+    /// SQLite still has open is harmless on Unix.
+    #[must_use]
+    pub fn remove_on_drop(mut self, dir: std::path::PathBuf) -> Self {
+        self.library = Some(Library(dir));
+        self
     }
 
     pub fn exec(&mut self, code: &str, timeout: Duration) -> ExecResult {
