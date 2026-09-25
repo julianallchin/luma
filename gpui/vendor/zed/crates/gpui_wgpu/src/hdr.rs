@@ -26,6 +26,27 @@
 use bytemuck::{Pod, Zeroable};
 use gpui::HdrOutput;
 
+/// How the path intermediate is composited into the frame. Colour is
+/// premultiplied "over"; alpha is added, and relies on a unorm target to clamp
+/// it at 1.
+///
+/// LUMA LOCAL EDIT: a constant rather than a local, so the HDR tests composite
+/// with the same state. It lives here, not in `wgpu_renderer`, because
+/// `luma-ui`'s tests compile this file alone. The HDR scene target is float and does not clamp; see
+/// `hdr.wgsl`.
+pub(crate) const PATHS_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
 /// The scene target's format in HDR mode.
 pub(crate) const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -606,8 +627,6 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     /// encode must still show that colour at its SDR luminance.
     #[test]
     fn path_strokes_over_opaque_ui_keep_their_sdr_luminance() -> Result<()> {
-        use crate::wgpu_renderer::PATHS_BLEND;
-
         let instance = wgpu::Instance::default();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             eprintln!("no GPU adapter; skipping");
