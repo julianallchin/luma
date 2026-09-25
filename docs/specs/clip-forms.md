@@ -83,14 +83,16 @@ source is one level deep: a source's own settings are plain values.
 | `noise(speed, range)` | Smooth random wandering over time |
 | `audio(from_hz, to_hz, floor, threshold)` | Energy of one frequency range of the track's mix |
 
-- `time[...]` and `hit[...]` are keyframes over progress 0–1. Segments are
-  `hold`, `linear`, `step` or `bezier`. A `bezier` segment stores its two
-  handles as `[progress, value]` in the curve's own units, like an envelope's
-  Bézier, and plays exactly as drawn:
-  `{"bezier": {"control1": [0.2, 0.9], "control2": [0.4, 0.1]}}`. A smooth
-  ease is a Bézier with its handles a third of the way along, at the end
-  values. Common curves are presets: ramp up, ramp
-  down, swell, fade in, fade out, hold then drop.
+- `time[...]` and `hit[...]` are keyframes over progress 0–1, in the one
+  curve format that envelopes also use: points `[x, value]` or
+  `[x, value, ease]`, x strictly increasing from 0 to 1. The ease moves the
+  value from its point to the next: `linear` (the default, not written),
+  `ease-in`, `ease-out`, `ease-in-out`, `hold` (jump at the next point), or
+  a drawn `[x1, y1, x2, y2]`, a CSS cubic-bezier local to the segment that
+  plays exactly as drawn. The last point has no ease:
+  `{"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}`.
+  Common curves are presets: ramp up, ramp down, swell, fade in, fade out,
+  hold then drop.
 - `audio` reads the full mix only. No stems, no drum events, no harmony.
   `from_hz` and `to_hz` set the frequency range (20–20,000 Hz, from < to).
   Named ranges only fill the two numbers: Kick 40–100, Bass 20–250, Mids
@@ -111,7 +113,7 @@ source is one level deep: a source's own settings are plain values.
   gives the same frame as playing to it.
 
 Stored form of a source: a tagged value, for example
-`{"type": "time", "value": {"points": [[0, 2], [1, 0.5]], "segments": ["linear"]}}`.
+`{"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}`.
 The engine turns each source into graph nodes when it prepares the clip.
 
 ## Forms
@@ -253,8 +255,8 @@ Strokes travel across the heads. Each event starts one stroke.
   from outside the axis and leaves fully: path progress 0–1 maps onto stroke
   centers from `−w/2` to `1 + w/2`, where `w` is the absolute width. Travel is
   the time from first light to fully gone. A stroke is dark at the start and
-  at the end of its life. Stepped paths (`steps(N)`, or any path with `hold`
-  or `step` segments) keep their exact positions, and `wrap` has no overrun.
+  at the end of its life. Stepped paths (`steps(N)`, or any path with a
+  `hold` ease) keep their exact positions, and `wrap` has no overrun.
 - **width** `abs` is a share of the axis, from 0 to 4. Above 1 a stroke is
   wider than the axis: a soft wide stroke keeps part of the rig lit through
   its whole life. `rel` is relative to the gap between strokes. Let

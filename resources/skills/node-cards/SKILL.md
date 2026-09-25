@@ -25,7 +25,12 @@ An input takes a plain value, or a source where its card allows it. A source
 is one level deep.
 
 - `time` — one curve over the whole clip, all heads equal:
-  `{"type": "time", "value": {"points": [[0, 2], [1, 0.5]], "segments": ["linear"]}}`.
+  `{"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}`.
+  A curve is points `[x, value]` or `[x, value, ease]`, x strictly increasing
+  from 0 to 1. The ease moves the value to the next point: `"linear"` (the
+  default), `"ease-in"`, `"ease-out"`, `"ease-in-out"`, `"hold"` (jump at the
+  next point) or `[x1, y1, x2, y2]`, a CSS cubic-bezier local to the segment,
+  every number in 0..1. The last point has no ease.
 - `hit` — one curve over the life of each event (chase, sparkle, and the
   hits of `color.constant@1`).
 - `noise` — `{"type": "noise", "value": {"speed": 4, "range": [0.2, 1]}}`,

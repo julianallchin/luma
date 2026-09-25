@@ -64,7 +64,10 @@ edit.check()
   `{"source": {"kind": "z"}, "per_group": False, "reverse": False}`. Radial
   and angle also need `"plane"`; the shorthand gives the Auto plane.
 - **Inputs keep units.** Proportions are 0..1. Colors are RGB triples in 0..1
-  or `#RRGGBB`. Curves are envelopes: a list of `[x, y]` knots in 0..1.
+  or `#RRGGBB`. Curves are points `[x, value]` or `[x, value, ease]`,
+  x from 0 to 1, for example
+  `{"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}`. An
+  envelope's values are 0..1.
 - **Preserve the seed** when you update a clip.
 
 ## Measure before you look

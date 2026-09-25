@@ -244,7 +244,7 @@ fn value(value: &Value) -> String {
         Value::Envelope(envelope) => envelope
             .points
             .iter()
-            .map(|[x, y]| format!("({}, {})", number(*x), number(*y)))
+            .map(|point| format!("({}, {})", number(point.x), number(point.value)))
             .collect::<Vec<_>>()
             .join(" "),
         Value::Mapping(spec) => {

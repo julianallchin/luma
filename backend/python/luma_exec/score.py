@@ -13,21 +13,24 @@ color.chase@1, color.sparkle@1, color.noise@1, strobe.constant@1 or aim@1. It ho
 a value for every input of its form. source() is the exact score document,
 suitable for an agent workspace or a one-shot model.
 
-Envelope values store anchors and optional Bézier segments, for example:
-    {"points": [[0, 1], [1, 0]], "curves": [
-        {"kind": "bezier", "control1": [.3, 1], "control2": [.7, 0]}]}
-An envelope needs 2–256 anchors, starting at x=0 and ending at x=1 with strictly
-increasing x; both coordinates must be finite and in 0..1.
-Handles use the same normalized coordinates as anchors. Their x positions must
-stay ordered between their segment endpoints; y stays in 0..1. An omitted
-curves list means straight segments. Every editor and evaluator uses this value
-for a plain "envelope" input, such as color.time@1's curve.
+Every curve has one format: a list of points, each [x, value] or
+[x, value, ease]:
+    {"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}
+x goes from 0 to 1: the first point has x 0, the last x 1, and x strictly
+increases. A curve has 2–256 points. The ease says how the value moves from
+this point to the next; with no ease it is "linear". The last point has no
+ease. Eases are "linear", "ease-in", "ease-out", "ease-in-out", "hold" (stay
+at this value and jump at the next point) or [x1, y1, x2, y2], a CSS
+cubic-bezier local to the segment: x is a share of the segment's length, y a
+share of the change to the next value, every number in 0..1.
 
-A "time"/"hit" source on a signal socket is a related but distinct shape:
-{"type": "time", "value": {"points": [[0, 0], [1, 1]], "segments": ["linear"]}}
-— "points" pairs an x with a number or color, and "segments" (not "curves")
-holds one Segment per adjacent pair. Tag a curve on a signal socket "time" or
-"hit", never "envelope"; the core rejects an envelope there.
+A plain "envelope" input, such as color.time@1's curve, holds values 0..1:
+    {"type": "envelope", "value": {"points": [[0, 0, "ease-in-out"], [1, 1]]}}
+A signal socket takes the same curve as a "time" source (over the clip) or a
+"hit" source (over each event), with numbers in the input's unit or colors:
+    {"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}
+Tag a curve on a signal socket "time" or "hit", never "envelope"; the core
+rejects an envelope there.
 """
 from __future__ import annotations
 
@@ -66,15 +69,15 @@ def _typed(kind, value):
                 raise TrackError(
                     f"a signal socket needs a numerical value or a source, not {value['type']!r}; "
                     'a curve here is a "time" (over the clip) or "hit" (over each event) source, '
-                    'e.g. {"type": "time", "value": {"points": [[0, 0], [1, 1]], "segments": ["linear"]}} '
+                    'e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
                     '— not "envelope", which is a different, unrelated value kind'
                 )
             return value  # The core validates units, channels and fixture domains.
         if isinstance(value, dict):
             raise TrackError(
                 'a signal socket needs a numerical value or a tagged source, not a bare dict; '
-                'tag a curve explicitly, e.g. {"type": "time", "value": {"points": [[0, 0], [1, 1]], '
-                '"segments": ["linear"]}} for one curve over the clip, or "hit" for one per event'
+                'tag a curve explicitly, e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
+                'for one curve over the clip, or "hit" for one per event'
             )
         rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
         literal = "color" if rgb else spec.get("unit") or "number"

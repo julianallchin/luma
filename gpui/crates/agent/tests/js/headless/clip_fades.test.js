@@ -13,7 +13,7 @@ const stored = () => library.score();
 const alpha = (clip = "form-clip") => stored().clips[clip].inputs.alpha;
 const FIXED = { type: "proportion", value: 1.0 };
 
-// The points of a stored alpha curve, as [x, y] pairs.
+// The points of a stored alpha curve, as [x, y] or [x, y, ease].
 function points(value) {
   expect(value.type).toBe("time");
   return value.value.points;
@@ -54,13 +54,14 @@ test("fade, bend and level handles write the clip alpha", () => {
   // Alpha lives on the timeline, not in the sheet.
   assert(!app.snapshot().findAll({ role: "row" }).some((n) => n.label === "Alpha"), "the sheet has an Alpha row");
 
-  // Bend the fade up: it becomes a Bézier above the straight line.
+  // Bend the fade up: its ease becomes a drawn Bézier [x1, y1, x2, y2],
+  // local to the fade, with its handles above the straight line's thirds.
   app.drag(node("slider", "Chase fade in bend"), { dx: 0, dy: -20 }, { steps: 6 });
   settle();
   const bent = alpha();
-  const [start, end] = points(bent);
-  const straight = start[1] + (end[1] - start[1]) / 3;
-  expect(bent.value.segments[0].bezier.control1[1]).toBeGreaterThan(straight + 1e-3);
+  const ease = points(bent)[0][2];
+  assert(Array.isArray(ease) && ease.length === 4, `bent: ${JSON.stringify(bent)}`);
+  expect(ease[1]).toBeGreaterThan(1 / 3 + 1e-3);
 
   // Pull the hold of the line halfway down; the bend stays.
   const drop2 = travel() / 2;
@@ -69,7 +70,7 @@ test("fade, bend and level handles write the clip alpha", () => {
   const lowered = alpha();
   const curve = points(lowered);
   assert(close(curve[1][1], 0.5) && close(curve[2][1], 0.5), `lowered: ${JSON.stringify(curve)}`);
-  assert(lowered.value.segments[0].bezier !== undefined, "the bend went with the level");
+  assert(JSON.stringify(curve[0][2]) === JSON.stringify(ease), "the bend went with the level");
 
   // Undo takes the level back.
   app.key("secondary-z");

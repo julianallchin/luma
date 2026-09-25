@@ -360,13 +360,13 @@ fn a_direction_path_and_a_wandering_direction() {
     set(
         &mut inputs,
         "direction",
-        Value::Time(Keyframes {
-            points: vec![
+        Value::Time(Keyframes::with_eases(
+            [
                 (0.0, Key::Color([1.0, 0.0, 0.0])),
                 (1.0, Key::Color([0.0, 1.0, 0.0])),
             ],
-            segments: vec![],
-        }),
+            &[],
+        )),
     );
     let s = 0.5_f64.sqrt();
     for aim in directions(&cells, &inputs, LENGTH / 2.0) {

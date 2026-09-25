@@ -48,7 +48,7 @@ class ScoreTests(unittest.TestCase):
 
     def test_signal_sockets_accept_time_and_hit_curve_sources(self):
         signal = {"signal": {"unit": None, "channels": None}}
-        curve = {"points": [[0, 0], [1, 1]], "segments": ["linear"]}
+        curve = {"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [1, 0]]}
         self.assertEqual(_typed(signal, {"type": "time", "value": curve}),
                          {"type": "time", "value": curve})
         self.assertEqual(_typed(signal, {"type": "hit", "value": curve}),

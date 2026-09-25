@@ -1,40 +1,18 @@
-use crate::{Error, Result};
-use serde::{Deserialize, Serialize};
+use crate::curve::{lerp, parameter};
+use crate::{Curve, CurvePoint, Ease, Error, Result};
 
-/// One segment between anchors. Bézier handles use the envelope's normalized
-/// coordinates, just like anchors; x is ordered and y stays within 0..1.
-/// `Hold` keeps the start value for the whole segment; `Step` takes the end
-/// value from the start of the segment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum EnvelopeCurve {
-    #[default]
-    Linear,
-    Bezier {
-        control1: [f64; 2],
-        control2: [f64; 2],
-    },
-    Hold,
-    Step,
-}
+/// An authored curve with values 0..1. The consumer supplies time or
+/// spatial meaning.
+pub type Envelope = Curve<f64>;
 
-/// Authored anchors and curves. The consumer supplies time or spatial meaning.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Envelope {
-    pub points: Vec<[f64; 2]>,
-    /// Empty means all straight segments, preserving existing authored history.
-    /// Otherwise there is exactly one curve per adjacent pair of anchors.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub curves: Vec<EnvelopeCurve>,
-}
-
-impl Envelope {
+impl Curve<f64> {
     pub fn linear(points: Vec<[f64; 2]>) -> Self {
-        Self {
-            points,
-            curves: Vec::new(),
-        }
+        Self::eased(points, &[])
+    }
+
+    /// A curve through `points` with `eases[i]` from point `i`.
+    pub fn eased(points: Vec<[f64; 2]>, eases: &[Ease]) -> Self {
+        Self::with_eases(points.into_iter().map(|[x, y]| (x, y)), eases)
     }
 
     pub fn soft_edges(softness: f64) -> Self {
@@ -49,140 +27,75 @@ impl Envelope {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if !(2..=256).contains(&self.points.len()) {
-            return Err(Error(format!(
-                "envelope.points has {} anchors; expected 2–256",
-                self.points.len()
-            )));
-        }
-        for (i, point) in self.points.iter().enumerate() {
-            if !normalized(*point) {
-                return Err(Error(format!(
-                    "envelope.points[{i}] is {point:?}; both coordinates must be finite and in 0..1"
-                )));
-            }
-            if i > 0 && self.points[i - 1][0] > point[0] {
-                return Err(Error(format!(
-                    "envelope.points[{i}].x is {}; must not precede the previous x ({})",
-                    point[0],
-                    self.points[i - 1][0]
-                )));
-            }
-        }
-        if self.points[0][0] != 0. || self.points.last().unwrap()[0] != 1. {
-            return Err(Error(format!(
-                "envelope.points must start at x=0 and end at x=1; got {} and {}",
-                self.points[0][0],
-                self.points.last().unwrap()[0]
-            )));
-        }
-        if !self.curves.is_empty() && self.curves.len() != self.points.len() - 1 {
-            return Err(Error(format!(
-                "envelope.curves has {} entries; expected {} (one per segment), or omit curves for straight segments",
-                self.curves.len(), self.points.len() - 1
-            )));
-        }
-        for (i, curve) in self.curves.iter().enumerate() {
-            if let EnvelopeCurve::Bezier { control1, control2 } = curve {
-                if !normalized(*control1)
-                    || !normalized(*control2)
-                    || control1[0] < self.points[i][0]
-                    || control1[0] > control2[0]
-                    || control2[0] > self.points[i + 1][0]
-                {
-                    return Err(Error(format!(
-                        "envelope.curves[{i}]: Bézier handles {control1:?}, {control2:?} must be normalized and ordered between anchors {:?} and {:?}",
-                        self.points[i], self.points[i + 1]
-                    )));
-                }
-            }
-        }
-        Ok(())
+        self.check(|v| {
+            (!v.is_finite() || !(0. ..=1.).contains(v))
+                .then(|| format!("an envelope value must be in 0..1, not {v}"))
+        })
     }
 
-    pub fn curve(&self, segment: usize) -> EnvelopeCurve {
-        self.curves.get(segment).copied().unwrap_or_default()
+    /// Point `i` as `[x, y]`.
+    pub fn point(&self, i: usize) -> [f64; 2] {
+        [self.points[i].x, self.points[i].value]
     }
 
-    /// Actual control polygon; straight segments have collinear third handles.
+    /// The segment's control polygon in the envelope's own coordinates. A
+    /// straight or held segment has its handles on the line, at the thirds.
     pub fn controls(&self, segment: usize) -> [[f64; 2]; 4] {
-        let a = self.points[segment];
-        let b = self.points[segment + 1];
-        let (c, d) = match self.curve(segment) {
-            EnvelopeCurve::Bezier { control1, control2 } => (control1, control2),
-            _ => (lerp(a, b, 1. / 3.), lerp(a, b, 2. / 3.)),
-        };
-        [a, c, d, b]
+        let (a, b) = (self.point(segment), self.point(segment + 1));
+        let [x1, y1, x2, y2] = self
+            .ease(segment)
+            .handles()
+            .unwrap_or(Ease::Linear.handles().unwrap());
+        let place = |x: f64, y: f64| [a[0] + x * (b[0] - a[0]), a[1] + y * (b[1] - a[1])];
+        [a, place(x1, y1), place(x2, y2), b]
     }
 
     pub fn sample(&self, progress: f64) -> f64 {
-        if progress < 0. {
-            return self.points[0][1];
-        }
-        if progress >= 1. {
-            return self.points.last().unwrap()[1];
-        }
-        let i = self
-            .points
-            .partition_point(|p| p[0] <= progress)
-            .saturating_sub(1);
-        let a = self.points[i];
-        let b = self.points[i + 1];
-        match self.curve(i) {
-            EnvelopeCurve::Linear => lerp(a, b, (progress - a[0]) / (b[0] - a[0]))[1],
-            EnvelopeCurve::Bezier { .. } => {
-                let controls = self.controls(i);
-                at(controls, parameter(controls, progress))[1]
-            }
-            EnvelopeCurve::Hold => a[1],
-            EnvelopeCurve::Step => b[1],
-        }
+        let (i, share) = self.locate(progress);
+        let (a, b) = (self.points[i].value, self.points[i + 1].value);
+        a + (b - a) * share
     }
 
-    pub fn set_curve(&mut self, segment: usize, curve: EnvelopeCurve) -> Result<()> {
+    pub fn set_ease(&mut self, segment: usize, ease: Ease) -> Result<()> {
         self.validate()?;
         if segment >= self.points.len() - 1 {
             return Err(Error("unknown envelope segment".into()));
         }
         let mut next = self.clone();
-        next.curves
-            .resize(self.points.len() - 1, EnvelopeCurve::Linear);
-        next.curves[segment] = curve;
+        next.points[segment].ease = ease;
         next.validate()?;
-        next.compact();
         *self = next;
         Ok(())
     }
 
-    /// Move an anchor and its attached handles together. Ordering and bounds
-    /// belong to this value, so native and programmatic edits obey one rule.
+    /// Set a segment's handles from two points in the envelope's own
+    /// coordinates, kept inside the segment's box. A flat segment keeps
+    /// its handles' heights.
+    pub fn set_handles(&mut self, segment: usize, c1: [f64; 2], c2: [f64; 2]) -> Result<()> {
+        if segment + 1 >= self.points.len() {
+            return Err(Error("unknown envelope segment".into()));
+        }
+        let (a, b) = (self.point(segment), self.point(segment + 1));
+        let old = self
+            .ease(segment)
+            .handles()
+            .unwrap_or(Ease::Linear.handles().unwrap());
+        let [x1, y1] = local(a, b, c1, [old[0], old[1]]);
+        let [x2, y2] = local(a, b, c2, [old[2], old[3]]);
+        self.set_ease(segment, Ease::Bezier([x1, y1, x2, y2]))
+    }
+
+    /// Move a point. Its eases are local to its segments, so they keep their
+    /// shape. Ordering and bounds belong to this value, so native and
+    /// programmatic edits obey one rule.
     pub fn move_point(&mut self, index: usize, point: [f64; 2]) -> Result<()> {
         self.validate()?;
-        let old = *self
-            .points
-            .get(index)
-            .ok_or_else(|| Error("unknown envelope anchor".into()))?;
-        let mut next = self.clone();
-        next.points[index] = point;
-        Self::linear(next.points.clone()).validate()?;
-        for i in index.saturating_sub(1)..=(index.min(self.points.len() - 2)) {
-            if let Some(EnvelopeCurve::Bezier { control1, control2 }) = next.curves.get_mut(i) {
-                let attached = if i == index {
-                    &mut *control1
-                } else {
-                    &mut *control2
-                };
-                for axis in 0..2 {
-                    attached[axis] = (attached[axis] + point[axis] - old[axis]).clamp(0., 1.);
-                }
-                let (a, b) = (next.points[i][0], next.points[i + 1][0]);
-                if a > b {
-                    return Err(Error("envelope anchors must remain ordered".into()));
-                }
-                control1[0] = control1[0].clamp(a, b);
-                control2[0] = control2[0].clamp(control1[0], b);
-            }
+        if index >= self.points.len() {
+            return Err(Error("unknown envelope anchor".into()));
         }
+        let mut next = self.clone();
+        next.points[index].x = point[0];
+        next.points[index].value = point[1];
         next.validate()?;
         *self = next;
         Ok(())
@@ -195,49 +108,37 @@ impl Envelope {
         if !x.is_finite()
             || x <= 0.
             || x >= 1.
-            || self.points.iter().any(|p| (p[0] - x).abs() < 1e-9)
+            || self.points.iter().any(|p| (p.x - x).abs() < 1e-9)
         {
             return Err(Error(
                 "new envelope anchor must lie inside a segment".into(),
             ));
         }
-        let i = self.points.partition_point(|p| p[0] < x) - 1;
-        let mut next = self.clone();
-        let [a, b, c, d] = self.controls(i);
-        let t = match self.curve(i) {
-            EnvelopeCurve::Bezier { .. } => parameter([a, b, c, d], x),
-            _ => (x - a[0]) / (d[0] - a[0]),
-        };
-        let (ab, bc, cd) = (lerp(a, b, t), lerp(b, c, t), lerp(c, d, t));
-        let (abc, bcd) = (lerp(ab, bc, t), lerp(bc, cd, t));
-        // A held or stepped segment keeps its value on both sides of the cut.
-        let point = match self.curve(i) {
-            EnvelopeCurve::Hold => [x, a[1]],
-            EnvelopeCurve::Step => [x, d[1]],
-            _ => lerp(abc, bcd, t),
-        };
-        next.points.insert(i + 1, point);
-        next.curves
-            .resize(self.points.len() - 1, EnvelopeCurve::Linear);
-        let (left, right) = match self.curve(i) {
-            curve @ (EnvelopeCurve::Linear | EnvelopeCurve::Hold | EnvelopeCurve::Step) => {
-                (curve, curve)
+        let i = self.points.partition_point(|p| p.x < x) - 1;
+        let ease = self.ease(i);
+        let (point, left, right) = match ease {
+            Ease::Linear => ([x, self.sample(x)], ease, ease),
+            // A held segment keeps its value on both sides of the cut.
+            Ease::Hold => ([x, self.points[i].value], ease, ease),
+            _ => {
+                let [a, b, c, d] = self.controls(i);
+                let t = parameter([a, b, c, d], x);
+                let (ab, bc, cd) = (lerp(a, b, t), lerp(b, c, t), lerp(c, d, t));
+                let (abc, bcd) = (lerp(ab, bc, t), lerp(bc, cd, t));
+                let m = lerp(abc, bcd, t);
+                let half = |from, to, c1, c2| {
+                    let [x1, y1] = local(from, to, c1, [1. / 3., 1. / 3.]);
+                    let [x2, y2] = local(from, to, c2, [2. / 3., 2. / 3.]);
+                    Ease::Bezier([x1, y1, x2, y2])
+                };
+                (m, half(a, m, ab, abc), half(m, d, bcd, cd))
             }
-            EnvelopeCurve::Bezier { .. } => (
-                EnvelopeCurve::Bezier {
-                    control1: ab,
-                    control2: abc,
-                },
-                EnvelopeCurve::Bezier {
-                    control1: bcd,
-                    control2: cd,
-                },
-            ),
         };
-        next.curves[i] = left;
-        next.curves.insert(i + 1, right);
+        let mut next = self.clone();
+        next.points[i].ease = left;
+        next.points
+            .insert(i + 1, CurvePoint::eased(point[0], point[1], right));
         next.validate()?;
-        next.compact();
         *self = next;
         Ok(i + 1)
     }
@@ -247,64 +148,38 @@ impl Envelope {
         if index == 0 || index >= self.points.len() - 1 {
             return Err(Error("envelope endpoints cannot be removed".into()));
         }
-        let mut next = self.clone();
-        let merged = match (self.curve(index - 1), self.curve(index)) {
-            (left, right) if left == right && !matches!(left, EnvelopeCurve::Bezier { .. }) => left,
-            (
-                EnvelopeCurve::Linear | EnvelopeCurve::Bezier { .. },
-                EnvelopeCurve::Linear | EnvelopeCurve::Bezier { .. },
-            ) => EnvelopeCurve::Bezier {
-                control1: self.controls(index - 1)[1],
-                control2: self.controls(index)[2],
-            },
-            _ => EnvelopeCurve::Linear,
+        let merged = match (self.ease(index - 1), self.ease(index)) {
+            (left, right) if left == right && matches!(left, Ease::Linear | Ease::Hold) => left,
+            (Ease::Hold, _) | (_, Ease::Hold) => Ease::Linear,
+            _ => {
+                // The outer handles of the two segments shape the one left.
+                let (a, b) = (self.point(index - 1), self.point(index + 1));
+                let [x1, y1] = local(a, b, self.controls(index - 1)[1], [1. / 3., 1. / 3.]);
+                let [x2, y2] = local(a, b, self.controls(index)[2], [2. / 3., 2. / 3.]);
+                Ease::Bezier([x1, y1, x2, y2])
+            }
         };
+        let mut next = self.clone();
         next.points.remove(index);
-        next.curves
-            .resize(self.points.len() - 1, EnvelopeCurve::Linear);
-        next.curves[index - 1] = merged;
-        next.curves.remove(index);
+        next.points[index - 1].ease = merged;
         next.validate()?;
-        next.compact();
         *self = next;
         Ok(())
     }
-
-    fn compact(&mut self) {
-        if self.curves.iter().all(|c| *c == EnvelopeCurve::Linear) {
-            self.curves.clear();
-        }
-    }
 }
 
-fn normalized(p: [f64; 2]) -> bool {
-    p.iter().all(|v| v.is_finite() && (0. ..=1.).contains(v))
-}
-fn lerp(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
-    [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
-}
-pub(crate) fn at([a, b, c, d]: [[f64; 2]; 4], t: f64) -> [f64; 2] {
-    lerp(
-        lerp(lerp(a, b, t), lerp(b, c, t), t),
-        lerp(lerp(b, c, t), lerp(c, d, t), t),
-        t,
-    )
-}
-pub(crate) fn parameter(controls: [[f64; 2]; 4], x: f64) -> f64 {
-    if x <= controls[0][0] {
-        return 0.;
-    }
-    if x >= controls[3][0] {
-        return 1.;
-    }
-    let (mut low, mut high) = (0., 1.);
-    for _ in 0..40 {
-        let mid = (low + high) * 0.5;
-        if at(controls, mid)[0] < x {
-            low = mid;
+/// `p` as a share of the box from `a` to `b`, kept in 0..1. A flat box has
+/// no share of height, so `fallback` keeps its height.
+fn local(a: [f64; 2], b: [f64; 2], p: [f64; 2], fallback: [f64; 2]) -> [f64; 2] {
+    let share = |from: f64, to: f64, v: f64, fallback: f64| {
+        if (to - from).abs() > 1e-12 {
+            ((v - from) / (to - from)).clamp(0., 1.)
         } else {
-            high = mid;
+            fallback
         }
-    }
-    (low + high) * 0.5
+    };
+    [
+        share(a[0], b[0], p[0], fallback[0]),
+        share(a[1], b[1], p[1], fallback[1]),
+    ]
 }

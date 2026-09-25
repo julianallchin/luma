@@ -455,10 +455,7 @@ pub(crate) fn run(
             let Value::Envelope(path) = inputs["path"].control(0) else {
                 unreachable!("validated path")
             };
-            let glides = path
-                .curves
-                .iter()
-                .all(|curve| !matches!(curve, EnvelopeCurve::Hold | EnvelopeCurve::Step));
+            let glides = path.points.iter().all(|point| point.ease != Ease::Hold);
             Ok(BTreeMap::from([numeric(
                 "value",
                 Signal::scalar(if glides { 1.0 } else { 0.0 }, Unit::Number)?,
