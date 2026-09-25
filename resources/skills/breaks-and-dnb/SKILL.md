@@ -30,13 +30,13 @@ the music and not as flicker.
 - **Liquid / rollers** — smooth, jazzy, vocal. The break is soft-edged; keep
   the accents warm and rounded, let pads and vocals drive color, moderate
   contrast. Closer to melodic-bass in spirit at double speed.
-- **Jump-up / neuro** — the bass talks (measure it — the modulation recipe in
-  `finding-things-in-audio` works at these rates too). Bass phrases get
+- **Jump-up / neuro** — the bass talks (`luma.music.modulation` works at
+  these rates too). Bass phrases get
   answered like dubstep wubs: accents on measured onsets, harder contrast,
   colder colors for neuro's mechanical growl.
 - **Jungle** — chopped breaks, chaos with a smile. The edits themselves (break
-  switches, stutters) are events worth accenting; find them where the drum
-  stem's texture suddenly shifts.
+  switches, stutters) are events worth accenting; find them with
+  `luma.music.deviations`.
 - **UKG / breaks** — swung, flirty, club-scale not festival-scale. Offbeat
   accents, restrained ceiling, groove circulation like tech house.
 
@@ -48,10 +48,19 @@ drop (two basslines at once, or the drop after a one-bar cut) is the genre's
 face-punch moment and deserves the reserved move. Breakdowns in liquid can be
 long and gorgeous — treat them with melodic-bass patience.
 
-## How deep to go
+## Listening
 
-Moderate-to-deep. One pass for the arc; go deep on the break-riding (one
-careful loop analysis reused across the track) rather than per-section
-fan-out. Delegate only where the track genuinely diverges in character —
-split along those seams and put the bass-measurement brief in each child,
-like heavy-bass.
+Depth: moderate for liquid and UKG, deep for jump-up, neuro and jungle.
+
+- Listen for: the break's kick and snare placement over one loop, where it
+  changes (edits, stutters, switches), the sub's motion, and in neuro the
+  bass's rate switches.
+- Detail: one careful loop analysis of the break at 16th resolution, reused
+  across the track; `deviations` finds every bar that edits it. Ghost notes
+  and hats are low-confidence in n2n. For neuro and jump-up drops, run the
+  skeptic pass and parallel listeners as in `heavy-bass`.
+- LDs love: the same light answer on the break's signature hits every bar,
+  and a hard change on the break switch.
+
+One pass for the arc. Delegate only where the track diverges in character,
+split along those seams, with the bass evidence rows in each child's brief.
