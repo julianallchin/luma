@@ -63,6 +63,16 @@ impl<'a> PassQueries<'a> {
         name: &'static str,
         original: Option<wgpu::ComputePassTimestampWrites<'a>>,
     ) -> Option<wgpu::ComputePassTimestampWrites<'a>> {
+        // wgpu on Vulkan resets every query from a compute pass's begin index
+        // through its end index. A bracket from a new index to a fixed base
+        // index would reset every sample written between them, and the resolve
+        // then waits for ever (the GPU faults). So a compute pass that already
+        // writes one base sample keeps just that sample.
+        if original.as_ref().is_some_and(|p| {
+            p.beginning_of_pass_write_index.is_none() || p.end_of_pass_write_index.is_none()
+        }) {
+            return original;
+        }
         self.render(
             name,
             original.map(|p| wgpu::RenderPassTimestampWrites {
