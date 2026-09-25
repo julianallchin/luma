@@ -163,6 +163,12 @@
         b: shot(b),
         ...options(opts, { threshold: "threshold", rect: "rect" }),
       }),
+    tint: (of, opts) =>
+      read("tint", {
+        shot: shot(of),
+        ...options(opts, { channel: "channel", margin: "margin", rect: "rect" }),
+      }),
+    keep: (of, name) => read("keep", { shot: shot(of), name }),
   };
 
   const line = (args) =>

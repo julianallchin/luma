@@ -1,7 +1,8 @@
 //! `image.*` in a script: the few reads pixel tests make of a screenshot.
 //!
-//! Two reads cover what the pixel suites assert: how bright a region is, and
-//! how much of it changed between two shots. Rects are logical pixels, like
+//! Three reads cover what the pixel suites assert: how bright a region is,
+//! how much of it changed between two shots, and how much of it is one hue
+//! (a refusal's red). `keep` copies a shot somewhere a person can find it. Rects are logical pixels, like
 //! node bounds, so a script can pass `node.bounds` straight in; the shot's
 //! `scale` turns them into device pixels.
 
@@ -49,11 +50,37 @@ struct Diff {
     rect: Option<Rect>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Tint {
+    shot: Shot,
+    channel: Channel,
+    margin: Option<u8>,
+    rect: Option<Rect>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum Channel {
+    Red,
+    Green,
+    Blue,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Keep {
+    shot: Shot,
+    name: String,
+}
+
 pub(crate) fn call(op: &str, args: &str) -> Result<String, HarnessError> {
     let bad = |error: serde_json::Error| HarnessError::BadCall(format!("image.{op}: {error}"));
     let value = match op {
         "stats" => stats(serde_json::from_str(args).map_err(bad)?)?,
         "diff" => diff(serde_json::from_str(args).map_err(bad)?)?,
+        "tint" => tint(serde_json::from_str(args).map_err(bad)?)?,
+        "keep" => keep(serde_json::from_str(args).map_err(bad)?)?,
         other => return Err(HarnessError::BadCall(format!("no image.{other}"))),
     };
     Ok(value.to_string())
@@ -146,6 +173,56 @@ fn diff(args: Diff) -> Result<Value, HarnessError> {
     Ok(json!(changed as f64 / f64::from(width * height)))
 }
 
+/// The fraction of pixels in which `channel` exceeds both others by at least
+/// `margin` (default 40): how much of a region reads as that hue rather than
+/// as one of the greys an interface is mostly made of.
+fn tint(args: Tint) -> Result<Value, HarnessError> {
+    let image = open(&args.shot)?;
+    let (x, y, width, height) = region(&image, args.shot.scale, args.rect)?;
+    let view = image::imageops::crop_imm(&image, x, y, width, height);
+    let margin = i16::from(args.margin.unwrap_or(40));
+    let index = args.channel as usize;
+    let tinted = image::GenericImageView::pixels(&*view)
+        .filter(|(_, _, pixel)| {
+            let value = i16::from(pixel[index]);
+            (0..3)
+                .filter(|&other| other != index)
+                .all(|other| value >= i16::from(pixel[other]) + margin)
+        })
+        .count();
+    Ok(json!(tinted as f64 / f64::from(width * height)))
+}
+
+/// Copy a shot out of the harness's own directory, which goes with the
+/// process, to `$LUMA_SHOTS/<name>.png` (default `<temp>/luma-shots`), and
+/// say where. `name` may carry a drawer (`"sidebar/push-01"`) but may not
+/// climb out of the root.
+fn keep(args: Keep) -> Result<Value, HarnessError> {
+    let relative = std::path::Path::new(&args.name);
+    if args.name.is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(HarnessError::BadCall(format!(
+            "image.keep: {:?} is not a relative name inside the shots directory",
+            args.name
+        )));
+    }
+    let root = std::env::var_os("LUMA_SHOTS").map_or_else(
+        || std::env::temp_dir().join("luma-shots"),
+        std::path::PathBuf::from,
+    );
+    let kept = root.join(format!("{}.png", args.name));
+    let failed = |error: std::io::Error| {
+        HarnessError::BadCall(format!("image.keep: {}: {error}", kept.display()))
+    };
+    std::fs::create_dir_all(kept.parent().unwrap_or(&root)).map_err(failed)?;
+    std::fs::copy(&args.shot.path, &kept).map_err(failed)?;
+    Ok(json!(kept.display().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +266,15 @@ mod tests {
         let outside =
             json!({ "shot": { "path": a }, "rect": { "x": 30, "y": 0, "width": 5, "height": 5 } });
         assert!(run("stats", outside).is_err());
+        // 25 of 200 pixels are pure red; none are green.
+        assert_eq!(
+            run("tint", json!({ "shot": { "path": b }, "channel": "red" })).unwrap(),
+            0.125
+        );
+        assert_eq!(
+            run("tint", json!({ "shot": { "path": b }, "channel": "green" })).unwrap(),
+            0.0
+        );
+        assert!(run("keep", json!({ "shot": { "path": a }, "name": "../out" })).is_err());
     }
 }
