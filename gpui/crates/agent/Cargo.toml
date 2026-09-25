@@ -8,7 +8,19 @@ publish = false
 default = ["app"]
 # The Luma view tree the MCP binary drives. Off, the crate is a harness with no
 # app in it — which is what `cargo test` wants.
-app = ["dep:luma-app", "dep:gpui-component"]
+#
+# It also carries the seeded library (`fixture`), which the script runner and
+# the cargo suites share — so the seeding crates ride on it too.
+app = [
+    "dep:luma-app",
+    "dep:gpui-component",
+    "dep:luma",
+    "dep:luma-patterns",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:base64",
+    "dep:sha2",
+]
 # Real text metrics and a real GPU renderer behind the same test platform, so
 # frames can be read back as images. Off by default: it links the platform
 # crate and creates a GPU device, which a headless `cargo test` must not do.
@@ -37,28 +49,34 @@ gpui-component = { workspace = true, optional = true }
 # crate's `RgbaImage`, and two copies of `image` would not unify.
 image = { version = "0.25", optional = true }
 
+# The fixture seeds a real Luma database before the app opens it: there is no
+# command for "a track that was never imported". `scripted-model` lets a test
+# drive a turn without a network.
+luma = { path = "../../../backend", features = ["scripted-model"], optional = true }
+luma-patterns = { path = "../../../backend/crates/patterns", optional = true }
+sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "time"], optional = true }
+# A fixture session's host proof is a pair of hashes over exact bytes plus
+# base64url JWT claims; minting one the production way needs Supabase.
+base64 = { version = "0.21", optional = true }
+sha2 = { version = "0.10", optional = true }
+
 [[bin]]
 name = "gpui-agent-mcp"
 path = "src/bin/mcp.rs"
 required-features = ["app"]
 
-# The fixture tests seed a real Luma database before the app opens it: there
-# is no command for "a track that was never imported", and the filters under
-# test are arithmetic over rows, not over files.
+[[bin]]
+name = "luma-test"
+path = "src/bin/luma-test/main.rs"
+required-features = ["app"]
+
+# The fixture crates (`luma`, `sqlx`, …) come in through `app`, which every
+# suite that seeds a library already needs.
 [dev-dependencies]
-# `scripted-model` is what lets a test drive a turn without a network.
-luma = { path = "../../../backend", features = ["scripted-model"] }
-luma-patterns = { path = "../../../backend/crates/patterns" }
 luma-chat = { path = "../chat" }
 # The pixel suite projects world points through the camera the app reports, so
 # it needs the same camera and the same gizmo scale the renderer uses.
 luma-scene = { path = "../scene" }
 glam = "0.30"
 async-trait = "0.1"
-# The sign-in suite writes a Supabase session and its host proof directly:
-# the proof is a pair of hashes over exact bytes plus base64url JWT claims, and
-# minting one the production way would need Supabase on the other end.
-base64 = "0.21"
-sha2 = "0.10"
-sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1", features = ["rt", "time"] }

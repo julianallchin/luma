@@ -16,8 +16,9 @@
 //   close-then-reopen idiom that used to be "Back then re-enter";
 // - `luma::DismissOverlay` is what Escape means.
 //
-// Requires `until` (support/until.js) — splice `nav::SCRIPT` or
-// `support::script(...)`, which carry both, rather than including this alone.
+// Requires `until` (until.js). `luma-test` loads both into every test; a
+// cargo test splices `support::NAV` or `support::script(...)`, which carry
+// both.
 //
 // Assigned onto the global for the same reason `until` is: one interpreter
 // context per session, so a `const` would be a redeclaration on the second
