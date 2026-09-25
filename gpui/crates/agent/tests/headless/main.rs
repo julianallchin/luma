@@ -17,7 +17,6 @@ mod add_tracks_flow;
 mod clip_forms;
 mod library_foundation;
 mod signin;
-mod tracks;
 mod venue_builder;
 mod venue_patch;
 mod venues;
