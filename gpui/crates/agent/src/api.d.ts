@@ -169,6 +169,22 @@ interface ImageApi {
    * 3, the noise floor) on any channel. The shots must be the same size.
    */
   diff(a: Shot | string, b: Shot | string, options?: { threshold?: number; rect?: Bounds }): number;
+  /**
+   * The fraction of pixels in which `channel` exceeds both other channels by
+   * at least `margin` (default 40) — how much of a region reads as that hue
+   * rather than as the greys around it. A refusal's red, say.
+   */
+  tint(
+    shot: Shot | string,
+    options: { channel: "red" | "green" | "blue"; margin?: number; rect?: Bounds },
+  ): number;
+  /**
+   * Copy a shot to `$LUMA_SHOTS/<name>.png` (default `<temp>/luma-shots`) and
+   * return the path. Shots otherwise live in a directory that goes with the
+   * process; this is how a capture outlives the run. `name` may hold a
+   * drawer, `"sidebar/push-01"`, but not `..`.
+   */
+  keep(shot: Shot | string, name: string): string;
 }
 
 interface App {
