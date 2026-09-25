@@ -1648,6 +1648,16 @@ fn articulated_roll(
     Ok(turned.to_radians())
 }
 
+/// The way a chained corner block enters by, and the way it leaves by.
+///
+/// The block offers all six plates, but a chain turns through its two open
+/// ways — the palette's default L (`luma_render::catalog::DEFAULT_CORNER_FACES`).
+/// Its exit is the free end a chain grows from; `exit_roll` then turns it to
+/// the next piece's direction. Picking the exit by the incoming run instead
+/// picks the plate straight through, which no roll can turn.
+const CORNER_ENTRY: &str = "face_-x";
+const CORNER_EXIT: &str = "face_-z";
+
 /// The half of the joint the new piece meets its host by.
 ///
 /// The generated families each have one upstream end and the rest are ways out,
@@ -1669,7 +1679,7 @@ fn chain_socket<S: NodeSockets + ?Sized>(
     let preferred = if is_stick(piece) {
         Some("end_a")
     } else if is_corner(piece) {
-        Some("face_-x")
+        Some(CORNER_ENTRY)
     } else if is_hinge(piece) {
         Some("leaf_fixed")
     } else {
@@ -1899,7 +1909,7 @@ fn leftover_tip<S: NodeSockets + ?Sized>(
     plan: &Plan,
     probe: &Node,
 ) -> Option<Tip> {
-    let free: Vec<ResolvedSocket> = scene
+    let mut free: Vec<ResolvedSocket> = scene
         .sockets
         .sockets(probe)
         .into_iter()
@@ -1907,7 +1917,16 @@ fn leftover_tip<S: NodeSockets + ?Sized>(
         .filter(|s| s.name != plan.edge.my_socket)
         .collect();
     let run = three_from_facade(DVec3::from(plan.run)).normalize_or_zero();
-    let socket = if free.len() == 1 {
+    let corner_exit = probe
+        .catalog_ref
+        .as_deref()
+        .and_then(crate::catalog::find)
+        .is_some_and(is_corner)
+        .then(|| free.iter().position(|s| s.name == CORNER_EXIT))
+        .flatten();
+    let socket = if let Some(exit) = corner_exit {
+        free.swap_remove(exit)
+    } else if free.len() == 1 {
         free.into_iter().next()?
     } else if run.length_squared() > 0.5 {
         free.into_iter().max_by(|a, b| {
