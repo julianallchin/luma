@@ -354,6 +354,14 @@ pub struct AgentChat {
     spring_tick: Option<std::time::Instant>,
     spring_settled: Option<std::time::Instant>,
     distance: f32,
+    /// The geometry the pin last held against: the transcript's size (set at
+    /// prepaint, ahead of the list's own layout) and the footer's height. A
+    /// pinned view that sees either change snaps to the end in the same
+    /// frame, so a resize or a taller composer never leaves it short of the
+    /// bottom. The spring only runs while a turn streams, so it cannot cover
+    /// these.
+    pin_size: Rc<Cell<gpui::Size<gpui::Pixels>>>,
+    pin_footer: f32,
     /// Reached by `crate::composer` from inside the panel's render, which is
     /// why it is crate-visible rather than private: the plate's layout state
     /// belongs to the composer, and passing it back through the entity would
@@ -428,6 +436,8 @@ impl AgentChat {
             spring_tick: None,
             spring_settled: None,
             distance: 0.0,
+            pin_size: Rc::default(),
+            pin_footer: 0.0,
             composer: Composer::new(cx),
             selection: None,
             model_picker: model_picker::Picker::new(cx),
@@ -1571,6 +1581,33 @@ impl AgentChat {
         } else {
             0.0
         };
+        // The composer grew or shrank: the list's bottom padding moves with it,
+        // and a pinned view has to move too or the tail slides under the
+        // composer.
+        if footer != self.pin_footer {
+            self.pin_footer = footer;
+            if self.pinned {
+                self.list.scroll_to_end();
+                self.distance = 0.0;
+            }
+        }
+        let pin_watch = {
+            let list = self.list.clone();
+            let pinned = self.pinned;
+            let seen = self.pin_size.clone();
+            // Prepainted before the list, so a snap lands in the list's own
+            // layout this frame rather than one frame late.
+            gpui::canvas(
+                move |bounds, _, _| {
+                    if seen.replace(bounds.size) != bounds.size && pinned {
+                        list.scroll_to_end();
+                    }
+                },
+                |_, _, _, _| (),
+            )
+            .absolute()
+            .size_full()
+        };
         let transcript_list = list(self.list.clone(), move |ix, window, cx| {
             let held = rows.clone();
             held.update(cx, |state, cx| {
@@ -1728,8 +1765,9 @@ impl AgentChat {
                         !self.transcript.messages.is_empty()
                             || !self.send_motion.pending.is_empty(),
                         |el| {
-                            el.child(transcript_list)
-                                .children(fade_bands(footer))
+                            el.child(pin_watch)
+                                .child(transcript_list)
+                                .children(fade_band(footer))
                                 .child(self.rail(&theme).bottom(px(footer)))
                                 .children(adrift.then(|| jump_to_bottom(&this, footer, &theme)))
                         },
@@ -1932,13 +1970,13 @@ fn header_button(
         .agent_disabled(disabled)
 }
 
-/// The bands at both ends of the transcript, dissolved into the panel's own
-/// ground.
+/// The band at the bottom of the transcript, dissolved into the panel's own
+/// ground. The top edge has no band: text overflows it sharply.
 ///
 /// Painted overlays rather than gpui's `EdgeFade`, which this pin does not
-/// have: a gradient to the panel's own ground *is* the fade. Without them a
-/// reply butts against the composer's plate below and the header's label above,
-/// and each pair reads as one control.
+/// have: a gradient to the panel's own ground *is* the fade. Without it a
+/// reply butts against the composer's plate below, and the pair reads as one
+/// control.
 ///
 /// The stop is [`theme::panel_opaque`] — the ground's colour at **full**
 /// coverage, not [`theme::panel`].
@@ -1949,23 +1987,14 @@ fn header_button(
 /// a surface that already has one. The band would be darker than the ground and
 /// would only half-cover the text, so it would read as a grey haze.
 ///
-/// The top band is inset by the header's height so text dissolves *before* it
-/// can reach the header's own label, rather than crossing under it.
-///
-/// The bottom band is the fallback only. Where the backdrop blurs, the
-/// composer's frosted pill blurs what passes under it, and the text around the
-/// pill stays sharp.
-fn fade_bands(footer: f32) -> Vec<gpui::Div> {
-    let ground = theme::panel_opaque();
-    let mut bands =
-        vec![luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, true).top(px(0.0))];
-    if !luma_ui::dialog::BACKDROP_BLUR_SUPPORTED {
-        bands.push(
-            luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, false)
-                .bottom(px(footer)),
-        );
-    }
-    bands
+/// The band is the fallback only. Where the backdrop blurs, the composer's
+/// frosted pill blurs what passes under it, and the text around the pill stays
+/// sharp.
+fn fade_band(footer: f32) -> Option<gpui::Div> {
+    (!luma_ui::dialog::BACKDROP_BLUR_SUPPORTED).then(|| {
+        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, theme::panel_opaque(), false)
+            .bottom(px(footer))
+    })
 }
 
 /// The way back down, offered only once the bottom is far enough away to be
@@ -1983,12 +2012,20 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl 
         .right_0()
         .flex()
         .justify_center()
-        .child(
+        // Frosted and filled like the composer pill: it floats over the
+        // transcript, and a bare chip's faint wash let the text show straight
+        // through it.
+        .child(luma_ui::dialog::frosted(
+            theme::JUMP_DIAMETER / 2.0,
+            theme::PILL_BLUR,
             luma_ui::float::chip()
                 .id("chat-jump-to-bottom")
                 .size(px(theme::JUMP_DIAMETER))
                 .px(px(0.0))
                 .rounded_full()
+                .bg(theme.input_bg)
+                .border_1()
+                .border_color(theme.border)
                 .on_click(move |_, _, cx| {
                     pressed.update(cx, |this, cx| this.jump_to_bottom(cx));
                 })
@@ -1998,7 +2035,7 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl 
                         .text_color(theme.text_muted),
                 )
                 .agent_node(NodeRole::Button, "Jump to bottom"),
-        )
+        ))
 }
 
 /// What an agent is for, in the words of the thing it is looking at, and the

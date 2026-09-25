@@ -1,6 +1,6 @@
 Execute Python in a namespace that persists for this agent thread. Current Luma state lives under `luma` and is refreshed before every call; the variables, functions and imports you create persist across calls. numpy, scipy, librosa and matplotlib are available. You get back stdout, stderr, the last expression's value, a traceback when it fails, and any matplotlib figures as images you can actually see. Write normal cell-shaped Python — no wrapper function, no `return`.
 
-For every call, describe the cell's purpose before its code. Use a short noun phrase that completes “Running …”, for example “section energy analysis.” Do not restate the code.
+For every call, name the cell's work before its code. Choose a verb that fits the work, and give it in two forms: `verb` ends in -ing and `verbPast` is its past tense, for example “Measuring” and “Measured”. `purpose` is a short phrase that follows the verb, for example “beat energy in bars 7–13”. Do not restate the code.
 
 Orientation:
 - `luma.catalog()` gives a compact overview. Drill into a relevant path, such as `luma.catalog("venue")` or `luma.catalog("features.drum_onsets")`; use `depth=` to see more of that branch. Request `depth=None` only when you need its full inventory.

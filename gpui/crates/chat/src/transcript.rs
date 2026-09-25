@@ -81,7 +81,8 @@ pub enum RowKind {
         /// it changes what the row paints, so it belongs to the row's identity.
         reasoning: bool,
     },
-    /// A run of consecutive tool calls, as one group.
+    /// A run of consecutive tool calls, as one group. `count` is the span of
+    /// parts it covers, which can include parts that paint nothing.
     Tools { part: usize, count: usize },
 }
 
@@ -171,16 +172,24 @@ fn push_assistant_rows(
         if let AgentChatPart::Tool(_) = item {
             // Consecutive calls are one group. The run is measured here, where
             // the sequence is visible, so the rail only ever draws what it is
-            // handed.
+            // handed. A part that paints nothing (a step marker, an empty
+            // text) does not end the run: two runs with nothing between them
+            // would read as one list with a stray gap in it.
             let first = part;
-            let mut count = 1;
+            let mut last = part;
             let mut hash = FNV_OFFSET;
             hash = hash_tool(hash, tool_at(message, part));
-            while matches!(parts.peek(), Some((_, AgentChatPart::Tool(_)))) {
-                let (next, _) = parts.next().expect("peeked");
+            while let Some(next) = (last + 1..message.parts.len())
+                .find(|&ix| !paints_nothing(message, turn, ix))
+                .filter(|&ix| tool_at(message, ix).is_some())
+            {
+                while parts.peek().is_some_and(|(ix, _)| *ix <= next) {
+                    parts.next();
+                }
                 hash = hash_tool(hash, tool_at(message, next));
-                count += 1;
+                last = next;
             }
+            let count = last + 1 - first;
             rows.push(RowKey {
                 turn: ix,
                 kind: RowKind::Tools { part: first, count },
@@ -206,6 +215,19 @@ fn push_assistant_rows(
                 version: version(state.block_hash(block), streaming),
             });
         }
+    }
+}
+
+/// Whether part `part` of an assistant turn adds no row of its own.
+fn paints_nothing(message: &AgentChatMessage, turn: &Entry, part: usize) -> bool {
+    match message.parts.get(part) {
+        Some(AgentChatPart::Tool(_)) | None => false,
+        Some(item) if markdown_of(item).is_some() => turn
+            .parts
+            .get(part)
+            .and_then(Option::as_ref)
+            .is_none_or(|state| state.tree.blocks.is_empty()),
+        Some(_) => true,
     }
 }
 
@@ -741,7 +763,7 @@ pub fn row(
                 .map(|tool| chip::label(tool).to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            (chip::rail(&tools, ctx, window), plain)
+            (chip::rail(&tools, ctx, window, cx), plain)
         }
         RowKind::Block {
             part,
@@ -968,6 +990,42 @@ mod tests {
         let mut appended = old.clone();
         appended.push(key(0, 50, 50));
         assert_eq!(diff_rows(&old, &appended), Some((50..50, 1)));
+    }
+
+    /// A step marker or an empty text between two tool calls paints nothing,
+    /// so it must not split them into two groups with a gap between.
+    #[test]
+    fn invisible_parts_do_not_split_a_tool_run() {
+        let tool = |id: &str| {
+            AgentChatPart::Tool(ToolPart {
+                name: Some("probe".into()),
+                dynamic: false,
+                call_id: id.into(),
+                state: luma_lib::agent::ToolState::InputAvailable,
+                input: None,
+                output: None,
+                error_text: None,
+            })
+        };
+        let message = AgentChatMessage {
+            id: "a".into(),
+            role: Role::Assistant,
+            parts: vec![
+                tool("1"),
+                AgentChatPart::StepStart,
+                AgentChatPart::Text { text: String::new() },
+                tool("2"),
+                AgentChatPart::Text { text: "done".into() },
+            ],
+        };
+        let mut entry = Entry::restored("a");
+        entry.sync(&message, false);
+        let transcript = Transcript {
+            messages: vec![message],
+        };
+        let rows = rows_for(&transcript, &[entry], None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, RowKind::Tools { part: 0, count: 4 });
     }
 
     /// The end-of-turn case: every version moves (the streaming bit) while

@@ -86,8 +86,10 @@ impl Tool for ScriptedTool {
     fn schema(&self) -> Value {
         json!({
             "type": "object",
-            "required": ["purpose", "code"],
+            "required": ["verb", "verbPast", "purpose", "code"],
             "properties": {
+                "verb": { "type": "string" },
+                "verbPast": { "type": "string" },
                 "purpose": { "type": "string" },
                 "code": { "type": "string" },
             },
@@ -182,7 +184,7 @@ fn script() -> Vec<Vec<ModelEvent>> {
         },
         ModelEvent::ToolCallArgsDelta {
             id: "call-1".into(),
-            json: r#"{"purpose":"ramp peak check","code":"ramp.peak()"}"#.into(),
+            json: r#"{"verb":"Checking","verbPast":"Checked","purpose":"ramp peak","code":"ramp.peak()"}"#.into(),
         },
         ModelEvent::ToolCallEnded {
             id: "call-1".into(),
@@ -246,7 +248,7 @@ fn delegation_script() -> Vec<Vec<ModelEvent>> {
         call(
             "call-child",
             "python",
-            json!({ "purpose": "ramp bounds", "code": "ramp.bounds()" }).to_string(),
+            json!({ "verb": "Measuring", "verbPast": "Measured", "purpose": "ramp bounds", "code": "ramp.bounds()" }).to_string(),
         ),
         end(
             vec![ModelEvent::TextDelta(SUBAGENT_ANSWER.into())],
