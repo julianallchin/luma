@@ -810,11 +810,11 @@ fn seam(color: gpui::Rgba) -> Div {
 /// How the thread and the workspace panel divide the room they share, and the
 /// floors neither may be dragged below.
 ///
-/// The workspace gets 65% of the shared room by default. Chat keeps its
+/// The workspace gets 72% of the shared room by default. Chat keeps its
 /// minimum readable width, and dragging or resetting the seam uses this same
 /// proportion at every window size.
 pub(crate) fn workspace_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.35, CENTER_MIN, WORKSPACE_MIN)
+    luma_ui::split::SplitFraction::new(0.28, CENTER_MIN, WORKSPACE_MIN)
 }
 
 /// The room the thread and the panel share this frame: the window, less the
