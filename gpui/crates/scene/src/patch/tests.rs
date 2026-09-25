@@ -920,12 +920,34 @@ fn refusals() -> serde_json::Value {
     })
 }
 
+/// Rebuilds every object with its keys sorted, so the golden's bytes do not
+/// depend on whether a workspace build turned on serde_json's
+/// `preserve_order` for everyone.
+fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k, sorted_keys(v)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted_keys).collect())
+        }
+        other => other,
+    }
+}
+
 fn golden() -> String {
-    let mut out = serde_json::to_string_pretty(&serde_json::json!({
+    let mut out = serde_json::to_string_pretty(&sorted_keys(serde_json::json!({
         "twoRuns": capture(&two_runs()),
         "crowdedRun": capture(&crowded()),
         "refusals": refusals(),
-    }))
+    })))
     .expect("the capture serializes");
     out.push('\n');
     out
