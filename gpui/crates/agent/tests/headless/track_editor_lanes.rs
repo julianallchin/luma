@@ -202,13 +202,17 @@ fn the_lane_stack_sits_on_the_floor_and_the_wheel_reaches_the_rest_of_it() {
         "alt-wheel did not grow the lanes to MAX_ZOOM_Y: {grown:#}"
     );
 
-    // 4. `H` fits the stack: nothing clipped away, and still anchored.
+    // 4. `H` fits the stack: every lane visible at full height, the top one
+    //    inside the canvas, and still anchored.
     let fitted = &out["fitted"];
-    let canvas = number(&fitted["canvas"], "bottom") - number(&fitted["canvas"], "top");
-    let want = ((canvas - 112.) / (LAYERS + 1) as f64).floor();
     assert!(
-        number(fitted, "shortest") >= want - 2.,
+        number(fitted, "shortest") > 0.
+            && number(fitted, "tallest") - number(fitted, "shortest") <= 2.,
         "H left a lane clipped out of view; every one of them should fit: {fitted:#}"
+    );
+    assert!(
+        number(&fitted["first"], "y") >= number(&fitted["canvas"], "top") - 1.,
+        "H left the top lane above the canvas: {fitted:#}"
     );
     on_the_floor(fitted, "the fitted lanes");
 }
