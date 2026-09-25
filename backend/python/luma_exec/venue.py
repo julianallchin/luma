@@ -108,6 +108,7 @@ Queries return stage coordinates and node handles for subsequent edits::
     v.groups()                           # saved sets and exact selection names
     v.nodes(kind="run", label="wing_*")   # -> .id .label .kind .at .size .face .tips
     v.extent(v.nodes(kind="tower"))       # -> span and centre in u/v: "is it centred?"
+    v.extent(v.groups()["drum_uplighters"])  # -> that group's own bounds/centroid/size
     print(v.describe())                   # compact spatial summary
     print(v.tiles())                      # the plan as a text map
     v.catalog()["guardrail"].size         # machine-readable dimensions
@@ -1202,6 +1203,28 @@ class GroupTree(tuple):
         return "\n".join(lines)
 
 
+def _node_ids(value: Any) -> list[str]:
+    """Every node id `value` names, expanding a `Group` or `Distribution` to
+    the fixtures it holds and flattening a list of any of these.
+
+    `Group.id` is the *group's own* row id, not a venue-graph node id —
+    handing a group straight to `_node()` would silently resolve to the wrong
+    id space instead of failing loudly. `group()` already special-cases this
+    for its `fixtures` argument; `extent()` and `nodes()` take the same
+    inputs here so the spatial check a rig analysis keeps needing — "where do
+    the lights in `drum_uplighters` sit" — is `v.extent(groups["drum_uplighters"])`,
+    not a manual `.fixture_ids` unpack first.
+    """
+    if isinstance(value, (Group, Distribution)):
+        return list(_node_ids(value.fixtures))
+    if isinstance(value, (list, tuple, set)):
+        ids: list[str] = []
+        for item in value:
+            ids.extend(_node_ids(item))
+        return ids
+    return [_node(value)]
+
+
 class Venue:
     """A live venue facade; its extracted records are per-cell snapshots."""
 
@@ -1834,20 +1857,22 @@ class Venue:
 
         No filter is the whole room. `kind` is one of `catalog().kinds`,
         `label` is a glob (`"wing_*"`), `on` narrows to what hangs off one node
-        at any depth, and `region` is `(u_min, v_min, u_max, v_max)` against the
-        footprint centre.
+        at any depth, `region` is `(u_min, v_min, u_max, v_max)` against the
+        footprint centre, and `ids` is a node, a group, or a list of either —
+        `v.nodes(ids=groups["drum_uplighters"])` is every fixture in that group.
 
             for tower in v.nodes(kind="tower"):
                 print(tower.id, tower.at, tower.size)
 
-        Every field comes back in facade metres and is legal input to a write
-        verb, so read → edit → verify round-trips without arithmetic in between.
+        Every field comes back in facade metres — `+u` stage right, `+v`
+        toward the crowd, `+z` up — and is legal input to a write verb, so
+        read → edit → verify round-trips without arithmetic in between.
         """
         response = self._verb(
             "venue.query",
             {
                 "draftId": draft,
-                "ids": None if ids is None else [_node(i) for i in ids],
+                "ids": None if ids is None else _node_ids(ids),
                 "kind": None if kind is None else str(kind),
                 "label": None if label is None else str(label),
                 "on": None if on is None else _node(on),
@@ -1866,20 +1891,22 @@ class Venue:
         region: Sequence[float] | None = None,
         draft: str | None = None,
     ) -> Extent | None:
-        """The span and centre of everything named — the "is it centred" check.
+        """The span and centre of everything named — the "is it centred" check,
+        and the compact per-group summary a spatial chase needs: bounds,
+        centroid and axis extent in metres, `+u` stage right, `+v` toward the
+        crowd, `+z` up.
 
             print(v.extent(kind="tower"))
             print(v.extent(v.nodes(label="portal_*")))
+            print(v.extent(v.groups()["drum_uplighters"]))   # one group's rig geometry
 
-        `selection` is a node, a list of them, or anything `nodes()` returned;
-        the keyword filters are the same as `nodes()`. `None` back means nothing
-        matched — including an **empty** selection, which is a question about no
-        nodes and not a question about the room.
+        `selection` is a node, a group, a list of either, or anything
+        `nodes()` returned; the keyword filters are the same as `nodes()`.
+        `None` back means nothing matched — including an **empty**
+        selection, which is a question about no nodes and not a question
+        about the room.
         """
-        ids: list[str] | None = None
-        if selection is not None:
-            items = selection if isinstance(selection, (list, tuple, set)) else [selection]
-            ids = [_node(item) for item in items]
+        ids = None if selection is None else _node_ids(selection)
         response = self._verb(
             "venue.extent",
             {
