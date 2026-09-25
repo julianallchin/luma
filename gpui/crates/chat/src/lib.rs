@@ -60,6 +60,7 @@ use luma_lib::agent::{
     AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt,
 };
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
+use luma_ui::arg::select::MenuVisibility;
 use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 
@@ -370,9 +371,8 @@ pub struct AgentChat {
     selection: Option<Selection>,
     model_picker: model_picker::Picker,
     selection_saving: bool,
-    /// Whether the context gauge's click-open card is showing.
-    usage_open: bool,
-    usage_closing: Option<std::time::Instant>,
+    /// The context gauge's click-open card: open, playing its exit, or closed.
+    usage: MenuVisibility,
     /// Live delegation state, newest child last, one entry per subagent this
     /// panel has seen a snapshot for.
     ///
@@ -442,8 +442,7 @@ impl AgentChat {
             selection: None,
             model_picker: model_picker::Picker::new(cx),
             selection_saving: false,
-            usage_open: false,
-            usage_closing: None,
+            usage: MenuVisibility::Closed,
             subagents: Vec::new(),
             read_only: false,
             turn: TurnState::Idle,
@@ -498,33 +497,10 @@ impl AgentChat {
     /// gauge is painted from a free function in [`usage`], which has no
     /// `&mut self` to reach.
     pub(crate) fn set_usage_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.usage_open == open {
-            return;
-        }
-        self.usage_open = open;
-        self.usage_closing =
-            (!open && !luma_ui::motion::reduced_motion(cx)).then(std::time::Instant::now);
-        if let Some(since) = self.usage_closing {
-            cx.spawn(async move |this, cx| loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(16))
-                    .await;
-                let keep_animating = this.update(cx, |this, cx| {
-                    if this.usage_closing != Some(since) {
-                        return false;
-                    }
-                    let done = since.elapsed() >= luma_ui::motion::span(&luma_ui::motion::MENU_OUT);
-                    if done {
-                        this.usage_closing = None;
-                    }
-                    cx.notify();
-                    !done
-                });
-                if !matches!(keep_animating, Ok(true)) {
-                    break;
-                }
-            })
-            .detach();
+        if open {
+            self.usage = MenuVisibility::Open;
+        } else {
+            self.usage.close();
         }
         cx.notify();
     }
@@ -852,7 +828,12 @@ impl AgentChat {
                 .and_then(|ix| self.list.bounds_for_item(ix))
             {
                 let content_end = f32::from(bounds.bottom() - viewport.top()) + scroll;
-                let room = send_motion::room(f32::from(viewport.size.height), content_end - offset);
+                // The room fills what the reader sees, which stops at the
+                // composer: the list's bottom padding (the footer) is scroll
+                // travel of its own, so counting it here too lifts the prompt
+                // above the viewport by the footer's height.
+                let visible = f32::from(viewport.size.height) - self.pin_footer;
+                let room = send_motion::room(visible, content_end - offset);
                 if (room - self.send_motion.room).abs() > 0.5 {
                     self.send_motion.room = room;
                     self.list.remeasure_items(end..end + 1);
@@ -1466,6 +1447,9 @@ impl Render for AgentChat {
 
 impl AgentChat {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.usage.tick_close(luma_ui::motion::reduced_motion(cx)) {
+            window.request_animation_frame();
+        }
         let theme = self.theme.clone();
         // Unattached: the panel is its own opening and nothing else. No status
         // strip and no composer, because there is no thread for a send to land
@@ -1503,18 +1487,10 @@ impl AgentChat {
         });
         let error = self.error.clone();
         let this = cx.entity();
-        let gauge = self.transcript.last_request().map(|request| {
-            usage::gauge(
-                &request,
-                &this,
-                self.usage_open,
-                self.usage_closing.map(|since| {
-                    luma_ui::motion::exit_progress(&luma_ui::motion::MENU_OUT, since)
-                }),
-                &theme,
-            )
-            .into_any_element()
-        });
+        let gauge = self
+            .transcript
+            .last_request()
+            .map(|request| usage::gauge(&request, &this, self.usage, &theme).into_any_element());
         // Asked with a clock: a fade that finished while its block was off
         // screen — or while the turn was settling — must stop asking for
         // frames on its own, or the panel never idles again.

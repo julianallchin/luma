@@ -30,10 +30,9 @@ const send = (text) => {
   app.click(app.snapshot().find({ role: "button", label: "Send" }));
 };
 
-// Everything up to the landing passes. After it, the transcript shows the
-// previous reply and the thinking trailer but not the prompt between them;
-// a standalone `AgentChat` does paint it (at the conversation's top).
-test.skip("bug: in the app shell a sent prompt is not painted in the transcript once it lands", () => {
+// In the app shell the composer overlays the list's tail, so the prompt's
+// landing has to leave room above the composer, not the whole list height.
+test("in the app shell a sent prompt stays on screen once it lands", () => {
   nav.trackEditor("Test Venue", "Aurora");
   nav.step("new conversation", "button", "New chat");
   until("the composer", (s) => {

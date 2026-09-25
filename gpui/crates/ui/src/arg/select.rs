@@ -69,7 +69,7 @@ impl MenuVisibility {
         }
         false
     }
-    pub(crate) fn exit(self) -> Option<f32> {
+    pub fn exit(self) -> Option<f32> {
         match self {
             Self::Closing(since) => Some(crate::motion::exit_progress(
                 &crate::motion::MENU_OUT,
