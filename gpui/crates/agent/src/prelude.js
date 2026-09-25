@@ -60,7 +60,7 @@
       : { node: node(value, which) };
 
   const snapshot = (opts) => {
-    const shot = call("snapshot", options(opts, { settle: "settle" }));
+    const shot = call("snapshot", options(opts, { settle: "settle", waitMs: "wait_ms" }));
     shot.find = (query) => shot.nodes.find(predicate(query));
     shot.findAll = (query) => shot.nodes.filter(predicate(query));
     return shot;
@@ -142,6 +142,27 @@
     screenshot: (opts) =>
       call("screenshot", options(opts, { node: "node", restale: "restale" })),
     help: () => __help(),
+  };
+
+  // Image reads run on the interpreter's side, over files a screenshot
+  // already wrote. Only a pixel build binds `__image`.
+  const read = (op, args) => {
+    if (typeof __image === "undefined") {
+      throw new Error(`image.${op} needs pixel mode (\`--pixel\`)`);
+    }
+    return JSON.parse(__image(op, JSON.stringify(args)));
+  };
+  const shot = (value) =>
+    typeof value === "string" ? { path: value } : { path: value.path, scale: value.scale };
+
+  globalThis.image = {
+    stats: (of, rect) => read("stats", { shot: shot(of), rect }),
+    diff: (a, b, opts) =>
+      read("diff", {
+        a: shot(a),
+        b: shot(b),
+        ...options(opts, { threshold: "threshold", rect: "rect" }),
+      }),
   };
 
   const line = (args) =>

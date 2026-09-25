@@ -118,6 +118,15 @@ impl Interpreter {
                     "__help",
                     Function::new(ctx.clone(), || API_DTS.to_string())?,
                 )?;
+                // Image reads work on files the pump already wrote, so they
+                // run here and never touch the app thread.
+                #[cfg(feature = "pixel")]
+                globals.set(
+                    "__image",
+                    Function::new(ctx.clone(), |ctx: Ctx<'_>, op: String, args: String| {
+                        crate::shots::call(&op, &args).map_err(|error| throw(&ctx, &error))
+                    })?,
+                )?;
                 ctx.eval::<(), _>(PRELUDE)
             })
             .map_err(js_setup_error)
@@ -126,18 +135,34 @@ impl Interpreter {
     /// Run one script. Never fails: a thrown exception is part of the result,
     /// because a model needs to see its own mistake to fix it.
     pub fn exec(&mut self, code: &str, timeout: Duration) -> ExecResult {
+        self.run(code, None, timeout)
+    }
+
+    /// [`Self::exec`], with `filename` as the script's name in stack traces.
+    pub fn exec_named(&mut self, code: &str, filename: &str, timeout: Duration) -> ExecResult {
+        self.run(code, Some(filename), timeout)
+    }
+
+    fn run(&mut self, code: &str, filename: Option<&str>, timeout: Duration) -> ExecResult {
         self.stdout.borrow_mut().clear();
         self.deadline
             .store(now_millis() + timeout.as_millis() as u64, Ordering::Relaxed);
         let started = Instant::now();
 
-        let outcome =
-            self.context.with(
-                |ctx| match ctx.eval::<rquickjs::Value, _>(code).catch(&ctx) {
-                    Ok(value) => Ok(to_json(&ctx, value)),
-                    Err(error) => Err(describe(error)),
-                },
-            );
+        let options = || {
+            let mut options = rquickjs::context::EvalOptions::default();
+            options.filename = filename.map(str::to_string);
+            options
+        };
+        let outcome = self.context.with(|ctx| {
+            match ctx
+                .eval_with_options::<rquickjs::Value, _>(code, options())
+                .catch(&ctx)
+            {
+                Ok(value) => Ok(to_json(&ctx, value)),
+                Err(error) => Err(describe(error)),
+            }
+        });
 
         self.deadline.store(0, Ordering::Relaxed);
 

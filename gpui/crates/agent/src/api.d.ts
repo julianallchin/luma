@@ -135,6 +135,42 @@ interface Timings {
   frames: FrameTiming[];
 }
 
+/** A screenshot on disk, as `app.screenshot()` returns it. */
+interface Shot {
+  path: string;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/**
+ * Reads over screenshots. Pixel mode only. A rect is in logical pixels
+ * relative to the shot's top-left, like node bounds — a shot of the whole
+ * window takes `node.bounds` as is. A rect outside the shot is an error.
+ */
+interface ImageApi {
+  /**
+   * Luma (0.299 R + 0.587 G + 0.114 B) and channel means over `rect`, or the
+   * whole shot. `min`/`max` are luma.
+   */
+  stats(
+    shot: Shot | string,
+    rect?: Bounds,
+  ): {
+    meanLuma: number;
+    min: number;
+    max: number;
+    mean: [number, number, number, number];
+    width: number;
+    height: number;
+  };
+  /**
+   * The fraction of pixels whose RGB differs by at least `threshold` (default
+   * 3, the noise floor) on any channel. The shots must be the same size.
+   */
+  diff(a: Shot | string, b: Shot | string, options?: { threshold?: number; rect?: Bounds }): number;
+}
+
 interface App {
   /**
    * Settle the app, draw a frame, and describe every control in it.
@@ -144,8 +180,12 @@ interface App {
    * settles, so whatever its own handlers drew is gone by the time a plain
    * `snapshot()` has settled again — and a one-frame flash lives exactly
    * there. Use it for that; a poll wants the settling default.
+   *
+   * `waitMs` makes it a cheap poll: if nothing ran since the last frame, wait
+   * up to `waitMs` for the app to have work (it returns as soon as some
+   * arrives), and draw only if something changed. `until` polls this way.
    */
-  snapshot(options?: { settle?: boolean }): Snapshot;
+  snapshot(options?: { settle?: boolean; waitMs?: number }): Snapshot;
 
   /**
    * Press and release at the centre of `node`.
@@ -264,14 +304,15 @@ interface App {
 
   /**
    * Render to a PNG on disk and return where it went. Pixel mode only —
-   * throws in headless mode, which has no renderer.
+   * throws in headless mode, which has no renderer. `width`/`height` are
+   * device pixels; `scale` is device pixels per logical one.
    */
-  screenshot(options?: {
-    node?: Node;
-  }): { path: string; width: number; height: number };
+  screenshot(options?: { node?: Node }): Shot;
 
   /** This file, verbatim. */
   help(): string;
 }
 
 declare const app: App;
+
+declare const image: ImageApi;

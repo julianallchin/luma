@@ -274,9 +274,11 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
 
         Cmd::Painted => Ok(painted(backend)),
 
-        Cmd::Snapshot { settle } => {
-            if settle {
-                backend.settle();
+        Cmd::Snapshot { settle, wait_ms } => {
+            match wait_ms {
+                Some(wait) => backend.poll(Duration::from_millis(wait)),
+                None if settle => backend.settle(),
+                None => {}
             }
             Ok(snapshot(backend))
         }
@@ -621,6 +623,10 @@ pub(crate) enum Host {
 /// `frames` would miss every interaction anyone wants to profile.
 pub(crate) struct Backend {
     host: Host,
+    /// Input reached the app since the last draw. Input runs inside
+    /// `update`, not as a task, so draining cannot tell that it happened.
+    touched: bool,
+    last_draw: Instant,
     /// The last [`TIMING_HISTORY`] frames. Bounded because a session is
     /// long-lived and nobody reads a million rows.
     timings: VecDeque<FrameTiming>,
@@ -652,6 +658,9 @@ struct FrameTiming {
 /// Frames kept. At 60Hz this is roughly the last eight seconds of drawing.
 const TIMING_HISTORY: usize = 512;
 
+/// How often a poll draws for a frame request alone: a 60 Hz display.
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
 /// How many finished frames the node registry holds for `app.painted()`.
 /// A whole gesture's worth of draws and no more — this retains every described
 /// node in each of them, and a driver reads them between commands rather than
@@ -679,6 +688,8 @@ impl Backend {
         };
         let mut backend = Self {
             host,
+            touched: true,
+            last_draw: Instant::now(),
             timings: VecDeque::new(),
         };
         // Every frame a command draws, not just the one it leaves behind: a
@@ -700,14 +711,20 @@ impl Backend {
         let start = Instant::now();
         self.run_until_parked();
         let parked = start.elapsed();
-
         let drawn = Instant::now();
         // Deliver the previous frame's callbacks once, just as a platform
         // frame does. Drawing alone leaves live springs frozen in the harness.
         self.in_window(|window, cx| {
             window.simulate_next_frame(cx);
         });
+        self.draw(parked, drawn);
+    }
+
+    /// Draw, and time it from `drawn`.
+    fn draw(&mut self, parked: Duration, drawn: Instant) {
         self.in_window(|window, cx| window.draw(cx).clear(cx));
+        self.touched = false;
+        self.last_draw = Instant::now();
         let draw = drawn.elapsed();
 
         let frame = self.frame();
@@ -719,6 +736,58 @@ impl Backend {
             parked,
             draw,
         });
+    }
+
+    /// [`Self::settle`] for a poll: draw only when a new frame could differ,
+    /// and no sooner than a display would.
+    ///
+    /// A frame can only change if a task ran, input arrived, or a callback
+    /// asked for the next frame — the same test a platform window makes
+    /// before it redraws. Input or finished work draws at once. A frame
+    /// request alone (the stage asks for one every render) is paced to
+    /// [`FRAME_INTERVAL`], as a display link would pace it. With neither, wait
+    /// up to `wait` for work: work from another thread (Luma's Tokio runtime)
+    /// schedules a runnable, and the scheduler unparks this thread when it
+    /// does, so the wait ends as soon as there is something to do.
+    fn poll(&mut self, wait: Duration) {
+        let start = Instant::now();
+        let ran = self.run_until_parked();
+        let parked = start.elapsed();
+        // Delivering the callbacks is the only way to count them, and it is
+        // what a draw does first anyway.
+        let callbacks = self.in_window(|window, cx| window.simulate_next_frame(cx));
+        if ran || self.touched {
+            return self.draw(parked, Instant::now());
+        }
+        let mut deadline = Instant::now() + wait;
+        if callbacks > 0 {
+            deadline = deadline.min(self.last_draw + FRAME_INTERVAL);
+        }
+        let mut arrived = self.has_runnables();
+        while !arrived {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::park_timeout(deadline - now);
+            arrived = self.has_runnables();
+        }
+        if arrived || callbacks > 0 {
+            let start = Instant::now();
+            self.run_until_parked();
+            self.draw(start.elapsed(), Instant::now());
+        }
+    }
+
+    fn has_runnables(&self) -> bool {
+        let (foreground, background) = self
+            .executor()
+            .dispatcher()
+            .as_test()
+            .expect("both hosts run on the test dispatcher")
+            .scheduler()
+            .pending_task_counts();
+        foreground + background > 0
     }
 
     /// Every frame still in the history, oldest first, with the mode that
@@ -740,11 +809,21 @@ impl Backend {
         })
     }
 
-    fn run_until_parked(&self) {
+    /// Run every runnable task, and say whether there were any.
+    fn run_until_parked(&self) -> bool {
+        let executor = self.executor();
+        let mut ran = false;
+        while executor.tick() {
+            ran = true;
+        }
+        ran
+    }
+
+    fn executor(&self) -> &gpui::BackgroundExecutor {
         match &self.host {
-            Host::Headless { cx, .. } => cx.background_executor.run_until_parked(),
+            Host::Headless { cx, .. } => &cx.background_executor,
             #[cfg(feature = "pixel")]
-            Host::Pixel { cx, .. } => cx.run_until_parked(),
+            Host::Pixel { cx, .. } => &cx.background_executor,
         }
     }
 
@@ -880,6 +959,7 @@ impl Backend {
     }
 
     fn input(&mut self, event: PlatformInput) {
+        self.touched = true;
         self.in_window(|window, cx| window.dispatch_event(event, cx));
     }
 
@@ -910,6 +990,7 @@ impl Backend {
                 })
             })
             .collect::<Result<_, _>>()?;
+        self.touched = true;
         for key in keys {
             self.in_window(|window, cx| window.dispatch_keystroke(key, cx));
         }
@@ -919,6 +1000,7 @@ impl Backend {
     /// Typing is a sequence of single-character keystrokes, which is what the
     /// platform delivers and therefore what a focused input handler expects.
     fn type_text(&mut self, text: &str) -> Result<(), HarnessError> {
+        self.touched = true;
         for character in text.chars() {
             let key = Keystroke::parse(&character.to_string()).map_err(|error| {
                 HarnessError::BadCall(format!("cannot type {character:?}: {error}"))
@@ -932,6 +1014,7 @@ impl Backend {
         let action = self
             .in_window(|_, cx| cx.build_action(name, payload))
             .map_err(|error| HarnessError::BadAction(format!("{name}: {error}")))?;
+        self.touched = true;
         self.in_window(|window, cx| window.dispatch_action(action, cx));
         Ok(())
     }

@@ -121,5 +121,7 @@ pub(crate) fn screenshot(
         "path": path.display().to_string(),
         "width": image.width(),
         "height": image.height(),
+        // Device pixels per logical one, so `image.*` can take node bounds.
+        "scale": scale,
     }))
 }

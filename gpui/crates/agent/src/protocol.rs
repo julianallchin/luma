@@ -100,6 +100,11 @@ pub enum Cmd {
     Snapshot {
         #[serde(default = "default_settle")]
         settle: bool,
+        /// Poll instead of settling: wait up to this long for the app to have
+        /// work, and draw only if something ran. What `until` asks between
+        /// checks — a poll that changes nothing costs no frame.
+        #[serde(default)]
+        wait_ms: Option<u64>,
     },
     /// Every frame drawn recently, oldest first, without settling — the
     /// frames a settled command drew *through* on its way to the one it left

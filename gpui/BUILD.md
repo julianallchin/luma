@@ -155,6 +155,34 @@ To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
 because that compiles a second copy of the shared support state.
 
+### Script tests (`gpui/test`)
+
+A UI test can also be a `.test.js` file under `crates/agent/tests/js/`. A new or
+changed test file needs no Rust build. From the repository root:
+
+```sh
+gpui/test                        # every headless file
+gpui/test settings slider        # files by name, path or glob
+gpui/test --filter "model picker" --slowest 5
+gpui/test --pixel                # files under tests/js/pixel, in target-pixel
+gpui/test --help
+```
+
+Each test gets its own seeded library and its own app. `-j N` sets how many run
+at once (default: half the cores; 2 with `--pixel`). A failure prints the
+message, the file line, the last frame's nodes and the console output.
+`--json` prints one JSON object per test. `--watch` runs a file again when it
+changes.
+
+A file calls `fixture({...})` once, with the options of
+`gpui_agent::fixture::Fixture` (`track: false`, `seconds`, `clips`, `rig`,
+`extra_scores`, …), then `test(name, fn)` for each test. `expect`, `assert`,
+`nav`, `until` and the `app` API are available. `src/api.d.ts` declares `app`
+and `image`. `src/runner.js` declares the rest.
+
+`until(what, pred, { timeoutMs })` fails after 5 s by default. Between checks
+it asks for a frame only when the app did something.
+
 ### Timing and grouping
 
 These tests are bound by wall-clock time. They wait for a rendered frame with a
@@ -162,9 +190,9 @@ timeout, and fixtures hold responses for a fixed time. A test that does not get
 CPU misses a deadline and fails an unrelated assertion.
 
 `Harness::headless` limits the number of driving threads
-(`HARNESS_CONCURRENCY` in `crates/agent/src/lib.rs`). This limit protects a
-loaded machine. On a quiet machine, results with and without the limit are the
-same.
+(`HARNESS_CONCURRENCY` in `crates/agent/src/lib.rs`, 6 by default; `luma-test`
+sets it to its `-j`). This limit protects a loaded machine. On a quiet machine,
+results with and without the limit are the same.
 
 `chat` is a separate target because it streams a reply at a fixed rate and
 checks that the transcript grows between frames.

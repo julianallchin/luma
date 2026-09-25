@@ -9,8 +9,8 @@ use serde_json::Value;
 
 /// The suite's `until` and `nav.*` helpers, spliced ahead of each script.
 const NAV: &str = concat!(
-    include_str!("../../src/until.js"),
-    include_str!("../../src/nav.js")
+    include_str!("../../tests/support/until.js"),
+    include_str!("../../tests/support/nav.js")
 );
 
 fn env(key: &str) -> String {

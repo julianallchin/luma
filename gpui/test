@@ -1,0 +1,21 @@
+#!/bin/sh
+# Run the `.test.js` UI suite: builds `luma-test` if needed, then runs it.
+#
+#   gpui/test [luma-test args]          headless, default target tree
+#   gpui/test --pixel [luma-test args]  pixel, gpui/target-pixel
+#
+# `gpui/test --help` lists the runner's flags.
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+features=""
+for arg in "$@"; do
+	if [ "$arg" = "--pixel" ]; then
+		features="--features pixel"
+		# One feature set per target directory; see gpui/BUILD.md.
+		CARGO_TARGET_DIR="$here/target-pixel"
+		export CARGO_TARGET_DIR
+	fi
+done
+# shellcheck disable=SC2086 # $features is deliberately split
+exec cargo +1.97.1 run -q --manifest-path "$here/Cargo.toml" -p gpui-agent --bin luma-test \
+	$features -- "$@"

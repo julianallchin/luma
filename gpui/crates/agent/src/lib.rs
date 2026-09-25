@@ -54,13 +54,18 @@
 //! re-finding the node by `(role, label)`; it is never the default.
 
 pub mod error;
+#[cfg(feature = "app")]
+pub mod fixture;
 pub mod interp;
 pub mod mcp;
 #[cfg(feature = "pixel")]
 mod pixel;
 pub mod protocol;
 pub mod pump;
+#[cfg(feature = "pixel")]
+mod shots;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
@@ -70,29 +75,20 @@ pub use pump::{Config, Mode, PumpClient, RootFactory, GPU_LIVENESS_TIMEOUT};
 
 /// How many threads may be driving an app at once in one process.
 ///
-/// This is a *deadline* limit, not a CPU limit. These tests are wall-clock
-/// bound: a script polls for a rendered frame with a timeout, and fixtures
-/// hold responses for a fixed number of milliseconds. A harness that only gets
-/// a sliver of a core misses those deadlines and fails an assertion that has
-/// nothing to do with what it was testing.
+/// A *deadline* limit, not a CPU limit: a script polls for a rendered frame
+/// with a timeout, and fixtures hold responses for fixed milliseconds, so a
+/// harness that gets a sliver of a core fails an assertion that has nothing
+/// to do with what it tested.
 ///
-/// With one binary per test file, cargo supplied this cap for free — it runs
-/// test binaries one at a time, so only that file's handful of tests ever
-/// overlapped. A consolidated suite has to say it out loud.
-///
-/// # It is insurance, not a fix
-///
-/// Be honest about what this bought. It was introduced when the machine was
-/// pathological — thirteen agents on one target directory and a 96%-full disk
-/// — and there the uncapped suite failed a different test on every run while
-/// six passed. On a quiet machine with a healthy disk the whole suite runs in
-/// ~28 s and passes either way; capped and uncapped are within noise of each
-/// other, because at that speed nothing is close to its deadline.
-///
-/// It stays because a loaded machine is the normal condition for this repo,
-/// and it costs nothing measurable when the machine is not loaded. If you find
-/// yourself raising it to make something faster, the cap is not your problem.
-const HARNESS_CONCURRENCY: usize = 6;
+/// The default suits `cargo test`, which runs one binary's tests on as many
+/// threads as there are cores. `luma-test` runs its own pool and sets this to
+/// the pool's size, so the pool is the one knob.
+static HARNESS_CONCURRENCY: AtomicUsize = AtomicUsize::new(6);
+
+/// Set how many threads may drive an app at once. See [`HARNESS_CONCURRENCY`].
+pub fn set_harness_concurrency(permits: usize) {
+    HARNESS_CONCURRENCY.store(permits.max(1), Ordering::Relaxed);
+}
 
 /// Permits, and somewhere to wait for one.
 static DRIVING_THREADS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
@@ -120,7 +116,7 @@ impl Slot {
             let mut driving = count
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            while *driving >= HARNESS_CONCURRENCY {
+            while *driving >= HARNESS_CONCURRENCY.load(Ordering::Relaxed) {
                 driving = free
                     .wait(driving)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -193,6 +189,12 @@ impl Harness {
 
     pub fn exec(&mut self, code: &str, timeout: Duration) -> ExecResult {
         self.interpreter.exec(code, timeout)
+    }
+
+    /// [`Self::exec`], with `filename` in the stack traces — so an error in a
+    /// test file points at that file's own lines.
+    pub fn exec_named(&mut self, code: &str, filename: &str, timeout: Duration) -> ExecResult {
+        self.interpreter.exec_named(code, filename, timeout)
     }
 
     pub fn reset(&mut self) -> Result<(), HarnessError> {
