@@ -1183,10 +1183,14 @@ pub(crate) fn check_inputs(
     definition: &Definition,
     inputs: &BTreeMap<String, Value>,
 ) -> Result<()> {
-    for name in definition.inputs.keys() {
-        if !inputs.contains_key(name) {
-            return Err(Error(format!("{id}: missing input {name}")));
-        }
+    let missing: Vec<&str> = definition
+        .inputs
+        .keys()
+        .filter(|name| !inputs.contains_key(*name))
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(Error(format!("{id}: missing input {}", missing.join(", "))));
     }
     for (name, value) in inputs {
         let spec = definition

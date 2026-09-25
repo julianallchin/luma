@@ -217,6 +217,15 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         .0
         .contains("unknown input delay"));
 
+    let mut several_missing = inputs.clone();
+    several_missing.remove("width");
+    several_missing.remove("travel");
+    let error = prepare(&form, &several_missing).unwrap_err();
+    assert!(
+        error.0.contains("travel") && error.0.contains("width"),
+        "one error should name every missing input, not just the first: {error}"
+    );
+
     let mut score = Score::default();
     let mut clip = presets()
         .preset("color.chase@1", "Chase")
