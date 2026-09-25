@@ -22,6 +22,7 @@
 //! The editor only ever writes a score as one whole `luma_patterns::Score`, so
 //! the fixture seeds it the same way, through `apply_score_document`.
 
+mod agent;
 pub mod session;
 
 use std::collections::HashMap;
@@ -160,6 +161,16 @@ pub struct Fixture {
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
     files: HashMap<String, String>,
+    /// The agent's model, replayed: one array of events per step. See
+    /// [`agent`] for the event shapes. Unset, the app's own model runs.
+    #[serde(deserialize_with = "agent::steps")]
+    model: Option<Vec<Vec<luma_lib::agent::model::ModelEvent>>>,
+    /// The gap between scripted events, so a turn is observably mid-text.
+    #[serde(rename = "model_cadence_ms", deserialize_with = "millis")]
+    model_cadence: Option<Duration>,
+    /// The agent's tools instead of its kind's own set: shipped ones by name,
+    /// scripted ones as objects.
+    tools: Option<Vec<agent::ToolEntry>>,
 }
 
 impl Default for Fixture {
@@ -189,6 +200,9 @@ impl Default for Fixture {
             graph_score: None,
             sql: Vec::new(),
             files: HashMap::new(),
+            model: None,
+            model_cadence: None,
+            tools: None,
         }
     }
 }
@@ -209,6 +223,9 @@ impl Fixture {
         let mut fixture: Self = serde_json::from_value(spec).map_err(|error| error.to_string())?;
         if fixture.graph_score.is_some() && !fixture.clips.is_empty() {
             return Err("graph_score and clips are exclusive".into());
+        }
+        if let Some(tools) = &fixture.tools {
+            agent::registry(tools)?;
         }
         fixture.name = name.into();
         Ok(fixture)
@@ -381,6 +398,9 @@ impl Fixture {
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
+        let model = self.model.clone();
+        let model_cadence = self.model_cadence;
+        let tools = self.tools.clone();
         let root: crate::RootFactory =
             Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
                 luma_app::init(cx);
@@ -400,6 +420,13 @@ impl Fixture {
                 }
                 if let Some(delay) = source_import_fixture_delay {
                     library.set_source_import_fixture_delay(delay);
+                }
+                if let Some(steps) = &model {
+                    library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));
+                }
+                if let Some(tools) = &tools {
+                    // Checked in `from_json`, so this cannot fail here.
+                    library.set_agent_tools(agent::registry(tools).expect("fixture tools"));
                 }
                 let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
                 cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
