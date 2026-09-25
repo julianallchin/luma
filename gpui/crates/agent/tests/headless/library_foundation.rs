@@ -4,17 +4,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::json;
-
-fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 /// Sign the disposable library in, on its own runtime: these tests build the
 /// `Library` themselves rather than through [`support::Fixture`], which does
@@ -75,7 +67,7 @@ fn install_slow_failing_python(cache: &std::path::Path) {
 
 #[test]
 fn library_creates_idempotent_empty_membership_and_persists_session_items() {
-    let _environment = environment_lock();
+    let _environment = super::support::environment_lock();
     let config = disposable_config_dir();
     std::env::set_var("LUMA_CONFIG_DIR", &config);
     // Nothing in Luma writes a synced row without a principal, and importing
@@ -180,7 +172,7 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
 
 #[test]
 fn both_dj_adapters_normalize_every_browser_read_through_library() {
-    let _environment = environment_lock();
+    let _environment = super::support::environment_lock();
     let config = disposable_config_dir();
     std::env::set_var("LUMA_CONFIG_DIR", &config);
     // Nothing in Luma writes a synced row without a principal, and importing
@@ -230,11 +222,12 @@ fn both_dj_adapters_normalize_every_browser_read_through_library() {
 #[cfg(unix)]
 #[test]
 fn both_dj_sources_import_through_the_same_library_request_contract() {
-    let _environment = environment_lock();
+    let _environment = super::support::environment_lock();
     let config = disposable_config_dir();
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
+    super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let engine_audio = config.join("engine.wav");
@@ -298,11 +291,12 @@ fn both_dj_sources_import_through_the_same_library_request_contract() {
 #[cfg(unix)]
 #[test]
 fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progress() {
-    let _environment = environment_lock();
+    let _environment = super::support::environment_lock();
     let config = disposable_config_dir();
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
+    super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("tiny.wav");
@@ -414,11 +408,12 @@ fn import_returns_durable_rows_before_analysis_and_reports_typed_partial_progres
 #[cfg(unix)]
 #[test]
 fn dropping_import_future_does_not_cancel_service_owned_analysis() {
-    let _environment = environment_lock();
+    let _environment = super::support::environment_lock();
     let config = disposable_config_dir();
     sign_in(&config);
     let cache = config.join("cache");
     install_slow_failing_python(&cache);
+    super::support::stub_genre_model(&config);
     std::env::set_var("LUMA_CONFIG_DIR", &config);
     std::env::set_var("LUMA_CACHE_DIR", &cache);
     let audio = config.join("detached.wav");

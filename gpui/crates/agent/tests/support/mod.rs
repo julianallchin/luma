@@ -33,6 +33,30 @@ pub fn script(body: &str) -> String {
     format!("{NAV}\n{body}")
 }
 
+/// Held by every test that sets `LUMA_CONFIG_DIR` or `LUMA_CACHE_DIR`.
+///
+/// The backend reads both from the process environment when a library opens,
+/// and one binary runs its tests on parallel threads. Without one lock, a test
+/// can open its library on another test's fake Python or config.
+pub fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Put a stand-in genre model in the library at `storage_root`.
+///
+/// Tests that fake the Python workers still reach the genre stage, and that
+/// stage downloads an 18 MB model before it starts its worker. The fake worker
+/// fails without reading the model, so an empty file is enough, and the test
+/// does not depend on the network.
+pub fn stub_genre_model(storage_root: &Path) {
+    let models = storage_root.join("models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join(luma_lib::GENRE_MODEL_FILE_NAME), b"").unwrap();
+}
+
 /// A runtime pointed at `config_dir` with motion snapped — what every harness
 /// in this suite wants that does not go through [`Fixture::open`].
 ///

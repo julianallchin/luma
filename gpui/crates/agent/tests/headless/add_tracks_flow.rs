@@ -75,7 +75,7 @@ fn harness() -> Harness {
         "fileSize": 16044,
         "sampleRate": 8000
     });
-    Fixture::new("add-tracks-flow", 20, vec![])
+    let harness = Fixture::new("add-tracks-flow", 20, vec![])
         .with_track_created_at("2000-01-01 00:00:00")
         .with_equal_timestamp_track()
         .with_source_fixture(luma_app::SourceAdapterFixture {
@@ -91,7 +91,9 @@ fn harness() -> Harness {
             searches: HashMap::from([("needle".into(), json!([track]))]),
         })
         .with_source_import_fixture_delay(Duration::from_millis(350))
-        .open(Mode::Headless)
+        .open(Mode::Headless);
+    support::stub_genre_model(&support::config_dir("add-tracks-flow"));
+    harness
 }
 
 const SCRIPT: &str = r#"
@@ -213,6 +215,9 @@ const SCRIPT: &str = r#"
 
 #[test]
 fn source_import_survives_close_reconciles_newest_and_joins_the_venue() {
+    // `harness` points the worker environment at a fake Python through
+    // `LUMA_CACHE_DIR`, which the library reads when it opens.
+    let _environment = support::environment_lock();
     let mut harness = harness();
     let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
