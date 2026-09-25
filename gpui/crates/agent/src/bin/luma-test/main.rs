@@ -9,6 +9,7 @@
 //! test gets its own seeded library and its own app; `-j` of them run at once.
 //! See `runner.js` for what a file is written against.
 
+mod capture;
 mod discover;
 mod report;
 mod run;
@@ -68,8 +69,12 @@ fn main() -> ExitCode {
         }
     };
 
+    // From here the app's output goes to a log; the report is all that
+    // reaches the terminal.
+    capture::start();
     let failed = run_files(&files, &options, jobs);
     if !options.watch {
+        capture::finish(failed);
         return if failed {
             ExitCode::FAILURE
         } else {
@@ -112,7 +117,10 @@ fn watch(files: &[PathBuf], options: &Options, jobs: usize) -> ExitCode {
             .ok()
     };
     let mut seen: Vec<_> = files.iter().chain(&helpers).map(stamp).collect();
-    eprintln!("watching {} test files; ctrl-c to stop", files.len());
+    capture::say(&format!(
+        "watching {} test files; ctrl-c to stop",
+        files.len()
+    ));
     loop {
         std::thread::sleep(Duration::from_millis(300));
         let now: Vec<_> = files.iter().chain(&helpers).map(stamp).collect();
@@ -131,7 +139,10 @@ fn watch(files: &[PathBuf], options: &Options, jobs: usize) -> ExitCode {
                 .collect()
         };
         seen = now;
-        eprintln!("\n--- change: re-running {} file(s)", changed.len());
+        capture::say(&format!(
+            "\n--- change: re-running {} file(s)",
+            changed.len()
+        ));
         run_files(&changed, options, jobs);
     }
 }

@@ -22,6 +22,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// happen before the script's clock starts. A test past both is abandoned.
 const GRACE: Duration = Duration::from_secs(90);
 
+/// App log lines shown under a failure, at most.
+const LOG_LINES: usize = 4;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Pass,
@@ -45,6 +48,8 @@ pub struct Outcome {
     pub console: String,
     /// A failed test's seeded library, left on disk.
     pub library: Option<String>,
+    /// A failed test's tail of the app log; see `capture`.
+    pub log: Vec<String>,
 }
 
 impl Outcome {
@@ -61,6 +66,7 @@ impl Outcome {
             shot: None,
             console: String::new(),
             library: None,
+            log: Vec::new(),
         }
     }
 
@@ -292,6 +298,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 fn guarded(job: Job) -> Outcome {
     let started = Instant::now();
     let since = SystemTime::now();
+    let log_from = crate::capture::mark();
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let thread_name = format!("luma-test-{id}");
     let (label, test, budget) = (job.label.clone(), job.test.clone(), job.timeout + GRACE);
@@ -317,6 +324,7 @@ fn guarded(job: Job) -> Outcome {
     };
     outcome.duration = started.elapsed();
     if outcome.status == Status::Fail {
+        outcome.log = crate::capture::between(log_from, crate::capture::mark(), LOG_LINES);
         if let Some(panic) = pump_panic_since(since) {
             outcome
                 .console

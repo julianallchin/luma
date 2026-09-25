@@ -332,10 +332,13 @@ impl Fixture {
     /// Seed the library and open the app on it.
     ///
     /// Every knob travels in the harness's [`Runtime`], so any number of
-    /// fixtures may be open at once in one process.
+    /// fixtures may be open at once in one process. The library goes with the
+    /// harness when the test passes and stays, path printed, when it panics.
     pub fn open(self, mode: Mode) -> Harness {
+        let dir = config_dir(&self.name);
         self.open_with(mode, Duration::from_secs(120))
             .expect("failed to start the harness")
+            .remove_on_drop(dir)
     }
 
     /// [`Self::open`] with the pump's per-command deadline stated.
