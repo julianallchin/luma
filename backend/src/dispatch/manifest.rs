@@ -85,17 +85,21 @@ fn handler_file(domain: &str) -> String {
     format!("backend/src/dispatch/handlers/{domain}.rs")
 }
 
-/// The 1-indexed line of a handler's `pub async fn`, so a manifest row points
-/// at the body rather than at a module.
-fn handler_line(root: &Path, domain: &str, name: &str) -> usize {
+/// A handler's file, after checking that it defines the command's
+/// `pub async fn`. Files only, not lines: a line number changes with every
+/// edit above it, and the manifest would go stale for no change in the surface.
+fn handler_file_checked(root: &Path, domain: &str, name: &str) -> String {
     let path = root.join(format!("src/dispatch/handlers/{domain}.rs"));
     let source = fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()));
     let signature = format!("pub async fn {name}(");
-    source
-        .lines()
-        .position(|line| line.trim_start().starts_with(&signature))
-        .map(|index| index + 1)
-        .unwrap_or_else(|| panic!("no `{signature}` in {}", path.display()))
+    assert!(
+        source
+            .lines()
+            .any(|line| line.trim_start().starts_with(&signature)),
+        "no `{signature}` in {}",
+        path.display()
+    );
+    handler_file(domain)
 }
 
 fn regenerate_events(root: &Path, previous: &Value) -> Vec<Value> {
@@ -131,16 +135,13 @@ fn regenerate_events(root: &Path, previous: &Value) -> Vec<Value> {
             let mut emitters = Vec::new();
             let mut listeners = Vec::new();
             for (path, source) in &indexed {
-                for (index, line) in source.lines().enumerate() {
-                    if !line.contains(&needle) {
-                        continue;
-                    }
-                    let site = format!("{path}:{}", index + 1);
-                    if path.starts_with("backend/") {
-                        emitters.push(site);
-                    } else {
-                        listeners.push(site);
-                    }
+                if !source.contains(&needle) {
+                    continue;
+                }
+                if path.starts_with("backend/") {
+                    emitters.push(path.clone());
+                } else {
+                    listeners.push(path.clone());
                 }
             }
             let orphan = emitters.is_empty() || listeners.is_empty();
@@ -226,8 +227,7 @@ fn render_json(table: &[Command], root: &Path, previous: &Value, events: &[Value
                 "name": command.name,
                 "domain": command.domain,
                 "handler": {
-                    "file": handler_file(command.domain),
-                    "line": handler_line(root, command.domain, command.name),
+                    "file": handler_file_checked(root, command.domain, command.name),
                 },
                 "args": args,
                 "returns": command.returns,
