@@ -336,7 +336,7 @@ test("height drags, types and undoes a free placement", () => {
 // Escape in the field cancels the draft and keeps the piece selected. It
 // does not: the stage's escape binding matches before the field's key
 // handler, so the same press empties the selection and the sheet goes.
-test.skip("escape in the height field cancels the draft and keeps the selection — bug: escape in the stage height field also clears the stage selection", () => {
+test("escape in the height field cancels the draft and keeps the selection", () => {
   placeAndType();
   app.click(heightNode());
   app.key("ctrl-a 9");
