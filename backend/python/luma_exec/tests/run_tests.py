@@ -329,7 +329,7 @@ def test_unavailable_branch():
     assert "LumaUnavailableError" in result["traceback"], result["traceback"]
     assert "no key detection" in result["traceback"], result["traceback"]
     # Sub-paths of an unavailable branch stay unavailable rather than exploding.
-    result = ok(client.execute("luma.audio.stems['drums']"))
+    result = ok(client.execute("luma.audio.vocals.shape"))
     assert "stems have not been separated" in result["repr"], result
 
 

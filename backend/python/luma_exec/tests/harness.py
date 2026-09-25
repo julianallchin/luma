@@ -121,7 +121,7 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                     ],
                     "provenance": {"source": "mix_pcm", "processor_version": 2},
                 },
-                "stems": {
+                "vocals": {
                     "$kind": "unavailable",
                     "reason": "stems have not been separated for this track",
                 },
