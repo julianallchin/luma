@@ -1,7 +1,8 @@
 //! Does a playing stage get slower the longer it plays?
 //!
 //! ```sh
-//! cargo test -p gpui-agent --features pixel --release --test visualizer_playback_soak -- --nocapture
+//! CARGO_TARGET_DIR=target-pixel cargo test -p gpui-agent --features pixel --release \
+//!     --test app_pixel visualizer_playback_soak -- --nocapture
 //! ```
 //!
 //! `visualizer_playback_budget.rs` measures what a frame costs. This measures
@@ -35,7 +36,11 @@ fn harness() -> Harness {
     Fixture::new(
         "visualizer-playback-soak",
         SECONDS,
-        vec![Clip::new("pattern-pulse", "Pulse", 0., f64::from(SECONDS))],
+        // Pulse moves every frame, so the stage never settles into a still.
+        vec![Clip {
+            preset: Some(("color.constant@1".into(), "Pulse".into())),
+            ..Clip::new("pulse", "Pulse", 0., f64::from(SECONDS))
+        }],
     )
     .with_rig_of(RIG)
     // A full-screen-sized stage, not the suite's default 1200x800. The
@@ -77,7 +82,8 @@ fn playing_does_not_get_slower_the_longer_it_plays() {
             r#"
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
-            until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
+            // The editor labels a clip by its form, not its preset.
+            until("the clip", (s) => s.find({{ role: "card", label: "Constant color" }}) !== undefined);
             nav.expand();
             app.frames(10, {{ waitMs: 60 }});
             nav.step("the Play button", "button", "Play");

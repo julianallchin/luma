@@ -1,53 +1,16 @@
-//! The user's repro: a track playing, then zooming in, and where the frame goes.
-//!
-//! ```sh
-//! CARGO_TARGET_DIR=target-pixel cargo test -p gpui-agent --features pixel \
-//!     --test app_pixel visualizer_playback_zoom_repro -- --nocapture
-//! ```
-//!
-//! # Why another stage test
-//!
-//! `visualizer_playback_budget` measures playback and `visualizer_zoom_budget`
-//! measures zooming, each on its own. The reported failure is *both at once* —
-//! "playing a track lags hella, unplayable; zooming in freezes" — and the two
-//! costs are not independent. Playback already pays the score, the frame
-//! assembly and the hit-test rebuild once per frame; a wheel gesture multiplies
-//! how many times per displayed frame that happens. A test that never does both
-//! cannot see the product.
-//!
-//! # Why it reports rather than asserts
-//!
-//! The isolated renderer profile says every one of these cases is inside
-//! budget, and the user's hands say otherwise, so the useful output here is an
-//! *attribution* and not a pass. The one thing it does assert is that the rig
-//! under measurement is the one it claims — every number is meaningless if the
-//! stage quietly fell back to four movers or an unlit scene.
-//!
-//! # Reading the output
-//!
-//! Four numbers, and the point is which of them moves:
-//!
-//! - `drawMs` — gpui's element walk on the **UI thread**. `sample`, `build` and
-//!   `pick` all happen inside it, so it bounds them.
-//! - `parkedMs` — the app settling its async work.
-//! - `UI (S/B/P)` — that walk split into score evaluation, frame assembly and
-//!   hit-test rebuild.
-//! - `PRES` — wall time between frames actually reaching the screen.
-//! - `gpu` — the renderer thread's own half: CPU encode, GPU pass total and
-//!   cluster binning, read off the frame-stats panel. This is the only one of the
-//!   five that zooming can move, because zooming changes fill and nothing else.
-//!
-//! A UI-thread stall shows as `drawMs` rising with `PRES`. A renderer that
-//! cannot keep up shows as `PRES` rising while `drawMs` stays flat. A gesture
-//! storm shows as neither rising much while the *count* of renders per gesture
-//! explodes, which is why `frames` is reported and not just the percentiles.
-#![cfg(feature = "pixel")]
+//! The measurement behind `main.rs`.
 
 use std::time::Duration;
 
-use super::support::{Clip, Fixture, NAV, TRACK_NAME, VENUE_NAME};
+use gpui_agent::fixture::{Clip, Fixture, TRACK_NAME, VENUE_NAME};
 use gpui_agent::{Harness, Mode};
 use serde_json::Value;
+
+/// The suite's `until` and `nav.*` helpers, spliced ahead of each script.
+const NAV: &str = concat!(
+    include_str!("../../tests/support/until.js"),
+    include_str!("../../tests/support/nav.js")
+);
 
 const SECONDS: u32 = 30;
 
@@ -89,12 +52,11 @@ fn harness() -> Harness {
         SECONDS,
         (0..clips())
             .map(|lane| {
-                Clip::new(
-                    format!("pattern-pulse-{lane}"),
-                    format!("Pulse {lane}"),
-                    0.,
-                    f64::from(SECONDS),
-                )
+                // Pulse moves every frame, so the score is never a still.
+                Clip {
+                    preset: Some(("color.constant@1".into(), "Pulse".into())),
+                    ..Clip::new(format!("pulse-{lane}"), "Pulse", 0., f64::from(SECONDS))
+                }
                 .lane(lane as i64)
             })
             .collect(),
@@ -110,8 +72,7 @@ fn run(harness: &mut Harness, code: &str) -> Value {
     result.result
 }
 
-#[test]
-fn playing_then_zooming_reports_where_the_frame_went() {
+pub fn main() {
     let mut harness = harness();
     run(
         &mut harness,
@@ -119,7 +80,7 @@ fn playing_then_zooming_reports_where_the_frame_went() {
             r#"
             {NAV}
             nav.trackEditor({VENUE_NAME:?}, {TRACK_NAME:?});
-            until("the clip", (s) => s.find({{ role: "card", label: "Pulse 0" }}) !== undefined);
+            until("the clip", (s) => s.find({{ role: "card", label: "Constant color" }}) !== undefined);
             nav.expand();
             app.frames(10, {{ waitMs: 60 }});
             const readout = (s) =>

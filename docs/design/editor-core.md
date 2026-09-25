@@ -63,10 +63,8 @@ with `u,v,yaw,trim`) — the re-solve hands back the same numbers. A snapped
 piece gets no widget (its pose is a relation); its one freedom is the
 inspector's. The mode pair (Translate/Rotate) renders iff the widget does.
 
-*Known debt:* a selected **fixture** still wears a gizmo whose drag writes a
-scene pose the graph discards on the next re-solve. The honest end state is no
-fixture gizmo — a clamped fixture slides in `u` — but removing it is a product
-change to the patch page tested by `visualizer_gizmo`, deferred deliberately.
+A selected **fixture** gets no widget either: its pose is a relation to the
+piece it hangs on (`Build::gizmo_space` returns `None` for a fixture node).
 
 ## Validity is the solver's
 
