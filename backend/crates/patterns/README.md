@@ -10,10 +10,14 @@ It has no database, playback-device state or separate scalar execution engine.
 - Numbers, colors and masks use the same numerical operations, with channel,
   unit and fixture-domain metadata. Scalar axes broadcast. Structured values
   such as envelopes and mapping specifications remain controls.
-- Track seconds and musical beats have distinct units. There is one editable
-  Envelope value and one shared numerical sampler, broadcasting across heads,
-  samples and channels. Coincident anchors describe instantaneous steps, with
-  the rightmost anchor winning at the boundary.
+- Track seconds and musical beats have distinct units. There is one curve
+  format (`Curve`) and one shared sampler, broadcasting across heads, samples
+  and channels. A curve is `{"points": [[x, value], [x, value, ease], ...]}`
+  with x strictly increasing from 0 to 1. The ease moves the value from its
+  point to the next: `"linear"` (the default, never written), `"ease-in"`,
+  `"ease-out"`, `"ease-in-out"`, `"hold"` (jump at the next point) or a CSS
+  `cubic-bezier` `[x1, y1, x2, y2]` local to the segment. The last point has
+  no ease. An `Envelope` is a curve of values 0..1.
 - Wire rate follows its actual dependencies. Computed constants can feed fixed
   controls; time-varying wires cannot. Editable graph outputs remain able to
   accept animation after starting with a constant value.
@@ -78,7 +82,8 @@ A missing or unknown input is an error. A score holds form clips only.
 - An input takes a plain value or, where its `promotable` list allows, a
   source: `time` and `hit` keyframe curves, `noise`, or `audio` (a band of
   the full mix, scaled over the clip). Sources are tagged values, for example
-  `{"type":"time","value":{"points":[[0,2],[1,0.5]],"segments":["linear"]}}`.
+  `{"type":"time","value":{"points":[[0,2,"ease-out"],[1,0.5]]}}`. A `time`
+  or `hit` curve is the same `Curve` as an envelope, with numbers or colors.
 - `PreparedGraph::new` lowers each source into nodes of a copy of the form.
   A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
   is summed over the clip like an odometer, from a table built from the

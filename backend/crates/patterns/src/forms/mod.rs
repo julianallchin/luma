@@ -252,14 +252,8 @@ fn every_input(default: f64, description: &str, promotable: &[SourceKind]) -> In
     )
 }
 
-fn curve(points: &[[f64; 2]], curves: &[EnvelopeCurve]) -> Value {
-    Value::Envelope(Envelope {
-        points: points.to_vec(),
-        curves: curves.to_vec(),
-    })
-}
-fn bezier(control1: [f64; 2], control2: [f64; 2]) -> EnvelopeCurve {
-    EnvelopeCurve::Bezier { control1, control2 }
+fn curve(points: &[[f64; 2]], eases: &[Ease]) -> Value {
+    Value::Envelope(Envelope::eased(points.to_vec(), eases))
 }
 
 /// Positions at the centers of N equal parts, without gliding.
@@ -269,10 +263,7 @@ pub fn steps_path(count: usize) -> Envelope {
         .map(|i| [i as f64 / count as f64, (i as f64 + 0.5) / count as f64])
         .collect();
     points.push([1.0, (count as f64 - 0.5) / count as f64]);
-    Envelope {
-        curves: vec![EnvelopeCurve::Hold; points.len() - 1],
-        points,
-    }
+    Envelope::eased(points, &vec![Ease::Hold; count])
 }
 
 /// Named paths: where a stroke is over its life (0 = axis start, 1 = end).
@@ -281,17 +272,11 @@ pub fn path_presets() -> Vec<(&'static str, Value)> {
         ("Forward", curve(&[[0., 0.], [1., 1.]], &[])),
         ("Backward", curve(&[[0., 1.], [1., 0.]], &[])),
         ("Bounce", curve(&[[0., 0.], [0.5, 1.], [1., 0.]], &[])),
-        (
-            "Ease in",
-            curve(&[[0., 0.], [1., 1.]], &[bezier([0.42, 0.], [1., 1.])]),
-        ),
-        (
-            "Ease out",
-            curve(&[[0., 0.], [1., 1.]], &[bezier([0., 0.], [0.58, 1.])]),
-        ),
+        ("Ease in", curve(&[[0., 0.], [1., 1.]], &[Ease::EaseIn])),
+        ("Ease out", curve(&[[0., 0.], [1., 1.]], &[Ease::EaseOut])),
         (
             "Ease in-out",
-            curve(&[[0., 0.], [1., 1.]], &[bezier([0.42, 0.], [0.58, 1.])]),
+            curve(&[[0., 0.], [1., 1.]], &[Ease::EaseInOut]),
         ),
         ("Steps (2)", Value::Envelope(steps_path(2))),
         ("Steps (3)", Value::Envelope(steps_path(3))),
@@ -309,7 +294,7 @@ pub fn shape_presets() -> Vec<(&'static str, Value)> {
             "Soft",
             curve(
                 &[[0., 0.], [0.5, 1.], [1., 0.]],
-                &[bezier([0.2, 0.], [0.3, 1.]), bezier([0.7, 1.], [0.8, 0.])],
+                &[Ease::Bezier([0.4, 0., 0.6, 1.]); 2],
             ),
         ),
         ("Comet", curve(&[[0., 0.], [0.95, 1.], [1., 0.]], &[])),
@@ -321,7 +306,10 @@ pub fn shape_presets() -> Vec<(&'static str, Value)> {
             "Spike",
             curve(
                 &[[0., 0.], [0.5, 1.], [1., 0.]],
-                &[bezier([0.4, 0.], [0.5, 0.3]), bezier([0.5, 0.3], [0.6, 0.])],
+                &[
+                    Ease::Bezier([0.8, 0., 1., 0.3]),
+                    Ease::Bezier([0., 0.7, 0.2, 1.]),
+                ],
             ),
         ),
     ]
@@ -333,7 +321,7 @@ fn progress_presets() -> Vec<(&'static str, Value)> {
         ("Linear", curve(&[[0., 0.], [1., 1.]], &[])),
         (
             "Ease in-out",
-            curve(&[[0., 0.], [1., 1.]], &[bezier([0.42, 0.], [0.58, 1.])]),
+            curve(&[[0., 0.], [1., 1.]], &[Ease::EaseInOut]),
         ),
         (
             "There and back",
@@ -357,10 +345,7 @@ pub fn palette_steps(count: usize) -> Envelope {
         .map(|i| [i as f64 / count as f64, i as f64 / last])
         .collect();
     points.push([1.0, 1.0]);
-    Envelope {
-        curves: vec![EnvelopeCurve::Hold; points.len() - 1],
-        points,
-    }
+    Envelope::eased(points, &vec![Ease::Hold; count])
 }
 
 /// An axis over the whole selection. Radial and angle read in the best-fit

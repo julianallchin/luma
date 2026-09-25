@@ -76,8 +76,8 @@ fn lit(values: &[f64]) -> Vec<bool> {
 fn set(inputs: &mut BTreeMap<String, Value>, key: &str, value: Value) {
     assert!(inputs.insert(key.into(), value).is_some(), "{key}");
 }
-fn curve(points: &[[f64; 2]], segment: Segment) -> Keyframes {
-    Keyframes::numbers(points, &vec![segment; points.len() - 1])
+fn curve(points: &[[f64; 2]], ease: Ease) -> Keyframes {
+    Keyframes::numbers(points, &vec![ease; points.len() - 1])
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn form_inputs_must_be_complete_known_and_promotable() {
     score.clips.insert("clip".into(), clip);
     assert!(score.validate(&standard_library()).is_err());
 
-    let ramp = curve(&[[0.0, 0.0], [1.0, 1.0]], Segment::Linear);
+    let ramp = curve(&[[0.0, 0.0], [1.0, 1.0]], Ease::Linear);
     for (key, value) in [
         ("axis", Value::Time(ramp.clone())),
         ("color", Value::Hit(ramp.clone())),
@@ -250,16 +250,16 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         // A curve must stay within the input's range: width 0 to 4.
         (
             "width",
-            Value::Time(curve(&[[0.0, 0.0], [1.0, 5.0]], Segment::Linear)),
+            Value::Time(curve(&[[0.0, 0.0], [1.0, 5.0]], Ease::Linear)),
         ),
         (
             "alpha",
-            Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Segment::Linear)),
+            Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Ease::Linear)),
         ),
         // A speed curve must stay positive.
         (
             "every",
-            Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Segment::Linear)),
+            Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Ease::Linear)),
         ),
     ] {
         let mut wrong = inputs.clone();
@@ -297,7 +297,7 @@ fn constant_color_follows_alpha() {
     set(
         &mut inputs,
         "alpha",
-        Value::Time(curve(&[[0.0, 0.0], [1.0, 1.0]], Segment::Linear)),
+        Value::Time(curve(&[[0.0, 0.0], [1.0, 1.0]], Ease::Linear)),
     );
     for (beat, expected) in [(0.0, 0.0), (4.0, 0.25), (8.0, 0.5)] {
         for value in render(&form, &inputs, beat) {
@@ -393,10 +393,7 @@ fn a_stroke_wider_than_the_axis_keeps_the_rig_partly_lit() {
     set(
         &mut inputs,
         "path",
-        Value::Envelope(Envelope {
-            points: vec![[0.0, from], [1.0, to]],
-            curves: Vec::new(),
-        }),
+        Value::Envelope(Envelope::linear(vec![[0.0, from], [1.0, to]])),
     );
     // Halfway through its life it covers the whole rig, brightest in the
     // middle.
@@ -531,20 +528,14 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
     set(
         &mut inputs,
         "every",
-        Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Segment::Linear)),
+        Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Ease::Linear)),
     );
     set(
         &mut inputs,
         "travel",
         Value::Time(Keyframes::numbers(
             &[[0.0, 2.0], [0.5, 1.0], [1.0, 3.0]],
-            &[
-                Segment::ease([0.0, 2.0], [0.5, 1.0]),
-                Segment::Bezier {
-                    control1: [0.6, 1.0],
-                    control2: [0.9, 2.5],
-                },
-            ],
+            &[Ease::EaseInOut, Ease::Bezier([0.2, 0.0, 0.8, 0.75])],
         )),
     );
     let program = prepare(&form, &inputs).unwrap();
@@ -573,7 +564,7 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
         set(
             &mut sparkle,
             "every",
-            Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Segment::Linear)),
+            Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Ease::Linear)),
         );
         set(&mut sparkle, "duration", Value::Beats(0.05));
         let program = prepare("color.sparkle@1", &sparkle).unwrap();
@@ -646,7 +637,7 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
     set(
         &mut inputs,
         "brightness",
-        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Segment::Linear)),
+        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
     );
     set(&mut inputs, "duration", Value::Beats(2.0));
     // Two events overlap: event 0 is at 0.375 and event 1 at 0.875. A head
@@ -676,7 +667,7 @@ fn a_sparkle_never_lights_every_head() {
     set(
         &mut inputs,
         "coverage",
-        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Segment::Linear)),
+        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
     );
     prepare(&form, &inputs).unwrap();
 }
@@ -709,7 +700,7 @@ fn pulse_is_a_wash_with_a_brightness_per_hit() {
     set(
         &mut inputs,
         "every",
-        Value::Time(curve(&[[0.0, 1.0], [1.0, 3.0]], Segment::Linear)),
+        Value::Time(curve(&[[0.0, 1.0], [1.0, 3.0]], Ease::Linear)),
     );
     prepare(&form, &inputs).unwrap();
 
@@ -951,16 +942,16 @@ fn noise_and_audio_sources_stay_in_their_range() {
 fn sources_are_tagged_values_in_stored_clips() {
     let value: Value = serde_json::from_value(serde_json::json!({
         "type": "time",
-        "value": {"points": [[0, 2], [1, 0.5]], "segments": ["linear"]}
+        "value": {"points": [[0, 2], [1, 0.5]]}
     }))
     .unwrap();
     assert_eq!(
         value,
-        Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Segment::Linear))
+        Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Ease::Linear))
     );
     for json in [
-        serde_json::json!({"type": "hit", "value": {"points": [[0, 1], [0.5, 1], [1, 0]], "segments": ["hold", "linear"]}}),
-        serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["hold"]}}),
+        serde_json::json!({"type": "hit", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}}),
+        serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0], "ease-in"], [1, [0, 0, 1]]]}}),
         serde_json::json!({"type": "noise", "value": {"speed": 4.0, "range": [0.2, 1.0]}}),
         serde_json::json!({"type": "audio", "value": {"from_hz": 40.0, "to_hz": 100.0, "floor": 0.3}}),
     ] {
@@ -976,7 +967,7 @@ fn sources_are_tagged_values_in_stored_clips() {
         "color",
         serde_json::from_value(serde_json::json!({
             "type": "time",
-            "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]], "segments": ["linear"]}
+            "value": {"points": [[0, [1, 0, 0]], [1, [0, 0, 1]]]}
         }))
         .unwrap(),
     );
@@ -1024,7 +1015,7 @@ fn hit_width_grows_each_stroke_over_its_life() {
     set(
         &mut inputs,
         "width",
-        Value::Hit(curve(&[[0.0, 0.1], [1.0, 0.6]], Segment::Linear)),
+        Value::Hit(curve(&[[0.0, 0.1], [1.0, 0.6]], Ease::Linear)),
     );
     // Hold the stroke in the middle of the axis, so only the width moves.
     set(
@@ -1133,21 +1124,14 @@ fn stepped_color_curves_show_each_palette_stop_without_blending() {
 #[test]
 fn bezier_sources_play_exactly_what_the_envelope_draws() {
     // Handles off the thirds: not a standard ease.
-    let control1 = [0.1, 0.9];
-    let control2 = [0.35, 0.05];
-    let drawn = Envelope {
-        points: vec![[0.0, 0.2], [0.5, 0.6], [1.0, 1.0]],
-        curves: vec![
-            EnvelopeCurve::Bezier { control1, control2 },
-            EnvelopeCurve::Linear,
-        ],
-    };
+    let handles = [0.2, 0.9, 0.7, 0.05];
+    let drawn = Envelope::eased(
+        vec![[0.0, 0.2], [0.5, 0.6], [1.0, 1.0]],
+        &[Ease::Bezier(handles)],
+    );
     let stored: Value = serde_json::from_value(serde_json::json!({
         "type": "time",
-        "value": {
-            "points": [[0.0, 0.2], [0.5, 0.6], [1.0, 1.0]],
-            "segments": [{"bezier": {"control1": control1, "control2": control2}}, "linear"]
-        }
+        "value": {"points": [[0.0, 0.2, handles], [0.5, 0.6], [1.0, 1.0]]}
     }))
     .unwrap();
     let Value::Time(curve) = &stored else {
@@ -1158,14 +1142,6 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
         let x = f64::from(i) / 200.0;
         assert_eq!(curve.sample(x)[0], drawn.sample(x), "{x}");
     }
-    // The ease shorthand is the smoothstep it names.
-    let ease = Keyframes::numbers(
-        &[[0.0, 0.0], [1.0, 1.0]],
-        &[Segment::ease([0.0, 0.0], [1.0, 1.0])],
-    );
-    for x in [0.1, 0.25, 0.5, 0.8] {
-        assert!((ease.sample(x)[0] - x * x * (3.0 - 2.0 * x)).abs() < 1e-9);
-    }
     // Played as a clip's alpha, it is the same curve.
     let (form, mut inputs) = preset("Wash");
     set(&mut inputs, "alpha", stored.clone());
@@ -1175,28 +1151,12 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
             assert!((value - expected).abs() < 1e-12, "{beat}");
         }
     }
-    // Handles out of order, or out of range for a proportion, are refused.
-    let bad = Keyframes {
-        points: curve.points.clone(),
-        segments: vec![
-            Segment::Bezier {
-                control1: [0.4, 0.5],
-                control2: [0.2, 0.5],
-            },
-            Segment::Linear,
-        ],
-    };
+    // Handles out of 0..1 are refused.
+    let mut bad = curve.clone();
+    bad.points[0].ease = Ease::Bezier([1.4, 0.5, 0.2, 0.5]);
     assert!(bad.validate().is_err());
-    let high = Keyframes {
-        points: curve.points.clone(),
-        segments: vec![
-            Segment::Bezier {
-                control1: [0.1, 1.5],
-                control2: [0.2, 0.5],
-            },
-            Segment::Linear,
-        ],
-    };
+    let mut high = curve.clone();
+    high.points[0].ease = Ease::Bezier([0.1, 1.5, 0.2, 0.5]);
     set(&mut inputs, "alpha", Value::Time(high));
     assert!(prepare(&form, &inputs).is_err());
 }

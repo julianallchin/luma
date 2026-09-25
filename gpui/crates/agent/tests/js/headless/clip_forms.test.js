@@ -42,21 +42,19 @@ function inRow(row, role, label, options) {
 const buttons = () => app.snapshot().findAll({ role: "button" }).map((n) => n.label);
 
 // A stored curve is the preset's shape scaled to the input's range: the same
-// x everywhere, and every y the preset's times one factor.
+// x and ease everywhere, and every y the preset's times one factor.
 function expectScaled(stored, preset) {
-  const pairs = (curve) => [
-    ...curve.points,
-    ...(curve.segments ?? []).flatMap((s) => (s.bezier ? [s.bezier.control1, s.bezier.control2] : [])),
-  ];
-  const got = pairs(stored);
-  const want = pairs(preset);
+  const got = stored.points;
+  const want = preset.points;
   expect(got.length).toBe(want.length);
   const top = Math.max(...want.map(([, y]) => y));
   const factor = Math.max(...got.map(([, y]) => y)) / top;
   assert(factor > 0, `the stored curve is flat: ${JSON.stringify(stored)}`);
-  got.forEach(([x, y], i) => {
+  got.forEach(([x, y, ease], i) => {
     assert(Math.abs(x - want[i][0]) < 1e-9 && Math.abs(y - want[i][1] * factor) < 1e-9,
       `point ${i} ${JSON.stringify([x, y])} is not ${JSON.stringify(want[i])} scaled by ${factor}`);
+    assert(JSON.stringify(ease) === JSON.stringify(want[i][2]),
+      `point ${i} ease ${JSON.stringify(ease)} is not ${JSON.stringify(want[i][2])}`);
   });
 }
 

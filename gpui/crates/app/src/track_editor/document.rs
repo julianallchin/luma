@@ -452,7 +452,7 @@ mod tests {
     use super::{p, same_document};
 
     /// A clip as the editor wrote it, from a session that blinked.
-    const CLIP: &str = r#"{"graph": "267688a9-e19d-4e62-aad8-a7d4e31e4097", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "inputs": {"color": {"type": "color", "value": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707]}, "mapping": {"type": "mapping", "value": {"source": {"kind": "z"}, "per_group": false, "reverse": true}}, "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]], "curves": [{"kind": "bezier", "control1": [0.4920748472213745, 0.0070618391036987305], "control2": [0.4920748472213745, 0.9999237060546875]}]}}, "travel": {"type": "beats", "value": 0.75}}}"#;
+    const CLIP: &str = r#"{"graph": "267688a9-e19d-4e62-aad8-a7d4e31e4097", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "inputs": {"color": {"type": "color", "value": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707]}, "mapping": {"type": "mapping", "value": {"source": {"kind": "z"}, "per_group": false, "reverse": true}}, "path": {"type": "envelope", "value": {"points": [[0.0, 0.0, [0.4920748472213745, 0.0070618391036987305, 0.4920748472213745, 0.9999237060546875]], [1.0, 1.0]]}}, "travel": {"type": "beats", "value": 0.75}}}"#;
 
     fn score(clip: serde_json::Value) -> p::Score {
         serde_json::from_value(serde_json::json!({
@@ -466,7 +466,7 @@ mod tests {
         let ours: serde_json::Value = serde_json::from_str(CLIP).unwrap();
         let mut stored = ours.clone();
         // What storage handed back: one ulp on a handle, a last digit on a beat.
-        stored["inputs"]["path"]["value"]["curves"][0]["control2"][1] =
+        stored["inputs"]["path"]["value"]["points"][0][2][3] =
             serde_json::json!(0.9999237060546876);
         stored["duration"] = serde_json::json!(ours["duration"].as_f64().unwrap() + 1e-15);
         assert!(same_document(&score(ours.clone()), &score(stored)));

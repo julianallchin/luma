@@ -252,7 +252,7 @@ with a slow speed), Bloom on the beat (Bloom with fan per hit).
     "base": {"type": "choice", "value": "direction"},
     "direction": {"type": "vector", "value": [0, 0.766, -0.643]},
     "point": {"type": "vector", "value": [0, 0, 0]},
-    "fan": {"type": "time", "value": {"points": [[0, 0], [1, 40]], "segments": ["linear"]}},
+    "fan": {"type": "time", "value": {"points": [[0, 0], [1, 40]]}},
     "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "plane": {"kind": "auto"}, "per_group": false, "reverse": false}},
     "motion": {"type": "choice", "value": "none"},
     "shape": {"type": "choice", "value": "swing_left_right"},

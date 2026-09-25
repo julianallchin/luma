@@ -6,6 +6,7 @@ mod catalog;
 mod clip_range;
 mod clock;
 mod color;
+mod curve;
 mod envelope;
 mod features;
 mod field_ops;
@@ -32,7 +33,8 @@ pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
 pub use clock::*;
 pub use color::{ColorStop, Gradient};
-pub use envelope::{Envelope, EnvelopeCurve};
+pub use curve::{Curve, CurvePoint, Ease};
+pub use envelope::Envelope;
 pub use features::*;
 pub use field_ops::FieldMath;
 pub use forms::{

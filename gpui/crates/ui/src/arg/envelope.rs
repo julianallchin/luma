@@ -8,7 +8,7 @@ use gpui::{
     canvas, div, point, px, Background, Bounds, Context, EventEmitter, MouseButton, PathBuilder,
     Pixels, Point, Window,
 };
-use luma_patterns::{Envelope, EnvelopeCurve};
+use luma_patterns::{Ease, Envelope};
 
 #[derive(Clone, Debug)]
 pub struct EnvelopeChanged(pub Envelope);
@@ -75,10 +75,7 @@ impl EnvelopeEditor {
             .hypot((a[1] - b[1]) * f32::from(bounds.size.height) as f64)
     }
     fn hit(&self, p: [f64; 2]) -> Option<Drag> {
-        if matches!(
-            self.value.curve(self.selected),
-            EnvelopeCurve::Bezier { .. }
-        ) {
+        if curved(self.value.ease(self.selected)) {
             let c = self.value.controls(self.selected);
             for h in [1, 2] {
                 if self.distance(c[h], p) <= 9. {
@@ -91,7 +88,7 @@ impl EnvelopeEditor {
             .iter()
             .enumerate()
             .filter_map(|(i, a)| {
-                let d = self.distance(*a, p);
+                let d = self.distance([a.x, a.value], p);
                 (d <= 9.).then_some((i, d))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -108,7 +105,7 @@ impl EnvelopeEditor {
                 } else if i == self.value.points.len() - 1 {
                     1.
                 } else {
-                    let (a, b) = (self.value.points[i - 1][0], self.value.points[i + 1][0]);
+                    let (a, b) = (self.value.points[i - 1].x, self.value.points[i + 1].x);
                     let margin = (b - a) * 1e-6;
                     p[0].clamp(a + margin, b - margin)
                 };
@@ -116,19 +113,8 @@ impl EnvelopeEditor {
             }
             Drag::Handle(i, h) => {
                 let mut c = self.value.controls(i);
-                p[0] = if h == 1 {
-                    p[0].clamp(c[0][0], c[2][0])
-                } else {
-                    p[0].clamp(c[1][0], c[3][0])
-                };
                 c[h] = p;
-                self.value.set_curve(
-                    i,
-                    EnvelopeCurve::Bezier {
-                        control1: c[1],
-                        control2: c[2],
-                    },
-                )
+                self.value.set_handles(i, c[1], c[2])
             }
         };
         self.error = result.err().map(|e| e.to_string());
@@ -141,17 +127,18 @@ impl EnvelopeEditor {
         }
         cx.notify();
     }
-    fn choose_curve(&mut self, curved: bool, cx: &mut Context<Self>) {
-        let c = self.value.controls(self.selected);
-        let curve = if curved {
-            EnvelopeCurve::Bezier {
-                control1: c[1],
-                control2: c[2],
-            }
+    fn choose_curve(&mut self, curve: bool, cx: &mut Context<Self>) {
+        let now = self.value.ease(self.selected);
+        if curved(now) == curve && now != Ease::Hold {
+            return;
+        }
+        // A new curve starts straight, with its handles on the line.
+        let ease = if curve {
+            Ease::Bezier(Ease::Linear.handles().unwrap())
         } else {
-            EnvelopeCurve::Linear
+            Ease::Linear
         };
-        match self.value.set_curve(self.selected, curve) {
+        match self.value.set_ease(self.selected, ease) {
             Ok(()) => {
                 self.error = None;
                 cx.emit(EnvelopeChanged(self.value.clone()));
@@ -169,13 +156,13 @@ impl Render for EnvelopeEditor {
         let drag_view = cx.entity();
         let dragging = self.dragging.is_some();
         let pressed = self.before_drag.is_some();
-        let curved = matches!(self.value.curve(selected), EnvelopeCurve::Bezier { .. });
+        let curved = curved(self.value.ease(selected));
         let mut handles = self
             .value
             .points
             .iter()
             .enumerate()
-            .map(|(i, p)| (Drag::Anchor(i), *p))
+            .map(|(i, p)| (Drag::Anchor(i), [p.x, p.value]))
             .collect::<Vec<_>>();
         if curved {
             let c = self.value.controls(selected);
@@ -327,7 +314,7 @@ impl Render for EnvelopeEditor {
                                         this.selected = this
                                             .value
                                             .points
-                                            .partition_point(|a| a[0] < p[0])
+                                            .partition_point(|a| a.x < p[0])
                                             .saturating_sub(1)
                                             .min(this.value.points.len() - 2);
                                     }
@@ -430,6 +417,12 @@ fn at(bounds: Bounds<Pixels>, p: [f64; 2]) -> Point<Pixels> {
     )
 }
 
+/// Whether `ease` is drawn with handles: every ease but a straight line and
+/// a hold.
+fn curved(ease: Ease) -> bool {
+    !matches!(ease, Ease::Linear | Ease::Hold)
+}
+
 /// Stroke `value`'s line across `bounds`. The editor and the curve picker's
 /// thumbnails draw the same line.
 pub(crate) fn paint_envelope(
@@ -441,20 +434,16 @@ pub(crate) fn paint_envelope(
 ) {
     let at = |p| at(bounds, p);
     let mut path = PathBuilder::stroke(width);
-    path.move_to(at(value.points[0]));
+    path.move_to(at(value.point(0)));
     for i in 0..value.points.len() - 1 {
         let c = value.controls(i);
-        match value.curve(i) {
-            EnvelopeCurve::Linear => path.line_to(at(c[3])),
-            EnvelopeCurve::Bezier { .. } => path.cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
-            EnvelopeCurve::Hold => {
+        match value.ease(i) {
+            Ease::Linear => path.line_to(at(c[3])),
+            Ease::Hold => {
                 path.line_to(at([c[3][0], c[0][1]]));
                 path.line_to(at(c[3]));
             }
-            EnvelopeCurve::Step => {
-                path.line_to(at([c[0][0], c[3][1]]));
-                path.line_to(at(c[3]));
-            }
+            _ => path.cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
         }
     }
     if let Ok(path) = path.build() {
@@ -463,18 +452,12 @@ pub(crate) fn paint_envelope(
 }
 
 fn soft_preset() -> Envelope {
-    Envelope {
-        points: vec![[0., 0.], [0.2, 1.], [0.8, 1.], [1., 0.]],
-        curves: vec![
-            EnvelopeCurve::Bezier {
-                control1: [0.07, 0.],
-                control2: [0.13, 1.],
-            },
-            EnvelopeCurve::Linear,
-            EnvelopeCurve::Bezier {
-                control1: [0.87, 1.],
-                control2: [0.93, 0.],
-            },
+    Envelope::eased(
+        vec![[0., 0.], [0.2, 1.], [0.8, 1.], [1., 0.]],
+        &[
+            Ease::Bezier([0.35, 0., 0.65, 1.]),
+            Ease::Linear,
+            Ease::Bezier([0.35, 0., 0.65, 1.]),
         ],
-    }
+    )
 }
