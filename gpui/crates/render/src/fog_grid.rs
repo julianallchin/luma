@@ -28,8 +28,13 @@ pub(crate) const SLICES: u32 = 128;
 pub(crate) const BLOCK_SIDE: u32 = 4;
 const BLOCK_LANES: u32 = BLOCK_SIDE * BLOCK_SIDE * BLOCK_SIDE;
 const BLOCK_WORDS: usize = 2 * crate::light_index::MASK_WORDS;
-pub(crate) const SOURCE_INNER: f32 = 3.0;
-pub(crate) const SOURCE_OUTER: f32 = 4.0;
+/// Distance from a broad wash's source, in metres, over which the per-pixel
+/// near-source pass hands its beam to the shared grid. At 3/4 m a view full of
+/// Sunstrip cells behind truss spent 11.8 ms in that pass; at 1.5/2 m the
+/// frame took 4.6 ms and close-ups of the bars and strobes showed no visible
+/// change (largest mean difference 0.06 of 256 levels).
+pub(crate) const SOURCE_INNER: f32 = 1.5;
+pub(crate) const SOURCE_OUTER: f32 = 2.0;
 pub(crate) const BROAD_WASH: f32 = 0.65;
 
 /// Conservative shared-volume light counts from an explicit diagnostic readback.

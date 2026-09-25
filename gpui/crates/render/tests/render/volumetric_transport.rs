@@ -819,8 +819,11 @@ fn live_shadow_intervals_agree_with_converged_transport() {
         let rmse = (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt();
         errors.sort_by(f64::total_cmp);
         let p99 = errors[errors.len() * 99 / 100];
+        // 0.79-0.85 with a 3/4 m near-source radius; 0.87-2.04 at 1.5/2 m
+        // (2026-09-25), where the grid takes more of each broad wash. The
+        // user compared close-ups and saw no difference.
         assert!(
-            rmse < 1.6 && p99 <= 6.0,
+            rmse < 2.3 && p99 <= 6.0,
             "{} lost shadow precision: RMSE {rmse:.3}, p99 {p99}",
             pose["id"]
         );
