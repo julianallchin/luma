@@ -14,7 +14,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent,
+    div, px, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent,
     SharedString, Subscription, Window,
 };
 
@@ -39,11 +39,36 @@ pub fn format_value(value: f64) -> String {
     format!("{value}")
 }
 
+/// A reciprocal as the field shows it: four decimals at most, as 1/3 beat
+/// shows as 3 per beat and 0.3 beats as 3.3333 per beat.
+fn format_per<T: DraftValue>(value: T) -> String {
+    let text = format!("{value:.4}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
+    }
+}
+
 /// The two number domains share drafting, focus and commit behavior. Integer
 /// seeds never pass through a floating-point conversion.
 pub trait DraftValue: Copy + PartialEq + std::fmt::Display + 'static {
     fn clamp_value(self, min: Self, max: Self) -> Self;
     fn parse(draft: &str, min: Self, max: Self) -> Option<Self>;
+    /// The value in the field's other unit: beats as hits per beat and back.
+    /// Zero stays zero. Only a fractional domain has one.
+    fn per(self) -> Self {
+        self
+    }
+    /// A draft typed in the other unit, as a value in this one. `None` reverts.
+    fn parse_per(_draft: &str) -> Option<Self> {
+        None
+    }
+    /// Whether the value reads better in the other unit: less than one beat,
+    /// above zero.
+    fn fractional(self) -> bool {
+        false
+    }
 }
 impl DraftValue for f64 {
     fn clamp_value(self, min: Self, max: Self) -> Self {
@@ -51,6 +76,19 @@ impl DraftValue for f64 {
     }
     fn parse(draft: &str, min: Self, max: Self) -> Option<Self> {
         parse_draft(draft, min, max)
+    }
+    fn per(self) -> Self {
+        if self == 0. {
+            0.
+        } else {
+            self.recip()
+        }
+    }
+    fn parse_per(draft: &str) -> Option<Self> {
+        parse_draft(draft, 0., f64::MAX).map(f64::per)
+    }
+    fn fractional(self) -> bool {
+        self > 0. && self < 1.
     }
 }
 impl DraftValue for u64 {
@@ -81,6 +119,9 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     width: f32,
     /// A dim unit shown after the digits: "%", "beats".
     unit: Option<&'static str>,
+    /// The other unit a press on the unit switches to, and whether the field
+    /// shows it now: "per beat" for a field in beats.
+    per: Option<(&'static str, bool)>,
     _blur: [Subscription; 2],
 }
 
@@ -128,6 +169,7 @@ impl<T: DraftValue> DraftedNumber<T> {
             max,
             width,
             unit: None,
+            per: None,
             _blur,
         }
     }
@@ -139,6 +181,43 @@ impl<T: DraftValue> DraftedNumber<T> {
         self
     }
 
+    /// Show a value below one as its reciprocal in `unit`, as 0.0625 beats
+    /// shows as 16 per beat. A press on the unit switches between the two.
+    /// The stored value stays in the first unit.
+    #[must_use]
+    pub fn with_per_unit(mut self, unit: &'static str, cx: &mut Context<Self>) -> Self {
+        self.per = Some((unit, false));
+        self.pick_unit(cx);
+        self
+    }
+
+    /// Show the value in the unit that suits it.
+    fn pick_unit(&mut self, cx: &mut Context<Self>) {
+        let fractional = self.value.fractional();
+        if let Some((_, on)) = &mut self.per {
+            *on = fractional;
+            let text = self.shown();
+            self.input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    /// The draft text of the committed value in the unit the field shows.
+    fn shown(&self) -> String {
+        match self.per {
+            Some((_, true)) => format_per(self.value.per()),
+            _ => self.value.to_string(),
+        }
+    }
+
+    fn toggle_unit(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, on)) = &mut self.per {
+            *on = !*on;
+            let text = self.shown();
+            self.input.update(cx, |input, cx| input.set_text(text, cx));
+            cx.notify();
+        }
+    }
+
     #[must_use]
     pub fn value(&self) -> T {
         self.value
@@ -148,19 +227,38 @@ impl<T: DraftValue> DraftedNumber<T> {
     /// the value moved under the field, and a draft over a stale value is the
     /// worse thing to keep.
     pub fn set_value(&mut self, value: T, cx: &mut Context<Self>) {
-        self.value = value.clamp_value(self.min, self.max);
-        let text = self.value.to_string();
+        let value = value.clamp_value(self.min, self.max);
+        let changed = value != self.value;
+        self.value = value;
+        // A press on the unit holds until the value moves.
+        if changed {
+            self.pick_unit(cx);
+        }
+        let text = self.shown();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
         cx.notify();
     }
 
     fn commit(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         let draft = self.input.read(cx).text().to_string();
-        match T::parse(&draft, self.min, self.max) {
+        // A rounded reciprocal left as it was keeps the exact value.
+        if draft == self.shown() {
+            return;
+        }
+        let parsed = match self.per {
+            Some((_, true)) => {
+                T::parse_per(&draft).map(|value| value.clamp_value(self.min, self.max))
+            }
+            _ => T::parse(&draft, self.min, self.max),
+        };
+        match parsed {
             Some(value) => {
                 let changed = value != self.value;
                 self.value = value;
-                let text = value.to_string();
+                if changed {
+                    self.pick_unit(cx);
+                }
+                let text = self.shown();
                 if draft != text {
                     self.input.update(cx, |input, cx| input.set_text(text, cx));
                 }
@@ -173,7 +271,7 @@ impl<T: DraftValue> DraftedNumber<T> {
     }
 
     fn revert(&mut self, cx: &mut Context<Self>) {
-        let text = self.value.to_string();
+        let text = self.shown();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
 
@@ -204,13 +302,27 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
             .gap(px(4.))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .when_some(self.unit, |field, unit| {
-                field.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(11.))
-                        .text_color(crate::ladder::foreground_alpha(0.45))
-                        .child(unit),
-                )
+                let label = div()
+                    .flex_none()
+                    .text_size(px(11.))
+                    .text_color(crate::ladder::foreground_alpha(0.45));
+                match self.per {
+                    None => field.child(label.child(unit)),
+                    Some((per, on)) => {
+                        let shown = if on { per } else { unit };
+                        field.child(
+                            label
+                                .id(ElementId::Name(format!("{}:unit", self.id).into()))
+                                .cursor_pointer()
+                                .hover(|label| {
+                                    label.text_color(crate::ladder::foreground_alpha(0.75))
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_unit(cx)))
+                                .child(shown)
+                                .agent_node(Role::Button, format!("{}: {shown}", self.id)),
+                        )
+                    }
+                }
             })
             .agent_node(Role::Input, reading)
             .agent_focused(focused)
@@ -248,6 +360,16 @@ mod tests {
         assert_eq!(format_value(42.), "42");
         assert_eq!(format_value(3.5), "3.5");
         assert_eq!(format_value(-0.25), "-0.25");
+    }
+
+    /// Beats show as hits per beat, rounded, and zero stays zero.
+    #[test]
+    fn reciprocals_read_as_rates() {
+        assert_eq!(format_per(0.0625_f64.per()), "16");
+        assert_eq!(format_per((1. / 3.0_f64).per()), "3");
+        assert_eq!(format_per(0.3_f64.per()), "3.3333");
+        assert_eq!(format_per(0.0_f64.per()), "0");
+        assert_eq!(32.0_f64.per().per(), 32.);
     }
 
     #[test]

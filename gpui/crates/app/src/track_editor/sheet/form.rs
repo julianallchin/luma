@@ -14,7 +14,7 @@ use luma_ui::arg::preset_picker::{luma_preset_picker, Thumb};
 /// Inputs in beats that must stay above zero.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
 /// The least beats a speed input takes.
-const MIN_BEATS: f64 = 1. / 16.;
+const MIN_BEATS: f64 = 1. / 32.;
 /// The top of a speed curve's value axis, in beats.
 const CURVE_BEATS: f64 = 8.;
 /// Beats a new noise source takes to wander once.
@@ -502,6 +502,7 @@ pub(super) fn widget(
         cx.new(|cx| {
             let field = DraftedNumber::new(label, value, min, max, width, window, cx);
             match unit {
+                Some("beats") => field.with_unit("beats").with_per_unit("per beat", cx),
                 Some(unit) => field.with_unit(unit),
                 None => field,
             }

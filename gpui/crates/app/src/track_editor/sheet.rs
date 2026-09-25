@@ -622,7 +622,9 @@ fn plain_widget(
                     );
                     match def.arg_type {
                         PatternArgType::Proportion => field.with_unit("%"),
-                        PatternArgType::Beats => field.with_unit("beats"),
+                        PatternArgType::Beats => {
+                            field.with_unit("beats").with_per_unit("per beat", cx)
+                        }
                         _ => field,
                     }
                 });
