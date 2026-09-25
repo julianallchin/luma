@@ -880,7 +880,11 @@ impl StateInner {
         let height = self
             .scrollbar_drag_start_height
             .unwrap_or_else(|| self.items.summary().height);
-        (height - bounds.size.height).max(px(0.))
+        // The padding scrolls with the items, so it is part of the travel.
+        // Without it a caller chasing this offset stops short of the end by
+        // the list's own padding.
+        let padding = self.last_padding.unwrap_or_default();
+        (height + padding.top + padding.bottom - bounds.size.height).max(px(0.))
     }
 
     fn visible_range(
