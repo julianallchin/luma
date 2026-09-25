@@ -19,7 +19,6 @@ struct Checkpoint {
     engine: Engine,
     model: Option<String>,
     head: String,
-    context: String,
     session: NativeSession,
 }
 
@@ -41,8 +40,6 @@ pub(crate) enum ResumeMiss {
     /// The transcript moved since the checkpoint completed: a steered
     /// message, a concurrent writer, or the checkpoint simply being stale.
     HeadMoved,
-    /// The system prompt, tool set, or effort changed since the checkpoint.
-    ContextChanged,
 }
 
 impl std::fmt::Display for ResumeMiss {
@@ -52,7 +49,6 @@ impl std::fmt::Display for ResumeMiss {
             Self::EngineChanged => "engine changed since the checkpoint",
             Self::ModelChanged => "model changed since the checkpoint",
             Self::HeadMoved => "transcript head moved since the checkpoint",
-            Self::ContextChanged => "system prompt/tools/effort changed since the checkpoint",
         })
     }
 }
@@ -80,13 +76,22 @@ impl RunLease {
     }
 
     /// `Ok` names the session to resume; `Err` says why not, for the caller to
-    /// log before it pays for the expensive `continuation()` fallback.
+    /// log before it pays to hydrate a fresh native session from the
+    /// transcript instead.
+    ///
+    /// The system prompt, tool descriptions and effort are deliberately not
+    /// part of this match: the native CLI is handed a fresh `--system-prompt`
+    /// on every call (resumed or not) and, with `--system-prompt-snapshot
+    /// off`, actually uses it rather than a value frozen at the session's
+    /// first turn — so none of those change what a resumed session does.
+    /// Only what changes whether the *same underlying process transcript* is
+    /// still the right one to continue does: the engine, the model, and
+    /// whether the transcript has moved since this checkpoint completed.
     pub fn resume(
         &self,
         engine: Engine,
         model: &Option<String>,
         head: Option<&str>,
-        context: &str,
     ) -> Result<Result<NativeSession, ResumeMiss>, AgentError> {
         let data = match std::fs::read(self.directory.join("session.json")) {
             Ok(data) => data,
@@ -104,9 +109,6 @@ impl RunLease {
         }
         if Some(checkpoint.head.as_str()) != head {
             return Ok(Err(ResumeMiss::HeadMoved));
-        }
-        if checkpoint.context != context {
-            return Ok(Err(ResumeMiss::ContextChanged));
         }
         Ok(Ok(checkpoint.session))
     }
@@ -126,14 +128,12 @@ impl RunLease {
         engine: Engine,
         model: Option<String>,
         head: String,
-        context: String,
         session: NativeSession,
     ) -> Result<(), AgentError> {
         let data = serde_json::to_vec(&Checkpoint {
             engine,
             model,
             head,
-            context,
             session,
         })
         .map_err(storage)?;
@@ -170,7 +170,6 @@ mod tests {
                 Engine::Codex,
                 None,
                 "head".into(),
-                "context".into(),
                 NativeSession {
                     id: "session".into(),
                     usage: Usage::default(),
@@ -179,45 +178,28 @@ mod tests {
             .unwrap();
         assert_eq!(
             lease
-                .resume(Engine::Codex, &None, Some("head"), "context")
+                .resume(Engine::Codex, &None, Some("head"))
                 .unwrap()
                 .map(|s| s.id),
             Ok("session".into())
         );
         assert_eq!(
-            lease
-                .resume(Engine::Claude, &None, Some("head"), "context")
-                .unwrap(),
+            lease.resume(Engine::Claude, &None, Some("head")).unwrap(),
             Err(ResumeMiss::EngineChanged)
         );
         assert_eq!(
-            lease
-                .resume(Engine::Codex, &None, Some("other"), "context")
-                .unwrap(),
+            lease.resume(Engine::Codex, &None, Some("other")).unwrap(),
             Err(ResumeMiss::HeadMoved)
         );
         assert_eq!(
             lease
-                .resume(
-                    Engine::Codex,
-                    &Some("other-model".into()),
-                    Some("head"),
-                    "context"
-                )
+                .resume(Engine::Codex, &Some("other-model".into()), Some("head"))
                 .unwrap(),
             Err(ResumeMiss::ModelChanged)
         );
-        assert_eq!(
-            lease
-                .resume(Engine::Codex, &None, Some("head"), "changed-tools")
-                .unwrap(),
-            Err(ResumeMiss::ContextChanged)
-        );
         lease.invalidate().unwrap();
         assert_eq!(
-            lease
-                .resume(Engine::Codex, &None, Some("head"), "context")
-                .unwrap(),
+            lease.resume(Engine::Codex, &None, Some("head")).unwrap(),
             Err(ResumeMiss::NoCheckpoint)
         );
         drop(lease);

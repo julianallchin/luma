@@ -4,18 +4,21 @@
 pub mod catalog;
 pub(crate) mod claim;
 mod claude;
+mod claude_session;
 mod codex;
 mod process;
 pub(crate) mod state;
 
 use super::{
     model::{ContentBlock, ToolSpec, Usage},
-    tools::ToolOutcome,
+    tools::{ToolOutcome, ToolRegistry},
+    transcript::Transcript,
     AgentError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +171,31 @@ impl Replier {
     }
 }
 
+/// Hydrate a fresh native session for `engine` from `transcript`, for a turn
+/// whose checkpointed process is not resumable (a different engine or model
+/// ran last, the transcript moved, or this machine never ran one for this
+/// thread). `Err` means this engine has no hydration path — only Claude does
+/// so far, see `claude_session` — or the session file could not be written;
+/// either way the caller falls back to `continuation()`.
+pub(super) fn hydrate_session(
+    engine: Engine,
+    transcript: &Transcript,
+    turn_message_id: &str,
+    registry: &ToolRegistry,
+    model: Option<&str>,
+    cwd: &Path,
+) -> Result<state::NativeSession, AgentError> {
+    match engine {
+        Engine::Claude => {
+            claude_session::hydrate(transcript, turn_message_id, registry, model, cwd)
+        }
+        Engine::Codex => Err(AgentError::Invalid(
+            "session hydration is not implemented for the Codex engine yet".into(),
+        )),
+        Engine::Api => unreachable!("API execution has no native session"),
+    }
+}
+
 fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
     tools
         .iter()
@@ -179,17 +207,6 @@ fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
             })
         })
         .collect()
-}
-
-pub(super) fn context_fingerprint(
-    system: &str,
-    tools: &[ToolSpec],
-    effort: Option<&str>,
-) -> String {
-    use sha2::{Digest, Sha256};
-    let context = serde_json::to_vec(&(system, tool_definitions(tools), effort))
-        .expect("serializable tool configuration");
-    format!("{:x}", Sha256::digest(context))
 }
 
 fn content(outcome: ToolOutcome) -> (Vec<ContentBlock>, bool) {
@@ -233,6 +250,67 @@ mod tests {
                 "missing advertised field {field}"
             );
         }
+    }
+
+    /// Conversion-level check for a thread that switches engines mid-run: the
+    /// same Luma transcript hydrates a fresh Claude session both before and
+    /// after an attempt to hydrate it for Codex, and that attempt fails
+    /// cleanly rather than writing anything — Codex hydration is a documented
+    /// gap (see `claude_session`'s module doc), not a silent no-op.
+    #[test]
+    fn hydrate_session_supports_claude_but_not_yet_codex_on_the_same_transcript() {
+        use crate::agent::tools::ToolRegistry;
+        use crate::agent::transcript::{AgentChatMessage, Transcript};
+
+        let scratch = tempfile::tempdir().unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", scratch.path());
+        let cwd = tempfile::tempdir().unwrap();
+        let transcript = Transcript {
+            messages: vec![
+                AgentChatMessage::user("u1", "start on the claude engine"),
+                AgentChatMessage::user("u2", "and then?"),
+            ],
+        };
+        let registry = ToolRegistry::new(vec![]);
+
+        let before = hydrate_session(
+            Engine::Claude,
+            &transcript,
+            "u2",
+            &registry,
+            None,
+            cwd.path(),
+        );
+        let claude_session = before.expect("claude hydration should succeed");
+
+        let codex_attempt = hydrate_session(
+            Engine::Codex,
+            &transcript,
+            "u2",
+            &registry,
+            None,
+            cwd.path(),
+        );
+        assert!(
+            codex_attempt.is_err(),
+            "Codex hydration is not implemented yet"
+        );
+
+        let after = hydrate_session(
+            Engine::Claude,
+            &transcript,
+            "u2",
+            &registry,
+            None,
+            cwd.path(),
+        );
+        let claude_session_again = after.expect("claude hydration should still succeed");
+        assert_ne!(
+            claude_session.id, claude_session_again.id,
+            "each hydration mints its own fresh session"
+        );
+
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 
     pub(super) fn request(engine: Engine, cwd: &std::path::Path) -> Request {
