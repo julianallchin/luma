@@ -26,6 +26,7 @@ from luma_exec.bindings import LumaRecord, build_namespace  # noqa: E402
 from luma_exec.figures import FigureSink  # noqa: E402
 from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 from luma_exec.host_errors import VenueRefused  # noqa: E402
+from luma_exec.score import GraphTrack  # noqa: E402
 from luma_exec.venue import (  # noqa: E402
     Catalog,
     Cursor,
@@ -52,6 +53,31 @@ def record(**overrides: Any) -> LumaRecord:
     }
     items.update(overrides)
     return LumaRecord(items, "luma.venue")
+
+
+def edit_with_one_clip():
+    """A minimal, saved `Edit` (via `luma.track.edit()`) for wire-shape tests."""
+    clip = {
+        "graph": "color.constant@1",
+        "start": 0.0,
+        "duration": 4.0,
+        "selection": {"expression": "all"},
+        "seed": 1,
+        "z_index": 0,
+        "blend_mode": "replace",
+        "inputs": {},
+    }
+    track = GraphTrack(
+        {
+            "id": "t1",
+            "title": "Test",
+            "duration_s": 100.0,
+            "editable": True,
+            "document": {"clips": {"c1": clip}},
+        },
+        nodes={},
+    )
+    return track.edit()
 
 
 class Host:
@@ -211,6 +237,28 @@ class VenueRenderTests(unittest.TestCase):
         self.assertEqual(repr(shot), "<StageImage dj t=12.5s 320x200>")
         self.assertTrue(shot.path.is_absolute())
         self.assertEqual(shot.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_render_with_edit_sends_a_bare_score_document(self) -> None:
+        """`RenderRequest.edit` deserializes as a bare `luma_patterns::Score`
+
+        (`{"clips": ...}`) with `deny_unknown_fields` — unlike
+        `score_check`/`score_apply`, which want `{"candidate": ...}`. A
+        `{"candidate": ...}` wrapper here used to fail with "unknown field
+        `candidate`, expected `clips`".
+        """
+        edit = edit_with_one_clip()
+        self.venue.render(edit=edit, t=1.0)
+        _, payload = self.host.calls[-1]
+        self.assertEqual(payload["edit"], edit.candidate)
+        self.assertNotIn("candidate", payload["edit"])
+        self.assertEqual(set(payload["edit"]), {"clips"})
+
+    def test_render_with_edit_and_only_isolates_the_named_clip(self) -> None:
+        edit = edit_with_one_clip()
+        clip = edit.clips[0]
+        self.venue.render(edit=edit, only=clip, t=1.0)
+        _, payload = self.host.calls[-1]
+        self.assertEqual(set(payload["edit"]["clips"]), {clip.id})
 
     def test_aim_arrows_are_on_unless_the_caller_says_otherwise(self) -> None:
         """This is the verification channel, so the aims are drawn by default."""

@@ -46,6 +46,29 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaises(TrackError):
             _typed(signal, {"type": "boundary", "value": "wrap"})
 
+    def test_signal_sockets_accept_time_and_hit_curve_sources(self):
+        signal = {"signal": {"unit": None, "channels": None}}
+        curve = {"points": [[0, 0], [1, 1]], "segments": ["linear"]}
+        self.assertEqual(_typed(signal, {"type": "time", "value": curve}),
+                         {"type": "time", "value": curve})
+        self.assertEqual(_typed(signal, {"type": "hit", "value": curve}),
+                         {"type": "hit", "value": curve})
+
+    def test_signal_sockets_reject_an_envelope_tag_with_a_clear_message(self):
+        # The core's Envelope value type has no signal_type(), so it can never
+        # satisfy a signal socket; a curve there must be tagged "time"/"hit".
+        signal = {"signal": {"unit": None, "channels": None}}
+        with self.assertRaisesRegex(TrackError, "not 'envelope'|time.*hit"):
+            _typed(signal, {"type": "envelope", "value": {"points": [[0, 0], [1, 1]]}})
+
+    def test_a_bare_curve_dict_on_a_signal_socket_fails_locally_not_in_rust(self):
+        # Regression: an untagged dict used to fall through to a numeric
+        # wrapper and only fail later in Rust with "invalid type: map,
+        # expected f64". It must now raise a clear TrackError in Python.
+        signal = {"signal": {"unit": None, "channels": None}}
+        with self.assertRaises(TrackError):
+            _typed(signal, {"points": [[0, 1], [1, 0]]})
+
     def test_mapping_choices_and_structured_mirror_values(self):
         self.assertEqual(_typed("mapping", "vector")["value"]["source"],
                          {"kind": "vector", "direction": [1.0, 0.0, 1.0]})
@@ -209,6 +232,10 @@ class ScoreTests(unittest.TestCase):
             _typed("beats", {"type": "proportion", "value": .5})
 
     def test_isolated_preview_preserves_clip_timing_and_the_complete_draft(self):
+        # _preview() returns a bare score document (`{"clips": ...}`), matching
+        # what RenderRequest.edit deserializes on the Rust side — never wrapped
+        # in `{"candidate": ...}`, which is only the score_check/score_apply
+        # wire shape.
         track = self.track()
         edit = track.edit()
         graph = "color.chase@1"
@@ -216,12 +243,12 @@ class ScoreTests(unittest.TestCase):
         edit.add_clip(graph, id="second", beats=(2, 5), selection="rear", blend="add", z=1)
         original = edit.candidate
         preview = edit._preview(first)
-        self.assertEqual(preview["candidate"]["clips"], {"first": original["clips"]["first"]})
-        self.assertEqual(preview["baseRevision"], edit.base_revision)
-        preview["candidate"]["clips"].clear()
+        self.assertEqual(set(preview), {"clips"})
+        self.assertEqual(preview["clips"], {"first": original["clips"]["first"]})
+        preview["clips"].clear()
         self.assertEqual(edit.candidate, original)
         self.assertEqual(len(track.clips), 0)
-        self.assertEqual(edit._preview()["candidate"], original)
+        self.assertEqual(edit._preview(), original)
         with self.assertRaisesRegex(TrackError, "unknown preview clip"):
             edit._preview("missing")
 

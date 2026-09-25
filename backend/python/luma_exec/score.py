@@ -20,7 +20,14 @@ An envelope needs 2–256 anchors, starting at x=0 and ending at x=1 with strict
 increasing x; both coordinates must be finite and in 0..1.
 Handles use the same normalized coordinates as anchors. Their x positions must
 stay ordered between their segment endpoints; y stays in 0..1. An omitted
-curves list means straight segments. Every editor and evaluator uses this value.
+curves list means straight segments. Every editor and evaluator uses this value
+for a plain "envelope" input, such as color.time@1's curve.
+
+A "time"/"hit" source on a signal socket is a related but distinct shape:
+{"type": "time", "value": {"points": [[0, 0], [1, 1]], "segments": ["linear"]}}
+— "points" pairs an x with a number or color, and "segments" (not "curves")
+holds one Segment per adjacent pair. Tag a curve on a signal socket "time" or
+"hit", never "envelope"; the core rejects an envelope there.
 """
 from __future__ import annotations
 
@@ -56,8 +63,19 @@ def _typed(kind, value):
         if isinstance(value, dict) and "type" in value:
             if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field",
                                      "time", "hit", "noise", "audio"}:
-                raise TrackError("a signal socket needs a numerical value or a source")
+                raise TrackError(
+                    f"a signal socket needs a numerical value or a source, not {value['type']!r}; "
+                    'a curve here is a "time" (over the clip) or "hit" (over each event) source, '
+                    'e.g. {"type": "time", "value": {"points": [[0, 0], [1, 1]], "segments": ["linear"]}} '
+                    '— not "envelope", which is a different, unrelated value kind'
+                )
             return value  # The core validates units, channels and fixture domains.
+        if isinstance(value, dict):
+            raise TrackError(
+                'a signal socket needs a numerical value or a tagged source, not a bare dict; '
+                'tag a curve explicitly, e.g. {"type": "time", "value": {"points": [[0, 0], [1, 1]], '
+                '"segments": ["linear"]}} for one curve over the clip, or "hit" for one per event'
+            )
         rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
         literal = "color" if rgb else spec.get("unit") or "number"
         return _typed(literal, value)
@@ -469,7 +487,12 @@ class Edit:
         return Window(self._track, self._candidate, self._track._range(**range))
 
     def _preview(self, only=None):
-        """Snapshot for the venue camera; isolation never mutates the draft."""
+        """Snapshot for the venue camera; isolation never mutates the draft.
+
+        A bare score document (`{"clips": ...}`), matching what
+        `RenderRequest.edit` deserializes on the Rust side — unlike
+        `score_check`/`score_apply`, which want `{"candidate": ...}`.
+        """
         self._open()
         candidate = self.candidate
         if only is not None:
@@ -479,7 +502,7 @@ class Edit:
             if missing:
                 raise TrackError(f"unknown preview clip(s): {', '.join(missing)}")
             candidate["clips"] = {id: candidate["clips"][id] for id in ids}
-        return {"candidate": candidate}
+        return candidate
 
 
 # Discovery and validation use the same mode vocabulary.
