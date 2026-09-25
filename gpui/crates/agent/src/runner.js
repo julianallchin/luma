@@ -2,8 +2,11 @@
 // `assert`, and `library` — reads of the test's own library on disk:
 // `library.query(sql)` returns rows as objects, `library.score()` the score
 // that holds clips as the document the editor saved, `library.presets()` the
-// shipped form presets in menu order. Read-only; a test changes the library
-// through the app. `luma-test` loads this twice per file.
+// shipped form presets in menu order, `library.curves(input)` the curve
+// presets an input offers (0–1, before the sheet scales them),
+// `library.gradients()` the named gradients and `library.shapes()` the named
+// chase shapes. Read-only; a test changes the library through the app.
+// `luma-test` loads this twice per file.
 //
 // First with no app and `__only` unset: `test(...)` only records, so the
 // runner learns the file's fixture and test names — and a syntax error fails
@@ -116,6 +119,9 @@
       query: (sql) => read({ op: "query", sql }),
       score: () => read({ op: "score" }),
       presets: () => read({ op: "presets" }),
+      curves: (input) => read({ op: "curves", input }),
+      gradients: () => read({ op: "gradients" }),
+      shapes: () => read({ op: "shapes" }),
     };
   }
   if (typeof app !== "undefined") {
