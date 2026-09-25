@@ -175,7 +175,7 @@ shipped app sets neither.
 - `gpui/crates/agent/tests/js/headless/chat*.test.js`: headless chat tests
   over a scripted model (the fixture's `model` and `tools` options). Run
   with `gpui/test`.
-- `gpui/crates/agent/tests/app_pixel/gauntlet_chat.rs`: the reference plates
+- `gpui/crates/agent/tests/js/pixel/chat_captures.test.js`: the reference plates
   `harness/gauntlet-chat/gpui-chat-{idle,streaming,finished}.png`.
 - `cargo test -p luma-md`: markdown parity and incremental-parse tests.
 

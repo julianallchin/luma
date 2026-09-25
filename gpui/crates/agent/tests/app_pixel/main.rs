@@ -11,22 +11,10 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-mod account_foot_pixels;
 mod add_tracks_pixels;
-mod chat_context_pixels;
-mod dialog_host_pixels;
-mod fixture_picker_pixels;
-mod gauntlet_chat;
 mod pixel_suite_guard;
-mod sidebar_scores_pixels;
-mod sidebar_toggle_budget;
-mod signin_pixels;
-mod subagents_pixels;
-mod tab_chrome_pixels;
 mod track_editor_budget;
 mod track_editor_waveform_pixels;
-mod venue_builder_pixels;
-mod venue_patch_pixels;
 mod venues_pixels;
 mod visualizer_capture;
 mod visualizer_gizmo;

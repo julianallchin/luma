@@ -4,7 +4,7 @@
 // landing it would commit, the relation the graph wrote down, the refusal
 // that stops it, the beads a socket can be clicked by — so these tests can
 // exist at all with the renderer off. What the picture adds is inspected in
-// `app_pixel/venue_builder_pixels.rs`.
+// `js/pixel/venue_builder.test.js`.
 //
 // Nothing here asserts a coordinate. Every claim is read back off the solved
 // graph — the edge that was written, the constraint that was checked, the
