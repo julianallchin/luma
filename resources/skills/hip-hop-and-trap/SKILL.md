@@ -28,7 +28,7 @@ frames rather than competes:
 ## The 808 and the hats
 
 - The 808 slide is this genre's wub. When the bass slides or stutters
-  (measure the bass envelope — toolbox), a slow brightness or color bend on
+  (measure the bass envelope — `finding-things-in-audio`), a slow brightness or color bend on
   the foundation follows it. It's a lean, not a hit.
 - Trap hats are the texture layer: rolls and triplet bursts. A dim shimmer can
   follow hat density, but never let hat rolls trigger bright strobes — that
@@ -43,7 +43,7 @@ color cycling reads cheap here faster than in any other genre.
 
 ## Structure
 
-Map verses and hooks first (vocal tags + vocal-stem energy — toolbox), then
+Map verses and hooks first (vocal tags + vocal-stem energy — `finding-things-in-audio`), then
 beat-switches: many rap tracks flip the entire instrumental mid-song. A beat
 switch is a full palette change, the biggest visual event of the track —
 bigger than any hook. Find it by listening for the bass and drum character

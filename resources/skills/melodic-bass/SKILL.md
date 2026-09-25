@@ -31,7 +31,7 @@ riding the top. Your job is to make the room inhale and exhale with them.
   edges — full rig at a warm sustain beats full rig strobing.
 - Vocal chops are sparkle. Small bright accents on a secondary group, following
   the chop rhythm loosely — decoration, not structure.
-- The bass still moves (measure it — toolbox recipe). A slow 1–2 Hz undulation
+- The bass still moves (measure it — the `finding-things-in-audio` recipe). A slow 1–2 Hz undulation
   under the drop wants a matching brightness breathe on the foundation. Deep
   and flowing, never gated on/off.
 

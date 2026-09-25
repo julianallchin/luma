@@ -13,7 +13,7 @@ or kick onsets against the beats) and work structurally.
 
 **Terrace.** Read the track as blocks — intro, build, main, breakdown, riser,
 drop, outro — and give each block a level. Hold the level for the whole block.
-Change only on phrase lines (find the phrase length once — toolbox). Discrete
+Change only on phrase lines (find the phrase length once — `finding-things-in-audio`). Discrete
 steps read as arrangement; continuous drifting reads as a screensaver.
 
 - Each drop sits at least one step above every block before it.
@@ -46,7 +46,7 @@ Same shape every time, and it's the one moment that needs real care:
 4. Drop: everything on the downbeat, then settle into the block's held state
    within a bar or two. Impact is a moment, not a section.
 
-Check it's real (fake-drop check — toolbox). This genre feints with filtered
+Check it's real (fake-drop check — `finding-things-in-audio`). This genre feints with filtered
 stalls constantly.
 
 ## Subgenre inflections

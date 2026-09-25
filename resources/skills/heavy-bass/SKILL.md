@@ -47,7 +47,7 @@ artillery and the bars read intense:
 ## The drops tell a story
 
 Compare the drops before scoring any of them (spectral character, wub rate and
-depth — the toolbox has both). What you're looking for:
+depth — `finding-things-in-audio` has both). What you're looking for:
 
 - **Drop 2 goes absurd.** First drop melodic, second drop suddenly noisy,
   distorted, stupid — flatness way up, rate faster or uglier. That contrast is
@@ -67,7 +67,7 @@ sixteenth — brightness terracing up, timed to where the riser actually peaks
 in the audio. Then the bar before the drop goes near-black. One or two bars of
 almost nothing makes the drop free. Do not decorate that bar; the snare rolls
 and vocal one-shots in it get nothing. And check the drop is real before you
-spend all this (fake-drop check, toolbox) — a feint gets a dry cut, and the
+spend all this (fake-drop check, `finding-things-in-audio`) — a feint gets a dry cut, and the
 real drop gets the payload.
 
 ## How deep to go

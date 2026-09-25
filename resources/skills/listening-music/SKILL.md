@@ -20,7 +20,7 @@ Between changes, hold still. Stillness is not laziness here; it's trust.
   move rhythmically, make it slow enough (whole-bar breathing) that drift is
   invisible.
 - Follow dynamics, not onsets. The band getting louder is your cue to warm or
-  widen — track the mix envelope (toolbox) at the scale of phrases.
+  widen — track the mix envelope (`finding-things-in-audio`) at the scale of phrases.
 - Quiet is quiet. A hushed verse can sit in near-dark. An ambient passage can
   be one color barely on. Let the room be dim enough that people listen.
 
