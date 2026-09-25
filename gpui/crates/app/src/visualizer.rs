@@ -151,6 +151,12 @@ struct Fly {
     /// Whether the camera moved or turned. A right click that did neither
     /// leaves the camera exactly as it was.
     moved: bool,
+    /// Whether the pointer lock was asked for yet, and whether it took. A
+    /// locked pointer is hidden and held where it was pressed, and the look
+    /// reads its relative motion once per frame; without a lock the look
+    /// follows the pointer's moves, which a visible cursor then shows.
+    lock_asked: bool,
+    locked: bool,
 }
 
 /// The hit-test geometry itself: what a ray can hit and which authored object
@@ -443,6 +449,13 @@ struct UiSpans {
     /// from one that was never asked for a frame at all, and those have
     /// different fixes and different owners.
     renders: u32,
+    /// Input the window dispatched during the gap, and what it cost — see
+    /// [`gpui::InputLoad`]. Pointer events arrive at the mouse's rate, not
+    /// the display's, and their cost is otherwise time nobody accounts for.
+    input_events: u32,
+    input_moves: u32,
+    input_ms: f32,
+    input_longest_ms: f32,
 }
 
 /// The app's own record of a submitted frame, returned when it is presented.
@@ -531,6 +544,9 @@ pub(crate) struct Visualizer {
     /// The held right button's fly. Beside [`Self::drag`] rather than in it,
     /// because keys change it and a pointer anchor does not.
     fly: Option<Fly>,
+    /// Whether this view holds the window's pointer lock — see
+    /// [`Self::sync_pointer_lock`].
+    pointer_locked: bool,
     /// The operator's fly speed multiple, which the wheel sets during a fly.
     /// Kept from one fly to the next.
     fly_speed: f32,
@@ -1325,6 +1341,7 @@ impl Visualizer {
             owes_opening_pose: false,
             drag: None,
             fly: None,
+            pointer_locked: false,
             fly_speed: 1.0,
             pivot_dot: None,
             editor_drag: None,
@@ -1840,6 +1857,8 @@ impl Visualizer {
                 keys: FlyKeys::default(),
                 last: Instant::now(),
                 moved: false,
+                lock_asked: false,
+                locked: false,
             });
         }
         self.drag = Some((drag, at));
@@ -1912,6 +1931,49 @@ impl Visualizer {
         }
     }
 
+    /// Turn the camera in place by a pointer motion, in logical pixels: the
+    /// orbit's turn about the eye.
+    fn look(&mut self, dx: f32, dy: f32) {
+        let turn = LOOK_RATE / f32::from(self.size.height).max(1.0);
+        let eye = self.camera.position();
+        self.camera
+            .orbit_about(eye, -turn * dx, -turn * dy, &self.framing);
+        if let Some(fly) = self.fly.as_mut() {
+            fly.moved = true;
+        }
+    }
+
+    /// Hold the platform's pointer lock to the fly: take it when a fly starts,
+    /// give it back when none is live, and while it is held turn the look by
+    /// the relative motion since the last call. Called from the press and
+    /// release listeners, which is where the lock should begin and end, and
+    /// once per frame, which is where the look is read and where a fly that
+    /// ended some other way lets go.
+    ///
+    /// A locked pointer sends no moves at all, so every one of the mouse's
+    /// thousand-a-second counts lands here as one summed turn per frame,
+    /// and the compositor never has to draw a moving cursor.
+    fn sync_pointer_lock(&mut self, window: &mut Window) {
+        match self.fly.as_mut() {
+            Some(fly) if !fly.lock_asked => {
+                fly.lock_asked = true;
+                fly.locked = window.set_pointer_lock(true);
+                self.pointer_locked = fly.locked;
+            }
+            None if self.pointer_locked => {
+                window.set_pointer_lock(false);
+                self.pointer_locked = false;
+            }
+            _ => {}
+        }
+        if self.fly.as_ref().is_some_and(|fly| fly.locked) {
+            let delta = window.take_pointer_delta();
+            if delta != Point::default() {
+                self.look(f32::from(delta.x), f32::from(delta.y));
+            }
+        }
+    }
+
     /// Consume one pointer step, in logical pixels.
     fn dragged(&mut self, delta: Point<Pixels>) {
         let Some((drag, _)) = self.drag else { return };
@@ -1930,15 +1992,7 @@ impl Visualizer {
                     .orbit_about(pivot, -turn * dx, -turn * dy, &self.framing);
             }
             // The same turn about the eye: a look.
-            Drag::Fly => {
-                let turn = LOOK_RATE / height;
-                let eye = self.camera.position();
-                self.camera
-                    .orbit_about(eye, -turn * dx, -turn * dy, &self.framing);
-                if let Some(fly) = self.fly.as_mut() {
-                    fly.moved = true;
-                }
-            }
+            Drag::Fly => self.look(dx, dy),
             // three's perspective pan: one screen height of drag moves the
             // target by the full visible extent at the target's depth, so a
             // point under the cursor stays under it.
@@ -2979,6 +3033,12 @@ struct FrameSample {
     /// gap means nothing asked for a frame — a different disease, and a
     /// different owner, from a thread that was busy elsewhere.
     renders_in_gap: u32,
+    /// Input events dispatched during `ui_frame_gap_ms`, the mouse moves
+    /// among them, their total dispatch time and the longest one.
+    input_events: u32,
+    input_moves: u32,
+    input_ms: f32,
+    input_longest_ms: f32,
     /// `draw_ms` split at the driver's completion callback: the GPU's share
     /// (submit until it said it was done, including any wait to begin) and the
     /// worker's share (how long after that before anyone looked). This is the
@@ -3466,6 +3526,7 @@ pub(crate) fn visualizer(
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
     state.presentation = matches!(&chrome, Chrome::Fullscreen { .. });
+    state.sync_pointer_lock(window);
     state.fly_tick(Instant::now(), window.modifiers().shift);
     let (venue_tools, transport) = match chrome {
         Chrome::Embedded { venue_tools } => (venue_tools, None),
@@ -4453,6 +4514,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         "request_to_prepaint_ms": "request_animation_frame to this prepaint",
                         "queued_ms": "waited for the renderer to start it",
                         "renders_in_gap": "stage renders during ui_frame_gap_ms; 1 is healthy, 0 means nothing asked for a frame",
+                        "input_ms": "input dispatch time during ui_frame_gap_ms (input_events events, input_moves of them mouse moves; input_longest_ms the longest)",
                         "shared_surface": "true = zero-copy (an IOSurface on Metal, a texture on the compositor's own device on wgpu); false = CPU readback, whose copy and map sit inside draw_ms and are invisible to gpu_total_ms",
                         "delivered": "false = a prepaint that submitted a frame and got none back; interval/draw/queued/gpu are absent on those rows, everything measured before submission is valid",
                         "replaced_undelivered": "this submission pushed an older frame out of the queue before it ever reached the screen",
@@ -4603,6 +4665,20 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         .requested_at
                         .map_or(0.0, |asked| (now - asked).as_secs_f32() * 1_000.0),
                     renders: std::mem::take(&mut stage.renders_since_prepaint),
+                    input_events: 0,
+                    input_moves: 0,
+                    input_ms: 0.0,
+                    input_longest_ms: 0.0,
+                }
+            };
+            let spans = {
+                let load = window.take_input_load();
+                UiSpans {
+                    input_events: load.events,
+                    input_moves: load.mouse_moves,
+                    input_ms: load.busy.as_secs_f32() * 1_000.0,
+                    input_longest_ms: load.longest.as_secs_f32() * 1_000.0,
+                    ..spans
                 }
             };
             let scale = window.scale_factor();
@@ -4768,6 +4844,10 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                         ui_frame_gap_ms: spans.frame_gap_ms,
                                         request_to_prepaint_ms: spans.request_to_prepaint_ms,
                                         renders_in_gap: spans.renders,
+                                        input_events: spans.input_events,
+                                        input_moves: spans.input_moves,
+                                        input_ms: spans.input_ms,
+                                        input_longest_ms: spans.input_longest_ms,
                                         replaced_undelivered: gpu.submission.replaced_undelivered,
                                         slots_idle: gpu.submission.slots.idle,
                                         slots_rendering: gpu.submission.slots.rendering,
@@ -4828,6 +4908,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                             sample.request_to_prepaint_ms =
                                                 completed.spans.request_to_prepaint_ms;
                                             sample.renders_in_gap = completed.spans.renders;
+                                            sample.input_events = completed.spans.input_events;
+                                            sample.input_moves = completed.spans.input_moves;
+                                            sample.input_ms = completed.spans.input_ms;
+                                            sample.input_longest_ms =
+                                                completed.spans.input_longest_ms;
                                             // The worker retains the latest profile
                                             // even when its image was discarded.
                                             // `profiled_serial` identifies its source;
@@ -4988,6 +5073,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                     state.editor_press(at, shift);
                 } else if let Some(drag) = Drag::of(event.button) {
                     state.begin_drag(drag, at);
+                    state.sync_pointer_lock(window);
                 }
                 cx.notify();
             }
@@ -5054,7 +5140,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
     });
 
     let released = app.clone();
-    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble {
             return;
         }
@@ -5080,6 +5166,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                     }
                 } else {
                     state.end_drag();
+                    state.sync_pointer_lock(window);
                 }
                 cx.notify();
             }
@@ -5803,6 +5890,7 @@ mod orbit_selection_tests {
             owes_opening_pose: false,
             drag: None,
             fly: None,
+            pointer_locked: false,
             fly_speed: 1.0,
             pivot_dot: None,
             editor_drag: None,
