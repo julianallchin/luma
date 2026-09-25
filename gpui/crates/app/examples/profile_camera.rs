@@ -20,6 +20,7 @@
 //! sub-passes among them). Renderer switches such as `LUMA_GRID_FOG=0` apply
 //! as in the app. `--quality` defaults to the quality in the export.
 //! `--compare` prints how far the written PNG is from another one.
+//! `--list-cones` prints the lit fixture cones at the playhead and exits.
 //!
 //! The haze clock runs at 60 frames a second from zero, so two runs with the
 //! same arguments draw the same frames.
@@ -130,6 +131,21 @@ fn main() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     export.apply(&mut frame);
+    if args.iter().any(|a| a == "--list-cones") {
+        for cone in &frame.fixture_cones {
+            let half = cone.cos_field.clamp(-1.0, 1.0).acos().to_degrees();
+            println!(
+                "cone at {:.2?} dir {:.2?} half-field {half:.1} deg wash {:.2} intensity {:.2} colour {:.2?} range {:.1}",
+                cone.position.to_array(),
+                cone.direction.to_array(),
+                cone.wash,
+                cone.intensity,
+                cone.color.to_array(),
+                cone.range,
+            );
+        }
+        return Ok(());
+    }
     let (width, height) = export.render_size();
     if (frame.haze_density, frame.haze_steps) != (export.haze.density, export.haze.steps)
         || frame.haze_resolution != export.haze.resolution
