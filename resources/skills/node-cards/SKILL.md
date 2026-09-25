@@ -123,6 +123,39 @@ the layers under it light. The rate is `rate × alpha`. `rate` (T N A),
 `alpha` (T N A). Preset: **Strobe**. A colored strobe is a color clip with a
 strobe clip above it.
 
+## aim@1
+
+Where the heads of a clip point: a rest aim (or a point every head points
+at), an optional fan across the axis, and optional motion around it. Always
+blends `replace_only`: an aim clip blends toward the aim under it by `alpha`,
+so stack aim clips to move a subset of heads without resetting the rest.
+
+- `base` (choice: `direction`, `point`) — whether the rest aim is one
+  direction or a point every head points at.
+- `direction` (vector U/V/Z; T N), used when `base` is `direction`.
+- `point` (vector U/V/Z in metres; T), used when `base` is `point`.
+- `fan` (degrees the heads spread apart across the axis, 0 = all alike; T H N A).
+- `axis` (how the heads are laid out, for `fan` and `spread`; same shorthand
+  as [Axis](#axis)).
+- `motion` (choice: `none`, `shape`, `noise`) — whether the heads wobble
+  around the base.
+- `shape` (choice: `swing_left_right`, `swing_up_down`, `circle`,
+  `figure_8`), used when `motion` is `shape`.
+- `size` (degrees of the wobble; T A).
+- `every` (beats for one wobble cycle, and between hits; T).
+- `spread` (degrees of phase the wobble travels across the heads; 360 = one
+  cycle, 0 = all together; T).
+- `speed` (beats for `noise` motion to wander one step; T), used when
+  `motion` is `noise`.
+- `alpha` (blend toward the aim under this clip; T H N A).
+
+Presets: **Position** (rest direction, no fan or motion), **Fan** (40°
+static fan), **Converge** (`base` point, heads aim at one point), **Bloom**
+(fan grows 0→40° over the clip on a radial axis), **Sweep** (45° swing
+left-right over 8 beats), **Wave** (25° swing up-down, spread across the
+heads), **Circle** (18° circle wobble), **Figure-8** (25° figure-8 wobble),
+**Ballyhoo** (40° noise wobble).
+
 ## Layers
 
 Layers combine forms by blend mode. A rainbow that chases is a
