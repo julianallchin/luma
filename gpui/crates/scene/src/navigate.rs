@@ -287,14 +287,14 @@ impl Camera {
     }
 }
 
-/// `travel` from `eye`, shortened so the eye ends no lower than
-/// [`MIN_EYE_Z`] above `floor_z`. Rising is never shortened.
+/// `travel` from `eye`, with its fall cut so the eye ends no lower than
+/// [`MIN_EYE_Z`] above `floor_z`. Only the height is cut: a move that meets
+/// the floor slides along it rather than stopping dead, which scaling the
+/// whole move did to anything aimed even slightly down. Rising is never cut,
+/// and an eye already below the limit is not lifted.
 fn above_floor(eye: Vec3, travel: Vec3, floor_z: f32) -> Vec3 {
-    let lowest = floor_z + MIN_EYE_Z;
-    if travel.z >= 0.0 || eye.z + travel.z >= lowest {
-        return travel;
-    }
-    travel * ((lowest - eye.z) / travel.z).clamp(0.0, 1.0)
+    let lowest = (floor_z + MIN_EYE_Z).min(eye.z);
+    Vec3::new(travel.x, travel.y, travel.z.max(lowest - eye.z))
 }
 
 #[cfg(test)]
@@ -535,6 +535,14 @@ mod tests {
         let mut camera = start;
         camera.fly(keys(&["q"]), 10.0, 1.0, 0.0);
         assert!((camera.position().z - MIN_EYE_Z).abs() < 1e-4);
+        // At the floor, a move aimed down slides along it rather than
+        // sticking: the level part of the step survives the cut.
+        let before = camera.position();
+        let mut camera = Camera::looking_from(before, before + Vec3::new(1.0, 0.0, -1.0), 50.0);
+        camera.fly(keys(&["w"]), 10.0, 1.0, 0.0);
+        let slid = camera.position() - before;
+        assert!(slid.z.abs() < 1e-4, "the eye stays on the floor limit: {slid:?}");
+        assert!(slid.x > 5.0, "the eye slides forward along the floor: {slid:?}");
         assert!(!FlyKeys::default().set("x", true));
     }
 
