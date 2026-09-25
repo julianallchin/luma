@@ -128,7 +128,7 @@ pub(super) fn prepaint(
                             &signal.bands,
                             [signal.gains.low, signal.gains.mid, signal.gains.high],
                             signal.ceilings,
-                            signal.sample_rate,
+                            luma_lib::audio::SAMPLE_RATE,
                         )
                         .map(Arc::new)
                         .map_err(|e| e.to_string())

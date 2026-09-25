@@ -11,6 +11,7 @@
 
 use std::path::Path;
 
+use crate::audio::SAMPLE_RATE;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::dispatch::{AppServices, CommandError};
 use crate::host_audio::{HostAudioControl, HostAudioSnapshot};
@@ -41,17 +42,13 @@ pub async fn host_load_segment(
     .map_err(|e| CommandError::Internal(format!("Failed to fetch track: {}", e)))?;
     drop(access);
 
-    let audio = decode(
-        &info.file_path,
-        &info.track_hash,
-        services.host_audio.decode_sample_rate(),
-    )?;
+    let audio = decode(&info.file_path, &info.track_hash)?;
 
     // Frame indices, then sample indices — the buffer is stereo interleaved.
     let num_frames = audio.samples.len() / 2;
-    let start_frame = (start_time * audio.sample_rate as f32).floor().max(0.0) as usize;
+    let start_frame = (start_time * SAMPLE_RATE as f32).floor().max(0.0) as usize;
     let end_frame = if end_time > 0.0 {
-        (end_time * audio.sample_rate as f32).ceil() as usize
+        (end_time * SAMPLE_RATE as f32).ceil() as usize
     } else {
         num_frames
     };
@@ -75,7 +72,6 @@ pub async fn host_load_segment(
         admitted_principal.as_deref(),
         session,
         samples,
-        audio.sample_rate,
         start_time,
     )
     .await
@@ -104,11 +100,7 @@ pub async fn host_load_track(
     .await
     .map_err(|e| CommandError::Internal(format!("Failed to fetch track: {}", e)))?;
 
-    let audio = decode(
-        &info.file_path,
-        &info.track_hash,
-        services.host_audio.decode_sample_rate(),
-    )?;
+    let audio = decode(&info.file_path, &info.track_hash)?;
 
     drop(access);
 
@@ -118,7 +110,6 @@ pub async fn host_load_track(
         admitted_principal.as_deref(),
         session,
         audio.samples.clone(),
-        audio.sample_rate,
         0.0,
     )
     .await
@@ -128,12 +119,10 @@ pub async fn host_load_track(
 fn decode(
     file_path: &str,
     track_hash: &str,
-    sample_rate: u32,
 ) -> Result<std::sync::Arc<crate::audio::decoder::DecodedAudio>, CommandError> {
-    let audio =
-        crate::audio::load_or_decode_audio_shared(Path::new(file_path), track_hash, sample_rate)
-            .map_err(|e| CommandError::Internal(format!("Failed to decode track: {}", e)))?;
-    if audio.samples.is_empty() || audio.sample_rate == 0 {
+    let audio = crate::audio::load_or_decode_audio_shared(Path::new(file_path), track_hash)
+        .map_err(|e| CommandError::Internal(format!("Failed to decode track: {}", e)))?;
+    if audio.samples.is_empty() {
         return Err(CommandError::Invalid("Track has no audio data".into()));
     }
     Ok(audio)
@@ -141,14 +130,12 @@ fn decode(
 
 /// Install `samples` on the host under a fresh `Operate` lease, refusing if the
 /// admitted identity changed while the (slow) decode was running.
-#[allow(clippy::too_many_arguments)]
 async fn commit_segment(
     services: &AppServices,
     track_id: &str,
     admitted_principal: Option<&str>,
     session: u64,
     samples: Vec<f32>,
-    sample_rate: u32,
     segment_start: f32,
 ) -> Result<(), CommandError> {
     let access = VisibleTrackAccess::<Operate>::operate(&services.db.0, track_id).await?;
@@ -159,7 +146,7 @@ async fn commit_segment(
     }
     services
         .host_audio
-        .finish_load(session, samples, sample_rate, segment_start)?;
+        .finish_load(session, samples, segment_start)?;
     Ok(access.commit().await?)
 }
 

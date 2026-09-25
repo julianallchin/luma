@@ -265,9 +265,7 @@ impl AppServices {
         let render_engine = RenderEngine::default();
         let host_audio = HostAudioState::default();
         // A host with no window or broadcaster must never probe or open the
-        // machine's audio device. It still advances transport from wall time,
-        // and the deterministic 48 kHz decode path is the same one desktop
-        // uses when output is disabled in settings.
+        // machine's audio device. It still advances transport from wall time.
         host_audio.set_audio_output_enabled(false);
         Self {
             db,

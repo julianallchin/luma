@@ -28,7 +28,6 @@ pub async fn get_track_waveform_signal(
         &services.db.0,
         &services.analysis_tasks,
         &track_id,
-        services.host_audio.decode_sample_rate(),
     )
     .await?)
 }
@@ -46,20 +45,19 @@ mod tests {
     use crate::services::waveforms::FULL_WAVEFORM_SIZE;
 
     const SECONDS: u32 = 90;
-    const RATE: u32 = 48_000;
+    use crate::audio::SAMPLE_RATE as RATE;
     const GATE_PERIOD_MS: f64 = 3.;
     const GATE_OPEN_MS: f64 = 1.;
     const QUIET: (f64, f64) = (25., 45.);
     const QUIET_LEVEL: f64 = 0.3;
 
     #[tokio::test]
-    async fn native_signal_preserves_sample_rate_and_stored_normalization() {
+    async fn native_signal_preserves_length_and_stored_normalization() {
         let directory = tempfile::tempdir().unwrap();
         let services = seed(directory.path()).await;
         let signal = super::get_track_waveform_signal(&services, "track".into())
             .await
             .unwrap();
-        assert_eq!(signal.sample_rate, RATE);
         for band in &signal.bands {
             assert_eq!(band.len(), (RATE * SECONDS) as usize);
             assert!(band.iter().all(|v| v.is_finite()));
@@ -134,7 +132,7 @@ mod tests {
     }
 
     /// A steady 100 Hz tone under a gated 10 kHz carrier, as 16-bit stereo WAV
-    /// at the rate the audio host decodes to — so the decode that answers the
+    /// at the one decode rate — so the decode that answers the
     /// command is not also a resample, which would soften the gate's edges and
     /// make the assertion about the resampler.
     ///

@@ -10,7 +10,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
+use crate::audio::{decode_track_samples, filter_3band, FilteredBands, SAMPLE_RATE};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::database::local::waveforms::StoredWaveform;
@@ -30,7 +30,6 @@ struct ComputedWaveform {
     preview_bands: BandEnvelopes,
     /// The units `bands` and `preview_bands` are both in.
     gains: BandGains,
-    sample_rate: u32,
     duration_seconds: f64,
 }
 
@@ -92,7 +91,7 @@ pub(crate) async fn ensure_track_waveform(
             bands_blob: &bands_blob,
             preview_bands_blob: &preview_bands_blob,
             band_gains: computed.gains,
-            sample_rate: computed.sample_rate as i64,
+            sample_rate: SAMPLE_RATE as i64,
             decoded_duration: computed.duration_seconds,
         },
     )
@@ -109,7 +108,7 @@ pub(crate) async fn ensure_track_waveform(
             full_samples: Some(computed.full_samples),
             bands: Some(computed.bands),
             preview_bands: Some(computed.preview_bands),
-            sample_rate: computed.sample_rate,
+            sample_rate: SAMPLE_RATE,
             duration_seconds: computed.duration_seconds,
         },
         computed.gains,
@@ -128,14 +127,12 @@ async fn compute_waveform_payload(
     // Decode audio samples (returns stereo, convert to mono for waveform analysis)
     let t0 = Instant::now();
     let path = track_path.to_path_buf();
-    let (samples, sample_rate) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<f32>, u32), String> {
-            let audio = decode_track_samples(&path, None)?;
-            // Convert stereo to mono for waveform analysis
-            Ok((audio.to_mono(), audio.sample_rate))
-        })
-        .await
-        .map_err(|e| format!("Waveform decode task failed: {}", e))??;
+    let samples = tokio::task::spawn_blocking(move || -> Result<Vec<f32>, String> {
+        // Convert stereo to mono for waveform analysis
+        Ok(decode_track_samples(&path)?.to_mono())
+    })
+    .await
+    .map_err(|e| format!("Waveform decode task failed: {}", e))??;
     analysis.checkpoint()?;
     let decode_ms = t0.elapsed().as_millis();
 
@@ -145,7 +142,7 @@ async fn compute_waveform_payload(
 
     // Use the actual decoded sample count for duration — metadata can differ
     // due to encoder padding, VBR headers, etc.
-    let decoded_duration = samples.len() as f64 / sample_rate as f64;
+    let decoded_duration = samples.len() as f64 / SAMPLE_RATE as f64;
 
     let t0 = Instant::now();
 
@@ -160,7 +157,7 @@ async fn compute_waveform_payload(
     // envelope are one unit system rather than two percentiles of two different
     // bucketizations.
     let t0 = Instant::now();
-    let filtered = filter_3band(&samples, sample_rate as f32);
+    let filtered = filter_3band(&samples, SAMPLE_RATE as f32);
 
     let full_peaks = bucketize_band_peaks(&filtered, 0..samples.len(), FULL_WAVEFORM_SIZE);
     let gains = BandGains::from_peaks(&full_peaks);
@@ -188,7 +185,6 @@ async fn compute_waveform_payload(
         bands,
         preview_bands,
         gains,
-        sample_rate,
         duration_seconds: decoded_duration,
     })
 }
@@ -256,7 +252,6 @@ pub async fn get_track_waveform_signal(
     pool: &SqlitePool,
     tasks: &AnalysisTaskGroup,
     track_id: &str,
-    target_rate: u32,
 ) -> Result<WaveformSignal, String> {
     let gains = band_gains(pool, tasks, track_id).await?;
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
@@ -268,20 +263,18 @@ pub async fn get_track_waveform_signal(
             .map_err(|error| format!("Failed to load waveform source: {error}"))?;
     drop(access);
 
-    // The same `(hash, rate)` key the audio host decodes under, so the track
-    // being played is the track being measured and neither pays for the other's
-    // copy.
+    // The same key the audio host decodes under, so the track being played is
+    // the track being measured and neither pays for the other's copy.
     let audio = tokio::task::spawn_blocking(move || {
-        crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash, target_rate)
+        crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash)
     })
     .await
     .map_err(|error| format!("Waveform decode task failed: {error}"))??;
 
     tokio::task::spawn_blocking(move || {
         let mono = audio.to_mono();
-        let filtered = filter_3band(&mono, audio.sample_rate as f32);
+        let filtered = filter_3band(&mono, SAMPLE_RATE as f32);
         WaveformSignal {
-            sample_rate: audio.sample_rate,
             bands: [filtered.low, filtered.mid, filtered.high],
             gains,
             ceilings: BandGains::ceilings(),
