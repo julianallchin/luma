@@ -23,7 +23,10 @@ There are three import paths:
 - The DJ paths match an existing track by source id first, then by content
   hash.
 
-Audio is decoded with symphonia at 48 kHz (`TARGET_SAMPLE_RATE`).
+Audio is decoded once, with ffmpeg (symphonia as fallback), to stereo at
+48 kHz (`audio::SAMPLE_RATE`). Every `.pcm` cache is at that rate; a cache at
+any other rate is re-decoded. Playback converts to the output device's rate in
+its output stream, never on disk.
 
 ## Background analysis
 
