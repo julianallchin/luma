@@ -55,10 +55,10 @@ pub struct TrackWaveform {
     pub duration_seconds: f64,
 }
 
-/// Full sample-rate filtered audio for a native GPU waveform. This large payload
-/// crosses the typed dispatch seam once, without JSON serialization.
+/// Filtered audio at [`crate::audio::SAMPLE_RATE`] for a native GPU waveform.
+/// This large payload crosses the typed dispatch seam once, without JSON
+/// serialization.
 pub struct WaveformSignal {
-    pub sample_rate: u32,
     /// Signed low/mid/high band samples, all of equal length.
     pub bands: [Vec<f32>; 3],
     pub gains: BandGains,
