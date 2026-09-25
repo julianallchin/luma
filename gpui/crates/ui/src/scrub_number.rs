@@ -1,7 +1,8 @@
 //! A compact value that scrubs relatively on drag and edits as text on click.
 //! Pointer edits preview live and commit on release, keeping one undo step per gesture.
 use crate::node::{Instrument, Role};
-use crate::{arg::number::parse_draft, float, ladder, text_input::TextInput};
+use crate::text_input::{self, TextInput, DRAFT_CONTEXT};
+use crate::{arg::number::parse_draft, float, ladder};
 use gpui::prelude::*;
 use gpui::*;
 use std::rc::Rc;
@@ -56,6 +57,7 @@ struct Editor {
     dragged: bool,
     value: f64,
     _blur: Subscription,
+    _keys: Subscription,
 }
 impl Editor {
     fn finish(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -101,6 +103,14 @@ impl RenderOnce for ScrubNumber {
                 weak.update(cx, |this: &mut Editor, cx| this.finish(true, window, cx))
                     .ok();
             });
+            let keys =
+                cx.subscribe_in(&input, window, |this: &mut Editor, _, event, window, cx| {
+                    match event {
+                        text_input::Event::Submitted => this.finish(true, window, cx),
+                        text_input::Event::Cancelled => this.finish(false, window, cx),
+                        _ => {}
+                    }
+                });
             Editor {
                 value: initial.value,
                 config: initial,
@@ -109,6 +119,7 @@ impl RenderOnce for ScrubNumber {
                 press: None,
                 dragged: false,
                 _blur: blur,
+                _keys: keys,
             }
         });
         editor.update(cx, |editor, cx| {
@@ -124,16 +135,11 @@ impl RenderOnce for ScrubNumber {
 impl Render for Editor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.editing {
+            // The draft context gives the field enter and escape ahead of
+            // every binding in the surface around it.
             return float::field()
+                .key_context(DRAFT_CONTEXT)
                 .w(px(self.config.width))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "enter" => this.finish(true, window, cx),
-                        "escape" => this.finish(false, window, cx),
-                        _ => return,
-                    }
-                    cx.stop_propagation();
-                }))
                 .child(div().w_full().child(self.input.clone()))
                 .agent_node(Role::Input, format!("{} input", self.config.id))
                 .into_any_element();

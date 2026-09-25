@@ -218,6 +218,12 @@ pub const COMPOSER_CONTEXT: &str = "Composer";
 /// text-editing keys **only**: bare arrows and `enter` stay unbound so the
 /// surrounding picker frame keeps its navigation.
 pub const SEARCH_CONTEXT: &str = "PickerSearch";
+/// The key context a host declares around a one-line field while it edits a
+/// draft, such as a number typed into a scrub box. Under it `enter` submits
+/// and `escape` cancels. It sits deeper than any app context, so the field
+/// owns both keys while it edits: the first escape drops the draft and
+/// nothing behind it.
+pub const DRAFT_CONTEXT: &str = "FieldDraft";
 
 /// Which keymap a field lives under, and whether `enter` inserts or submits.
 ///
@@ -320,6 +326,11 @@ pub fn init(cx: &mut App) {
     ]);
     cx.bind_keys(editing(Some(SEARCH_CONTEXT)));
     cx.bind_keys(bindings);
+    let draft = Some(DRAFT_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("enter", Submit, draft),
+        KeyBinding::new("escape", Cancel, draft),
+    ]);
 }
 
 // -- appearance --------------------------------------------------------------
@@ -362,9 +373,9 @@ impl Default for Style {
 pub enum Event {
     /// The content changed, by any path.
     Edited,
-    /// `enter` in a [`Mode::Composer`] field.
+    /// `enter` in a [`Mode::Composer`] field or under [`DRAFT_CONTEXT`].
     Submitted,
-    /// `escape` in a [`Mode::Composer`] field. The field does nothing with it
+    /// `escape` in a [`Mode::Composer`] field or under [`DRAFT_CONTEXT`]. The field does nothing with it
     /// itself — what escape *means* is the host's decision.
     Cancelled,
     /// The caret or the selection moved without an edit.
