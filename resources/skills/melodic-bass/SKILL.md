@@ -4,7 +4,7 @@ description: Future bass, melodic dubstep, wave, chillstep — flowy halftime. U
 ---
 # Melodic bass
 
-Same halftime bones as heavy bass — snare on 3, felt tempo half the BPM — but
+Same halftime bones as heavy bass — snare every fourth felt beat — but
 the soul is opposite. The bass is a warm ocean, the chords are the event, and
 the drop *blooms* instead of punching. If you find yourself planning strobes,
 re-listen; if the snare is artillery and the bass is snarling, you're in
@@ -31,7 +31,7 @@ riding the top. Your job is to make the room inhale and exhale with them.
   edges — full rig at a warm sustain beats full rig strobing.
 - Vocal chops are sparkle. Small bright accents on a secondary group, following
   the chop rhythm loosely — decoration, not structure.
-- The bass still moves (measure it — the `finding-things-in-audio` recipe). A slow 1–2 Hz undulation
+- The bass still moves (`luma.music.modulation`). A slow 1–2 Hz undulation
   under the drop wants a matching brightness breathe on the foundation. Deep
   and flowing, never gated on/off.
 
@@ -57,10 +57,17 @@ this genre's breakdowns are the emotional center, not a pause. The a cappella
 or piano moment, if the track has one, is the most valuable bar in the song:
 near-dark, one color, stillness.
 
-## How deep to go
+## Listening
 
-Moderate. Per-phrase, not per-onset. The swell map (chord changes + envelope
-peaks per phrase) is usually enough to score the whole track in one pass, and
-one pass keeps the flow coherent — this genre suffers most when sections feel
-authored by different hands. Fan out only when the track is genuinely too big
-for one careful pass, along its own natural seams.
+Depth: moderate. Per phrase, not per onset.
+
+- Listen for: chord changes, swell peaks and their length, the sidechain
+  pump's depth, vocal chop rhythm, and the bar where the drop opens up.
+- Detail: one pass of the loop per phrase; a swell map (chord changes and
+  envelope peaks per phrase) is usually enough. Run the skeptic pass on the
+  drop. Parallel listeners only when a drop turns aggressive.
+- LDs love: a color change that lands on the chord change, and a bloom timed
+  to the swell's real peak, not the bar line.
+
+Score it in one pass so it reads as one hand. Fan out only when the track is
+too big for one careful pass, along its own seams.
