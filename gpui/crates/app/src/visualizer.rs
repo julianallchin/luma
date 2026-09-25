@@ -5707,19 +5707,37 @@ mod orbit_selection_tests {
         );
         let frame =
             build_frame_with(&scene, &Default::default(), &|_, _| None, 0.0, &mut library).unwrap();
+        let object = EditorObject::StagePiece("deck".into());
+        // The rendered object: every vertex the frame draws for the deck.
+        let expected = Aabb::from_points(
+            frame
+                .draws
+                .iter()
+                .filter(|draw| draw.editor_object.as_ref() == Some(&object))
+                .flat_map(|draw| {
+                    frame.meshes[draw.mesh]
+                        .vertices
+                        .iter()
+                        .map(|vertex| draw.model.transform_point3(Vec3::from(vertex.position)))
+                }),
+        );
+        assert!(!expected.is_empty(), "the frame draws the deck");
         let cage = frame
             .overlays
             .iter()
             .find(|overlay| frame.meshes[overlay.mesh].key.starts_with("::piece-cage:"))
             .unwrap();
-        let expected = Aabb::from_points(
+        let cage_bounds = Aabb::from_points(
             frame.meshes[cage.mesh]
                 .vertices
                 .iter()
                 .map(|vertex| cage.model.transform_point3(Vec3::from(vertex.position))),
         );
+        assert!(
+            cage_bounds.min.cmple(expected.min).all() && cage_bounds.max.cmpge(expected.max).all(),
+            "the selection cage {cage_bounds:?} must enclose the object {expected:?}"
+        );
         let pick = PickSnapshot::from_frame(&frame, &scene, camera, &mut PickCache::default());
-        let object = EditorObject::StagePiece("deck".into());
         let actual = pick.geometry.bounds[&object];
         assert!(
             actual.min.abs_diff_eq(expected.min, 1e-4),
