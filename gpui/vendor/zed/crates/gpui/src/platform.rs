@@ -908,6 +908,17 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn can_start_external_drag(&self) -> bool {
         false
     }
+    /// Lock the pointer where it is and hide it, or release it. While locked
+    /// the pointer sends no absolute motion; its relative motion accumulates
+    /// for [`PlatformWindow::take_pointer_delta`]. Whether the pointer is now
+    /// locked: `false` where the platform cannot lock one.
+    fn set_pointer_lock(&self, _locked: bool) -> bool {
+        false
+    }
+    /// Relative pointer motion since the previous call, while locked.
+    fn take_pointer_delta(&self) -> Point<Pixels> {
+        Point::default()
+    }
     fn start_external_drag(&self, _payload: &ExternalDragPayload) -> bool {
         false
     }
