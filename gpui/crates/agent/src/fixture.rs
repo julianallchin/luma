@@ -866,8 +866,9 @@ pub fn config_dir(name: &str) -> PathBuf {
 
 /// What a test script may read back from its library: `{"op": "query",
 /// "sql": …}` gives rows as objects (a blob as its length), `{"op": "score"}`
-/// the score that holds clips as the document the editor saved. Read-only: a
-/// test writes through the app.
+/// the score that holds clips as the document the editor saved, and
+/// `{"op": "presets"}` the shipped form presets. Read-only: a test writes
+/// through the app.
 pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
     let request: Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -896,6 +897,9 @@ pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
                         .map_err(|error| error.to_string())?;
                 serde_json::to_value(score).map_err(|error| error.to_string())
             }
+            // The shipped catalogue a placed clip copies from, in menu order.
+            Some("presets") => serde_json::to_value(&luma_patterns::presets().presets)
+                .map_err(|error| error.to_string()),
             other => Err(format!("unknown library op {other:?}")),
         };
         pool.close().await;
