@@ -101,7 +101,7 @@ source is one level deep: a source's own settings are plain values.
   below it gives 0, below the floor too; at or above it the value is
   floor + (1 − floor) × energy, not remapped from the threshold. The
   energy is the mean of the FFT magnitude bins in the range (2048-point FFT,
-  about 21.5 Hz per bin at 44.1 kHz), so a narrow low range uses few bins.
+  about 23.4 Hz per bin at 48 kHz), so a narrow low range uses few bins.
   Stored form: `{"type": "audio", "value": {"from_hz": 40, "to_hz": 100,
   "floor": 0.3, "threshold": 0.5}}`. A threshold of 0 is left out.
 - Engine note for speed inputs (`every`, `travel`) with a `time` curve: count
