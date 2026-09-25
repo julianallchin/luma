@@ -41,6 +41,12 @@ Use standard Rust formatting and clippy. Keep backend modules cohesive around do
 
 Use the GPUI harness for UI verification and `luma-render` tests/captures for rendering. Run backend tests for backend changes. Keep migrations consistent with model changes.
 
+- **Write UI tests as `.test.js`** under `gpui/crates/agent/tests/js/` and run them with `gpui/test` (see `gpui/BUILD.md`, "Script tests"). They need no Rust build. Keep a UI test in Rust only when it needs Rust-side setup or measurement.
+- **Assert behavior, not values copied from the code.** A test that fails when someone tunes a constant, moves a pixel or renames an internal, while nothing a user sees broke, is a change-detector: delete it or assert the relation behind it (an order, a bound, a round trip, "lit > dark").
+- **No absolute timings and no sleeps.** Wait with `until`; compare timings against a measurement from the same run.
+- **Never loosen a test or raise a timeout to make it pass.** A skipped test says why: `test.skip("bug: …")`.
+- **Run the tests you changed**, not the whole suite.
+
 ## Data & File Locations
 
 The global library database `luma.db` stays in the platform app config directory:
