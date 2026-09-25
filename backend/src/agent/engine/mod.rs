@@ -4,18 +4,21 @@
 pub mod catalog;
 pub(crate) mod claim;
 mod claude;
+mod claude_session;
 mod codex;
 mod process;
 pub(crate) mod state;
 
 use super::{
     model::{ContentBlock, ToolSpec, Usage},
-    tools::ToolOutcome,
+    tools::{ToolOutcome, ToolRegistry},
+    transcript::Transcript,
     AgentError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +171,41 @@ impl Replier {
     }
 }
 
+/// What hydrating a fresh native session from the transcript produced, for an
+/// engine whose checkpoint could not be literally resumed (a crash, a head
+/// mismatch, a model change, or the first native run for this thread on this
+/// machine — never an engine change: see [`state::ResumeMiss::EngineChanged`],
+/// which the caller must refuse rather than route here).
+pub(super) enum Hydration {
+    Session(state::NativeSession),
+    /// This engine has no hydration path — only Claude does, see
+    /// `claude_session`. The caller falls back to `continuation()`, the one
+    /// remaining reason it still exists.
+    Unsupported,
+}
+
+/// `Err` means hydration was attempted and failed — a real problem (the
+/// session file could not be built or written), not a missing capability.
+/// The caller must fail the turn rather than silently fall back: a bad
+/// hydration is a bug to see and fix, not a cost to eat quietly.
+pub(super) fn hydrate_session(
+    engine: Engine,
+    transcript: &Transcript,
+    turn_message_id: &str,
+    registry: &ToolRegistry,
+    model: Option<&str>,
+    cwd: &Path,
+) -> Result<Hydration, AgentError> {
+    match engine {
+        Engine::Claude => {
+            claude_session::hydrate(transcript, turn_message_id, registry, model, cwd)
+                .map(Hydration::Session)
+        }
+        Engine::Codex => Ok(Hydration::Unsupported),
+        Engine::Api => unreachable!("API execution has no native session"),
+    }
+}
+
 fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
     tools
         .iter()
@@ -179,17 +217,6 @@ fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
             })
         })
         .collect()
-}
-
-pub(super) fn context_fingerprint(
-    system: &str,
-    tools: &[ToolSpec],
-    effort: Option<&str>,
-) -> String {
-    use sha2::{Digest, Sha256};
-    let context = serde_json::to_vec(&(system, tool_definitions(tools), effort))
-        .expect("serializable tool configuration");
-    format!("{:x}", Sha256::digest(context))
 }
 
 fn content(outcome: ToolOutcome) -> (Vec<ContentBlock>, bool) {
@@ -233,6 +260,47 @@ mod tests {
                 "missing advertised field {field}"
             );
         }
+    }
+
+    #[test]
+    fn hydrate_session_dispatches_claude_and_reports_codex_unsupported() {
+        use crate::agent::tools::ToolRegistry;
+        use crate::agent::transcript::{AgentChatMessage, Transcript};
+
+        let scratch = tempfile::tempdir().unwrap();
+        std::env::set_var("CLAUDE_CONFIG_DIR", scratch.path());
+        let cwd = tempfile::tempdir().unwrap();
+        let transcript = Transcript {
+            messages: vec![
+                AgentChatMessage::user("u1", "hello"),
+                AgentChatMessage::user("u2", "and then?"),
+            ],
+        };
+        let registry = ToolRegistry::new(vec![]);
+
+        let claude = hydrate_session(
+            Engine::Claude,
+            &transcript,
+            "u2",
+            &registry,
+            None,
+            cwd.path(),
+        )
+        .expect("claude hydration should succeed");
+        assert!(matches!(claude, Hydration::Session(_)));
+
+        let codex = hydrate_session(
+            Engine::Codex,
+            &transcript,
+            "u2",
+            &registry,
+            None,
+            cwd.path(),
+        )
+        .expect("Codex being unsupported is not an error");
+        assert!(matches!(codex, Hydration::Unsupported));
+
+        std::env::remove_var("CLAUDE_CONFIG_DIR");
     }
 
     pub(super) fn request(engine: Engine, cwd: &std::path::Path) -> Request {
