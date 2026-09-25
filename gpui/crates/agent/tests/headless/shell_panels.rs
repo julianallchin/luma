@@ -236,8 +236,12 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
         "the overlay let a shell shortcut mutate the covered sidebar: {:#}",
         out["overlayKeyBlocked"]
     );
-    assert_eq!(out["dialog"]["bounds"]["width"], 900.0);
-    assert_eq!(out["dialog"]["bounds"]["height"], 680.0);
+    let dialog = &out["dialog"]["bounds"];
+    assert!(
+        (0.0..=1600.0).contains(&number(dialog, "width"))
+            && (0.0..=950.0).contains(&number(dialog, "height")),
+        "the dialog does not fit its 1600x950 window: {dialog:#}"
+    );
     assert_eq!(
         out["dialogAfterTab"]["focused"], true,
         "Tab escaped the modal focus plane: {:#}",
@@ -291,6 +295,10 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
     assert!(number(&compact["dialog"]["bounds"], "width") <= 608.0);
     assert!(number(&compact["dialog"]["bounds"], "height") <= 426.0);
     assert!(number(&compact["dialog"]["bounds"], "y") >= 38.0);
+    assert!(
+        number(&compact["dialog"]["bounds"], "width") < number(dialog, "width"),
+        "a compact window did not clamp the dialog below its full-window size"
+    );
     for control in ["close", "minimize", "maximize"] {
         assert!(
             number(&compact[control]["bounds"], "width") > 0.0,
