@@ -172,8 +172,9 @@ shipped app sets neither.
 
 - `backend/src/agent/tests.rs`: turns over a scripted model and a temporary
   database. Live tests are `#[ignore]` and need `LUMA_AI_GATEWAY_API_KEY`.
-- `gpui/crates/agent/tests/chat/`: headless chat tests (`agent_chat.rs`,
-  `context_gauge.rs`, `dialog_keyboard.rs`, `send_motion.rs`, `subagents.rs`).
+- `gpui/crates/agent/tests/js/headless/chat*.test.js`: headless chat tests
+  over a scripted model (the fixture's `model` and `tools` options). Run
+  with `gpui/test`.
 - `gpui/crates/agent/tests/app_pixel/gauntlet_chat.rs`: the reference plates
   `harness/gauntlet-chat/gpui-chat-{idle,streaming,finished}.png`.
 - `cargo test -p luma-md`: markdown parity and incremental-parse tests.
