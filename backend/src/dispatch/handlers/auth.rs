@@ -220,7 +220,6 @@ pub async fn set_session_item(
     let render_engine = &services.render_engine;
     let controller = &services.controller;
     let mixer = &services.mixer;
-    let stem_cache = &services.stem_cache;
     let analysis_tasks = &services.analysis_tasks;
     if key == crate::database::local::auth::SUPABASE_SESSION_KEY {
         let validated = crate::database::local::auth::validate_supabase_session(&value).await?;
@@ -301,7 +300,6 @@ pub async fn set_session_item(
             )
             .await);
         }
-        stem_cache.clear();
         if let Err(error) = crate::database::local::auth::replace_session_for_connection(
             &mut session_guard,
             &validated,
@@ -443,7 +441,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     let render_engine = &services.render_engine;
     let controller = &services.controller;
     let mixer = &services.mixer;
-    let stem_cache = &services.stem_cache;
     let analysis_tasks = &services.analysis_tasks;
 
     {
@@ -492,7 +489,6 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
     render_engine.reset_for_identity_switch();
     controller.disconnect()?;
     mixer.disconnect()?;
-    stem_cache.clear();
 
     wipe_signed_in_projection(&mut transaction, &principal).await?;
     transaction

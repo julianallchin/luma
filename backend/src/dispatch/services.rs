@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::CommandError;
 use crate::agent_execution::workspace::PythonWorkspaceService;
 use crate::artnet::ArtNetManager;
-use crate::audio::{FftService, StemCache};
+use crate::audio::FftService;
 use crate::controller_manager::ControllerManager;
 use crate::database::local::auth;
 use crate::database::local::state::StateDb;
@@ -190,7 +190,6 @@ pub struct AppServices {
     pub(crate) track_sources: Arc<dyn TrackSources>,
     pub(crate) fft: FftService,
     /// Decoded stem samples, shared so a track's stems are decoded once.
-    pub(crate) stem_cache: StemCache,
     pub(crate) render_engine: RenderEngine,
     /// MIDI controller mapping + connection. Held as an `Arc` because its
     /// interior is bare `Mutex`es — a clone would fork the live mapping.
@@ -276,7 +275,6 @@ impl AppServices {
                 .expect("headless worker environment paths must resolve"),
             track_sources: system_track_sources(),
             fft: FftService::new(),
-            stem_cache: StemCache::new(),
             render_engine: render_engine.clone(),
             controller: Arc::new(ControllerManager::new(render_engine, None)),
             mixer: Arc::new(MixerManager::new()),
@@ -311,7 +309,6 @@ impl AppServices {
             self.storage.clone(),
             self.workers.clone(),
             self.events.clone(),
-            self.stem_cache.clone(),
             lease.guard(),
         )
         .await
