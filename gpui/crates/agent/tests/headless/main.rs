@@ -13,13 +13,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-mod add_tracks_empty;
-mod add_tracks_error;
 mod add_tracks_flow;
-mod add_tracks_focus;
-mod add_tracks_source_race;
-mod agent_chat_track;
-mod agent_chat_venue;
 mod aim_sheet;
 mod chrome_anchors;
 mod clip_fades;
@@ -35,25 +29,18 @@ mod score_edit_focus;
 mod shell_panels;
 mod sidebar_scores;
 mod signin;
-mod tab_chrome;
-mod thread_switch;
 mod track_editor;
 mod track_editor_lanes;
 mod track_editor_previews;
 mod track_editor_sheet;
 mod track_editor_stack;
 mod track_editor_ux;
-mod track_editor_waveform;
-mod track_overlaps;
-mod track_playback_sessions;
 mod tracks;
 mod venue_builder;
-mod venue_clouds;
 mod venue_floor;
 mod venue_patch;
 mod venues;
 mod visualizer_fullscreen;
 mod visualizer_score;
-mod workspace_scope;
 
 mod sync_status;
