@@ -35,7 +35,11 @@ pub(crate) enum ResumeMiss {
     /// somewhere else (this state is deliberately machine-local; see the
     /// module doc).
     NoCheckpoint,
-    EngineChanged,
+    /// The checkpoint was left by a different engine. Luma does not convert
+    /// a conversation between providers, so the caller must fail loudly
+    /// rather than hydrate or resume — carries the engine that *was*
+    /// checkpointed, for the error message.
+    EngineChanged(Engine),
     ModelChanged,
     /// The transcript moved since the checkpoint completed: a steered
     /// message, a concurrent writer, or the checkpoint simply being stale.
@@ -44,12 +48,14 @@ pub(crate) enum ResumeMiss {
 
 impl std::fmt::Display for ResumeMiss {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::NoCheckpoint => "no checkpoint for this thread on this machine",
-            Self::EngineChanged => "engine changed since the checkpoint",
-            Self::ModelChanged => "model changed since the checkpoint",
-            Self::HeadMoved => "transcript head moved since the checkpoint",
-        })
+        match self {
+            Self::NoCheckpoint => f.write_str("no checkpoint for this thread on this machine"),
+            Self::EngineChanged(was) => {
+                write!(f, "checkpointed for the {} engine", was.key())
+            }
+            Self::ModelChanged => f.write_str("model changed since the checkpoint"),
+            Self::HeadMoved => f.write_str("transcript head moved since the checkpoint"),
+        }
     }
 }
 
@@ -102,7 +108,7 @@ impl RunLease {
         };
         let checkpoint: Checkpoint = serde_json::from_slice(&data).map_err(storage)?;
         if checkpoint.engine != engine {
-            return Ok(Err(ResumeMiss::EngineChanged));
+            return Ok(Err(ResumeMiss::EngineChanged(checkpoint.engine)));
         }
         if &checkpoint.model != model {
             return Ok(Err(ResumeMiss::ModelChanged));
@@ -185,7 +191,7 @@ mod tests {
         );
         assert_eq!(
             lease.resume(Engine::Claude, &None, Some("head")).unwrap(),
-            Err(ResumeMiss::EngineChanged)
+            Err(ResumeMiss::EngineChanged(Engine::Codex))
         );
         assert_eq!(
             lease.resume(Engine::Codex, &None, Some("other")).unwrap(),

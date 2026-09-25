@@ -212,6 +212,18 @@ impl Turn {
             Execution::External { engine, model, .. } => {
                 match lease.resume(*engine, model, resume_head.as_deref())? {
                     Ok(session) => Some(session),
+                    // Luma does not convert a conversation between
+                    // providers: a checkpoint left by a different engine is
+                    // a configuration problem to surface, not a cue to
+                    // hydrate a translation of it.
+                    Err(engine::state::ResumeMiss::EngineChanged(was)) => {
+                        return Err(AgentError::Invalid(format!(
+                            "thread {} was checkpointed for the {} engine and cannot resume under {}",
+                            self.thread_id,
+                            was.key(),
+                            engine.key()
+                        )));
+                    }
                     // A brand-new thread always misses this way (no
                     // checkpoint yet) and that costs nothing — a plain first
                     // prompt is already the cheapest thing continuation()
@@ -223,6 +235,8 @@ impl Turn {
                             "[agent] thread {} native resume missed ({miss}); hydrating a session from the transcript",
                             self.thread_id
                         );
+                        // A real hydration failure is not a cue to fall back
+                        // to continuation() quietly — `?` fails the turn.
                         match engine::hydrate_session(
                             *engine,
                             &self.transcript,
@@ -230,15 +244,11 @@ impl Turn {
                             &registry,
                             model.as_deref(),
                             lease.directory(),
-                        ) {
-                            Ok(session) => Some(session),
-                            Err(error) => {
-                                log::warn!(
-                                    "[agent] thread {} could not hydrate a session ({error}); falling back to full-transcript continuation()",
-                                    self.thread_id
-                                );
-                                None
-                            }
+                        )? {
+                            engine::Hydration::Session(session) => Some(session),
+                            // The one remaining reason continuation() still
+                            // exists: an engine with no hydration path yet.
+                            engine::Hydration::Unsupported => None,
                         }
                     }
                 }
