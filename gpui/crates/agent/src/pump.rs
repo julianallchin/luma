@@ -561,9 +561,9 @@ fn resolve(backend: &Backend, node: &NodeRef, restale: Restale) -> Result<Node, 
 ///
 /// Spelled out rather than accepting gpui's serde form, so an unknown name is
 /// a clear error instead of a silently-default `false` — the same reason the
-/// prelude refuses unknown options. `"secondary"` is the platform key under
-/// the name gpui's own `Modifiers::secondary` gives it, which is what a
-/// handler branching on cmd-or-ctrl actually reads.
+/// prelude refuses unknown options. `"secondary"` is gpui's
+/// `Modifiers::secondary_key` — command on macOS, control elsewhere — which is
+/// what a handler branching on cmd-or-ctrl actually reads.
 fn parse_modifiers(names: &[String]) -> Result<Modifiers, HarnessError> {
     let mut modifiers = Modifiers::none();
     for name in names {
@@ -571,14 +571,17 @@ fn parse_modifiers(names: &[String]) -> Result<Modifiers, HarnessError> {
             "control" | "ctrl" => modifiers.control = true,
             "alt" | "option" => modifiers.alt = true,
             "shift" => modifiers.shift = true,
-            "platform" | "secondary" | "command" | "cmd" | "super" | "win" => {
-                modifiers.platform = true
+            "platform" | "command" | "cmd" | "super" | "win" => modifiers.platform = true,
+            "secondary" => {
+                let secondary = Modifiers::secondary_key();
+                modifiers.platform |= secondary.platform;
+                modifiers.control |= secondary.control;
             }
             "function" | "fn" => modifiers.function = true,
             other => {
                 return Err(HarnessError::BadCall(format!(
                     "unknown modifier {other:?}; expected control, alt, shift, \
-                     platform (aka secondary/command), or function"
+                     platform (aka command), secondary, or function"
                 )))
             }
         }

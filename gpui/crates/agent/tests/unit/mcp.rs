@@ -141,7 +141,8 @@ fn malformed_input_is_reported_rather_than_dropped() {
     ]);
     assert_eq!(out[0]["result"]["isError"], true);
     assert_eq!(out[1]["error"]["code"], -32601);
-    assert!(tool_payload(&out[2])["error"]
+    assert_eq!(out[2]["result"]["isError"], true);
+    assert!(out[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
         .contains("`code` is required"));
