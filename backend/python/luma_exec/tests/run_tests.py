@@ -587,18 +587,19 @@ def test_shutdown():
 def run_stdlib_suites() -> int:
     """The focused suites next door, in the same command.
 
-    `test_score.py` and `test_venue.py` drive the same facades this file drives
-    through a worker, at a smaller radius and with no venv — which is exactly
-    why they are easy to forget. They went unrun for a whole surface; one
-    command is the fix.
+    `test_score.py`, `test_venue.py` and `test_worker.py` drive the same
+    facades this file drives through a worker, at a smaller radius and with no
+    venv — which is exactly why they are easy to forget. They went unrun for a
+    whole surface; one command is the fix.
     """
     import unittest
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(
-        loader.loadTestsFromName(name) for name in ("test_score", "test_venue")
+        loader.loadTestsFromName(name)
+        for name in ("test_score", "test_venue", "test_worker")
     )
-    print("\n--- stdlib suites (test_score, test_venue) ---")
+    print("\n--- stdlib suites (test_score, test_venue, test_worker) ---")
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     return len(result.failures) + len(result.errors)
 
