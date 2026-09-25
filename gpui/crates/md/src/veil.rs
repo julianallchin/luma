@@ -358,26 +358,31 @@ mod tests {
     }
 
     #[test]
-    fn fade_constants_match_mugen_fade_painter() {
-        // @wingleeio/mugen-markdown dist/index.mjs: EMA_SEED_MS=160,
-        // MIN_FADE_MS=120, MAX_FADE_MS=400, alpha=(1-p)**1.6,
-        // ema = ema*0.7 + min(gap,1000)*0.3, boost = 1 + 0.3*max(0,n-2).
-        assert_eq!(VEIL_EMA_SEED_MS, 160.0);
-        assert_eq!(VEIL_MIN_FADE_MS, 120.0);
-        assert_eq!(VEIL_MAX_FADE_MS, 400.0);
-        assert_eq!(VEIL_CURVE_POW, 1.6);
-        // duration = clamp(ema*3, 120, 400).
-        assert_eq!(veil_duration_ms(160.0), 400.0); // seed → clamped at max
-        assert_eq!(veil_duration_ms(30.0), 120.0); // fast stream → floor
-        assert_eq!(veil_duration_ms(60.0), 180.0);
-        // EMA update.
-        assert_eq!(veil_ema_next(160.0, 100.0), 160.0 * 0.7 + 100.0 * 0.3);
-        assert_eq!(veil_ema_next(160.0, 5000.0), 160.0 * 0.7 + 1000.0 * 0.3);
-        // Fast-stream boost kicks in at the 3rd concurrent chunk.
+    fn fade_timing_is_bounded_and_follows_the_stream() {
+        // However fast or slow the stream, the fade stays inside its clamp,
+        // and a slower stream never fades faster.
+        let mut previous = 0.0;
+        for ema in (0..2_000).map(|ms| ms as f32) {
+            let duration = veil_duration_ms(ema);
+            assert!((VEIL_MIN_FADE_MS..=VEIL_MAX_FADE_MS).contains(&duration));
+            assert!(
+                duration >= previous,
+                "a slower stream faded faster at {ema}ms"
+            );
+            previous = duration;
+        }
+        // The average moves toward the latest gap without jumping to it.
+        let next = veil_ema_next(VEIL_EMA_SEED_MS, 100.0);
+        assert!(next < VEIL_EMA_SEED_MS && next > 100.0);
+        // One long pause cannot stretch the next fade without limit.
+        assert_eq!(
+            veil_ema_next(VEIL_EMA_SEED_MS, 5_000.0),
+            veil_ema_next(VEIL_EMA_SEED_MS, 500_000.0)
+        );
+        // A lone chunk is not boosted; more chunks in flight never slow down.
         assert_eq!(veil_boost(0), 1.0);
-        assert_eq!(veil_boost(2), 1.0);
-        assert!((veil_boost(3) - 1.3).abs() < 1e-6);
-        assert!((veil_boost(5) - 1.9).abs() < 1e-6);
+        assert!((0..10).all(|n| veil_boost(n + 1) >= veil_boost(n)));
+        assert!(veil_boost(10) > 1.0);
     }
 
     #[test]

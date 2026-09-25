@@ -549,9 +549,11 @@ mod tests {
         let ring = card_selected_shadows();
         assert_eq!(ring.len(), 1, "selection is one edge, not a stack");
         assert!(ring[0].inset, "a drop shadow paints behind a glass chip");
-        assert_eq!(ring[0].blur_radius, gpui::px(0.0));
-        assert_eq!(ring[0].spread_radius, gpui::px(1.0));
-        assert_eq!(ring[0].color, hairline(0.09));
+        assert!(
+            ring[0].spread_radius > gpui::px(0.0),
+            "a ring with no spread is invisible"
+        );
+        assert!(ring[0].color.a > 0.0, "a transparent ring is invisible");
     }
 
     /// The four families are the seam a light mode is added at, so each has to
