@@ -333,14 +333,14 @@ mod tests {
         b.inline("track.title", "Hex").unwrap();
         b.inline("track.bpm", 128.0).unwrap();
         b.tensor("features.beats", beats("a-1", 4)).unwrap();
-        b.unavailable("audio.stems", "stem preprocessing has not completed")
+        b.unavailable("audio.vocals", "stem preprocessing has not completed")
             .unwrap();
         let manifest = b.build().unwrap();
         let json = serde_json::to_value(&manifest.root).unwrap();
         assert_eq!(json["track"]["title"], "Hex");
         assert_eq!(json["track"]["bpm"], 128.0);
         assert_eq!(json["features"]["beats"]["$kind"], "tensor");
-        assert_eq!(json["audio"]["stems"]["$kind"], "unavailable");
+        assert_eq!(json["audio"]["vocals"]["$kind"], "unavailable");
     }
 
     #[test]

@@ -113,7 +113,7 @@ async fn beats(
         store,
         "features.downbeats",
         &downbeats,
-        provenance.with_note("first beat of each bar"),
+        provenance.with_note("first beat of each bar; index i starts UI bar i + 1"),
     )?;
     inline(b, "features.bpm", row.bpm)?;
     inline(b, "features.beats_per_bar", row.beats_per_bar)?;
@@ -146,7 +146,9 @@ async fn drum_onsets(
 
     let provenance = Provenance::new("n2n")
         .with_version(version_of("track_drum_onsets"))
-        .with_note(DRUM_CLASS_NOTE);
+        .with_note(format!(
+            "{DRUM_CLASS_NOTE}; hits within 30 ms merged; n2n has no velocity"
+        ));
     // Canonical classes first, then anything else the model produced, so a new
     // class shows up without a code change.
     let extra: Vec<&String> = onsets
@@ -162,7 +164,13 @@ async fn drum_onsets(
     ) {
         let path = format!("features.drum_onsets.{class}");
         match onsets.get(&class) {
-            Some(times) => put_event_times(b, store, &path, times, provenance.clone())?,
+            Some(times) => put_event_times(
+                b,
+                store,
+                &path,
+                &merge_duplicates(times),
+                provenance.clone(),
+            )?,
             None => unavailable(
                 b,
                 &path,
@@ -171,6 +179,26 @@ async fn drum_onsets(
         }
     }
     Ok(())
+}
+
+/// n2n reports one hit up to three times within a few milliseconds; hits closer
+/// than this are one drum hit.
+const DUPLICATE_HIT_S: f32 = 0.03;
+
+/// Sorted hits with each run of near-duplicates kept as its first hit.
+fn merge_duplicates(times: &[f32]) -> Vec<f32> {
+    let mut sorted = times.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let mut hits: Vec<f32> = Vec::with_capacity(sorted.len());
+    for time in sorted {
+        if hits
+            .last()
+            .is_none_or(|last| time - last >= DUPLICATE_HIT_S)
+        {
+            hits.push(time);
+        }
+    }
+    hits
 }
 
 /// Record keys the Python binding object cannot expose as attributes without
@@ -211,7 +239,8 @@ async fn bars(
     let tags: Vec<String> = serde_json::from_str(&tag_order_json).unwrap_or_default();
 
     let n_bars = parsed.len();
-    let indices: Vec<i64> = parsed.iter().map(|bar| bar.bar_idx as i64).collect();
+    // The UI numbers bars from 1; so does every bar the agent sees.
+    let numbers: Vec<i64> = parsed.iter().map(|bar| bar.bar_idx as i64 + 1).collect();
     let starts: Vec<f64> = parsed.iter().map(|bar| bar.start).collect();
     let ends: Vec<f64> = parsed.iter().map(|bar| bar.end).collect();
     let intensity: Vec<f64> = parsed
@@ -231,10 +260,10 @@ async fn bars(
     put_i64(
         b,
         store,
-        "features.bars.indices",
-        &indices,
+        "features.bars.numbers",
+        &numbers,
         vec![AxisSpec::index("bar", n_bars)],
-        provenance.clone(),
+        provenance.clone().with_note("UI bar numbers, from 1"),
     )?;
     put_f64(
         b,

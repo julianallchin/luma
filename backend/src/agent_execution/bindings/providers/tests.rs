@@ -164,7 +164,8 @@ impl Fixture {
         // spellings appear in one manifest on purpose.
         sqlx::query("INSERT INTO track_drum_onsets (track_id, onsets_json) VALUES (?, ?)")
             .bind(TRACK_ID)
-            .bind(r#"{"kick":[0.5,1.5],"snare":[1.0],"hat":[]}"#)
+            // n2n repeats a hit within milliseconds: 0.51 is the 0.5 kick again.
+            .bind(r#"{"kick":[0.5,0.51,1.5],"snare":[1.0],"hat":[]}"#)
             .execute(&self.pool)
             .await
             .unwrap();
@@ -216,22 +217,13 @@ impl Fixture {
             .await
             .unwrap();
 
-        // Only the drums stem exists, and only stems that ran have rows.
+        // Separation ran: only the vocals stem is ever bound.
         sqlx::query(
-            "INSERT INTO track_stems (track_id, stem_name, file_path) VALUES (?, 'drums', ?)",
+            "INSERT INTO track_stems (track_id, stem_name, file_path) VALUES (?, 'vocals', ?)",
         )
         .bind(TRACK_ID)
-        .bind("drums.ogg")
+        .bind("vocals.ogg")
         .execute(&self.pool)
-        .await
-        .unwrap();
-        crate::preprocessing::failures::record(
-            &self.pool,
-            TRACK_ID,
-            "stems",
-            1,
-            "demucs ran out of memory",
-        )
         .await
         .unwrap();
 
@@ -263,7 +255,7 @@ impl Fixture {
         .await
         .unwrap();
 
-        // PCM caches: the mix (stereo, 3 frames) and the drums stem (mono).
+        // PCM caches: the mix and the vocals stem (stereo, 3 frames each).
         crate::audio::cache::write_pcm_file(
             &self.storage.mix_pcm_path(TRACK_HASH),
             &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -272,10 +264,10 @@ impl Fixture {
         )
         .unwrap();
         crate::audio::cache::write_pcm_file(
-            &self.storage.stem_pcm_path(TRACK_HASH, "drums"),
-            &[0.0, 1.0, -1.0, 0.5],
+            &self.storage.stem_pcm_path(TRACK_HASH, "vocals"),
+            &[0.0, 0.1, 0.1, 0.1, 0.1, 0.1],
             48_000,
-            1,
+            2,
         )
         .unwrap();
 
@@ -445,6 +437,13 @@ fn read_f64(manifest: &BindingManifest, store: &ArtifactStore, path: &str) -> Ve
         .collect()
 }
 
+fn read_i64(manifest: &BindingManifest, store: &ArtifactStore, path: &str) -> Vec<i64> {
+    read_raw(manifest, store, path, 8)
+        .chunks_exact(8)
+        .map(|b| i64::from_le_bytes(b.try_into().unwrap()))
+        .collect()
+}
+
 fn read_raw(
     manifest: &BindingManifest,
     store: &ArtifactStore,
@@ -487,13 +486,14 @@ async fn full_assembly_covers_every_schema_branch() {
     // §10.1 audio
     assert_eq!(shape(&v, "audio.mix"), vec![3, 2]);
     assert_eq!(at(&v, "audio.mix")["byte_offset"], 18);
-    assert_eq!(shape(&v, "audio.stems.drums"), vec![4]);
-    for stem in ["bass", "vocals", "other"] {
-        assert_eq!(
-            at(&v, &format!("audio.stems.{stem}"))["$kind"],
-            "unavailable"
-        );
-    }
+    assert_eq!(shape(&v, "audio.vocals"), vec![3, 2]);
+    assert_eq!(shape(&v, "audio.rest"), vec![3, 2]);
+    let audio: Vec<&String> = v["audio"].as_object().unwrap().keys().collect();
+    assert_eq!(
+        audio,
+        ["mix", "rest", "vocals"],
+        "individual stems are not exposed"
+    );
 
     // §10.1 features
     assert_eq!(shape(&v, "features.beats"), vec![4]);
@@ -503,7 +503,7 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(shape(&v, "features.drum_onsets.kick"), vec![2]);
     assert_eq!(shape(&v, "features.drum_onsets.snare"), vec![1]);
     assert_eq!(shape(&v, "features.drum_onsets.hat"), vec![0]);
-    assert_eq!(shape(&v, "features.bars.indices"), vec![2]);
+    assert_eq!(shape(&v, "features.bars.numbers"), vec![2]);
     assert_eq!(shape(&v, "features.bars.starts_s"), vec![2]);
     assert_eq!(shape(&v, "features.bars.ends_s"), vec![2]);
     assert_eq!(shape(&v, "features.bars.intensity"), vec![2]);
@@ -764,12 +764,28 @@ async fn audio_tensors_describe_their_own_pcm_layout() {
         vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
     );
 
-    // Mono stems have no channel axis at all.
-    let drums = at(&v, "audio.stems.drums");
-    assert_eq!(drums["axes"].as_array().unwrap().len(), 1);
+    // `rest` is the mix minus the vocals stem, sample by sample.
+    let rest = read_f32(&manifest, &store, "audio.rest");
+    let expected = [0.0, 0.0, 0.1, 0.2, 0.3, 0.4];
+    assert!(
+        rest.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-6),
+        "{rest:?}"
+    );
+}
+
+#[tokio::test]
+async fn drum_onsets_merge_duplicate_hits_and_bars_count_from_one() {
+    let f = Fixture::new().await;
+    let (manifest, store) = f.assemble(&f.scope()).await;
     assert_eq!(
-        read_f32(&manifest, &store, "audio.stems.drums"),
-        vec![0.0, 1.0, -1.0, 0.5]
+        read_f32(&manifest, &store, "features.drum_onsets.kick"),
+        vec![0.5, 1.5]
+    );
+    let v = root(&manifest);
+    assert_eq!(at(&v, "features.bars.numbers")["dtype"], "i64");
+    assert_eq!(
+        read_i64(&manifest, &store, "features.bars.numbers"),
+        vec![1, 2]
     );
 }
 
@@ -796,10 +812,6 @@ async fn unavailable_reasons_name_the_real_cause() {
     let (manifest, _store) = f.assemble(&f.scope()).await;
     let v = root(&manifest);
 
-    // A failed preprocessor reports its own error, not a generic string.
-    let bass = reason(&v, "audio.stems.bass");
-    assert!(bass.contains("demucs ran out of memory"), "{bass}");
-
     // A class the model didn't emit is unavailable; a class it emitted with no
     // hits is an empty tensor. That distinction is the point.
     assert!(reason(&v, "features.drum_onsets.cymbal").contains("did not emit"));
@@ -810,15 +822,43 @@ async fn unavailable_reasons_name_the_real_cause() {
 }
 
 #[tokio::test]
-async fn a_separated_stem_without_a_pcm_cache_says_it_is_undecoded() {
+async fn a_failed_separation_leaves_vocals_and_rest_unavailable_with_its_error() {
     let f = Fixture::new().await;
-    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "drums")).unwrap();
-    std::fs::create_dir_all(f.storage.stems_dir(TRACK_HASH)).unwrap();
-    std::fs::write(f.storage.stems_dir(TRACK_HASH).join("drums.ogg"), b"x").unwrap();
+    sqlx::query("DELETE FROM track_stems WHERE track_id = ?")
+        .bind(TRACK_ID)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "vocals")).unwrap();
+    crate::preprocessing::failures::record(
+        &f.pool,
+        TRACK_ID,
+        "stems",
+        1,
+        "demucs ran out of memory",
+    )
+    .await
+    .unwrap();
 
     let (manifest, _store) = f.assemble(&f.scope()).await;
-    let r = reason(&root(&manifest), "audio.stems.drums");
-    assert!(r.contains("no decoded PCM cache"), "{r}");
+    let v = root(&manifest);
+    for path in ["audio.vocals", "audio.rest"] {
+        let r = reason(&v, path);
+        assert!(r.contains("demucs ran out of memory"), "{path}: {r}");
+    }
+    assert_eq!(shape(&v, "audio.mix"), vec![3, 2]);
+}
+
+#[tokio::test]
+async fn a_separated_vocals_stem_without_a_cache_is_decoded_on_demand() {
+    let f = Fixture::new().await;
+    std::fs::remove_file(f.storage.stem_pcm_path(TRACK_HASH, "vocals")).unwrap();
+    std::fs::create_dir_all(f.storage.stems_dir(TRACK_HASH)).unwrap();
+    std::fs::write(f.storage.stems_dir(TRACK_HASH).join("vocals.ogg"), b"x").unwrap();
+
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let r = reason(&root(&manifest), "audio.vocals");
+    assert!(r.contains("decoding the vocals stem failed"), "{r}");
 }
 
 #[tokio::test]

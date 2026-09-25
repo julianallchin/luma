@@ -1,15 +1,19 @@
-//! `luma.audio` — the mix and the separated stems, as `pcm_f32` artifacts.
+//! `luma.audio` — the two signals the agent analyses, plus the mix for reference.
 //!
-//! Nothing is transcoded for the agent: the `.pcm` caches Luma already writes
-//! for playback and evaluation are imported as-is and described by a tensor that
-//! starts after their 18-byte header. That is why `byte_offset` is 18 and the
-//! shape is `[frames, channels]` — interleaved, exactly the file's own layout.
+//! - `vocals`: the vocals stem.
+//! - `rest`: the mix minus the vocals stem — drums, bass and everything else,
+//!   so rap harmonics can never pass for a growl.
+//! - `mix`: the full mix, for reference.
 //!
-//! The mix is *ensured*: if the cache is missing but the source file is on disk,
-//! it is decoded and persisted (the same call playback makes). Stems are not —
-//! decoding four stems inline would turn one agent message into a minute of
-//! silence, and stem PCM is written by the preprocessing pipeline anyway. A
-//! missing stem cache reports the pipeline state instead.
+//! The individual drums/bass/other stems are deliberately not exposed: demucs
+//! scatters one sound across them, and an agent that trusts those labels hears
+//! the wrong thing. Band splits of `rest` plus n2n drum onsets replace them.
+//!
+//! Nothing is transcoded for the agent: each signal is a `.pcm` cache imported
+//! as-is and described by a tensor that starts after the 18-byte header, so
+//! `byte_offset` is 18 and the shape is `[frames, channels]`. All three are
+//! *ensured*: a missing cache is decoded (mix, vocals) or derived (rest) and
+//! persisted on first use.
 
 use std::path::{Path, PathBuf};
 
@@ -19,11 +23,12 @@ use crate::agent_execution::artifacts::{
 };
 use crate::agent_execution::bindings::assembler::{BindingBuilder, PCM_HEADER_LEN};
 use crate::agent_execution::bindings::manifest::{AxisSpec, DType, Provenance, TensorRef};
+use crate::audio::cache::{read_pcm_file, write_pcm_file};
 use crate::database::local;
 use crate::services::tracks::TARGET_SAMPLE_RATE;
 
-/// The stems Luma separates, in a fixed order so the manifest is deterministic.
-pub const STEM_NAMES: [&str; 4] = ["drums", "bass", "vocals", "other"];
+/// The derived "stem" name of the mix minus vocals, cached beside the stems.
+const REST: &str = "rest";
 
 pub async fn provide(
     b: &mut BindingBuilder,
@@ -31,45 +36,108 @@ pub async fn provide(
     store: &mut ArtifactStore,
 ) -> Result<(), String> {
     let Some(track) = ctx.track.as_ref() else {
-        unavailable(b, "audio.mix", NO_TRACK)?;
-        for stem in STEM_NAMES {
-            unavailable(b, &format!("audio.stems.{stem}"), NO_TRACK)?;
+        for path in ["audio.mix", "audio.vocals", "audio.rest"] {
+            unavailable(b, path, NO_TRACK)?;
         }
         return Ok(());
     };
 
-    match ensure_mix_pcm(ctx, &track.track_hash, &track.file_path) {
-        Ok(path) => bind_pcm(
-            b,
-            store,
-            "audio.mix",
-            &path,
-            Provenance::new("audio_cache")
-                .with_note("full stereo decode, resampled to 48 kHz on import"),
-        )?,
-        Err(reason) => unavailable(b, "audio.mix", reason)?,
-    }
+    let mix = ensure_mix_pcm(ctx, &track.track_hash, &track.file_path);
+    let vocals = ensure_vocals_pcm(ctx, track).await;
+    let rest = match (&mix, &vocals) {
+        (Ok(mix), Ok(vocals)) => ensure_rest_pcm(
+            mix,
+            vocals,
+            &ctx.storage.stem_pcm_path(&track.track_hash, REST),
+        ),
+        (Err(reason), _) | (_, Err(reason)) => {
+            Err(format!("rest is the mix minus vocals: {reason}"))
+        }
+    };
 
+    for (path, signal, note) in [
+        (
+            "audio.mix",
+            mix,
+            "full stereo mix at 48 kHz, for reference; analyse rest and vocals",
+        ),
+        ("audio.vocals", vocals, "vocals stem, decoded PCM cache"),
+        (
+            "audio.rest",
+            rest,
+            "mix minus the vocals stem: drums, bass and everything else",
+        ),
+    ] {
+        match signal {
+            Ok(file) => bind_pcm(
+                b,
+                store,
+                path,
+                &file,
+                Provenance::new("audio_cache").with_note(note),
+            )?,
+            Err(reason) => unavailable(b, path, reason)?,
+        }
+    }
+    Ok(())
+}
+
+/// The vocals stem's PCM cache, decoding the separated stem into place when the
+/// cache is missing. `Err` says whether separation never ran or its file is gone.
+async fn ensure_vocals_pcm(
+    ctx: &ProviderCtx<'_>,
+    track: &crate::models::tracks::TrackSummary,
+) -> Result<PathBuf, String> {
+    let cache = ctx.storage.stem_pcm_path(&track.track_hash, "vocals");
+    if cache.exists() {
+        return Ok(cache);
+    }
     let stems = local::tracks::get_track_stems(ctx.pool, &track.id)
         .await
         .unwrap_or_default();
-    for stem in STEM_NAMES {
-        let path = ctx.storage.stem_pcm_path(&track.track_hash, stem);
-        if path.exists() {
-            bind_pcm(
-                b,
-                store,
-                &format!("audio.stems.{stem}"),
-                &path,
-                Provenance::new("stem_separation")
-                    .with_note(format!("{stem} stem, decoded PCM cache")),
-            )?;
-            continue;
-        }
-        let reason = stem_reason(ctx, track, &stems, stem).await;
-        unavailable(b, &format!("audio.stems.{stem}"), reason)?;
+    if !stems.iter().any(|s| s.stem_name == "vocals") {
+        return Err(missing_reason(ctx.pool, &track.id, "stems", "stem separation").await);
     }
-    Ok(())
+    let Some(source) = ctx.storage.stem_source_path(&track.track_hash, "vocals") else {
+        return Err(
+            "the vocals stem is recorded in the database but its audio file is missing from disk"
+                .into(),
+        );
+    };
+    // Keyed so the decode cache lands exactly on `stem_pcm_path`.
+    let key = format!("{}_stem_vocals", track.track_hash);
+    crate::audio::cache::load_or_decode_audio_shared(&source, &key, TARGET_SAMPLE_RATE)
+        .map_err(|e| format!("decoding the vocals stem failed: {e}"))?;
+    cache
+        .exists()
+        .then_some(cache)
+        .ok_or_else(|| "the vocals stem decoded but no PCM cache file was written".to_string())
+}
+
+/// `mix - vocals`, written once and reused while it is newer than both inputs.
+fn ensure_rest_pcm(mix: &Path, vocals: &Path, rest: &Path) -> Result<PathBuf, String> {
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    if let (Some(done), Some(a), Some(b)) = (modified(rest), modified(mix), modified(vocals)) {
+        if done >= a && done >= b {
+            return Ok(rest.to_path_buf());
+        }
+    }
+    let mix = read_pcm_file(mix)?;
+    let vocals = read_pcm_file(vocals)?;
+    if (mix.sample_rate, mix.channels) != (vocals.sample_rate, vocals.channels) {
+        return Err(format!(
+            "the mix ({} Hz, {} ch) and vocals ({} Hz, {} ch) caches do not line up",
+            mix.sample_rate, mix.channels, vocals.sample_rate, vocals.channels
+        ));
+    }
+    let samples: Vec<f32> = mix
+        .samples
+        .iter()
+        .zip(&vocals.samples)
+        .map(|(m, v)| m - v)
+        .collect();
+    write_pcm_file(rest, &samples, mix.sample_rate, mix.channels)?;
+    Ok(rest.to_path_buf())
 }
 
 /// The full-decode PCM cache path, decoding it into place when it is absent and
@@ -150,26 +218,4 @@ fn channel_labels(channels: usize) -> Vec<String> {
         return vec!["l".into(), "r".into()];
     }
     (0..channels).map(|i| format!("ch{i}")).collect()
-}
-
-/// Why a stem has no PCM cache: never separated, separated-and-lost, or
-/// separated-but-not-yet-decoded. Each is a different thing for the agent to do.
-async fn stem_reason(
-    ctx: &ProviderCtx<'_>,
-    track: &crate::models::tracks::TrackSummary,
-    stems: &[crate::models::tracks::TrackStem],
-    stem: &str,
-) -> String {
-    if !stems.iter().any(|s| s.stem_name == stem) {
-        return missing_reason(ctx.pool, &track.id, "stems", "stem separation").await;
-    }
-    match ctx.storage.stem_source_path(&track.track_hash, stem) {
-        Some(_) => format!(
-            "the {stem} stem is separated but has no decoded PCM cache yet \
-             (it is written the first time the stem is played or evaluated)"
-        ),
-        None => format!(
-            "the {stem} stem is recorded in the database but its audio file is missing from disk"
-        ),
-    }
 }
