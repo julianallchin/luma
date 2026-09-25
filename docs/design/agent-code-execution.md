@@ -61,7 +61,7 @@ The desired capability is deliberately open-ended:
 
 - use the already-computed beats, drum onsets, bars, chords, spectral features,
   and venue geometry;
-- access the source audio mix and stems when the question is about audio rather
+- access the source audio (vocals, rest, mix) when the question is about audio rather
   than an already-derived feature;
 - derive custom thresholds and new features with NumPy, SciPy, and librosa;
 - inspect graph outputs as semantic spatiotemporal tensors;
@@ -362,7 +362,8 @@ routine tool output does not dump revision bookkeeping at the model.
 
 This distinction is fundamental:
 
-- `luma.audio` contains audio signals: the mix and stems.
+- `luma.audio` contains audio signals: the vocals stem, the rest of the mix
+  without vocals, and the mix for reference.
 - `luma.features` contains information derived from audio: beats, downbeats,
   drum onsets, bar classifications, chords, mel data, waveform bands, and MERT
   features when exposed.
@@ -386,11 +387,11 @@ snares = luma.features.drum_onsets["snare"].values
 Operate on audio:
 
 ```python
-drums = luma.audio.stems["drums"]
+rest = luma.audio.rest  # the mix without vocals
 
 envelope = librosa.onset.onset_strength(
-    y=drums.values,
-    sr=drums.sample_rate_hz,
+    y=rest.values.mean(axis=1),
+    sr=rest.sample_rate_hz,
 )
 
 threshold = np.quantile(envelope, 0.88)
@@ -670,7 +671,7 @@ builder.inline("track", track_metadata)?;
 builder.tensor("features.beats", beat_tensor)?;
 builder.tensor("venue.positions", positions_tensor)?;
 builder.record("track.clips", authored_clips)?;
-builder.unavailable("audio.stems", "stem preprocessing has not completed")?;
+builder.unavailable("audio.vocals", "stem preprocessing has not completed")?;
 ```
 
 Expected providers:
@@ -823,12 +824,9 @@ luma.track
   document                  the complete saved score: clips by ID
 
 luma.audio
-  mix                       lazy AudioTensor
-  stems
-    drums                   lazy AudioTensor
-    bass
-    vocals
-    other
+  mix                       lazy AudioTensor, for reference
+  vocals                    lazy AudioTensor, the vocals stem
+  rest                      lazy AudioTensor, mix minus vocals
 
 luma.features
   beats                     event-time tensor
@@ -841,7 +839,7 @@ luma.features
     hat
     cymbal
   bars
-    indices
+    numbers                 UI bar numbers, from 1
     starts_s
     ends_s
     intensity
@@ -854,6 +852,11 @@ luma.features
   waveform_bands            [band, time]
   mel                       [frequency, time]
   mert                      optional [frame, feature] products
+
+luma.music                  the track as heard (see music.py)
+  feel                      felt tempo versus the stored grid
+  listen(bars) deviations(bars) modulation(bars) similar(at) sections()
+  beats onsets envelopes mert beat_features
 
 luma.venue
   id
