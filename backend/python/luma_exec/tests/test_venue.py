@@ -875,6 +875,32 @@ class BuildTests(unittest.TestCase):
         self.venue.extent(self.venue.nodes())
         self.assertEqual(self.host.last("venue.extent")["ids"], ["n-1", "n-2"])
 
+    def test_extent_and_nodes_take_a_group_by_its_fixtures_not_its_own_id(self) -> None:
+        """A group's `.id` is the *group* row's id, not a venue-graph node id —
+        handing one to a plain `_node()` would silently ask the host about the
+        wrong thing. `extent()`/`nodes()` must expand it to member fixtures,
+        the same way `group()` already does for its own `fixtures` argument."""
+        from luma_exec.venue import Group
+        group = Group({
+            "id": "group-row-should-never-reach-the-host",
+            "name": "wing",
+            "fixtures": [{"id": "f1", "label": "A"}, {"id": "f2", "label": "B"}],
+        })
+        self.venue.extent(group)
+        self.assertEqual(self.host.last("venue.extent")["ids"], ["f1", "f2"])
+        self.venue.nodes(ids=group)
+        self.assertEqual(self.host.last("venue.query")["ids"], ["f1", "f2"])
+        # A list mixing a group with a plain node id flattens too.
+        self.venue.extent([group, "n-1"])
+        self.assertEqual(self.host.last("venue.extent")["ids"], ["f1", "f2", "n-1"])
+
+    def test_extent_takes_a_distribution_by_the_fixtures_it_placed(self) -> None:
+        distribution = Distribution({"report": {"fixtures": [
+            {"id": "f3", "label": "C", "universe": 1, "address": 1, "alongM": 0.0},
+        ]}})
+        self.venue.extent(distribution)
+        self.assertEqual(self.host.last("venue.extent")["ids"], ["f3"])
+
     def test_an_empty_selection_is_a_question_about_nothing(self) -> None:
         """`extent([])` is not `extent()`: a caller that selected no nodes
         asked about no nodes, and the whole venue is the wrong answer."""

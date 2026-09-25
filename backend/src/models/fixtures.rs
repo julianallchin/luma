@@ -407,6 +407,11 @@ pub struct PatchedFixture {
     /// The address was set by hand, so auto-patch derives around it rather than
     /// over it. Local-only: see `migrations/20260830000000_patch_addressing.sql`.
     pub address_pinned: bool,
+    /// The old, pre-venue-graph pose. Superseded by the resolved venue graph
+    /// (`crate::venue_graph::resolved`) for every placed fixture; these stay
+    /// `0.0` after that conversion runs and are read only by
+    /// `crate::venue_graph::migrate`, never for a live position. See
+    /// `migrations/20260829000000_venue_graph.sql`.
     pub pos_x: f64,
     pub pos_y: f64,
     pub pos_z: f64,
