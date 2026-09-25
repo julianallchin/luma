@@ -14,7 +14,6 @@ mod support;
 mod account_foot_pixels;
 mod add_tracks_pixels;
 mod chat_context_pixels;
-mod chrome_anchors_pixels;
 mod dialog_host_pixels;
 mod fixture_picker_pixels;
 mod gauntlet_chat;
