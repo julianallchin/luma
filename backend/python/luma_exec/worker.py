@@ -666,12 +666,21 @@ def _split_cell(code: str) -> tuple[ast.Module, ast.Expression | None]:
 
 
 def _format_traceback(exc: BaseException) -> str:
-    """Format a traceback that starts at the agent's own cell frame."""
-    tb = exc.__traceback__
-    cursor = tb
-    while cursor is not None and cursor.tb_frame.f_code.co_filename != CELL_FILENAME:
-        cursor = cursor.tb_next
-    text = "".join(traceback.format_exception(type(exc), exc, cursor or tb))
+    """Format only the agent's own <cell> frames, plus the final exception line.
+
+    luma_exec's own frames (score.py, venue.py, worker.py, ...), stdlib frames,
+    and any absolute host filesystem path are internal implementation detail:
+    they debug Luma, not the agent's code, and would otherwise reach the model
+    on every internal error. Chained causes/contexts are dropped for the same
+    reason; what remains is enough to see what the agent's own code did wrong.
+    """
+    summary = traceback.TracebackException.from_exception(exc, compact=True)
+    summary.__cause__ = None
+    summary.__context__ = None
+    summary.stack = traceback.StackSummary.from_list(
+        frame for frame in summary.stack if frame.filename == CELL_FILENAME
+    )
+    text = "".join(summary.format())
     clamped, _ = display.clamp(text)
     return clamped
 
