@@ -171,25 +171,29 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let mut routes = harness(
         &restored_dir,
         luma_app::NavigationFixture {
-            catalogue_responses: vec![(Duration::from_millis(300), None), (Duration::ZERO, None)],
+            // Every catalogue read is held, so the picker's loading route is
+            // on screen when the venue switcher opens it.
+            catalogue_responses: vec![
+                (Duration::from_millis(1_500), None),
+                (Duration::from_millis(1_500), None),
+            ],
             ..Default::default()
         },
     );
     let shots = run(
         &mut routes,
         r#"
-        let shot = app.snapshot();
-        const loadingCard = shot.find({ role: "card", label: "Venue dialog" });
-        if (!shot.find({ role: "text", label: "Loading venues…" })) {
-            throw new Error("first production paint skipped Loading");
-        }
-        const loading = app.screenshot().path;
-        const loadingCardShot = app.screenshot({ node: loadingCard }).path;
-
+        // A remembered venue opens straight onto its shell (behind the boot
+        // splash); the picker, and its loading route, open from the switcher.
         const baseState = until("the restored venue shell", (s) =>
             s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
         const base = app.screenshot().path;
         app.click(baseState.find({ role: "button", label: "Pixel Venue" }));
+        let shot = until("the loading route", (s) =>
+            s.find({ role: "text", label: "Loading venues…" }) !== undefined);
+        const loadingCard = shot.find({ role: "card", label: "Venue dialog" });
+        const loading = app.screenshot().path;
+        const loadingCardShot = app.screenshot({ node: loadingCard }).path;
         shot = until("the browse route", (s) =>
             s.find({ role: "input", label: "Search venues…" })?.focused === true
                 && s.find({ role: "card", label: "Pixel Venue" }) !== undefined);
@@ -214,7 +218,7 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         "#,
     );
 
-    let error_dir = fixture_dir("error", false);
+    let error_dir = fixture_dir("error", true);
     let long_error = format!(
         "Pixel catalogue failure while reading venue metadata.\n{}\n{}",
         "UNBROKEN_ERROR_TOKEN_".repeat(180),
@@ -226,17 +230,23 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
     let mut error = harness(
         &error_dir,
         luma_app::NavigationFixture {
-            catalogue_responses: vec![(Duration::from_millis(250), Some(long_error))],
+            // Boot reads the catalogue once to restore the venue; the
+            // switcher's read is the one that fails.
+            catalogue_responses: vec![
+                (Duration::from_millis(1_500), None),
+                (Duration::from_millis(1_500), Some(long_error)),
+            ],
             ..Default::default()
         },
     );
     let error_shots = run(
         &mut error,
         r#"
-        const initial = app.snapshot();
-        if (!initial.find({ role: "text", label: "Loading venues…" })) {
-            throw new Error("error route skipped Loading");
-        }
+        const shell = until("the restored venue shell", (s) =>
+            s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
+        app.click(shell.find({ role: "button", label: "Pixel Venue" }));
+        until("the loading route", (s) =>
+            s.find({ role: "text", label: "Loading venues…" }) !== undefined);
         const errorLoading = app.screenshot().path;
         const shot = until("the pixel error route", (s) =>
             s.find((n) => n.role === "text" && n.label.includes("Pixel catalogue failure")) !== undefined);
@@ -364,16 +374,16 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
         sidebar_edge_after < sidebar_edge_before,
         "sidebar backdrop did not reduce titlebar edge energy: {sidebar_edge_before:.3}->{sidebar_edge_after:.3}"
     );
+    assert!(
+        differing_fraction(&loading_pixels, &error_loading_pixels) < 0.02,
+        "loading paint changed substantially between route outcomes"
+    );
     for path in card_paths {
         assert!(
             luma_range(&pixels(path)) > 24,
             "venue route card is a flat placeholder"
         );
     }
-    assert!(
-        differing_fraction(&loading_pixels, &error_loading_pixels) < 0.02,
-        "loading paint changed substantially between route outcomes"
-    );
 }
 
 // ---------------------------------------------------------------------------
