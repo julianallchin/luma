@@ -30,6 +30,7 @@
       ]
     },
     "editing": false,
+    "aimArrows": false,
     "render": {
       "environment": {
         "background": [
@@ -48,7 +49,14 @@
         "enabled": false,
         "steps": 8,
         "resolution": 1.0,
-        "density": 0.8
+        "density": 0.24,
+        "appearance": {
+          "cloudiness": 0.35,
+          "cloudSize": 4.0,
+          "turbulence": 0.3,
+          "windSpeed": 0.15,
+          "windDirection": 30.0
+        }
       },
       "sun": {
         "direction": [
@@ -66,9 +74,30 @@
         "shadowSoftness": 3.0
       },
       "showGrid": false,
+      "showFloor": true,
+      "showCables": true,
+      "showGizmos": true,
+      "house": null,
+      "sky": null,
       "debugView": "pbr",
+      "look": {
+        "tone": "agx",
+        "exposure": {
+          "auto": false,
+          "ev": 0.0,
+          "minEv": -2.5,
+          "maxEv": 1.0
+        },
+        "glare": {
+          "strength": 0.0,
+          "threshold": 2.0,
+          "star": 0.0,
+          "style": "aperture"
+        }
+      },
       "fixtureSurfaceLighting": true,
       "fixtureShadows": true,
+      "geometryShadows": false,
       "clusterDebug": false,
       "fov": 42.0
     },
@@ -78,6 +107,7 @@
       {
         "id": "receiver",
         "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "kind": "floor",
         "pos": [
           0.0,
           0.0,
@@ -93,6 +123,7 @@
       {
         "id": "caster",
         "meshPath": "stage_lab/speaker_dbr15.glb",
+        "kind": "speaker",
         "pos": [
           0.0,
           1.1,

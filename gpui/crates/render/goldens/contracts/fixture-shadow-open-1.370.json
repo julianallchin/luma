@@ -30,6 +30,7 @@
       ]
     },
     "editing": false,
+    "aimArrows": false,
     "render": {
       "environment": {
         "background": [
@@ -48,13 +49,41 @@
         "enabled": true,
         "steps": 8,
         "resolution": 1.0,
-        "density": 0.8
+        "density": 0.8,
+        "appearance": {
+          "cloudiness": 0.35,
+          "cloudSize": 4.0,
+          "turbulence": 0.3,
+          "windSpeed": 0.15,
+          "windDirection": 30.0
+        }
       },
       "sun": null,
       "showGrid": false,
+      "showFloor": true,
+      "showCables": false,
+      "showGizmos": false,
+      "house": null,
+      "sky": null,
       "debugView": "pbr",
+      "look": {
+        "tone": "agx",
+        "exposure": {
+          "auto": false,
+          "ev": 0.0,
+          "minEv": -2.5,
+          "maxEv": 1.0
+        },
+        "glare": {
+          "strength": 0.0,
+          "threshold": 2.0,
+          "star": 0.0,
+          "style": "aperture"
+        }
+      },
       "fixtureSurfaceLighting": false,
       "fixtureShadows": false,
+      "geometryShadows": false,
       "clusterDebug": false,
       "fov": 50.0
     },
@@ -95,6 +124,7 @@
       {
         "id": "deck",
         "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "kind": "floor",
         "pos": [
           -0.2,
           -1.2,
