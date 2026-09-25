@@ -17,6 +17,4 @@ mod track_editor_budget;
 mod track_editor_waveform_pixels;
 mod venues_pixels;
 mod visualizer_capture;
-mod visualizer_gizmo;
 mod visualizer_playback_soak;
-mod visualizer_playback_zoom_repro;
