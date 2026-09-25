@@ -92,13 +92,6 @@ const TICK_RADIUS: f32 = 0.06;
 /// them reads as a field of directions rather than as a thicket.
 const AIM_LENGTH_M: f32 = 3.0;
 
-/// How far a target line reaches out of its fixture, in metres.
-const TARGET_LENGTH_M: f32 = 6.0;
-
-/// How strongly a target line is drawn: a hint beside the beam, not a second
-/// beam.
-const TARGET_ALPHA: f32 = 0.3;
-
 /// Handles hide when their axis points within this much of straight at the
 /// camera, where the drag math degenerates (`AXIS_HIDE_TRESHOLD`).
 const AXIS_HIDE: f32 = 0.99;
@@ -199,7 +192,6 @@ pub(crate) fn build(
     if scene.aim_arrows {
         out.extend(aim_arrows(scene, definitions, camera, to_world, bank));
     }
-    out.extend(aim_targets(scene, definitions, to_world, bank));
     if !scene.editing {
         return out;
     }
@@ -614,55 +606,6 @@ fn aim_arrows(
             lines: false,
             color,
             opacity: 1.0,
-            depth: OverlayDepth::Free,
-        });
-    }
-    out
-}
-
-/// A faint line along each [`AimTarget`](crate::scene_desc::AimTarget): where
-/// the score points a head its preview motors have not reached yet.
-///
-/// The direction is [`crate::luminaire::beam_direction`] at the target's pan
-/// and tilt, so the line lies where the beam will once the head gets there.
-fn aim_targets(
-    scene: &Scene,
-    definitions: &Definitions,
-    to_world: Mat4,
-    bank: &mut crate::frame::Bank,
-) -> Vec<Overlay> {
-    let mut out = Vec::new();
-    for target in &scene.editor.aim_targets {
-        let fixture_id = target
-            .head
-            .split_once(':')
-            .map_or(target.head.as_str(), |(id, _)| id);
-        let Some(fixture) = scene.fixtures.iter().find(|f| f.id == fixture_id) else {
-            continue;
-        };
-        let direction = crate::luminaire::beam_direction(
-            definitions.get(&fixture.fixture_path),
-            fixture.rot,
-            Some(target.position),
-        );
-        let Some(direction) = direction.try_normalize().map(three_from_world) else {
-            continue;
-        };
-        let run = basis_from_up(direction);
-        out.push(Overlay {
-            mesh: bank.insert(MeshKind::Segment.key().to_string(), || {
-                MeshKind::Segment.build()
-            }),
-            model: to_world
-                * Mat4::from_translation(three_from_data(Vec3::from(fixture.pos)))
-                * Mat4::from_mat3(Mat3::from_cols(
-                    direction * TARGET_LENGTH_M,
-                    run.x_axis,
-                    run.z_axis,
-                )),
-            lines: true,
-            color: Vec3::ONE,
-            opacity: TARGET_ALPHA,
             depth: OverlayDepth::Free,
         });
     }
