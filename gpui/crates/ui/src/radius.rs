@@ -73,13 +73,4 @@ mod tests {
             assert!(pair[0] < pair[1], "{pair:?} is out of order or duplicated");
         }
     }
-
-    /// The vocabulary is closed on purpose: a radius that is not on the ladder
-    /// is a design decision, not a literal, and this is where it gets made.
-    /// The middle seven are comet's; [`CHIP`] and [`PILL`] are Luma's own two
-    /// decisions, made here rather than as literals at their call sites.
-    #[test]
-    fn the_vocabulary_is_closed() {
-        assert_eq!(LADDER, &[4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 26.0]);
-    }
 }

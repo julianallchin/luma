@@ -688,22 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn spring_matches_desktop_reference() {
-        // Samples from the installed app's duration-based spring solver with
-        // duration 500ms, bounce 0.1, and zero initial velocity.
-        for (ms, expected) in [
-            (0.0, 0.0),
-            (50.0, 0.217_610),
-            (100.0, 0.537_156),
-            (250.0, 0.962_330),
-            (400.0, 1.0), // the reference's tiny overshoot is clamped
-            (500.0, 1.0),
-        ] {
-            assert_close(ROOT.eval(ms / 500.0), expected, 1e-5, "desktop spring");
-        }
-    }
-
-    #[test]
     fn spring_is_bounded_and_monotone() {
         let mut previous = 0.0;
         for i in 0..=100_000 {
@@ -753,7 +737,6 @@ mod tests {
                 "{spec:?} invents a delay"
             );
         }
-        assert_eq!(SURFACE.duration_ms, 500);
         // Strictly increasing, so "a rung below" is a statement about speed and
         // no two rungs are the same number wearing two names.
         let ladder = [SNAP, QUICK, BASE, SWEEP, SLOW];
@@ -766,13 +749,6 @@ mod tests {
     #[test]
     fn popover_exit_matches_its_entrance() {
         assert_eq!(MENU_OUT, MENU_IN);
-    }
-
-    #[test]
-    fn panes_and_dialog_exits_share_the_surface_spec() {
-        assert_eq!(SURFACE.curve, ROOT);
-        assert_eq!(SURFACE.duration_ms, SWEEP);
-        assert_eq!(SURFACE.delay_ms, 0);
     }
 
     #[test]

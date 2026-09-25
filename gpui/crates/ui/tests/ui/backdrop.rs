@@ -1,10 +1,9 @@
 //! Exercise the exact vendored compositor code on a real GPU. Cargo cannot run
 //! unit tests of a vendored dependency from this workspace, and the GPUI pixel
 //! harness currently has no Linux headless renderer.
-#![cfg(target_os = "linux")]
 #![allow(dead_code)]
 
-#[path = "../../../vendor/zed/crates/gpui_wgpu/src/backdrop.rs"]
+#[path = "../../../../vendor/zed/crates/gpui_wgpu/src/backdrop.rs"]
 mod backdrop;
 
 #[test]
