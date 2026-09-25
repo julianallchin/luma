@@ -16,6 +16,12 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+// LUMA LOCAL EDIT: a renderer with no window. See `headless.rs`.
+#[cfg(feature = "test-support")]
+mod headless;
+#[cfg(feature = "test-support")]
+pub use headless::WgpuHeadlessRenderer;
+
 const MAX_INSTANCE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
 
 const INSTANCE_TEXTURE_TEXEL_SIZE: u64 = 16;
@@ -211,7 +217,9 @@ enum InstanceData {
 struct WgpuResources {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    surface: wgpu::Surface<'static>,
+    /// LUMA LOCAL EDIT: `None` for a headless renderer, which draws into its
+    /// own target and never presents.
+    surface: Option<wgpu::Surface<'static>>,
     pipelines: WgpuPipelines,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
@@ -231,6 +239,12 @@ struct WgpuResources {
 }
 
 impl WgpuResources {
+    fn surface(&self) -> &wgpu::Surface<'static> {
+        self.surface
+            .as_ref()
+            .expect("a headless renderer has no surface")
+    }
+
     fn invalidate_intermediate_textures(&mut self) {
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
@@ -356,7 +370,7 @@ impl WgpuRenderer {
         Self::new_internal(
             Some(Rc::clone(&gpu_context)),
             context,
-            surface,
+            Some(surface),
             config,
             compositor_gpu,
             atlas,
@@ -384,18 +398,26 @@ impl WgpuRenderer {
         config: WgpuSurfaceConfig,
     ) -> anyhow::Result<Self> {
         let atlas = Arc::new(WgpuAtlas::from_context(context));
-        Self::new_internal(None, context, surface, config, None, atlas)
+        Self::new_internal(None, context, Some(surface), config, None, atlas)
     }
 
     fn new_internal(
         gpu_context: Option<GpuContext>,
         context: &WgpuContext,
-        surface: wgpu::Surface<'static>,
+        surface: Option<wgpu::Surface<'static>>,
         config: WgpuSurfaceConfig,
         compositor_gpu: Option<CompositorGpuHint>,
         atlas: Arc<WgpuAtlas>,
     ) -> anyhow::Result<Self> {
-        let surface_caps = surface.get_capabilities(&context.adapter);
+        // LUMA LOCAL EDIT: with no surface, draw what an opaque SDR window
+        // would, into a target that reads back as RGBA.
+        let surface_caps = match &surface {
+            Some(surface) => surface.get_capabilities(&context.adapter),
+            None => wgpu::SurfaceCapabilities {
+                formats: vec![wgpu::TextureFormat::Rgba8Unorm],
+                ..Default::default()
+            },
+        };
         let preferred_formats = [
             wgpu::TextureFormat::Bgra8Unorm,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -482,20 +504,20 @@ impl WgpuRenderer {
         let mut pq_format = hdr::pq_surface_format(&surface_caps);
         #[cfg(target_family = "wasm")]
         let mut pq_format = None;
-        if let Some(format) = pq_format {
+        if let (Some(format), Some(surface)) = (pq_format, &surface) {
             let hdr_config = wgpu::SurfaceConfiguration {
                 format,
                 color_space: wgpu::SurfaceColorSpace::Bt2100Pq,
                 ..surface_config.clone()
             };
-            if try_configure(&context.device, &surface, &hdr_config) {
+            if try_configure(&context.device, surface, &hdr_config) {
                 surface_config = hdr_config;
             } else {
                 warn!("Surface refused {format:?} in BT.2100 PQ; presenting SDR.");
                 pq_format = None;
             }
         }
-        if pq_format.is_none() {
+        if let (None, Some(surface)) = (pq_format, &surface) {
             // Configure the surface immediately. The adapter selection process already validated
             // that this adapter can successfully configure this surface.
             surface.configure(&context.device, &surface_config);
@@ -1196,9 +1218,9 @@ impl WgpuRenderer {
                 texture.destroy();
             }
 
-            resources
-                .surface
-                .configure(&resources.device, &surface_config);
+            if let Some(surface) = &resources.surface {
+                surface.configure(&resources.device, &surface_config);
+            }
 
             // Invalidate intermediate textures - they will be lazily recreated
             // in draw() after we confirm the surface is healthy. This avoids
@@ -1256,7 +1278,7 @@ impl WgpuRenderer {
                 return;
             };
             resources
-                .surface
+                .surface()
                 .configure(&resources.device, &surface_config);
             resources.pipelines = Self::create_pipelines(
                 &resources.device,
@@ -1308,7 +1330,7 @@ impl WgpuRenderer {
         }) {
             warn!("Failed to poll device before switching HDR output: {e:?}");
         }
-        if !try_configure(&resources.device, &resources.surface, &surface_config) {
+        if !try_configure(&resources.device, resources.surface(), &surface_config) {
             if !want_hdr {
                 // SDR was configured at creation; a refusal now is a device
                 // problem the next frame's error path reports.
@@ -1317,7 +1339,7 @@ impl WgpuRenderer {
             warn!("Surface refused BT.2100 PQ; presenting SDR.");
             self.pq_format = None;
             resources
-                .surface
+                .surface()
                 .configure(&resources.device, &self.surface_config);
             return;
         }
@@ -1429,11 +1451,11 @@ impl WgpuRenderer {
             let surface_config = self.surface_config.clone();
             let resources = self.resources_mut();
             resources
-                .surface
+                .surface()
                 .configure(&resources.device, &surface_config);
         }
 
-        let frame = match self.resources().surface.get_current_texture() {
+        let frame = match self.resources().surface().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 self.surface_suboptimal = true;
@@ -1443,7 +1465,7 @@ impl WgpuRenderer {
                 let surface_config = self.surface_config.clone();
                 let resources = self.resources_mut();
                 resources
-                    .surface
+                    .surface()
                     .configure(&resources.device, &surface_config);
                 return false;
             }
@@ -1464,52 +1486,7 @@ impl WgpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let gamma_params = GammaParams {
-            gamma_ratios: self.rendering_params.gamma_ratios,
-            grayscale_enhanced_contrast: self.rendering_params.grayscale_enhanced_contrast,
-            subpixel_enhanced_contrast: self.rendering_params.subpixel_enhanced_contrast,
-            is_bgr: self.is_bgr as u32,
-            _pad: 0,
-        };
-
-        let globals = GlobalParams {
-            viewport_size: [
-                self.surface_config.width as f32,
-                self.surface_config.height as f32,
-            ],
-            premultiplied_alpha: if self.surface_config.alpha_mode
-                == wgpu::CompositeAlphaMode::PreMultiplied
-            {
-                1
-            } else {
-                0
-            },
-            pad: 0,
-        };
-
-        let path_globals = GlobalParams {
-            premultiplied_alpha: 0,
-            ..globals
-        };
-
-        {
-            let resources = self.resources();
-            resources.queue.write_buffer(
-                &resources.globals_buffer,
-                0,
-                bytemuck::bytes_of(&globals),
-            );
-            resources.queue.write_buffer(
-                &resources.globals_buffer,
-                self.path_globals_offset,
-                bytemuck::bytes_of(&path_globals),
-            );
-            resources.queue.write_buffer(
-                &resources.globals_buffer,
-                self.gamma_offset,
-                bytemuck::bytes_of(&gamma_params),
-            );
-        }
+        self.write_globals();
 
         // LUMA LOCAL EDIT: an HDR frame is drawn into the scene target and
         // then encoded into the swapchain. See `hdr.rs`.
@@ -1579,6 +1556,53 @@ impl WgpuRenderer {
 
         self.resources().queue.present(frame);
         true
+    }
+
+    /// Writes the frame's uniforms. Everything that draws a frame calls this
+    /// first; `headless.rs` does too.
+    fn write_globals(&self) {
+        let gamma_params = GammaParams {
+            gamma_ratios: self.rendering_params.gamma_ratios,
+            grayscale_enhanced_contrast: self.rendering_params.grayscale_enhanced_contrast,
+            subpixel_enhanced_contrast: self.rendering_params.subpixel_enhanced_contrast,
+            is_bgr: self.is_bgr as u32,
+            _pad: 0,
+        };
+
+        let globals = GlobalParams {
+            viewport_size: [
+                self.surface_config.width as f32,
+                self.surface_config.height as f32,
+            ],
+            premultiplied_alpha: if self.surface_config.alpha_mode
+                == wgpu::CompositeAlphaMode::PreMultiplied
+            {
+                1
+            } else {
+                0
+            },
+            pad: 0,
+        };
+
+        let path_globals = GlobalParams {
+            premultiplied_alpha: 0,
+            ..globals
+        };
+
+        let resources = self.resources();
+        resources
+            .queue
+            .write_buffer(&resources.globals_buffer, 0, bytemuck::bytes_of(&globals));
+        resources.queue.write_buffer(
+            &resources.globals_buffer,
+            self.path_globals_offset,
+            bytemuck::bytes_of(&path_globals),
+        );
+        resources.queue.write_buffer(
+            &resources.globals_buffer,
+            self.gamma_offset,
+            bytemuck::bytes_of(&gamma_params),
+        );
     }
 
     fn record_frame(&mut self, scene: &Scene, frame_view: &wgpu::TextureView) -> Result<()> {
@@ -2301,7 +2325,7 @@ impl WgpuRenderer {
                 .as_mut()
                 .expect("GPU resources not available");
             surface.configure(&res.device, &self.surface_config);
-            res.surface = surface;
+            res.surface = Some(surface);
 
             // Invalidate intermediate textures — they'll be recreated lazily.
             res.invalidate_intermediate_textures();
@@ -2397,7 +2421,7 @@ impl WgpuRenderer {
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
-            surface,
+            Some(surface),
             config,
             self.compositor_gpu,
             self.atlas.clone(),

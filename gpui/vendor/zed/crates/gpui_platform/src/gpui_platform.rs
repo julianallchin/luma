@@ -90,7 +90,21 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
         ))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "wayland", feature = "x11")
+    ))]
+    {
+        gpui_linux::headless_renderer()
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        all(
+            any(target_os = "linux", target_os = "freebsd"),
+            any(feature = "wayland", feature = "x11")
+        )
+    )))]
     {
         None
     }
