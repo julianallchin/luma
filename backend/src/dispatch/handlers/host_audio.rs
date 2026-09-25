@@ -45,7 +45,7 @@ pub async fn host_load_segment(
     let audio = decode(&info.file_path, &info.track_hash)?;
 
     // Frame indices, then sample indices — the buffer is stereo interleaved.
-    let num_frames = audio.samples.len() / 2;
+    let num_frames = audio.len() / 2;
     let start_frame = (start_time * SAMPLE_RATE as f32).floor().max(0.0) as usize;
     let end_frame = if end_time > 0.0 {
         (end_time * SAMPLE_RATE as f32).ceil() as usize
@@ -57,7 +57,7 @@ pub async fn host_load_segment(
         Vec::new()
     } else {
         let capped_end_frame = end_frame.min(num_frames);
-        audio.samples[start_frame * 2..capped_end_frame * 2].to_vec()
+        audio[start_frame * 2..capped_end_frame * 2].to_vec()
     };
 
     if samples.is_empty() {
@@ -109,20 +109,17 @@ pub async fn host_load_track(
         &track_id,
         admitted_principal.as_deref(),
         session,
-        audio.samples.clone(),
+        audio.to_vec(),
         0.0,
     )
     .await
 }
 
 /// Decode through the shared audio cache, so later analysis reuses this decode.
-fn decode(
-    file_path: &str,
-    track_hash: &str,
-) -> Result<std::sync::Arc<crate::audio::decoder::DecodedAudio>, CommandError> {
+fn decode(file_path: &str, track_hash: &str) -> Result<std::sync::Arc<Vec<f32>>, CommandError> {
     let audio = crate::audio::load_or_decode_audio_shared(Path::new(file_path), track_hash)
         .map_err(|e| CommandError::Internal(format!("Failed to decode track: {}", e)))?;
-    if audio.samples.is_empty() {
+    if audio.is_empty() {
         return Err(CommandError::Invalid("Track has no audio data".into()));
     }
     Ok(audio)

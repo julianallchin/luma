@@ -28,7 +28,6 @@ use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::audio::StemCache;
 use crate::database::local::tracks as tracks_db;
 use crate::dispatch::Events;
 use crate::models::tracks::{TrackImportPhase, TrackImportProgress};
@@ -227,7 +226,6 @@ pub async fn run_for_track(
     storage: &StorageRoot,
     workers: &WorkerEnvironment,
     events: &Events,
-    stem_cache: &StemCache,
     track_id: &str,
     preprocessors: &[PreprocessorRef],
     analysis: &AnalysisGuard,
@@ -257,7 +255,6 @@ pub async fn run_for_track(
             storage,
             workers,
             events,
-            stem_cache,
             &track,
             stems_dir.clone(),
             analysis.clone(),
@@ -290,7 +287,6 @@ pub async fn run_for_track(
             let storage = storage.clone();
             let workers = workers.clone();
             let events = events.clone();
-            let stem_cache = stem_cache.clone();
             let track = track.clone();
             let stems_dir = stems_dir.clone();
             let track_id_owned = track_id.to_string();
@@ -298,14 +294,7 @@ pub async fn run_for_track(
             let import = import.cloned();
             set.spawn(async move {
                 let ctx = PreprocessorContext::new(
-                    &pool,
-                    &storage,
-                    &workers,
-                    &events,
-                    &stem_cache,
-                    &track,
-                    stems_dir,
-                    analysis,
+                    &pool, &storage, &workers, &events, &track, stems_dir, analysis,
                 );
                 let res = run_one(&ctx, &track_id_owned, p.as_ref(), import.as_ref()).await;
                 (p.name(), p.output(), res)
@@ -422,7 +411,6 @@ pub async fn run_for_tracks(
     storage: StorageRoot,
     workers: WorkerEnvironment,
     events: Events,
-    stem_cache: StemCache,
     track_ids: Vec<String>,
     analysis: AnalysisGuard,
     import: Option<ImportEventContext>,
@@ -443,7 +431,6 @@ pub async fn run_for_tracks(
         let storage = storage.clone();
         let workers = workers.clone();
         let events = events.clone();
-        let stem_cache = stem_cache.clone();
         let preprocessors = preprocessors.clone();
         let sem = semaphore.clone();
         let completed = completed.clone();
@@ -479,7 +466,6 @@ pub async fn run_for_tracks(
                 &storage,
                 &workers,
                 &events,
-                &stem_cache,
                 &track_id,
                 &preprocessors,
                 &analysis,
@@ -555,7 +541,6 @@ pub async fn reconcile_on_startup(
     storage: StorageRoot,
     workers: WorkerEnvironment,
     events: Events,
-    stem_cache: StemCache,
     analysis: AnalysisGuard,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
@@ -579,10 +564,7 @@ pub async fn reconcile_on_startup(
         "[preprocessing] {} tracks need preprocessing, queueing...",
         queued.len()
     );
-    run_for_tracks(
-        pool, storage, workers, events, stem_cache, queued, analysis, None,
-    )
-    .await;
+    run_for_tracks(pool, storage, workers, events, queued, analysis, None).await;
     Ok(())
 }
 

@@ -14,7 +14,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::audio::StemCache;
 use crate::database::local::tracks as tracks_db;
 use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
@@ -470,7 +469,6 @@ pub async fn run_background_analysis(
     storage: StorageRoot,
     workers: WorkerEnvironment,
     events: Events,
-    stem_cache: StemCache,
     track_ids: Vec<String>,
     analysis: AnalysisGuard,
     import: scheduler::ImportEventContext,
@@ -499,7 +497,6 @@ pub async fn run_background_analysis(
         storage,
         workers,
         events,
-        stem_cache,
         track_ids.clone(),
         analysis.clone(),
         Some(import),
@@ -650,7 +647,6 @@ fn parse_track_beats(
 pub async fn delete_track(
     pool: &SqlitePool,
     storage: &StorageRoot,
-    stem_cache: &StemCache,
     track_id: &str,
     owner_user_id: Option<&str>,
 ) -> Result<(), String> {
@@ -722,7 +718,6 @@ pub async fn delete_track(
             "[tracks] track {track_id} deletion committed despite an uncertain commit response: {commit_error}"
         );
     }
-    stem_cache.remove_track(track_id);
 
     // SQLite is committed, so an interrupted cleanup is completed by the
     // startup reaper instead of surfacing a false failure after deletion.

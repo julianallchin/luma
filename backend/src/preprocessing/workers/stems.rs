@@ -1,8 +1,7 @@
 //! StemsPreprocessor — Demucs separation via the python stem worker.
 //!
 //! Writes per-stem `.ogg` files to `<stems_dir>/<track_hash>/`, persists
-//! `track_stems` rows (4 per track), and primes the in-memory [`StemCache`]
-//! so node graphs that reference stems don't need to re-decode.
+//! `track_stems` rows (4 per track). Consumers decode a stem's PCM on demand.
 //!
 //! Overrides [`Preprocessor::verify_disk`] to additionally check the OGG
 //! files exist — a user-deleted stems directory triggers re-separation
@@ -12,7 +11,6 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
-use crate::audio::{load_or_decode_audio, stereo_to_mono};
 use crate::database::local::tracks as tracks_db;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
@@ -79,21 +77,6 @@ impl Preprocessor for StemsPreprocessor {
                 self.version(),
             )
             .await?;
-        }
-
-        // Prime the in-memory stem cache so node graphs don't re-decode.
-        for stem in &stem_files {
-            ctx.checkpoint()?;
-            let cache_tag = format!("{}_stem_{}", track.track_hash, stem.name);
-            if let Ok(audio) = load_or_decode_audio(&stem.path, &cache_tag) {
-                if !audio.samples.is_empty() {
-                    ctx.checkpoint()?;
-                    let mono = stereo_to_mono(&audio.samples);
-                    ctx.checkpoint()?;
-                    ctx.stem_cache()
-                        .insert(track_id, stem.name.clone(), mono.into());
-                }
-            }
         }
 
         Ok(())
