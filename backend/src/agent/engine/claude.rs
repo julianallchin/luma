@@ -33,6 +33,12 @@ impl Session {
         }
         let mut cmd = stream_command(&request.cwd);
         cmd.arg("--system-prompt").arg(&request.system);
+        // Without this, the CLI freezes the system prompt at a conversation's
+        // first turn and reuses that snapshot verbatim on every later resume
+        // — including a hydrated one — no matter what `--system-prompt` this
+        // call passed. Luma's system prompt carries this turn's editor
+        // context, so a resumed turn needs it applied, not the first turn's.
+        cmd.arg("--system-prompt-snapshot").arg("off");
         cmd.arg("--mcp-config")
             .arg(json!({"mcpServers":{"luma":{"type":"sdk","name":"luma"}}}).to_string());
         if let Some(effort) = &request.effort {

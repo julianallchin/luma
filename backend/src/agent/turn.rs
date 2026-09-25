@@ -115,7 +115,6 @@ struct TurnSetup<'a> {
     execution: &'a Execution,
     lease: &'a engine::state::RunLease,
     resume: Option<engine::state::NativeSession>,
-    context: String,
     system: String,
     registry: &'a ToolRegistry,
     scope: &'a PythonScopeInput,
@@ -209,32 +208,38 @@ impl Turn {
             None => None,
         };
         let execution = self.resolve_execution(&detail.thread).await?;
-        // Fingerprinted on the *stable* prompt, not `system` (which also
-        // carries this turn's editor context — see above): the native CLI is
-        // handed a fresh `--system-prompt` on every call, resumed or not, so a
-        // changed editor context never invalidates a resumable session. Folding
-        // it in here used to mean switching tracks/venues mid-conversation
-        // silently killed `--resume` and fell back to `continuation()`.
-        let context = engine::context_fingerprint(
-            super::system_prompt(),
-            &registry.specs(),
-            detail.thread.effort.as_deref(),
-        );
         let resume = match &execution {
             Execution::External { engine, model, .. } => {
-                match lease.resume(*engine, model, resume_head.as_deref(), &context)? {
+                match lease.resume(*engine, model, resume_head.as_deref())? {
                     Ok(session) => Some(session),
+                    // A brand-new thread always misses this way (no
+                    // checkpoint yet) and that costs nothing — a plain first
+                    // prompt is already the cheapest thing continuation()
+                    // could produce. Only a thread with prior history is
+                    // worth hydrating a session for.
+                    Err(_miss) if resume_head.is_none() => None,
                     Err(miss) => {
-                        // A brand-new thread always misses (no checkpoint yet)
-                        // and that's cheap — only a thread with prior history
-                        // pays for the continuation() fallback this triggers.
-                        if resume_head.is_some() {
-                            log::warn!(
-                                "[agent] thread {} falling back to full-transcript continuation(): {miss}",
-                                self.thread_id
-                            );
+                        log::warn!(
+                            "[agent] thread {} native resume missed ({miss}); hydrating a session from the transcript",
+                            self.thread_id
+                        );
+                        match engine::hydrate_session(
+                            *engine,
+                            &self.transcript,
+                            &turn_message_id,
+                            &registry,
+                            model.as_deref(),
+                            lease.directory(),
+                        ) {
+                            Ok(session) => Some(session),
+                            Err(error) => {
+                                log::warn!(
+                                    "[agent] thread {} could not hydrate a session ({error}); falling back to full-transcript continuation()",
+                                    self.thread_id
+                                );
+                                None
+                            }
                         }
-                        None
                     }
                 }
             }
@@ -245,7 +250,6 @@ impl Turn {
             execution: &execution,
             lease: &lease,
             resume,
-            context,
             system,
             registry: &registry,
             scope: &scope,
@@ -276,7 +280,7 @@ impl Turn {
                 (&execution, self.native_session.take(), self.head.clone())
             {
                 setup.resume = Some(session.clone());
-                lease.checkpoint(*engine, model.clone(), head, setup.context.clone(), session)?;
+                lease.checkpoint(*engine, model.clone(), head, session)?;
             }
             // After the row is durable, so a run's recorded price never
             // describes work the transcript does not have.
