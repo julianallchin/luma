@@ -1,35 +1,3 @@
-//! A real score, played through the real renderer, sampled second by second.
-//!
-//! ```sh
-//! LUMA_REAL_CONFIG=/path/to/a/library/copy \
-//! LUMA_REAL_VENUE=Club LUMA_REAL_TRACK="…" \
-//! LUMA_REAL_FROM=45 LUMA_REAL_TO=53 \
-//! CARGO_TARGET_DIR=…/target-pixel cargo test -p gpui-agent --features pixel \
-//!     --test visualizer_real_score_window -- --ignored --nocapture
-//! ```
-//!
-//! # Why this exists next to the synthetic instruments
-//!
-//! `visualizer_playback_zoom_repro` sweeps a *shape* — rig size, clip count —
-//! and answers "what does this configuration cost". It cannot answer "why is
-//! this show slow at 0:49", because the thing that changes at 0:49 is content:
-//! which fixtures a clip selects, and what kind of fixtures those are. Only the
-//! user's own library has that.
-//!
-//! # Read-only, and why the copy is not optional
-//!
-//! Opening a library runs migrations, so pointing this at a live one would
-//! write to it. `LUMA_REAL_CONFIG` must be a COPY. Nothing here writes to the
-//! library either way, but the app underneath it does not promise that.
-//!
-//! # Ignored by default
-//!
-//! It needs a library that only exists on one machine, so it is not a gate. It
-//! reports; it asserts only that it measured the rig it claims to have measured.
-#![cfg(feature = "pixel")]
-
-mod support;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,13 +6,18 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};
 use luma_ui::runtime::Runtime;
 use serde_json::Value;
-use support::NAV;
+
+/// The suite's `until` and `nav.*` helpers, spliced ahead of each script.
+const NAV: &str = concat!(
+    include_str!("../../src/until.js"),
+    include_str!("../../src/nav.js")
+);
 
 fn env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("{key} must be set"))
 }
 
-/// The window this test is about, and a run-up before it. The run-up is the
+/// The window this measurement is about, and a run-up before it. The run-up is the
 /// whole point: a number from inside the window means nothing without the
 /// seconds either side of it measured the same way in the same process.
 fn window() -> (f64, f64) {
@@ -115,7 +88,7 @@ fn run(harness: &mut Harness, code: &str) -> Value {
 
 /// Open the venue's track and put the stage on screen with the lab reporting.
 ///
-/// Shared by both tests so "which screen was measured" cannot differ between
+/// Shared by both measurements so "which screen was measured" cannot differ between
 /// them — the two numbers are only comparable if the walk was.
 fn open_the_stage(harness: &mut Harness) {
     let venue = env("LUMA_REAL_VENUE");
@@ -160,8 +133,14 @@ fn open_the_stage(harness: &mut Harness) {
     );
 }
 
-#[test]
-#[ignore = "needs a real library copy via LUMA_REAL_CONFIG"]
+pub fn main() {
+    match std::env::args().nth(1).as_deref() {
+        None | Some("seconds") => a_real_score_reports_where_each_second_goes(),
+        Some("zoom") => zooming_into_the_beams_while_playing_reports_where_the_frame_goes(),
+        Some(other) => panic!("unknown measurement {other:?}; expected `seconds` or `zoom`"),
+    }
+}
+
 fn a_real_score_reports_where_each_second_goes() {
     let (from, to) = window();
     let mut harness = harness();
@@ -270,8 +249,6 @@ fn a_real_score_reports_where_each_second_goes() {
 /// Reports per zoom step rather than in aggregate, because the claim under test
 /// is that cost rises *with* closeness: an average over the whole gesture would
 /// show the same number whether the last step cost 2 ms or 200.
-#[test]
-#[ignore = "needs a real library copy via LUMA_REAL_CONFIG"]
 fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
     let (from, _) = window();
     let mut harness = harness();

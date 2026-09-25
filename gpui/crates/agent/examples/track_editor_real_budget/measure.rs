@@ -1,29 +1,3 @@
-//! What one frame of the track editor costs on a real score, while the view
-//! is moving.
-//!
-//! ```sh
-//! LUMA_REAL_CONFIG=/path/to/a/library/copy \
-//! LUMA_REAL_VENUE=Club LUMA_REAL_TRACK="Black Hole" \
-//! CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel \
-//!     --test track_editor_real_budget -- --ignored --nocapture
-//! ```
-//!
-//! # Why this exists next to `app_pixel track_editor_budget`
-//!
-//! The synthetic budget sweeps a *shape* — lanes, clips, one length — and
-//! answers "what does a busy score cost". It cannot answer "why is this one
-//! slow", because what differs between two scores is content: how many clips
-//! carry a decoded preview, how short they are, how many rows a venue puts in
-//! each heatmap. Only the user's own library has that, so this opens it.
-//!
-//! # Read-only, and why the copy is not optional
-//!
-//! Opening a library runs migrations, so `LUMA_REAL_CONFIG` must be a COPY.
-//! See `visualizer_real_score_window.rs`, which this mirrors.
-#![cfg(feature = "pixel")]
-
-mod support;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,7 +6,12 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};
 use luma_ui::runtime::Runtime;
 use serde_json::Value;
-use support::NAV;
+
+/// The suite's `until` and `nav.*` helpers, spliced ahead of each script.
+const NAV: &str = concat!(
+    include_str!("../../src/until.js"),
+    include_str!("../../src/nav.js")
+);
 
 fn env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("{key} must be set"))
@@ -109,9 +88,7 @@ fn leg(frames: &Value) -> String {
     )
 }
 
-#[test]
-#[ignore = "needs a real library copy via LUMA_REAL_CONFIG"]
-fn a_real_score_reports_what_scrolling_and_zooming_cost() {
+pub fn main() {
     let venue = env("LUMA_REAL_VENUE");
     let track = env("LUMA_REAL_TRACK");
     // The stage above the editor is on by default in the app, and it repaints

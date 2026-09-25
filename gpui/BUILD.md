@@ -121,8 +121,10 @@ This invalidates the whole tree once.
 
 ## Test suites
 
-`crates/agent/tests/` has 9 test targets. Five are directories that group many
-test files. Four are single files. Filter by test name to run one file:
+Keep integration tests in as few binaries as possible, because each
+binary links the whole crate graph. `crates/agent/tests/` has 5 test targets,
+each a directory that groups many test files. Filter by test name to run one
+file:
 
 ```sh
 cargo test -p gpui-agent --test headless tab_chrome
@@ -135,13 +137,19 @@ CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel --tes
 |---|---|
 | `headless` | outside-in app tests, no GPU |
 | `chat` | the agent panel |
-| `app_pixel` | outside-in app tests with a real renderer |
+| `app_pixel` | outside-in app tests with a real renderer; `pixel_suite_guard` in it is not feature-gated, so a run without `pixel` still reports something |
 | `ui_pixel` | `luma-ui` surfaces with a renderer, no app |
 | `unit` | tests of the harness itself: no library, no renderer |
-| `pixel_suite_guard` | not feature-gated, so a run without `pixel` still reports something |
-| `visualizer_playback_zoom_repro` | a diagnostic; it reports and does not assert |
-| `track_editor_real_budget` | `#[ignore]`; frame cost on a copy of a real library |
-| `visualizer_real_score_window` | `#[ignore]`; a real score through the renderer, second by second |
+
+Two measurement tools for a copy of a real library (`LUMA_REAL_CONFIG`) are
+examples, not tests: `cargo run -p gpui-agent --features pixel --example
+track_editor_real_budget` (frame cost while the editor moves) and `--example
+visualizer_real_score_window` (a real score through the renderer, second by
+second).
+
+`luma-render` has one binary, `--test render`, plus four that change
+process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
+`shared_presentation` and `waveform`. `luma-ui` has one, `--test ui`.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,

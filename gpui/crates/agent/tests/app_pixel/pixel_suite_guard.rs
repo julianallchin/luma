@@ -3,7 +3,7 @@
 //!
 //! # The trap this closes
 //!
-//! Every GPU test file in this directory opens with
+//! Every GPU test file in the pixel suites opens with
 //! `#![cfg(feature = "pixel")]`, so without that feature each one compiles to
 //! **zero tests** and cargo reports `ok. 0 passed` in ~0.00s. That is
 //! indistinguishable at a glance from a real green run, and it has already
@@ -11,7 +11,7 @@
 //! by an invocation that had in fact compiled and run nothing at all, while
 //! the test was failing consistently under `--features pixel`.
 //!
-//! This file is deliberately **not** feature-gated, so it is the one target in
+//! This module is deliberately **not** feature-gated, so it is the one part of
 //! the pixel suite that always has something to say.
 //!
 //! # Two levels, because two audiences
@@ -45,11 +45,4 @@ fn gpu_tests_were_skipped_rerun_with_features_pixel() {
          `--features pixel`, so every pixel-gated file compiled to zero tests. \
          Re-run with `--features pixel --no-fail-fast` to exercise them."
     );
-}
-
-#[cfg(feature = "pixel")]
-#[test]
-fn gpu_tests_are_enabled() {
-    // Present so the pass list says which half of the suite ran, and so the
-    // guard above cannot be mistaken for a file that only exists to fail.
 }
