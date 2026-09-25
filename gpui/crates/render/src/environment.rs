@@ -66,6 +66,26 @@ pub(crate) struct EnvironmentPipelines {
     brdf: wgpu::TextureView,
 }
 
+/// A renderer's local reflection probes (`probes.rs`), as the scene group
+/// binds them.
+pub(crate) struct LocalProbes<'a> {
+    /// The probes' radiance, a cube array.
+    pub cubes: &'a wgpu::TextureView,
+    /// A cube array bound in the relight's copy of the group instead.
+    pub dummy: &'a wgpu::TextureView,
+    /// The probe grid uniform.
+    pub grid: &'a wgpu::Buffer,
+    /// Each probe face's mean radiance, the probes' diffuse.
+    pub ambient: &'a wgpu::Buffer,
+}
+
+/// The environment's scene group, and the probe relight's copy of it.
+#[derive(Clone)]
+pub(crate) struct SceneGroups {
+    pub scene: wgpu::BindGroup,
+    pub relight: wgpu::BindGroup,
+}
+
 /// Which probe a renderer currently has resident, and the bindings for it.
 #[derive(Default)]
 pub(crate) struct EnvironmentCache {
@@ -76,7 +96,7 @@ pub(crate) struct EnvironmentCache {
     /// authored environment does, not when the transport moves — so rebuilding
     /// a uniform buffer and a five-entry bind group every frame was per-frame
     /// garbage for a value that had not moved.
-    cached: Option<(SceneParams, wgpu::Buffer, wgpu::BindGroup)>,
+    cached: Option<(SceneParams, wgpu::Buffer, SceneGroups)>,
     /// This renderer's frame-constant ambient value. One buffer per renderer,
     /// because two renderers on one device can hold different probes.
     ambient: Option<wgpu::Buffer>,
@@ -96,6 +116,14 @@ impl EnvironmentPipelines {
                 // `ambient_pipeline` once per frame instead of by six cube
                 // samples in every surface and composite fragment.
                 uniform_entry(5),
+                // The local reflection probes and their grid (`probes.rs`).
+                // The grid is read by the probe debug spheres' vertices too.
+                sampled(6, wgpu::TextureViewDimension::CubeArray),
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ..uniform_entry(7)
+                },
+                uniform_entry(8),
             ],
         });
         let equirect_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -241,7 +269,8 @@ impl EnvironmentPipelines {
         device: &wgpu::Device,
         probe: &(wgpu::TextureView, wgpu::TextureView),
         ambient: &wgpu::Buffer,
-    ) -> wgpu::BindGroup {
+        local: &LocalProbes<'_>,
+    ) -> SceneGroups {
         let uniform = buffer(
             device,
             &[SceneParams {
@@ -253,18 +282,48 @@ impl EnvironmentPipelines {
             wgpu::BufferUsages::UNIFORM,
             "environment-sky",
         );
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("environment-sky"),
-            layout: &self.scene_layout,
-            entries: &[
-                binding(0, wgpu::BindingResource::TextureView(&probe.0)),
-                binding(1, wgpu::BindingResource::TextureView(&probe.1)),
-                binding(2, wgpu::BindingResource::TextureView(&self.brdf)),
-                binding(3, wgpu::BindingResource::Sampler(&self.sampler)),
-                binding(4, uniform.as_entire_binding()),
-                binding(5, ambient.as_entire_binding()),
-            ],
-        })
+        self.scene_groups(
+            device,
+            "environment-sky",
+            (&probe.0, &probe.1),
+            &uniform,
+            ambient,
+            local,
+        )
+    }
+
+    /// The scene group, and the probe relight's copy of it, which binds
+    /// `local.dummy` in place of the probes the relight writes.
+    fn scene_groups(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        cubes: (&wgpu::TextureView, &wgpu::TextureView),
+        uniform: &wgpu::Buffer,
+        ambient: &wgpu::Buffer,
+        local: &LocalProbes<'_>,
+    ) -> SceneGroups {
+        let group = |probes: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.scene_layout,
+                entries: &[
+                    binding(0, wgpu::BindingResource::TextureView(cubes.0)),
+                    binding(1, wgpu::BindingResource::TextureView(cubes.1)),
+                    binding(2, wgpu::BindingResource::TextureView(&self.brdf)),
+                    binding(3, wgpu::BindingResource::Sampler(&self.sampler)),
+                    binding(4, uniform.as_entire_binding()),
+                    binding(5, ambient.as_entire_binding()),
+                    binding(6, wgpu::BindingResource::TextureView(probes)),
+                    binding(7, local.grid.as_entire_binding()),
+                    binding(8, local.ambient.as_entire_binding()),
+                ],
+            })
+        };
+        SceneGroups {
+            scene: group(local.cubes),
+            relight: group(local.dummy),
+        }
     }
 
     /// Reduce the diffuse probe to its mean lobe radiance, once per frame.
@@ -381,7 +440,8 @@ impl EnvironmentCache {
         device: &wgpu::Device,
         environment: Option<&EnvironmentImage>,
         ambient: &wgpu::Buffer,
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+        local: &LocalProbes<'_>,
+    ) -> (wgpu::Buffer, SceneGroups) {
         let enabled = environment.is_some() && self.resident.is_some();
         let params = environment.map_or(
             SceneParams {
@@ -399,9 +459,10 @@ impl EnvironmentCache {
         );
         // The resident probe is part of the identity: a reprojected cube map
         // with identical parameters still needs a new bind group.
-        if let Some((cached, uniform, bind_group)) = &self.cached {
+        // The local probes' views are the renderer's own and never change.
+        if let Some((cached, uniform, groups)) = &self.cached {
             if *cached == params {
-                return (uniform.clone(), bind_group.clone());
+                return (uniform.clone(), groups.clone());
             }
         }
         let uniform = buffer(
@@ -414,20 +475,16 @@ impl EnvironmentCache {
             (&pipelines.fallback_cube, &pipelines.fallback_cube),
             |resident| (&resident.irradiance, &resident.specular),
         );
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("environment-scene"),
-            layout: &pipelines.scene_layout,
-            entries: &[
-                binding(0, wgpu::BindingResource::TextureView(irradiance)),
-                binding(1, wgpu::BindingResource::TextureView(specular)),
-                binding(2, wgpu::BindingResource::TextureView(&pipelines.brdf)),
-                binding(3, wgpu::BindingResource::Sampler(&pipelines.sampler)),
-                binding(4, uniform.as_entire_binding()),
-                binding(5, ambient.as_entire_binding()),
-            ],
-        });
-        self.cached = Some((params, uniform.clone(), bind_group.clone()));
-        (uniform, bind_group)
+        let groups = pipelines.scene_groups(
+            device,
+            "environment-scene",
+            (irradiance, specular),
+            &uniform,
+            ambient,
+            local,
+        );
+        self.cached = Some((params, uniform.clone(), groups.clone()));
+        (uniform, groups)
     }
 }
 

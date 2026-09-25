@@ -1457,6 +1457,7 @@ fn frame_with_lights(
         fixture_shadows: true,
         geometry_shadows: false,
         cluster_debug: false,
+        probes: luma_render::scene_desc::ProbeView::default(),
         clear_color: base.clear_color,
         room: None,
         ambient: base.ambient,

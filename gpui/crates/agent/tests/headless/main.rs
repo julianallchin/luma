@@ -16,6 +16,7 @@ mod support;
 mod add_tracks_flow;
 mod clip_forms;
 mod library_foundation;
+mod probe_view;
 mod signin;
 mod venue_builder;
 mod venues;

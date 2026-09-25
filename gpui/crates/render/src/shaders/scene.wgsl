@@ -554,41 +554,67 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     let visibility = textureLoad(ambient_visibility, vec2<i32>(in.clip.xy), 0);
     let occlusion = ao * visibility.r;
     out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
-    if environment_params.enabled > 0.5 && environment_params.intensity > 0.0 {
+    // Environment light: the sky probe, and over the stage the local
+    // reflection probes (`probe_sample.wgsl`) in its place. The local probes
+    // hold absolute radiance, the sky probe's scaled by its intensity, and
+    // they light a room that has no sky probe at all.
+    let sky_probe = environment_params.enabled > 0.5 && environment_params.intensity > 0.0;
+    let reflected = reflect(-v, n);
+    let local = probe_light(in.world, n, reflected, roughness);
+    if sky_probe || local.weight > 0.0 {
         let dot_nv = saturate(dot(n, v));
         let fresnel = f_schlick(f0, 1.0, dot_nv);
-        let reflected = reflect(-v, n);
-        var irradiance = textureSampleLevel(
-            environment_irradiance,
-            environment_sampler,
-            environment_direction(n),
-            0.0,
-        ).rgb;
         // Lagarde and de Rousiers 2014: occlusion of a specular lobe from the
         // diffuse visibility, tighter for smooth surfaces.
         let lobe = saturate(pow(dot_nv + visibility.r, exp2(-16.0 * roughness - 1.0)) - 1.0 + visibility.r);
-        var specular_visibility = vec3<f32>(lobe);
-        if globals.room_falloff.y > 0.5 {
-            let sky = occluded_sky(n, irradiance, visibility);
-            irradiance = sky.irradiance;
-            specular_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
-        }
-        let diffuse_ibl = irradiance * diffuse_color * visibility.r;
-        let prefiltered = textureSampleLevel(
-            environment_specular,
-            environment_sampler,
-            environment_direction(reflected),
-            roughness * 7.0,
-        ).rgb;
         let brdf = textureSampleLevel(
             environment_brdf,
             environment_sampler,
             vec2<f32>(dot_nv, roughness),
             0.0,
         ).rg;
-        let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y) * specular_visibility;
-        out += (diffuse_ibl * (vec3<f32>(1.0) - fresnel) + specular_ibl)
-            * environment_params.intensity * ao;
+        // The occlusion both environment terms take: this pixel's own
+        // ambient visibility, and outdoors the stage height field's share of
+        // sky and lit ground (`occluded_sky`), as a ratio to the open sky
+        // probe. The local probes need it as much as the sky probe does: they
+        // stand over the deck and the barriers, not under them, so what lies
+        // under a deck is darker than anything they saw.
+        var diffuse_visibility = vec3<f32>(visibility.r);
+        var specular_visibility = vec3<f32>(lobe);
+        var irradiance = vec3<f32>(0.0);
+        if sky_probe {
+            irradiance = textureSampleLevel(
+                environment_irradiance,
+                environment_sampler,
+                environment_direction(n),
+                0.0,
+            ).rgb;
+            if globals.room_falloff.y > 0.5 {
+                let sky = occluded_sky(n, irradiance, visibility);
+                diffuse_visibility *= min(sky.irradiance / max(irradiance, vec3<f32>(1e-5)), vec3<f32>(1.0));
+                irradiance = sky.irradiance;
+                specular_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
+            }
+        }
+        var ibl = vec3<f32>(0.0);
+        // Inside the grid the probes stand in for the sky probe entirely.
+        if sky_probe && local.weight < 1.0 {
+            let diffuse_ibl = irradiance * diffuse_color * visibility.r;
+            let prefiltered = textureSampleLevel(
+                environment_specular,
+                environment_sampler,
+                environment_direction(reflected),
+                roughness * 7.0,
+            ).rgb;
+            let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y) * specular_visibility;
+            ibl = (diffuse_ibl * (vec3<f32>(1.0) - fresnel) + specular_ibl) * environment_params.intensity;
+        }
+        if local.weight > 0.0 {
+            let local_ibl = local.diffuse * diffuse_color * diffuse_visibility * (vec3<f32>(1.0) - fresnel)
+                + local.specular * (f0 * brdf.x + brdf.y) * specular_visibility;
+            ibl = mix(ibl, local_ibl, local.weight);
+        }
+        out += ibl * ao;
     }
 
     if globals.dir_to_light.w > 0.5 {

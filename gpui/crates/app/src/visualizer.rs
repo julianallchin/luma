@@ -919,6 +919,10 @@ struct RenderControls {
     /// Low lowers the haze resolution and gobo samples here, the pixel budget
     /// in [`RenderScale::size`], and the rest inside the renderer.
     quality: scene_desc::Quality,
+    /// The local reflection probes and their debug balls: a session view
+    /// choice, never saved. `LUMA_PROBES` and `LUMA_PROBE_DEBUG` set where
+    /// it starts.
+    probes: scene_desc::ProbeView,
 }
 
 /// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
@@ -987,6 +991,7 @@ impl RenderControls {
         render.fixture_shadows = self.fixture_shadows;
         render.geometry_shadows = true;
         render.look = self.look;
+        render.probes = self.probes;
         render
     }
 
@@ -1027,6 +1032,7 @@ impl RenderControls {
             render_scale_percent: 100,
             look: scene_desc::Look::STAGE,
             quality: scene_desc::Quality::High,
+            probes: scene_desc::ProbeView::default(),
         };
         controls.set_environment(environment);
         controls
@@ -1077,6 +1083,8 @@ enum ViewToggle {
     Grid,
     Gizmos,
     AutoExposure,
+    ReflectionProbes,
+    ShowProbes,
 }
 #[derive(Clone, Copy)]
 enum ViewValue {
@@ -1129,6 +1137,8 @@ impl RenderControls {
                 // both, so it is the only value that means the same thing.
                 exposure.ev = 0.0;
             }
+            ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
+            ViewToggle::ShowProbes => self.probes.debug = !self.probes.debug,
         }
     }
     fn set(&mut self, control: ViewValue, value: f32) {
@@ -3646,6 +3656,8 @@ fn view_toggle(
         ViewToggle::Grid => 2,
         ViewToggle::Gizmos => 3,
         ViewToggle::AutoExposure => 4,
+        ViewToggle::ReflectionProbes => 5,
+        ViewToggle::ShowProbes => 6,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -4233,12 +4245,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
     });
     // The drawn heads lag the score the way motors would; the output does not.
-    let (universe, aim_targets) = state.motors.follow(time, universe);
-    let aim_targets = if state.presentation {
-        Vec::new()
-    } else {
-        aim_targets
-    };
+    let universe = state.motors.follow(time, universe);
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
@@ -4436,7 +4443,6 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 gizmo_space,
                                 hover: gizmo_hover,
                                 build: build_affordances.clone(),
-                                aim_targets: aim_targets.clone(),
                             };
                             gpu.viewport.set_display_range(display);
                             match gpu.frame(LiveFrameInputs {

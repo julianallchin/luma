@@ -287,6 +287,8 @@ pub struct Frame {
     pub geometry_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
+    /// The local reflection probes, and whether to draw them.
+    pub probes: crate::scene_desc::ProbeView,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
@@ -1298,6 +1300,7 @@ pub fn build_with(
         fixture_shadows: scene.render.fixture_shadows,
         geometry_shadows: scene.render.geometry_shadows,
         cluster_debug: scene.render.cluster_debug,
+        probes: scene.render.probes,
         clear_color: Vec3::from(scene.render.environment.background),
         room: lit_room,
         // Under a sky the fill is the sky itself, arriving as an image-based

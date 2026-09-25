@@ -1231,6 +1231,8 @@ pub struct Renderer {
     environment: EnvironmentCache,
     atmosphere: AtmosphereCache,
     sun_shafts: crate::sun_shafts::Cache,
+    /// The local reflection probes over this renderer's stage.
+    probes: crate::probes::Probes,
     sky_visibility: crate::sky_visibility::SkyVisibility,
     /// Exposure state and post-chain targets (`post.rs`).
     post: crate::post::Post,
@@ -2158,6 +2160,8 @@ pub struct Gpu {
     environment: EnvironmentPipelines,
     atmosphere: AtmospherePipelines,
     sun_shafts: crate::sun_shafts::Pipelines,
+    /// The local reflection probes' capture, relight and prefilter.
+    probes: crate::probes::Pipelines,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     cluster_layout: wgpu::BindGroupLayout,
@@ -2466,6 +2470,11 @@ impl Gpu {
                 count: None,
             },
         ]);
+        // The probe relight (`probes.rs`) lights its texels with the scene
+        // pass's own functions, in compute, so groups 0 and 3 are visible there.
+        for entry in &mut scene_entries {
+            entry.visibility |= wgpu::ShaderStages::COMPUTE;
+        }
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
             entries: &scene_entries,
@@ -2477,51 +2486,55 @@ impl Gpu {
         // passes it serialised them on Metal, ~20× wall per frame at high
         // draw counts. Profiler accumulation is a separate compute pass now;
         // never bind a read-write buffer here.)
+        let mut cluster_entries = vec![
+            storage_entry(0, wgpu::ShaderStages::FRAGMENT),
+            storage_entry(1, wgpu::ShaderStages::FRAGMENT),
+            uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+            storage_entry(5, wgpu::ShaderStages::FRAGMENT),
+            depth_array_entry(6, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            uniform_entry(8, wgpu::ShaderStages::FRAGMENT),
+            storage_entry(9, wgpu::ShaderStages::FRAGMENT),
+            storage_entry(10, wgpu::ShaderStages::FRAGMENT),
+            storage_entry(11, wgpu::ShaderStages::FRAGMENT),
+            depth_array_entry(12, wgpu::ShaderStages::FRAGMENT),
+            // Per-tile surface depth split of the light index (binding 14
+            // is declared alongside 13 in `scene_bindings.wgsl`).
+            // The far-field fog prefix, for grid-sourced surface transmittance.
+            wgpu::BindGroupLayoutEntry {
+                binding: 13,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            storage_entry(14, wgpu::ShaderStages::FRAGMENT),
+            // Per-pixel ambient visibility (`sky_visibility.rs`).
+            wgpu::BindGroupLayoutEntry {
+                binding: 15,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ];
+        for entry in &mut cluster_entries {
+            entry.visibility |= wgpu::ShaderStages::COMPUTE;
+        }
         let cluster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("surface-clusters"),
-            entries: &[
-                storage_entry(0, wgpu::ShaderStages::FRAGMENT),
-                storage_entry(1, wgpu::ShaderStages::FRAGMENT),
-                uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
-                storage_entry(5, wgpu::ShaderStages::FRAGMENT),
-                depth_array_entry(6, wgpu::ShaderStages::FRAGMENT),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                uniform_entry(8, wgpu::ShaderStages::FRAGMENT),
-                storage_entry(9, wgpu::ShaderStages::FRAGMENT),
-                storage_entry(10, wgpu::ShaderStages::FRAGMENT),
-                storage_entry(11, wgpu::ShaderStages::FRAGMENT),
-                depth_array_entry(12, wgpu::ShaderStages::FRAGMENT),
-                // Per-tile surface depth split of the light index (binding 14
-                // is declared alongside 13 in `scene_bindings.wgsl`).
-                // The far-field fog prefix, for grid-sourced surface transmittance.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 13,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                storage_entry(14, wgpu::ShaderStages::FRAGMENT),
-                // Per-pixel ambient visibility (`sky_visibility.rs`).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 15,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &cluster_entries,
         });
 
         // Group 1 is the per-draw material texture. glTF's `baseColorTexture`
@@ -2699,16 +2712,7 @@ impl Gpu {
 
         // Both scene-geometry shaders open with the shared bind-group
         // declarations; see `scene_bindings.wgsl`.
-        let bindings = format!(
-            "{}{}{}{}{}{}{}",
-            crate::haze_field::prelude(),
-            include_str!("shaders/medium.wgsl"),
-            include_str!("shaders/scene_bindings.wgsl"),
-            crate::atmosphere::surface_prelude(),
-            include_str!("shaders/horizon.wgsl"),
-            include_str!("shaders/haze_daylight.wgsl"),
-            include_str!("shaders/outdoor_surface.wgsl"),
-        );
+        let bindings = scene_bindings_wgsl();
         let sun_shafts = crate::sun_shafts::Pipelines::new(
             &device,
             &queue,
@@ -2721,16 +2725,8 @@ impl Gpu {
         // pass's slot); the surface pass carries the same bindings inside its
         // group 3, so its copy is rebound by this one documented replace.
         let light_index_prelude = include_str!("shaders/light_index.wgsl");
-        let scene_light_index_prelude = light_index_prelude.replace("@group(1)", "@group(3)");
-        let scene_module = shader(
-            &device,
-            "scene",
-            &format!(
-                "{bindings}{scene_light_index_prelude}{fixture_light}{visibility}{}{}",
-                include_str!("shaders/scene.wgsl"),
-                include_str!("shaders/floor.wgsl")
-            ),
-        );
+        let scene_wgsl = scene_wgsl();
+        let scene_module = shader(&device, "scene", &scene_wgsl);
         // The transport (ray reconstruction + per-light integral + group-0
         // layout) is one file both volumetric passes prepend, so they cannot
         // draw two different beams.
@@ -2920,6 +2916,18 @@ impl Gpu {
             });
 
         let vertex_layout = mesh_vertex_layout();
+
+        let probes = crate::probes::Pipelines::new(
+            &device,
+            &crate::probes::PipelineSources {
+                material_layout: &material_layout,
+                scene_layout: &scene_layout,
+                environment_layout: environment.scene_layout(),
+                cluster_layout: &cluster_layout,
+                vertex_layout: mesh_vertex_layout(),
+                scene_source: &scene_wgsl,
+            },
+        );
 
         let scene_source = ScenePipelineSource {
             layout: scene_pipeline_layout.clone(),
@@ -4288,6 +4296,7 @@ impl Gpu {
             environment,
             atmosphere,
             sun_shafts,
+            probes,
             scene_layout,
             material_layout,
             cluster_layout,
@@ -4488,6 +4497,7 @@ impl Renderer {
             gpu.fog_visibility_requested,
             gpu.fog_visibility_unavailable,
         );
+        let probes = crate::probes::Probes::new(&gpu.device);
         Self {
             gpu,
             haze_compute,
@@ -4497,6 +4507,7 @@ impl Renderer {
             environment: EnvironmentCache::default(),
             atmosphere: AtmosphereCache::default(),
             sun_shafts: crate::sun_shafts::Cache::default(),
+            probes,
             sky_visibility: crate::sky_visibility::SkyVisibility::default(),
             post,
             shadow_map,
@@ -5222,6 +5233,39 @@ impl Renderer {
         }
     }
 
+    /// Faces of the reflection probes still to capture since the stage last
+    /// changed: they are captured a probe a frame. Zero when every probe
+    /// holds the current stage, or when they are off.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reflection_probes_pending(&self) -> u32 {
+        self.probes.pending()
+    }
+
+    /// One reflection probe's six faces, side by side, as linear RGBA: `what`
+    /// 0 its relit radiance at `mip` above its base, 1 its captured albedo,
+    /// 2 its captured normal, metal and distance. For diagnosis.
+    ///
+    /// # Errors
+    /// Fails when no probes are placed or the readback cannot be mapped.
+    #[doc(hidden)]
+    pub fn read_reflection_probe(
+        &self,
+        probe: u32,
+        what: u32,
+        mip: u32,
+    ) -> anyhow::Result<(u32, u32, Vec<[f32; 4]>)> {
+        self.probes
+            .read_back(&self.gpu.device, &self.gpu.queue, probe, what, mip)
+    }
+
+    /// Where the reflection probes stand, world metres.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reflection_probe_positions(&self) -> Vec<Vec3> {
+        self.probes.positions()
+    }
+
     /// Route wide beams to the half-resolution haze pass (the default) or
     /// keep every beam native. Native is the reference for integrator tests
     /// that must not also measure the upsample's silhouette error.
@@ -5841,12 +5885,22 @@ impl Renderer {
         }
         let ambient_buf = self.environment.ambient(&self.gpu.device);
         let mut ambient_probe = self.environment.irradiance(&self.gpu.environment).clone();
-        let (_environment_uniform, mut environment_bg) = self.environment.bind_group(
+        let (probe_cubes, probe_grid, probe_ambient) = self.probes.bindings();
+        let local_probes = crate::environment::LocalProbes {
+            cubes: probe_cubes,
+            dummy: self.gpu.probes.dummy_cubes(),
+            grid: probe_grid,
+            ambient: probe_ambient,
+        };
+        let (_environment_uniform, environment_groups) = self.environment.bind_group(
             &self.gpu.environment,
             &self.gpu.device,
             frame.environment.as_ref(),
             &ambient_buf,
+            &local_probes,
         );
+        let mut environment_bg = environment_groups.scene;
+        let mut probe_environment_bg = environment_groups.relight;
         // The sky, when there is one, is both the background the composite
         // resolves and the probe the scene pass is lit by. Its tables are
         // rebuilt only when the sun moves, so this is a cache hit for every
@@ -5880,10 +5934,14 @@ impl Renderer {
             &mut pass_queries,
         );
         if let Some(probe) = &sky_probe {
-            environment_bg =
-                self.gpu
-                    .environment
-                    .sky_bind_group(&self.gpu.device, probe, &ambient_buf);
+            let groups = self.gpu.environment.sky_bind_group(
+                &self.gpu.device,
+                probe,
+                &ambient_buf,
+                &local_probes,
+            );
+            environment_bg = groups.scene;
+            probe_environment_bg = groups.relight;
             ambient_probe = probe.0.clone();
         }
         // Frame-constant probe mean, computed once here instead of by six cube
@@ -6265,35 +6323,51 @@ impl Renderer {
         let targets_done = Instant::now();
         let ambient_visibility = self.sky_visibility.output(&self.gpu.device, width, height);
         // Built after the targets: binding 13 is this frame's fog prefix.
-        let cluster_bg = self
-            .gpu
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("surface-clusters"),
-                layout: &self.gpu.cluster_layout,
-                entries: &[
-                    binding(0, index_bindings.core.as_entire_binding()),
-                    binding(1, index_bindings.rest.as_entire_binding()),
-                    binding(4, cluster_uniform.as_entire_binding()),
-                    binding(5, fixture_shadow_matrix_buf.as_entire_binding()),
-                    binding(
-                        6,
-                        wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
-                    ),
-                    binding(7, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
-                    binding(8, index_bindings.params.as_entire_binding()),
-                    binding(9, index_bindings.tile_masks.as_entire_binding()),
-                    binding(10, index_bindings.z_bins.as_entire_binding()),
-                    binding(11, self.visibility.buffer.as_entire_binding()),
-                    binding(
-                        12,
-                        wgpu::BindingResource::TextureView(&self.fixture_shadow_map_extra),
-                    ),
-                    binding(13, wgpu::BindingResource::TextureView(&fog_transmittance)),
-                    binding(14, index_bindings.surface_splits.as_entire_binding()),
-                    binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
-                ],
-            });
+        // The probe relight's copy binds every cone in source order in place
+        // of the light index's in-view subset (`probes.rs`).
+        self.probes
+            .set_lights(&self.gpu.device, &self.gpu.queue, &cores, &rests);
+        let probe_work = self.probes.prepare(&self.gpu.queue, frame, opaque);
+        let probe_debug_balls = self.probes.debug_balls();
+        let cluster_group = |label: &str, core: &wgpu::Buffer, rest: &wgpu::Buffer| {
+            self.gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(label),
+                    layout: &self.gpu.cluster_layout,
+                    entries: &[
+                        binding(0, core.as_entire_binding()),
+                        binding(1, rest.as_entire_binding()),
+                        binding(4, cluster_uniform.as_entire_binding()),
+                        binding(5, fixture_shadow_matrix_buf.as_entire_binding()),
+                        binding(
+                            6,
+                            wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
+                        ),
+                        binding(7, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
+                        binding(8, index_bindings.params.as_entire_binding()),
+                        binding(9, index_bindings.tile_masks.as_entire_binding()),
+                        binding(10, index_bindings.z_bins.as_entire_binding()),
+                        binding(11, self.visibility.buffer.as_entire_binding()),
+                        binding(
+                            12,
+                            wgpu::BindingResource::TextureView(&self.fixture_shadow_map_extra),
+                        ),
+                        binding(13, wgpu::BindingResource::TextureView(&fog_transmittance)),
+                        binding(14, index_bindings.surface_splits.as_entire_binding()),
+                        binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
+                    ],
+                })
+        };
+        let cluster_bg = cluster_group(
+            "surface-clusters",
+            &index_bindings.core,
+            &index_bindings.rest,
+        );
+        let probe_cluster_bg = self
+            .probes
+            .cone_buffers()
+            .map(|(core, rest)| cluster_group("probe-clusters", core, rest));
         let history_key =
             haze_history_key(frame, width, height, haze_size, haze_density, caster_hash);
         let time_continuous = self
@@ -6711,6 +6785,53 @@ impl Renderer {
                 &mut pass_queries,
             );
 
+            // The local reflection probes (`probes.rs`): this frame's share
+            // of any capture, then every probe relit and prefiltered, before
+            // the scene pass samples them.
+            if self.probes.live() {
+                let capture = probe_work.capture.clone();
+                if !capture.is_empty() {
+                    let spheres: Vec<(Vec3, f32)> = frame.draws[..opaque]
+                        .iter()
+                        .map(|draw| world_sphere(draw, mesh_bounds[draw.mesh]))
+                        .collect();
+                    self.probes.encode_capture(
+                        &self.gpu.probes,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut encoder,
+                        &instance_buf,
+                        capture,
+                        pass_queries.render("probe-capture", None),
+                        |pass, at, face, texels| {
+                            pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                            pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                            for (i, (centre, radius)) in spheres.iter().enumerate() {
+                                if !crate::probes::face_sees(face, *centre - at, *radius, texels) {
+                                    continue;
+                                }
+                                pass.set_bind_group(1, &materials[i], &[]);
+                                let (first, last, base) = ranges[frame.draws[i].mesh];
+                                pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
+                            }
+                        },
+                    );
+                }
+                if let Some(probe_clusters) = &probe_cluster_bg {
+                    self.probes.encode_relight(
+                        &self.gpu.probes,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut encoder,
+                        &lit_bg,
+                        &probe_environment_bg,
+                        probe_clusters,
+                        pass_queries.compute("probe-relight", None),
+                        pass_queries.compute("probe-filter", None),
+                    );
+                }
+            }
+
             // The scene pass reads nothing the haze chain writes unless the
             // surface transmittance comes from the fog grid; then it is
             // encoded after `fog-transmittance` instead of here, still ahead
@@ -6756,6 +6877,11 @@ impl Renderer {
                     }
                     pass.set_pipeline(&pipelines.scene);
                     draw_range(&mut pass, &lit_draws);
+                    if let Some(balls) = probe_debug_balls {
+                        pass.set_pipeline(&pipelines.probe_debug);
+                        pass.set_bind_group(1, &gpu.white_material, &[]);
+                        pass.draw(0..crate::probes::DEBUG_BALL_VERTICES, 0..balls);
+                    }
                     for (slot, kind) in frame.transparent.iter().enumerate() {
                         pass.set_pipeline(match kind {
                             crate::frame::Transparent::Grid => &pipelines.grid,
@@ -12497,6 +12623,7 @@ mod tests {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
+            probes: crate::scene_desc::ProbeView::default(),
             clear_color: Vec3::ZERO,
             room: None,
             ambient: Vec3::splat(0.002),
@@ -13045,6 +13172,7 @@ mod tests {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
+            probes: crate::scene_desc::ProbeView::default(),
             environment: None,
             clear_color: scene_radiance,
             room: None,
@@ -13527,6 +13655,8 @@ struct ScenePipelines {
     grid: wgpu::RenderPipeline,
     compass: wgpu::RenderPipeline,
     cables: wgpu::RenderPipeline,
+    /// The reflection probes as small balls (`probe_debug.wgsl`).
+    probe_debug: wgpu::RenderPipeline,
 }
 
 /// Everything [`ScenePipelines`] is built from, kept so a second sample count
@@ -13622,6 +13752,31 @@ impl ScenePipelineSource {
                 module: &self.scene,
                 entry_point: Some("fs_surface_depth"),
                 targets: &[Some(wgpu::TextureFormat::R16Float.into())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(true)),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let probe_debug = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("probe-debug"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.scene,
+                entry_point: Some("vs_probe_debug"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.scene,
+                entry_point: Some("fs_probe_debug"),
+                targets: &[Some(SCENE_FORMAT.into())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -13738,6 +13893,7 @@ impl ScenePipelineSource {
             grid,
             compass,
             cables,
+            probe_debug,
         }
     }
 }
@@ -13923,6 +14079,44 @@ fn residual_transport_key(
         shadow_samples,
         quality: [0; 4],
     }
+}
+
+/// The shared bind-group declarations every scene-geometry shader opens with;
+/// see `scene_bindings.wgsl`.
+fn scene_bindings_wgsl() -> String {
+    format!(
+        "{}{}{}{}{}{}{}",
+        crate::haze_field::prelude(),
+        include_str!("shaders/medium.wgsl"),
+        include_str!("shaders/scene_bindings.wgsl"),
+        crate::atmosphere::surface_prelude(),
+        include_str!("shaders/horizon.wgsl"),
+        include_str!("shaders/haze_daylight.wgsl"),
+        include_str!("shaders/outdoor_surface.wgsl"),
+    )
+}
+
+/// The scene module's source.
+///
+/// The local reflection probes (`probes.rs`) are in it: the scene pass
+/// samples them, and their relight is this module with its entry points
+/// appended, so a probe texel is lit by the functions that light the surface
+/// it stands for. The light-index prelude is authored against group 1 (the
+/// haze pass's slot); the surface pass carries the same bindings inside its
+/// group 3, so its copy is rebound by this one documented replace.
+pub(crate) fn scene_wgsl() -> String {
+    format!(
+        "{}{}{}{}{}{}{}{}{}",
+        scene_bindings_wgsl(),
+        crate::probes::prelude(),
+        include_str!("shaders/probe_sample.wgsl"),
+        include_str!("shaders/light_index.wgsl").replace("@group(1)", "@group(3)"),
+        include_str!("shaders/fixture_light.wgsl"),
+        include_str!("shaders/visibility.wgsl"),
+        include_str!("shaders/scene.wgsl"),
+        include_str!("shaders/floor.wgsl"),
+        include_str!("shaders/probe_debug.wgsl"),
+    )
 }
 
 fn shader(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
