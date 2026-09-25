@@ -19,6 +19,9 @@ pub mod eval;
 mod ffmpeg_env;
 pub mod fixtures;
 mod genre_worker;
+/// Where a test that fakes the analysis workers puts a stand-in genre model,
+/// so the genre stage does not download the real one.
+pub use genre_worker::MODEL_FILE_NAME as GENRE_MODEL_FILE_NAME;
 pub mod headless_host;
 pub mod host_audio;
 mod mert_worker;
