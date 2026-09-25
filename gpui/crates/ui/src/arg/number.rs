@@ -7,20 +7,20 @@
 //! host therefore never sees `"1."`, `""`, or `"-"` mid-keystroke; the whole
 //! point of the widget is that those states cannot leave it.
 //!
-//! Built on [`TextInput`] in its search mode: that keymap deliberately leaves
-//! `enter` and `escape` unbound, so this wrapper hears them as plain key
-//! events and gives them their meaning here — the same division of labor a
-//! picker's filter field uses.
+//! Built on [`TextInput`] in its search mode, under [`DRAFT_CONTEXT`] while a
+//! draft differs from the value: that context binds `enter` to submit and
+//! `escape` to cancel ahead of every binding around the field, and this
+//! wrapper gives them their meaning.
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent,
-    SharedString, Subscription, Window,
+    div, px, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    Subscription, Window,
 };
 
 use crate::float;
 use crate::node::{AgentNode, Instrument, Role};
-use crate::text_input::TextInput;
+use crate::text_input::{self, TextInput, DRAFT_CONTEXT};
 
 /// Parse a draft against its range. `None` is "revert": empty, unparseable,
 /// or non-finite input has no number in it to commit. A finite number outside
@@ -122,7 +122,7 @@ pub struct DraftedNumber<T: DraftValue = f64> {
     /// The other unit a press on the unit switches to, and whether the field
     /// shows it now: "per beat" for a field in beats.
     per: Option<(&'static str, bool)>,
-    _blur: [Subscription; 2],
+    _subs: [Subscription; 2],
 }
 
 impl<T: DraftValue> EventEmitter<NumberEvent<T>> for DraftedNumber<T> {}
@@ -151,16 +151,20 @@ impl<T: DraftValue> DraftedNumber<T> {
             this.update(cx, |editor, cx| editor.commit(window, cx)).ok();
         });
         // A press elsewhere commits at once; focus-out may come a frame later.
-        let pressed_out = cx.subscribe_in(
-            &input,
-            window,
-            |editor, _, event: &crate::text_input::Event, window, cx| {
-                if *event == crate::text_input::Event::Blurred {
+        // Enter and escape come from the draft context the field declares.
+        let keys = cx.subscribe_in(&input, window, |editor, _, event, window, cx| {
+            match event {
+                text_input::Event::Blurred | text_input::Event::Submitted => {
                     editor.commit(window, cx);
                 }
-            },
-        );
-        let _blur = [focus_out, pressed_out];
+                text_input::Event::Cancelled => editor.revert(cx),
+                _ => {}
+            }
+            // Whether there is a draft decides the key context, so any change
+            // to the text re-renders the field.
+            cx.notify();
+        });
+        let _subs = [focus_out, keys];
         Self {
             id: id.into(),
             input,
@@ -170,7 +174,7 @@ impl<T: DraftValue> DraftedNumber<T> {
             width,
             unit: None,
             per: None,
-            _blur,
+            _subs,
         }
     }
 
@@ -274,15 +278,6 @@ impl<T: DraftValue> DraftedNumber<T> {
         let text = self.shown();
         self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
-            "enter" => self.commit(window, cx),
-            "escape" => self.revert(cx),
-            _ => return,
-        }
-        cx.stop_propagation();
-    }
 }
 
 impl<T: DraftValue> Focusable for DraftedNumber<T> {
@@ -295,8 +290,13 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let reading = format!("{} = {}", self.id, self.input.read(cx).text());
         let focused = self.input.focus_handle(cx).is_focused(window);
+        // While there is a draft, the draft context gives the field enter and
+        // escape ahead of every binding in the surface around it. A clean
+        // field has nothing to submit or drop, so its escape still closes the
+        // dialog it sits in.
+        let drafting = self.input.read(cx).text() != self.shown();
         float::field()
-            .on_key_down(cx.listener(Self::on_key_down))
+            .when(drafting, |field| field.key_context(DRAFT_CONTEXT))
             .w(px(self.width))
             .font_family(crate::fonts::MONO)
             .gap(px(4.))

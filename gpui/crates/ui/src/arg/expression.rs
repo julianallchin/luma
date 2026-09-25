@@ -25,7 +25,7 @@ use gpui::{
 use crate::float::Picker;
 use crate::float::{self, RowState};
 use crate::node::{Instrument, Role};
-use crate::text_input::TextInput;
+use crate::text_input::{self, TextInput, DRAFT_CONTEXT};
 use crate::{fonts, ladder};
 
 use crate::CONTROL_HEIGHT;
@@ -162,8 +162,9 @@ pub enum ExpressionEvent {
 /// shaper, plus the suggestion menu and its keyboard.
 ///
 /// Search mode is the load-bearing choice: its keymap deliberately leaves the
-/// bare arrows, `enter`, `tab` and `escape` unbound, so the menu's keyboard
-/// lives here as plain key events instead of fighting the field's bindings.
+/// bare arrows and `tab` unbound, so the menu's keyboard lives here as plain
+/// key events instead of fighting the field's bindings. `enter` and `escape`
+/// come from [`DRAFT_CONTEXT`], ahead of every binding around the field.
 pub struct GroupExpressionEditor {
     input: Entity<TextInput>,
     /// The suggestion loop over the group vocabulary — `all` first, then the
@@ -198,7 +199,16 @@ impl GroupExpressionEditor {
         let this_out = cx.entity().downgrade();
         let subs = vec![
             // Re-render on every edit/caret move: the menu filters live.
-            cx.subscribe(&input, |_, _, _, cx| cx.notify()),
+            // Enter and escape arrive here too, as the draft context's
+            // Submitted and Cancelled.
+            cx.subscribe_in(&input, window, |editor, _, event, window, cx| {
+                match event {
+                    text_input::Event::Submitted => editor.submit(window, cx),
+                    text_input::Event::Cancelled => editor.cancel(window, cx),
+                    _ => {}
+                }
+                cx.notify();
+            }),
             window.on_focus_in(&handle, cx, move |_, cx| {
                 this_in
                     .update(cx, |editor, cx| {
@@ -304,7 +314,32 @@ impl GroupExpressionEditor {
         self.picker.rewind();
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    /// Enter: take the highlighted suggestion while the menu is up, else
+    /// commit and leave the field.
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.requery(cx);
+        if self.focused && !self.picker.is_empty() {
+            if let Some(option) = self.picker.current().cloned() {
+                self.apply_suggestion(&option, cx);
+            }
+            return;
+        }
+        self.commit(cx);
+        window.blur();
+    }
+
+    /// Escape: drop the draft and leave the field.
+    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let committed = self.committed.clone();
+        self.input
+            .update(cx, |input, cx| input.set_text(committed, cx));
+        window.blur();
+    }
+
+    /// The menu's keys. Enter and escape are not here: they come as the
+    /// draft context's bindings, which run before any key listener, so a
+    /// surrounding escape binding cannot take them first.
+    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.requery(cx);
         let live = self.focused && !self.picker.is_empty();
         match event.keystroke.key.as_str() {
@@ -314,20 +349,10 @@ impl GroupExpressionEditor {
             "up" if live => {
                 self.picker.step(-1);
             }
-            "tab" | "enter" if live => {
+            "tab" if live => {
                 if let Some(option) = self.picker.current().cloned() {
                     self.apply_suggestion(&option, cx);
                 }
-            }
-            "enter" => {
-                self.commit(cx);
-                window.blur();
-            }
-            "escape" => {
-                let committed = self.committed.clone();
-                self.input
-                    .update(cx, |input, cx| input.set_text(committed, cx));
-                window.blur();
             }
             _ => return,
         }
@@ -408,6 +433,9 @@ impl Render for GroupExpressionEditor {
         // shell must clip its text, and a menu clipped with it would be a
         // one-row stub.
         div()
+            // Gives the field enter and escape ahead of every binding in the
+            // surface around it.
+            .key_context(DRAFT_CONTEXT)
             .on_key_down(cx.listener(Self::on_key_down))
             .relative()
             .flex_shrink_0()
