@@ -163,7 +163,8 @@ actions!(
         /// Restore the stage graph a verb replaced / step forward again.
         UndoStage,
         RedoStage,
-        /// Dolly the stage camera a step in / out — the wheel's verb on a key.
+        /// Zoom the stage camera a step in / out at the pane's centre — the
+        /// wheel's verb on a key.
         ZoomStageIn,
         ZoomStageOut,
         /// Frame the stage selection: put the camera's target on it and dolly

@@ -410,7 +410,7 @@ impl Luma {
                     // camera to move and the gesture would be lost.
                     match this.visualizer_mut() {
                         Some(stage) => {
-                            stage.dolly_in(steps);
+                            stage.zoom_in(steps);
                             cx.notify();
                             // Seek into lit material and start the transport:
                             // a stage with nothing lit is not the state the
@@ -547,13 +547,13 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::RedoStage, _, cx| this.stage_redo(cx)))
             .on_action(cx.listener(|this, _: &keymap::ZoomStageIn, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
-                    state.dolly(crate::visualizer::DOLLY_IN);
+                    state.zoom(crate::visualizer::ZOOM_IN, None);
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ZoomStageOut, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
-                    state.dolly(crate::visualizer::DOLLY_OUT);
+                    state.zoom(crate::visualizer::ZOOM_OUT, None);
                     cx.notify();
                 }
             }))
