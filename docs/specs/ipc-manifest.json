@@ -1137,7 +1137,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 708
+        "line": 705
       },
       "name": "generate_venue_groups",
       "prose": {
@@ -1445,7 +1445,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 20
+        "line": 21
       },
       "name": "host_load_segment",
       "prose": {
@@ -1473,7 +1473,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 86
+        "line": 82
       },
       "name": "host_load_track",
       "prose": {
@@ -1498,7 +1498,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 177
+        "line": 164
       },
       "name": "host_pause",
       "prose": {
@@ -1524,7 +1524,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 167
+        "line": 154
       },
       "name": "host_play",
       "prose": {
@@ -1550,7 +1550,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 183
+        "line": 170
       },
       "name": "host_seek",
       "prose": {
@@ -1580,7 +1580,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 193
+        "line": 180
       },
       "name": "host_set_loop_region",
       "prose": {
@@ -1615,7 +1615,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 218
+        "line": 205
       },
       "name": "host_set_playback_range",
       "returns": "()"
@@ -1634,7 +1634,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 208
+        "line": 195
       },
       "name": "host_set_playback_rate",
       "prose": {
@@ -1651,7 +1651,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 236
+        "line": 223
       },
       "name": "host_snapshot",
       "prose": {
@@ -3126,7 +3126,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 682
+        "line": 679
       },
       "name": "save_venue_group",
       "prose": {
