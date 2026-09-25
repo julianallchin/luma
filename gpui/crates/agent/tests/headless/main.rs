@@ -19,10 +19,7 @@ mod library_foundation;
 mod signin;
 mod tracks;
 mod venue_builder;
-mod venue_floor;
 mod venue_patch;
 mod venues;
-mod visualizer_fullscreen;
-mod visualizer_score;
 
 mod sync_status;
