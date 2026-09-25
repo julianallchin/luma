@@ -1966,7 +1966,7 @@ migrations, so neither may be pointed at a live one.
 
 - `compositor::tests::profile_a_real_score_across_a_window` (backend) — eval
   cost, lit count, strobing count and `dimmer_sum` per frame across a window.
-- `visualizer_real_score_window` (gpui-agent, `--features pixel`) — the same
+- `visualizer_real_score_window` (a gpui-agent example, `--features pixel`) — the same
   window played through the real renderer, reporting the UI/GPU/present split
   per second of track time.
 

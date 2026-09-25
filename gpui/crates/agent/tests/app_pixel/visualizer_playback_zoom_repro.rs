@@ -2,7 +2,7 @@
 //!
 //! ```sh
 //! CARGO_TARGET_DIR=target-pixel cargo test -p gpui-agent --features pixel \
-//!     --test visualizer_playback_zoom_repro -- --nocapture
+//!     --test app_pixel visualizer_playback_zoom_repro -- --nocapture
 //! ```
 //!
 //! # Why another stage test
@@ -43,13 +43,11 @@
 //! explodes, which is why `frames` is reported and not just the percentiles.
 #![cfg(feature = "pixel")]
 
-mod support;
-
 use std::time::Duration;
 
+use super::support::{Clip, Fixture, NAV, TRACK_NAME, VENUE_NAME};
 use gpui_agent::{Harness, Mode};
 use serde_json::Value;
-use support::{Clip, Fixture, NAV, TRACK_NAME, VENUE_NAME};
 
 const SECONDS: u32 = 30;
 
