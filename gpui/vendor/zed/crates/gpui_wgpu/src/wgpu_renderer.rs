@@ -268,6 +268,9 @@ pub struct WgpuRenderer {
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     surface_configured: bool,
     needs_redraw: bool,
+    // LUMA LOCAL EDIT: the last acquire said the swapchain is suboptimal. The
+    // frame it gave is presented; the next draw reconfigures before acquiring.
+    surface_suboptimal: bool,
     // LUMA LOCAL EDIT: HDR output. See `hdr.rs`.
     /// The swapchain format SDR output uses.
     sdr_format: wgpu::TextureFormat,
@@ -677,6 +680,7 @@ impl WgpuRenderer {
             device_lost: context.device_lost_flag(),
             surface_configured: true,
             needs_redraw: false,
+            surface_suboptimal: false,
             sdr_format: surface_format,
             pq_format,
             hdr_display: hdr::display_from_env(),
@@ -1415,17 +1419,25 @@ impl WgpuRenderer {
 
         self.atlas.before_frame();
 
+        // LUMA LOCAL EDIT: reconfigure here, with no image acquired, rather
+        // than dropping the suboptimal frame. Vulkan's `discard_texture` is a
+        // no-op, so a dropped image stays acquired until a configure succeeds;
+        // a configure that fails would leak it, and two leaks on a 3-image
+        // swapchain leave nothing to acquire. A failed configure here keeps the
+        // old, intact swapchain, and the next acquire reports suboptimal again.
+        if std::mem::take(&mut self.surface_suboptimal) {
+            let surface_config = self.surface_config.clone();
+            let resources = self.resources_mut();
+            resources
+                .surface
+                .configure(&resources.device, &surface_config);
+        }
+
         let frame = match self.resources().surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                // Textures must be destroyed before the surface can be reconfigured.
-                drop(frame);
-                let surface_config = self.surface_config.clone();
-                let resources = self.resources_mut();
-                resources
-                    .surface
-                    .configure(&resources.device, &surface_config);
-                return false;
+                self.surface_suboptimal = true;
+                frame
             }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 let surface_config = self.surface_config.clone();
@@ -1536,7 +1548,32 @@ impl WgpuRenderer {
         };
         if let Err(error) = recorded {
             log::error!("{error:#}");
-            self.resources().queue.submit(std::iter::empty());
+            // LUMA LOCAL EDIT: present a cleared frame rather than dropping
+            // it, for the same reason as the suboptimal case above: a dropped
+            // image stays acquired and the swapchain runs out.
+            let resources = self.resources();
+            let mut encoder =
+                resources
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("failed_frame_encoder"),
+                    });
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("failed_frame_clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &frame_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            resources.queue.submit(std::iter::once(encoder.finish()));
+            resources.queue.present(frame);
             return false;
         }
 
