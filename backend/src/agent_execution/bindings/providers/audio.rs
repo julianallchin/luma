@@ -22,10 +22,10 @@ use super::{missing_reason, unavailable, ProviderCtx, NO_TRACK};
 use crate::agent_execution::artifacts::{
     ArtifactEncoding, ArtifactKind, ArtifactStore, ImportRequest,
 };
-use crate::agent_execution::bindings::assembler::{BindingBuilder, PCM_HEADER_LEN};
+use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::{AxisSpec, DType, Provenance, TensorRef};
 use crate::audio::cache::{load_or_decode_audio_shared, read_pcm_file, write_pcm_file};
-use crate::audio::SAMPLE_RATE;
+use crate::audio::{PCM_HEADER_LEN, SAMPLE_RATE};
 use crate::database::local;
 
 /// The derived "stem" name of the mix minus vocals, cached beside the stems.
@@ -196,7 +196,7 @@ fn bind_pcm(
 
     let sample_rate = descriptor.sample_rate_hz.unwrap_or(SAMPLE_RATE);
     let channels = descriptor.channels.unwrap_or(1).max(1) as usize;
-    let samples = descriptor.byte_len.saturating_sub(PCM_HEADER_LEN) / 4;
+    let samples = descriptor.byte_len.saturating_sub(PCM_HEADER_LEN as u64) / 4;
     let frames = samples as usize / channels;
 
     let time = AxisSpec::linear_unit("time", 0.0, 1.0 / sample_rate as f64, frames, "s");
@@ -210,7 +210,7 @@ fn bind_pcm(
     };
 
     let tensor = TensorRef::new(descriptor.id.clone(), DType::F32, shape, axes, provenance)
-        .with_offset(PCM_HEADER_LEN);
+        .with_offset(PCM_HEADER_LEN as u64);
     b.artifact(descriptor).map_err(String::from)?;
     b.tensor(path, tensor).map_err(String::from)?;
     Ok(())

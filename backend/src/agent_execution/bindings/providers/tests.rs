@@ -248,7 +248,6 @@ impl Fixture {
                     mid: 1.0,
                     high: 1.0,
                 },
-                sample_rate: 48_000,
                 decoded_duration: 8.0,
             },
         )

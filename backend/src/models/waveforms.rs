@@ -51,7 +51,6 @@ pub struct TrackWaveform {
     pub bands: Option<BandEnvelopes>,
     /// 3-band envelopes for preview waveform
     pub preview_bands: Option<BandEnvelopes>,
-    pub sample_rate: u32,
     pub duration_seconds: f64,
 }
 
@@ -89,9 +88,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
             .try_get::<Option<Vec<u8>>, _>("preview_bands_blob")?
             .and_then(|b| bytes_to_band_envelopes(&b));
 
-        let sample_rate_i64: i64 = row.try_get("sample_rate")?;
-        let sample_rate = sample_rate_i64 as u32;
-
         // Prefer decoded_duration (true audio length) over metadata duration
         let duration_seconds: f64 = row
             .try_get::<Option<f64>, _>("decoded_duration")
@@ -107,7 +103,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
             full_samples,
             bands,
             preview_bands,
-            sample_rate,
             duration_seconds,
         })
     }

@@ -1498,7 +1498,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 164
+        "line": 161
       },
       "name": "host_pause",
       "prose": {
@@ -1524,7 +1524,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 154
+        "line": 151
       },
       "name": "host_play",
       "prose": {
@@ -1550,7 +1550,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 170
+        "line": 167
       },
       "name": "host_seek",
       "prose": {
@@ -1580,7 +1580,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 180
+        "line": 177
       },
       "name": "host_set_loop_region",
       "prose": {
@@ -1615,7 +1615,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 205
+        "line": 202
       },
       "name": "host_set_playback_range",
       "returns": "()"
@@ -1634,7 +1634,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 195
+        "line": 192
       },
       "name": "host_set_playback_rate",
       "prose": {
@@ -1651,7 +1651,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "backend/src/dispatch/handlers/host_audio.rs",
-        "line": 223
+        "line": 220
       },
       "name": "host_snapshot",
       "prose": {
@@ -2823,7 +2823,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 351
+        "line": 349
       },
       "name": "remove_session_item",
       "prose": {
@@ -3596,7 +3596,7 @@
       "domain": "auth",
       "handler": {
         "file": "backend/src/dispatch/handlers/auth.rs",
-        "line": 438
+        "line": 436
       },
       "name": "wipe_database",
       "prose": {
@@ -3766,8 +3766,8 @@
     },
     {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:272",
-        "backend/src/dispatch/handlers/tracks.rs:310",
+        "backend/src/dispatch/handlers/tracks.rs:270",
+        "backend/src/dispatch/handlers/tracks.rs:307",
         "backend/src/sync/media.rs:135"
       ],
       "listeners": [],
@@ -3823,14 +3823,14 @@
     },
     {
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:226",
-        "backend/src/dispatch/handlers/tracks.rs:376",
-        "backend/src/dispatch/handlers/tracks.rs:454",
-        "backend/src/preprocessing/scheduler.rs:351",
-        "backend/src/preprocessing/scheduler.rs:399",
-        "backend/src/preprocessing/scheduler.rs:463",
-        "backend/src/preprocessing/scheduler.rs:499",
-        "backend/src/preprocessing/scheduler.rs:531"
+        "backend/src/dispatch/handlers/tracks.rs:224",
+        "backend/src/dispatch/handlers/tracks.rs:368",
+        "backend/src/dispatch/handlers/tracks.rs:446",
+        "backend/src/preprocessing/scheduler.rs:340",
+        "backend/src/preprocessing/scheduler.rs:388",
+        "backend/src/preprocessing/scheduler.rs:450",
+        "backend/src/preprocessing/scheduler.rs:485",
+        "backend/src/preprocessing/scheduler.rs:517"
       ],
       "listeners": [
         "gpui/crates/app/src/library.rs:152"
@@ -3841,7 +3841,7 @@
     },
     {
       "emitters": [
-        "backend/src/preprocessing/scheduler.rs:386"
+        "backend/src/preprocessing/scheduler.rs:375"
       ],
       "listeners": [],
       "name": "track-status-changed",

@@ -270,11 +270,11 @@ impl ArtifactStore {
 
         let byte_len = fs::metadata(&dest)?.len();
         let (sample_rate_hz, channels) = if request.encoding == ArtifactEncoding::PcmF32 {
-            match codecs::read_pcm_header(&dest) {
+            match crate::audio::read_pcm_header(&dest) {
                 Ok(h) => (Some(h.sample_rate), Some(h.channels)),
                 Err(e) => {
                     let _ = fs::remove_file(&dest);
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         } else {
@@ -625,7 +625,7 @@ mod tests {
     fn importing_pcm_fills_sample_rate_and_channels() {
         let (d, mut s) = store();
         let src = d.path().join("mix.pcm");
-        codecs::write_pcm(&src, 2, 48000, 2, &[0.0; 8]).unwrap();
+        crate::audio::write_pcm_file(&src, &[0.0; 8], 48000, 2).unwrap();
         let desc = s
             .import(ImportRequest::new(
                 &src,
