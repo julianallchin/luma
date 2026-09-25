@@ -1,11 +1,11 @@
-use crate::backdrop::{Backdrop, batch_first_order};
+use crate::backdrop::{batch_first_order, Backdrop};
 use crate::hdr::{self, HdrEncoder};
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, HdrOutput, Path, Point,
-    PrimitiveBatch, ScaledPixels, Scene, Size, get_gamma_correction_ratios,
+    get_gamma_correction_ratios, AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs,
+    HdrOutput, Path, Point, PrimitiveBatch, ScaledPixels, Scene, Size,
 };
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
@@ -52,26 +52,6 @@ const SUBPIXEL_SHADERS: &str = concat!(
     include_str!("shaders_storage.wgsl"),
     include_str!("shaders_subpixel.wgsl"),
 );
-
-/// How the path intermediate is composited into the frame. Colour is
-/// premultiplied "over"; alpha is added, and relies on a unorm target to clamp
-/// it at 1.
-///
-/// LUMA LOCAL EDIT: a constant rather than a local, so the HDR tests composite
-/// with the same state. The HDR scene target is float and does not clamp; see
-/// `hdr.wgsl`.
-pub(crate) const PATHS_BLEND: wgpu::BlendState = wgpu::BlendState {
-    color: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-        operation: wgpu::BlendOperation::Add,
-    },
-    alpha: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Add,
-    },
-};
 
 fn least_common_multiple(left: u64, right: u64) -> u64 {
     let mut first = left;
@@ -1006,7 +986,7 @@ impl WgpuRenderer {
             wgpu::PrimitiveTopology::TriangleStrip,
             &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(PATHS_BLEND),
+                blend: Some(crate::hdr::PATHS_BLEND),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             1,
