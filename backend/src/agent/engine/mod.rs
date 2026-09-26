@@ -206,6 +206,10 @@ pub(super) fn hydrate_session(
     }
 }
 
+/// Every tool is marked read-only because the Claude CLI runs a call
+/// alongside others only when it carries `readOnlyHint`. Luma already orders
+/// what must not overlap: Python cells queue per thread, and subagents write
+/// into their own drafts and merge only the clips they changed.
 fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
     tools
         .iter()
@@ -214,6 +218,7 @@ fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
                 "name":tool.name,
                 "description":tool.description,
                 "inputSchema":tool.schema,
+                "annotations":{"readOnlyHint":true},
             })
         })
         .collect()
@@ -241,6 +246,10 @@ mod tests {
         let definitions = tool_definitions(&registry.specs());
         let schema = &definitions[0]["inputSchema"];
         assert_eq!(definitions[0]["name"], "subagent");
+        assert_eq!(
+            definitions[0]["annotations"]["readOnlyHint"], true,
+            "the Claude CLI runs parallel subagents only for read-only tools"
+        );
         assert_eq!(
             schema["type"], "object",
             "actual MCP/native definition must have an object root: {schema}"
