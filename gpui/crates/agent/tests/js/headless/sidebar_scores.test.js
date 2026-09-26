@@ -48,3 +48,49 @@ test("the row opens a track's scores, and the level switches, mints and pops", (
     s.find({ role: "input", label: "Search tracks" }) !== undefined && s.find({ role: "card", label: "Scores level" }) === undefined);
   expect(app.snapshot().find({ role: "row", label: "Aurora" }) !== undefined).toBe(true);
 });
+
+test("double-clicking a score's name renames it in place", () => {
+  const names = () => app.snapshot().findAll({ role: "text" }).filter((n) => n.label.startsWith("Score name #"));
+  const nameOf = (ordinal) => names().find((n) => n.label.startsWith(`Score name ${ordinal} = `));
+  const field = (ordinal) => app.snapshot().find({ role: "input", label: `Score name ${ordinal}` });
+
+  nav.trackEditor("Test Venue", "Aurora");
+  nav.scores("Aurora");
+  until("three names", () => names().length === 3);
+  const before = nameOf("#1").label;
+
+  // Escape drops the draft and writes nothing.
+  app.click(nameOf("#1"), { count: 2 });
+  until("the name is a field", () => field("#1") !== undefined);
+  app.key("ctrl-a backspace");
+  app.type(field("#1"), "Nope");
+  app.key("escape");
+  until("the field is gone", () => field("#1") === undefined);
+  expect(nameOf("#1").label).toBe(before);
+  // Escape ended the rename only; the level is still up.
+  expect(app.snapshot().find({ role: "card", label: "Scores level" }) !== undefined).toBe(true);
+
+  // An empty name is not a name.
+  app.click(nameOf("#1"), { count: 2 });
+  until("the name is a field", () => field("#1") !== undefined);
+  app.key("ctrl-a backspace enter");
+  until("the field is gone", () => field("#1") === undefined);
+  app.frames(3);
+  expect(nameOf("#1").label).toBe(before);
+
+  // Enter saves, and the list shows the new name.
+  app.click(nameOf("#1"), { count: 2 });
+  until("the name is a field", () => field("#1") !== undefined);
+  app.key("ctrl-a backspace");
+  app.type(field("#1"), "Opening set");
+  app.key("enter");
+  until("the new name in the list", () => nameOf("#1")?.label === "Score name #1 = Opening set");
+
+  // Blur saves too: a press on another row commits the draft.
+  app.click(nameOf("#2"), { count: 2 });
+  until("the name is a field", () => field("#2") !== undefined);
+  app.key("ctrl-a backspace");
+  app.type(field("#2"), "Encore");
+  app.click(nameOf("#3"));
+  until("the blurred name in the list", () => nameOf("#2")?.label === "Score name #2 = Encore");
+});

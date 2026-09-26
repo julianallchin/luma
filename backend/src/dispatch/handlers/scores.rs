@@ -156,7 +156,134 @@ pub async fn ensure_venue_score(
     .await?)
 }
 
+/// Rename a score. The name is trimmed; an empty one is refused, because a
+/// score is always shown by its name.
+pub async fn rename_score(
+    services: &AppServices,
+    score_id: String,
+    name: String,
+) -> Result<(), CommandError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CommandError::Invalid("A score name cannot be empty".into()));
+    }
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
+    db::rename_score(&mut access, &score_id, name).await?;
+    access.commit().await?;
+    Ok(())
+}
+
 /// A delete is a delete: the score's clips, definitions and drafts go with it.
 pub async fn delete_score(services: &AppServices, id: String) -> Result<(), CommandError> {
     Ok(catalog::delete_score(&services.db.0, &id).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use crate::database::local::{auth, database, state};
+    use crate::dispatch::{dispatch, AppServices};
+
+    const OWNER: &str = "11111111-2222-3333-4444-555555555555";
+
+    #[tokio::test]
+    async fn rename_score_trims_refuses_empty_and_writes_the_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = database::init_app_db_at(directory.path()).await.unwrap();
+        let state_db = state::init_state_db_at(directory.path()).await.unwrap();
+        auth::install_test_session(&state_db.0, OWNER).await;
+        auth::bootstrap_headless_admission(&db.0, &state_db.0)
+            .await
+            .unwrap();
+        let storage = crate::storage::StorageRoot::from_path(directory.path().to_path_buf());
+        let workspaces = Arc::new(
+            crate::agent_execution::workspace::PythonWorkspaceService::new(
+                storage.agent_workspaces_dir(),
+                Arc::new(|| Err("no Python here".to_string())),
+            ),
+        );
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let services = AppServices::headless(db, state_db, storage, repo, workspaces);
+
+        let venue = dispatch(
+            &services,
+            "create_venue",
+            &json!({ "name": "Room", "description": null }),
+        )
+        .await
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM venues WHERE id = ?")
+            .bind(&venue)
+            .fetch_one(&services.db.0)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('track', ?, 'h', '/t.wav')",
+        )
+        .bind(&uid)
+        .execute(&services.db.0)
+        .await
+        .unwrap();
+        let score = dispatch(
+            &services,
+            "create_score",
+            &json!({
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "trackId": "track",
+                "venueId": venue,
+                "name": "Draft",
+            }),
+        )
+        .await
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let name = |services: &AppServices| {
+            let pool = services.db.0.clone();
+            let score = score.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<String>>("SELECT name FROM scores WHERE id = ?")
+                    .bind(score)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        dispatch(
+            &services,
+            "rename_score",
+            &json!({ "scoreId": score, "name": "  Opening set  " }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(name(&services).await.as_deref(), Some("Opening set"));
+
+        assert!(dispatch(
+            &services,
+            "rename_score",
+            &json!({ "scoreId": score, "name": "   " }),
+        )
+        .await
+        .is_err());
+        assert_eq!(name(&services).await.as_deref(), Some("Opening set"));
+
+        assert!(dispatch(
+            &services,
+            "rename_score",
+            &json!({ "scoreId": "no-such-score", "name": "Other" }),
+        )
+        .await
+        .is_err());
+    }
 }

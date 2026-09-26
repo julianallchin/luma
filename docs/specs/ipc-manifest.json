@@ -2752,6 +2752,32 @@
     {
       "args": [
         {
+          "name": "scoreId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "rename_score",
+      "prose": {
+        "notes": "Trims the name and refuses an empty one. A name equal to the stored one writes nothing. The track sidebar re-reads list_scores_across_venues after success.",
+        "returns": "void",
+        "sideEffects": [
+          "VenueAccess::<Write> on the score",
+          "UPDATE scores.name; the writer connection's upload queue syncs it through PowerSync"
+        ]
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "venueId",
           "rust": "String"
         }
@@ -3557,7 +3583,7 @@
       "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
     {
-      "commandCount": 8,
+      "commandCount": 9,
       "domain": "scores",
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
@@ -3712,7 +3738,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 149,
+    "commandCount": 150,
     "domainCount": 26,
     "eventCount": 13
   },
