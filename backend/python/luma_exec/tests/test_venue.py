@@ -225,7 +225,6 @@ class VenueRenderTests(unittest.TestCase):
                         "width": 320,
                         "height": 200,
                         "highlight": None,
-                        "aimArrows": True,
                         "house": None,
                         "sun": None,
                     },
@@ -259,14 +258,6 @@ class VenueRenderTests(unittest.TestCase):
         self.venue.render(edit=edit, only=clip, t=1.0)
         _, payload = self.host.calls[-1]
         self.assertEqual(set(payload["edit"]["clips"]), {clip.id})
-
-    def test_aim_arrows_are_on_unless_the_caller_says_otherwise(self) -> None:
-        """This is the verification channel, so the aims are drawn by default."""
-        self.venue.render()
-        self.venue.render(aim_arrows=False)
-        self.assertEqual(
-            [call[1]["aimArrows"] for call in self.host.calls], [True, False]
-        )
 
     def test_environment_reads_with_no_arguments_and_writes_with_any(self) -> None:
         at_rest = self.venue.environment()
