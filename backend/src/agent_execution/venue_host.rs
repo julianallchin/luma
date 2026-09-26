@@ -157,7 +157,6 @@ impl VenueHost {
                 view,
                 time,
                 state,
-                aim_arrows: request.aim_arrows,
                 size: (width, height),
                 bare: false,
             },
@@ -175,12 +174,10 @@ impl VenueHost {
             view,
             time,
             state,
-            aim_arrows,
             size: (width, height),
             bare,
         } = shot;
         let (mut scene, definitions) = geometry.scene();
-        scene.aim_arrows = aim_arrows;
         if bare {
             // A draft is looked at for its shape. The floor and its grid are
             // the *room's* furniture, and a component being previewed is not in
@@ -935,7 +932,6 @@ impl VenueHost {
                 view,
                 time: 0.0,
                 state: None,
-                aim_arrows: false,
                 size: (width, height),
                 bare: true,
             },
@@ -1471,7 +1467,6 @@ struct Shoot {
     view: View,
     time: f32,
     state: Option<UniverseState>,
-    aim_arrows: bool,
     size: (u32, u32),
     /// Draw the piece and nothing else — no floor, no grid. What a draft is
     /// previewed through.
@@ -1742,11 +1737,6 @@ struct RenderRequest {
     /// A private candidate score, evaluated by the same compositor as apply.
     /// Omitted for the saved score. Never persisted or sent to the live viewport.
     edit: Option<luma_patterns::Score>,
-    /// Draw each fixture's rest aim as an arrow. Defaulted on the Python side
-    /// rather than here, so the answer to "on or off by default" has one home;
-    /// this channel is a verification channel, and a picture that does not say
-    /// which way the heads point does not verify a patch.
-    aim_arrows: bool,
     /// Light this one frame with the house at `house`, whatever the room is.
     ///
     /// A camera setting, not an edit: it is written over the environment the
