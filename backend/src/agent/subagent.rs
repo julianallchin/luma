@@ -313,7 +313,9 @@ pub(super) async fn delegate(
     })
 }
 
-/// Drive the child's turn, forwarding its live state to the parent's host.
+/// Drive the child's turn, forwarding its live state to the parent's host:
+/// a [`SubagentSnapshot`] for the pill, and every event as
+/// [`TurnEvent::Child`] for a reader showing the child's thread.
 ///
 /// The child's events are folded through the same reducer the hosts use, so
 /// "what the child finally said" is read off a [`Transcript`] rather than
@@ -347,6 +349,7 @@ async fn run_child(
             }
             _ => {}
         }
+        ctx.progress.child(child_thread_id, event);
     }
     (result, transcript)
 }

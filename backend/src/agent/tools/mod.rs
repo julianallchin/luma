@@ -79,10 +79,9 @@ impl ToolContext<'_> {
 
 /// Live progress from a call whose work outlasts a chip.
 ///
-/// One method, deliberately. The turn folds every event it emits into the
-/// transcript before handing it to the host; the only event a tool may bypass
-/// that fold with is the one the reducer drops on sight, because it is not
-/// transcript at all.
+/// The turn folds every event it emits into the transcript before handing it
+/// to the host; the only events a tool may bypass that fold with are the ones
+/// the reducer drops on sight, because they are not this thread's transcript.
 #[derive(Clone)]
 pub struct ToolProgress(mpsc::UnboundedSender<TurnEvent>);
 
@@ -97,6 +96,15 @@ impl ToolProgress {
         if let Ok(snapshot) = serde_json::to_value(snapshot) {
             let _ = self.0.send(TurnEvent::Subagent { snapshot });
         }
+    }
+
+    /// Forward one event of a delegated turn, tagged with the child's thread,
+    /// so a host can show that thread live. Also dropped by the reducer.
+    pub fn child(&self, thread_id: &str, event: TurnEvent) {
+        let _ = self.0.send(TurnEvent::Child {
+            thread_id: thread_id.to_owned(),
+            event: Box::new(event),
+        });
     }
 }
 

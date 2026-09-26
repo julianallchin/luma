@@ -575,20 +575,28 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
             }),
         ),
         TurnEvent::ToolCallEnded { call_id, output } => {
-            let Some(row) = transcript.messages.len().checked_sub(1) else {
-                return Applied::default();
-            };
-            let message = &mut transcript.messages[row];
-            let found = message
-                .parts
-                .iter_mut()
-                .enumerate()
-                .rev()
-                .find_map(|(index, part)| match part {
-                    AgentChatPart::Tool(tool) if tool.call_id == *call_id => Some((index, tool)),
-                    _ => None,
-                });
-            let Some((part, tool)) = found else {
+            // Usually the open row, but a steer can close that row while one
+            // of its calls is still running: the result lands where the call is.
+            let found =
+                transcript
+                    .messages
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(row, message)| {
+                        message
+                            .parts
+                            .iter_mut()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(index, part)| match part {
+                                AgentChatPart::Tool(tool) if tool.call_id == *call_id => {
+                                    Some((row, index, tool))
+                                }
+                                _ => None,
+                            })
+                    });
+            let Some((row, part, tool)) = found else {
                 return Applied::default();
             };
             match output {
@@ -625,13 +633,132 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                 }),
             },
         ),
+        TurnEvent::Steered {
+            user_id,
+            text,
+            next_id,
+        } => {
+            transcript
+                .messages
+                .push(AgentChatMessage::user(user_id.clone(), text.clone()));
+            let row = transcript.messages.len() - 1;
+            transcript.messages.push(AgentChatMessage {
+                id: next_id.clone(),
+                role: Role::Assistant,
+                parts: Vec::new(),
+            });
+            Applied {
+                row: Some(row),
+                ..Applied::default()
+            }
+        }
+        TurnEvent::MessageEnded {
+            id, stop_reason, ..
+        } => {
+            let Some(row) = transcript
+                .messages
+                .iter()
+                .rposition(|message| message.id == *id)
+            else {
+                return Applied::default();
+            };
+            end_row(&mut transcript.messages[row], *stop_reason);
+            Applied {
+                row: Some(row),
+                ..Applied::default()
+            }
+        }
         // Live-only or host-only: a subagent milestone is not transcript
         // (§2.5), and the other two are notifications to the editor.
         TurnEvent::Subagent { .. }
+        | TurnEvent::Child { .. }
         | TurnEvent::DocumentChanged { .. }
         | TurnEvent::PreviewSelection { .. }
-        | TurnEvent::MessageEnded { .. }
         | TurnEvent::TurnEnded { .. } => Applied::default(),
+    }
+}
+
+/// Say how `row` ended: its last step's stop reason becomes `stop_reason`. The
+/// last step, because that is the one [`Transcript::unfinished`] reads — a CLI
+/// engine reports each request as it happens and learns only at the end which
+/// of them was the last. A row that recorded no step gets a bare marker.
+pub(crate) fn end_row(row: &mut AgentChatMessage, stop_reason: super::model::StopReason) {
+    let last = row.parts.iter_mut().rev().find_map(|part| match part {
+        AgentChatPart::ProviderMessage { data } if data.is_object() => Some(data),
+        _ => None,
+    });
+    match last {
+        Some(Value::Object(data)) => {
+            data.insert("stopReason".into(), stop_reason.as_str().into());
+        }
+        _ => row.parts.push(AgentChatPart::ProviderMessage {
+            data: serde_json::json!({ "stopReason": stop_reason.as_str() }),
+        }),
+    }
+}
+
+/// What a tool call that never returned reports, once the turn that made it
+/// is gone.
+pub const INTERRUPTED: &str = "Interrupted: Luma stopped before this tool call returned.";
+
+impl Transcript {
+    /// Whether the last turn stopped part way: a prompt nobody answered, or an
+    /// assistant row whose last step asked for tools, or that has a step
+    /// without an end, or a call without a result.
+    ///
+    /// Read from the rows alone, so a thread reopened after a quit answers the
+    /// same as the turn that was writing it. Rows written before steps were
+    /// persisted always closed with their final step, and read as finished.
+    #[must_use]
+    pub fn unfinished(&self) -> bool {
+        let Some(last) = self.messages.last() else {
+            return false;
+        };
+        match last.role {
+            Role::User => true,
+            Role::Session => false,
+            Role::Assistant => {
+                let open_call = last.parts.iter().any(|part| {
+                    matches!(part, AgentChatPart::Tool(tool)
+                        if tool.output.is_none() && tool.error_text.is_none())
+                });
+                let step_start = last
+                    .parts
+                    .iter()
+                    .rposition(|part| matches!(part, AgentChatPart::StepStart));
+                let step_end = last
+                    .parts
+                    .iter()
+                    .rposition(|part| matches!(part, AgentChatPart::ProviderMessage { .. }));
+                let stop = step_end.and_then(|at| match &last.parts[at] {
+                    AgentChatPart::ProviderMessage { data } => {
+                        data.get("stopReason").and_then(Value::as_str)
+                    }
+                    _ => None,
+                });
+                open_call
+                    || matches!((step_start, step_end), (Some(start), end) if end.is_none_or(|end| end < start))
+                    || stop == Some(super::model::StopReason::ToolUse.as_str())
+            }
+        }
+    }
+
+    /// Give every call in the last row that has no result an
+    /// [`INTERRUPTED`] error, so the row is a valid provider transcript
+    /// again. Answers the row it changed.
+    pub fn interrupt_open_calls(&mut self) -> Option<usize> {
+        let row = self.messages.len().checked_sub(1)?;
+        let mut changed = false;
+        for part in &mut self.messages[row].parts {
+            if let AgentChatPart::Tool(tool) = part {
+                if tool.output.is_none() && tool.error_text.is_none() {
+                    tool.state = ToolState::OutputError;
+                    tool.error_text = Some(INTERRUPTED.into());
+                    changed = true;
+                }
+            }
+        }
+        changed.then_some(row)
     }
 }
 
@@ -702,16 +829,24 @@ fn now_ms() -> i64 {
 /// wherever a tool persists more (or less) than the model should re-read.
 #[must_use]
 pub fn to_model_messages(transcript: &Transcript, registry: &ToolRegistry) -> Vec<ModelMessage> {
-    let mut out = Vec::new();
+    let mut out: Vec<ModelMessage> = Vec::new();
     for message in &transcript.messages {
         match message.role {
             Role::User => {
                 let text = message.text();
-                if !text.is_empty() {
-                    out.push(ModelMessage {
+                if text.is_empty() {
+                    continue;
+                }
+                // A steer lands right after a step's tool results: one user
+                // turn, results first, as the providers require.
+                match out.last_mut() {
+                    Some(previous) if previous.role == ModelRole::User => {
+                        previous.content.push(ContentBlock::Text(text));
+                    }
+                    _ => out.push(ModelMessage {
                         role: ModelRole::User,
                         content: vec![ContentBlock::Text(text)],
-                    });
+                    }),
                 }
             }
             Role::Assistant => push_assistant_steps(&mut out, message, registry),
@@ -1197,5 +1332,140 @@ mod tests {
         assert_eq!(Role::parse("session"), Some(Role::Session));
         assert_eq!(Role::Session.as_str(), "session");
         assert_eq!(Role::parse("mcp"), None);
+    }
+
+    fn assistant(parts: Vec<AgentChatPart>) -> AgentChatMessage {
+        AgentChatMessage {
+            id: "a1".into(),
+            role: Role::Assistant,
+            parts,
+        }
+    }
+
+    fn step(stop: &str) -> AgentChatPart {
+        AgentChatPart::ProviderMessage {
+            data: json!({ "stopReason": stop, "usage": Usage::default() }),
+        }
+    }
+
+    fn call(output: Option<Value>) -> AgentChatPart {
+        AgentChatPart::Tool(ToolPart {
+            name: Some("echo".into()),
+            dynamic: false,
+            call_id: "c1".into(),
+            state: ToolState::InputAvailable,
+            input: Some(json!({})),
+            output,
+            error_text: None,
+        })
+    }
+
+    /// What counts as a turn cut short, read from the rows alone. A closed
+    /// row of any age reads finished; so does the reader's own stop.
+    #[test]
+    fn an_unfinished_turn_is_read_from_its_rows() {
+        let thread = |last: AgentChatMessage| Transcript {
+            messages: vec![AgentChatMessage::user("u1", "go"), last],
+        };
+        let unanswered = Transcript {
+            messages: vec![AgentChatMessage::user("u1", "go")],
+        };
+        assert!(unanswered.unfinished(), "a prompt nobody answered");
+        let cases = [
+            (
+                vec![
+                    AgentChatPart::StepStart,
+                    call(Some(json!(1))),
+                    step("tool_use"),
+                ],
+                true,
+            ),
+            (
+                vec![AgentChatPart::StepStart, call(None), step("tool_use")],
+                true,
+            ),
+            (vec![AgentChatPart::StepStart], true),
+            (
+                vec![
+                    AgentChatPart::StepStart,
+                    step("tool_use"),
+                    AgentChatPart::StepStart,
+                    AgentChatPart::Text {
+                        text: "half".into(),
+                    },
+                ],
+                true,
+            ),
+            (
+                vec![
+                    AgentChatPart::StepStart,
+                    AgentChatPart::Text {
+                        text: "done".into(),
+                    },
+                    step("end_turn"),
+                ],
+                false,
+            ),
+            (vec![AgentChatPart::StepStart, step("max_tokens")], false),
+            // Rows from before steps were persisted: no step markers at all.
+            (vec![AgentChatPart::Text { text: "old".into() }], false),
+        ];
+        for (parts, unfinished) in cases {
+            let transcript = thread(assistant(parts));
+            assert_eq!(transcript.unfinished(), unfinished, "{transcript:#?}");
+        }
+
+        let mut stopped = thread(assistant(vec![
+            AgentChatPart::StepStart,
+            call(None),
+            step("tool_use"),
+        ]));
+        assert_eq!(stopped.interrupt_open_calls(), Some(1));
+        end_row(&mut stopped.messages[1], StopReason::Aborted);
+        assert!(!stopped.unfinished(), "{stopped:#?}");
+    }
+
+    /// A CLI engine learns which request was its last only when the run
+    /// ends; closing the row says so on that request.
+    #[test]
+    fn closing_a_row_marks_its_last_step() {
+        let mut transcript = Transcript {
+            messages: vec![assistant(vec![AgentChatPart::StepStart, step("tool_use")])],
+        };
+        assert!(transcript.unfinished());
+        apply(
+            &mut transcript,
+            &TurnEvent::MessageEnded {
+                id: "a1".into(),
+                stop_reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            },
+        );
+        assert!(!transcript.unfinished(), "{transcript:#?}");
+        assert_eq!(transcript.requests().count(), 1, "no step was added");
+    }
+
+    /// A steer lands after a step's tool results: the model sees one user
+    /// turn, the results first, as the providers require.
+    #[test]
+    fn a_steer_joins_the_tool_results_it_follows() {
+        let transcript = Transcript {
+            messages: vec![
+                AgentChatMessage::user("u1", "go"),
+                assistant(vec![
+                    AgentChatPart::StepStart,
+                    call(Some(json!("ok"))),
+                    step("tool_use"),
+                ]),
+                AgentChatMessage::user("u2", "darker"),
+            ],
+        };
+        let messages = to_model_messages(&transcript, &ToolRegistry::default());
+        let last = messages.last().expect("messages");
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert!(matches!(
+            last.content.as_slice(),
+            [ContentBlock::ToolResult { .. }, ContentBlock::Text(text)] if text == "darker"
+        ));
     }
 }

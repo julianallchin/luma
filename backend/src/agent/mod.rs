@@ -505,11 +505,27 @@ pub enum TurnEvent {
     Subagent {
         snapshot: Value,
     },
+    /// One event of a subagent's turn, forwarded as it happens so a host can
+    /// show the child's thread live. Never persisted: the child writes its own
+    /// rows, and the parent's reducer drops this on sight.
+    Child {
+        thread_id: String,
+        event: Box<TurnEvent>,
+    },
     /// The score moved; the editor should re-read it.
     DocumentChanged,
     /// Ephemeral editor state the host may honour or ignore.
     PreviewSelection {
         expression: Option<String>,
+    },
+    /// A steering message reached the model: the open assistant row closes,
+    /// `text` becomes the user row `user_id`, and `next_id` opens as the
+    /// assistant row that answers it. Emitted at the point the engine took
+    /// the message, so the transcript shows it where the model saw it.
+    Steered {
+        user_id: String,
+        text: String,
+        next_id: String,
     },
     /// The assistant row is closed and durable.
     MessageEnded {
@@ -817,6 +833,19 @@ impl AgentService {
     /// it is polled, and dropping it cancels everything in flight.
     #[must_use]
     pub fn turn(&self, thread_id: &str, prompt: UserPrompt) -> TurnStream {
+        self.run(thread_id, Some(prompt))
+    }
+
+    /// Continue the thread's unfinished turn (see [`Transcript::unfinished`])
+    /// from what it persisted. Only ever on the reader's request: it spends
+    /// money. An API engine asks the model again with the saved rows; a CLI
+    /// engine resumes its native session with a short continuation prompt.
+    #[must_use]
+    pub fn resume(&self, thread_id: &str) -> TurnStream {
+        self.run(thread_id, None)
+    }
+
+    fn run(&self, thread_id: &str, prompt: Option<UserPrompt>) -> TurnStream {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (steer_tx, steer_rx) = mpsc::unbounded_channel();
         let run = turn::run(
@@ -831,6 +860,15 @@ impl AgentService {
             run: Some(Box::pin(run)),
             steer: steer_tx,
         }
+    }
+
+    /// Record that the reader stopped the thread's turn, so the chat does not
+    /// offer to resume it. Call after dropping the turn's stream: this waits
+    /// for the turn to let go of the thread, then closes its last row as
+    /// aborted and gives any call without a result an interrupted error.
+    /// Answers the transcript as it now stands.
+    pub async fn record_stop(&self, thread_id: &str) -> Result<Transcript, AgentError> {
+        turn::record_stop(self, thread_id).await
     }
 
     pub(crate) async fn principal(&self) -> Result<Option<String>, AgentError> {
@@ -860,10 +898,10 @@ impl TurnStream {
         TurnSteer(self.steer.clone())
     }
 
-    /// Redirect the turn in flight. Applied at the next step boundary — the
-    /// point at which one assistant row closes and the next opens, which is
-    /// also the point at which the invariant "one prepared turn per assistant
-    /// row" is maintained.
+    /// Redirect the turn in flight. It reaches the model at the engine's next
+    /// step — after the running tool results for the API, through the CLI's
+    /// own mid-turn input for Claude and Codex — and a
+    /// [`TurnEvent::Steered`] marks where.
     pub fn steer(&self, message: impl Into<String>) {
         let _ = self.steer.send(message.into());
     }

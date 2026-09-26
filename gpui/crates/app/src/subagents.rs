@@ -33,7 +33,7 @@ use gpui::{
     div, prelude::*, px, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
     SharedString, Window,
 };
-use luma_chat::AgentChat;
+use luma_chat::{AgentChat, RunningTurns};
 use luma_lib::agent::subagent::{SubagentPhase, SubagentSnapshot};
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
@@ -131,24 +131,37 @@ impl Luma {
             .as_ref()
             .map(|chat| chat.read(cx).subagents().to_vec())
             .unwrap_or_default();
-        let agent = self.library.agent();
+        let source = self.reader_source(cx);
         let mut state = Subagents::new(rows, cx);
-        if let Some(child) = child {
-            open_child(&mut state, child, &agent, cx);
+        if let (Some(child), Some(source)) = (child, source) {
+            open_child(&mut state, child, &source, cx);
         }
         self.overlay.open(Overlay::Subagents(Box::new(state)));
         cx.notify();
     }
 
     fn open_subagent(&mut self, child: SharedString, cx: &mut Context<Self>) {
-        // Read the agent handle out first: `open_mut` below borrows `self`, and
-        // reaching back through `cx.entity()` for it inside that borrow is a
-        // read of an entity that is already being updated.
-        let agent = self.library.agent();
+        // Read the reader's inputs out first: `open_mut` below borrows `self`,
+        // and reaching back through `cx.entity()` for them inside that borrow
+        // is a read of an entity that is already being updated.
+        let Some(source) = self.reader_source(cx) else {
+            return;
+        };
         if let Some(Overlay::Subagents(state)) = self.overlay.open_mut() {
-            open_child(state, child, &agent, cx);
+            open_child(state, child, &source, cx);
             cx.notify();
         }
+    }
+
+    /// What a child's reader is built from: the agent, and the app's running
+    /// turns, where a running child's turn is folded from its parent's. `None`
+    /// without a chat, which is also when there is no child to read.
+    fn reader_source(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<(luma_chat::Agent, Entity<RunningTurns>)> {
+        let running = self.chat.as_ref()?.read(cx).running().clone();
+        Some((self.library.agent(), running))
     }
 
     /// Go back to the list, and say whether there was anywhere to go back
@@ -256,12 +269,11 @@ impl Luma {
 ///
 /// A free function rather than a method on either side because it writes the
 /// dialog's own state while the overlay that holds it is already borrowed from
-/// `Luma`; the agent handle it needs is read out before that borrow and handed
-/// in.
+/// `Luma`; the reader's inputs are read out before that borrow and handed in.
 fn open_child(
     state: &mut Subagents,
     child: SharedString,
-    agent: &luma_chat::Agent,
+    (agent, running): &(luma_chat::Agent, Entity<RunningTurns>),
     cx: &mut Context<Luma>,
 ) {
     if state
@@ -270,8 +282,9 @@ fn open_child(
         .is_none_or(|(mounted, _)| mounted != &child)
     {
         let agent = agent.clone();
+        let running = running.clone();
         let thread = child.clone();
-        let reader = cx.new(|cx| AgentChat::reader(agent, &thread, cx));
+        let reader = cx.new(|cx| AgentChat::reader(agent, running, &thread, cx));
         state.reader = Some((child.clone(), reader));
     }
     state.morph.request(

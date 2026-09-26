@@ -4,6 +4,8 @@ use super::{
     protocol, AgentError, ContentBlock, Event, Request, ToolOutcome, Usage,
 };
 use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 pub(in crate::agent) struct Session {
     process: Process,
@@ -11,6 +13,26 @@ pub(in crate::agent) struct Session {
     usage: Usage,
     pub(super) last_usage: Option<Usage>,
     pub(super) context_window: Option<u64>,
+    steers: Arc<Mutex<Steers>>,
+    /// Events one frame produced beyond the one returned.
+    ready: VecDeque<Event>,
+    /// The turn completed while steers were still waiting for their answer.
+    completing: bool,
+}
+
+// Adapted from Comet, MIT, (c) 2026 Wing: `turn/steer` with the turn-completed
+// race falling back to the next `turn/start` on the same thread.
+/// What the session and its [`Steerer`] share about steering.
+#[derive(Default)]
+struct Steers {
+    thread: Option<String>,
+    /// The turn a steer may join: set by `turn/start`'s answer, cleared at
+    /// `turn/completed`.
+    turn: Option<String>,
+    /// `turn/steer` requests awaiting an answer, by request id.
+    requests: HashMap<String, (String, String)>,
+    /// Steers no running turn took, delivered as the next `turn/start`.
+    queued: VecDeque<(String, String)>,
 }
 
 impl Session {
@@ -31,12 +53,33 @@ impl Session {
             usage,
             last_usage: None,
             context_window: None,
+            steers: Arc::default(),
+            ready: VecDeque::new(),
+            completing: false,
         })
+    }
+
+    pub(super) fn steerer(&self) -> Steerer {
+        Steerer {
+            input: self.process.input(),
+            steers: Arc::clone(&self.steers),
+        }
     }
 
     pub async fn next(&mut self) -> Result<Event, AgentError> {
         loop {
+            if let Some(event) = self.ready.pop_front() {
+                return Ok(event);
+            }
             let frame = self.process.read().await?;
+            if frame.get("method").is_none() {
+                if let Some(id) = frame["id"].as_str() {
+                    if let Some(event) = self.answered(id, &frame).await? {
+                        return Ok(event);
+                    }
+                    continue;
+                }
+            }
             if let Some(error) = frame.get("error") {
                 return Err(protocol(format!("Codex: {error}")));
             }
@@ -101,6 +144,7 @@ impl Session {
                             "threadId":thread,"effort":self.request.effort,"input":[{"type":"text","text":self.request.prompt}]
                         }}))
                         .await?;
+                    self.steers.lock().expect("steers").thread = Some(thread.clone());
                     return Ok(Event::Session {
                         id: thread,
                         model: frame
@@ -108,6 +152,13 @@ impl Session {
                             .and_then(Value::as_str)
                             .map(str::to_string),
                     });
+                }
+                Some(3) if frame.get("method").is_none() => {
+                    self.steers.lock().expect("steers").turn = frame
+                        .pointer("/result/turn/id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    continue;
                 }
                 _ => {}
             }
@@ -161,11 +212,23 @@ impl Session {
                     self.context_window = params["tokenUsage"]["modelContextWindow"]
                         .as_u64()
                         .filter(|window| *window > 0);
+                    if let Some(last) = self.last_usage {
+                        self.ready.push_back(Event::Step(last));
+                    }
                     return Ok(Event::Usage(delta));
                 }
                 "turn/completed" => {
                     if params.pointer("/turn/status").and_then(Value::as_str) == Some("completed") {
-                        return Ok(Event::Done);
+                        let waiting = {
+                            let mut steers = self.steers.lock().expect("steers");
+                            steers.turn = None;
+                            !steers.requests.is_empty()
+                        };
+                        if waiting {
+                            self.completing = true;
+                            continue;
+                        }
+                        return self.finish_turn().await;
                     }
                     return Err(protocol(format!(
                         "Codex turn did not complete: {}",
@@ -187,6 +250,66 @@ impl Session {
         self.usage
     }
 
+    /// The answer to a request this session made by string id: a steer, or a
+    /// turn it started for one.
+    async fn answered(&mut self, id: &str, frame: &Value) -> Result<Option<Event>, AgentError> {
+        if id.starts_with(TURN_REQUEST) {
+            if let Some(error) = frame.get("error") {
+                return Err(protocol(format!("Codex: steering failed: {error}")));
+            }
+            self.steers.lock().expect("steers").turn = frame
+                .pointer("/result/turn/id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return Ok(None);
+        }
+        let (steer, rejected) = {
+            let mut steers = self.steers.lock().expect("steers");
+            let Some(steer) = steers.requests.remove(id) else {
+                return Ok(None);
+            };
+            let rejected = frame.get("error").is_some();
+            if rejected {
+                // Most often the turn finished between the send and this
+                // request: the text is fine, the turn is gone.
+                steers.queued.push_back(steer.clone());
+            }
+            (steer, rejected)
+        };
+        let settled = self.completing && self.steers.lock().expect("steers").requests.is_empty();
+        let mut event = (!rejected).then(|| Event::Steered(vec![steer.0]));
+        if settled {
+            self.completing = false;
+            let end = self.finish_turn().await?;
+            match event {
+                Some(_) => self.ready.push_back(end),
+                None => event = Some(end),
+            }
+        }
+        Ok(event)
+    }
+
+    /// The turn is over. A steer no turn took becomes the next turn on the
+    /// same thread; otherwise the run is done.
+    async fn finish_turn(&mut self) -> Result<Event, AgentError> {
+        let next = {
+            let mut steers = self.steers.lock().expect("steers");
+            steers
+                .queued
+                .pop_front()
+                .map(|steer| (steer, steers.thread.clone()))
+        };
+        let Some(((id, text), Some(thread))) = next else {
+            return Ok(Event::Done);
+        };
+        self.process
+            .send(json!({"id":format!("{TURN_REQUEST}{id}"),"method":"turn/start","params":{
+                "threadId":thread,"effort":self.request.effort,"input":[{"type":"text","text":text}]
+            }}))
+            .await?;
+        Ok(Event::Steered(vec![id]))
+    }
+
     pub(super) fn input(&self) -> super::process::Input {
         self.process.input()
     }
@@ -194,6 +317,40 @@ impl Session {
     #[cfg(test)]
     pub async fn reply(&mut self, id: Value, outcome: ToolOutcome) -> Result<(), AgentError> {
         self.process.send(reply_frame(id, outcome)).await
+    }
+}
+
+const STEER_REQUEST: &str = "luma-steer-";
+const TURN_REQUEST: &str = "luma-turn-";
+
+/// Sends steers into a running session's live turn.
+pub(in crate::agent) struct Steerer {
+    input: super::process::Input,
+    steers: Arc<Mutex<Steers>>,
+}
+
+impl Steerer {
+    pub async fn steer(&self, id: &str, text: &str) -> Result<(), AgentError> {
+        let request = {
+            let mut steers = self.steers.lock().expect("steers");
+            match (steers.thread.clone(), steers.turn.clone()) {
+                (Some(thread), Some(turn)) => {
+                    let request = format!("{STEER_REQUEST}{id}");
+                    steers
+                        .requests
+                        .insert(request.clone(), (id.to_owned(), text.to_owned()));
+                    json!({"id":request,"method":"turn/steer","params":{
+                        "threadId":thread,"expectedTurnId":turn,
+                        "input":[{"type":"text","text":text}]
+                    }})
+                }
+                _ => {
+                    steers.queued.push_back((id.to_owned(), text.to_owned()));
+                    return Ok(());
+                }
+            }
+        };
+        self.input.send(request).await
     }
 }
 
@@ -306,7 +463,64 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
             (20, 30, 4)
         );
         assert_eq!(session.usage_total().input_tokens, 60);
+        // The request itself, for the context gauge, as soon as it is known.
+        assert!(matches!(session.next().await.unwrap(), Event::Step(step) if step == last));
         assert!(matches!(session.next().await.unwrap(),Event::Text(text) if text == "done"));
+        assert!(matches!(session.next().await.unwrap(), Event::Done));
+    }
+
+    /// A steer joins the live turn through `turn/steer`; one that loses the
+    /// race with the turn's end is not lost but starts the next turn on the
+    /// same thread.
+    #[tokio::test]
+    async fn steers_join_the_turn_or_start_the_next() {
+        let temp = tempfile::tempdir().unwrap();
+        let script = r#"
+import json,sys
+read=lambda: json.loads(sys.stdin.readline())
+def send(x): print(json.dumps(x),flush=True)
+assert read()['method']=='initialize'
+send({'id':1,'result':{}})
+read(); read()
+send({'id':4,'result':{'account':{'type':'chatgpt'}}})
+read()
+send({'id':5,'result':{'config':{}}})
+read()
+send({'id':2,'result':{'thread':{'id':'native'}}})
+assert read()['method']=='turn/start'
+send({'id':3,'result':{'turn':{'id':'turn-1'}}})
+send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'total':{'inputTokens':100,'cachedInputTokens':0,'outputTokens':10},'last':{'inputTokens':100,'cachedInputTokens':0,'outputTokens':10}}}})
+steer=read()
+assert steer['method']=='turn/steer', steer
+assert steer['params']=={'threadId':'native','expectedTurnId':'turn-1','input':[{'type':'text','text':'darker'}]}, steer
+send({'id':steer['id'],'result':{'turnId':'turn-1'}})
+late=read()
+assert late['method']=='turn/steer', late
+send({'method':'turn/completed','params':{'turn':{'id':'turn-1','status':'completed'}}})
+send({'id':late['id'],'error':{'code':-32600,'message':'no active turn'}})
+start=read()
+assert start['method']=='turn/start', start
+assert start['params']['threadId']=='native' and start['params']['input']==[{'type':'text','text':'and blue'}], start
+send({'id':start['id'],'result':{'turn':{'id':'turn-2'}}})
+send({'method':'turn/completed','params':{'turn':{'id':'turn-2','status':'completed'}}})
+"#;
+        let mut command = tokio::process::Command::new("python3");
+        command.args(["-c", script]);
+        let request = super::super::tests::request(super::super::Engine::Codex, temp.path());
+        let mut session = Session::connect(request, Process::start(command).unwrap())
+            .await
+            .unwrap();
+        let steerer = session.steerer();
+        assert!(matches!(
+            session.next().await.unwrap(),
+            Event::Session { .. }
+        ));
+        assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
+        assert!(matches!(session.next().await.unwrap(), Event::Step(_)));
+        steerer.steer("s1", "darker").await.unwrap();
+        assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s1"]));
+        steerer.steer("s2", "and blue").await.unwrap();
+        assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s2"]));
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
 }

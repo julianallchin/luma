@@ -1,5 +1,7 @@
 //! Machine-local execution state. The synced transcript is authoritative: a
-//! native session is reusable only at the exact transcript head it completed.
+//! native session is reusable only at the exact transcript head it was last
+//! checkpointed at. A turn checkpoints at every commit, so a turn that was
+//! quit part way is continuable from the last step it made durable.
 
 use super::{AgentError, Engine, Usage};
 use serde::{Deserialize, Serialize};
@@ -119,16 +121,6 @@ impl RunLease {
         Ok(Ok(checkpoint.session))
     }
 
-    /// Invalidate before launching: an interrupted native session may contain
-    /// tool calls that never reached a durable Luma assistant row.
-    pub fn invalidate(&self) -> Result<(), AgentError> {
-        match std::fs::remove_file(self.directory.join("session.json")) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(storage(e)),
-        }
-    }
-
     pub fn checkpoint(
         &self,
         engine: Engine,
@@ -203,7 +195,9 @@ mod tests {
                 .unwrap(),
             Err(ResumeMiss::ModelChanged)
         );
-        lease.invalidate().unwrap();
+        drop(lease);
+        let fresh = tempfile::tempdir().unwrap();
+        let lease = RunLease::acquire(fresh.path(), "../thread", Some("a")).unwrap();
         assert_eq!(
             lease.resume(Engine::Codex, &None, Some("head")).unwrap(),
             Err(ResumeMiss::NoCheckpoint)
