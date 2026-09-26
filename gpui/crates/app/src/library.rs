@@ -621,7 +621,9 @@ struct SessionWrite {
 
 impl Library {
     fn runtime(&self) -> &tokio::runtime::Runtime {
-        self.runtime.as_ref().expect("the runtime lives as long as the library")
+        self.runtime
+            .as_ref()
+            .expect("the runtime lives as long as the library")
     }
 
     /// Open the library in the app's real config directory — the same
@@ -1762,6 +1764,15 @@ impl Library {
         self.call("delete_score", json!({ "id": id }))
     }
 
+    /// Rename a score. The backend trims the name and refuses an empty one.
+    pub fn rename_score(
+        &self,
+        score_id: &str,
+        name: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("rename_score", json!({ "scoreId": score_id, "name": name }))
+    }
+
     /// Atomically add a track to a venue. Repeated Add actions return the
     /// existing score even when they carry different request ids.
     pub fn ensure_track_in_venue(
@@ -2588,6 +2599,14 @@ impl Library {
     /// painter — see `eval::scene`.
     pub fn sample_universe(&self, t: f32) -> Option<UniverseState> {
         self.services.render_engine().sample(t)
+    }
+
+    /// [`Self::sample_universe`], owned by a thread of its own: the same
+    /// evaluation of the installed score, for an export that samples it while
+    /// the UI thread keeps drawing.
+    pub fn score_sampler(&self) -> impl Fn(f32) -> Option<UniverseState> + Send + 'static {
+        let services = self.services.clone();
+        move |t| services.render_engine().sample(t)
     }
 
     /// Append one entry to the render telemetry log, and forget about it.

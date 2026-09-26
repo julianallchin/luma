@@ -8,18 +8,22 @@ pub(super) struct Zoom {
     target: f32,
     velocity: f32,
     at: Instant,
+    /// The lowest zoom, in log scale: the whole song, or
+    /// [`View::MIN_ZOOM`] on a short one.
+    floor: f32,
 }
 impl Zoom {
-    pub fn new(zoom: f32, now: Instant) -> Self {
+    pub fn new(zoom: f32, floor: f32, now: Instant) -> Self {
         Self {
             value: zoom.ln(),
             target: zoom.ln(),
             velocity: 0.,
             at: now,
+            floor: floor.ln(),
         }
     }
     pub fn push(&mut self, delta: f32) {
-        self.target = (self.target + delta).clamp(View::MIN_ZOOM.ln(), View::MAX_ZOOM.ln());
+        self.target = (self.target + delta).clamp(self.floor, View::MAX_ZOOM.ln());
     }
     pub fn advance(&mut self, now: Instant) -> (f32, bool) {
         let dt = now.saturating_duration_since(self.at).as_secs_f32();
@@ -30,7 +34,7 @@ impl Zoom {
             dt,
             motion::SNAP as f32 / 1000.,
         );
-        self.value = (self.target + displacement).clamp(View::MIN_ZOOM.ln(), View::MAX_ZOOM.ln());
+        self.value = (self.target + displacement).clamp(self.floor, View::MAX_ZOOM.ln());
         self.velocity = velocity;
         let settled = (self.value - self.target).abs() < 0.00005 && self.velocity.abs() < 0.001;
         if settled {
@@ -38,7 +42,7 @@ impl Zoom {
             self.velocity = 0.;
         }
         (
-            self.value.exp().clamp(View::MIN_ZOOM, View::MAX_ZOOM),
+            self.value.exp().clamp(self.floor.exp(), View::MAX_ZOOM),
             settled,
         )
     }
@@ -51,7 +55,7 @@ mod tests {
     #[test]
     fn notches_accumulate_and_retarget_without_jumping() {
         let now = Instant::now();
-        let mut zoom = Zoom::new(100., now);
+        let mut zoom = Zoom::new(100., View::MIN_ZOOM, now);
         zoom.push(0.4);
         let (first, _) = zoom.advance(now + Duration::from_millis(16));
         assert!(first > 100. && first < 100. * 0.4f32.exp());
@@ -66,7 +70,7 @@ mod tests {
     #[test]
     fn reversing_and_limits_settle_without_drift() {
         let now = Instant::now();
-        let mut zoom = Zoom::new(100., now);
+        let mut zoom = Zoom::new(100., View::MIN_ZOOM, now);
         zoom.push(0.5);
         zoom.advance(now + Duration::from_millis(25));
         zoom.push(-0.5);

@@ -34,8 +34,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, confirm, fixture_picker, keymap, patch, settings, stage,
-    subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, confirm, export_dialog, fixture_picker, keymap, patch,
+    settings, stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -89,6 +89,9 @@ pub(crate) enum Overlay {
     /// enum, and it is the *smallest* variant here rather than the largest.
     Confirm(confirm::Confirm),
     GroupRepair(patch::groups::Repair),
+    /// Rendering the open score to a video file. Boxed like the rest: it
+    /// carries paths, names and the running export.
+    ShowExport(Box<export_dialog::ExportDialog>),
 }
 
 impl Overlay {
@@ -106,6 +109,7 @@ impl Overlay {
             Self::AddFixtures(_) => keymap::context::ADD_FIXTURES,
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::GroupRepair(_) => keymap::context::ROOT,
+            Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
         }
     }
 }
@@ -393,6 +397,7 @@ impl Luma {
         }
         match self.overlay.as_open() {
             Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
+            Some(Overlay::ShowExport(dialog)) if dialog.is_running() => {}
             Some(_) => self.close_overlay(cx),
             // Nothing floating: keep stepping back out, innermost first — a
             // menu inside the args sheet, then the selection the sheet *is*,
@@ -418,6 +423,166 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
+/// What a [`Region`] shows: a function of the app, run with the app's own
+/// context so every listener it builds is the app's.
+type RegionBody = fn(&mut Luma, &mut Window, &mut Context<Luma>) -> AnyElement;
+
+/// One part of the window drawn as its own view.
+///
+/// # Why the window is cut into views
+///
+/// The window renders from one `Luma`, and gpui renders the root view on every
+/// frame it draws. The stage asks for a frame on every render (see
+/// [`visualizer::visualizer`]), so while every pane was part of the root, each
+/// stage frame rebuilt and laid out every pane in the window — the fixture
+/// table, the sidebar, the editors — with nothing in them changed. A *cached*
+/// region is not rebuilt: gpui reuses its last layout, prepaint and paint
+/// until the region's entity is notified (or its bounds change, or the window
+/// is refreshed).
+///
+/// # What rebuilds a cached region
+///
+/// - **Any notify of the app.** A cached region observes `Luma`, so every
+///   `cx.notify()` that used to rebuild it as part of the root still does.
+/// - **Anything it asks for itself.** A `request_animation_frame` made while
+///   it renders, a `use_state` entity or a child view notifies the region,
+///   because the region is the view being rendered.
+///
+/// What does not rebuild it is the stage's frame loop: the stage renders in a
+/// *live* region of its own (never cached — it changes every frame), so its
+/// `request_animation_frame` notifies that region and not the app. Input that
+/// only moves the stage's camera notifies the stage's region too (see
+/// [`Luma::notify_stage`]).
+///
+/// # The one gap
+///
+/// gpui runs no observers for a notify made *during* a draw: it only marks the
+/// view dirty. So a draw-time sync in the root render (`sync_visualizer` and
+/// its siblings) must not change what a cached region shows unless a notify
+/// outside the draw caused it. Each of those syncs runs because some gesture
+/// or load already notified the app, and that notify is what rebuilds the
+/// region in the same frame.
+pub(crate) struct Region {
+    app: gpui::WeakEntity<Luma>,
+    body: RegionBody,
+    _app_changed: Option<gpui::Subscription>,
+    /// How many times this region has rendered, published as a text node so a
+    /// script can see that a frame reused it.
+    #[cfg(feature = "agent")]
+    renders: (&'static str, u64),
+}
+
+impl Region {
+    fn new(
+        app: &gpui::Entity<Luma>,
+        label: &'static str,
+        body: RegionBody,
+        cached: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        #[cfg(not(feature = "agent"))]
+        let _ = label;
+        Self {
+            app: app.downgrade(),
+            body,
+            _app_changed: cached.then(|| cx.observe(app, |_, _, cx| cx.notify())),
+            #[cfg(feature = "agent")]
+            renders: (label, 0),
+        }
+    }
+}
+
+impl gpui::Render for Region {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let body = self.body;
+        let element = self
+            .app
+            .upgrade()
+            .map(|app| app.update(cx, |app, cx| body(app, window, cx)));
+        // A cached region is laid out as its own root at the size its host
+        // gave it, so its content fills that box rather than being measured.
+        let region = div().size_full().flex().flex_col().children(element);
+        #[cfg(feature = "agent")]
+        let region = {
+            let (label, renders) = &mut self.renders;
+            *renders += 1;
+            region.child(
+                div()
+                    .size_0()
+                    .agent_node(Role::Text, format!("{label} renders = {renders}")),
+            )
+        };
+        region
+    }
+}
+
+/// The shell's regions, made on first use and kept for the app's life.
+#[derive(Default)]
+pub(crate) struct Regions {
+    sidebar: Option<gpui::Entity<Region>>,
+    tab: Option<gpui::Entity<Region>>,
+    inspector: Option<gpui::Entity<Region>>,
+    environment: Option<gpui::Entity<Region>>,
+    stage: Option<gpui::Entity<Region>>,
+    fullscreen_stage: Option<gpui::Entity<Region>>,
+}
+
+impl Regions {
+    fn get(
+        slot: &mut Option<gpui::Entity<Region>>,
+        label: &'static str,
+        body: RegionBody,
+        cached: bool,
+        cx: &mut Context<Luma>,
+    ) -> gpui::Entity<Region> {
+        slot.get_or_insert_with(|| {
+            let app = cx.entity();
+            cx.new(|cx| Region::new(&app, label, body, cached, cx))
+        })
+        .clone()
+    }
+
+    /// The live region the fullscreen stage renders in.
+    pub(crate) fn fullscreen_stage(&mut self, cx: &mut Context<Luma>) -> gpui::Entity<Region> {
+        Self::get(
+            &mut self.fullscreen_stage,
+            "Fullscreen stage",
+            crate::fullscreen::stage,
+            false,
+            cx,
+        )
+    }
+}
+
+impl Luma {
+    /// Redraw the stage for input that changed only the stage — the camera, a
+    /// gizmo's hover. Unlike `cx.notify()`, this leaves every cached region
+    /// as it was.
+    pub(crate) fn notify_stage(&self, cx: &mut App) {
+        let regions = &self.regions;
+        for region in [&regions.stage, &regions.fullscreen_stage]
+            .into_iter()
+            .flatten()
+        {
+            cx.notify(region.entity_id());
+        }
+    }
+}
+
+/// Mount a cached region in a box `style` sizes.
+fn cached(region: gpui::Entity<Region>, style: gpui::StyleRefinement) -> AnyElement {
+    luma_ui::node::cached_view(region, style).into_any_element()
+}
+
+fn sidebar_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let entity = cx.entity();
+    let app = &*app;
+    match &app.sidebar {
+        Some(browser) => tracks::sidebar(app, browser, &entity, window).into_any_element(),
+        None => div().into_any_element(),
+    }
+}
+
 /// The whole window: full-height region columns, the seams between them, the
 /// overlay over all of it, and the traffic lights over that.
 ///
@@ -427,35 +592,9 @@ impl Luma {
 /// from edge to edge. Regions are flush and square: no insets, no gutters, no
 /// rounded cards. Depth is a value step across a seam — the one structural
 /// line this shell draws, and the only border it has in either axis.
-/// The browser is independently invalidated; timeline ticks do not rebuild it.
-pub(crate) struct SidebarView {
-    app: gpui::WeakEntity<Luma>,
-    _subscription: gpui::Subscription,
-}
-impl gpui::Render for SidebarView {
-    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let Some(app) = self.app.upgrade() else {
-            return div();
-        };
-        let state = app.read(cx);
-        match &state.sidebar {
-            Some(browser) => tracks::sidebar(state, browser, &app, window),
-            None => div(),
-        }
-    }
-}
-
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
-    let sidebar_view = app
-        .sidebar_view
-        .get_or_insert_with(|| {
-            cx.new(|cx| SidebarView {
-                app: entity.downgrade(),
-                _subscription: cx.observe(&entity, |_, _, cx| cx.notify()),
-            })
-        })
-        .clone();
+    let sidebar_view = Regions::get(&mut app.regions.sidebar, "Sidebar", sidebar_body, true, cx);
     // Geometry follows state. Each edge region's resting width is restated
     // here every frame as a pure function of what the shell is showing, so a
     // toggle only flips a flag and `retarget` — a no-op while the destination
@@ -597,7 +736,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // inside the clipping pane rather than between the regions.
                 .bg(glass::tone_column())
                 .key_context(keymap::context::SIDEBAR)
-                .child(luma_ui::node::cached_view(
+                .child(cached(
                     sidebar_view,
                     gpui::StyleRefinement::default().size_full(),
                 ))
@@ -701,7 +840,16 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         let panel = column(head)
             .bg(ladder::background())
             .key_context(keymap::context::WORKSPACE)
-            .child(workspace_body(app, window, cx))
+            .child(workspace_body(
+                app,
+                if takeover {
+                    workspace_panel_width
+                } else {
+                    workspace_open_w
+                },
+                window,
+                cx,
+            ))
             .into_any_element();
         row = row.child(if takeover {
             div().h_full().flex_1().min_w_0().child(panel)
@@ -810,11 +958,11 @@ fn seam(color: gpui::Rgba) -> Div {
 /// How the thread and the workspace panel divide the room they share, and the
 /// floors neither may be dragged below.
 ///
-/// The workspace gets 72% of the shared room by default. Chat keeps its
+/// The workspace gets 78% of the shared room by default. Chat keeps its
 /// minimum readable width, and dragging or resetting the seam uses this same
 /// proportion at every window size.
 pub(crate) fn workspace_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.28, CENTER_MIN, WORKSPACE_MIN)
+    luma_ui::split::SplitFraction::new(0.22, CENTER_MIN, WORKSPACE_MIN)
 }
 
 /// The room the thread and the panel share this frame: the window, less the
@@ -915,76 +1063,58 @@ impl Luma {
 /// and a shell where every background region had to disarm itself would be the
 /// trap's job done N times at the wrong layer. `shell_panels` and
 /// `dialog_focus` are what hold that line.
-fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+///
+/// `width` is the column's laid-out width, which only split view reads: its
+/// seam grip is placed in pixels.
+fn workspace_body(
+    app: &mut Luma,
+    width: f32,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
     // An empty panel is not a panel with nothing in it — it is the place a
     // first tab is started from. The stage stands down with it: a rig view
     // over no editor is a room with no subject.
     if app.workspace.is_empty() {
         return empty_panel(app, &cx.entity());
     }
-    let inspector = match app.workspace.active_body_mut() {
-        Some(Body::TrackEditor(editor)) => {
-            Some(track_editor::inspector(editor, &cx.entity(), window, cx))
-        }
-        _ => None,
-    };
+    let split = app.split_view_active();
+    let inspector = matches!(app.workspace.active_body(), Some(Body::TrackEditor(_)))
+        .then(|| inspector_region(app, split, cx));
+    if split {
+        return split_view(app, inspector, width, window, cx);
+    }
     if app.visualizer.is_none() {
         return div()
             .flex_1()
             .min_h_0()
             .flex()
             .children(inspector)
-            .child(active_tab(app, window, cx))
+            .child(tab_region(app, cx))
             .into_any_element();
     }
     let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
     let (stage_height, _) = app.active_visualizer_split().resolve(available);
     let grip = visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx);
-    // Split the borrow the way `active_tab` does: the stage's element mutates
-    // its own state and reads the library synchronously, and the two fields
-    // are disjoint.
-    let stage_view = app.stage_view();
     // The venue's room — indoor or outdoor, sun, haze — sits beside the stage
     // it lights, on the venue tab only.
-    let environment = matches!(app.workspace.active_body(), Some(Body::Patch(_)))
-        .then(|| app.visualizer.as_ref())
-        .flatten()
-        .map(|state| visualizer::environment_panel(state, &cx.entity()));
-    let venue_tools = match (app.workspace.active_body(), stage_view.as_ref()) {
-        (Some(Body::Patch(page)), Some(stage_view)) => Some(stage::controls(
-            &page.stage,
-            &cx.entity(),
-            Some(stage_view),
-            window,
-        )),
-        _ => None,
-    };
-    let fullscreen_slot = app
-        .fullscreen
-        .as_ref()
-        .filter(|_| app.fullscreen_presented())
-        .map(|state| state.slot.clone());
-    let focus = app.visualizer_focus.clone();
-    let Luma {
-        visualizer,
-        library,
-        ..
-    } = app;
-    let stage = if let Some(slot) = fullscreen_slot {
-        Some(crate::fullscreen::placeholder(slot))
-    } else {
-        visualizer.as_mut().map(|state| {
-            visualizer::visualizer(
-                state,
-                &cx.entity(),
-                library,
-                window,
-                visualizer::Chrome::Embedded { venue_tools },
-                &focus,
-            )
-            .into_any_element()
-        })
-    };
+    let environment = matches!(app.workspace.active_body(), Some(Body::Patch(_))).then(|| {
+        let region = Regions::get(
+            &mut app.regions.environment,
+            "Environment",
+            environment_body,
+            true,
+            cx,
+        );
+        cached(
+            region,
+            gpui::StyleRefinement::default()
+                .w(px(visualizer::ENVIRONMENT_PANEL_WIDTH))
+                .h_full()
+                .flex_none(),
+        )
+    });
+    let stage = stage_region(app, cx);
     div()
         .flex_1()
         .min_h_0()
@@ -999,21 +1129,228 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
                 .flex()
                 .overflow_hidden()
                 .children(inspector)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .key_context(keymap::context::VISUALIZER)
-                        .children(stage),
-                )
+                .child(stage_slot(stage))
                 .children(environment),
         )
         .child(visualizer_seam())
-        .child(active_tab(app, window, cx))
+        .child(tab_region(app, cx))
         .child(grip)
         .into_any_element()
 }
+
+/// The active tab, in its cached region. It fills the rest of whichever row
+/// or column it is placed in.
+fn tab_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
+    let region = Regions::get(&mut app.regions.tab, "Tab", active_tab, true, cx);
+    cached(
+        region,
+        gpui::StyleRefinement::default()
+            .flex_1()
+            .min_w_0()
+            .min_h_0(),
+    )
+}
+
+/// The score's inspector, in its cached region: a fixed-width column beside
+/// the stage, or, in split view, the whole box under it.
+fn inspector_region(app: &mut Luma, split: bool, cx: &mut Context<Luma>) -> AnyElement {
+    let region = Regions::get(
+        &mut app.regions.inspector,
+        "Inspector",
+        inspector_body,
+        true,
+        cx,
+    );
+    let style = gpui::StyleRefinement::default();
+    let style = if split {
+        style.size_full()
+    } else {
+        style.w(px(luma_ui::sheet::WIDTH)).h_full().flex_none()
+    };
+    cached(region, style)
+}
+
+fn inspector_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let split = app.split_view_active();
+    let entity = cx.entity();
+    match app.workspace.active_body_mut() {
+        Some(Body::TrackEditor(editor)) => {
+            track_editor::inspector(editor, &entity, split, window, cx)
+        }
+        _ => div().into_any_element(),
+    }
+}
+
+fn environment_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let entity = cx.entity();
+    match &app.visualizer {
+        Some(state) => visualizer::environment_panel(state, &entity, window),
+        None => div().into_any_element(),
+    }
+}
+
+/// The embedded stage's live region. Never cached: the stage changes every
+/// frame, and its frame loop notifies this region rather than the app.
+fn stage_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
+    Regions::get(&mut app.regions.stage, "Stage", stage_body, false, cx).into_any_element()
+}
+
+/// The embedded stage, with the venue page's tools on the venue tab.
+fn stage_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let stage_view = app.stage_view();
+    let venue_tools = match (app.workspace.active_body(), stage_view.as_ref()) {
+        (Some(Body::Patch(page)), Some(stage_view)) => Some(stage::controls(
+            &page.stage,
+            &cx.entity(),
+            Some(stage_view),
+            window,
+        )),
+        _ => None,
+    };
+    stage_element(app, venue_tools, window, cx).unwrap_or_else(|| div().into_any_element())
+}
+
+/// The stage's element: the live view, or the placeholder it leaves while it
+/// is presented fullscreen. `None` when there is no stage to show.
+fn stage_element(
+    app: &mut Luma,
+    venue_tools: Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> Option<AnyElement> {
+    let fullscreen_slot = app
+        .fullscreen
+        .as_ref()
+        .filter(|_| app.fullscreen_presented())
+        .map(|state| state.slot.clone());
+    let focus = app.visualizer_focus.clone();
+    // Split the borrow the way `active_tab` does: the stage's element mutates
+    // its own state and reads the library synchronously, and the two fields
+    // are disjoint.
+    let Luma {
+        visualizer,
+        library,
+        ..
+    } = app;
+    let state = visualizer.as_mut()?;
+    Some(match fullscreen_slot {
+        Some(slot) => crate::fullscreen::placeholder(slot),
+        None => visualizer::visualizer(
+            state,
+            &cx.entity(),
+            library,
+            window,
+            visualizer::Chrome::Embedded { venue_tools },
+            &focus,
+        )
+        .into_any_element(),
+    })
+}
+
+/// The box the stage fills, under the stage's own key context.
+fn stage_slot(stage: AnyElement) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .key_context(keymap::context::VISUALIZER)
+        .child(stage)
+}
+
+/// The score editor in split view: the timeline on the left, and beside it a
+/// column of the stage over the inspector.
+///
+/// The same three pieces [`workspace_body`] stacks — the tab, the stage and
+/// the inspector — only placed differently, so every key context, focus
+/// handle and listener they carry is the one the stacked layout has. The
+/// stage/inspector seam is the stacked layout's stage seam: it pulls
+/// [`Luma::active_visualizer_split`], which is this layout's row split
+/// while it is up. With no stage, the inspector takes the whole column.
+fn split_view(
+    app: &mut Luma,
+    inspector: Option<AnyElement>,
+    width: f32,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
+    let (editor_width, _) = app.split_view_columns.resolve(width - SEAM_WIDTH);
+    let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
+    let (stage_height, _) = app.split_view_rows.resolve(available);
+    let stage = app.visualizer.is_some().then(|| {
+        div()
+            .h(px(stage_height))
+            .flex_none()
+            .flex()
+            .overflow_hidden()
+            .child(stage_slot(stage_region(app, cx)))
+    });
+    let has_stage = stage.is_some();
+    let side = div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        // The row grip is placed against this column's own top edge.
+        .relative()
+        .children(stage)
+        .when(has_stage, |side| side.child(visualizer_seam()))
+        .child(div().flex_1().min_h_0().flex().children(inspector))
+        .when(has_stage, |side| {
+            side.child(visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx))
+        });
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .relative()
+        .on_drag_move(cx.listener(Luma::drag_split_view_seam))
+        .child(
+            div()
+                .w(px(editor_width))
+                .flex_none()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(tab_region(app, cx)),
+        )
+        .child(seam(ladder::seam_hint()))
+        .child(side)
+        .child(split_view_grip(editor_width + SEAM_WIDTH / 2.0, cx))
+        .into_any_element()
+}
+
+/// Split view's column split: the timeline takes about two thirds of the
+/// workspace, and neither side may be dragged narrower than stays usable.
+pub(crate) fn split_view_columns() -> luma_ui::split::SplitFraction {
+    luma_ui::split::SplitFraction::new(0.65, 360.0, 280.0)
+}
+
+/// Split view's row split: the stage over the inspector, with the inspector
+/// taking the larger share.
+pub(crate) fn split_view_rows() -> luma_ui::split::SplitFraction {
+    luma_ui::split::SplitFraction::new(0.45, 140.0, 160.0)
+}
+
+/// The grip on split view's column seam, at `at` from the workspace's
+/// leading edge. Mounted after both sides for the reason [`workspace_grip`]
+/// is.
+fn split_view_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
+        "split-view-seam",
+        pane::Seam::Vertical,
+        at,
+        || SplitViewResize,
+        |app: &mut Luma, _| app.split_view_columns.reset(),
+        glass::glass_hover(),
+        cx,
+    )
+    .agent_node(Role::Slider, "Score editor width")
+}
+
+/// Split view's column seam, under the pointer — routed by type like
+/// [`WorkspaceResize`].
+struct SplitViewResize;
 
 /// What the panel shows before its first tab: the ways to open one, stacked
 /// and centred.
@@ -1138,7 +1475,9 @@ struct VisualizerResize;
 
 impl Luma {
     fn active_visualizer_split(&mut self) -> &mut luma_ui::split::SplitFraction {
-        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
+        if self.split_view_active() {
+            &mut self.split_view_rows
+        } else if matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
             &mut self.score_editor_split
         } else {
             &mut self.visualizer_split
@@ -1148,6 +1487,27 @@ impl Luma {
     /// Track the pointer while the stage seam is dragged. Like the workspace
     /// seam, the height follows the pointer directly — a drag is already
     /// continuous, and tweening toward it would only add lag.
+    /// Whether the visible tab is laid out as split view: the setting is on
+    /// and the tab is a score editor.
+    fn split_view_active(&self) -> bool {
+        self.split_view && matches!(self.workspace.active_body(), Some(Body::TrackEditor(_)))
+    }
+
+    /// Track the pointer while split view's column seam is dragged. The
+    /// listener sits on the split itself, so its bounds are the room the two
+    /// sides share.
+    fn drag_split_view_seam(
+        &mut self,
+        event: &DragMoveEvent<SplitViewResize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let offset = f32::from(event.event.position.x - event.bounds.origin.x);
+        let available = f32::from(event.bounds.size.width) - SEAM_WIDTH;
+        self.split_view_columns.drag_to(offset, available);
+        cx.notify();
+    }
+
     fn drag_visualizer_seam(
         &mut self,
         event: &DragMoveEvent<VisualizerResize>,
@@ -1266,6 +1626,7 @@ fn overlay_layer(
             patch::groups::repair_dialog(state, entity),
             "Group repair dialog",
         ),
+        Overlay::ShowExport(state) => (export_dialog::render(state, entity), "Export show dialog"),
         Overlay::Confirm(state) => (
             confirm::render(
                 state,
@@ -1278,7 +1639,10 @@ fn overlay_layer(
             "Confirm dialog",
         ),
     };
-    let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {
+    // A running export is closed by its own Cancel, never by a stray click.
+    let scrim_dismiss = if (matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none())
+        || app.exporting_show()
+    {
         luma_ui::dialog::ScrimDismiss::Disabled
     } else {
         let dismissed = entity.clone();
@@ -1314,10 +1678,10 @@ mod tests {
     #[test]
     fn opening_the_sidebar_narrows_both_neighbours_in_the_ratio_they_were_at() {
         let split = workspace_split();
-        let closed = shared_room(1600.0, 0.0);
-        let open = shared_room(1600.0, SIDEBAR_WIDTH);
-        assert_eq!(closed, 1599.0);
-        assert_eq!(open, 1342.0);
+        let closed = shared_room(2400.0, 0.0);
+        let open = shared_room(2400.0, SIDEBAR_WIDTH);
+        assert_eq!(closed, 2399.0);
+        assert_eq!(open, 2142.0);
 
         let (thread_closed, panel_closed) = split.resolve(closed);
         let (thread_open, panel_open) = split.resolve(open);

@@ -126,6 +126,8 @@ mod zoom_motion;
 pub struct Editor {
     track_id: String,
     track_name: String,
+    /// The track's audio file, which playback decodes from the top.
+    audio_path: std::path::PathBuf,
     /// The venue whose score is open. Half of what a conversation about this
     /// track is scoped by — see [`crate::agent::scope_for`].
     venue_id: String,
@@ -655,10 +657,18 @@ fn shift_time(clock: Option<&luma_patterns::BeatTimeline>, time: f64, from: f64,
 /// The quantised point, before the capture test, or `None` when there is no
 /// grid to quantise against.
 ///
-/// The subdivision ladder has two tiers: at or above 200 px/s and below 100 it
-/// is quarters of a beat, and in between it is halves.
+/// It snaps to the grid lines the eye can see: the finest [`Grid`] rung that
+/// has at least [`MIN_SNAP_SPACING`] of room.
 fn beat_snap(beats: Option<&BeatGrid>, time: f64, zoom: f32) -> Option<f64> {
     let grid = beats.filter(|grid| !grid.beats.is_empty())?;
+    let (beat, bar) = mean_lengths(grid);
+    let divisions = match Grid::fit(beat * zoom, bar * zoom, MIN_SNAP_SPACING).0 {
+        Grid::Beat(divisions) => f64::from(divisions),
+        Grid::Bars(n) if !grid.downbeats.is_empty() => {
+            return Some(bar_snap(&grid.downbeats, time, n as usize));
+        }
+        Grid::Bars(_) => 1.,
+    };
     let beats = &grid.beats;
     if beats.len() == 1 {
         return Some(f64::from(beats[0]));
@@ -677,15 +687,23 @@ fn beat_snap(beats: Option<&BeatGrid>, time: f64, zoom: f32) -> Option<f64> {
     if !length.is_finite() || length <= 0. {
         return Some(prev);
     }
-    let divisions = if (100. ..200.).contains(&zoom) {
-        2.
-    } else {
-        4.
-    };
     let step = ((time - prev) / length * divisions)
         .round()
         .clamp(0., divisions);
     Some((prev + step / divisions * length).clamp(prev, next))
+}
+
+/// The nearest of every `n`-th downbeat, counted from bar 1.
+fn bar_snap(downbeats: &[f32], time: f64, n: usize) -> f64 {
+    let index = downbeats
+        .partition_point(|bar| f64::from(*bar) <= time)
+        .saturating_sub(1);
+    let before = index / n * n;
+    let at = |index: usize| f64::from(downbeats[index]);
+    match downbeats.get(before + n) {
+        Some(after) if f64::from(*after) - time < time - at(before) => f64::from(*after),
+        _ => at(before),
+    }
 }
 
 /// Where the eye is: a horizontal zoom in pixels per second, and a scroll in
@@ -819,8 +837,8 @@ impl Edge {
 }
 
 impl View {
-    /// Horizontal zoom limits in logical pixels
-    /// per second.
+    /// Horizontal zoom limits in logical pixels per second. A long song can
+    /// go below `MIN_ZOOM`, to fit it whole: see [`Editor::min_zoom`].
     const MIN_ZOOM: f32 = 25.;
     const MAX_ZOOM: f32 = 5_000.;
     /// The opening zoom.
@@ -859,6 +877,15 @@ impl Editor {
     /// only readers outside this module.
     pub(crate) fn track_name(&self) -> &str {
         &self.track_name
+    }
+
+    /// What an export of the open score takes from the timeline: its name,
+    /// its length in seconds and its audio file. `None` with no score open,
+    /// or before the track's length is known.
+    pub(crate) fn export_source(&self) -> Option<(String, f32, std::path::PathBuf)> {
+        self.score.as_ref()?;
+        let duration = self.transport.duration;
+        (duration > 0.).then(|| (self.track_name.clone(), duration, self.audio_path.clone()))
     }
 
     /// Whether an edit is allowed to land at all: a score this host owns, and
@@ -967,6 +994,18 @@ impl Editor {
     /// The furthest the view may scroll: the content's width less the
     /// canvas's. A browser scroll container applies this bound for free; here
     /// it is the one place scroll is written, so it applies it once.
+    /// The lowest horizontal zoom: the whole song across the canvas, or
+    /// [`View::MIN_ZOOM`] when that is further in.
+    fn min_zoom(&self) -> f32 {
+        let width = f32::from(self.canvas.get().size.width);
+        let duration = self.transport.duration;
+        if duration > 0. && width > 0. {
+            View::MIN_ZOOM.min(width / duration)
+        } else {
+            View::MIN_ZOOM
+        }
+    }
+
     fn set_scroll(&mut self, scroll: f32) {
         let content = f64::from(self.transport.duration).max(0.) as f32 * self.view.zoom;
         let width = f32::from(self.canvas.get().size.width);
@@ -999,7 +1038,15 @@ impl Editor {
         let duration = f64::from(self.transport.duration).max(0.);
         let beats = self.beats.as_deref();
         let zoom = self.view.zoom;
-        let snap = |time: f64| snap(beats, time, zoom, SNAP_CAPTURE_DRAG);
+        // A drag with no sideways motion keeps its time: a clip lifted to
+        // another lane must not also jump to a grid line.
+        let snap = |time: f64| {
+            if delta == 0. {
+                time
+            } else {
+                snap(beats, time, zoom, SNAP_CAPTURE_DRAG)
+            }
+        };
         let clock = beats.and_then(|grid| grid.timeline().ok());
         let clock = clock.as_ref();
 
@@ -1746,6 +1793,7 @@ impl Luma {
         let state = Box::new(Editor {
             track_id: track.id.clone(),
             track_name: track_title(&track),
+            audio_path: track.file_path.clone().into(),
             venue_id: venue_id.clone(),
             score: None,
             waveform: None,
@@ -2688,12 +2736,13 @@ impl Luma {
             if reduced_motion {
                 editor.zoom_motion = None;
                 editor.view.zoom = (editor.view.zoom * (delta.y * rate).exp())
-                    .clamp(View::MIN_ZOOM, View::MAX_ZOOM);
+                    .clamp(editor.min_zoom(), View::MAX_ZOOM);
                 editor.set_scroll(anchor.time as f32 * editor.view.zoom - anchor.offset);
             } else {
+                let floor = editor.min_zoom();
                 editor
                     .zoom_motion
-                    .get_or_insert_with(|| zoom_motion::Zoom::new(editor.view.zoom, now))
+                    .get_or_insert_with(|| zoom_motion::Zoom::new(editor.view.zoom, floor, now))
                     .push(delta.y * rate);
             }
             editor.anchor = Some(Anchor { at: now, ..anchor });
@@ -3085,15 +3134,17 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
 }
 
 /// The inspector occupies the editing area, even with the rig hidden: the
-/// selected clip's controls, or the preset browser.
+/// selected clip's controls, or the preset browser. `fill` is split view's
+/// placement — see [`sheet::panel`].
 pub(crate) fn inspector(
     state: &mut Editor,
     app: &Entity<Luma>,
+    fill: bool,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app)
+    sheet::panel(state, app, fill)
 }
 
 /// Render the screen: a toolbar strip over the canvas.
@@ -3210,6 +3261,7 @@ pub(crate) fn fullscreen_transport(
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
     let transport = app.clone();
     let insert = app.clone();
+    let export = app.clone();
     let playing = state.transport.playing;
     div()
         .flex()
@@ -3252,6 +3304,12 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             .id("add-score-pattern")
             .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
             .agent_node(Role::Button, "Add pattern"),
+        )
+        .child(
+            luma_ui::button("Export show", state.export_source().is_some().into())
+                .id("export-show")
+                .on_click(move |_, _, cx| export.update(cx, |app, cx| app.open_show_export(cx)))
+                .agent_node(Role::Button, "Export show"),
         )
         .child(luma_ui::caption(format!(
             "{} / {}",
@@ -3970,8 +4028,105 @@ fn fade(color: Rgba, alpha: f32) -> Hsla {
     color
 }
 
-/// `drawBeatGrid`: every beat as a faint line, every downbeat heavier, and a
-/// bar number on every `barLabelStep`-th one.
+/// One rung of the grid ladder, from finest to coarsest.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Grid {
+    /// `n` lines to the beat: 4, 2 or 1.
+    Beat(u32),
+    /// A line every `n` bars: 1, 2, 4 and on.
+    Bars(u32),
+}
+
+impl Grid {
+    /// The ladder, finest first. Each rung has twice the spacing of the one
+    /// before it, except beat to bar, which is the time signature.
+    const LADDER: [Self; 14] = [
+        Self::Beat(4),
+        Self::Beat(2),
+        Self::Beat(1),
+        Self::Bars(1),
+        Self::Bars(2),
+        Self::Bars(4),
+        Self::Bars(8),
+        Self::Bars(16),
+        Self::Bars(32),
+        Self::Bars(64),
+        Self::Bars(128),
+        Self::Bars(256),
+        Self::Bars(512),
+        Self::Bars(1024),
+    ];
+
+    /// The pixels between two lines of this rung.
+    fn spacing(self, beat: f32, bar: f32) -> f32 {
+        match self {
+            Self::Beat(n) => beat / n as f32,
+            Self::Bars(n) => bar * n as f32,
+        }
+    }
+
+    /// The finest rung whose lines are at least `minimum` pixels apart, and
+    /// that spacing.
+    fn fit(beat: f32, bar: f32, minimum: f32) -> (Self, f32) {
+        Self::LADDER
+            .iter()
+            .map(|grid| (*grid, grid.spacing(beat, bar)))
+            .find(|(_, spacing)| *spacing >= minimum)
+            .unwrap_or((Self::Bars(1024), Self::Bars(1024).spacing(beat, bar)))
+    }
+
+    /// The rung the grid shows at `zoom`, and how far its lines have faded
+    /// in: 0 when they have just enough room, 1 at twice that.
+    fn at(beats: &BeatGrid, zoom: f32) -> (Self, f32) {
+        let (beat, bar) = mean_lengths(beats);
+        let (grid, spacing) = Self::fit(beat * zoom, bar * zoom, MIN_GRID_SPACING);
+        let fade = ((spacing - MIN_GRID_SPACING) / MIN_GRID_SPACING).clamp(0., 1.);
+        // Smoothstep, so a rung eases in and out rather than ramping.
+        (grid, fade * fade * (3. - 2. * fade))
+    }
+}
+
+/// The smallest gap between two drawn grid lines, in pixels. A rung fades in
+/// from here and is fully drawn at twice this.
+const MIN_GRID_SPACING: f32 = 12.;
+
+/// The smallest gap a snap target needs: a rung snaps once it is half faded
+/// in, so a cursor never catches on a line the eye cannot see.
+const MIN_SNAP_SPACING: f32 = 18.;
+
+/// The mean beat and bar, in seconds.
+///
+/// The bar comes from the gap between the first two downbeats, and falls back
+/// to the mean beat times the time signature with a single downbeat.
+fn mean_lengths(beats: &BeatGrid) -> (f32, f32) {
+    let beat = if beats.beats.len() > 1 {
+        (beats.beats[beats.beats.len() - 1] - beats.beats[0]) / (beats.beats.len() - 1) as f32
+    } else {
+        0.5
+    };
+    let bar = if beats.downbeats.len() > 1 {
+        beats.downbeats[1] - beats.downbeats[0]
+    } else {
+        beat * if beats.beats_per_bar == 0 {
+            4.
+        } else {
+            beats.beats_per_bar as f32
+        }
+    };
+    (beat, bar)
+}
+
+/// The grid behind the timeline, which follows the zoom without a single
+/// jump.
+///
+/// Bars are shaded even and odd, in blocks that run from one bar number to
+/// the next, counted from bar 1. Lines are drawn at the finest rung with room,
+/// and that rung fades in as the zoom gives it more room. Bar lines are the
+/// strongest, beats weaker and beat subdivisions the faintest.
+///
+/// When the bar numbers halve or double, nothing snaps: the bars that gain or
+/// lose a number fade their number, their line weight and the shading edge
+/// they carry, over one doubling of the zoom. See [`Labels`].
 fn paint_beat_grid(
     canvas: Bounds<Pixels>,
     beats: &BeatGrid,
@@ -3982,7 +4137,67 @@ fn paint_beat_grid(
     cx: &mut App,
 ) {
     let height = f32::from(canvas.size.height);
-    let step = bar_label_step(beats, view.zoom);
+    let (grid, fade_in) = Grid::at(beats, view.zoom);
+    let (beat_length, bar_length) = mean_lengths(beats);
+    let labels = Labels::at(bar_length * view.zoom);
+    let downbeat_count = beats.downbeats.len();
+
+    // Even and odd blocks, bar by bar, merged into runs of one shade so that
+    // two quads never meet mid-block. A bar past the last downbeat ends where
+    // the mean bar says it would.
+    let bar_at = |index: usize| -> f64 {
+        match beats.downbeats.get(index) {
+            Some(time) => f64::from(*time),
+            None => {
+                f64::from(beats.downbeats[downbeat_count - 1])
+                    + f64::from(bar_length) * (index + 1 - downbeat_count) as f64
+            }
+        }
+    };
+    let first = beats
+        .downbeats
+        .partition_point(|bar| f64::from(*bar) <= start)
+        .saturating_sub(1);
+    let mut run: Option<(f64, f32)> = None;
+    let shade = |left: f64, right: f64, value: f32, window: &mut Window| {
+        if value <= 0. {
+            return;
+        }
+        let (left, right) = (view.x_of(left), view.x_of(right));
+        window.paint_quad(fill(
+            Bounds {
+                origin: point(
+                    canvas.origin.x + px(left),
+                    canvas.origin.y + px(HEADER_HEIGHT),
+                ),
+                size: size(px(right - left), px(height - HEADER_HEIGHT)),
+            },
+            fade(ladder::stripe(), value),
+        ));
+    };
+    for index in first..downbeat_count {
+        let left = bar_at(index);
+        if left > end {
+            break;
+        }
+        let value = labels.shade(index);
+        match run {
+            Some((_, shaded)) if shaded == value => {}
+            Some((from, shaded)) => {
+                shade(from, left, shaded, window);
+                run = Some((left, value));
+            }
+            None => run = Some((left, value)),
+        }
+    }
+    if let Some((from, shaded)) = run {
+        let last = beats
+            .downbeats
+            .partition_point(|bar| f64::from(*bar) <= end)
+            .max(first + 1);
+        shade(from, bar_at(last), shaded, window);
+    }
+
     // Millisecond-rounded, which is what de-duplicates a downbeat against the
     // beat it sits on. Exact float equality would draw both, a hair apart.
     let downbeats: std::collections::HashSet<i64> = beats
@@ -3991,35 +4206,46 @@ fn paint_beat_grid(
         .map(|time| (f64::from(*time) * 1000.).round() as i64)
         .collect();
 
-    // Anchor thinning to track time, so panning never changes the selected beats.
-    let mut last: Option<f64> = None;
-    for beat in &beats.beats {
-        let beat = f64::from(*beat);
-        if beat > end {
-            break;
-        }
-        if downbeats.contains(&((beat * 1000.).round() as i64)) {
-            continue;
-        }
-        if last
-            .is_some_and(|last| (beat - last) * f64::from(view.zoom) < f64::from(MIN_BEAT_SPACING))
-        {
-            continue;
-        }
-        last = Some(beat);
-        if beat < start {
-            continue;
-        }
-        let x = view.x_of(beat);
-        window.paint_quad(fill(
-            hairline(canvas, x, HEADER_HEIGHT, height, 1.),
-            fade(ladder::primary(), 0.25),
-        ));
-        if view.zoom > 100. {
+    if let Grid::Beat(divisions) = grid {
+        // The ruler's beat ticks fade in between 80 and 120 px/s.
+        let tick = ((view.zoom - 80.) / 40.).clamp(0., 1.);
+        for (index, beat) in beats.beats.iter().enumerate() {
+            let beat = f64::from(*beat);
+            let next = beats
+                .beats
+                .get(index + 1)
+                .map_or(beat + f64::from(beat_length), |next| f64::from(*next));
+            if next < start {
+                continue;
+            }
+            if beat > end {
+                break;
+            }
+            // Subdivisions: the odd ones belong to the finest rung alone.
+            for part in 1..divisions {
+                let finest = divisions == 2 || part % 2 == 1;
+                let alpha = 0.12 * if finest { fade_in } else { 1. };
+                let x = view.x_of(beat + (next - beat) * f64::from(part) / f64::from(divisions));
+                window.paint_quad(fill(
+                    hairline(canvas, x, HEADER_HEIGHT, height, 1.),
+                    fade(ladder::primary(), alpha),
+                ));
+            }
+            if beat < start || downbeats.contains(&((beat * 1000.).round() as i64)) {
+                continue;
+            }
+            let alpha = 0.25 * if divisions == 1 { fade_in } else { 1. };
+            let x = view.x_of(beat);
             window.paint_quad(fill(
-                hairline(canvas, x, HEADER_HEIGHT - 5., HEADER_HEIGHT, 1.),
-                fade(ladder::primary(), 0.25),
+                hairline(canvas, x, HEADER_HEIGHT, height, 1.),
+                fade(ladder::primary(), alpha),
             ));
+            if tick > 0. {
+                window.paint_quad(fill(
+                    hairline(canvas, x, HEADER_HEIGHT - 5., HEADER_HEIGHT, 1.),
+                    fade(ladder::primary(), alpha * tick),
+                ));
+            }
         }
     }
 
@@ -4031,24 +4257,39 @@ fn paint_beat_grid(
         if downbeat < start - bleed || downbeat > end {
             continue;
         }
-        let x = view.x_of(downbeat);
-        let major = index % step == 0;
-        let (alpha, width, tick) = if major {
-            (0.6, 2., 12.)
-        } else {
-            (0.35, 1., 8.)
+        let major = labels.weight(index);
+        // At a bar rung, only every `n`-th bar has a line, and the odd ones of
+        // those belong to the finest rung alone.
+        let presence = match grid {
+            Grid::Beat(_) => 1.,
+            Grid::Bars(n) if index % n as usize != 0 => 0.,
+            Grid::Bars(n) if index % (2 * n as usize) != 0 => fade_in,
+            Grid::Bars(_) => 1.,
         };
+        let alpha = lerp(0.35 * presence, 0.6, major);
+        if alpha <= 0. {
+            continue;
+        }
+        let x = view.x_of(downbeat);
         window.paint_quad(fill(
-            hairline(canvas, x, HEADER_HEIGHT - tick, height, width),
+            hairline(
+                canvas,
+                x,
+                HEADER_HEIGHT - lerp(8., 12., major),
+                height,
+                lerp(1., 2., major),
+            ),
             fade(ladder::primary(), alpha),
         ));
-        if major {
+        if major > 0. {
+            let mut color = ladder::foreground();
+            color.a *= major;
             label(
                 canvas,
                 x + 4.,
                 HEADER_HEIGHT - 10.,
                 &(index + 1).to_string().into(),
-                ladder::foreground(),
+                color,
                 window,
                 cx,
             );
@@ -4056,32 +4297,62 @@ fn paint_beat_grid(
     }
 }
 
-/// The smallest gap between two drawn beats, in pixels.
-const MIN_BEAT_SPACING: f32 = 6.;
+fn lerp(from: f32, to: f32, amount: f32) -> f32 {
+    from + (to - from) * amount
+}
 
-/// `getBarLabelStep`: label every Nth bar, so labels stay ~80px apart.
+/// Where the bar numbers are, as a smooth function of the zoom.
 ///
-/// The bar's length comes from the gap between the first two downbeats alone —
-/// not from the average beat — which is what the single-downbeat fallback is
-/// for. Both branches are pinned by goldens.
-fn bar_label_step(beats: &BeatGrid, zoom: f32) -> usize {
-    let average = if beats.beats.len() > 1 {
-        (beats.beats[beats.beats.len() - 1] - beats.beats[0]) / (beats.beats.len() - 1) as f32
-    } else {
-        0.5
-    };
-    let bar = if beats.downbeats.len() > 1 {
-        beats.downbeats[1] - beats.downbeats[0]
-    } else {
-        average
-            * if beats.beats_per_bar == 0 {
-                4.
-            } else {
-                beats.beats_per_bar as f32
-            }
-    };
-    let pixels_per_bar = bar * zoom;
-    (80. / pixels_per_bar.max(1.)).ceil().max(1.) as usize
+/// `getBarLabelStep` put a number on every `step`-th bar, `step` the power of
+/// two that keeps numbers about [`LABEL_SPACING`] apart, and the shading
+/// alternates at the same step. Here `level` is `log2` of the exact step
+/// that spacing asks for. At a whole level, the numbered bars are the
+/// multiples of `2^level`. Between two levels, the multiples of `2^level`
+/// that are not multiples of `2^(level + 1)` are on their way out, and
+/// `blend` is how far.
+struct Labels {
+    level: u32,
+    blend: f32,
+}
+
+/// The gap bar numbers keep, in pixels.
+const LABEL_SPACING: f32 = 80.;
+
+impl Labels {
+    fn at(bar: f32) -> Self {
+        let exact = (LABEL_SPACING / bar.max(f32::EPSILON)).log2().max(0.);
+        let level = exact.floor();
+        let blend = exact - level;
+        Self {
+            level: (level as u32).min(30),
+            // Smoothstep, so each change eases in and out.
+            blend: blend * blend * (3. - 2. * blend),
+        }
+    }
+
+    /// How much bar `index` (0 is bar 1) is a numbered bar: 1 for a full
+    /// number and a heavy line, 0 for a plain bar.
+    fn weight(&self, index: usize) -> f32 {
+        let rank = if index == 0 {
+            u32::MAX
+        } else {
+            index.trailing_zeros()
+        };
+        if rank > self.level {
+            1.
+        } else if rank == self.level {
+            1. - self.blend
+        } else {
+            0.
+        }
+    }
+
+    /// How shaded bar `index` is, from 0 to 1: the odd blocks of the step
+    /// being left, blended into the odd blocks of the step being taken.
+    fn shade(&self, index: usize) -> f32 {
+        let odd = |level: u32| ((index >> level.min(63)) & 1) as f32;
+        lerp(odd(self.level), odd(self.level + 1), self.blend)
+    }
 }
 
 /// `drawTimeRuler`: the clock ruler an unanalysed track falls back to.
@@ -4688,7 +4959,59 @@ fn label(
 
 #[cfg(test)]
 mod tests {
-    use super::shift_time;
+    use super::{bar_snap, shift_time, Grid, Labels, MIN_GRID_SPACING};
+
+    #[test]
+    fn bar_numbers_and_shading_change_without_a_jump() {
+        // Bars from 200 px down to 2 px, in small steps: no bar's number,
+        // line weight or shade may move more than a little between two.
+        let mut previous: Option<Labels> = None;
+        let mut bar = 200_f32;
+        while bar > 2. {
+            let labels = Labels::at(bar);
+            if let Some(previous) = &previous {
+                for index in 0..256 {
+                    assert!((labels.weight(index) - previous.weight(index)).abs() < 0.05);
+                    assert!((labels.shade(index) - previous.shade(index)).abs() < 0.05);
+                }
+            }
+            previous = Some(labels);
+            bar *= 0.995;
+        }
+        // At 40 px a bar, every 2nd bar is numbered and blocks are 2 bars.
+        let labels = Labels::at(40.);
+        assert_eq!(
+            [labels.weight(0), labels.weight(1), labels.weight(2)],
+            [1., 0., 1.]
+        );
+        assert_eq!(
+            (0..4).map(|index| labels.shade(index)).collect::<Vec<_>>(),
+            [0., 0., 1., 1.]
+        );
+    }
+
+    #[test]
+    fn the_grid_climbs_the_ladder_as_the_zoom_drops() {
+        // A 0.5 s beat in 4/4, in pixels at each zoom.
+        let fit = |zoom: f32| Grid::fit(0.5 * zoom, 2. * zoom, MIN_GRID_SPACING).0;
+        assert_eq!(fit(200.), Grid::Beat(4));
+        assert_eq!(fit(50.), Grid::Beat(2));
+        assert_eq!(fit(25.), Grid::Beat(1));
+        assert_eq!(fit(10.), Grid::Bars(1));
+        assert_eq!(fit(2.), Grid::Bars(4));
+    }
+
+    #[test]
+    fn a_bar_snap_counts_its_blocks_from_bar_one() {
+        let bars: Vec<f32> = (0..9).map(|bar| 1. + 2. * bar as f32).collect();
+        assert_eq!(bar_snap(&bars, 4.9, 1), 5.);
+        // Every 4th bar is 1 s and 9 s: 4.9 is nearer 1, 5.1 nearer 9.
+        assert_eq!(bar_snap(&bars, 4.9, 4), 1.);
+        assert_eq!(bar_snap(&bars, 5.1, 4), 9.);
+        // Before bar 1 and past the last block.
+        assert_eq!(bar_snap(&bars, 0., 4), 1.);
+        assert_eq!(bar_snap(&bars, 30., 4), 17.);
+    }
 
     /// Beats that alternate between 0.4285 s and 0.4286 s, like a detected
     /// grid stored to 0.1 ms.

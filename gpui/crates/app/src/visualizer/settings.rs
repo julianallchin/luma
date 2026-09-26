@@ -47,6 +47,16 @@ impl Default for Transition {
         }
     }
 }
+impl DockMotion {
+    /// Whether a switch is still sliding to its new side.
+    fn switching(&self) -> bool {
+        let now = Instant::now();
+        self.switches
+            .iter()
+            .any(|switch| switch.value(now) != switch.target)
+    }
+}
+
 impl Transition {
     fn value(&self, now: Instant) -> f32 {
         if self.reduced {
@@ -169,10 +179,22 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
+/// How wide the environment panel beside the stage is. The shell sizes the
+/// panel's cached region with it, since a cached region is not measured.
+pub(crate) const ENVIRONMENT_PANEL_WIDTH: f32 = 260.;
+
 /// The room itself, beside the stage on the venue tab: indoor or outdoor, the sun and the
 /// haze. These are venue truth, saved on the venue row, so they live with the
 /// venue and not with the render settings, which are about the picture.
-pub(crate) fn environment_panel(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
+///
+/// The panel is drawn in a cached region of its own, not with the stage, so the
+/// stage's frames do not reach it: a switch that is still sliding asks for its
+/// own next frame.
+pub(crate) fn environment_panel(
+    state: &Visualizer,
+    app: &Entity<Luma>,
+    window: &mut Window,
+) -> AnyElement {
     let environment = state.venue_environment();
     let mut rows = div()
         .id("venue-environment-scroll")
@@ -196,6 +218,9 @@ pub(crate) fn environment_panel(state: &Visualizer, app: &Entity<Luma>) -> AnyEl
         .child(section("Floor", floor_rows(environment, app)))
         .child(float::divider())
         .child(section("Haze", super::haze_rows(state, app)));
+    if state.settings_motion.borrow().switching() {
+        window.request_animation_frame();
+    }
     for error in [&state.environment_error, &state.haze_error]
         .into_iter()
         .flatten()
@@ -204,7 +229,7 @@ pub(crate) fn environment_panel(state: &Visualizer, app: &Entity<Luma>) -> AnyEl
     }
     div()
         .flex_none()
-        .w(px(260.))
+        .w(px(ENVIRONMENT_PANEL_WIDTH))
         .h_full()
         .overflow_hidden()
         .border_l_1()

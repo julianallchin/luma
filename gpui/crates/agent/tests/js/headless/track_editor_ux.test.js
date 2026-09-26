@@ -280,9 +280,11 @@ test("duplicate, delete, undo, split, lift, alt-drag and overlap are writes", ()
   reopen();
   expect([count(STROBE), total()]).toEqual([1, start]);
 
-  // Split: Haze under the middle of the lane, the cursor set with a press on
-  // its body below the header, then cut in two.
-  const middle = node("row", "Lane 2").bounds.width / 2 / ZOOM;
+  // Split: Haze a second right of the middle of the lane, the cursor set
+  // with a press on its body below the header, then cut in two. The second
+  // is what makes the later half overlap Wash, so the lift below cannot
+  // share Wash's lane.
+  const middle = node("row", "Lane 2").bounds.width / 2 / ZOOM + 1;
   const haze = span(HAZE);
   app.drag(node("card", HAZE), { dx: (middle - (haze.start + haze.length / 2)) * ZOOM, dy: 0 });
   app.frames(20);

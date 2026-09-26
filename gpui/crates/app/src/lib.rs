@@ -40,6 +40,7 @@ mod agent;
 mod chat_history;
 mod chrome;
 mod confirm;
+mod export_dialog;
 mod fixture_library;
 mod fixture_picker;
 mod fullscreen;
@@ -108,7 +109,9 @@ pub struct Luma {
     /// keeps itself open: the two states are one fact read twice.
     pub(crate) sidebar: Option<tracks::Tracks>,
     pub(crate) sidebar_hidden: bool,
-    pub(crate) sidebar_view: Option<Entity<shell::SidebarView>>,
+    /// The window's parts drawn as views of their own, so the stage's frames
+    /// rebuild only the stage — see [`shell::Region`].
+    pub(crate) regions: shell::Regions,
     /// The sidebar's live width — the slide [`sidebar_hidden`](Self::sidebar_hidden)
     /// asks for. Intent and geometry are kept apart because only one of them
     /// is true mid-slide: the flag says where the region is going, this says
@@ -167,6 +170,15 @@ pub struct Luma {
     /// not a preference about every future window.
     pub(crate) score_editor_split: luma_ui::split::SplitFraction,
     pub(crate) visualizer_split: luma_ui::split::SplitFraction,
+    /// The `split_view` setting, as last read: the score editor lays the
+    /// timeline beside the stage and the inspector — see
+    /// [`shell::split_view`].
+    pub(crate) split_view: bool,
+    /// How split view divides the workspace between the timeline and the
+    /// column beside it, and that column between the stage and the
+    /// inspector. Session-lived, like the splits above.
+    pub(crate) split_view_columns: luma_ui::split::SplitFraction,
+    pub(crate) split_view_rows: luma_ui::split::SplitFraction,
     /// The sign-in screen, or none. **Not an overlay**: while it is up it is
     /// the app's whole content and the shell is not rendered at all — see
     /// [`signin`]. Boxed because it carries a morph, two text fields and their
@@ -249,7 +261,7 @@ impl Luma {
             next_track_import: 0,
             sidebar: None,
             sidebar_hidden: false,
-            sidebar_view: None,
+            regions: shell::Regions::default(),
             // The first shell frame resolves both widths without animation;
             // subsequent visibility changes use the shared spring.
             sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
@@ -271,6 +283,9 @@ impl Luma {
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
+            split_view: false,
+            split_view_columns: shell::split_view_columns(),
+            split_view_rows: shell::split_view_rows(),
             sign_in: None,
             refreshing_session: false,
             sync_status: sync_status::SidebarSync::default(),
@@ -548,13 +563,13 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::ZoomStageIn, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     state.zoom(crate::visualizer::ZOOM_IN, None);
-                    cx.notify();
+                    this.notify_stage(cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ZoomStageOut, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     state.zoom(crate::visualizer::ZOOM_OUT, None);
-                    cx.notify();
+                    this.notify_stage(cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &keymap::ExportStageCamera, _, cx| {

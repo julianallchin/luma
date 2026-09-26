@@ -348,45 +348,124 @@ impl TimeAxis {
 // ---------------------------------------------------------------------------
 
 /// Everything the ffmpeg argv is a function of.
-struct Encode<'a> {
-    size: (u32, u32),
-    fps: u32,
+pub struct Encode<'a> {
+    pub size: (u32, u32),
+    pub fps: u32,
     /// The track file, where in it the video starts, and how long it runs.
-    audio: (&'a Path, f32, f32),
-    output: &'a Path,
+    /// `None` writes a silent file.
+    pub audio: Option<(&'a Path, f32, f32)>,
+    pub output: &'a Path,
 }
 
-/// The video encoder to ask for, and its rate control.
-///
-/// `h264_videotoolbox` is hardware and effectively free; it exists only on
-/// Apple platforms, and it is rate-controlled rather than quality-controlled,
-/// hence the two shapes.
-fn video_codec(size: (u32, u32), fps: u32) -> Vec<String> {
-    if cfg!(target_os = "macos") {
-        let rate = f64::from(size.0) * f64::from(size.1) * f64::from(fps) * BITS_PER_PIXEL;
-        vec![
-            "-c:v".into(),
-            "h264_videotoolbox".into(),
-            "-b:v".into(),
-            format!("{}", rate.round() as u64),
-        ]
-    } else {
-        vec![
-            "-c:v".into(),
-            "libx264".into(),
-            "-crf".into(),
-            "18".into(),
-            "-preset".into(),
-            "veryfast".into(),
-        ]
+/// The video encoder to ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Codec {
+    /// Apple's hardware H.264. Rate-controlled rather than quality-controlled.
+    VideoToolbox,
+    /// NVIDIA's hardware HEVC. Much faster than x264 at 4K.
+    Nvenc,
+    /// Software H.264, which every ffmpeg build has.
+    X264,
+}
+
+impl Codec {
+    fn args(self, size: (u32, u32), fps: u32) -> Vec<String> {
+        let args: &[&str] = match self {
+            Self::VideoToolbox => {
+                let rate = f64::from(size.0) * f64::from(size.1) * f64::from(fps) * BITS_PER_PIXEL;
+                return vec![
+                    "-c:v".into(),
+                    "h264_videotoolbox".into(),
+                    "-b:v".into(),
+                    format!("{}", rate.round() as u64),
+                ];
+            }
+            // Main10 with spatial and temporal AQ: a show is mostly dark haze
+            // gradients, which 8-bit bands and plain CQ starves of bits.
+            // `hvc1` so Apple players open the file too.
+            Self::Nvenc => &[
+                "-c:v",
+                "hevc_nvenc",
+                "-preset",
+                "p5",
+                "-tune",
+                "hq",
+                "-rc",
+                "vbr",
+                "-cq",
+                "16",
+                "-b:v",
+                "0",
+                "-spatial-aq",
+                "1",
+                "-temporal-aq",
+                "1",
+                "-rc-lookahead",
+                "32",
+                "-profile:v",
+                "main10",
+                "-tag:v",
+                "hvc1",
+            ],
+            Self::X264 => &["-c:v", "libx264", "-preset", "fast", "-crf", "16"],
+        };
+        args.iter().map(|arg| (*arg).to_string()).collect()
     }
+
+    fn pixel_format(self) -> &'static str {
+        match self {
+            Self::Nvenc => "p010le",
+            Self::VideoToolbox | Self::X264 => "yuv420p",
+        }
+    }
+}
+
+/// The ffmpeg to run and the encoder to ask it for.
+///
+/// On Linux and Windows, NVENC wins where one of the two ffmpegs — the bundled
+/// one, then the one on `PATH` — can open it. Listing it in `-encoders` is not
+/// enough: distribution builds list it on machines with no NVIDIA GPU, so one
+/// black frame is encoded to find out. The bundled static build has no NVENC.
+fn pick_encoder() -> (PathBuf, Codec) {
+    let bundled = crate::ffmpeg_env::ffmpeg_path();
+    if cfg!(target_os = "macos") {
+        return (bundled, Codec::VideoToolbox);
+    }
+    let nvenc = |ffmpeg: &Path| {
+        Command::new(ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:s=256x256",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "hevc_nvenc",
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    [bundled.clone(), PathBuf::from("ffmpeg")]
+        .into_iter()
+        .find(|ffmpeg| nvenc(ffmpeg))
+        .map_or((bundled, Codec::X264), |ffmpeg| (ffmpeg, Codec::Nvenc))
 }
 
 /// The full ffmpeg command line, output last.
 ///
 /// Pure, so the shape of the pipe is a unit test rather than a thing you learn
 /// by watching a render fail four minutes in.
-fn ffmpeg_argv(encode: &Encode) -> Vec<String> {
+fn ffmpeg_argv(encode: &Encode, codec: Codec) -> Vec<String> {
     let (width, height) = encode.size;
     let mut argv: Vec<String> = vec![
         "-y".into(),
@@ -413,29 +492,38 @@ fn ffmpeg_argv(encode: &Encode) -> Vec<String> {
     // reaches EOF, and a pipe that delivers one frame every 50 ms leaves the
     // audio decoder some seven seconds behind when that happens — measured, on
     // every recording, as exactly that much silence missing from the end.
-    let (audio, start, seconds) = encode.audio;
-    if start > 0.0 {
-        argv.push("-ss".into());
-        argv.push(format!("{start}"));
+    if let Some((audio, start, seconds)) = encode.audio {
+        if start > 0.0 {
+            argv.push("-ss".into());
+            argv.push(format!("{start}"));
+        }
+        argv.push("-t".into());
+        argv.push(format!("{seconds}"));
+        argv.push("-i".into());
+        argv.push(audio.to_string_lossy().into_owned());
+        argv.extend(["-map", "0:v:0", "-map", "1:a:0"].map(String::from));
+        argv.extend(["-c:a", "aac", "-b:a", "192k"].map(String::from));
     }
-    argv.push("-t".into());
-    argv.push(format!("{seconds}"));
-    argv.push("-i".into());
-    argv.push(audio.to_string_lossy().into_owned());
-    argv.extend(["-map", "0:v:0", "-map", "1:a:0"].map(String::from));
-    argv.extend(video_codec(encode.size, encode.fps));
+    argv.extend(codec.args(encode.size, encode.fps));
+    // The frames are sRGB. Converted to YUV with the BT.709 matrix and tagged
+    // BT.709, so players decode the colours the stage drew: without the
+    // explicit matrix swscale converts with BT.601 and the tag names a matrix
+    // the pixels were not made with.
+    argv.push("-vf".into());
+    argv.push(format!(
+        "scale=out_color_matrix=bt709:out_range=tv,format={}",
+        codec.pixel_format()
+    ));
     argv.extend(
         [
-            // yuv420p so every player takes it; bt709 tagged so the beam cores
-            // the tonemapper produces are read in the space they were made in.
-            "-pix_fmt",
-            "yuv420p",
             "-colorspace",
             "bt709",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-color_range",
+            "tv",
             "-movflags",
             "+faststart",
         ]
@@ -443,6 +531,132 @@ fn ffmpeg_argv(encode: &Encode) -> Vec<String> {
     );
     argv.push(encode.output.to_string_lossy().into_owned());
     argv
+}
+
+/// Frames queued between the caller and ffmpeg. A slow encoder holds the
+/// caller back here rather than buffering the film in memory.
+const ENCODE_QUEUE: usize = 2;
+
+/// A running ffmpeg writing raw RGBA frames to an mp4.
+///
+/// Frames cross to ffmpeg on a thread of their own, so the caller renders the
+/// next frame while the last one is in the pipe. Dropped before
+/// [`Encoder::finish`], it kills ffmpeg and deletes the partial file: a file
+/// at `output` is a finished one.
+pub struct Encoder {
+    child: std::process::Child,
+    frames: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    writer: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    stderr: Option<std::thread::JoinHandle<String>>,
+    output: PathBuf,
+    closed: bool,
+}
+
+impl Encoder {
+    /// Start ffmpeg on the best encoder this machine has.
+    ///
+    /// # Errors
+    /// ffmpeg could not be started.
+    pub fn start(encode: &Encode) -> Result<Self, RecordError> {
+        let (ffmpeg, codec) = pick_encoder();
+        let mut child = Command::new(ffmpeg)
+            .args(ffmpeg_argv(encode, codec))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(RecordError::FfmpegSpawn)?;
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        // Drained on its own thread: a full stderr pipe would deadlock the
+        // frame loop against an encoder that is trying to explain itself.
+        let stderr = child.stderr.take().expect("stderr was piped");
+        let stderr = std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::BufReader::new(stderr), &mut text);
+            text
+        });
+        let (frames, queued) = std::sync::mpsc::sync_channel::<Vec<u8>>(ENCODE_QUEUE);
+        // Ends when the sender is dropped, closing stdin with it: that EOF
+        // is what tells ffmpeg the film is over.
+        let writer = std::thread::spawn(move || {
+            for frame in queued {
+                stdin.write_all(&frame)?;
+            }
+            Ok(())
+        });
+        Ok(Self {
+            child,
+            frames: Some(frames),
+            writer: Some(writer),
+            stderr: Some(stderr),
+            output: encode.output.to_path_buf(),
+            closed: false,
+        })
+    }
+
+    /// Queue one frame. Waits while ffmpeg is [`ENCODE_QUEUE`] frames behind.
+    ///
+    /// # Errors
+    /// ffmpeg stopped taking frames; its own explanation when it gave one.
+    pub fn write(&mut self, frame: Vec<u8>) -> Result<(), RecordError> {
+        if self
+            .frames
+            .as_ref()
+            .is_some_and(|frames| frames.send(frame).is_ok())
+        {
+            return Ok(());
+        }
+        Err(self.close().err().unwrap_or_else(|| {
+            RecordError::Pipe(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }))
+    }
+
+    /// End the stream and wait for ffmpeg to finish the file.
+    ///
+    /// # Errors
+    /// A frame could not be handed over, or ffmpeg exited non-zero — its
+    /// stderr is in the message. The partial file is deleted.
+    pub fn finish(mut self) -> Result<(), RecordError> {
+        self.close()
+    }
+
+    fn close(&mut self) -> Result<(), RecordError> {
+        self.closed = true;
+        drop(self.frames.take());
+        let written = self
+            .writer
+            .take()
+            .map_or(Ok(()), |writer| writer.join().unwrap_or(Ok(())));
+        let status = self.child.wait().map_err(RecordError::Pipe);
+        let stderr = self
+            .stderr
+            .take()
+            .map(|stderr| stderr.join().unwrap_or_default())
+            .unwrap_or_default();
+        let result = match status {
+            Ok(status) if !status.success() => Err(RecordError::Ffmpeg {
+                status: status.to_string(),
+                stderr,
+            }),
+            Ok(_) => written.map_err(RecordError::Pipe),
+            Err(error) => Err(error),
+        };
+        if result.is_err() {
+            let _ = std::fs::remove_file(&self.output);
+        }
+        result
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.close();
+        let _ = std::fs::remove_file(&self.output);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,28 +748,12 @@ impl Session {
         )?;
         let (width, height) = sequence.size();
 
-        let argv = ffmpeg_argv(&Encode {
+        let mut encoder = Encoder::start(&Encode {
             size: (width, height),
             fps: self.axis.fps,
-            audio: (&self.audio, self.axis.start, self.axis.seconds()),
+            audio: Some((&self.audio, self.axis.start, self.axis.seconds())),
             output: &self.output,
-        });
-        let mut ffmpeg = Command::new(crate::ffmpeg_env::ffmpeg_path())
-            .args(&argv)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(RecordError::FfmpegSpawn)?;
-        let mut stdin = ffmpeg.stdin.take().expect("stdin was piped");
-        // Drained on its own thread: a full stderr pipe would deadlock the
-        // frame loop against an encoder that is trying to explain itself.
-        let stderr = ffmpeg.stderr.take().expect("stderr was piped");
-        let watcher = std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = std::io::Read::read_to_string(&mut std::io::BufReader::new(stderr), &mut text);
-            text
-        });
+        })?;
 
         let haze = self.axis.haze;
         let mut arena = Arena::default();
@@ -572,11 +770,11 @@ impl Session {
         let started = Instant::now();
         let (mut render, mut encode) = (Duration::ZERO, Duration::ZERO);
         let mut written = 0u64;
-        let mut broken = None;
+        let mut cancelled = false;
 
         for n in 0..self.axis.frames() {
             if cancel.load(Ordering::Relaxed) {
-                broken = Some(RecordError::Cancelled);
+                cancelled = true;
                 break;
             }
             let clock = Instant::now();
@@ -599,12 +797,7 @@ impl Session {
             render += clock.elapsed();
 
             let clock = Instant::now();
-            if let Err(error) = stdin.write_all(pixels) {
-                // A broken pipe means ffmpeg died; its stderr is the real
-                // diagnosis, so fall through to the exit check.
-                broken = Some(RecordError::Pipe(error));
-                break;
-            }
+            encoder.write(pixels.to_vec())?;
             encode += clock.elapsed();
             written += 1;
             progress(Progress {
@@ -617,23 +810,11 @@ impl Session {
         }
         let elapsed = started.elapsed();
 
-        drop(stdin);
-        let status = ffmpeg.wait().map_err(RecordError::Pipe)?;
-        let stderr = watcher.join().unwrap_or_default();
-        if let Some(error) = broken {
-            if !status.success() {
-                return Err(RecordError::Ffmpeg {
-                    status: status.to_string(),
-                    stderr,
-                });
-            }
-            return Err(error);
-        }
-        if !status.success() {
-            return Err(RecordError::Ffmpeg {
-                status: status.to_string(),
-                stderr,
-            });
+        // A cancelled recording is still closed the ordinary way, so what
+        // was rendered is a playable file.
+        encoder.finish()?;
+        if cancelled {
+            return Err(RecordError::Cancelled);
         }
         Ok(Recorded {
             path: self.output,
@@ -703,7 +884,7 @@ impl Exposure {
     }
 
     /// The mean exposure, re-encoded. Alpha is left opaque: the pipe is
-    /// `yuv420p` and nothing downstream reads it.
+    /// YUV and nothing downstream reads it.
     fn resolve(&mut self) -> &[u8] {
         if self.linear.is_empty() {
             return &self.out;
@@ -885,16 +1066,22 @@ mod tests {
 
     #[test]
     fn the_argv_pipes_raw_video_in_and_muxes_the_track_audio() {
-        let argv = ffmpeg_argv(&Encode {
-            size: (1280, 720),
-            fps: 30,
-            audio: (Path::new("/tracks/a.mp3"), 0.0, 10.0),
-            output: Path::new("/out/a.mp4"),
-        });
+        let argv = ffmpeg_argv(
+            &Encode {
+                size: (1280, 720),
+                fps: 30,
+                audio: Some((Path::new("/tracks/a.mp3"), 0.0, 10.0)),
+                output: Path::new("/out/a.mp4"),
+            },
+            Codec::X264,
+        );
         let line = argv.join(" ");
         assert!(line.contains("-f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i pipe:0"));
         assert!(line.contains("-t 10 -i /tracks/a.mp3 -map 0:v:0 -map 1:a:0"));
-        assert!(line.contains("-pix_fmt yuv420p"));
+        // Converted with the matrix it is tagged with.
+        assert!(line.contains("out_color_matrix=bt709"));
+        assert!(line.contains("format=yuv420p"));
+        assert!(line.contains("-colorspace bt709"));
         assert!(line.contains("-c:a aac"));
         assert!(line.contains("-movflags +faststart"));
         assert_eq!(argv.last().unwrap(), "/out/a.mp4");
@@ -904,12 +1091,15 @@ mod tests {
 
     #[test]
     fn a_span_seeks_the_audio_input_only() {
-        let argv = ffmpeg_argv(&Encode {
-            size: (640, 360),
-            fps: 25,
-            audio: (Path::new("/tracks/a.mp3"), 30.0, 12.5),
-            output: Path::new("/out/a.mp4"),
-        });
+        let argv = ffmpeg_argv(
+            &Encode {
+                size: (640, 360),
+                fps: 25,
+                audio: Some((Path::new("/tracks/a.mp3"), 30.0, 12.5)),
+                output: Path::new("/out/a.mp4"),
+            },
+            Codec::X264,
+        );
         let seek = argv.iter().position(|a| a == "-ss").expect("seeks");
         let audio = argv
             .iter()
@@ -920,20 +1110,27 @@ mod tests {
     }
 
     #[test]
-    fn the_encoder_matches_the_platform() {
-        let argv = ffmpeg_argv(&Encode {
-            size: (1920, 1080),
-            fps: 30,
-            audio: (Path::new("/a.mp3"), 0.0, 3.0),
-            output: Path::new("/o.mp4"),
-        });
-        if cfg!(target_os = "macos") {
-            assert!(argv.contains(&"h264_videotoolbox".to_string()));
-            // 1920x1080x30 at 0.15 bpp.
-            assert!(argv.contains(&"9331200".to_string()));
-        } else {
-            assert!(argv.contains(&"libx264".to_string()));
-        }
+    fn a_silent_file_has_one_input_and_no_audio_stream() {
+        let argv = ffmpeg_argv(
+            &Encode {
+                size: (640, 360),
+                fps: 60,
+                audio: None,
+                output: Path::new("/out/a.mp4"),
+            },
+            Codec::Nvenc,
+        );
+        assert_eq!(argv.iter().filter(|arg| *arg == "-i").count(), 1);
+        assert!(!argv.iter().any(|arg| arg == "-map" || arg == "aac"));
+        assert!(argv.contains(&"hevc_nvenc".to_string()));
+    }
+
+    #[test]
+    fn videotoolbox_is_rate_controlled_by_the_frame_size() {
+        // 1920x1080x30 at 0.15 bpp.
+        assert!(Codec::VideoToolbox
+            .args((1920, 1080), 30)
+            .contains(&"9331200".to_string()));
     }
 
     #[test]

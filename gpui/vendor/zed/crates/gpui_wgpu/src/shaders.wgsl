@@ -312,6 +312,11 @@ fn oklab_to_linear_srgb(color: vec4<f32>) -> vec4<f32> {
 
 fn over(below: vec4<f32>, above: vec4<f32>) -> vec4<f32> {
     let alpha = above.a + below.a * (1.0 - above.a);
+    // Two fully transparent colors (an element faded to opacity 0) would
+    // divide 0 by 0 here, and the NaN paints as a black border.
+    if (alpha <= 0.0) {
+        return vec4<f32>(0.0);
+    }
     let color = (above.rgb * above.a + below.rgb * below.a * (1.0 - above.a)) / alpha;
     return vec4<f32>(color, alpha);
 }

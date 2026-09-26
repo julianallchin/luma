@@ -402,17 +402,25 @@ impl<V: View> Element for ViewElement<V> {
 
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
-                        let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                            let mut element = self
-                                .view
-                                .take()
-                                .unwrap()
-                                .render(window, cx)
-                                .into_any_element();
-                            element.layout_as_root(bounds.size.into(), window, cx);
-                            element.prepaint_at(bounds.origin, window, cx);
-                            element
-                        });
+                        let (mut element, mut accessed_entities) =
+                            cx.detect_accessed_entities(|cx| {
+                                let mut element = self
+                                    .view
+                                    .take()
+                                    .unwrap()
+                                    .render(window, cx)
+                                    .into_any_element();
+                                element.layout_as_root(bounds.size.into(), window, cx);
+                                element.prepaint_at(bounds.origin, window, cx);
+                                element
+                            });
+                        // The view's own entity, always. The detection above
+                        // counts only entities first touched inside the render,
+                        // so a view created earlier in this frame (by its
+                        // parent's render) would drop out of the set, and on
+                        // every frame that reused it a `notify` would find no
+                        // window tracking it.
+                        accessed_entities.insert(entity_id);
 
                         let prepaint_end = window.prepaint_index();
                         window.refreshing = refreshing;
