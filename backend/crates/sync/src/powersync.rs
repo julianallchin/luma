@@ -1,6 +1,8 @@
 //! PowerSync and SQLx connections to the same local database.
 
-use std::{collections::HashSet, future::Future, path::Path, pin::Pin, time::Duration};
+use std::{
+    collections::HashSet, future::Future, path::Path, pin::Pin, sync::Mutex, time::Duration,
+};
 
 pub use ::powersync as sdk;
 pub use powersync_http::Client as HttpClient;
@@ -112,7 +114,7 @@ impl Connections {
         Ok(Database {
             sql: self.sql,
             sync,
-            tasks,
+            tasks: Mutex::new(tasks),
         })
     }
 }
@@ -121,15 +123,23 @@ impl Connections {
 pub struct Database {
     pub sql: SqlitePool,
     pub sync: PowerSyncDatabase,
-    tasks: Vec<Task>,
+    tasks: Mutex<Vec<Task>>,
 }
 
 impl Database {
-    pub async fn close(mut self) {
+    pub async fn close(self) {
         self.sync.disconnect().await;
         self.sql.close().await;
-        for task in self.tasks.drain(..) {
+        let tasks = std::mem::take(&mut *self.tasks.lock().expect("poisoned"));
+        for task in tasks {
             task.stop().await;
         }
+    }
+
+    /// Stop the SDK's tasks now, while other handles to this database are
+    /// still alive. For a host that is quitting and cannot wait for the last
+    /// handle to go.
+    pub fn stop_tasks(&self) {
+        self.tasks.lock().expect("poisoned").clear();
     }
 }
