@@ -137,12 +137,17 @@ impl FieldLayout {
 }
 
 /// Whether `draw` stands in the height field: stage geometry, not the ground
-/// plane (the field's own `z = 0`) and not fixture bodies, which move every
-/// cue and are too small to shade a sky.
+/// plane (the field's own `z = 0`), not fixture bodies, which move every
+/// cue and are too small to shade a sky, and not truss. The field holds one
+/// solid slab a texel, so a truss tower read as a solid column ten metres
+/// tall and put a dark ring round its foot; the lattice is mostly open air.
+/// Its contact shade is the depth prepass's GTAO.
 pub(crate) fn in_field(frame: &Frame, index: usize) -> bool {
     let draw = &frame.draws[index];
+    let key = &frame.meshes[draw.mesh].key;
     !matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
-        && !crate::frame::is_ground(&frame.meshes[draw.mesh].key)
+        && !crate::frame::is_ground(key)
+        && !key.starts_with("procedural/truss/")
 }
 
 /// Consecutive runs `(start, end)` of opaque draws of one mesh that stand in

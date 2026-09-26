@@ -5,11 +5,13 @@
 // each looks its reflection up at the ray's hit on the parallax box as that
 // probe sees it: a truss a metre from a probe reflects the deck under
 // itself, not the deck under the probe. Past the grid's edge the probes fade
-// out over `box_min.w` metres and the sky probe takes over.
+// out over `box_min.w` metres. What they give is a change to the sky probe's
+// light, not light (`probe_relight.wgsl`), so they fade to nothing there,
+// and on open ground they add nothing anywhere.
 
 @group(2) @binding(6) var probe_cubes: texture_cube_array<f32>;
 @group(2) @binding(7) var<uniform> probe_grid: ProbeGrid;
-// Each probe face's mean radiance, six to a probe (`probe_ambient` in
+// Each probe face's mean change, six to a probe (`probe_ambient` in
 // `probe_filter.wgsl`): the diffuse, as an ambient cube.
 @group(2) @binding(8) var<uniform> probe_ambient: array<vec4<f32>, PROBE_AMBIENT_LEN>;
 
@@ -22,13 +24,16 @@ fn probe_ambient_at(index: u32, c: vec3<f32>) -> vec3<f32> {
         + w.z * probe_ambient[base + select(5u, 4u, c.z >= 0.0)].rgb;
 }
 
+/// What the stage changes of the sky probe's light at a point: each term
+/// is added to the sky probe's own and may be negative, where the stage
+/// hides a brighter sky than it sends.
 struct ProbeLight {
     // Prefiltered radiance along the reflection, for the split sum.
     specular: vec3<f32>,
     // Mean radiance over the normal's side: E / pi, as the sky probe's
     // irradiance cube stores it.
     diffuse: vec3<f32>,
-    // How much the probes stand in for the sky probe here, 0 to 1.
+    // How much of the change applies here, 0 to 1.
     weight: f32,
 };
 

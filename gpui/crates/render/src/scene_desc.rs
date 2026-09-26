@@ -37,7 +37,7 @@ pub struct Viewport {
 }
 
 /// One golden scene: a complete description of a frame's inputs.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scene {
     /// Stable id; also the filename stem of every frame.
@@ -188,7 +188,7 @@ pub enum SocketMarkState {
 }
 
 /// Y-up camera space, the space the catalogue stores camera poses in.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CameraPose {
     /// Eye position.
     pub position: [f32; 3],
@@ -1674,7 +1674,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
 }
 
 /// Z-up data space; `pos[2]` is height, rotations are Euler XYZ radians.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fixture {
     /// Venue-unique id; primitive keys are `"<id>:<head>"`.
@@ -1826,7 +1826,7 @@ enum Part {
 }
 
 /// A stage piece, in the same Z-up data space as [`Fixture`].
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Piece {
     /// Venue-unique id.

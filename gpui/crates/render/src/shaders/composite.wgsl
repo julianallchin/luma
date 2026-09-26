@@ -37,6 +37,7 @@ override LINEAR_OUTPUT: bool = false;
 @group(0) @binding(6) var haze_noise_sampler: sampler;
 // r: the fraction of the haze's sunlight the sun reaches past the stage and
 // the clouds, g: the linear view depth it stands for (`sun_shafts.wgsl`).
+// Read for the sky only; the scene pass applied it to the surfaces.
 @group(0) @binding(7) var shaft_tex: texture_2d<f32>;
 
 struct EnvironmentParams {
@@ -101,44 +102,6 @@ fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
     }
     let haze = w00 * s00.rgb + w10 * s10.rgb + w01 * s01.rgb + w11 * s11.rgb;
     return haze / total;
-}
-
-/// The sun-shaft fraction at this pixel: a tent over the four by four
-/// nearest texels, each also weighted by how near its depth is to this
-/// pixel's, so a shaft does not bleed across a silhouette. The tent is wider
-/// than a bilinear tap because each texel's few samples are noisy; shafts
-/// are soft anyway.
-fn upsample_shafts(uv: vec2<f32>, full_depth: f32) -> f32 {
-    let r = cfg.display.zw;
-    let lr = uv * r - 0.5;
-    let base = floor(lr);
-    let f = lr - base;
-    let tolerance = 0.25 + 0.05 * full_depth;
-    let range = ground_depth_range(uv, full_depth);
-    var sum = 0.0;
-    var total = 0.0;
-    var nearest = 1.0;
-    var nearest_err = 1e9;
-    for (var j = -1; j < 3; j++) {
-        for (var i = -1; i < 3; i++) {
-            let texel = clamp(vec2<i32>(base) + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(r) - 1);
-            let s = textureLoad(shaft_tex, texel, 0);
-            // Outside the span by the depth tolerance; inside it, by how far
-            // in octaves the texel stands from the pixel's own centre.
-            let err = max(max(range.x - s.g, s.g - range.y), 0.0) / tolerance
-                + 0.25 * abs(log2(max(s.g, 1e-3) / max(full_depth, 1e-3)));
-            let d = abs(vec2<f32>(f32(i), f32(j)) - f);
-            let tent = max(2.0 - d.x, 0.0) * max(2.0 - d.y, 0.0);
-            let w = tent * exp(-err);
-            sum += w * s.r;
-            total += w;
-            if err < nearest_err {
-                nearest = s.r;
-                nearest_err = err;
-            }
-        }
-    }
-    return select(nearest, sum / total, total > 1e-4);
 }
 
 /// The view depths a pixel of open ground covers, from its lower edge to its
@@ -273,31 +236,24 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     }
     if debug == 7u { return vec4<f32>(display_transform(haze), 1.0); }
     if outdoor {
-        var surface = texel.rgb;
-        if cfg.display.y > 0.5 && cfg.medium.min.w > 0.0 && debug == 0u {
-            // The scene pass lit its haze with the whole sun; take away the
-            // part the stage and the clouds shade. Sky pixels take theirs
-            // from the fraction too.
+        if cfg.display.y > 0.5 && cfg.medium.min.w > 0.0 && debug == 0u && texel.a < 1.0 {
+            // The sky's haze above was lit with the whole sun; take away the
+            // part the stage and the clouds shade. Surfaces scaled their own
+            // haze in the scene pass, each at its own depth: taken off here,
+            // at the depth of the pixel's centre only, the far ground's share
+            // came off a truss edge in front of it.
             let shaft_depth = select(6e4, depth, raw_depth > 0.0);
-            let lit = upsample_shafts(uv, shaft_depth);
+            let lit = upsample_shafts(shaft_tex, uv, shaft_depth, ground_depth_range(uv, shaft_depth));
             let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
             let far = cfg.inv_view_proj * clip;
             let ray_dir = normalize(far.xyz / far.w - cfg.camera_pos.xyz);
             let sun = outdoor_haze_sun(ray_dir, sky.sun.xyz, cfg.outdoor_sun) * (1.0 - lit);
-            if texel.a > 0.0 {
-                let hit_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, raw_depth, 1.0);
-                let distance = length(hit_clip.xyz / hit_clip.w - cfg.camera_pos.xyz);
-                let transmission = exp(-medium_optical_depth(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance));
-                surface = max(surface - texel.a * sun * (1.0 - transmission), vec3<f32>(0.0));
-            }
-            if texel.a < 1.0 {
-                let far_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, 0.0, 1.0);
-                let distance = length(far_clip.xyz / far_clip.w - cfg.camera_pos.xyz);
-                let transmission = exp(-medium_optical_depth(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance));
-                background = max(background - sun * (1.0 - transmission), vec3<f32>(0.0));
-            }
+            let far_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, 0.0, 1.0);
+            let distance = length(far_clip.xyz / far_clip.w - cfg.camera_pos.xyz);
+            let transmission = exp(-medium_optical_depth(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance));
+            background = max(background - sun * (1.0 - transmission), vec3<f32>(0.0));
         }
-        scene = surface + (1.0 - texel.a) * background;
+        scene = texel.rgb + (1.0 - texel.a) * background;
     }
     if LINEAR_OUTPUT {
         return vec4<f32>(scene * medium + haze, 1.0);

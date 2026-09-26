@@ -554,10 +554,12 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     let visibility = textureLoad(ambient_visibility, vec2<i32>(in.clip.xy), 0);
     let occlusion = ao * visibility.r;
     out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
-    // Environment light: the sky probe, and over the stage the local
-    // reflection probes (`probe_sample.wgsl`) in its place. The local probes
-    // hold absolute radiance, the sky probe's scaled by its intensity, and
-    // they light a room that has no sky probe at all.
+    // Environment light: the sky probe, and over the stage what the local
+    // reflection probes (`probe_sample.wgsl`) say the stage changes of it:
+    // the stage's own light, less the sky it hides. On open ground they
+    // change nothing, so the grid's edge does not show. Their change is
+    // absolute, the sky probe's radiance scaled by its intensity, and it
+    // lights a room that has no sky probe at all.
     let sky_probe = environment_params.enabled > 0.5 && environment_params.intensity > 0.0;
     let reflected = reflect(-v, n);
     let local = probe_light(in.world, n, reflected, roughness);
@@ -581,9 +583,14 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
         // under a deck is darker than anything they saw.
         var diffuse_visibility = vec3<f32>(visibility.r);
         var specular_visibility = vec3<f32>(lobe);
-        var irradiance = vec3<f32>(0.0);
+        // Radiance for the split sum's specular, and E / pi for the diffuse
+        // with its visibility taken: the sky probe's, plus the probes'
+        // change, which may be negative. Only the sum is kept from going
+        // below nothing.
+        var diffuse_light = vec3<f32>(0.0);
+        var specular_light = vec3<f32>(0.0);
         if sky_probe {
-            irradiance = textureSampleLevel(
+            var irradiance = textureSampleLevel(
                 environment_irradiance,
                 environment_sampler,
                 environment_direction(n),
@@ -595,25 +602,21 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
                 irradiance = sky.irradiance;
                 specular_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
             }
-        }
-        var ibl = vec3<f32>(0.0);
-        // Inside the grid the probes stand in for the sky probe entirely.
-        if sky_probe && local.weight < 1.0 {
-            let diffuse_ibl = irradiance * diffuse_color * visibility.r;
             let prefiltered = textureSampleLevel(
                 environment_specular,
                 environment_sampler,
                 environment_direction(reflected),
                 roughness * 7.0,
             ).rgb;
-            let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y) * specular_visibility;
-            ibl = (diffuse_ibl * (vec3<f32>(1.0) - fresnel) + specular_ibl) * environment_params.intensity;
+            diffuse_light = irradiance * visibility.r * environment_params.intensity;
+            specular_light = prefiltered * environment_params.intensity;
         }
         if local.weight > 0.0 {
-            let local_ibl = local.diffuse * diffuse_color * diffuse_visibility * (vec3<f32>(1.0) - fresnel)
-                + local.specular * (f0 * brdf.x + brdf.y) * specular_visibility;
-            ibl = mix(ibl, local_ibl, local.weight);
+            diffuse_light += local.diffuse * diffuse_visibility * local.weight;
+            specular_light += local.specular * local.weight;
         }
+        let ibl = max(diffuse_light, vec3<f32>(0.0)) * diffuse_color * (vec3<f32>(1.0) - fresnel)
+            + max(specular_light, vec3<f32>(0.0)) * (f0 * brdf.x + brdf.y) * specular_visibility;
         out += ibl * ao;
     }
 
@@ -710,7 +713,7 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     let delta = in.world - globals.camera_pos.xyz;
     var radiance: vec3<f32>;
     if ground && span.valid {
-        radiance = surface_haze(ground_aerial(out, span), delta, in.clip.xy);
+        radiance = surface_haze(ground_aerial(out, span), delta, in.clip.xy, ground_span_depths(span));
     } else {
         radiance = surface_radiance(out, delta, in.clip.xy);
     }
@@ -739,6 +742,9 @@ struct GroundSpan {
     // radians; the upper stops where the ground ends.
     near: f32,
     far: f32,
+    // The upper edge's depression where the ground does not end: at or
+    // below zero it sees the sky.
+    upper: f32,
 };
 
 /// Where a ground fragment really is. Along the horizon a pixel is part
@@ -780,7 +786,8 @@ fn ground_span(world: vec3<f32>) -> GroundSpan {
     let centre = atan2(span.height, run);
     let end = atan2(span.height, AERIAL_MAX_M);
     span.near = centre + 0.5 * pixel;
-    span.far = max(centre - 0.5 * pixel, end);
+    span.upper = centre - 0.5 * pixel;
+    span.far = max(span.upper, end);
     return span;
 }
 
@@ -795,10 +802,30 @@ fn ground_span_run(span: GroundSpan, angle: f32) -> f32 {
     return span.height / tan(angle);
 }
 
+/// The view depths the span covers, from its lower edge to its upper, for
+/// matching the sun shafts (`upsample_shafts`). Toward the horizon a pixel
+/// of ground spans hundreds of metres, and the last row from a kilometre or
+/// so to the sky. Matched on its centre's depth alone, that row found no
+/// shaft texel like it — the ground below is nearer, the sky above is the
+/// sky — and took the near ground's: a line along the horizon. A texel
+/// anywhere in the span matches it.
+fn ground_span_depths(span: GroundSpan) -> vec2<f32> {
+    let forward = globals.camera_forward.xyz;
+    let near = ground_span_run(span, span.near);
+    let near_depth = dot(vec3<f32>(span.heading * near, -span.height), forward);
+    // An upper edge at or above the horizontal sees the sky, which the
+    // shafts store at 6e4.
+    var far_depth = 6e4;
+    if span.upper > 1e-6 {
+        let far = ground_span_run(span, span.upper);
+        far_depth = min(dot(vec3<f32>(span.heading * far, -span.height), forward), 6e4);
+    }
+    return vec2<f32>(min(near_depth, far_depth), max(near_depth, far_depth));
+}
+
 /// The air in front of the span: a step per half octave of distance, up to
 /// eight, since the aerial volume's slices are spaced by the distance's
-/// logarithm. The haze is left to the pixel's centre, the depth the
-/// composite takes the haze's shafts off at (`composite.wgsl`).
+/// logarithm. The haze is left to the pixel's centre.
 fn ground_aerial(color: vec3<f32>, span: GroundSpan) -> vec3<f32> {
     let ratio = ground_span_run(span, span.far) / ground_span_run(span, span.near);
     let count = u32(clamp(ceil(2.0 * log2(max(ratio, 1.0))), 1.0, 8.0));

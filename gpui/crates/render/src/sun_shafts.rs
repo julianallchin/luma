@@ -7,7 +7,10 @@
 //! sun nobody can see. This pass marches each view ray at low resolution,
 //! reads the stage's sun cascades and the cloud shadow map where the ray's
 //! haze scatters, and leaves the fraction of that haze the sun reaches. The
-//! composite scales the closed form's sun term by it (`composite.wgsl`).
+//! scene pass scales each fragment's haze by it at the fragment's own depth
+//! (`outdoor_surface.wgsl`), and the composite the uncovered sky's
+//! (`composite.wgsl`). So the pass runs between the depth prepass and the
+//! scene pass.
 //!
 //! Cost: one texel per 2x2 pixels on High and per 4x4 on Low, a fixed
 //! number of samples each, one shadow tap and one cloud-map tap per sample.
@@ -203,8 +206,6 @@ pub(crate) struct FrameInput<'a> {
     pub aerial: &'a crate::atmosphere::AerialTextures,
     pub depth: &'a wgpu::TextureView,
     pub inv_view_proj: Mat4,
-    pub width: u32,
-    pub height: u32,
     pub quality: Quality,
 }
 
@@ -215,20 +216,20 @@ pub(crate) struct Cache {
 }
 
 impl Cache {
-    /// Encode the pass and return the texture the composite reads, with its
-    /// size.
-    pub(crate) fn encode(
+    /// The texture this frame's pass writes, sized for a `width` by `height`
+    /// frame. The scene pass's bind group takes it before the pass is
+    /// encoded.
+    pub(crate) fn target(
         &mut self,
-        pipelines: &Pipelines,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        input: &FrameInput,
-        profile: &mut crate::pass_profile::PassQueries,
-    ) -> (wgpu::TextureView, (u32, u32)) {
-        let (divisor, samples) = budget(input.quality);
+        width: u32,
+        height: u32,
+        quality: Quality,
+    ) -> wgpu::TextureView {
+        let (divisor, _) = budget(quality);
         let size = (
-            input.width.div_ceil(divisor).max(1),
-            input.height.div_ceil(divisor).max(1),
+            width.div_ceil(divisor).max(1),
+            height.div_ceil(divisor).max(1),
         );
         if self.target.as_ref().is_none_or(|(at, _)| *at != size) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -247,7 +248,23 @@ impl Cache {
             });
             self.target = Some((size, texture.create_view(&Default::default())));
         }
-        let view = self.target.as_ref().expect("target allocated").1.clone();
+        self.target.as_ref().expect("target allocated").1.clone()
+    }
+
+    /// Encode the pass into the texture [`Self::target`] returned.
+    pub(crate) fn encode(
+        &self,
+        pipelines: &Pipelines,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &FrameInput,
+        profile: &mut crate::pass_profile::PassQueries,
+    ) {
+        let (_, samples) = budget(input.quality);
+        let (size, view) = self
+            .target
+            .as_ref()
+            .expect("target allocated before the pass");
         let uniform = wgpu::util::DeviceExt::create_buffer_init(
             device,
             &wgpu::util::BufferInitDescriptor {
@@ -297,7 +314,7 @@ impl Cache {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: wgpu::BindingResource::TextureView(view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -313,7 +330,5 @@ impl Cache {
         pass.set_bind_group(0, &scene, &[]);
         pass.set_bind_group(1, &target, &[]);
         pass.dispatch_workgroups(size.0.div_ceil(8), size.1.div_ceil(8), 1);
-        drop(pass);
-        (view, size)
     }
 }

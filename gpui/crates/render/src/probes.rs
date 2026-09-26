@@ -17,11 +17,15 @@
 //! - **Relight** (`probe_relight.wgsl`): every texel every frame, by the
 //!   frame's sun, sky, clouds and fixtures, through the scene pass's own
 //!   functions. A fixture that turns red is red in the probes that frame.
+//!   A texel holds what the stage changes of the sky probe's light that way:
+//!   the stage's own light less the sky it hides, and nothing where the
+//!   probe sees open sky or open ground.
 //! - **Prefilter** (`probe_filter.wgsl`): the roughness mips, from the base
 //!   down, eight samples a texel.
 //! - **Sample** (`probe_sample.wgsl`): the scene pass blends the probes
-//!   round a point, parallax-corrected, for its specular and diffuse
-//!   environment light, and the sky probe past the grid.
+//!   round a point, parallax-corrected, and adds their change to the sky
+//!   probe's specular and diffuse light. Open ground takes the sky probe's
+//!   light alone, inside the grid as past it, so the grid has no edge.
 //!
 //! Beams and haze stay out: the probes hold surfaces, and the air is drawn
 //! over the frame after them.
@@ -138,6 +142,10 @@ pub(crate) struct Layout {
     /// Whether the stage stands on a ground plane, which the relight extends
     /// to the horizon.
     pub has_ground: bool,
+    /// Whether the sky probe holds the ground: open air, where its lower
+    /// half is the floor under the sun. The probes then keep only what the
+    /// stage changes of it (`probe_relight.wgsl`).
+    pub open_air: bool,
 }
 
 impl Layout {
@@ -179,7 +187,11 @@ impl Layout {
             box_max: self.box_max.extend(self.reach).to_array(),
             ground: self
                 .ground
-                .extend(f32::from(u8::from(self.has_ground)))
+                .extend(match (self.has_ground, self.open_air) {
+                    (false, _) => 0.0,
+                    (true, false) => 1.0,
+                    (true, true) => 2.0,
+                })
                 .to_array(),
             positions,
         }
@@ -384,6 +396,7 @@ pub(crate) fn place(frame: &Frame, opaque: usize) -> Option<Layout> {
         base_mip: base_mip(frame.quality),
         ground,
         has_ground: draws.iter().any(|draw| is_ground(draw)),
+        open_air: frame.sky.is_some(),
     })
 }
 

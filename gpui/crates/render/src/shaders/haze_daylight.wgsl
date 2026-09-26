@@ -9,8 +9,9 @@ fn outdoor_haze_light(direction: vec3<f32>, sun_dir: vec3<f32>, sunlight: vec4<f
     return outdoor_ambient_mean.rgb + outdoor_haze_sun(direction, sun_dir, sunlight);
 }
 
-/// The sun's part of `outdoor_haze_light`, which the composite scales by
-/// how much of the haze the sun really reaches (`sun_shafts.wgsl`).
+/// The sun's part of `outdoor_haze_light`, which the scene pass and the
+/// composite scale by how much of the haze the sun really reaches
+/// (`sun_shafts.wgsl`).
 fn outdoor_haze_sun(direction: vec3<f32>, sun_dir: vec3<f32>, sunlight: vec4<f32>) -> vec3<f32> {
     let g = sunlight.w;
     let denominator = max(1.0 + g * g - 2.0 * g * dot(direction, sun_dir), 1e-4);

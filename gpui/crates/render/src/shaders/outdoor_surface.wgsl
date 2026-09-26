@@ -1,7 +1,7 @@
 override PROFILE_SKIP_SURFACE_CLOUDS: bool = false;
 // Apply outdoor transport before alpha blending. A nearby cable sees only
 // the air in front of itself, not the kilometres of air behind it.
-fn scene_radiance(color: vec3<f32>, delta: vec3<f32>) -> vec3<f32> {
+fn scene_radiance(color: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
     let aerial = aerial_radiance(color, delta);
     if PROFILE_SKIP_SURFACE_CLOUDS { return aerial; }
     let debug = u32(globals.params.w + 0.5);
@@ -10,8 +10,25 @@ fn scene_radiance(color: vec3<f32>, delta: vec3<f32>) -> vec3<f32> {
     let distance = length(delta);
     let direction = delta / max(distance, 1e-6);
     let transmission = exp(-medium_optical_depth(globals.medium, globals.camera_pos.xyz, direction, distance));
+    let depth = dot(delta, globals.camera_forward.xyz);
     return aerial * transmission
-        + outdoor_haze_light(direction, aerial_sky.sun.xyz, globals.outdoor_sun) * (1.0 - transmission);
+        + surface_haze_light(direction, frag_xy, depth, vec2<f32>(depth)) * (1.0 - transmission);
+}
+
+// The light the haze in front of a fragment scatters toward the camera: the
+// sky's, and the sun's where the sun reaches the air past the stage and the
+// clouds (`sun_shafts.wgsl`). Each fragment reads the shafts at its own view
+// `depth`: a pixel is resolved from several fragments, and one depth for all
+// of them took the far ground's shaft off the truss in front of it. `range`
+// is the view depths the fragment covers (`upsample_shafts`).
+fn surface_haze_light(direction: vec3<f32>, frag_xy: vec2<f32>, depth: f32, range: vec2<f32>) -> vec3<f32> {
+    var lit = 1.0;
+    // A single texel of full sun is bound when the pass did not run.
+    if any(textureDimensions(sun_shaft_fraction) > vec2<u32>(1u)) {
+        lit = upsample_shafts(sun_shaft_fraction, frag_xy * globals.viewport.zw, depth, range);
+    }
+    return outdoor_ambient_mean.rgb
+        + outdoor_haze_sun(direction, aerial_sky.sun.xyz, globals.outdoor_sun) * lit;
 }
 
 // Camera transmittance for an opaque surface fragment. The fog prefix already
@@ -50,12 +67,14 @@ fn surface_transmittance(direction: vec3<f32>, distance: f32, frag_xy: vec2<f32>
 // `scene_radiance` for the opaque scene pipeline, which knows its fragment
 // position and may read the fog grid instead of marching.
 fn surface_radiance(color: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
-    return surface_haze(aerial_radiance(color, delta), delta, frag_xy);
+    let depth = dot(delta, globals.camera_forward.xyz);
+    return surface_haze(aerial_radiance(color, delta), delta, frag_xy, vec2<f32>(depth));
 }
 
 // The haze half of `surface_radiance`, over light that has crossed the
-// aerial perspective already.
-fn surface_haze(aerial: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3<f32> {
+// aerial perspective already. `range` is the view depths the fragment
+// covers (`upsample_shafts`).
+fn surface_haze(aerial: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>, range: vec2<f32>) -> vec3<f32> {
     if PROFILE_SKIP_SURFACE_CLOUDS { return aerial; }
     let debug = u32(globals.params.w + 0.5);
     if globals.medium.max.w <= 0.0 || globals.medium.min.w <= 0.0
@@ -63,6 +82,7 @@ fn surface_haze(aerial: vec3<f32>, delta: vec3<f32>, frag_xy: vec2<f32>) -> vec3
     let distance = length(delta);
     let direction = delta / max(distance, 1e-6);
     let transmission = surface_transmittance(direction, distance, frag_xy);
+    let depth = dot(delta, globals.camera_forward.xyz);
     return aerial * transmission
-        + outdoor_haze_light(direction, aerial_sky.sun.xyz, globals.outdoor_sun) * (1.0 - transmission);
+        + surface_haze_light(direction, frag_xy, depth, range) * (1.0 - transmission);
 }

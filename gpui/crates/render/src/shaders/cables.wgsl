@@ -61,6 +61,6 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let color = scene_radiance(vec3<f32>(0.0), in.world - globals.camera_pos.xyz);
+    let color = scene_radiance(vec3<f32>(0.0), in.world - globals.camera_pos.xyz, in.clip.xy);
     return vec4<f32>(color, in.alpha * horizon_coverage(in.view_depth));
 }

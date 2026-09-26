@@ -854,7 +854,7 @@ struct CompositeUniform {
     outdoor_sun: [f32; 4],
     /// x: display headroom, the brightest output as a multiple of SDR white.
     /// Read only by the [`Channels::Hdr`] pipeline. y: 1 when the sun
-    /// shaft texture (`sun_shafts.rs`) holds this frame; zw: its size.
+    /// shaft texture (`sun_shafts.rs`) holds this frame. zw unused.
     display: [f32; 4],
 }
 
@@ -2520,6 +2520,17 @@ impl Gpu {
             // Per-pixel ambient visibility (`sky_visibility.rs`).
             wgpu::BindGroupLayoutEntry {
                 binding: 15,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            // The sun-shaft fraction (`sun_shafts.rs`).
+            wgpu::BindGroupLayoutEntry {
+                binding: 16,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -5226,8 +5237,9 @@ impl Renderer {
     }
 
     /// One reflection probe's six faces, side by side, as linear RGBA: `what`
-    /// 0 its relit radiance at `mip` above its base, 1 its captured albedo,
-    /// 2 its captured normal, metal and distance. For diagnosis.
+    /// 0 its relit change to the sky probe at `mip` above its base, 1 its
+    /// captured albedo, 2 its captured normal, metal and distance. For
+    /// diagnosis.
     ///
     /// # Errors
     /// Fails when no probes are placed or the readback cannot be mapped.
@@ -5349,22 +5361,37 @@ impl Renderer {
         channels: Channels,
         out: &mut Vec<u8>,
     ) -> anyhow::Result<()> {
-        let mut pending = self.submit_readback(
-            frame,
-            width,
-            height,
-            subframes,
-            Destination::Bytes(channels),
-            0,
-            true,
-            false,
-        );
+        let mut pending = self.submit_live_bytes(frame, width, height, subframes, channels, 0);
         let completed = pending.complete_blocking(&self.gpu.device)?;
         *out = completed
             .image
             .into_pixels()
             .expect("a Bytes destination reads its pixels back");
         Ok(())
+    }
+
+    /// [`Self::render_live_into`] without the wait: the frame is drawn into
+    /// presentation `slot` and read back through the returned handle, so
+    /// frames in other slots can be drawn while this one is copied out.
+    pub(crate) fn submit_live_bytes(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        channels: Channels,
+        slot: usize,
+    ) -> PendingFrame {
+        self.submit_readback(
+            frame,
+            width,
+            height,
+            subframes,
+            Destination::Bytes(channels),
+            slot,
+            true,
+            false,
+        )
     }
 
     pub(crate) fn submit_live(
@@ -6305,6 +6332,16 @@ impl Renderer {
         };
         let targets_done = Instant::now();
         let ambient_visibility = self.sky_visibility.output(&self.gpu.device, width, height);
+        // Outdoor haze with a sun: the sun-shaft target, which the scene pass
+        // reads per fragment through binding 16. A texel of full sun stands
+        // in when the pass does not run.
+        let shafts = (frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
+            self.sun_shafts
+                .target(&self.gpu.device, t_width, t_height, frame.quality)
+        });
+        let shaft_view = shafts
+            .clone()
+            .unwrap_or_else(|| self.gpu.sun_shafts.off.clone());
         // Built after the targets: binding 13 is this frame's fog prefix.
         // The probe relight's copy binds every cone in source order in place
         // of the light index's in-view subset (`probes.rs`).
@@ -6339,6 +6376,7 @@ impl Renderer {
                         binding(13, wgpu::BindingResource::TextureView(&fog_transmittance)),
                         binding(14, index_bindings.surface_splits.as_entire_binding()),
                         binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
+                        binding(16, wgpu::BindingResource::TextureView(&shaft_view)),
                     ],
                 })
         };
@@ -6768,6 +6806,30 @@ impl Renderer {
                 &mut pass_queries,
             );
 
+            // --- sun shafts ------------------------------------------------------
+            // How much of each ray's haze the sun reaches past the stage and
+            // the clouds. Reads the depth prepass, the shadow cascades and
+            // the cloud shadow map, all drawn above; the scene pass reads it.
+            let inv_view_proj = view_proj.inverse();
+            if shafts.is_some() {
+                self.sun_shafts.encode(
+                    &self.gpu.sun_shafts,
+                    &self.gpu.device,
+                    &mut encoder,
+                    &crate::sun_shafts::FrameInput {
+                        globals: &globals_buf,
+                        shadow_map: &self.shadow_map,
+                        shadow_sampler: &self.gpu.hard_shadow_sampler,
+                        haze_field: (&self.gpu.haze_field.view, &self.gpu.haze_field.sampler),
+                        aerial: &aerial,
+                        depth: &depth_view,
+                        inv_view_proj,
+                        quality: frame.quality,
+                    },
+                    &mut pass_queries,
+                );
+            }
+
             // The local reflection probes (`probes.rs`): this frame's share
             // of any capture, then every probe relit and prefiltered, before
             // the scene pass samples them.
@@ -6887,7 +6949,6 @@ impl Renderer {
             // --- haze ------------------------------------------------------------
             // The light index was built (and its SoA uploaded) before the scene
             // passes; the haze passes bind the same frame's index as group 1.
-            let inv_view_proj = view_proj.inverse();
             let subframes = subframes.max(1);
             let weight = 1.0 / subframes as f32;
             let grid_prepare = self
@@ -8320,31 +8381,6 @@ impl Renderer {
                 haze_view.clone()
             };
 
-            // --- sun shafts ------------------------------------------------------
-            // Outdoor haze with a sun: how much of each ray's haze the sun
-            // reaches past the stage and the clouds. Reads the scene's depth
-            // and the shadow cascades, so it runs after both.
-            let shafts = (frame.sky.is_some() && medium.min[3] > 0.0).then(|| {
-                self.sun_shafts.encode(
-                    &self.gpu.sun_shafts,
-                    &self.gpu.device,
-                    &mut encoder,
-                    &crate::sun_shafts::FrameInput {
-                        globals: &globals_buf,
-                        shadow_map: &self.shadow_map,
-                        shadow_sampler: &self.gpu.hard_shadow_sampler,
-                        haze_field: (&self.gpu.haze_field.view, &self.gpu.haze_field.sampler),
-                        aerial: &aerial,
-                        depth: &depth_view,
-                        inv_view_proj,
-                        width: t_width,
-                        height: t_height,
-                        quality: frame.quality,
-                    },
-                    &mut pass_queries,
-                )
-            });
-
             // --- composite + readback --------------------------------------------
             let composite_uniform = CompositeUniform {
                 medium,
@@ -8368,8 +8404,8 @@ impl Renderer {
                 display: [
                     destination.headroom(),
                     f32::from(u8::from(shafts.is_some())),
-                    shafts.as_ref().map_or(1.0, |(_, size)| size.0 as f32),
-                    shafts.as_ref().map_or(1.0, |(_, size)| size.1 as f32),
+                    0.0,
+                    0.0,
                 ],
             };
             let composite_buf = self.storage(
@@ -8398,14 +8434,7 @@ impl Renderer {
                         ),
                         binding(3, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
                         binding(4, wgpu::BindingResource::TextureView(&depth_view)),
-                        binding(
-                            7,
-                            wgpu::BindingResource::TextureView(
-                                shafts
-                                    .as_ref()
-                                    .map_or(&self.gpu.sun_shafts.off, |(view, _)| view),
-                            ),
-                        ),
+                        binding(7, wgpu::BindingResource::TextureView(&shaft_view)),
                     ],
                 });
             {
@@ -8478,6 +8507,7 @@ impl Renderer {
                             headroom: destination.headroom(),
                             output: channels.index(),
                             temporal,
+                            time: frame.time,
                             // The lens's veil from a sun off the frame is
                             // the sun's light through the clouds, or under
                             // a deck the veil glows from a sun nobody sees.
@@ -14140,13 +14170,14 @@ fn residual_transport_key(
 /// see `scene_bindings.wgsl`.
 fn scene_bindings_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("shaders/medium.wgsl"),
         include_str!("shaders/scene_bindings.wgsl"),
         crate::atmosphere::surface_prelude(),
         include_str!("shaders/horizon.wgsl"),
         include_str!("shaders/haze_daylight.wgsl"),
+        include_str!("shaders/shaft_upsample.wgsl"),
         include_str!("shaders/outdoor_surface.wgsl"),
     )
 }
@@ -14165,11 +14196,12 @@ fn beam_transport_wgsl() -> String {
 /// The composite module's source.
 fn composite_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         crate::haze_field::prelude(),
         include_str!("shaders/medium.wgsl"),
         crate::atmosphere::composite_prelude(),
         include_str!("shaders/haze_daylight.wgsl"),
+        include_str!("shaders/shaft_upsample.wgsl"),
         include_str!("shaders/tone.wgsl"),
         include_str!("shaders/composite.wgsl")
     )

@@ -153,3 +153,7 @@ struct FixtureShadowMatrix {
 // Per-pixel ambient visibility (`ambient_occlusion.wgsl`): r GTAO, g sky
 // visibility, b/a sun and sky visibility of the ground below.
 @group(3) @binding(15) var ambient_visibility: texture_2d<f32>;
+// The sun-shaft fraction (`sun_shafts.wgsl`): r the share of the haze's
+// sunlight the sun reaches past the stage and the clouds, g the view depth
+// it stands for. One texel of full sun when the pass does not run.
+@group(3) @binding(16) var sun_shaft_fraction: texture_2d<f32>;
