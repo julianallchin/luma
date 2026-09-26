@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::database::local::venue_access::AuthorizedVenue;
+use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::scores::{Score, ScoreSummary};
 
 pub mod rows;
@@ -173,6 +173,24 @@ pub async fn get_score(access: &mut impl AuthorizedVenue, id: &str) -> Result<Sc
     .fetch_one(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to fetch score: {}", e))
+}
+
+/// Give a score a new name. A name equal to the stored one writes nothing, so
+/// it uploads nothing either.
+pub async fn rename_score(
+    access: &mut VenueAccess<'_, Write>,
+    id: &str,
+    name: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE scores SET name = ? WHERE id = ? AND venue_id = ? AND name IS NOT ?")
+        .bind(name)
+        .bind(id)
+        .bind(access.venue_id().to_owned())
+        .bind(name)
+        .execute(&mut *access.connection())
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("Failed to rename score: {}", e))
 }
 
 #[cfg(test)]

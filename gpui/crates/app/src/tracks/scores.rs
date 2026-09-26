@@ -29,6 +29,7 @@ use gpui::*;
 use luma_ui::float::{self, RowState};
 use luma_ui::glass;
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::text_input::{self, TextInput, DRAFT_CONTEXT};
 
 use luma_lib::models::scores::ScoreSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
@@ -157,6 +158,19 @@ pub(crate) struct Scores {
     /// menu has to outlive that — and there is exactly one, because two menus
     /// open at once is the bug the single slot rules out.
     pub(crate) menu: Option<ScoreMenu>,
+    /// The score whose name is being typed, or none. One slot for the same
+    /// reason as [`Self::menu`]: one caret is what a person has.
+    rename: Option<Rename>,
+}
+
+/// An inline rename: the score, the live field, and what the name read when
+/// the caret arrived. A commit that matches it writes nothing, so Enter and
+/// blur can both commit without a second write.
+struct Rename {
+    score_id: SharedString,
+    field: Entity<TextInput>,
+    opened_on: String,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Which score was right-clicked, where, and the two facts the delete gesture
@@ -221,6 +235,7 @@ impl Luma {
                     loaded: false,
                     error: None,
                     menu: None,
+                    rename: None,
                 },
                 row_top,
                 cx,
@@ -506,6 +521,118 @@ impl Luma {
         })
         .detach();
     }
+
+    /// Put the caret in `score_id`'s name. Only this venue's own scores get
+    /// here: another person's score is read only, and another venue's is not
+    /// this list's subject.
+    fn start_score_rename(
+        &mut self,
+        score_id: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
+        let Level::Scores(level) = &browser.level else {
+            return;
+        };
+        let Some(row) = level.rows.iter().find(|row| row.id == score_id) else {
+            return;
+        };
+        if row.read_only {
+            return;
+        }
+        let opened_on = row.name.as_deref().unwrap_or_default().to_string();
+        let field = cx.new(|cx| {
+            let mut input = TextInput::search("Score name", cx);
+            input.set_text(opened_on.clone(), cx);
+            input
+        });
+        let keys = cx.subscribe_in(
+            &field,
+            window,
+            |this: &mut Luma, _, event: &text_input::Event, window, cx| match event {
+                text_input::Event::Submitted => this.finish_score_rename(true, Some(window), cx),
+                text_input::Event::Cancelled => this.finish_score_rename(false, Some(window), cx),
+                // A press elsewhere. Focus goes where the press sends it.
+                text_input::Event::Blurred => this.finish_score_rename(true, None, cx),
+                _ => cx.notify(),
+            },
+        );
+        // Focus leaving by the keyboard, such as Tab. A press elsewhere is
+        // `Blurred` above; whichever comes second finds nothing to save.
+        let luma = cx.entity().downgrade();
+        let blur = window.on_focus_out(&field.read(cx).focus_handle(cx), cx, move |_, _, cx| {
+            luma.update(cx, |this, cx| this.finish_score_rename(true, None, cx))
+                .ok();
+        });
+        let focus = field.read(cx).focus_handle(cx);
+        if let Some(Level::Scores(level)) = self.sidebar.as_mut().map(|browser| &mut browser.level)
+        {
+            level.menu = None;
+            level.rename = Some(Rename {
+                score_id,
+                field,
+                opened_on,
+                _subscriptions: vec![keys, blur],
+            });
+        }
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// End the rename. `save` writes the typed name when it is a different,
+    /// non-empty name; otherwise nothing is written. `window` is present when
+    /// a key ended it, and the caret then goes back to the level's seat; on a
+    /// blur, focus has already gone where the person sent it.
+    fn finish_score_rename(
+        &mut self,
+        save: bool,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(browser) = &mut self.sidebar else {
+            return;
+        };
+        let Level::Scores(level) = &mut browser.level else {
+            return;
+        };
+        let Some(rename) = level.rename.take() else {
+            return;
+        };
+        if let Some(window) = window {
+            window.focus(&level.back_focus, cx);
+        }
+        cx.notify();
+        let name = rename.field.read(cx).text().trim().to_string();
+        if !save || name.is_empty() || name == rename.opened_on {
+            return;
+        }
+        let track_id = level.track.id.clone();
+        let pending = self.library.rename_score(&rename.score_id, &name);
+        cx.spawn(async move |this, cx| {
+            // The listing is read after the write, for the reason
+            // `create_sidebar_score` gives: before it, the old name is still in it.
+            let renamed = pending.await;
+            let Ok(listing) =
+                this.read_with(cx, |this, _| this.library.scores_across_venues(&track_id))
+            else {
+                return;
+            };
+            let listing = listing.await;
+            this.update(cx, |this, cx| {
+                let user = this.library.user_id();
+                this.with_scores(&track_id, cx, |level| match (renamed, listing) {
+                    (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
+                    (Err(error), _) => level.error = Some(error.to_string()),
+                    (_, Err(error)) => level.error = Some(error.to_string()),
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 /// The row, as the editor holds the score it is showing. This level is the one
@@ -640,10 +767,16 @@ fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity
             )))
         })
         .children(here.into_iter().map(|row| {
+            let rename = scores
+                .rename
+                .as_ref()
+                .filter(|rename| rename.score_id == row.id)
+                .map(|rename| &rename.field);
             score_row(
                 row,
                 open == Some(row.id.as_ref()),
                 Some((app, &scores.track)),
+                rename,
             )
         }))
         .when(scores.loaded, |el| el.child(new_score(app)))
@@ -654,7 +787,10 @@ fn body(state: &super::Tracks, scores: &Scores, open: Option<&str>, app: &Entity
                 .pt(px(8.))
                 .child(float::divider())
                 .child(float::section_heading(venue).pt(px(8.)))
-                .children(rows.into_iter().map(|row| score_row(row, false, None)))
+                .children(
+                    rows.into_iter()
+                        .map(|row| score_row(row, false, None, None)),
+                )
         }))
         .child(div().flex_1())
 }
@@ -686,11 +822,17 @@ fn elsewhere<'a>(
 /// which is readable here and openable only as its own tab. Comet's selection
 /// recipe decides the open one, through [`float::menu_row`]: hover and
 /// selection share the fill, and only the open score carries the inset ring.
+///
+/// `rename` is the live field when this row's name is being typed.
 fn score_row(
     row: &ScoreRow,
     open: bool,
     press: Option<(&Entity<Luma>, &TrackBrowserRow)>,
+    rename: Option<&Entity<TextInput>>,
 ) -> AnyElement {
+    let renamer = press
+        .filter(|_| !row.read_only)
+        .map(|(app, _)| (app.clone(), row.id.clone()));
     let id = SharedString::from(format!("score-{}", row.id));
     let label = format!(
         "#{} · {} · {} clips · {}{}{}",
@@ -762,13 +904,10 @@ fn score_row(
             .flex()
             .flex_col()
             .gap(px(1.))
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(12.))
-                    .text_color(glass::ink(if open { 0.9 } else { 0.7 }))
-                    .child(row.name.clone().unwrap_or_else(|| row.author.clone())),
-            )
+            .child(match rename {
+                Some(field) => name_field(row, field),
+                None => name_label(row, open, renamer),
+            })
             .child(
                 div()
                     .truncate()
@@ -780,6 +919,55 @@ fn score_row(
     .when(row.read_only, |el| el.child(luma_ui::caption("Read only")))
     .agent_node(Role::Row, label)
     .into_any_element()
+}
+
+/// The score's name, or its owner when it has none. A double-click on it
+/// starts a rename when `renamer` is present — this venue's own score.
+///
+/// The first click of the pair has already opened the score through the row,
+/// which is the same score, so it does no harm. The second click stops here so
+/// the row does not open it again on top of the rename.
+fn name_label(
+    row: &ScoreRow,
+    open: bool,
+    renamer: Option<(Entity<Luma>, SharedString)>,
+) -> AnyElement {
+    let name = row.name.clone().unwrap_or_else(|| row.author.clone());
+    div()
+        .id(SharedString::from(format!("score-name-{}", row.id)))
+        .truncate()
+        .text_size(px(12.))
+        .text_color(glass::ink(if open { 0.9 } else { 0.7 }))
+        .child(name.clone())
+        .when_some(renamer, |el, (app, score_id)| {
+            el.on_click(move |event, window, cx| {
+                if event.click_count() != 2 {
+                    return;
+                }
+                cx.stop_propagation();
+                let score_id = score_id.clone();
+                app.update(cx, |this, cx| this.start_score_rename(score_id, window, cx));
+            })
+        })
+        .agent_node(
+            Role::Text,
+            format!("Score name #{} = {}", row.ordinal, name),
+        )
+        .into_any_element()
+}
+
+/// The name as a live field. The draft context gives the field Enter and
+/// Escape ahead of the sidebar's own keys. Presses inside it stop here, so
+/// placing the caret does not open the score and take focus from the field.
+fn name_field(row: &ScoreRow, field: &Entity<TextInput>) -> AnyElement {
+    float::field()
+        .id(SharedString::from(format!("score-name-field-{}", row.id)))
+        .key_context(DRAFT_CONTEXT)
+        .w_full()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .child(div().w_full().child(field.clone()))
+        .agent_node(Role::Input, format!("Score name #{}", row.ordinal))
+        .into_any_element()
 }
 
 /// Mint another score on this `(track, venue)`.
