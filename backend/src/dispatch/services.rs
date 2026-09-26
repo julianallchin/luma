@@ -300,6 +300,13 @@ impl AppServices {
         self
     }
 
+    /// Stop record replication, for a host that is quitting.
+    pub fn stop_sync(&self) {
+        if let Some(sync) = &self.sync {
+            sync.stop();
+        }
+    }
+
     /// Resume stale or interrupted analysis after the desktop's Python setup.
     pub async fn reconcile_analysis(&self) -> Result<(), String> {
         let epoch = self.analysis_tasks.current_epoch()?;

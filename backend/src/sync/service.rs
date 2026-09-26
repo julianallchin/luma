@@ -134,9 +134,12 @@ impl Service {
         })
     }
 
-    /// Stop the tasks. Dropping the last `Service` does the same.
+    /// Stop the tasks, the SDK's own among them. Dropping the last `Service`
+    /// stops the watchers too, but the SDK's tasks wait for every handle to
+    /// the database, so a host that quits calls this.
     pub fn stop(&self) {
         let _ = self.shutdown.send(true);
+        self.database.stop_tasks();
     }
 }
 

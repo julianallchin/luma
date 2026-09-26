@@ -3060,6 +3060,7 @@ fn repo_fixtures_root() -> Option<PathBuf> {
 impl Drop for Library {
     fn drop(&mut self) {
         let _ = self.sync_shutdown.send(true);
+        self.services.stop_sync();
         // A plain drop waits with no limit for every blocking task. PowerSync
         // runs its actors as blocking tasks that stop only when the last
         // handle to its database goes, and a handle that outlives the library
