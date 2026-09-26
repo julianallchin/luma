@@ -179,15 +179,9 @@ pub(crate) fn placeholder(slot: Rc<Cell<Bounds<Pixels>>>) -> AnyElement {
         .into_any_element()
 }
 
-pub(crate) fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
-    if !app.fullscreen_presented() {
-        return shell::regions(app, window, cx).into_any_element();
-    }
-    let progress = app.fullscreen.as_ref().unwrap().frame_progress;
-    let shell = (progress < 1.).then(|| shell::regions(app, window, cx));
-    let bounds = app.fullscreen.as_ref().unwrap().slot.get();
-    let viewport = window.viewport_size();
-    let interpolate = |from: Pixels, to: Pixels| px(motion::lerp(from.into(), to.into(), progress));
+/// The presented stage, rendered in its own live region so its frames do not
+/// rebuild the shell sliding out behind it (see [`shell::Region`]).
+pub(crate) fn stage(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     let transport = match app.workspace.active_body_mut() {
         Some(Body::TrackEditor(editor)) => {
             Some(track_editor::fullscreen_transport(editor, &cx.entity(), cx))
@@ -200,8 +194,8 @@ pub(crate) fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         library,
         ..
     } = app;
-    let stage = visualizer.as_mut().map(|state| {
-        visualizer::visualizer(
+    match visualizer.as_mut() {
+        Some(state) => visualizer::visualizer(
             state,
             &cx.entity(),
             library,
@@ -209,8 +203,24 @@ pub(crate) fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             visualizer::Chrome::Fullscreen { transport },
             &focus,
         )
-        .into_any_element()
-    });
+        .into_any_element(),
+        None => div().into_any_element(),
+    }
+}
+
+pub(crate) fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    if !app.fullscreen_presented() {
+        return shell::regions(app, window, cx).into_any_element();
+    }
+    let progress = app.fullscreen.as_ref().unwrap().frame_progress;
+    let shell = (progress < 1.).then(|| shell::regions(app, window, cx));
+    let bounds = app.fullscreen.as_ref().unwrap().slot.get();
+    let viewport = window.viewport_size();
+    let interpolate = |from: Pixels, to: Pixels| px(motion::lerp(from.into(), to.into(), progress));
+    let stage = app
+        .visualizer
+        .is_some()
+        .then(|| app.regions.fullscreen_stage(cx));
     div()
         .size_full()
         .relative()

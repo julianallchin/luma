@@ -1183,9 +1183,12 @@ impl WgpuRenderer {
             };
 
             // Wait for any in-flight GPU work to complete before destroying textures
+            // LUMA LOCAL EDIT: a time limit. A frame of a hidden window can wait
+            // forever for its swapchain image, and a wait with no limit then
+            // freezes the app.
             if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
                 submission_index: None,
-                timeout: None,
+                timeout: Some(GPU_IDLE_TIMEOUT),
             }) {
                 warn!("Failed to poll device during resize: {e:?}");
             }
@@ -1304,9 +1307,10 @@ impl WgpuRenderer {
         };
         // The swapchain's images and every target sized or formatted for it
         // go; nothing may still be drawing into them.
+        // LUMA LOCAL EDIT: a time limit, as in `update_drawable_size`.
         if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: None,
+            timeout: Some(GPU_IDLE_TIMEOUT),
         }) {
             warn!("Failed to poll device before switching HDR output: {e:?}");
         }
@@ -2412,6 +2416,10 @@ impl WgpuRenderer {
         Ok(())
     }
 }
+
+/// LUMA LOCAL EDIT: the longest wait for in-flight GPU work before the
+/// swapchain is reconfigured.
+const GPU_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// LUMA LOCAL EDIT: the format the compositor's pipelines draw into. The
 /// swapchain itself in SDR; in HDR the scene target, which `HdrEncoder` then

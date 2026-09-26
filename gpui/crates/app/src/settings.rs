@@ -230,6 +230,10 @@ impl Luma {
             self.hdr_output_allowed = values.hdr_output;
             cx.notify();
         }
+        if self.split_view != values.split_view {
+            self.split_view = values.split_view;
+            cx.notify();
+        }
     }
 
     /// Open or dismiss the account menu that hangs off the sidebar's foot.
@@ -386,6 +390,11 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             None,
             checkbox(app, "hdr_output", "HDR output", values.hdr_output),
             Some("Used only when the display supports HDR. Bright stage light can go above the brightness of white in other windows."),
+        ),
+        field(
+            None,
+            checkbox(app, "split_view", "Split view", values.split_view),
+            Some("The score editor shows the timeline on the left, with the stage and the inspector on the right."),
         ),
     ]
 }

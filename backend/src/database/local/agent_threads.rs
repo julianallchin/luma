@@ -442,8 +442,15 @@ async fn transcript_head_for_connection(
     .ok_or_else(|| thread_not_found(thread_id))
 }
 
-/// List threads, most recently updated first. Both filters are optional and
-/// independent: `agent_kind` narrows by agent, `subject` by (kind, id) pair.
+/// A subagent's thread belongs to its parent: it is reached through the parent
+/// (by id, from the spawning tool call), never listed beside it. Every listing
+/// of conversations appends this, so a child can neither show up as a chat of
+/// its own nor win "most recently updated" because it was the one writing.
+const TOP_LEVEL: &str = "AND thread.parent_thread_id IS NULL";
+
+/// List top-level threads, most recently updated first. Both filters are
+/// optional and independent: `agent_kind` narrows by agent, `subject` by
+/// (kind, id) pair. Subagent threads are never listed; see [`TOP_LEVEL`].
 pub async fn list_threads(
     pool: &SqlitePool,
     agent_kind: Option<&str>,
@@ -456,7 +463,7 @@ pub async fn list_threads(
         .map(|column| format!("thread.{column}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut sql = format!("SELECT {columns} {LIVE_THREADS_FOR_PRINCIPAL}");
+    let mut sql = format!("SELECT {columns} {LIVE_THREADS_FOR_PRINCIPAL} {TOP_LEVEL}");
     if agent_kind.is_some() {
         sql.push_str(" AND agent_kind = ?");
     }
@@ -480,8 +487,9 @@ pub async fn list_threads(
         .map_err(|e| format!("Failed to list agent threads: {}", e))
 }
 
-/// All live transcripts for one principal, read in one recursive query for
-/// history summaries and search. Each row retains its conversation id.
+/// All live top-level transcripts for one principal, read in one recursive
+/// query for history summaries and search. Each row retains its conversation
+/// id. A subagent's lines are not separate hits; see [`TOP_LEVEL`].
 pub async fn list_history_messages(
     pool: &SqlitePool,
     owner_user_id: Option<&str>,
@@ -497,7 +505,7 @@ pub async fn list_history_messages(
                ON message.id = head.head_message_id
              WHERE head.uid IS ?
                AND head.thread_id IN (
-                   SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL}
+                   SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL} {TOP_LEVEL}
                )
              UNION ALL
              SELECT child.thread_id, parent.id, parent.parent_message_id,

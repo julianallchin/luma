@@ -66,13 +66,14 @@ impl Editor {
         let time = self.minimap_time(at).clamp(0., duration);
         let width = f32::from(self.canvas.get().size.width);
         let minimum = f64::from(width / View::MAX_ZOOM);
-        let maximum = f64::from(width / View::MIN_ZOOM).min(duration);
+        let floor = self.min_zoom();
+        let maximum = f64::from(width / floor).min(duration);
         let start = match drag {
             Drag::Pan { offset } => time - offset,
             Drag::Start { end, offset } => {
                 let span = (end - (time - offset)).clamp(minimum.min(end), maximum.min(end));
                 self.view.zoom =
-                    (width / span.max(f64::EPSILON) as f32).clamp(View::MIN_ZOOM, View::MAX_ZOOM);
+                    (width / span.max(f64::EPSILON) as f32).clamp(floor, View::MAX_ZOOM);
                 end - f64::from(width / self.view.zoom)
             }
             Drag::End { start, offset } => {
@@ -80,7 +81,7 @@ impl Editor {
                 let span =
                     (time - offset - start).clamp(minimum.min(available), maximum.min(available));
                 self.view.zoom =
-                    (width / span.max(f64::EPSILON) as f32).clamp(View::MIN_ZOOM, View::MAX_ZOOM);
+                    (width / span.max(f64::EPSILON) as f32).clamp(floor, View::MAX_ZOOM);
                 start
             }
         };

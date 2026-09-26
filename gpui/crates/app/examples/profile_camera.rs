@@ -19,6 +19,7 @@
 //! `LUMA_PROFILE_DETAIL=1` adds a line for each named pass (the haze
 //! sub-passes among them). Renderer switches such as `LUMA_GRID_FOG=0` apply
 //! as in the app. `--quality` defaults to the quality in the export.
+//! `--haze=DENSITY` replaces the haze density (0 turns haze off).
 //! `--compare` prints how far the written PNG is from another one.
 //! `--list-cones` prints the lit fixture cones at the playhead and exits.
 //!
@@ -76,11 +77,8 @@ fn main() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    let score_id = export
-        .scene
-        .score_id
-        .clone()
-        .ok_or("the export has no score")?;
+    // With no score the fixtures stand at rest.
+    let score_id = export.scene.score_id.clone();
     let (program, geometry, settings) = runtime.block_on(async {
         let pool = SqlitePoolOptions::new()
             .max_connections(2)
@@ -91,8 +89,12 @@ fn main() -> Result<(), String> {
             )
             .await
             .map_err(|e| e.to_string())?;
-        let program =
-            luma_lib::build_score_scene(&pool, &storage, &fixtures, &score_id, None).await?;
+        let program = match &score_id {
+            Some(id) => {
+                Some(luma_lib::build_score_scene(&pool, &storage, &fixtures, id, None).await?)
+            }
+            None => None,
+        };
         let geometry = VenueGeometry::load(&pool, &fixtures, &export.scene.venue_id).await?;
         let settings = luma_lib::settings::load_settings(&pool).await?;
         Ok::<_, String>((program, geometry, settings))
@@ -117,20 +119,28 @@ fn main() -> Result<(), String> {
     render.look = serde_json::from_str(&settings.stage_look).unwrap_or(Look::STAGE);
 
     let playhead = export.scene.playhead_s;
-    let state = program
-        .render(&[playhead], Scope::Composite, &mut Arena::default())
-        .pop()
-        .ok_or("the score produced no frame")?;
+    let state = match &program {
+        Some(program) => Some(
+            program
+                .render(&[playhead], Scope::Composite, &mut Arena::default())
+                .pop()
+                .ok_or("the score produced no frame")?,
+        ),
+        None => None,
+    };
     let mut library = Library::new(meshes_root(Some(&fixtures)));
     let mut frame = build_frame_with(
         &scene,
         &definitions,
-        &|id, head| primitive_state(Some(&state), id, head),
+        &|id, head| primitive_state(state.as_ref(), id, head),
         playhead,
         &mut library,
     )
     .map_err(|e| e.to_string())?;
     export.apply(&mut frame);
+    if let Some(density) = flag("haze") {
+        frame.haze_density = density.parse().map_err(|e| format!("--haze: {e}"))?;
+    }
     if args.iter().any(|a| a == "--list-cones") {
         for cone in &frame.fixture_cones {
             let half = cone.cos_field.clamp(-1.0, 1.0).acos().to_degrees();
@@ -190,7 +200,7 @@ fn main() -> Result<(), String> {
         "{} / score {} at {playhead:.2}s, {width}x{height}, {quality:?}, haze {} steps at {}, \
          {} cones, {} lights per tile, {} shadow maps redrawn at most, {measured} frames",
         export.scene.venue_name,
-        score_id,
+        score_id.as_deref().unwrap_or("none"),
         frame.haze_steps,
         frame.haze_resolution,
         frame.fixture_cones.len(),

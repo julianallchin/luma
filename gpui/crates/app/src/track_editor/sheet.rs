@@ -962,25 +962,32 @@ impl Luma {
 // -- rendering ----------------------------------------------------------------
 
 /// The inspector: the selected clip's controls, or the preset browser. It
-/// is always open at its full width.
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
+/// is always open: a fixed-width column beside the stage, or, with `fill`
+/// (split view), the whole box it is given under the stage.
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool) -> AnyElement {
     let (label, body) = match state.sheet.built.as_ref() {
         Some(built) => ("Clip inputs", body(state, built, app)),
         None => ("Presets", browser::body(state, app)),
     };
-    let width = px(luma_ui::sheet::WIDTH);
     let content = div()
         .id("clip-inspector")
         .size_full()
         .overflow_hidden()
         .bg(ladder::background())
-        .border_r_1()
-        .border_color(ladder::trim())
+        // Beside the stage its trailing edge is a rule; under it, the seam
+        // above is the only rule it needs.
+        .when(!fill, |content| {
+            content.border_r_1().border_color(ladder::trim())
+        })
         .child(body)
         .into_any_element();
-    luma_ui::pane::pane(width, width, content)
-        .agent_node(Role::Card, label)
-        .into_any_element()
+    let panel = if fill {
+        div().size_full().min_h_0().child(content)
+    } else {
+        let width = px(luma_ui::sheet::WIDTH);
+        luma_ui::pane::pane(width, width, content)
+    };
+    panel.agent_node(Role::Card, label).into_any_element()
 }
 
 /// The sheet's content: what is selected, then the controls for it.

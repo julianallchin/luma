@@ -70,6 +70,8 @@ pub(crate) mod context {
     pub const ADD_FIXTURES: &str = "AddFixtures";
     /// The one confirmation dialog — see [`crate::confirm`].
     pub const CONFIRM: &str = "Confirm";
+    /// The "Export show" dialog — see [`crate::export_dialog`].
+    pub const SHOW_EXPORT: &str = "ShowExport";
     /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
     /// over the shell, it *is* the app while it is up, so the shell's bindings
     /// are absent because the shell is — not because a predicate excluded them.
@@ -82,7 +84,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 9] = [
+    pub const DIALOGS: [&str; 10] = [
         VENUES,
         SETTINGS,
         ADD_TRACKS,
@@ -92,6 +94,7 @@ pub(crate) mod context {
         PATTERN_INSERT,
         ADD_FIXTURES,
         CONFIRM,
+        SHOW_EXPORT,
     ];
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`

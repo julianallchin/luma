@@ -18,27 +18,51 @@ const SEEK_AHEAD_S: f32 = 0.25;
 const SEEK_BACK_S: f32 = 0.05;
 
 /// Where each previewed head is drawn, and the clocks of the last frame.
-#[derive(Default)]
 pub(super) struct Motors {
     drawn: HashMap<String, [f32; 2]>,
-    last: Option<(Instant, f32)>,
+    /// The clock and the track time of the last frame, in seconds.
+    last: Option<(f64, f32)>,
+    /// What [`Self::follow`]'s clock counts from.
+    epoch: Instant,
+}
+
+impl Default for Motors {
+    fn default() -> Self {
+        Self {
+            drawn: HashMap::new(),
+            last: None,
+            epoch: Instant::now(),
+        }
+    }
 }
 
 impl Motors {
     /// Turn each head of `universe` from where it was drawn toward the pan
-    /// and tilt the score sends. A seek places every head on its target.
+    /// and tilt the score sends, on the wall clock.
     pub(super) fn follow(
         &mut self,
         time: f32,
         universe: Option<UniverseState>,
     ) -> Option<UniverseState> {
-        let now = Instant::now();
+        let clock = self.epoch.elapsed().as_secs_f64();
+        self.step(clock, time, universe)
+    }
+
+    /// [`Self::follow`] on the caller's clock: `clock` is seconds on any
+    /// clock that does not run backwards. A seek places every head on its
+    /// target.
+    pub(super) fn step(
+        &mut self,
+        clock: f64,
+        time: f32,
+        universe: Option<UniverseState>,
+    ) -> Option<UniverseState> {
         let elapsed = self.last.map(|(at, then)| {
-            let wall = (now - at).as_secs_f32();
+            let wall = (clock - at) as f32;
             let track = time - then;
             (wall, track < -SEEK_BACK_S || track > wall + SEEK_AHEAD_S)
         });
-        self.last = Some((now, time));
+        self.last = Some((clock, time));
         let Some(mut universe) = universe else {
             self.drawn.clear();
             return None;
@@ -69,7 +93,6 @@ impl Motors {
 mod tests {
     use super::*;
     use luma_lib::models::universe::PrimitiveState;
-    use std::time::Duration;
 
     fn at(position: [f32; 2]) -> Option<UniverseState> {
         Some(UniverseState {
@@ -95,20 +118,26 @@ mod tests {
     #[test]
     fn a_head_turns_at_the_motor_speed_until_it_arrives() {
         let mut motors = Motors::default();
-        let first = motors.follow(0.0, at([0.0, 0.0]));
+        let first = motors.step(0.0, 0.0, at([0.0, 0.0]));
         assert_eq!(drawn(&first), [0.0, 0.0]);
         // Half a second later the score wants 180° of pan: the head is drawn
         // about 90° along.
-        let start = Instant::now() - Duration::from_millis(500);
-        motors.last = Some((start, 0.0));
-        let turning = motors.follow(0.5, at([180.0, 20.0]));
+        let turning = motors.step(0.5, 0.5, at([180.0, 20.0]));
         let [pan, tilt] = drawn(&turning);
         assert!((85.0..=100.0).contains(&pan), "{pan}");
         assert_eq!(tilt, 20.0);
         // A second later it is there.
-        motors.last = Some((Instant::now() - Duration::from_secs(1), 0.5));
-        let arrived = motors.follow(1.5, at([180.0, 20.0]));
+        let arrived = motors.step(1.5, 1.5, at([180.0, 20.0]));
         assert_eq!(drawn(&arrived), [180.0, 20.0]);
+    }
+
+    #[test]
+    fn equal_clock_steps_turn_a_head_equally() {
+        let mut motors = Motors::default();
+        motors.step(0.0, 0.0, at([0.0, 0.0]));
+        let first = drawn(&motors.step(1.0 / 60.0, 1.0 / 60.0, at([180.0, 0.0])))[0];
+        let second = drawn(&motors.step(2.0 / 60.0, 2.0 / 60.0, at([180.0, 0.0])))[0];
+        assert!((second - 2.0 * first).abs() < 1e-3, "{first} then {second}");
     }
 
     #[test]

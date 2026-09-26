@@ -48,7 +48,8 @@
 mod camera_export;
 mod motors;
 mod settings;
-pub(crate) use settings::environment_panel;
+pub(crate) mod show_export;
+pub(crate) use settings::{environment_panel, ENVIRONMENT_PANEL_WIDTH};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -88,10 +89,13 @@ pub(crate) const FOV_Y_DEG: f32 = 50.0;
 /// Frame shape to fit against before the viewport has been laid out once.
 const DEFAULT_ASPECT: f32 = 16.0 / 9.0;
 
-/// How far the frame-stats overlay sits in from the viewport's top edge. It is
-/// a box in the corner, so it is a layout number and nothing else — see
+/// How far the controls in the stage's top corners sit in from its edges. They
+/// are boxes in the corners, so this is a layout number and nothing else — see
 /// [`Visualizer::view_finder`] for why it buys no camera distance.
-const STATS_OVERLAY_TOP: Pixels = px(12.);
+const CORNER_INSET: Pixels = px(16.);
+/// How tall the controls in the stage's top corners are: the FPS readout on
+/// the left, the fullscreen button on the right.
+const CORNER_CONTROL: Pixels = px(32.);
 /// How far the floating toolbar sits in from the viewport's bottom edge. Read
 /// by the overlay that draws it *and* by the camera fit, so the two cannot
 /// drift: a rig framed to the whole pane is framed partly under this chrome.
@@ -602,8 +606,11 @@ pub(crate) struct Visualizer {
     /// are queued behind it. The newest value per key wins.
     view_setting_saving: bool,
     view_setting_pending: Rc<RefCell<std::collections::BTreeMap<&'static str, String>>>,
-    /// Whether the FPS readout is unfolded into the full frame-stats panel.
-    fps_expanded: bool,
+    /// Whether the FPS readout's frame-stats panel is open, or playing its exit.
+    fps_panel: FpsPanel,
+    /// A show export is rendering. The stage draws nothing meanwhile, so the
+    /// export has the GPU to itself.
+    pub(crate) exporting: bool,
     /// The builder. `None` until the rig lands, and the one place a position
     /// is editable in this app — see [`crate::stage`].
     pub(crate) build: Option<crate::stage::Build>,
@@ -666,6 +673,8 @@ struct Stage {
     last_work: StageWork,
     /// The last few seconds of frames, and the report a hitch leaves behind.
     hitches: HitchRing,
+    /// The worker's retired-frame count over the readout's window.
+    rendered: RenderedRate,
     /// A hitch report waiting for a caller that can reach the library. The
     /// paint closure notices the hitch but has no `Library`; `body` has one and
     /// runs every frame, so it drains this.
@@ -1371,7 +1380,8 @@ impl Visualizer {
             view_setting_error: None,
             view_setting_saving: false,
             view_setting_pending: Rc::default(),
-            fps_expanded: false,
+            fps_panel: FpsPanel::new(cx.reduce_motion()),
+            exporting: false,
             build: None,
             stage: Rc::default(),
         }
@@ -3462,6 +3472,7 @@ impl Luma {
             }
             return;
         };
+        let exporting = self.exporting_show();
         // Split the borrow: both arms read the library and mutate the stage,
         // and the two fields are disjoint. The same split `shell::active_tab`
         // takes for the same reason.
@@ -3486,6 +3497,7 @@ impl Luma {
         }
         if let Some(state) = visualizer {
             state.audition = audition;
+            state.exporting = exporting;
         }
     }
 
@@ -3527,6 +3539,10 @@ pub(crate) enum Chrome {
 /// *not calling* as the off switch (see [`Luma::sync_visualizer`] and
 /// `shell::workspace_body`); a hidden pane that still rendered would keep a GPU
 /// busy drawing frames nobody sees.
+///
+/// Callers render this inside a live `shell::Region` of its own. The request
+/// notifies the view being rendered, so it asks for a frame of the stage's
+/// region, not of the app: the cached panes around the stage are not rebuilt.
 pub(crate) fn visualizer(
     state: &mut Visualizer,
     app: &Entity<Luma>,
@@ -3536,8 +3552,11 @@ pub(crate) fn visualizer(
     focus: &gpui::FocusHandle,
 ) -> impl IntoElement {
     // Continuous redraw: asking at the top of a render is what makes the next
-    // one happen, and CVDisplayLink paces it (spec §4.3).
-    window.request_animation_frame();
+    // one happen, and CVDisplayLink paces it (spec §4.3). An export draws no
+    // stage, so it asks for nothing.
+    if !state.exporting {
+        window.request_animation_frame();
+    }
     // Stamped here so the stage's prepaint can say how much of the frame the
     // rest of the UI thread spent before reaching it, and counted so a gap with
     // *no* render can be told from a gap full of other work.
@@ -3557,6 +3576,7 @@ pub(crate) fn visualizer(
     let body = body(state, app, library);
     let floating = overlay_toolbar(state, app, venue_tools, transport);
     state.bottom_bar_visible = floating.is_some();
+    state.fps_panel.tick();
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
     let builder = state
@@ -3686,7 +3706,7 @@ pub(crate) fn visualizer(
                 .children(marquee)
                 .children(pivot_dot)
                 .children(builder)
-                .child(fps)
+                .children(fps)
                 .children(state.stage.borrow().exports.notice())
                 .children(floating)
                 .child(fullscreen_button(state.presentation, app))
@@ -4114,21 +4134,25 @@ fn fullscreen_button(fullscreen: bool, app: &Entity<Luma>) -> impl IntoElement {
         luma_ui::icons::IconName::Expand
     };
     let app = app.clone();
-    div().absolute().top(px(16.)).right(px(16.)).child(
-        luma_ui::button("", luma_ui::Enabled::Yes)
-            .id("visualizer-fullscreen")
-            .size(px(32.))
-            .p_0()
-            .occlude()
-            .child(gpui_component::Icon::new(icon).size(px(18.)))
-            .tooltip(move |window, cx| {
-                gpui_component::tooltip::Tooltip::new(label).build(window, cx)
-            })
-            .on_click(move |_, window, cx| {
-                app.update(cx, |this, cx| this.toggle_visualizer_fullscreen(window, cx))
-            })
-            .agent_node(Role::Button, label),
-    )
+    div()
+        .absolute()
+        .top(CORNER_INSET)
+        .right(CORNER_INSET)
+        .child(
+            luma_ui::button("", luma_ui::Enabled::Yes)
+                .id("visualizer-fullscreen")
+                .size(CORNER_CONTROL)
+                .p_0()
+                .occlude()
+                .child(gpui_component::Icon::new(icon).size(px(18.)))
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                })
+                .on_click(move |_, window, cx| {
+                    app.update(cx, |this, cx| this.toggle_visualizer_fullscreen(window, cx))
+                })
+                .agent_node(Role::Button, label),
+        )
 }
 
 /// Only mount the floating surface when it has controls to display.
@@ -4240,6 +4264,10 @@ const FPS_WINDOW_MS: f32 = 1_000.0;
 struct FpsReading {
     /// Delivered rate over the trailing second, when anything arrived.
     fps: Option<f32>,
+    /// The rate the renderer worker finished frames at over the same second,
+    /// shown or dropped as stale. Above `fps`, the renderer makes frames the
+    /// screen never shows; level with it, the pace is set before the renderer.
+    rendered: Option<f32>,
     /// The worst delivered interval in the ring's whole window. The rate alone
     /// averages away exactly the frames the eye catches; this is the dip.
     low_ms: Option<f32>,
@@ -4266,138 +4294,312 @@ fn fps_reading(stage: &Stage) -> FpsReading {
     }
     FpsReading {
         fps: (sum > 0.0).then(|| frames as f32 * 1_000.0 / sum),
+        rendered: stage.rendered.rate(),
         low_ms,
         intervals,
     }
 }
 
-/// The corner FPS readout, and the frame-stats panel it unfolds into.
+/// The renderer worker's retired-frame count, sampled at each submission over
+/// the readout's trailing window.
+///
+/// [`luma_render::AsyncViewport::finished`] counts every frame the worker
+/// finished, whether it reached the screen or was dropped as stale. The hitch
+/// ring records that count but no clock, so the rate needs this pairing of the
+/// two. A few dozen entries at most: one per prepaint for one second.
+#[derive(Default)]
+struct RenderedRate {
+    samples: std::collections::VecDeque<(Instant, u64)>,
+}
+
+impl RenderedRate {
+    fn record(&mut self, at: Instant, finished: u64) {
+        // A new viewport counts from zero again.
+        if self
+            .samples
+            .back()
+            .is_some_and(|&(_, last)| finished < last)
+        {
+            self.samples.clear();
+        }
+        self.samples.push_back((at, finished));
+        // Keep the newest sample at or before the window's start, so that once
+        // a window's worth has passed the span covers all of it.
+        let window = Duration::from_secs_f32(FPS_WINDOW_MS / 1_000.0);
+        while self
+            .samples
+            .get(1)
+            .is_some_and(|&(second, _)| at.duration_since(second) >= window)
+        {
+            self.samples.pop_front();
+        }
+    }
+
+    /// Frames finished per second across the samples held.
+    fn rate(&self) -> Option<f32> {
+        let (&(from, first), &(to, last)) = (self.samples.front()?, self.samples.back()?);
+        let span = to.duration_since(from).as_secs_f32();
+        (span > 0.0).then(|| (last - first) as f32 / span)
+    }
+}
+
+/// Whether the frame-stats panel is open, and whether it may animate.
+struct FpsPanel {
+    visibility: luma_ui::arg::select::MenuVisibility,
+    reduced: bool,
+}
+
+impl FpsPanel {
+    fn new(reduced: bool) -> Self {
+        Self {
+            visibility: luma_ui::arg::select::MenuVisibility::Closed,
+            reduced,
+        }
+    }
+
+    /// Retire an exit that has finished. The stage renders every frame, so
+    /// nothing else has to ask for the frames the exit plays over.
+    fn tick(&mut self) {
+        self.visibility.tick_close(self.reduced);
+    }
+}
+
+/// A reading on a floating surface: the value bright, its unit or name after
+/// it in the label's darker ink.
+fn stat_value(value: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .flex_none()
+        .text_color(ladder::foreground())
+        .child(value.into())
+}
+
+/// The corner FPS readout, and the frame-stats panel it opens.
 ///
 /// This is the stats' one home: two surfaces for one reading would drift
-/// apart. Folded it is the rate and its worst
-/// recent frame; unfolded it adds the frame-time graph and the per-phase
-/// numbers the hitch ring already records, under the same labels the harness
-/// has always read (`DRAW`, `UI`, `PRES`, `CPU`).
-fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
-    let live = matches!(state.status, Status::Live);
-    let expanded = state.fps_expanded;
-    let (resting, reading, draw, ui, pres, gpu, shadows) = {
+/// apart. The readout is the delivered rate beside the rendered one; the panel
+/// adds the worst recent frame, the frame-time graph and the per-phase numbers
+/// the hitch ring already records. Each panel line publishes the label the
+/// measuring scripts have always read (`Draw `, `UI `, `Present `, `CPU `).
+///
+/// It is part of the stage's own element, so it is rebuilt with every stage
+/// frame while the cached panes around the stage are not.
+fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Option<AnyElement> {
+    if !matches!(state.status, Status::Live) {
+        return None;
+    }
+    let open = state.fps_panel.visibility.is_open();
+    let closing = state.fps_panel.visibility.exit();
+    let (resting, reading) = {
         let stage = state.stage.borrow();
-        let work = stage.last_work;
-        (
-            stage.resting,
-            fps_reading(&stage),
-            stage
-                .last_draw_ms
-                .map_or_else(|| "Draw —".to_string(), |ms| format!("Draw {ms:.1} ms")),
-            format!(
-                "UI {:.1} (sample {:.1} build {:.1} pick {:.1}) ms",
-                work.total_ms(),
-                work.sample_ms,
-                work.build_ms,
-                work.pick_ms
-            ),
-            stage.last_present.map_or_else(
-                || "Present —".to_string(),
-                |present| format!("Present {:.1}/{:.1} ms", present.p50_ms, present.p95_ms),
-            ),
-            match (stage.last_cpu_ms, stage.last_gpu_ms, stage.last_cluster_ms) {
-                (Some(cpu), Some(gpu), Some(cluster)) => {
-                    format!("CPU {cpu:.2} · GPU {gpu:.2} · cluster {cluster:.2} ms")
-                }
-                _ => "CPU/GPU timing unavailable".to_string(),
-            },
-            format!("Shadows {} redrawn", stage.last_shadow_maps.unwrap_or(0)),
-        )
+        (stage.resting, fps_reading(&stage))
     };
+    let rate = |value: Option<f32>| value.map_or_else(|| "—".to_string(), |v| format!("{v:.0}"));
     // A resting stage is not rendering slowly, it is not rendering at all —
     // a number here, stale or zero, would read as one or the other.
-    let fps_text = if resting {
-        "IDLE".to_string()
+    let summary: Vec<AnyElement> = if resting {
+        vec![stat_value("Idle")
+            .agent_node(Role::Text, "FPS IDLE")
+            .into_any_element()]
     } else {
-        reading
-            .fps
-            .map_or_else(|| "—".to_string(), |fps| format!("{fps:.0}"))
+        let fps = rate(reading.fps);
+        vec![
+            stat_value(fps.clone())
+                .agent_node(Role::Text, format!("FPS {fps}"))
+                .into_any_element(),
+            luma_ui::float::label("fps ·").into_any_element(),
+            stat_value(rate(reading.rendered)).into_any_element(),
+            luma_ui::float::label("rendered").into_any_element(),
+        ]
     };
-    let low_text = reading.low_ms.map_or_else(
-        || "LOW —".to_string(),
-        |ms| format!("LOW {:.0}", 1_000.0 / ms.max(1.0)),
-    );
-    let dipped = reading.low_ms.is_some_and(|ms| ms >= HITCH_MS);
-    let header = div()
-        .flex()
-        .items_end()
-        .gap(px(6.))
-        .child(
-            div()
-                .text_size(px(10.))
-                .line_height(px(12.))
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(ladder::foreground())
-                .child(fps_text.clone())
-                .agent_node(Role::Text, format!("FPS {fps_text}")),
-        )
-        .child(luma_ui::caption("FPS"))
-        .when(expanded, |el| {
-            el.child(
-                div()
-                    .text_size(px(9.))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(if dipped {
-                        ladder::status_bad()
-                    } else {
-                        ladder::muted_foreground()
-                    })
-                    .child(low_text.clone())
-                    .agent_node(Role::Text, low_text),
-            )
-        });
+    let panel = (open || closing.is_some()).then(|| {
+        let stage = state.stage.borrow();
+        stats_panel(&stage, reading)
+    });
     let toggle = {
         let app = app.clone();
         move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
             app.update(cx, |this, cx| {
                 if let Some(state) = this.visualizer_mut() {
-                    state.fps_expanded = !state.fps_expanded;
+                    state.fps_panel.visibility.toggle();
                 }
-                cx.notify();
+                this.notify_stage(cx);
             });
         }
     };
-    div()
-        .absolute()
-        .top(STATS_OVERLAY_TOP)
-        .right(px(10.))
-        .when(live, |el| {
-            el.child(
+    let trigger = luma_ui::button("", luma_ui::Enabled::Yes)
+        .id("fps-overlay")
+        .h(CORNER_CONTROL)
+        .gap(px(4.))
+        // Opaque over the viewport, so the pointer plane it covers is its own
+        // (see [`listen`]).
+        .occlude()
+        .children(summary)
+        .on_click(toggle)
+        .agent_node(Role::Toggle, "Frame stats");
+    let id = "frame-stats";
+    let trigger_height = f32::from(CORNER_CONTROL);
+    Some(
+        div()
+            .absolute()
+            .top(CORNER_INSET)
+            .left(CORNER_INSET)
+            .child(
                 div()
-                    .id("fps-overlay")
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .p(px(4.))
-                    .border_1()
-                    .border_color(ladder::border())
-                    .bg(ladder::apex())
-                    // The card, not the absolute wrapper it hangs in: opaque
-                    // over the viewport, so the pointer plane it covers is its
-                    // own (see [`listen`]).
-                    .occlude()
-                    .when(expanded, |el| el.w(px(224.)))
-                    .child(header)
-                    .when(expanded, |el| {
-                        el.child(frame_graph(reading.intervals))
-                            .child(div().h(px(1.)).bg(ladder::trim()))
-                            .child(luma_ui::caption(draw))
-                            .child(luma_ui::caption(ui))
-                            .child(luma_ui::caption(pres))
-                            .child(luma_ui::caption(gpu))
-                            .child(luma_ui::caption(shadows))
-                    })
-                    .on_click(toggle)
-                    .agent_node(Role::Toggle, "Frame stats"),
+                    .relative()
+                    .child(trigger)
+                    .children(panel.map(|content| match closing {
+                        Some(t) => {
+                            luma_ui::float::anchored_below_closing(id, trigger_height, content, t)
+                        }
+                        // The readout's own toggle closes it: a stats panel is
+                        // watched while the camera moves, so a press on the
+                        // stage must not dismiss it.
+                        None => luma_ui::float::anchored_below(
+                            id,
+                            trigger_height,
+                            luma_ui::float::Dismiss::Never,
+                            content,
+                        ),
+                    })),
             )
-        })
+            .into_any_element(),
+    )
 }
+
+/// The frame-stats panel: the frame-time graph over one line per reading.
+fn stats_panel(stage: &Stage, reading: FpsReading) -> AnyElement {
+    let work = stage.last_work;
+    let ms = |value: Option<f32>, digits: usize| {
+        value.map_or_else(|| "—".to_string(), |v| format!("{v:.digits$} ms"))
+    };
+    let line = |name: &'static str, value: Div, detail: Option<String>| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .child(
+                div()
+                    .w(px(STAT_NAME_WIDTH))
+                    .child(luma_ui::float::label(name)),
+            )
+            .child(value)
+            .children(detail.map(luma_ui::float::label))
+    };
+    let dipped = reading.low_ms.is_some_and(|ms| ms >= HITCH_MS);
+    let low = reading
+        .low_ms
+        .map(|ms| format!("{:.0} fps", 1_000.0 / ms.max(1.0)));
+    let rendered = reading.rendered.map(|fps| format!("{fps:.0} fps"));
+    let present = stage
+        .last_present
+        .map(|present| format!("{:.1} / {:.1} ms", present.p50_ms, present.p95_ms));
+    let timings = match (stage.last_cpu_ms, stage.last_gpu_ms, stage.last_cluster_ms) {
+        (Some(cpu), Some(gpu), Some(cluster)) => {
+            format!("CPU {cpu:.2} · GPU {gpu:.2} · cluster {cluster:.2} ms")
+        }
+        _ => "CPU/GPU timing unavailable".to_string(),
+    };
+    let shadows = stage.last_shadow_maps.unwrap_or(0);
+    luma_ui::float::popover_card()
+        .w(px(240.))
+        .p(px(12.))
+        .gap(px(6.))
+        .child(frame_graph(reading.intervals))
+        .child(luma_ui::float::divider())
+        .child(
+            line(
+                "Low",
+                stat_value(low.clone().unwrap_or_else(|| "—".to_string()))
+                    .when(dipped, |value| value.text_color(ladder::status_bad())),
+                None,
+            )
+            .agent_node(
+                Role::Text,
+                format!("Low {}", low.unwrap_or_else(|| "—".to_string())),
+            ),
+        )
+        .child(
+            line(
+                "Rendered",
+                stat_value(rendered.clone().unwrap_or_else(|| "—".to_string())),
+                None,
+            )
+            .agent_node(
+                Role::Text,
+                format!("Rendered {}", rendered.unwrap_or_else(|| "—".to_string())),
+            ),
+        )
+        .child(
+            line("Draw", stat_value(ms(stage.last_draw_ms, 1)), None).agent_node(
+                Role::Text,
+                stage
+                    .last_draw_ms
+                    .map_or_else(|| "Draw —".to_string(), |ms| format!("Draw {ms:.1} ms")),
+            ),
+        )
+        .child(
+            line(
+                "UI",
+                stat_value(ms(Some(work.total_ms()), 1)),
+                Some(format!(
+                    "sample {:.1} · build {:.1} · pick {:.1}",
+                    work.sample_ms, work.build_ms, work.pick_ms
+                )),
+            )
+            .agent_node(
+                Role::Text,
+                format!(
+                    "UI {:.1} (sample {:.1} build {:.1} pick {:.1}) ms",
+                    work.total_ms(),
+                    work.sample_ms,
+                    work.build_ms,
+                    work.pick_ms
+                ),
+            ),
+        )
+        .child(
+            line(
+                "Present",
+                stat_value(present.clone().unwrap_or_else(|| "—".to_string())),
+                present.is_some().then(|| "p50 / p95".to_string()),
+            )
+            .agent_node(
+                Role::Text,
+                stage.last_present.map_or_else(
+                    || "Present —".to_string(),
+                    |present| format!("Present {:.1}/{:.1} ms", present.p50_ms, present.p95_ms),
+                ),
+            ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(line("CPU", stat_value(ms(stage.last_cpu_ms, 2)), None))
+                .child(line("GPU", stat_value(ms(stage.last_gpu_ms, 2)), None))
+                .child(line(
+                    "Cluster",
+                    stat_value(ms(stage.last_cluster_ms, 2)),
+                    None,
+                ))
+                .agent_node(Role::Text, timings),
+        )
+        .child(
+            line(
+                "Shadows",
+                stat_value(shadows.to_string()),
+                Some("redrawn".to_string()),
+            )
+            .agent_node(Role::Text, format!("Shadows {shadows} redrawn")),
+        )
+        .into_any_element()
+}
+
+/// The width of the name column in the frame-stats panel, so the values line
+/// up down the panel.
+const STAT_NAME_WIDTH: f32 = 60.0;
 
 /// Delivered frame intervals as bars, newest at the right.
 ///
@@ -4410,7 +4612,10 @@ fn frame_graph(intervals: Vec<f32>) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
-            window.paint_quad(gpui::fill(bounds, ladder::background()));
+            window.paint_quad(
+                gpui::fill(bounds, luma_ui::glass::wash(luma_ui::glass::WASH_REST))
+                    .corner_radii(px(luma_ui::radius::CONTROL)),
+            );
             let width = f32::from(bounds.size.width);
             let height = f32::from(bounds.size.height);
             let budget_y = height * (1.0 - FRAME_BUDGET_MS / HITCH_MS);
@@ -4479,6 +4684,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         return plate("Stage rendering is off".to_string())
             .agent_node(Role::Card, "Stage")
             .into_any_element();
+    }
+    if state.exporting {
+        return plate("Exporting the show…".to_string());
     }
     // Idempotent, and normally a no-op: launch has already started this (see
     // `warm_renderer`, which also adopts the window's device first). It is
@@ -4780,6 +4988,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             if !stage.resting {
                                 stage.resting = true;
                                 gpu.viewport.rest();
+                                // A rate across the rest would count the rest.
+                                stage.rendered = RenderedRate::default();
                             }
                             stage.previous.clone().map(|frame| (frame, None))
                         } else {
@@ -4968,9 +5178,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                         _ => stage.previous.clone().map(|frame| (frame, None)),
                                     };
                                     trace_stage_frame(&sample);
-                                    if let Some(run_up) =
-                                        stage.hitches.record(sample, Instant::now())
-                                    {
+                                    let now = Instant::now();
+                                    stage.rendered.record(now, gpu.submission.finished);
+                                    if let Some(run_up) = stage.hitches.record(sample, now) {
                                         stage.pending_hitch = Some(run_up);
                                     }
                                     painted
@@ -5112,6 +5322,9 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         let over = over_move.is_hovered(window);
         dragged.update(cx, |this, cx| {
             let mut aim = false;
+            // Hovering the gizmo and dragging on the stage change only the
+            // stage, so they redraw only the stage.
+            let mut stage_only = false;
             {
                 let Some(state) = this.visualizer_mut() else {
                     return;
@@ -5127,7 +5340,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                         let hover = over.then(|| state.hover_gizmo(at)).flatten();
                         if state.gizmo_hover != hover {
                             state.gizmo_hover = hover;
-                            cx.notify();
+                            stage_only = true;
                         }
                         aim = over
                             && !state.presentation
@@ -5138,17 +5351,17 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
                     }
                     Some(MouseButton::Left) => {
                         if state.editor_drag.is_some() {
+                            // An orbit, a marquee or a gizmo in flight: the
+                            // stage's own state until the release commits it.
                             state.editor_moved(at);
-                            cx.notify();
+                            stage_only = true;
                         }
                     }
                     Some(_) => {
                         if let Some((drag, was)) = state.drag {
                             state.drag = Some((drag, at));
                             state.dragged(at - was);
-                            if state.input_redraws() {
-                                cx.notify();
-                            }
+                            stage_only |= state.input_redraws();
                         }
                     }
                 }
@@ -5156,6 +5369,8 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             if aim {
                 this.stage_aim_from_pointer(at, cx);
                 cx.notify();
+            } else if stage_only {
+                this.notify_stage(cx);
             }
         });
     });
@@ -5223,7 +5438,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         zoomed.update(cx, |this, cx| {
             if let Some(state) = this.visualizer_mut() {
                 state.wheel(wheel, event.position);
-                cx.notify();
+                this.notify_stage(cx);
             }
         });
     });
@@ -5578,6 +5793,58 @@ mod render_scale_tests {
         assert_eq!(
             RenderScale::Native.size(255, None, (1000, 1000)),
             RenderScale::Native.size(100, None, (1000, 1000))
+        );
+    }
+}
+
+#[cfg(test)]
+mod rendered_rate_tests {
+    use super::RenderedRate;
+    use std::time::{Duration, Instant};
+
+    /// Record `frames` retirements `every` apart, continuing from `count`.
+    fn run(rate: &mut RenderedRate, at: &mut Instant, count: &mut u64, frames: u64, every: u64) {
+        for _ in 0..frames {
+            *at += Duration::from_millis(every);
+            *count += 1;
+            rate.record(*at, *count);
+        }
+    }
+
+    /// The rate is the trailing window's, so a slowdown shows once it has
+    /// lasted a window, rather than being averaged into everything before it.
+    #[test]
+    fn the_rate_follows_the_trailing_window() {
+        let (mut rate, mut at, mut count) = (RenderedRate::default(), Instant::now(), 0);
+        rate.record(at, count);
+        run(&mut rate, &mut at, &mut count, 200, 5);
+        let fast = rate.rate().unwrap();
+        run(&mut rate, &mut at, &mut count, 75, 20);
+        let slow = rate.rate().unwrap();
+        assert!(slow * 2.0 < fast, "fast {fast}, then slow {slow}");
+        // Held samples span the window and not much more.
+        let (first, last) = (
+            rate.samples.front().unwrap().0,
+            rate.samples.back().unwrap().0,
+        );
+        assert!(last.duration_since(first) < Duration::from_millis(1_100));
+    }
+
+    /// A new viewport counts from zero. That is a restart, not a frame count
+    /// going backwards.
+    #[test]
+    fn a_restarted_count_starts_a_new_window() {
+        let (mut rate, mut at, mut count) = (RenderedRate::default(), Instant::now(), 0);
+        run(&mut rate, &mut at, &mut count, 50, 10);
+        let before = rate.rate().unwrap();
+        count = 0;
+        rate.record(at, count);
+        assert_eq!(rate.rate(), None);
+        run(&mut rate, &mut at, &mut count, 50, 10);
+        let after = rate.rate().unwrap();
+        assert!(
+            (after - before).abs() < before * 0.05,
+            "{before} then {after}"
         );
     }
 }
@@ -5940,7 +6207,8 @@ mod orbit_selection_tests {
             view_setting_error: None,
             view_setting_saving: false,
             view_setting_pending: Rc::default(),
-            fps_expanded: false,
+            fps_panel: FpsPanel::new(true),
+            exporting: false,
             build,
             stage: Rc::new(RefCell::new(Stage {
                 displayed_pick: Some(pick),

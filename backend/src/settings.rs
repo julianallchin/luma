@@ -70,6 +70,10 @@ pub struct AppSettings {
     /// cost knob of this machine, like `render_scale`.
     #[serde(default)]
     pub stage_low_quality: bool,
+    /// Whether the score editor shows the timeline beside the stage and the
+    /// inspector, instead of under them. A view preference of this machine.
+    #[serde(default)]
+    pub split_view: bool,
     #[serde(default)]
     pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
@@ -93,6 +97,7 @@ impl Default for AppSettings {
             hdr_output: true,
             stage_look: String::new(),
             stage_low_quality: false,
+            split_view: false,
             agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
@@ -159,6 +164,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         hdr_output: map.get("hdr_output").map(|v| v == "true").unwrap_or(true),
         stage_look: map.get("stage_look").cloned().unwrap_or_default(),
         stage_low_quality: map.get("stage_low_quality").is_some_and(|v| v == "true"),
+        split_view: map.get("split_view").is_some_and(|v| v == "true"),
         agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
