@@ -21,12 +21,20 @@
 //!  ├ list       ListState    the virtualized transcript
 //!  ├ composer   TextareaState
 //!  ├ expanded  HashSet      which tool chips the reader has opened
-//!  └ turn       TurnState    Idle | Streaming { _task, since, steer }
+//!  ├ turn       Option<..>   when the shown thread's turn started, if one runs
+//!  └ running    Entity ──────┐
+//!                            ▼
+//! RunningTurns               one per app, shared by every panel
+//!  └ turns      HashMap      thread id → { _task, since, steer, transcript }
 //! ```
 //!
 //! A chat belongs to one score. The host names the open score, and the panel
 //! opens that score's most recently updated chat. Other editor tabs do not
 //! change the thread: they only supply a context for each turn.
+//!
+//! A turn belongs to its thread, not to the panel. [`RunningTurns`] drives it;
+//! the panel attaches to whichever thread it shows, and switching away only
+//! detaches — see [`running`].
 //!
 //! # Streaming
 //!
@@ -39,6 +47,7 @@ pub mod chip;
 pub mod composer;
 mod model_picker;
 pub mod python_cell;
+pub mod running;
 mod send_motion;
 pub mod subagents;
 pub mod theme;
@@ -52,7 +61,7 @@ use std::rc::Rc;
 
 use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Entity, FocusHandle, ListAlignment, ListState,
-    SharedString, Task, Window,
+    SharedString, Window,
 };
 use gpui_component::Icon;
 use luma_lib::agent::{
@@ -65,6 +74,7 @@ use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 
 use crate::composer::Composer;
+pub use crate::running::{RunningEvent, RunningTurns};
 use crate::theme::Theme;
 use crate::transcript::{Entry, RowKey};
 
@@ -218,11 +228,22 @@ impl Agent {
             },
         );
         let steer = stream.steering();
+        // Drop the stream — which cancels the turn and releases its run lease —
+        // as soon as the panel lets go, not at the next event: a long tool
+        // call emits nothing, and a send in the meantime would find the
+        // thread still locked.
         self.runtime.spawn(async move {
-            use futures::StreamExt as _;
-            while let Some(event) = stream.next().await {
-                if events.send(event).is_err() {
-                    break;
+            use futures::{future::Either, StreamExt as _};
+            loop {
+                let next = std::pin::pin!(stream.next());
+                let closed = std::pin::pin!(events.closed());
+                match futures::future::select(next, closed).await {
+                    Either::Left((Some(event), _)) => {
+                        if events.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
                 }
             }
         });
@@ -236,10 +257,11 @@ impl Agent {
 /// are the shell's to mount, and a chat crate that reached for one would invert
 /// the dependency. Starting a *new* conversation is not here — that is entirely
 /// the panel's own business, so it just does it.
+///
+/// Documents an agent commit changed are not here: a turn can run while the
+/// panel shows another thread, so the app hears them from [`RunningTurns`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatEvent {
-    /// An agent commit changed persisted documents; refresh the editors.
-    DocumentChanged,
     /// Open this account’s conversation history.
     HistoryRequested,
     /// Show this thread's subagents. `Some` names the child to open straight
@@ -252,6 +274,8 @@ pub enum ChatEvent {
 }
 
 /// One turn's events, in order. Dropping it cancels the turn.
+///
+/// Driven by [`RunningTurns`], never by a panel — see [`running`].
 pub struct Turn {
     events: tokio::sync::mpsc::UnboundedReceiver<TurnEvent>,
     steer: luma_lib::agent::TurnSteer,
@@ -293,22 +317,6 @@ enum Conversation {
     /// The read landed. This is the thread, and the transcript beside it is
     /// its whole history — empty included, and that empty is a fact.
     Open(String),
-}
-
-/// Whether a turn is running, and the task driving it. Dropping the task drops
-/// the [`Turn`], which cancels — so "cancel" is `self.turn = TurnState::Idle`
-/// and there is no second call a caller could forget.
-enum TurnState {
-    Idle,
-    /// The task driving the turn, when it started — the working indicator's
-    /// timer origin — and the handle that redirects it. All three begin and
-    /// end with the turn; separate optional fields would be three things that
-    /// could outlive the one they describe.
-    Streaming {
-        _task: Task<()>,
-        since: std::time::Instant,
-        steer: luma_lib::agent::TurnSteer,
-    },
 }
 
 pub struct AgentChat {
@@ -386,7 +394,16 @@ pub struct AgentChat {
     /// composer, no status strip. What the subagents dialog mounts over a
     /// child thread, so inspecting one costs no second transcript renderer.
     read_only: bool,
-    turn: TurnState,
+    /// Where turns run. The panel starts, steers and stops them there and
+    /// never owns one, so showing another thread cannot cancel anything.
+    running: Entity<RunningTurns>,
+    _running: gpui::Subscription,
+    /// When the shown thread's turn started, while one runs — the working
+    /// indicator's timer origin. A mirror of [`Self::running`], kept so
+    /// [`Self::is_streaming`] needs no `cx`: set by a send and by attaching,
+    /// cleared by [`Self::seat`] and by the registry's
+    /// [`RunningEvent::Ended`].
+    turn: Option<std::time::Instant>,
     /// Which row currently carries the working indicator, so the one row whose
     /// height it changes can be remeasured when it moves. Derived state, kept
     /// only because `ListState` caches heights and cannot be asked what it
@@ -413,7 +430,16 @@ pub struct AgentChat {
 impl AgentChat {
     /// Open a chat on `scope`, and start resolving its thread when there is
     /// one. `None` opens the panel unattached — see [`Self::scope`].
-    pub fn new(agent: Agent, scope: Option<ThreadScope>, cx: &mut Context<Self>) -> Self {
+    ///
+    /// `running` is the app's one [`RunningTurns`]: every panel that can send
+    /// shares it, so a turn outlives whichever panel started it.
+    pub fn new(
+        agent: Agent,
+        running: Entity<RunningTurns>,
+        scope: Option<ThreadScope>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let subscription = cx.subscribe(&running, |this, _, event, cx| this.on_running(event, cx));
         let chat = Self {
             agent,
             subject: scope.clone(),
@@ -445,7 +471,9 @@ impl AgentChat {
             usage: MenuVisibility::Closed,
             subagents: Vec::new(),
             read_only: false,
-            turn: TurnState::Idle,
+            running,
+            _running: subscription,
+            turn: None,
             trailer_row: None,
             error: None,
             expanded: HashSet::new(),
@@ -469,11 +497,22 @@ impl AgentChat {
     /// is not a second renderer and must never become one: the whole reason a
     /// subagent's thread is a real `agent_threads` row is that reading it
     /// needs no code of its own.
+    ///
+    /// A reader never sends, so it gets a registry of its own that stays empty.
+    /// A child's turn is its parent's delegation, not a turn in the app's
+    /// [`RunningTurns`], so there is nothing there for it to attach to.
     pub fn reader(agent: Agent, thread_id: &str, cx: &mut Context<Self>) -> Self {
-        let mut chat = Self::new(agent, None, cx);
+        let running = cx.new(|_| RunningTurns::default());
+        let mut chat = Self::new(agent, running, None, cx);
         chat.read_only = true;
         chat.open_thread(thread_id, cx);
         chat
+    }
+
+    /// The app's running turns — what the history list marks as running.
+    #[must_use]
+    pub fn running(&self) -> &Entity<RunningTurns> {
+        &self.running
     }
 
     /// Every subagent this panel has heard from this session, running and
@@ -716,8 +755,11 @@ impl AgentChat {
         self.transcript = transcript;
         // Live state belongs to the conversation being left: a snapshot names a
         // child of *this* thread, and carrying one across would put another
-        // conversation's delegation on the pill.
+        // conversation's delegation on the pill. So does the attachment to its
+        // turn — detaching, which leaves the turn running.
         self.subagents.clear();
+        self.turn = None;
+        self.live = None;
         self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
         self.list = ListState::new(
             self.rows.len() + 1,
@@ -995,9 +1037,10 @@ impl AgentChat {
     /// open, which tab is focused, what the score says — is untouched, because
     /// reading an old conversation is not the same act as going back to what it
     /// was about. The agent re-orients itself from the transcript.
+    ///
+    /// A turn running in the conversation being left keeps running; opening a
+    /// running one attaches to its turn — see [`Self::receive`].
     pub fn open_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        // Whatever is running belongs to the conversation being left.
-        self.cancel(cx);
         let read = self.begin_read(cx);
         let pending = self.agent.open_thread(thread_id.to_string());
         cx.spawn(async move |this, cx| {
@@ -1018,7 +1061,6 @@ impl AgentChat {
         let Some(scope) = self.subject.clone().or_else(|| self.scope.clone()) else {
             return;
         };
-        self.cancel(cx);
         let read = self.begin_read(cx);
         let pending = self.agent.new_thread(scope);
         cx.spawn(async move |this, cx| {
@@ -1056,8 +1098,23 @@ impl AgentChat {
                 Ok((scope, transcript)) => {
                     self.scope = Some(scope);
                     self.selection = Selection::from_thread(&detail.thread).ok();
+                    // A running thread is attached to, not read: its rows are
+                    // written at step boundaries, so the read is missing the
+                    // reply in flight, and the registry's transcript is not.
+                    let live = self
+                        .running
+                        .read(cx)
+                        .live(&detail.thread.id)
+                        .map(|live| (live.since, live.transcript.clone()));
                     self.conversation = Conversation::Open(detail.thread.id);
-                    self.seat(transcript, cx);
+                    match live {
+                        Some((since, transcript)) => {
+                            self.seat(transcript, cx);
+                            self.turn = Some(since);
+                            self.settle_trailer();
+                        }
+                        None => self.seat(transcript, cx),
+                    }
                     if !self.read_only {
                         self.selection_saving = true;
                         let pending = self.agent.preferred_selection();
@@ -1131,14 +1188,12 @@ impl AgentChat {
 
     /// Show `subject`'s most recently updated chat, or unattach.
     ///
-    /// A different score is a different set of chats, so a running turn is
-    /// cancelled, as it is when the reader opens another chat. The draft
-    /// stays in the composer.
+    /// A running turn keeps running in the background, as it does when the
+    /// reader opens another chat. The draft stays in the composer.
     pub fn set_subject(&mut self, subject: Option<ThreadScope>, cx: &mut Context<Self>) {
         if self.subject == subject {
             return;
         }
-        self.cancel(cx);
         self.subject = subject.clone();
         match subject {
             Some(subject) => self.load(subject, cx),
@@ -1157,7 +1212,7 @@ impl AgentChat {
     /// Whether a turn is running. The composer, the send button and the status
     /// strip all read this one fact.
     pub fn is_streaming(&self) -> bool {
-        matches!(self.turn, TurnState::Streaming { .. })
+        self.turn.is_some()
     }
 
     /// Dismiss the model picker first; otherwise stop a running turn.
@@ -1207,14 +1262,24 @@ impl AgentChat {
         Some((call, progress))
     }
 
-    /// Drop the turn, which cancels it.
-    ///
-    /// Also the *end*-of-turn path, not only the stop button: a turn that ran
-    /// to completion and one the reader stopped leave the panel in exactly the
-    /// same state, and a second function for it would be a second place that
-    /// has to remember to settle the live turn's parse.
+    /// Stop the shown thread's turn. Turns of other threads keep running.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
-        self.turn = TurnState::Idle;
+        if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
+            let thread = thread.to_owned();
+            self.running
+                .update(cx, |running, cx| running.cancel(&thread, cx));
+        }
+        self.settle(cx);
+    }
+
+    /// Detach from an ended turn.
+    ///
+    /// The stop button's path and the *end*-of-turn path both land here: a
+    /// turn that ran to completion and one the reader stopped leave the panel
+    /// in exactly the same state, and a second function for it would be a
+    /// second place that has to remember to settle the live turn's parse.
+    fn settle(&mut self, cx: &mut Context<Self>) {
+        self.turn = None;
         if !self.send_motion.pending.is_empty() {
             let draft = self
                 .send_motion
@@ -1266,8 +1331,8 @@ impl AgentChat {
         if prompt.is_empty() {
             return;
         }
-        if let TurnState::Streaming { steer, .. } = &self.turn {
-            steer.send(prompt.clone());
+        if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
+            self.running.read(cx).steer(thread, prompt.clone());
             self.start_send_motion(prompt, cx);
             self.composer.clear(cx);
             cx.notify();
@@ -1278,31 +1343,30 @@ impl AgentChat {
             cx.notify();
             return;
         };
+        let agent = self.agent.clone();
+        let context = self.editor_context.clone();
+        let transcript = self.transcript.clone();
+        let started = self.running.update(cx, |running, cx| {
+            running.start(
+                &thread,
+                transcript,
+                || agent.turn(&thread, prompt.clone(), context),
+                cx,
+            )
+        });
+        let since = match started {
+            Ok(since) => since,
+            // Refused: the prompt stays in the composer for after a stop.
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
         self.composer.clear(cx);
         self.error = None;
-        self.start_send_motion(prompt.clone(), cx);
-
-        let turn = self
-            .agent
-            .turn(&thread, prompt, self.editor_context.clone());
-        let steer = turn.steering();
-        let mut turn = turn;
-        let task = cx.spawn(async move |this, cx| {
-            while let Some(event) = turn.next().await {
-                if this
-                    .update(cx, |this, cx| this.on_event(&event, cx))
-                    .is_err()
-                {
-                    return;
-                }
-            }
-            this.update(cx, |this, cx| this.cancel(cx)).ok();
-        });
-        self.turn = TurnState::Streaming {
-            _task: task,
-            since: std::time::Instant::now(),
-            steer,
-        };
+        self.start_send_motion(prompt, cx);
+        self.turn = Some(since);
         self.settle_trailer();
         cx.notify();
     }
@@ -1313,9 +1377,7 @@ impl AgentChat {
     /// that there is nothing being written and a timer would be counting the
     /// round trip out rather than the thinking.
     fn trailer(&self) -> Option<working::Trailer> {
-        let TurnState::Streaming { since, .. } = &self.turn else {
-            return None;
-        };
+        let since = self.turn?;
         let answering = matches!(
             self.transcript.messages.last().map(|message| message.role),
             Some(luma_lib::agent::Role::Assistant)
@@ -1326,7 +1388,7 @@ impl AgentChat {
             } else {
                 working::Working::Sending
             },
-            since: *since,
+            since,
             seed: working::flavour_seed(self.thread().unwrap_or_default()),
         })
     }
@@ -1377,11 +1439,20 @@ impl AgentChat {
         }
     }
 
+    /// Follow the shown thread's turn; every other thread's is not this
+    /// panel's to paint.
+    fn on_running(&mut self, event: &RunningEvent, cx: &mut Context<Self>) {
+        match event {
+            RunningEvent::Event { thread, event } if self.thread() == Some(thread) => {
+                self.on_event(event, cx);
+            }
+            RunningEvent::Ended { thread } if self.thread() == Some(thread) => self.settle(cx),
+            _ => {}
+        }
+    }
+
     /// Fold one event, reparse what it touched, and tell the list what moved.
     fn on_event(&mut self, event: &TurnEvent, cx: &mut Context<Self>) {
-        if matches!(event, TurnEvent::DocumentChanged { .. }) {
-            cx.emit(ChatEvent::DocumentChanged);
-        }
         if let TurnEvent::MessageStarted {
             id,
             role: luma_lib::agent::Role::User,

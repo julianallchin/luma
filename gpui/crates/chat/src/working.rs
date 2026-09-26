@@ -131,7 +131,7 @@ const CELL: f32 = 2.5;
 ///
 /// `view` leases the clock: the panel repaints at 30fps while this is mounted
 /// and schedules nothing once it is gone.
-fn spinner(view: EntityId, cx: &mut gpui::App) -> impl IntoElement {
+pub fn spinner(view: EntityId, cx: &mut gpui::App) -> impl IntoElement {
     let delta = motion::pulse_delta(&motion::GRADIENT_SPIN, view, cx);
     let center = (MATRIX_SIDE as f32 - 1.0) / 2.0;
     let max = MATRIX_SIDE as f32 - 1.0 + center;

@@ -2,8 +2,8 @@
 //! editors only supply the working context for each turn.
 
 use gpui::{AppContext as _, Context, Window};
-use luma_chat::AgentChat;
-use luma_lib::agent::ThreadScope;
+use luma_chat::{AgentChat, RunningEvent, RunningTurns};
+use luma_lib::agent::{ThreadScope, TurnEvent};
 
 use crate::shell::Body;
 use crate::tabs::Target;
@@ -61,22 +61,33 @@ impl Luma {
             return;
         }
         let agent = self.library.agent();
+        // Owned by the chat, which lives as long as the app: quitting drops it,
+        // and with it every running turn.
+        let running = cx.new(|_| RunningTurns::default());
         let chat = cx.new(|cx| {
-            let mut chat = AgentChat::new(agent, None, cx);
+            let mut chat = AgentChat::new(agent, running.clone(), None, cx);
             chat.set_editor_context(context, cx);
             chat.set_subject(subject, cx);
             chat
         });
-        self.chat_subscription =
-            Some(
-                cx.subscribe_in(&chat, window, |this, _, event, _, cx| match event {
-                    luma_chat::ChatEvent::DocumentChanged => this.agent_documents_changed(cx),
-                    luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
-                    luma_chat::ChatEvent::SubagentsRequested(child) => {
-                        this.show_subagents(child.clone(), cx);
-                    }
-                }),
-            );
+        let requests = cx.subscribe_in(&chat, window, |this, _, event, _, cx| match event {
+            luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
+            luma_chat::ChatEvent::SubagentsRequested(child) => {
+                this.show_subagents(child.clone(), cx);
+            }
+        });
+        // Heard from the registry rather than the panel: a turn in the
+        // background changes documents while the panel shows another chat.
+        let commits = cx.subscribe(&running, |this, _, event, cx| {
+            if let RunningEvent::Event {
+                event: TurnEvent::DocumentChanged,
+                ..
+            } = event
+            {
+                this.agent_documents_changed(cx);
+            }
+        });
+        self.chat_subscription = Some(gpui::Subscription::join(requests, commits));
         self.chat = Some(chat);
         cx.notify();
     }

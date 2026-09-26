@@ -630,6 +630,41 @@ async fn cancelling_a_thread_interrupts_its_busy_cell() {
     f.service.shutdown_all();
 }
 
+/// Stopping a turn drops the cell's future mid-run. The blocking kernel call
+/// must not carry on unseen until its 90 s limit: that holds the thread's cell
+/// slot, and the next turn's first cell would find it still busy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_a_running_cell_interrupts_it() {
+    let Some(f) = Fixture::new("dropping_a_running_cell_interrupts_it").await else {
+        return;
+    };
+    let thread = f.thread().await;
+    expect_ok(&f.run(&thread, "keep = 5").await, "warm up");
+
+    let dropped = tokio::time::timeout(
+        Duration::from_secs(2),
+        f.run(&thread, "while True:\n    pass\n"),
+    )
+    .await;
+    assert!(dropped.is_err(), "the busy cell finished on its own");
+
+    let mut freed = false;
+    for _ in 0..600 {
+        if f.service.claim_cell(&thread).is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(freed, "the dropped cell still holds the slot after 30 s");
+
+    let out = f.run(&thread, "keep").await;
+    expect_ok(&out, "after the dropped cell");
+    assert_eq!(out.repr.as_deref(), Some("5"));
+
+    f.service.shutdown_all();
+}
+
 // ---------------------------------------------------------------------------
 // B6 — the venue facade builds a rig
 // ---------------------------------------------------------------------------
@@ -1218,7 +1253,7 @@ try:
 except LumaHostCallError as error:
     assert 'back_mvoers' in str(error) and 'back_movers' in str(error)
 def frame(name):
-    return np.array(Image.open(v.render(highlight=name, house=0, aim_arrows=False, width=320, height=180).path))
+    return np.array(Image.open(v.render(highlight=name, house=0, width=320, height=180).path))
 assert np.any(frame(empty.name) != frame(back.name)), 'selected collection did not light the render'
 before = back.fixture_ids
 suggested = v.generate_groups()
