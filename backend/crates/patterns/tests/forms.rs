@@ -1073,6 +1073,27 @@ fn a_score_holds_only_form_clips_with_finite_timing() {
 }
 
 #[test]
+fn a_changed_clip_with_an_envelope_out_of_range_is_refused() {
+    let library = standard_library();
+    let mut stored = Score::default();
+    stored.clips.insert(
+        "chase".into(),
+        presets()
+            .preset("color.chase@1", "Chase")
+            .unwrap()
+            .clip(START, 4.0),
+    );
+    let mut candidate = stored.clone();
+    candidate.clips.get_mut("chase").unwrap().inputs.insert(
+        "path".into(),
+        Value::Envelope(Envelope::linear(vec![[0.0, 1.1], [1.0, 0.0]])),
+    );
+    let error = candidate.validate_changes(&library, &stored).unwrap_err().0;
+    assert!(error.contains("clip chase"), "{error}");
+    assert!(error.contains("must be in 0..1, not 1.1"), "{error}");
+}
+
+#[test]
 fn stepped_color_curves_show_each_palette_stop_without_blending() {
     let (form, mut inputs) = preset("Color fade");
     let palette = [

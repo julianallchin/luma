@@ -27,6 +27,16 @@ impl TrackHost {
         }
     }
 
+    /// Refuse a candidate whose changed clips fail validation. Playback leaves
+    /// a bad clip out and plays the rest; the agent must see the error instead,
+    /// or check, render and apply all look fine while the clip goes dark.
+    async fn validate_candidate(&self, candidate: &Score) -> Result<(), HostCallError> {
+        let stored = self.score_document().await?;
+        candidate
+            .validate_changes(&luma_patterns::standard_library(), &stored)
+            .map_err(|error| HostCallError::new("invalid_score", error.to_string()))
+    }
+
     pub(crate) fn track_id(&self) -> &str {
         &self.scope.track_id
     }
@@ -113,7 +123,15 @@ impl TrackHost {
         let limit = call_limit(context)?;
         if method == "track.score_apply" {
             let plan: Candidate = decode(payload)?;
-            supervise(self.prepare_score(&plan.candidate), context, limit).await?;
+            supervise(
+                async {
+                    self.validate_candidate(&plan.candidate).await?;
+                    self.prepare_score(&plan.candidate).await
+                },
+                context,
+                limit,
+            )
+            .await?;
             context.begin_irreversible()?;
             self.apply_score(&plan.candidate).await?;
             return Ok(json!(plan.candidate));
@@ -122,12 +140,14 @@ impl TrackHost {
             match method {
                 "track.score_check" => {
                     let plan: Candidate = decode(payload)?;
+                    self.validate_candidate(&plan.candidate).await?;
                     let scene = self.prepare_score(&plan.candidate).await?;
                     Ok(json!({"ok": true, "clips": plan.candidate.clips.len(), "compiledClips": scene.annotations.len()}))
                 }
                 "track.score_render" => {
                     let request: Render = decode(payload)?;
                     validate_window(&self.pool, &self.scope.track_id, request.start_time, request.end_time).await?;
+                    self.validate_candidate(&request.candidate).await?;
                     let scene = self.prepare_score(&request.candidate).await?;
                     self.render_scene(scene, request.start_time, request.end_time).await
                 }
