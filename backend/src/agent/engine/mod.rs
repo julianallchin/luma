@@ -86,7 +86,14 @@ pub(super) enum Event {
         input: Value,
         reply: Value,
     },
+    /// Tokens spent, for the thread's running cost.
     Usage(Usage),
+    /// One model request finished, and this is what it read and wrote — the
+    /// step the context gauge reads.
+    Step(Usage),
+    /// The engine fed these steering messages, by the ids the turn gave
+    /// them, to its model. Earlier ones first.
+    Steered(Vec<String>),
     Done,
 }
 
@@ -141,6 +148,13 @@ impl Session {
         }
     }
 
+    pub fn steerer(&self) -> Steerer {
+        match self {
+            Self::Codex(session) => Steerer::Codex(session.steerer()),
+            Self::Claude(session) => Steerer::Claude(session.steerer()),
+        }
+    }
+
     pub fn replier(&self) -> Replier {
         match self {
             Self::Codex(session) => Replier {
@@ -151,6 +165,25 @@ impl Session {
                 engine: Engine::Claude,
                 input: session.input(),
             },
+        }
+    }
+}
+
+/// Hands a steering message to a running native session. A writer of its
+/// own, like [`Replier`], so a steer never waits on the session's read.
+pub(super) enum Steerer {
+    Codex(codex::Steerer),
+    Claude(claude::Steerer),
+}
+
+impl Steerer {
+    /// `tools_open`: whether one of the session's tool calls is still running.
+    /// The session answers with [`Event::Steered`] naming `id` once its model
+    /// has the message.
+    pub async fn steer(&self, id: &str, text: &str, tools_open: bool) -> Result<(), AgentError> {
+        match self {
+            Self::Codex(steerer) => steerer.steer(id, text).await,
+            Self::Claude(steerer) => steerer.steer(id, text, tools_open).await,
         }
     }
 }

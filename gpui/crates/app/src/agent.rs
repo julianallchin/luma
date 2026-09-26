@@ -78,13 +78,17 @@ impl Luma {
         });
         // Heard from the registry rather than the panel: a turn in the
         // background changes documents while the panel shows another chat.
-        let commits = cx.subscribe(&running, |this, _, event, cx| {
+        // A subagent's own commits land on its private draft; its parent
+        // announces the change when the draft is published.
+        let commits = cx.subscribe(&running, |this, running, event, cx| {
             if let RunningEvent::Event {
+                thread,
                 event: TurnEvent::DocumentChanged,
-                ..
             } = event
             {
-                this.agent_documents_changed(cx);
+                if running.read(cx).is_running(thread) {
+                    this.agent_documents_changed(cx);
+                }
             }
         });
         self.chat_subscription = Some(gpui::Subscription::join(requests, commits));

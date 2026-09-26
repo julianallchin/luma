@@ -1,13 +1,20 @@
 //! The turn protocol.
 //!
 //! ```text
-//! persist(user) → model step(s) → persist(assistant)
+//! persist(user) → model step → commit → tool results → commit → … → close
 //! ```
 //!
-//! A turn's tools write rows as they go; closing a row is just an append. The
-//! editor is told the score moved by comparing its `updated_at` across the
+//! Every engine reaches one commit point per step: the step's usage goes into
+//! the transcript, the open assistant row is appended (first time) or
+//! rewritten in place, and a CLI engine's native session is checkpointed at
+//! that head. A quit mid-turn therefore loses at most the step in flight, and
+//! [`Transcript::unfinished`] reads the rest back. Steering joins at the
+//! engine's next step and is placed with [`TurnEvent::Steered`].
+//!
+//! The editor is told the score moved by comparing its `updated_at` across the
 //! turn, which is exactly what a save touches and nothing else does.
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use futures_util::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
@@ -20,7 +27,7 @@ use super::model::{
     ReasoningLevel, StopReason, Usage,
 };
 use super::tools::{self, ToolContext, ToolProgress, ToolRegistry};
-use super::transcript::{self, Transcript};
+use super::transcript::{self, Applied, Transcript};
 use super::{
     AgentChatMessage, AgentError, AgentService, Role, ToolResult, TurnEvent, TurnOutcome,
     UserPrompt,
@@ -36,10 +43,14 @@ use crate::models::agent_threads::{
 /// runaway, not to shape a response.
 pub(super) const MAX_TOKENS: u32 = 32_000;
 
+/// What a CLI engine's resumed native session is told when the reader resumes
+/// a turn that stopped part way.
+const CONTINUE_PROMPT: &str = "Luma stopped while you were working on the last request, and has restarted. Tool calls that had not returned were interrupted and did not complete. Check what was done, then continue the task.";
+
 pub(super) async fn run(
     service: AgentService,
     thread_id: String,
-    prompt: UserPrompt,
+    prompt: Option<UserPrompt>,
     events: mpsc::UnboundedSender<TurnEvent>,
     steer: mpsc::UnboundedReceiver<String>,
 ) {
@@ -48,7 +59,9 @@ pub(super) async fn run(
         thread_id,
         events,
         steer,
+        unsent: VecDeque::new(),
         transcript: Transcript::default(),
+        durable: HashSet::new(),
         head: None,
         principal: None,
         spend: AgentThreadUsage::default(),
@@ -74,7 +87,13 @@ struct Turn {
     thread_id: String,
     events: mpsc::UnboundedSender<TurnEvent>,
     steer: mpsc::UnboundedReceiver<String>,
+    /// Steers a CLI engine was handed but never confirmed before its run
+    /// ended: the next row answers them.
+    unsent: VecDeque<String>,
     transcript: Transcript,
+    /// Rows already in the database. A commit rewrites these and appends the
+    /// rest.
+    durable: HashSet<String>,
     /// The durable transcript tip this turn has observed. Every append is a
     /// compare-and-swap against it.
     head: Option<String>,
@@ -132,12 +151,14 @@ struct TurnSetup<'a> {
 impl Turn {
     /// Fold the event into the transcript, then hand it to the host. The two
     /// stay in lockstep because rehydration reads the same transcript.
-    fn emit(&mut self, event: TurnEvent) {
-        transcript::apply(&mut self.transcript, &event);
+    fn emit(&mut self, event: TurnEvent) -> Applied {
+        let applied = transcript::apply(&mut self.transcript, &event);
         let _ = self.events.send(event);
+        applied
     }
 
-    async fn drive(&mut self, prompt: UserPrompt) -> Result<(), AgentError> {
+    /// `None` resumes the thread's unfinished turn instead of asking anew.
+    async fn drive(&mut self, prompt: Option<UserPrompt>) -> Result<(), AgentError> {
         let pool = self.service.services().db().0.clone();
         self.principal = self.service.principal().await?;
         let lease = engine::state::RunLease::acquire(
@@ -161,11 +182,24 @@ impl Turn {
             .unwrap_or_default();
         self.spend.thread_id.clone_from(&self.thread_id);
         self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
+        self.durable = self
+            .transcript
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect();
         self.head = self.transcript.head_message_id();
         let resume_head = self.head.clone();
-        let mut turn_message_id = self
-            .append_user(&prompt.text, prompt.context.as_ref())
-            .await?;
+        // Resuming continues the open assistant row, when there is one, and
+        // attributes its tools to the prompt that row answers.
+        let mut resume_row = None;
+        let mut turn_message_id = match &prompt {
+            Some(prompt) => {
+                self.append_user(&prompt.text, prompt.context.as_ref())
+                    .await?
+            }
+            None => self.prepare_resume(&mut resume_row).await?,
+        };
         detail.thread =
             super::context::execution_thread(&pool, &self.thread_id, self.principal.as_deref())
                 .await
@@ -237,10 +271,17 @@ impl Turn {
                         );
                         // A real hydration failure is not a cue to fall back
                         // to continuation() quietly — `?` fails the turn.
+                        // A resumed turn hydrates everything: it sends no
+                        // new message of its own.
+                        let cut = if prompt.is_some() {
+                            turn_message_id.as_str()
+                        } else {
+                            ""
+                        };
                         match engine::hydrate_session(
                             *engine,
                             &self.transcript,
-                            &turn_message_id,
+                            cut,
                             &registry,
                             model.as_deref(),
                             lease.directory(),
@@ -255,7 +296,6 @@ impl Turn {
             }
             Execution::Api { .. } => None,
         };
-        lease.invalidate()?;
         let mut setup = TurnSetup {
             execution: &execution,
             lease: &lease,
@@ -281,31 +321,131 @@ impl Turn {
         .await
         .map_err(AgentError::Storage)?;
 
+        let mut resuming = prompt.is_none();
         loop {
-            let (stop_reason, usage, assistant_id) =
-                self.assistant_row(&setup, &turn_message_id).await?;
+            self.spend.turns += 1;
+            let (stop_reason, usage, assistant_id) = self
+                .assistant_row(&setup, &turn_message_id, resume_row.take(), resuming)
+                .await?;
+            resuming = false;
             self.close_row(&setup, &assistant_id, stop_reason, usage)
                 .await?;
-            if let (Execution::External { engine, model, .. }, Some(session), Some(head)) =
-                (&execution, self.native_session.take(), self.head.clone())
-            {
-                setup.resume = Some(session.clone());
-                lease.checkpoint(*engine, model.clone(), head, session)?;
+            if let Some(session) = self.native_session.take() {
+                setup.resume = Some(session);
             }
-            // After the row is durable, so a run's recorded price never
-            // describes work the transcript does not have.
-            self.spend.turns += 1;
-            db::record_thread_usage(&pool, &self.spend)
-                .await
-                .map_err(AgentError::Storage)?;
 
-            // Steering is applied here and nowhere else: between one durable
-            // assistant row and the next, so each row keeps its own preparation.
-            match self.steer.try_recv() {
-                Ok(text) => turn_message_id = self.append_user(&text, None).await?,
-                Err(_) => return Ok(()),
+            // A steer that arrived after the row's last step, or one a CLI
+            // engine never took: the next row answers it.
+            match self
+                .unsent
+                .pop_front()
+                .or_else(|| self.steer.try_recv().ok())
+            {
+                Some(text) => turn_message_id = self.append_user(&text, None).await?,
+                None => return Ok(()),
             }
         }
+    }
+
+    /// Ready a resume: the thread must have an unfinished turn, and any call
+    /// that never returned gets its interrupted result, durably, so the rows
+    /// are a valid provider transcript again. Answers the prompt the turn
+    /// answers; `open_row` is set to the assistant row to continue, if any.
+    async fn prepare_resume(
+        &mut self,
+        open_row: &mut Option<String>,
+    ) -> Result<String, AgentError> {
+        if !self.transcript.unfinished() {
+            return Err(AgentError::Invalid(
+                "this conversation has no unfinished turn to resume".into(),
+            ));
+        }
+        if let Some(row) = self.transcript.interrupt_open_calls() {
+            let id = self.transcript.messages[row].id.clone();
+            self.commit_row(&id).await?;
+        }
+        if let Some(last) = self
+            .transcript
+            .messages
+            .last()
+            .filter(|message| message.role == Role::Assistant)
+        {
+            *open_row = Some(last.id.clone());
+        }
+        self.transcript
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::User)
+            .map(|message| message.id.clone())
+            .ok_or_else(|| AgentError::Invalid("the unfinished turn has no prompt".into()))
+    }
+
+    /// Make `row_id` in the database say what it says in the transcript:
+    /// append it the first time, rewrite it after. An empty row is not worth
+    /// a row and waits for its first part.
+    async fn commit_row(&mut self, row_id: &str) -> Result<(), AgentError> {
+        let row = self.row(row_id)?;
+        if self.durable.contains(row_id) {
+            db::update_message_parts(
+                &self.service.services().db().0,
+                &self.thread_id,
+                row_id,
+                &row.parts_json(),
+                self.principal.as_deref(),
+            )
+            .await
+            .map_err(AgentError::Storage)?;
+        } else if !row.parts.is_empty() {
+            self.append(&row).await?;
+            self.durable.insert(row_id.to_owned());
+        }
+        Ok(())
+    }
+
+    /// The commit point every step reaches: the row is durable, the native
+    /// session is checkpointed at the head it is now continuable from, and
+    /// the thread's running cost says what was spent to get here.
+    async fn commit(&mut self, setup: &TurnSetup<'_>, row_id: &str) -> Result<(), AgentError> {
+        self.commit_row(row_id).await?;
+        if let (Execution::External { engine, model, .. }, Some(session), Some(head)) =
+            (setup.execution, &self.native_session, &self.head)
+        {
+            setup
+                .lease
+                .checkpoint(*engine, model.clone(), head.clone(), session.clone())?;
+        }
+        // After the row, so a recorded price never describes work the
+        // transcript does not have.
+        db::record_thread_usage(&self.service.services().db().0, &self.spend)
+            .await
+            .map_err(AgentError::Storage)
+    }
+
+    /// Close the open row, record `text` as the user row `user_id`, and open
+    /// the row that answers it. Where this is called is where the model took
+    /// the steer.
+    async fn steer_into(
+        &mut self,
+        setup: &TurnSetup<'_>,
+        row: &mut String,
+        turn_message_id: &mut String,
+        user_id: String,
+        text: String,
+    ) -> Result<(), AgentError> {
+        self.commit(setup, row).await?;
+        let next_id = uuid::Uuid::new_v4().to_string();
+        self.emit(TurnEvent::Steered {
+            user_id: user_id.clone(),
+            text: text.clone(),
+            next_id: next_id.clone(),
+        });
+        self.append(&AgentChatMessage::user(user_id.clone(), text))
+            .await?;
+        self.durable.insert(user_id.clone());
+        *row = next_id;
+        *turn_message_id = user_id;
+        Ok(())
     }
 
     /// Add one model step to this thread's running cost.
@@ -325,17 +465,30 @@ impl Turn {
     }
 
     /// One assistant row: as many model steps as the model asks for, with tool
-    /// calls run between them. Returns the last step's stop reason and usage.
+    /// calls run between them. Returns the last step's stop reason and usage,
+    /// and the row that step wrote — a steer moves the turn to a new row.
+    ///
+    /// `open_row` continues a row a stopped turn left open; `resuming` says
+    /// the turn continues rather than answers a new prompt.
     async fn assistant_row(
         &mut self,
         setup: &TurnSetup<'_>,
         turn_message_id: &str,
+        open_row: Option<String>,
+        resuming: bool,
     ) -> Result<(StopReason, Usage, String), AgentError> {
-        let assistant_id = uuid::Uuid::new_v4().to_string();
-        self.emit(TurnEvent::MessageStarted {
-            id: assistant_id.clone(),
-            role: Role::Assistant,
-        });
+        let mut assistant_id = match open_row {
+            Some(id) => id,
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                self.emit(TurnEvent::MessageStarted {
+                    id: id.clone(),
+                    role: Role::Assistant,
+                });
+                id
+            }
+        };
+        let mut turn_message_id = turn_message_id.to_owned();
 
         if let Execution::External {
             engine,
@@ -346,10 +499,10 @@ impl Turn {
             let result = self
                 .external_row(
                     setup,
-                    turn_message_id,
-                    *engine,
-                    model.clone(),
-                    effort.clone(),
+                    &mut assistant_id,
+                    &mut turn_message_id,
+                    (*engine, model.clone(), effort.clone()),
+                    resuming,
                 )
                 .await?;
             return Ok((StopReason::EndTurn, result, assistant_id));
@@ -383,6 +536,7 @@ impl Turn {
                 model: setup.execution.model().to_string(),
                 duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             });
+            self.commit(setup, &assistant_id).await?;
 
             if calls.is_empty() {
                 return Ok((stop_reason, usage, assistant_id));
@@ -393,15 +547,32 @@ impl Turn {
             let mut tasks = ToolTasks::default();
             for call in calls {
                 let (service, thread_id, events) = (&service, &thread_id, &events);
+                let turn_message_id = turn_message_id.clone();
                 tasks.push(call.name == "python", async move {
                     let output =
-                        execute_tool(service, thread_id, events, setup, turn_message_id, &call)
+                        execute_tool(service, thread_id, events, setup, &turn_message_id, &call)
                             .await;
                     (call.id, output)
                 });
             }
             while let Some((call_id, output)) = tasks.running.next().await {
                 self.emit(TurnEvent::ToolCallEnded { call_id, output });
+                self.commit(setup, &assistant_id).await?;
+            }
+            drop(tasks);
+
+            // The earliest point a steer can reach an API model: the step's
+            // results are in, and the next request is not yet made.
+            while let Ok(text) = self.steer.try_recv() {
+                let user_id = uuid::Uuid::new_v4().to_string();
+                self.steer_into(
+                    setup,
+                    &mut assistant_id,
+                    &mut turn_message_id,
+                    user_id,
+                    text,
+                )
+                .await?;
             }
         }
     }
@@ -423,8 +594,12 @@ impl Turn {
 
         while let Some(event) = stream.next().await {
             match event? {
-                ModelEvent::TextDelta(text) => self.emit(TurnEvent::TextDelta { text }),
-                ModelEvent::ReasoningDelta(text) => self.emit(TurnEvent::ReasoningDelta { text }),
+                ModelEvent::TextDelta(text) => {
+                    self.emit(TurnEvent::TextDelta { text });
+                }
+                ModelEvent::ReasoningDelta(text) => {
+                    self.emit(TurnEvent::ReasoningDelta { text });
+                }
                 ModelEvent::ToolCallStarted { id, name } => pending.push(PendingCall {
                     id,
                     name,
@@ -487,20 +662,28 @@ impl Turn {
         Ok(id)
     }
 
-    /// Close one assistant row: append it, then say whether the score moved.
+    /// Close one assistant row: record how it ended, commit it, then say
+    /// whether the score moved.
     ///
     /// `save_score` touches the score row exactly when something changed, so a
     /// moved `updated_at` is the one honest signal that the editor should
     /// re-read — and a turn that only talked emits nothing.
     async fn close_row(
         &mut self,
-        _setup: &TurnSetup<'_>,
+        setup: &TurnSetup<'_>,
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
     ) -> Result<(), AgentError> {
-        let row = self.assistant_row_of(assistant_id)?;
-        self.append(&row).await?;
+        let ended = TurnEvent::MessageEnded {
+            id: assistant_id.to_string(),
+            stop_reason,
+            usage,
+        };
+        // Folded before the commit, sent after it: the host hears the row
+        // closed once it is.
+        transcript::apply(&mut self.transcript, &ended);
+        self.commit(setup, assistant_id).await?;
         if let Some((score_id, stamp)) = self.score.clone() {
             let pool = self.service.services().db().0.clone();
             let current = score_stamp(&pool, &score_id).await?;
@@ -509,24 +692,19 @@ impl Turn {
                 self.emit(TurnEvent::DocumentChanged);
             }
         }
-        self.emit(TurnEvent::MessageEnded {
-            id: assistant_id.to_string(),
-            stop_reason,
-            usage,
-        });
+        let _ = self.events.send(ended);
         Ok(())
     }
 
-    /// The row this turn just produced, read back out of the transcript it was
-    /// folded into.
-    fn assistant_row_of(&self, assistant_id: &str) -> Result<AgentChatMessage, AgentError> {
+    /// A row as the transcript it was folded into has it.
+    fn row(&self, id: &str) -> Result<AgentChatMessage, AgentError> {
         self.transcript
             .messages
             .iter()
             .rev()
-            .find(|message| message.id == assistant_id)
+            .find(|message| message.id == id)
             .cloned()
-            .ok_or_else(|| AgentError::Invalid("assistant row vanished mid-turn".into()))
+            .ok_or_else(|| AgentError::Invalid("transcript row vanished mid-turn".into()))
     }
 
     async fn append(&mut self, message: &AgentChatMessage) -> Result<(), AgentError> {
@@ -619,24 +797,28 @@ impl Turn {
         })
     }
 
+    /// One CLI engine run: the native session owns the model loop and calls
+    /// back into Luma's tools. Each request it reports, each tool result and
+    /// each steer it takes is a commit point.
     async fn external_row(
         &mut self,
         setup: &TurnSetup<'_>,
-        turn_message_id: &str,
-        engine: Engine,
-        model: Option<String>,
-        effort: Option<String>,
+        assistant_id: &mut String,
+        turn_message_id: &mut String,
+        (engine, model, effort): (Engine, Option<String>, Option<String>),
+        resuming: bool,
     ) -> Result<Usage, AgentError> {
         let directory = setup.lease.directory().to_path_buf();
-        let prompt = if setup.resume.is_some() {
-            self.transcript
+        let prompt = match (&setup.resume, resuming) {
+            (Some(_), true) => CONTINUE_PROMPT.to_string(),
+            (Some(_), false) => self
+                .transcript
                 .messages
                 .iter()
-                .find(|m| m.id == turn_message_id)
+                .find(|m| m.id == *turn_message_id)
                 .map(|m| serde_json::to_string(&m.parts).expect("serializable transcript"))
-                .unwrap_or_default()
-        } else {
-            continuation(&self.transcript)
+                .unwrap_or_default(),
+            (None, _) => continuation(&self.transcript),
         };
         let mut session = engine::Session::start(engine::Request {
             engine,
@@ -650,6 +832,8 @@ impl Turn {
         })
         .await?;
         let started = std::time::Instant::now();
+        let mut step_started = started;
+        let mut stepped = false;
         let mut usage = Usage::default();
         self.emit(TurnEvent::StepStarted);
         let service = self.service.clone();
@@ -657,9 +841,14 @@ impl Turn {
         let events = self.events.clone();
         let mut pending: ToolTasks<'_, (String, String, Value, ToolResult)> = ToolTasks::default();
         let replier = session.replier();
-        let mut replies = FuturesUnordered::new();
+        let steerer = session.steerer();
+        let mut writes: FuturesUnordered<BoxFuture<'_, Result<(), AgentError>>> =
+            FuturesUnordered::new();
         let mut active = std::collections::BTreeSet::<String>::new();
-        loop {
+        // Steers handed to the engine and not yet taken, by the id they carry.
+        let mut sent = HashMap::<String, String>::new();
+        let mut steering = true;
+        let result = loop {
             let event = {
                 let next = session.next();
                 tokio::pin!(next);
@@ -673,12 +862,31 @@ impl Turn {
                                 ToolResult::Failed { message } => tools::ToolOutcome::Error(message.clone()),
                             };
                             active.remove(&id);
-                            self.emit(TurnEvent::ToolCallEnded { call_id: id, output });
-                            replies.push(replier.reply(reply, model_output));
+                            let applied = self.emit(TurnEvent::ToolCallEnded { call_id: id, output });
+                            let replier = &replier;
+                            writes.push(Box::pin(replier.reply(reply, model_output)));
+                            if let Some(row) = applied.row.map(|row| self.transcript.messages[row].id.clone()) {
+                                if let Err(error) = self.commit(setup, &row).await { break Err(error); }
+                            }
                             continue;
                         }
-                        sent = replies.next(), if !replies.is_empty() => {
-                            if let Err(error) = sent.expect("pending reply") { break Err(error); }
+                        sent_write = writes.next(), if !writes.is_empty() => {
+                            if let Err(error) = sent_write.expect("pending write") { break Err(error); }
+                        }
+                        text = self.steer.recv(), if steering => {
+                            let Some(text) = text else {
+                                steering = false;
+                                continue;
+                            };
+                            let id = uuid::Uuid::new_v4().to_string();
+                            let tools_open = !active.is_empty();
+                            let steerer = &steerer;
+                            let write_id = id.clone();
+                            let write_text = text.clone();
+                            writes.push(Box::pin(async move {
+                                steerer.steer(&write_id, &write_text, tools_open).await
+                            }));
+                            sent.insert(id, text);
                         }
                         event = &mut next => break event,
                     }
@@ -686,47 +894,69 @@ impl Turn {
             };
             let event = match event {
                 Ok(event) => event,
-                Err(error) => {
-                    pending.running.clear();
-                    for call_id in &active {
-                        self.emit(TurnEvent::ToolCallEnded {
-                            call_id: call_id.clone(),
-                            output: ToolResult::Failed {
-                                message: format!(
-                                    "cancelled because native session failed: {error}"
-                                ),
-                            },
-                        });
-                    }
-                    return Err(error);
-                }
+                Err(error) => break Err(error),
             };
             match event {
                 engine::Event::Session { id, model } => {
                     self.native_session = Some(engine::state::NativeSession {
                         id,
-                        usage: Usage::default(),
+                        usage: session.usage_total(),
                     });
                     if let Some(model) = model {
-                        db::set_thread_actor(
+                        if let Err(error) = db::set_thread_actor(
                             &self.service.services().db().0,
                             &self.thread_id,
                             &model,
                             self.principal.as_deref(),
                         )
                         .await
-                        .map_err(AgentError::Storage)?;
+                        {
+                            break Err(AgentError::Storage(error));
+                        }
                         self.actual_model = Some(model);
                     }
                 }
-                engine::Event::Text(text) => self.emit(TurnEvent::TextDelta { text }),
-                engine::Event::FinalAnswer(text) => self.emit(TurnEvent::FinalAnswer { text }),
-                engine::Event::Reasoning(text) => self.emit(TurnEvent::ReasoningDelta { text }),
+                engine::Event::Text(text) => {
+                    self.emit(TurnEvent::TextDelta { text });
+                }
+                engine::Event::FinalAnswer(text) => {
+                    self.emit(TurnEvent::FinalAnswer { text });
+                }
+                engine::Event::Reasoning(text) => {
+                    self.emit(TurnEvent::ReasoningDelta { text });
+                }
                 engine::Event::Usage(step) => {
                     usage.input_tokens += step.input_tokens;
                     usage.output_tokens += step.output_tokens;
                     usage.cache_creation_input_tokens += step.cache_creation_input_tokens;
                     usage.cache_read_input_tokens += step.cache_read_input_tokens;
+                }
+                engine::Event::Step(request) => {
+                    stepped = true;
+                    self.external_step(&session, setup, request, StopReason::ToolUse, step_started);
+                    step_started = std::time::Instant::now();
+                    if let Err(error) = self.commit(setup, assistant_id).await {
+                        break Err(error);
+                    }
+                }
+                engine::Event::Steered(ids) => {
+                    let mut failed = None;
+                    for id in ids {
+                        let Some(text) = sent.remove(&id) else {
+                            continue;
+                        };
+                        if let Err(error) = self
+                            .steer_into(setup, assistant_id, turn_message_id, id, text)
+                            .await
+                        {
+                            failed = Some(error);
+                            break;
+                        }
+                        self.emit(TurnEvent::StepStarted);
+                    }
+                    if let Some(error) = failed {
+                        break Err(error);
+                    }
                 }
                 engine::Event::Tool {
                     id,
@@ -746,45 +976,192 @@ impl Turn {
                     });
                     active.insert(id.clone());
                     let (service, thread_id, events) = (&service, &thread_id, &events);
+                    let turn_message_id = turn_message_id.clone();
                     pending.push(name == "python", async move {
-                        let output =
-                            execute_tool(service, thread_id, events, setup, turn_message_id, &call)
-                                .await;
+                        let output = execute_tool(
+                            service,
+                            thread_id,
+                            events,
+                            setup,
+                            &turn_message_id,
+                            &call,
+                        )
+                        .await;
                         (id, name, reply, output)
                     });
                 }
                 engine::Event::Done => {
-                    while let Some(sent) = replies.next().await {
-                        sent?;
+                    let mut failed = None;
+                    while let Some(sent_write) = writes.next().await {
+                        if let Err(error) = sent_write {
+                            failed = Some(error);
+                            break;
+                        }
+                    }
+                    if let Some(error) = failed {
+                        break Err(error);
                     }
                     if !pending.running.is_empty() {
-                        pending.running.clear();
-                        for call_id in &active {
-                            self.emit(TurnEvent::ToolCallEnded { call_id: call_id.clone(), output: ToolResult::Failed { message: "cancelled because native engine ended before this tool returned".into() } });
-                        }
-                        return Err(AgentError::Invalid("native engine ended with unfinished tool calls; pending work was cancelled".into()));
+                        break Err(AgentError::Invalid("native engine ended with unfinished tool calls; pending work was cancelled".into()));
                     }
-                    if let Some(saved) = &mut self.native_session {
-                        saved.usage = session.usage_total();
-                    }
-                    let model = self
-                        .actual_model
-                        .clone()
-                        .unwrap_or_else(|| setup.execution.model().into());
-                    self.charge(&model, usage, started.elapsed());
-                    let (last_usage, context_window) = session.request_usage();
-                    self.emit(TurnEvent::StepEnded {
-                        context_window,
-                        stop_reason: StopReason::EndTurn,
-                        usage: last_usage.unwrap_or(usage),
-                        model,
-                        duration_ms: started.elapsed().as_millis() as u64,
-                    });
-                    return Ok(usage);
+                    break Ok(());
                 }
             }
+        };
+        if let Err(error) = result {
+            pending.running.clear();
+            for call_id in &active {
+                self.emit(TurnEvent::ToolCallEnded {
+                    call_id: call_id.clone(),
+                    output: ToolResult::Failed {
+                        message: format!("cancelled because native session failed: {error}"),
+                    },
+                });
+            }
+            // What finished before the failure stays: the row is durable as
+            // far as it got, and a resume continues from there.
+            let _ = self.commit(setup, assistant_id).await;
+            return Err(error);
+        }
+        // Steers the engine never took are answered by the next row.
+        self.unsent.extend(sent.into_values());
+        if let Some(saved) = &mut self.native_session {
+            saved.usage = session.usage_total();
+        }
+        let model = self
+            .actual_model
+            .clone()
+            .unwrap_or_else(|| setup.execution.model().into());
+        self.charge(&model, usage, started.elapsed());
+        // An engine that reported no request of its own still ends with one
+        // step on record, as every row did before steps were reported.
+        if !stepped {
+            let (last, _) = session.request_usage();
+            self.external_step(
+                &session,
+                setup,
+                last.unwrap_or(usage),
+                StopReason::EndTurn,
+                started,
+            );
+        }
+        Ok(usage)
+    }
+
+    /// Put one CLI request's usage on the open row. A CLI reports its window
+    /// only at the end of a run, so until then the request borrows the one
+    /// this thread last recorded for the same model.
+    fn external_step(
+        &mut self,
+        session: &engine::Session,
+        setup: &TurnSetup<'_>,
+        request: Usage,
+        stop_reason: StopReason,
+        since: std::time::Instant,
+    ) {
+        let model = self
+            .actual_model
+            .clone()
+            .unwrap_or_else(|| setup.execution.model().into());
+        let (_, reported) = session.request_usage();
+        let context_window = reported.or_else(|| {
+            self.transcript
+                .last_request()
+                .filter(|last| last.model.as_deref() == Some(model.as_str()))
+                .and_then(|last| last.context_window)
+        });
+        if let Some(saved) = &mut self.native_session {
+            saved.usage = session.usage_total();
+        }
+        self.emit(TurnEvent::StepEnded {
+            context_window,
+            stop_reason,
+            usage: request,
+            model,
+            duration_ms: u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX),
+        });
+    }
+}
+
+/// See [`AgentService::record_stop`].
+pub(super) async fn record_stop(
+    service: &AgentService,
+    thread_id: &str,
+) -> Result<Transcript, AgentError> {
+    let pool = service.services().db().0.clone();
+    let principal = service.principal().await?;
+    // The stopped turn lets go of its lease when its future drops, which the
+    // host has asked for but may not have happened yet. Holding the lease
+    // here is what makes this the last writer of the turn's rows.
+    let mut tries = 0;
+    let _lease = loop {
+        match engine::state::RunLease::acquire(
+            service.services().storage().path(),
+            thread_id,
+            principal.as_deref(),
+        ) {
+            Ok(lease) => break lease,
+            Err(AgentError::Invalid(_)) if tries < 250 => {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    let detail = db::get_thread(&pool, thread_id, principal.as_deref())
+        .await
+        .map_err(AgentError::Storage)?;
+    let mut transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
+    if !transcript.unfinished() {
+        return Ok(transcript);
+    }
+    transcript.interrupt_open_calls();
+    let head = transcript.head_message_id();
+    match transcript.messages.last_mut() {
+        Some(last) if last.role == Role::Assistant => {
+            transcript::end_row(last, StopReason::Aborted);
+            db::update_message_parts(
+                &pool,
+                thread_id,
+                &last.id,
+                &last.parts_json(),
+                principal.as_deref(),
+            )
+            .await
+            .map_err(AgentError::Storage)?;
+        }
+        _ => {
+            // Stopped before the model wrote anything: the prompt gets an
+            // empty answer that says so.
+            let mut row = AgentChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                role: Role::Assistant,
+                parts: Vec::new(),
+            };
+            transcript::end_row(&mut row, StopReason::Aborted);
+            let outcome = db::append_messages_at_head(
+                &pool,
+                thread_id,
+                AppendAgentThreadMessagesInput {
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                    expected_head_message_id: head,
+                    messages: vec![NewAgentThreadMessage {
+                        id: Some(row.id.clone()),
+                        role: row.role.as_str().to_string(),
+                        parts: row.parts_json(),
+                    }],
+                },
+                principal.as_deref(),
+            )
+            .await
+            .map_err(AgentError::Storage)?;
+            if let AgentThreadAppendOutcome::HeadMoved { .. } = outcome {
+                return Err(AgentError::HeadMoved);
+            }
+            transcript.messages.push(row);
         }
     }
+    Ok(transcript)
 }
 
 /// Futures remain owned by their turn: dropping it cancels running and queued

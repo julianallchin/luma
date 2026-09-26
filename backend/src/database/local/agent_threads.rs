@@ -706,6 +706,47 @@ pub async fn append_messages_at_head(
     })
 }
 
+/// Rewrite what one of this thread's rows says, in place. A running turn
+/// appends its assistant row at the first step that has something to keep and
+/// then grows it here at every step and tool result, so a quit mid-turn loses
+/// at most the step in flight. The row keeps its place in the chain.
+pub async fn update_message_parts(
+    pool: &SqlitePool,
+    thread_id: &str,
+    message_id: &str,
+    parts: &serde_json::Value,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let parts_json = serde_json::to_string(parts)
+        .map_err(|e| format!("Failed to serialize message parts: {e}"))?;
+    let mut tx = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|e| format!("Failed to begin agent message update: {e}"))?;
+    ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
+    let updated = sqlx::query(
+        "UPDATE agent_thread_messages SET parts_json = ?
+         WHERE id = ? AND created_in_thread_id = ? AND uid IS ?",
+    )
+    .bind(&parts_json)
+    .bind(message_id)
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to update agent message {message_id}: {e}"))?
+    .rows_affected();
+    if updated != 1 {
+        return Err(format!(
+            "Agent message {message_id} is not a row of thread {thread_id}"
+        ));
+    }
+    touch(&mut tx, thread_id, owner_user_id).await?;
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit agent message update: {e}"))
+}
+
 /// The one wording for a lost head CAS, shared by every caller that reports
 /// one.
 pub(crate) fn transcript_head_moved_error(expected: Option<&str>, current: Option<&str>) -> String {
@@ -1141,6 +1182,32 @@ async fn touch(
         return Err(thread_not_found(thread_id));
     }
     Ok(())
+}
+
+#[cfg(test)]
+/// Write `updated_at` the way a sync pull does — with the stamping trigger
+/// off — so a test can say "this row is the newest" without a clock. Needs a
+/// signed-in admission: the table refuses remote writes for a guest.
+pub(crate) async fn stamp_updated_at(pool: &SqlitePool, thread_id: &str, at: &str) {
+    let mut tx = pool.begin().await.unwrap();
+    let admission = "UPDATE auth_write_admission SET remote_writes = ? WHERE singleton = 1";
+    sqlx::query(admission)
+        .bind(1)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_threads SET updated_at = ? WHERE id = ?")
+        .bind(at)
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(admission)
+        .bind(0)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 }
 
 #[cfg(test)]
@@ -1609,6 +1676,79 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    const OWNER: Option<&str> = Some("alice");
+
+    /// A subagent's thread is its parent's, not a chat of its own: listings
+    /// and search skip it even when it is the newest row, while a direct read
+    /// by id and the parent's delete still reach it.
+    #[tokio::test]
+    async fn listings_and_search_skip_subagent_threads() {
+        let (_dir, pool) = test_pool().await;
+        // A signed-in principal: a sync pull only ever writes as one.
+        admit(&pool, Some("alice")).await;
+        let parent = create_thread(&pool, track_thread("track-1"), OWNER)
+            .await
+            .unwrap();
+        let child = create_thread(
+            &pool,
+            CreateAgentThreadInput {
+                parent_thread_id: Some(parent.id.clone()),
+                parent_call_id: Some("call_1".into()),
+                ..track_thread("track-1")
+            },
+            OWNER,
+        )
+        .await
+        .unwrap();
+        for (thread, text) in [(&parent, "parent line"), (&child, "child line")] {
+            append_test_messages(
+                &pool,
+                &thread.id,
+                vec![msg("user", json!([{"type": "text", "text": text}]))],
+                OWNER,
+            )
+            .await
+            .unwrap();
+        }
+        stamp_updated_at(&pool, &child.id, "2999-01-01T00:00:00Z").await;
+
+        let listed: Vec<String> = list_threads(
+            &pool,
+            Some("track_copilot"),
+            Some("track"),
+            Some("track-1"),
+            OWNER,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|thread| thread.id)
+        .collect();
+        assert_eq!(listed, vec![parent.id.clone()]);
+        let unfiltered = list_threads(&pool, None, None, None, OWNER).await.unwrap();
+        assert!(unfiltered.iter().all(|thread| thread.id != child.id));
+
+        let history = list_history_messages(&pool, OWNER).await.unwrap();
+        assert!(!history.is_empty());
+        assert!(
+            history.iter().all(|row| row.thread_id == parent.id),
+            "a subagent's lines must not be search hits of their own"
+        );
+
+        let opened = get_thread(&pool, &child.id, OWNER).await.unwrap();
+        assert_eq!(
+            opened.thread.parent_thread_id.as_deref(),
+            Some(parent.id.as_str())
+        );
+        assert_eq!(opened.messages.len(), 1);
+
+        assert_eq!(
+            delete_thread(&pool, &parent.id, OWNER).await.unwrap(),
+            vec![child.id.clone()]
+        );
+        assert!(get_thread(&pool, &child.id, OWNER).await.is_err());
     }
 
     #[tokio::test]

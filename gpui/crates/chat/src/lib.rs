@@ -219,14 +219,40 @@ impl Agent {
     /// could not redirect would force the composer to lock while one ran.
     #[must_use]
     pub fn turn(&self, thread_id: &str, prompt: String, context: Option<ThreadScope>) -> Turn {
-        let (events, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut stream = self.service.turn(
+        self.drive(self.service.turn(
             thread_id,
             UserPrompt {
                 text: prompt,
                 context: Some(luma_lib::agent::TurnContext { scope: context }),
             },
-        );
+        ))
+    }
+
+    /// Continue the thread's unfinished turn. Only on the reader's request —
+    /// see [`luma_lib::agent::AgentService::resume`].
+    #[must_use]
+    pub fn resume(&self, thread_id: &str) -> Turn {
+        self.drive(self.service.resume(thread_id))
+    }
+
+    /// Record a stop the reader asked for, once the stopped turn has let go,
+    /// and answer the thread as it now stands.
+    pub fn record_stop(
+        &self,
+        thread_id: String,
+    ) -> impl std::future::Future<Output = Result<Transcript, String>> + use<> {
+        let agent = self.service.clone();
+        let task = self.runtime.spawn(async move {
+            agent
+                .record_stop(&thread_id)
+                .await
+                .map_err(|e| e.to_string())
+        });
+        async move { task.await.map_err(|e| e.to_string())? }
+    }
+
+    fn drive(&self, mut stream: luma_lib::agent::TurnStream) -> Turn {
+        let (events, rx) = tokio::sync::mpsc::unbounded_channel();
         let steer = stream.steering();
         // Drop the stream — which cancels the turn and releases its run lease —
         // as soon as the panel lets go, not at the next event: a long tool
@@ -411,6 +437,10 @@ pub struct AgentChat {
     trailer_row: Option<usize>,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
+    /// A stop the reader asked for is being written. Until it lands, the
+    /// stopped turn reads as unfinished, and the panel must not offer to
+    /// resume what the reader just stopped.
+    stopping: bool,
     /// Tool calls the reader has opened, by call id. Details start closed.
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
@@ -473,6 +503,7 @@ impl AgentChat {
             read_only: false,
             running,
             _running: subscription,
+            stopping: false,
             turn: None,
             trailer_row: None,
             error: None,
@@ -498,11 +529,15 @@ impl AgentChat {
     /// subagent's thread is a real `agent_threads` row is that reading it
     /// needs no code of its own.
     ///
-    /// A reader never sends, so it gets a registry of its own that stays empty.
-    /// A child's turn is its parent's delegation, not a turn in the app's
-    /// [`RunningTurns`], so there is nothing there for it to attach to.
-    pub fn reader(agent: Agent, thread_id: &str, cx: &mut Context<Self>) -> Self {
-        let running = cx.new(|_| RunningTurns::default());
+    /// A reader never sends, but it reads the app's [`RunningTurns`]: a
+    /// running child's turn is folded there from its parent's, so the reader
+    /// attaches to it the way the main panel attaches to its own turn.
+    pub fn reader(
+        agent: Agent,
+        running: Entity<RunningTurns>,
+        thread_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut chat = Self::new(agent, running, None, cx);
         chat.read_only = true;
         chat.open_thread(thread_id, cx);
@@ -1113,7 +1148,14 @@ impl AgentChat {
                             self.turn = Some(since);
                             self.settle_trailer();
                         }
-                        None => self.seat(transcript, cx),
+                        None => {
+                            // A turn a quit cut short: a call that never
+                            // returned shows as interrupted, as a resume
+                            // will record it.
+                            let mut transcript = transcript;
+                            transcript.interrupt_open_calls();
+                            self.seat(transcript, cx);
+                        }
                     }
                     if !self.read_only {
                         self.selection_saving = true;
@@ -1263,13 +1305,74 @@ impl AgentChat {
     }
 
     /// Stop the shown thread's turn. Turns of other threads keep running.
+    ///
+    /// The stop is written to the thread, so the chat does not offer to
+    /// resume a turn the reader ended on purpose — that offer is for turns a
+    /// quit or a failure cut short.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
             let thread = thread.to_owned();
             self.running
                 .update(cx, |running, cx| running.cancel(&thread, cx));
+            self.stopping = true;
+            let pending = self.agent.record_stop(thread.clone());
+            cx.spawn(async move |this, cx| {
+                let recorded = pending.await;
+                this.update(cx, |this, cx| {
+                    this.stopping = false;
+                    match recorded {
+                        // Seated only over the same thread, at rest: a
+                        // reader who moved on or sent again has newer rows.
+                        Ok(transcript)
+                            if this.thread() == Some(thread.as_str()) && !this.is_streaming() =>
+                        {
+                            this.seat(transcript, cx);
+                        }
+                        Ok(_) => {}
+                        Err(error) => this.error = Some(error),
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
         self.settle(cx);
+    }
+
+    /// Whether to offer [`Self::resume`]: the shown thread's last turn
+    /// stopped part way — a quit or a failure, not the reader's stop — and
+    /// nothing is running in it.
+    fn resumable(&self) -> bool {
+        !self.read_only
+            && !self.is_streaming()
+            && !self.stopping
+            && self.is_open()
+            && self.transcript.unfinished()
+    }
+
+    /// Continue the shown thread's unfinished turn from what it saved.
+    pub fn resume(&mut self, cx: &mut Context<Self>) {
+        if !self.resumable() {
+            return;
+        }
+        let Some(thread) = self.thread().map(str::to_owned) else {
+            return;
+        };
+        let agent = self.agent.clone();
+        let transcript = self.transcript.clone();
+        let started = self.running.update(cx, |running, cx| {
+            running.start(&thread, transcript, || agent.resume(&thread), cx)
+        });
+        match started {
+            Ok(since) => {
+                self.error = None;
+                self.turn = Some(since);
+                self.settle_trailer();
+            }
+            Err(error) => self.error = Some(error),
+        }
+        cx.notify();
     }
 
     /// Detach from an ended turn.
@@ -1316,10 +1419,10 @@ impl AgentChat {
     /// Send what is in the composer — starting a turn, or steering the one
     /// already running.
     ///
-    /// Steering rather than queueing is the runtime's own shape: a redirect is
-    /// applied at the next assistant-row boundary, which is where the turn
-    /// keeps its durability invariant anyway. Queueing here would be a second
-    /// place that decides when a prompt takes effect.
+    /// Steering rather than queueing is the runtime's own shape: a redirect
+    /// reaches the model at the engine's next step, and the turn places it in
+    /// the transcript there ([`TurnEvent::Steered`]). Queueing here would be a
+    /// second place that decides when a prompt takes effect.
     pub fn send(&mut self, cx: &mut Context<Self>) {
         if self.selection_saving {
             return;
@@ -1446,19 +1549,58 @@ impl AgentChat {
             RunningEvent::Event { thread, event } if self.thread() == Some(thread) => {
                 self.on_event(event, cx);
             }
-            RunningEvent::Ended { thread } if self.thread() == Some(thread) => self.settle(cx),
+            RunningEvent::Ended { thread } if self.thread() == Some(thread) => {
+                self.settle(cx);
+                // A reader follows a turn it did not start, so it may have
+                // attached late or to a delegation its parent dropped. The
+                // rows are the thread's record; end on them.
+                if self.read_only {
+                    self.reload(cx);
+                }
+            }
             _ => {}
         }
     }
 
+    /// Seat the shown thread's persisted rows in place of the live transcript,
+    /// without the blank a fresh read shows first. Skipped when the rows say
+    /// what is already shown, and when a turn attached meanwhile.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let Some(thread) = self.thread().map(str::to_owned) else {
+            return;
+        };
+        let pending = self.agent.open_thread(thread.clone());
+        cx.spawn(async move |this, cx| {
+            let Ok(detail) = pending.await else {
+                return;
+            };
+            let Ok(transcript) = Transcript::from_rows(&detail.messages) else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if this.thread() != Some(thread.as_str())
+                    || this.turn.is_some()
+                    || this.transcript == transcript
+                {
+                    return;
+                }
+                this.seat(transcript, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Fold one event, reparse what it touched, and tell the list what moved.
     fn on_event(&mut self, event: &TurnEvent, cx: &mut Context<Self>) {
-        if let TurnEvent::MessageStarted {
-            id,
-            role: luma_lib::agent::Role::User,
-        } = event
-        {
-            self.send_motion.accept(id);
+        match event {
+            TurnEvent::MessageStarted {
+                id,
+                role: luma_lib::agent::Role::User,
+            }
+            | TurnEvent::Steered { user_id: id, .. } => self.send_motion.accept(id),
+            _ => {}
         }
         let applied = luma_lib::agent::apply(&mut self.transcript, event);
         // `apply` is the only thing that appends messages, so growing beside it
@@ -1557,6 +1699,7 @@ impl AgentChat {
             )
         });
         let error = self.error.clone();
+        let resumable = self.resumable();
         let this = cx.entity();
         let gauge = self
             .transcript
@@ -1870,6 +2013,7 @@ impl AgentChat {
                                     window,
                                     cx,
                                 ))
+                                .children(resume_strip(resumable, &this, &theme))
                                 .children(error_strip(error.as_deref(), &theme))
                                 // The subagent pill clears the full composer.
                                 .children(subagents::pill(&self.subagents, &this, &theme)),
@@ -2239,6 +2383,38 @@ fn suggestion(
 /// The error line under the composer, or nothing. Only a failure earns the
 /// space: the send hint went with the language label, and the context gauge
 /// lives in the composer's cluster.
+/// The offer to continue a turn that stopped part way. Never automatic: a
+/// resume spends money, so it waits for the reader.
+fn resume_strip(show: bool, chat: &Entity<AgentChat>, theme: &Theme) -> Option<AnyElement> {
+    if !show {
+        return None;
+    }
+    let chat = chat.clone();
+    Some(
+        div()
+            .h(px(theme::STATUS_STRIP_HEIGHT))
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(theme::SPACE_MD))
+            .w_full()
+            .px(px(theme::SPACE_LG))
+            .mb(px(theme::SPACE_XS))
+            .text_size(px(11.0))
+            .text_color(theme.text_muted)
+            .child("The last turn stopped before it finished.")
+            .child(
+                luma_ui::button("Resume", luma_ui::Enabled::Yes)
+                    .id("resume-turn")
+                    .on_click(move |_, _, cx| chat.update(cx, |this, cx| this.resume(cx)))
+                    .agent_node(NodeRole::Button, "Resume"),
+            )
+            .into_any_element(),
+    )
+}
+
 fn error_strip(error: Option<&str>, theme: &Theme) -> Option<AnyElement> {
     let error = error?;
     Some(

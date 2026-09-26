@@ -372,6 +372,84 @@ async fn a_subagent_runs_on_its_own_thread_and_merges_into_the_parent() {
             .contains("subagentSnapshot"),
         "live snapshots must not be persisted"
     );
+
+    // The child's turn reached the host as it happened, tagged with its
+    // thread, and folds into the same transcript its rows hold.
+    let mut live = Transcript::default();
+    for event in &events {
+        if let TurnEvent::Child { thread_id, event } = event {
+            assert_eq!(thread_id, &child_id);
+            super::transcript::apply(&mut live, event);
+        }
+    }
+    assert_eq!(
+        live.messages
+            .iter()
+            .map(|message| (message.role, message.text()))
+            .collect::<Vec<_>>(),
+        child_transcript
+            .messages
+            .iter()
+            .map(|message| (message.role, message.text()))
+            .collect::<Vec<_>>(),
+        "the live child turn and its persisted rows disagree"
+    );
+}
+
+/// "The last used chat" is the newest *conversation*. A subagent's thread
+/// writes after its parent, but it is the parent's, so the parent is what
+/// reopens.
+#[tokio::test]
+async fn the_last_used_chat_is_never_a_subagent_thread() {
+    let fixture = fixture().await;
+    let pool = fixture.pool();
+    let parent = crate::database::local::agent_threads::get_thread_row(
+        pool,
+        &fixture.thread_id,
+        Some(OWNER),
+    )
+    .await
+    .expect("parent");
+    let child = crate::database::local::agent_threads::create_thread(
+        pool,
+        crate::models::agent_threads::CreateAgentThreadInput {
+            parent_thread_id: Some(parent.id.clone()),
+            parent_call_id: Some("call_1".into()),
+            agent_kind: parent.agent_kind.clone(),
+            subject_kind: parent.subject_kind.clone(),
+            subject_id: parent.subject_id.clone(),
+            venue_id: parent.venue_id.clone(),
+            score_id: parent.score_id.clone(),
+            ..Default::default()
+        },
+        Some(OWNER),
+    )
+    .await
+    .expect("child");
+    crate::database::local::agent_threads::stamp_updated_at(
+        pool,
+        &child.id,
+        "2999-01-01T00:00:00Z",
+    )
+    .await;
+
+    let scope = ThreadScope::track("track-1", "venue-1", "score-1");
+    let agent = AgentService::new(fixture.services.clone());
+    assert_eq!(
+        agent
+            .resolve_thread(&scope)
+            .await
+            .expect("resolve")
+            .thread
+            .id,
+        parent.id
+    );
+    assert!(agent
+        .list_threads(&scope)
+        .await
+        .expect("list")
+        .iter()
+        .all(|thread| thread.id != child.id));
 }
 
 /// Nesting works one level and stops there, and the nested child publishes into
@@ -682,21 +760,20 @@ async fn a_turn_with_one_tool_call_persists_its_assistant_row() {
     // and the insert above proves the trigger let the row through.
 }
 
+/// A steer sent while the first step runs reaches the model at the next step,
+/// right after that step's tool results — not after the model has finished —
+/// and the rows on disk say so in the same order.
 #[tokio::test]
-async fn steering_mid_turn_persists_every_assistant_row() {
+async fn steering_mid_turn_lands_between_tool_steps() {
     let fixture = fixture().await;
-    let mut steps = tool_then_reply();
-    steps.push(vec![
-        ModelEvent::TextDelta("and darker".into()),
-        ModelEvent::StepEnded {
-            stop_reason: StopReason::EndTurn,
-            usage: Usage::default(),
-        },
-    ]);
-    let service = agent(&fixture, steps);
+    let scripted = Arc::new(ScriptedModel::new(tool_then_reply()));
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::clone(&scripted) as Arc<dyn super::model::ModelClient>)
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
 
     let mut stream = service.turn(&fixture.thread_id, "make it dark".to_string().into());
-    // Steer before the first row closes; it is applied at the row boundary.
+    // Queued before the first step; the turn takes it once that step's tool
+    // results are in.
     stream.steer("darker");
     let events = drain(&mut stream).await;
     assert_eq!(
@@ -706,6 +783,37 @@ async fn steering_mid_turn_persists_every_assistant_row() {
         }),
         "steered turn did not complete: {events:#?}"
     );
+    let steered = events
+        .iter()
+        .position(|event| matches!(event, TurnEvent::Steered { text, .. } if text == "darker"))
+        .unwrap_or_else(|| panic!("no steer was placed: {events:#?}"));
+    let tool_ended = events
+        .iter()
+        .position(|event| matches!(event, TurnEvent::ToolCallEnded { .. }))
+        .expect("the tool ran");
+    let reply = events
+        .iter()
+        .position(|event| matches!(event, TurnEvent::TextDelta { text } if text == "all "))
+        .expect("the model replied");
+    assert!(
+        tool_ended < steered && steered < reply,
+        "the steer must sit between the tool result and the next step: {events:#?}"
+    );
+
+    // Two steps, one turn: the model saw the steer in its second request,
+    // after the tool result, in the same user message.
+    let requests = scripted.requests();
+    assert_eq!(requests.len(), 2, "the steer must not cost a third step");
+    let last = requests[1].messages.last().expect("messages");
+    assert_eq!(last.role, super::model::ModelRole::User);
+    assert!(matches!(
+        last.content.first(),
+        Some(super::model::ContentBlock::ToolResult { .. })
+    ));
+    assert!(matches!(
+        last.content.last(),
+        Some(super::model::ContentBlock::Text(text)) if text == "darker"
+    ));
 
     let rows = crate::database::local::agent_threads::list_messages(
         fixture.pool(),
@@ -715,14 +823,21 @@ async fn steering_mid_turn_persists_every_assistant_row() {
     .await
     .expect("messages");
     let transcript = Transcript::from_rows(&rows).expect("transcript");
-    let assistants: Vec<_> = transcript
+    let shape: Vec<_> = transcript
         .messages
         .iter()
-        .filter(|message| message.role == Role::Assistant)
-        .map(|message| message.id.clone())
+        .map(|message| (message.role, message.text()))
         .collect();
-    assert_eq!(assistants.len(), 2, "steering must open a second row");
-    // Every assistant row is prepared, not only the first one of a prompt.
+    assert_eq!(
+        shape,
+        vec![
+            (Role::User, "make it dark".to_string()),
+            (Role::Assistant, String::new()),
+            (Role::User, "darker".to_string()),
+            (Role::Assistant, "all done".to_string()),
+        ]
+    );
+    assert!(!transcript.unfinished());
 }
 
 #[tokio::test]
@@ -1414,4 +1529,365 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
         head_before,
         "cancelled children never published live changes"
     );
+}
+
+/// The thread's rows as the database has them.
+async fn rows_on_disk(fixture: &Fixture) -> Transcript {
+    let rows = crate::database::local::agent_threads::list_messages(
+        fixture.pool(),
+        &fixture.thread_id,
+        Some(OWNER),
+    )
+    .await
+    .expect("messages");
+    Transcript::from_rows(&rows).expect("transcript")
+}
+
+/// Run a turn until the step after the first tool result starts, then drop
+/// it — what a quit does. Nothing after the drop can write.
+async fn quit_after_the_tool_result(fixture: &Fixture) {
+    let service = agent(fixture, tool_then_reply());
+    let mut stream = service.turn(&fixture.thread_id, "make it dark".to_string().into());
+    let mut ended = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            TurnEvent::ToolCallEnded { .. } => ended = true,
+            // The next step begins only after the result was committed.
+            TurnEvent::StepStarted if ended => break,
+            TurnEvent::TurnEnded { outcome } => panic!("the turn ended first: {outcome:?}"),
+            _ => {}
+        }
+    }
+    drop(stream);
+}
+
+#[tokio::test]
+async fn a_quit_after_a_tool_result_keeps_the_step_and_its_result() {
+    let fixture = fixture().await;
+    quit_after_the_tool_result(&fixture).await;
+
+    let transcript = rows_on_disk(&fixture).await;
+    assert_eq!(transcript.messages.len(), 2, "{transcript:#?}");
+    let assistant = &transcript.messages[1];
+    assert_eq!(assistant.role, Role::Assistant);
+    let tool = assistant
+        .parts
+        .iter()
+        .find_map(|part| match part {
+            AgentChatPart::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the tool call was lost: {assistant:#?}"));
+    assert_eq!(tool.state, ToolState::OutputAvailable);
+    assert_eq!(tool.output, Some(json!({ "echoed": { "value": "hi" } })));
+    assert!(
+        transcript.unfinished(),
+        "a turn cut off after a tool step must read as unfinished"
+    );
+}
+
+#[tokio::test]
+async fn resume_continues_the_open_row_from_the_saved_rows() {
+    let fixture = fixture().await;
+    quit_after_the_tool_result(&fixture).await;
+    let open_row = rows_on_disk(&fixture).await.messages[1].id.clone();
+
+    let scripted = Arc::new(ScriptedModel::new(vec![reply_step("resumed")]));
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::clone(&scripted) as Arc<dyn super::model::ModelClient>)
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
+    let events = drain(&mut service.resume(&fixture.thread_id)).await;
+    assert_eq!(
+        events.last(),
+        Some(&TurnEvent::TurnEnded {
+            outcome: TurnOutcome::Completed
+        }),
+        "{events:#?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TurnEvent::MessageStarted { .. })),
+        "a resume writes into the open row, and asks nothing new: {events:#?}"
+    );
+
+    // The model was asked with exactly what was saved: the prompt, the call,
+    // and its result.
+    let request = &scripted.requests()[0];
+    let last = request.messages.last().expect("messages");
+    assert!(matches!(
+        last.content.as_slice(),
+        [super::model::ContentBlock::ToolResult {
+            is_error: false,
+            ..
+        }]
+    ));
+
+    let transcript = rows_on_disk(&fixture).await;
+    assert_eq!(transcript.messages.len(), 2, "{transcript:#?}");
+    assert_eq!(transcript.messages[1].id, open_row);
+    assert_eq!(transcript.messages[1].text(), "resumed");
+    assert!(!transcript.unfinished());
+}
+
+/// A tool that never returns, as one cut off by a quit.
+struct HangTool;
+
+#[async_trait]
+impl Tool for HangTool {
+    fn name(&self) -> &'static str {
+        "hang"
+    }
+
+    fn description(&self) -> std::borrow::Cow<'static, str> {
+        "Never return.".into()
+    }
+
+    fn schema(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
+
+    async fn call(&self, _ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
+        std::future::pending().await
+    }
+}
+
+/// Run a turn whose tool never returns, until its step is on disk, then drop
+/// it.
+async fn quit_during_a_tool(fixture: &Fixture) {
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::new(ScriptedModel::new(vec![call_step(
+            "call_1", "hang", "{}",
+        )])))
+        .with_tools(ToolRegistry::new(vec![Arc::new(HangTool)]));
+    let mut stream = service.turn(&fixture.thread_id, "go".to_string().into());
+    let drive = async { while stream.next().await.is_some() {} };
+    let saved = async {
+        loop {
+            if rows_on_disk(fixture).await.messages.len() == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        () = drive => panic!("the turn ended although its tool never returns"),
+        () = saved => {}
+    }
+    drop(stream);
+}
+
+#[tokio::test]
+async fn resume_answers_a_call_cut_off_by_a_quit_as_interrupted() {
+    let fixture = fixture().await;
+    quit_during_a_tool(&fixture).await;
+    assert!(rows_on_disk(&fixture).await.unfinished());
+
+    let scripted = Arc::new(ScriptedModel::new(vec![reply_step("picking up")]));
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::clone(&scripted) as Arc<dyn super::model::ModelClient>)
+        .with_tools(ToolRegistry::new(vec![Arc::new(HangTool)]));
+    let events = drain(&mut service.resume(&fixture.thread_id)).await;
+    assert_eq!(
+        events.last(),
+        Some(&TurnEvent::TurnEnded {
+            outcome: TurnOutcome::Completed
+        }),
+        "{events:#?}"
+    );
+    let request = &scripted.requests()[0];
+    assert!(
+        matches!(
+            request
+                .messages
+                .last()
+                .map(|message| message.content.as_slice()),
+            Some([super::model::ContentBlock::ToolResult { is_error: true, .. }])
+        ),
+        "the provider must see the cut-off call answered: {:#?}",
+        request.messages
+    );
+    let transcript = rows_on_disk(&fixture).await;
+    let AgentChatPart::Tool(tool) = transcript.messages[1]
+        .parts
+        .iter()
+        .find(|part| matches!(part, AgentChatPart::Tool(_)))
+        .expect("tool part")
+    else {
+        unreachable!()
+    };
+    assert_eq!(tool.error_text.as_deref(), Some(transcript::INTERRUPTED));
+    assert!(!transcript.unfinished());
+}
+
+#[tokio::test]
+async fn a_recorded_stop_is_not_offered_for_resume() {
+    let fixture = fixture().await;
+    quit_during_a_tool(&fixture).await;
+    let service = agent(&fixture, Vec::new());
+
+    let transcript = service
+        .record_stop(&fixture.thread_id)
+        .await
+        .expect("stop recorded");
+    assert!(!transcript.unfinished(), "{transcript:#?}");
+    assert_eq!(rows_on_disk(&fixture).await, transcript);
+    let events = drain(&mut service.resume(&fixture.thread_id)).await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(TurnEvent::TurnEnded {
+                outcome: TurnOutcome::Failed { .. }
+            })
+        ),
+        "a stopped turn has nothing to resume: {events:#?}"
+    );
+}
+
+/// The context gauge reads [`Transcript::last_request`] off the live fold.
+/// It must move with each step of a turn, not only when the turn ends.
+#[tokio::test]
+async fn the_context_gauge_moves_at_every_step() {
+    let fixture = fixture().await;
+    let step = |mut events: Vec<ModelEvent>, prompt: u64| {
+        if let Some(ModelEvent::StepEnded { usage, .. }) = events.last_mut() {
+            usage.cache_read_input_tokens = prompt;
+        }
+        events
+    };
+    let service = agent(
+        &fixture,
+        vec![
+            step(call_step("call_1", "echo", r#"{"value":"hi"}"#), 20_000),
+            step(reply_step("done"), 30_000),
+        ],
+    );
+    let mut stream = service.turn(&fixture.thread_id, "go".to_string().into());
+    let mut live = Transcript::default();
+    let mut readings = Vec::new();
+    while let Some(event) = stream.next().await {
+        transcript::apply(&mut live, &event);
+        let ended = matches!(event, TurnEvent::StepEnded { .. });
+        if ended {
+            readings.push(live.last_request().expect("a step").prompt_tokens());
+        }
+    }
+    assert_eq!(readings.len(), 2, "one reading per step");
+    assert!(
+        readings[0] < readings[1],
+        "the gauge did not move between steps: {readings:?}"
+    );
+}
+
+/// A stand-in `claude` for a whole turn: it calls `echo`, takes the steer the
+/// test sends while the call runs, reports the request's usage, replays the
+/// steer where it took it, and answers.
+const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
+import json,sys
+if 'auth' in sys.argv:
+    print(json.dumps({'loggedIn':True,'authMethod':'claude.ai'})); sys.exit(0)
+read=lambda: json.loads(sys.stdin.readline())
+def send(x): print(json.dumps(x),flush=True)
+assert read()['request']['subtype']=='initialize'
+send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{}}})
+assert read()['type']=='user'
+send({'type':'system','subtype':'init','session_id':'native','model':'claude-sonnet-5'})
+send({'type':'control_request','request_id':'call','request':{'subtype':'mcp_message','server_name':'luma','message':{'id':1,'method':'tools/call','params':{'name':'echo','arguments':{'value':'hi'}}}}})
+steer=None
+reply=None
+while steer is None or reply is None:
+    line=read()
+    if line['type']=='user': steer=line
+    else: reply=line
+send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_start','message':{'usage':{'input_tokens':10,'cache_read_input_tokens':9000}}}})
+send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_delta','usage':{'output_tokens':20}}})
+send({'type':'user','uuid':steer['uuid'],'isReplay':True,'parent_tool_use_id':None,'message':steer['message']})
+send({'type':'stream_event','parent_tool_use_id':None,'event':{'delta':{'type':'text_delta','text':'darker it is'}}})
+send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_start','message':{'usage':{'input_tokens':10,'cache_read_input_tokens':9500}}}})
+send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_delta','usage':{'output_tokens':5}}})
+send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_tokens':20,'output_tokens':25},'modelUsage':{'claude-sonnet-5':{'contextWindow':200000}}})
+sys.stdin.readline()
+"#;
+
+#[tokio::test]
+async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() {
+    let fixture = fixture().await;
+    let fake = fixture._dir.path().join("claude");
+    std::fs::write(&fake, FAKE_CLAUDE).expect("fake claude");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    std::env::set_var("LUMA_CLAUDE_EXECUTABLE", &fake);
+    sqlx::query("UPDATE agent_threads SET engine = 'claude', model = NULL WHERE id = ?")
+        .bind(&fixture.thread_id)
+        .execute(fixture.pool())
+        .await
+        .expect("claude thread");
+
+    let service = AgentService::new(fixture.services.clone())
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
+    let mut stream = service.turn(&fixture.thread_id, "make it dark".to_string().into());
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        if matches!(event, TurnEvent::ToolCallStarted { .. }) {
+            stream.steer("darker");
+        }
+        events.push(event);
+    }
+    std::env::remove_var("LUMA_CLAUDE_EXECUTABLE");
+    assert_eq!(
+        events.last(),
+        Some(&TurnEvent::TurnEnded {
+            outcome: TurnOutcome::Completed
+        }),
+        "{events:#?}"
+    );
+
+    let transcript = rows_on_disk(&fixture).await;
+    let shape: Vec<_> = transcript
+        .messages
+        .iter()
+        .map(|message| (message.role, message.text()))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (Role::User, "make it dark".to_string()),
+            (Role::Assistant, String::new()),
+            (Role::User, "darker".to_string()),
+            (Role::Assistant, "darker it is".to_string()),
+        ],
+        "the steer sits after the call it followed: {transcript:#?}"
+    );
+    assert!(matches!(
+        &transcript.messages[1].parts[..],
+        [
+            AgentChatPart::StepStart,
+            AgentChatPart::Tool(_),
+            AgentChatPart::ProviderMessage { .. }
+        ]
+    ));
+    // One step per request, each with its own prompt: what the gauge reads.
+    let prompts: Vec<_> = transcript.requests().map(|r| r.prompt_tokens()).collect();
+    assert_eq!(prompts, vec![9010, 9510]);
+    assert!(!transcript.unfinished(), "{transcript:#?}");
+
+    // The native session is continuable from the head the turn left.
+    let lease = super::engine::state::RunLease::acquire(
+        fixture.services.storage().path(),
+        &fixture.thread_id,
+        Some(OWNER),
+    )
+    .expect("lease");
+    let resumed = lease
+        .resume(
+            super::engine::Engine::Claude,
+            &None,
+            transcript.head_message_id().as_deref(),
+        )
+        .expect("checkpoint read")
+        .expect("checkpoint at the head");
+    assert_eq!(resumed.id, "native");
 }

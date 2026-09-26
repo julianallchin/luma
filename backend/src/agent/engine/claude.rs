@@ -7,6 +7,9 @@ use super::{
     protocol, AgentError, ContentBlock, Event, Request, ToolOutcome, Usage,
 };
 use serde_json::{json, Value};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub(in crate::agent) struct Session {
     process: Process,
@@ -16,7 +19,26 @@ pub(in crate::agent) struct Session {
     pub(super) last_usage: Option<Usage>,
     pub(super) context_window: Option<u64>,
     model: Option<String>,
+    /// Steers written to stdin whose replay has not come back, oldest first.
+    steers: Arc<Mutex<VecDeque<String>>>,
+    /// A turn end held back while steers wait for their replay.
+    held: Option<Held>,
+    /// What the request in flight read, as its `message_start` said.
+    request_usage: Option<Usage>,
 }
+
+struct Held {
+    final_answer: Option<String>,
+    deadline: tokio::time::Instant,
+}
+
+// Adapted from Comet, MIT, (c) 2026 Wing: the held turn end.
+/// How long a turn end waits for the replay of a steer written before it. A
+/// `now` steer interrupts the turn it lands in, and the CLI (2.1.283, checked
+/// by hand) ends that turn with a `result` — an error one when it cut a step
+/// short — and then replays the steer and answers it. If nothing follows,
+/// the steers were absorbed into the turn that ended.
+const HELD_RESULT_SETTLE: Duration = Duration::from_secs(5);
 
 impl Session {
     pub async fn start(request: Request) -> Result<Self, AgentError> {
@@ -63,18 +85,52 @@ impl Session {
             last_usage: None,
             context_window: None,
             model: None,
+            steers: Arc::default(),
+            held: None,
+            request_usage: None,
         })
     }
 
+    pub(super) fn steerer(&self) -> Steerer {
+        Steerer {
+            input: self.process.input(),
+            steers: Arc::clone(&self.steers),
+        }
+    }
+
     pub async fn next(&mut self) -> Result<Event, AgentError> {
-        if let Some(text) = self.final_answer.take() {
-            return Ok(Event::FinalAnswer(text));
-        }
-        if self.completed {
-            return Ok(Event::Done);
-        }
         loop {
-            let frame = self.process.read().await?;
+            if let Some(text) = self.final_answer.take() {
+                return Ok(Event::FinalAnswer(text));
+            }
+            if self.completed {
+                return Ok(Event::Done);
+            }
+            let frame = match self.held.as_ref().map(|held| held.deadline) {
+                None => self.process.read().await?,
+                Some(deadline) => {
+                    match tokio::time::timeout_at(deadline, self.process.read()).await {
+                        Ok(frame) => {
+                            // Still producing: not the quiet end the hold waits for.
+                            if let Some(held) = &mut self.held {
+                                held.deadline = tokio::time::Instant::now() + HELD_RESULT_SETTLE;
+                            }
+                            frame?
+                        }
+                        Err(_) => {
+                            let held = self.held.take().expect("held above");
+                            self.completed = true;
+                            self.final_answer = held.final_answer;
+                            let absorbed: Vec<String> =
+                                self.steers.lock().expect("steers").drain(..).collect();
+                            if absorbed.is_empty() {
+                                continue;
+                            }
+                            return Ok(Event::Steered(absorbed));
+                        }
+                    }
+                }
+            };
             match frame["type"].as_str().unwrap_or("") {
                 "control_response" if frame["response"]["request_id"] == "initialize" => {
                     if frame["response"]["subtype"] != "success" {
@@ -142,8 +198,44 @@ impl Session {
                         model: frame["model"].as_str().map(str::to_string),
                     });
                 }
+                "user" if frame["parent_tool_use_id"].is_null() => {
+                    // Only the CLI's replay says a steer joined the
+                    // conversation. A replay confirms its steer and every
+                    // earlier one: a steer superseded by a later `now` is
+                    // never replayed itself.
+                    let uuid = frame["uuid"].as_str().unwrap_or_default();
+                    let mut steers = self.steers.lock().expect("steers");
+                    if let Some(at) = steers.iter().position(|id| id == uuid) {
+                        return Ok(Event::Steered(steers.drain(..=at).collect()));
+                    }
+                }
                 "stream_event" => {
                     let event = &frame["event"];
+                    if frame["parent_tool_use_id"].is_null() {
+                        match event["type"].as_str().unwrap_or("") {
+                            "message_start" => {
+                                self.request_usage = Some(usage_of(&event["message"]["usage"]));
+                            }
+                            // The request's end: its final usage, all of it.
+                            "message_delta" => {
+                                let end = usage_of(&event["usage"]);
+                                let start = self.request_usage.take().unwrap_or_default();
+                                let usage = Usage {
+                                    input_tokens: start.input_tokens.max(end.input_tokens),
+                                    output_tokens: start.output_tokens.max(end.output_tokens),
+                                    cache_creation_input_tokens: start
+                                        .cache_creation_input_tokens
+                                        .max(end.cache_creation_input_tokens),
+                                    cache_read_input_tokens: start
+                                        .cache_read_input_tokens
+                                        .max(end.cache_read_input_tokens),
+                                };
+                                self.last_usage = Some(usage);
+                                return Ok(Event::Step(usage));
+                            }
+                            _ => {}
+                        }
+                    }
                     match event["delta"]["type"].as_str().unwrap_or("") {
                         "text_delta" => {
                             return Ok(Event::Text(
@@ -164,15 +256,7 @@ impl Session {
                         self.model = Some(model.to_owned());
                     }
                     if let Some(usage) = message.get("usage") {
-                        self.last_usage = Some(Usage {
-                            input_tokens: count(usage, "input_tokens"),
-                            output_tokens: count(usage, "output_tokens"),
-                            cache_creation_input_tokens: count(
-                                usage,
-                                "cache_creation_input_tokens",
-                            ),
-                            cache_read_input_tokens: count(usage, "cache_read_input_tokens"),
-                        });
+                        self.last_usage = Some(usage_of(usage));
                     }
                     if frame.get("error").is_some() {
                         return Err(claude_error(&frame));
@@ -180,11 +264,22 @@ impl Session {
                 }
 
                 "result" => {
-                    if frame["is_error"] == true {
+                    let steering = !self.steers.lock().expect("steers").is_empty();
+                    if frame["is_error"] == true && !steering {
                         return Err(claude_error(&frame));
                     }
-                    self.completed = true;
-                    self.final_answer = frame["result"].as_str().map(str::to_owned);
+                    let final_answer = frame["result"].as_str().map(str::to_owned);
+                    if steering {
+                        // A steer boundary, not the end of the run.
+                        self.held = Some(Held {
+                            final_answer,
+                            deadline: tokio::time::Instant::now() + HELD_RESULT_SETTLE,
+                        });
+                    } else {
+                        self.held = None;
+                        self.completed = true;
+                        self.final_answer = final_answer;
+                    }
                     let models = frame["modelUsage"].as_object();
                     let model_usage = models.and_then(|models| {
                         self.model
@@ -202,16 +297,13 @@ impl Session {
                                     .flatten()
                             })
                     });
-                    self.context_window = model_usage
+                    if let Some(window) = model_usage
                         .and_then(|usage| usage["contextWindow"].as_u64())
-                        .filter(|window| *window > 0);
-                    let usage = &frame["usage"];
-                    return Ok(Event::Usage(Usage {
-                        input_tokens: count(usage, "input_tokens"),
-                        output_tokens: count(usage, "output_tokens"),
-                        cache_creation_input_tokens: count(usage, "cache_creation_input_tokens"),
-                        cache_read_input_tokens: count(usage, "cache_read_input_tokens"),
-                    }));
+                        .filter(|window| *window > 0)
+                    {
+                        self.context_window = Some(window);
+                    }
+                    return Ok(Event::Usage(usage_of(&frame["usage"])));
                 }
                 _ => {}
             }
@@ -239,6 +331,30 @@ impl Session {
         self.process.send(reply_frame(id, outcome)).await
     }
 }
+/// Writes steers into a running session's stdin.
+pub(in crate::agent) struct Steerer {
+    input: super::process::Input,
+    steers: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl Steerer {
+    pub async fn steer(&self, id: &str, text: &str, tools_open: bool) -> Result<(), AgentError> {
+        // Recorded before the write, so a replay can never outrun it.
+        self.steers.lock().expect("steers").push_back(id.to_owned());
+        self.input.send(steer_frame(text, id, !tools_open)).await
+    }
+}
+
+// Adapted from Comet, MIT, (c) 2026 Wing.
+/// A steer line. `priority: "now"` stops streaming text or thinking at once
+/// and the steer is answered next. But `now` also aborts an in-flight MCP tool
+/// call, so while any tool is open the steer goes as `next`: the tool
+/// finishes and the steer lands right after its result, in the same turn.
+fn steer_frame(text: &str, id: &str, immediate: bool) -> Value {
+    json!({"type":"user", "uuid":id, "priority": if immediate { "now" } else { "next" },
+        "message":{"role":"user","content":text}, "parent_tool_use_id":null})
+}
+
 fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
     let mut cmd = claude_command(cwd);
     cmd.args([
@@ -249,6 +365,9 @@ fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
         "stream-json",
         "--verbose",
         "--include-partial-messages",
+        // Echoes each stdin user message when the CLI takes it: the one
+        // signal that says where a steer joined the conversation.
+        "--replay-user-messages",
         "--tools",
         "",
         "--strict-mcp-config",
@@ -370,6 +489,15 @@ fn count(value: &Value, key: &str) -> u64 {
     value[key].as_u64().unwrap_or(0)
 }
 
+fn usage_of(usage: &Value) -> Usage {
+    Usage {
+        input_tokens: count(usage, "input_tokens"),
+        output_tokens: count(usage, "output_tokens"),
+        cache_creation_input_tokens: count(usage, "cache_creation_input_tokens"),
+        cache_read_input_tokens: count(usage, "cache_read_input_tokens"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +573,82 @@ send({'type':'result','is_error':False,'usage':{'input_tokens':10,'output_tokens
         assert_eq!(session.context_window, Some(200_000));
         assert_eq!(session.last_usage.expect("last request").input_tokens, 6);
         assert!(matches!(session.next().await.unwrap(), Event::Done));
+    }
+
+    /// The Claude CLI's steering, as 2.1.283 was seen doing it by hand: a
+    /// `now` steer ends the running turn with an error result, then replays
+    /// the steer and answers it. The result is a steer boundary, the replay
+    /// places the steer, and each request reports its usage as it ends.
+    #[tokio::test]
+    async fn a_steer_waits_for_its_replay_and_each_request_reports_usage() {
+        let temp = tempfile::tempdir().unwrap();
+        let script = r#"
+import json,sys
+read=lambda: json.loads(sys.stdin.readline())
+def send(x): print(json.dumps(x),flush=True)
+def request(start,end):
+    send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_start','message':{'usage':start}}})
+    send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':end}})
+assert read()['request']['subtype']=='initialize'
+send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{}}})
+first=read()
+assert first['type']=='user'
+send({'type':'system','subtype':'init','session_id':'native'})
+send({'type':'user','uuid':'cli-own','isReplay':True,'parent_tool_use_id':None,'message':first['message']})
+request({'input_tokens':10,'cache_read_input_tokens':4000,'output_tokens':1},{'output_tokens':30})
+steer=read()
+assert steer=={'type':'user','uuid':'s1','priority':'now','message':{'role':'user','content':'darker'},'parent_tool_use_id':None}, steer
+send({'type':'result','subtype':'error_during_execution','is_error':True,'errors':['[ede_diagnostic] interrupted']})
+send({'type':'system','subtype':'init','session_id':'native'})
+send({'type':'user','uuid':'s1','isReplay':True,'parent_tool_use_id':None,'message':steer['message']})
+request({'input_tokens':10,'cache_read_input_tokens':5000,'output_tokens':1},{'input_tokens':10,'cache_read_input_tokens':5000,'output_tokens':7})
+send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_tokens':20,'output_tokens':37},'modelUsage':{'claude-sonnet-5':{'contextWindow':200000}}})
+"#;
+        let mut command = tokio::process::Command::new("python3");
+        command.args(["-c", script]);
+        let request = super::super::tests::request(super::super::Engine::Claude, temp.path());
+        let mut session = Session::connect(request, Process::start(command).unwrap())
+            .await
+            .unwrap();
+        let steerer = session.steerer();
+        assert!(matches!(
+            session.next().await.unwrap(),
+            Event::Session { .. }
+        ));
+        let Event::Step(first) = session.next().await.unwrap() else {
+            panic!("the first request's usage")
+        };
+        assert_eq!(
+            (first.cache_read_input_tokens, first.output_tokens),
+            (4000, 30)
+        );
+        steerer.steer("s1", "darker", false).await.unwrap();
+        // The interrupted turn's end is not the run's end.
+        assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
+        assert!(matches!(
+            session.next().await.unwrap(),
+            Event::Session { .. }
+        ));
+        assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s1"]));
+        let Event::Step(second) = session.next().await.unwrap() else {
+            panic!("the second request's usage")
+        };
+        assert!(
+            second.cache_read_input_tokens > first.cache_read_input_tokens,
+            "each request reports its own prompt"
+        );
+        assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
+        assert!(
+            matches!(session.next().await.unwrap(), Event::FinalAnswer(text) if text == "darker it is")
+        );
+        assert!(matches!(session.next().await.unwrap(), Event::Done));
+    }
+
+    /// A steer written while a tool runs must not abort it.
+    #[test]
+    fn a_steer_waits_behind_an_open_tool() {
+        assert_eq!(steer_frame("x", "id", false)["priority"], "next");
+        assert_eq!(steer_frame("x", "id", true)["priority"], "now");
     }
 }
 

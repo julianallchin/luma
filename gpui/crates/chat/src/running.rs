@@ -11,6 +11,12 @@
 //! One entity for the whole app, shared by every panel. Dropping it drops
 //! every task, which drops every [`Turn`], which cancels every turn — quitting
 //! needs no second path.
+//!
+//! A subagent's turn is folded here too, from the [`TurnEvent::Child`] events
+//! its parent's turn carries, so a reader opened on the child attaches to it
+//! exactly as a panel attaches to its own. That entry is passive: it has no
+//! task, counts against no limit and cannot be stopped or steered on its own.
+//! It ends with the child's turn, or with its parent's.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -35,22 +41,36 @@ pub enum RunningEvent {
     Ended { thread: String },
 }
 
-/// One running turn. The task, its start and its steering handle begin and end
-/// together, which is why they are one entry rather than three maps.
-pub(crate) struct Running {
-    /// Drives the [`Turn`]. Dropping it cancels the turn.
-    _task: Task<()>,
+/// What a panel attaching to a running thread seats.
+pub(crate) struct Live {
     /// The working indicator's timer origin, for whichever panel attaches.
     pub(crate) since: Instant,
-    steer: TurnSteer,
     /// The thread's transcript at send time with every event since folded in
     /// — what a re-attaching panel seats instead of a database read.
     pub(crate) transcript: Transcript,
 }
 
+/// One running turn. The task, its live state and its steering handle begin
+/// and end together, which is why they are one entry rather than three maps.
+struct Running {
+    /// Drives the [`Turn`]. Dropping it cancels the turn.
+    _task: Task<()>,
+    steer: TurnSteer,
+    live: Live,
+}
+
+/// A subagent's turn, seen through its parent's.
+struct Child {
+    /// The thread whose turn carries this one's events: a running turn or,
+    /// for a nested delegation, another child.
+    parent: String,
+    live: Live,
+}
+
 #[derive(Default)]
 pub struct RunningTurns {
     turns: HashMap<String, Running>,
+    children: HashMap<String, Child>,
 }
 
 impl EventEmitter<RunningEvent> for RunningTurns {}
@@ -95,9 +115,8 @@ impl RunningTurns {
             thread.to_owned(),
             Running {
                 _task: task,
-                since,
                 steer,
-                transcript,
+                live: Live { since, transcript },
             },
         );
         cx.notify();
@@ -116,34 +135,102 @@ impl RunningTurns {
     ///
     /// Also the *end*-of-turn path: a turn that ran out and one the reader
     /// stopped leave the registry in the same state and say so the same way.
+    ///
+    /// Only a turn this registry drives can be stopped; a subagent stops with
+    /// its parent.
     pub fn cancel(&mut self, thread: &str, cx: &mut Context<Self>) {
         if self.turns.remove(thread).is_some() {
-            cx.emit(RunningEvent::Ended {
-                thread: thread.to_owned(),
-            });
-            cx.notify();
+            self.ended(thread, cx);
         }
     }
 
+    /// Say `thread` is over, and end every child its turn was carrying.
+    fn ended(&mut self, thread: &str, cx: &mut Context<Self>) {
+        let orphans: Vec<String> = self
+            .children
+            .iter()
+            .filter(|(_, child)| child.parent == thread)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for orphan in orphans {
+            if self.children.remove(&orphan).is_some() {
+                self.ended(&orphan, cx);
+            }
+        }
+        cx.emit(RunningEvent::Ended {
+            thread: thread.to_owned(),
+        });
+        cx.notify();
+    }
+
+    /// Whether a turn this registry drives is running on `thread`. A
+    /// subagent's thread is not: it is its parent's work.
     #[must_use]
     pub fn is_running(&self, thread: &str) -> bool {
         self.turns.contains_key(thread)
     }
 
-    /// `thread`'s running turn, for a panel attaching to it.
-    pub(crate) fn live(&self, thread: &str) -> Option<&Running> {
-        self.turns.get(thread)
+    /// `thread`'s running turn, or the running subagent turn on it, for a
+    /// panel attaching to it.
+    pub(crate) fn live(&self, thread: &str) -> Option<&Live> {
+        self.turns
+            .get(thread)
+            .map(|running| &running.live)
+            .or_else(|| self.children.get(thread).map(|child| &child.live))
     }
 
     fn fold(&mut self, thread: &str, event: TurnEvent, cx: &mut Context<Self>) {
-        let Some(running) = self.turns.get_mut(thread) else {
-            return;
+        if let TurnEvent::Child {
+            thread_id: child,
+            event,
+        } = event
+        {
+            return self.fold_child(thread, child, *event, cx);
+        }
+        let live = match self.turns.get_mut(thread) {
+            Some(running) => &mut running.live,
+            None => match self.children.get_mut(thread) {
+                Some(child) => &mut child.live,
+                None => return,
+            },
         };
-        luma_lib::agent::apply(&mut running.transcript, &event);
+        luma_lib::agent::apply(&mut live.transcript, &event);
         cx.emit(RunningEvent::Event {
             thread: thread.to_owned(),
             event,
         });
+    }
+
+    /// One event of `child`'s turn, carried by `parent`'s. The first one
+    /// opens the child's entry; its `TurnEnded` closes it.
+    fn fold_child(
+        &mut self,
+        parent: &str,
+        child: String,
+        event: TurnEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let ends = matches!(event, TurnEvent::TurnEnded { .. });
+        if !self.children.contains_key(&child) {
+            if ends || self.live(parent).is_none() {
+                return;
+            }
+            self.children.insert(
+                child.clone(),
+                Child {
+                    parent: parent.to_owned(),
+                    live: Live {
+                        since: Instant::now(),
+                        transcript: Transcript::default(),
+                    },
+                },
+            );
+            cx.notify();
+        }
+        self.fold(&child, event, cx);
+        if ends && self.children.remove(&child).is_some() {
+            self.ended(&child, cx);
+        }
     }
 }
 
@@ -284,6 +371,140 @@ mod tests {
         running.update(cx, |running, cx| running.cancel("t0", cx));
         assert!(start(&running, "over", cx).is_ok());
         drop(held);
+    }
+
+    fn child(thread: &str, event: TurnEvent) -> TurnEvent {
+        TurnEvent::Child {
+            thread_id: thread.into(),
+            event: Box::new(event),
+        }
+    }
+
+    /// Events of `thread` the registry emitted, in order.
+    fn heard(
+        running: &Entity<RunningTurns>,
+        thread: &'static str,
+        cx: &mut TestAppContext,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<TurnEvent>>> {
+        let seen = std::rc::Rc::<std::cell::RefCell<Vec<TurnEvent>>>::default();
+        let sink = seen.clone();
+        cx.update(|cx| {
+            cx.subscribe(running, move |_, event, _| {
+                if let RunningEvent::Event { thread: at, event } = event {
+                    if at == thread {
+                        sink.borrow_mut().push(event.clone());
+                    }
+                }
+            })
+            .detach();
+        });
+        seen
+    }
+
+    /// A subagent's turn, carried inside its parent's, is followed live under
+    /// the child's own thread — what a reader on that thread attaches to — and
+    /// ends when the child's turn does.
+    #[gpui::test]
+    fn a_child_turn_is_live_under_its_own_thread(cx: &mut TestAppContext) {
+        let running = cx.new(|_| RunningTurns::default());
+        let ended = ended(&running, cx);
+        let heard = heard(&running, "child", cx);
+        let parent = start(&running, "parent", cx).unwrap();
+        for event in [
+            TurnEvent::MessageStarted {
+                id: "c1".into(),
+                role: Role::Assistant,
+            },
+            TurnEvent::TextDelta {
+                text: "half a child reply".into(),
+            },
+        ] {
+            parent.send(child("child", event)).unwrap();
+        }
+        cx.run_until_parked();
+        assert_eq!(heard.borrow().len(), 2);
+        running.read_with(cx, |running, _| {
+            let live = running.live("child").expect("the child is not live");
+            assert_eq!(live.transcript.messages[0].text(), "half a child reply");
+            assert!(
+                running
+                    .live("parent")
+                    .unwrap()
+                    .transcript
+                    .messages
+                    .is_empty(),
+                "a child's events reached its parent's transcript"
+            );
+            // Its parent's work: not a turn of its own to stop or count.
+            assert!(!running.is_running("child"));
+        });
+        running.update(cx, |running, cx| running.cancel("child", cx));
+        running.read_with(cx, |running, _| assert!(running.live("child").is_some()));
+
+        parent
+            .send(child(
+                "child",
+                TurnEvent::TurnEnded {
+                    outcome: luma_lib::agent::TurnOutcome::Completed,
+                },
+            ))
+            .unwrap();
+        cx.run_until_parked();
+        running.read_with(cx, |running, _| {
+            assert!(running.live("child").is_none());
+            assert!(running.is_running("parent"));
+        });
+        assert_eq!(*ended.borrow(), ["child"]);
+    }
+
+    /// A child cannot outlive the turn that carries it, however deep.
+    #[gpui::test]
+    fn stopping_the_parent_ends_its_children(cx: &mut TestAppContext) {
+        let running = cx.new(|_| RunningTurns::default());
+        let ended = ended(&running, cx);
+        let parent = start(&running, "parent", cx).unwrap();
+        let started = TurnEvent::MessageStarted {
+            id: "m".into(),
+            role: Role::Assistant,
+        };
+        parent.send(child("child", started.clone())).unwrap();
+        parent
+            .send(child("child", child("grandchild", started)))
+            .unwrap();
+        cx.run_until_parked();
+        running.read_with(cx, |running, _| {
+            assert!(running.live("grandchild").is_some());
+        });
+        running.update(cx, |running, cx| running.cancel("parent", cx));
+        running.read_with(cx, |running, _| {
+            assert!(running.live("child").is_none() && running.live("grandchild").is_none());
+        });
+        let mut ended = ended.borrow().clone();
+        ended.sort();
+        assert_eq!(ended, ["child", "grandchild", "parent"]);
+    }
+
+    /// Children are not turns the app runs, so they take no room from them.
+    #[gpui::test]
+    fn children_take_no_room_from_the_limit(cx: &mut TestAppContext) {
+        let running = cx.new(|_| RunningTurns::default());
+        let parent = start(&running, "t0", cx).unwrap();
+        for at in 0..MAX_RUNNING {
+            parent
+                .send(child(
+                    &format!("child{at}"),
+                    TurnEvent::MessageStarted {
+                        id: "m".into(),
+                        role: Role::Assistant,
+                    },
+                ))
+                .unwrap();
+        }
+        cx.run_until_parked();
+        let held: Vec<_> = (1..MAX_RUNNING)
+            .map(|at| start(&running, &format!("t{at}"), cx).unwrap())
+            .collect();
+        drop((parent, held));
     }
 
     #[gpui::test]

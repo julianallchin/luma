@@ -33,7 +33,7 @@
 //! # Why it is never disabled
 //!
 //! A turn in flight does not lock the field: what the person types during one
-//! *steers* it (`TurnStream::steer`), applied at the next row boundary. So the
+//! *steers* it (`TurnStream::steer`), which reaches the model at its next step. So the
 //! one button reads Send, Steer or Stop — see [`Action`] — and there is no
 //! state in which the composer is inert while a conversation is happening.
 
