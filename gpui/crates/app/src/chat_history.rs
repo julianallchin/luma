@@ -83,10 +83,18 @@ pub(crate) struct ChatHistory {
     row_focuses: HashMap<String, FocusHandle>,
     list_scroll: ScrollHandle,
     _search_subscription: Subscription,
+    /// Which conversations have a turn running, for the rows' indicator.
+    running: Entity<luma_chat::RunningTurns>,
+    /// Repaints the list when a turn starts or ends while it is open.
+    _running_subscription: Subscription,
 }
 
 impl ChatHistory {
-    fn loading(generation: u64, cx: &mut Context<Luma>) -> Self {
+    fn loading(
+        generation: u64,
+        running: Entity<luma_chat::RunningTurns>,
+        cx: &mut Context<Luma>,
+    ) -> Self {
         let search = cx.new(|cx| TextInput::search("Search chats…", cx));
         let search_focus = search.read(cx).focus_handle(cx);
         let subscription = cx.subscribe(&search, |luma, field, event, cx| {
@@ -108,6 +116,8 @@ impl ChatHistory {
             row_focuses: HashMap::new(),
             list_scroll: ScrollHandle::new(),
             _search_subscription: subscription,
+            _running_subscription: cx.observe(&running, |_, _, cx| cx.notify()),
+            running,
         }
     }
 
@@ -171,7 +181,14 @@ impl Luma {
         let Some(subject) = crate::agent::chat_subject(self) else {
             return;
         };
-        let state = ChatHistory::loading(generation, cx);
+        let Some(running) = self
+            .chat
+            .as_ref()
+            .map(|chat| chat.read(cx).running().clone())
+        else {
+            return;
+        };
+        let state = ChatHistory::loading(generation, running, cx);
         let pending = self.library.agent().history(subject);
         self.overlay.open(Overlay::ChatHistory(Box::new(state)));
         cx.notify();
@@ -414,7 +431,9 @@ fn list(
                     let cursor = index == state.picker.cursor();
                     match row {
                         Row::Thread(_) => {
-                            thread_row(entry, cursor, focus, app, window).into_any_element()
+                            let running = state.running.read(cx).is_running(&entry.thread.id);
+                            thread_row(entry, cursor, running, focus, app, window, cx)
+                                .into_any_element()
                         }
                         Row::Hit { hit, first } => {
                             hit_row(entry, hit, index, *first, cursor, focus, app, window)
@@ -456,12 +475,16 @@ fn age(entry: &ThreadEntry) -> gpui::Div {
         .child(relative_age(&entry.thread.updated_at))
 }
 
+/// `running` puts the chat's working spinner before the age: the same mark
+/// the panel shows under a reply being written.
 fn thread_row(
     entry: &ThreadEntry,
     cursor: bool,
+    running: bool,
     focus: &FocusHandle,
     app: &Entity<Luma>,
     window: &gpui::Window,
+    cx: &mut gpui::App,
 ) -> impl IntoElement {
     let headline = entry.headline();
     pressable(entry, entry.thread.id.clone(), cursor, focus, app)
@@ -490,6 +513,14 @@ fn thread_row(
                     )
                 }),
         )
+        .when(running, |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .child(luma_chat::working::spinner(app.entity_id(), cx))
+                    .agent_node(Role::Text, "Running"),
+            )
+        })
         .child(age(entry))
         .agent_node(Role::Card, headline)
         .agent_focused(focus.is_focused(window))

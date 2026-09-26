@@ -25,7 +25,7 @@ use crate::agent_execution::bindings::providers::{assemble_bindings, BindingScop
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::track_host::{TrackEditScope, TrackScope};
 use crate::agent_execution::venue_host::VenueHost;
-use crate::agent_execution::worker_process::{ExecStatus, HostOperationScope};
+use crate::agent_execution::worker_process::{CancelToken, ExecStatus, HostOperationScope};
 use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, Workspace, DEFAULT_CELL_TIMEOUT,
 };
@@ -333,6 +333,9 @@ pub async fn run_python_cell_inner(
         )
     });
     let host = CellHost::new(track, venue);
+    // Stopping a turn drops this future, but not the blocking task below.
+    // Interrupt the kernel then, so the cell does not run on unseen.
+    let interrupt = CancelOnDrop(Some(cancel.clone()));
     let executed = tokio::task::spawn_blocking(move || {
         // Once blocking execution begins, the task itself owns admission. If
         // the async command future is dropped, deletion still cannot overtake
@@ -352,8 +355,26 @@ pub async fn run_python_cell_inner(
         Ok::<_, String>(project(&workspace_for_cell, outcome))
     })
     .await;
+    interrupt.disarm();
 
     executed.map_err(|e| format!("the python cell task failed: {e}"))?
+}
+
+/// Cancels a cell whose awaiting future is dropped before the cell finishes.
+struct CancelOnDrop(Option<CancelToken>);
+
+impl CancelOnDrop {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.0.take() {
+            cancel.cancel();
+        }
+    }
 }
 
 /// [`CellOutcome`] -> the model-facing result: statuses flattened, figures read

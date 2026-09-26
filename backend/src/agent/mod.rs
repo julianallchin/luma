@@ -875,6 +875,14 @@ impl TurnStream {
 pub struct TurnSteer(mpsc::UnboundedSender<String>);
 
 impl TurnSteer {
+    /// A handle, and the end its messages arrive at — for a host that stands
+    /// in for a turn, as a test of the host does.
+    #[must_use]
+    pub fn channel() -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (steer, steered) = mpsc::unbounded_channel();
+        (Self(steer), steered)
+    }
+
     pub fn send(&self, message: impl Into<String>) {
         let _ = self.0.send(message.into());
     }

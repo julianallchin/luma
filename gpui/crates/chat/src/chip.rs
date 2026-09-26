@@ -360,7 +360,7 @@ fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
     let chat = ctx.chat.clone();
     let child = child_thread(tool);
     div()
-        .h(px(theme::CHIP_HEIGHT))
+        .h(px(PILL_ROW_HEIGHT))
         .flex()
         .flex_none()
         .flex_row()
@@ -410,6 +410,11 @@ fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
 
 /// The widest a subagent pill grows before its description truncates.
 const PILL_MAX_WIDTH: f32 = 256.0;
+
+/// A subagent row's height. A tool row's 13 px label leaves about 7 px of air
+/// above and below it in [`theme::CHIP_HEIGHT`]; the pill's filled box would
+/// leave 2 px, so the row grows until the box has the same air.
+const PILL_ROW_HEIGHT: f32 = luma_ui::CONTROL_HEIGHT + 2.0 * 7.0;
 
 /// One tool call: a compact purpose label and disclosure chevron,
 /// and its detail card when the chevron has been answered.
