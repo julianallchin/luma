@@ -28,8 +28,9 @@ struct ProbeFilterParams {
 @group(0) @binding(1) var probe_source_sampler: sampler;
 @group(0) @binding(2) var probe_target: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(3) var<uniform> filter_params: ProbeFilterParams;
-// Each probe face's mean radiance: the lowest mip, six to a probe, for the
-// scene pass's diffuse (`probe_sample.wgsl`).
+// Each probe face's mean change to the sky probe (`probe_relight.wgsl`)
+// over its axis's side, six to a probe, for the scene pass's diffuse
+// (`probe_sample.wgsl`).
 @group(0) @binding(4) var<storage, read_write> probe_ambient_out: array<vec4<f32>>;
 // y: the first layer this frame writes (`probe_relight.wgsl`).
 @group(0) @binding(5) var<uniform> probe_filter_first: vec4<u32>;
@@ -136,16 +137,31 @@ fn probe_filter_base(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-/// The ambient cube: each face's one-texel mip, read along its axis.
-/// `filter_params.layers` faces, one thread each.
+/// Cosine-weighted samples a face of the ambient cube takes.
+const PROBE_AMBIENT_SAMPLES: u32 = 64u;
+/// The mip, from the base, they read: a quarter of the base's size.
+const PROBE_AMBIENT_LOD: f32 = 2.0;
+
+/// The ambient cube: each face's mean change over its axis's side, E / pi
+/// as the sky probe's irradiance cube stores it, from cosine-weighted
+/// samples of a fine mip. `filter_params.layers` faces, one thread each.
+/// Read along the axis at the one-texel mip, the prefilter's wide lobes
+/// carried the stage below the horizon into the face above it: the deck's
+/// top and its shadow lit and darkened open ground by the stage.
 @compute @workgroup_size(64, 1, 1)
 fn probe_ambient(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= filter_params.layers {
         return;
     }
     let axis = probe_face_direction(id.x % 6u, vec2<f32>(0.5));
-    probe_ambient_out[id.x] = vec4<f32>(
-        textureSampleLevel(probe_source, probe_source_sampler, axis, i32(id.x / 6u), filter_params.source_mips - 1.0).rgb,
-        1.0,
-    );
+    let lod = min(PROBE_AMBIENT_LOD, filter_params.source_mips - 1.0);
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < PROBE_AMBIENT_SAMPLES; i++) {
+        let xi = vec2<f32>(fract(f32(i) * 0.618034 + 0.31), (f32(i) + 0.5) / f32(PROBE_AMBIENT_SAMPLES));
+        let phi = 2.0 * PROBE_FILTER_PI * xi.x;
+        let sin_theta = sqrt(xi.y);
+        let l = probe_filter_basis(axis, vec3<f32>(cos(phi) * sin_theta, sin(phi) * sin_theta, sqrt(1.0 - xi.y)));
+        sum += textureSampleLevel(probe_source, probe_source_sampler, l, i32(id.x / 6u), lod).rgb;
+    }
+    probe_ambient_out[id.x] = vec4<f32>(sum / f32(PROBE_AMBIENT_SAMPLES), 1.0);
 }

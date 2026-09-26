@@ -79,7 +79,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Both cell and section colours are white today; the mix is kept so the
     // two can diverge without touching the call site.
-    let color = scene_radiance(vec3<f32>(1.0), in.world - globals.camera_pos.xyz);
+    let color = scene_radiance(vec3<f32>(1.0), in.world - globals.camera_pos.xyz, in.clip.xy);
     let alpha = max(minor * 0.01, major * 0.04) * fade * OPACITY;
     let depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);
     return vec4<f32>(color, alpha * horizon_coverage(depth));
@@ -92,6 +92,6 @@ fn fs_compass(in: VsOut) -> @location(0) vec4<f32> {
     // camera framing the whole rig, which stands well past FADE_DISTANCE.
     let fade = 1.0 - smoothstep(FADE_DISTANCE * 2.0, FADE_DISTANCE * 4.0, dist);
     let depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);
-    let color = scene_radiance(vec3<f32>(0.3), in.world - globals.camera_pos.xyz);
+    let color = scene_radiance(vec3<f32>(0.3), in.world - globals.camera_pos.xyz, in.clip.xy);
     return vec4<f32>(color, arrow_mask(in.world.xy) * fade * 0.25 * horizon_coverage(depth));
 }

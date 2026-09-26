@@ -71,7 +71,7 @@ pub use scene_desc::Catalogue;
 pub use share::Surface;
 pub use viewport::{
     AsyncPresentation, AsyncViewport, DisplayRange, Occupancy, Pacing, Presentation, Presented,
-    SubmitOutcome, Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
+    Recorder, SubmitOutcome, Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
 };
 pub use warmup::{warm, warming, Warming};
 

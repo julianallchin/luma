@@ -50,7 +50,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         0.0,
     ).rgb;
     // The clouds are in the probe: under a deck, the ambient is the deck.
-    let clouds = textureSampleLevel(clouds_tex, clouds_sampler, cloud_panorama_uv(dir), 0.0);
-    let clouded = sky * clouds.a + clouds.rgb;
+    // Below the horizon the ground is in front of them. The panorama clamps
+    // there to its horizon row, which painted the ground cloud grey: a steel
+    // barrier on dirt reflected grey under any cloud. The ground stays lit
+    // as under a clear sky, too bright under a heavy deck.
+    var clouded = sky;
+    if dir.z >= 0.0 {
+        let clouds = textureSampleLevel(clouds_tex, clouds_sampler, cloud_panorama_uv(dir), 0.0);
+        clouded = sky * clouds.a + clouds.rgb;
+    }
     textureStore(output_tex, vec2<i32>(id.xy), i32(id.z), vec4<f32>(clouded * sky_exposure(cfg), 1.0));
 }

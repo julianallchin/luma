@@ -47,12 +47,17 @@ fn vs_probe_debug(
 @fragment
 fn fs_probe_debug(in: ProbeDebugOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
-    let radiance = textureSampleLevel(
+    // The cube holds the stage's change to the sky probe: add the sky back.
+    var radiance = textureSampleLevel(
         probe_cubes,
         environment_sampler,
         probe_cube_direction(n),
         in.probe,
         probe_grid.step.w,
     ).rgb;
-    return vec4<f32>(radiance, 1.0);
+    if environment_params.enabled > 0.5 {
+        radiance += textureSampleLevel(environment_specular, environment_sampler, environment_direction(n), 0.0).rgb
+            * environment_params.intensity;
+    }
+    return vec4<f32>(max(radiance, vec3<f32>(0.0)), 1.0);
 }

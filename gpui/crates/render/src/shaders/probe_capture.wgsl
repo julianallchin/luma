@@ -37,8 +37,8 @@ struct CaptureVertex {
 struct CaptureTargets {
     // rgb: albedo, linear. a: perceptual roughness.
     @location(0) albedo: vec4<f32>,
-    // xy: the world normal, octahedral. z: metal. w: distance from the probe,
-    // metres; zero where nothing was drawn.
+    // xy: the world normal, octahedral. z: metal, or -1 on the ground plane.
+    // w: distance from the probe, metres; zero where nothing was drawn.
     @location(1) normal: vec4<f32>,
 };
 
@@ -82,7 +82,8 @@ fn fs_capture(in: CaptureVertex) -> CaptureTargets {
     }
     var albedo = probe_face.ground.rgb;
     var roughness = 0.9;
-    var metallic = 0.0;
+    // The ground's mark for the relight: under a sky it is the sky probe's.
+    var metallic = -1.0;
     if inst.flags.x <= 0.5 {
         let base = textureSample(capture_base_color, capture_sampler, in.uv);
         let mr = textureSample(capture_metallic_roughness, capture_sampler, in.uv);

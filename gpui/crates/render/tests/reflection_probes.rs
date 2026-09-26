@@ -571,6 +571,100 @@ fn the_ground_under_a_deck_stays_dark_with_probes() {
     );
 }
 
+/// Open ground takes the same light inside the probe grid as past it, at a
+/// low sun and a high one: no lit or warm disk round the stage where the
+/// grid ends. The probes' own estimate of the open sky and ground was not
+/// the sky probe's, so the grid showed as an ellipse on the ground ("looks
+/// like a nuke went off"): at a 2 degree sun the ground just inside was 11%
+/// brighter over the ground past it than without the probes, and redder.
+/// The ground under the deck stays darker than open ground.
+///
+/// The deck is 8 by 4 m, so the grid (its bounds and 2 m) ends 4 m in front
+/// of its middle and fades out over a cell of 3 m. Inside is 3.6 m in front,
+/// outside 8 m. Each point's colour with the probes on is compared with its
+/// colour without them, which takes the view, the stage's shadow and the
+/// height field's occlusion out of the comparison: what is left is the
+/// probes' change. A little of it is real: the rough ground reflects the
+/// deck, which the probes, standing over it, see lit from above.
+#[test]
+fn open_ground_has_no_edge_at_the_probe_grid() {
+    let mut renderer = Renderer::new().unwrap();
+    let deck = Material {
+        base_color: Vec3::splat(0.3),
+        roughness: 0.7,
+        ..Default::default()
+    };
+    let inside = Vec3::new(0.0, -3.6, 0.0);
+    let outside = Vec3::new(0.0, -8.0, 0.0);
+    let under = Vec3::new(0.0, 0.0, 0.0);
+    let luminance = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    // Red and blue over luminance: the warmth the edge showed as.
+    let chroma = |c: Vec3| Vec3::new(c.x, 0.0, c.z) / luminance(c).max(1e-4);
+    for elevation in [2.0, 55.0] {
+        let colours = |probes: bool, renderer: &mut Renderer| {
+            let environment = VenueEnvironment::outdoor(elevation)
+                .with_sun_azimuth(200.0)
+                .with_floor(Floor::Dirt);
+            let mut frame = frame_with(
+                environment,
+                Vec3::new(0.0, -15.0, 3.0),
+                Vec3::new(0.0, -2.0, 0.0),
+                Quality::High,
+                Vec::new(),
+            );
+            frame.probes.enabled = probes;
+            let mut boxes = vec![(Vec3::new(0.0, 0.0, 1.0), Vec3::new(8.0, 4.0, 0.1), deck)];
+            for x in [-3.9, 3.9] {
+                for y in [-1.9, 1.9] {
+                    boxes.push((
+                        Vec3::new(x, y, 0.5),
+                        Vec3::new(0.1, 0.1, 1.0),
+                        materials::STEEL,
+                    ));
+                }
+            }
+            add_boxes(&mut frame, &boxes);
+            let pixels = settled(renderer, &frame);
+            capture(
+                &format!(
+                    "grid-edge-sun-{elevation}-probes-{}",
+                    if probes { "on" } else { "off" }
+                ),
+                &pixels,
+            );
+            [inside, outside, under].map(|p| mean(&pixels, project(&frame, p), 6))
+        };
+        let [in_off, out_off, under_off] = colours(false, &mut renderer);
+        let [in_on, out_on, under_on] = colours(true, &mut renderer);
+        let step = |inside: Vec3, outside: Vec3| luminance(inside) / luminance(outside).max(1e-4);
+        // The step at the grid's edge with the probes, over the same step
+        // without them: 1 when the grid does not show.
+        let edge = step(in_on, out_on) / step(in_off, out_off);
+        let warmth = (chroma(in_on) - chroma(out_on) - (chroma(in_off) - chroma(out_off))).length();
+        let under_ratio = step(under_on, out_on);
+        eprintln!(
+            "sun {elevation} deg: edge {edge:.3}, colour shift {warmth:.4}; under the deck \
+             over open ground {under_ratio:.3} (without probes {:.3}); inside on {in_on:.3} \
+             off {in_off:.3}",
+            step(under_off, out_off)
+        );
+        assert!(
+            (edge - 1.0).abs() < 0.04,
+            "sun {elevation} deg: the grid's edge shows on open ground: the step across it is \
+             {edge:.3} of the step without the probes"
+        );
+        assert!(
+            warmth < 0.03,
+            "sun {elevation} deg: the grid's edge changes open ground's colour by {warmth:.4}"
+        );
+        assert!(
+            under_ratio < 0.8,
+            "sun {elevation} deg: the ground under the deck is not darker than open ground: \
+             {under_ratio:.3} of it"
+        );
+    }
+}
+
 /// At dusk the truss towers are no brighter in a band at the horizon than
 /// what they reflect there. A vertical tube at eye height reflects the
 /// horizon: the sky just above it and the ground just below. The probes had
@@ -856,8 +950,8 @@ fn reflection_probe_timings() {
 }
 
 /// Diagnosis: dump the probe nearest the barrier on dirt: its captured
-/// albedo, normal and distance, its relit radiance and every prefiltered
-/// mip, to `LUMA_PROBE_CAPTURE_DIR`. Run with `LUMA_PROBE_DEBUG=1` for the
+/// albedo, normal and distance, and its change to the sky probe (black
+/// where negative) at every prefiltered mip, to `LUMA_PROBE_CAPTURE_DIR`. Run with `LUMA_PROBE_DEBUG=1` for the
 /// balls too.
 #[test]
 #[ignore = "diagnosis"]

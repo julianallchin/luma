@@ -3,9 +3,10 @@
 // nothing stood between it and the sun. This pass marches each view ray at
 // low resolution and asks, where the ray's haze scatters, how much of it the
 // sun reaches: past the truss and roof through the stage's shadow cascades,
-// past the clouds through the cloud shadow map. The composite scales the
-// closed form's sun term by the answer, so a roof casts a dark shaft into
-// the haze and a gap in the clouds a bright one.
+// past the clouds through the cloud shadow map. The scene pass (for each
+// surface's haze) and the composite (for the sky's) scale the closed form's
+// sun term by the answer, so a roof casts a dark shaft into the haze and a
+// gap in the clouds a bright one.
 //
 // Samples are placed where the scattered light comes from, not evenly in
 // distance: each takes an equal share of `1 - T`, the fraction of the view
@@ -52,7 +53,7 @@ fn shaft_stage_sun(p: vec3<f32>) -> f32 {
 }
 
 /// Jimenez's interleaved gradient noise: a different offset for each of a
-/// block's neighbours, so the composite's upsample averages them.
+/// block's neighbours, so the upsample (`shaft_upsample.wgsl`) averages them.
 fn shaft_jitter(pixel: vec2<u32>, frame: f32) -> f32 {
     let p = vec2<f32>(pixel) + 5.588238 * frame;
     return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));

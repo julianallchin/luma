@@ -575,6 +575,80 @@ fn a_sunlit_box_casts_a_shadow_into_the_haze_behind_it() {
     assert!((over - 1.0).abs() < 0.02, "sunlit haze changed: {over}");
 }
 
+/// Thin posts against the far ground, with a sun 1.8 degrees up ahead and
+/// haze in the air: the truss the app drew speckled.
+///
+/// Under overcast the sun does not reach the air, so the haze has no sun in
+/// it (as in the stage's shadow). The composite once took that sun off each
+/// pixel at the depth of the pixel's centre. On a post's edge the
+/// centre sees the far ground, while most of the pixel's colour is post,
+/// whose haze is the short run of air in front of it: the far ground's sun
+/// came off the post, more than the post had, red and green clipped to
+/// nothing and blue was left. Now each fragment takes its own share off in
+/// the scene pass. An edge pixel is part post and part ground, both warm
+/// in a low sun's haze, so it is not blue.
+#[test]
+fn a_thin_post_against_the_far_ground_keeps_its_colour_in_sunlit_haze() {
+    let mut renderer = Renderer::new().unwrap();
+    let render = |renderer: &mut Renderer, posts: bool| {
+        let mut frame = frame(
+            outdoor(1.8, CloudCover::Overcast).with_sun_azimuth(0.0),
+            Vec3::new(-20.0, 0.0, 6.0),
+            Vec3::new(20.0, 0.0, 3.0),
+            0.0,
+            Quality::High,
+        );
+        frame.haze_density = 0.1;
+        if posts {
+            let mesh = frame.meshes.len();
+            frame.meshes.push(crate::common::cube("::thin-posts"));
+            let at = frame.draws.len() - frame.transparent.len();
+            for i in 0..13 {
+                frame.draws.insert(
+                    at + i,
+                    Draw {
+                        mesh,
+                        model: Mat4::from_translation(Vec3::new(0.0, -9.0 + 1.5 * i as f32, 4.5))
+                            * Mat4::from_scale(Vec3::new(0.1, 0.1, 9.0)),
+                        material: Material {
+                            base_color: Vec3::splat(0.5),
+                            metallic: 0.0,
+                            roughness: 0.8,
+                            ..Default::default()
+                        },
+                        textures: MaterialTextures::default(),
+                        editor_object: None,
+                    },
+                );
+            }
+        }
+        renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap()
+    };
+    let open = render(&mut renderer, false);
+    let posts = render(&mut renderer, true);
+    capture("thin-posts-open", &open, WIDTH, HEIGHT);
+    capture("thin-posts", &posts, WIDTH, HEIGHT);
+    // Below the horizon, where the ground stands behind the posts.
+    let blue = |[r, _, b]: [f32; 3]| b - r;
+    let (mut covered, mut speckled) = (0, 0);
+    for (x, y) in pixels_in(HEIGHT / 2..HEIGHT) {
+        let (ground, pixel) = (rgb(&open, x, y), rgb(&posts, x, y));
+        if (luma(pixel) - luma(ground)).abs() < 2.0 / 255.0 {
+            continue;
+        }
+        covered += 1;
+        if blue(ground) < 0.0 && blue(pixel) > 10.0 / 255.0 {
+            speckled += 1;
+        }
+    }
+    eprintln!("thin posts: {covered} pixels show a post, {speckled} of them blue");
+    assert!(covered > 500, "the posts do not show: {covered}");
+    assert!(
+        speckled == 0,
+        "{speckled} of {covered} post pixels are blue on warm ground"
+    );
+}
+
 /// The sun at 25 degrees, at azimuth 0 (+X), and a camera looking either
 /// toward it or away from it, 22 degrees up.
 fn sun_view(clouds: CloudCover, toward: bool, haze: f32) -> Frame {

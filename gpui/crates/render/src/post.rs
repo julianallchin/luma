@@ -34,8 +34,6 @@
 //!    saturates at the display's white, so a white core stays white and the
 //!    halo spreads over its surroundings.
 
-use std::time::Instant;
-
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
@@ -157,6 +155,9 @@ pub(crate) struct PostFrame<'a> {
     /// Whether the exposure adapts from the previous frame's. A standalone
     /// capture snaps.
     pub temporal: bool,
+    /// The frame's clock, in seconds. The exposure adapts over its steps, so
+    /// a file rendered faster than real time adapts as the viewport does.
+    pub time: f32,
     /// Direction toward the sun and its disc's light (radiance × solid
     /// angle), when the sky draws one.
     pub sun: Option<(Vec3, Vec3)>,
@@ -647,7 +648,8 @@ pub(crate) struct Post {
     lenses: Option<(wgpu::Buffer, u64)>,
     fft: wgpu::Buffer,
     tonemap: wgpu::Buffer,
-    last_adapt: Option<Instant>,
+    /// The clock of the last metered frame.
+    last_adapt: Option<f32>,
     /// Metering mode of the last frame; switching it snaps.
     was_auto: Option<bool>,
 }
@@ -876,13 +878,12 @@ impl Post {
         }
 
         // --- metering ---------------------------------------------------------
-        let now = Instant::now();
         let auto = look.exposure.auto;
         let snap = !frame.temporal || self.was_auto != Some(auto) || self.last_adapt.is_none();
         let dt = self.last_adapt.map_or(0.0, |last| {
-            now.duration_since(last).as_secs_f32().min(MAX_ADAPT_STEP_S)
+            (frame.time - last).max(0.0).min(MAX_ADAPT_STEP_S)
         });
-        self.last_adapt = Some(now);
+        self.last_adapt = Some(frame.time);
         self.was_auto = Some(auto);
         queue.write_buffer(
             &self.meter,

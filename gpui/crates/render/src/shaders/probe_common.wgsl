@@ -6,6 +6,12 @@
 // relit every frame by the frame's own sun, sky and fixtures, so a truss
 // reflects the pool a fixture has just turned red in the same frame.
 //
+// The cubes hold a change to the sky probe, not radiance: the sky probe
+// lights everything, and the probes add what the stage changes of it
+// (`probe_relight.wgsl`). A texel that sees open sky, or open ground under
+// a sky, holds nothing, so a point the stage does not touch is lit by the
+// sky probe alone, inside the grid as past it.
+//
 // Cube space is the environment's: three's Y up, `(x, z, -y)` of the
 // renderer's Z-up world (`environment_direction` in `scene.wgsl`, without its
 // rotation). Faces run +X, -X, +Y, -Y, +Z, -Z, as WebGPU samples a cube.
@@ -24,7 +30,9 @@ struct ProbeGrid {
     // w: the relight's reach, metres: fixtures whose cone misses this ball
     // round a probe are not relit in it.
     box_max: vec4<f32>,
-    // rgb: the ground's albedo. w: 1 when there is a ground plane.
+    // rgb: the ground's albedo. w: 0 with no ground plane; 1 with one the
+    // probes light; 2 with one the sky probe holds (open air), of which the
+    // probes keep only what the stage changes.
     ground: vec4<f32>,
     // Where each probe stands, world. A grid point inside geometry is moved
     // out of it, so this is not always the grid point (`probes.rs`).

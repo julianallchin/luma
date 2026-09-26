@@ -416,6 +416,90 @@ impl Viewport {
     }
 }
 
+/// Frames [`Recorder`] keeps in flight: one drawing, one copying out, one
+/// being read. Bounded by the presentation slots, which hold one readback each.
+const RECORDER_DEPTH: usize = 3;
+
+const _: () = assert!(RECORDER_DEPTH <= PRESENTATION_SLOTS);
+
+/// Live-quality frames for a file, as fast as the GPU draws them.
+///
+/// The same pass chain, [`LIVE_SUBFRAMES`] budget and temporal history as the
+/// viewport, read back as sRGB RGBA8 in the order they were pushed. Nothing is
+/// paced to a display. Up to [`RECORDER_DEPTH`] frames are in flight, each in
+/// its own presentation slot, so copying one frame out never stalls the draw
+/// of the next.
+pub struct Recorder {
+    renderer: Renderer,
+    in_flight: std::collections::VecDeque<PendingFrame>,
+    next_slot: usize,
+}
+
+impl Recorder {
+    /// A renderer of its own on the process-wide device, so its temporal
+    /// history is not the viewport's.
+    ///
+    /// # Errors
+    /// Fails when no wgpu adapter or device can be acquired.
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(Self {
+            renderer: Renderer::new()?,
+            in_flight: std::collections::VecDeque::new(),
+            next_slot: 0,
+        })
+    }
+
+    /// Queue `frame` at `width` x `height`. Once [`RECORDER_DEPTH`] frames
+    /// are in flight, waits for the oldest and hands back its pixels.
+    ///
+    /// # Errors
+    /// Fails if the oldest frame's readback cannot be mapped.
+    pub fn push(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let oldest = if self.in_flight.len() == RECORDER_DEPTH {
+            self.pop()?
+        } else {
+            None
+        };
+        // Slots are claimed in turn and retired oldest first, so the slot
+        // taken here is the one `pop` just emptied.
+        let slot = self.next_slot;
+        self.next_slot = (slot + 1) % RECORDER_DEPTH;
+        let pending = self.renderer.submit_live_bytes(
+            frame,
+            width.max(1),
+            height.max(1),
+            LIVE_SUBFRAMES,
+            Channels::Rgba,
+            slot,
+        );
+        self.in_flight.push_back(pending);
+        Ok(oldest)
+    }
+
+    /// Wait for the oldest frame in flight and hand back its pixels, or
+    /// `None` when nothing is in flight.
+    ///
+    /// # Errors
+    /// Fails if the readback cannot be mapped.
+    pub fn pop(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(mut pending) = self.in_flight.pop_front() else {
+            return Ok(None);
+        };
+        let completed = pending.complete_blocking(self.renderer.gpu().device())?;
+        Ok(Some(
+            completed
+                .image
+                .into_pixels()
+                .expect("a Bytes destination reads its pixels back"),
+        ))
+    }
+}
+
 /// Live-only asynchronous presentation.
 ///
 /// A bounded set of GPU output slots ([`PRESENTATION_SLOTS`]) binds in-flight
