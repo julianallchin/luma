@@ -1,22 +1,26 @@
 //! **One-shot.** Converts the light colors in a stored clip's inputs from
-//! gamma-encoded sRGB, the old working space, to linear Rec. 2020, the
-//! current one (see [`crate::color_space`]). It exists only for the one-time
-//! conversion of stored clip rows and of `presets.json`, and is deleted after
-//! that run.
+//! the old working space to linear Rec. 2020, the current one (see
+//! [`crate::color_space`]). It exists only for the one-time conversion of
+//! stored clip rows and of `presets.json`, and is deleted after that run.
+//!
+//! The old numbers were linear light with sRGB primaries: the renderer and
+//! the DMX output both used them as they were, and only the editor's swatches
+//! read them as gamma-encoded. So this changes primaries only, with no
+//! transfer curve, and a stored clip keeps its light on stage and in the
+//! visualizer.
 //!
 //! **Run it exactly once over each row.** A stored color carries no tag
 //! that says which space it is in, so this cannot tell a converted color from
-//! an old one: a second run converts again, and every color darkens and
-//! shifts.
+//! an old one: a second run converts again, and every color shifts.
 //!
 //! It works on the stored JSON, not the typed [`Value`], so everything that
 //! is not a light color stays exactly as stored.
-use crate::color_space::from_srgb;
+use crate::color_space::from_linear_srgb;
 use crate::*;
 use serde_json::Value as Json;
 
 /// `inputs_json` (a clip's stored inputs: input name → tagged value) of a
-/// clip of form `form`, with every light color converted from gamma sRGB to
+/// clip of form `form`, with every light color converted from linear sRGB to
 /// linear Rec. 2020:
 ///
 /// - `color`: the value;
@@ -125,7 +129,7 @@ fn triple(value: &Json) -> Result<[f64; 3]> {
 }
 
 fn convert_triple(value: &mut Json) -> Result<()> {
-    *value = serde_json::json!(from_srgb(triple(value)?));
+    *value = serde_json::json!(from_linear_srgb(triple(value)?));
     Ok(())
 }
 
@@ -157,7 +161,7 @@ fn convert_light(output: &mut Json) -> Result<()> {
     };
     let color = triple(color)?;
     let dimmer = output.get("dimmer").and_then(Json::as_f64);
-    let light = from_srgb(color.map(|v| v * dimmer.unwrap_or(1.)));
+    let light = from_linear_srgb(color.map(|v| v * dimmer.unwrap_or(1.)));
     let split = FixtureOutput::from_rgb(light);
     output["color"] = serde_json::json!(split.color);
     if dimmer.is_some() {
@@ -171,8 +175,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn srgb(rgb: [f64; 3]) -> Json {
-        json!(from_srgb(rgb))
+    fn converted(rgb: [f64; 3]) -> Json {
+        json!(from_linear_srgb(rgb))
     }
 
     /// A clip of each form that holds colors, in every place a color can be.
@@ -185,8 +189,8 @@ mod tests {
             {"t": 1.0, "color": blue, "alpha": 0.5}
         ]});
         let converted_gradient = json!({"stops": [
-            {"t": 0.0, "color": srgb(orange)},
-            {"t": 1.0, "color": srgb(blue), "alpha": 0.5}
+            {"t": 0.0, "color": converted(orange)},
+            {"t": 1.0, "color": converted(blue), "alpha": 0.5}
         ]});
         let brightness =
             json!({"type": "hit", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}});
@@ -200,7 +204,7 @@ mod tests {
                     "alpha": {"type": "proportion", "value": 0.5}
                 }),
                 json!({
-                    "color": {"type": "time", "value": {"points": [[0, srgb(orange), "ease-in"], [1, srgb(blue)]]}},
+                    "color": {"type": "time", "value": {"points": [[0, converted(orange), "ease-in"], [1, converted(blue)]]}},
                     "brightness": brightness,
                     "every": {"type": "beats", "value": 1.0},
                     "alpha": {"type": "proportion", "value": 0.5}
@@ -219,12 +223,12 @@ mod tests {
             (
                 "color.sparkle@1",
                 json!({"color": {"type": "color", "value": orange}, "grain": {"type": "number", "value": 1.0}}),
-                json!({"color": {"type": "color", "value": srgb(orange)}, "grain": {"type": "number", "value": 1.0}}),
+                json!({"color": {"type": "color", "value": converted(orange)}, "grain": {"type": "number", "value": 1.0}}),
             ),
             (
                 "color.noise@1",
                 json!({"color": {"type": "hit", "value": {"points": [[0, orange], [1, blue]]}}}),
-                json!({"color": {"type": "hit", "value": {"points": [[0, srgb(orange)], [1, srgb(blue)]]}}}),
+                json!({"color": {"type": "hit", "value": {"points": [[0, converted(orange)], [1, converted(blue)]]}}}),
             ),
             // Old ids are read as color@1 on load; their rows convert too.
             (
@@ -235,12 +239,12 @@ mod tests {
             (
                 "color.chase@1",
                 json!({"color": {"type": "color", "value": blue}}),
-                json!({"color": {"type": "color", "value": srgb(blue)}}),
+                json!({"color": {"type": "color", "value": converted(blue)}}),
             ),
             (
                 "color.constant@1",
                 json!({"color": {"type": "time", "value": {"points": [[0, orange], [1, blue]]}}}),
-                json!({"color": {"type": "time", "value": {"points": [[0, srgb(orange)], [1, srgb(blue)]]}}}),
+                json!({"color": {"type": "time", "value": {"points": [[0, converted(orange)], [1, converted(blue)]]}}}),
             ),
         ];
         for (form, before, after) in cases {
@@ -280,7 +284,7 @@ mod tests {
         let head = &out["l"]["value"]["a"];
         let color: [f64; 3] = serde_json::from_value(head["color"].clone()).unwrap();
         let dimmer = head["dimmer"].as_f64().unwrap();
-        let light = from_srgb([0.5, 0.25, 0.]);
+        let light = from_linear_srgb([0.5, 0.25, 0.]);
         for (a, b) in color.map(|v| v * dimmer).iter().zip(light) {
             assert!((a - b).abs() < 1e-12);
         }
@@ -293,9 +297,12 @@ mod tests {
     fn shipped_presets_are_converted() {
         let presets = crate::presets();
         let fire = presets.gradients.iter().find(|g| g.name == "Fire").unwrap();
-        // The old first stop was sRGB [0.15, 0, 0]: far darker as linear light.
+        // The old first stop was linear sRGB [0.15, 0, 0]: the same light.
         let first = fire.gradient.stops[0].color;
-        assert!(first[0] < 0.05 && color_space::in_srgb(first), "{first:?}");
+        let red = color_space::from_linear_srgb([1., 0., 0.]);
+        for (a, b) in first.iter().zip(red) {
+            assert!((a - 0.15 * b).abs() < 1e-8, "{first:?}");
+        }
         for preset in &presets.presets {
             for value in preset.inputs.values() {
                 if let Value::Color(color) = value {

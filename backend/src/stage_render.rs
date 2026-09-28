@@ -1056,6 +1056,13 @@ mod tests {
         let drawn = head(red.map(|v| v / peak), (0.5 * peak) as f32);
         assert!((drawn.dimmer - 0.5).abs() < 1e-5);
         assert!(drawn.color[0] == 1.0 && drawn.color[1].max(drawn.color[2]) < 1e-5);
+        // A stored clip's color, converted by primaries only, draws as the
+        // renderer drew its old numbers.
+        let orange = luma_patterns::color_space::from_linear_srgb([1., 0.5, 0.]);
+        let peak = orange.iter().copied().fold(0., f64::max);
+        let drawn = head(orange.map(|v| v / peak), (0.5 * peak) as f32);
+        assert!((drawn.dimmer - 0.5).abs() < 1e-5);
+        assert!((drawn.color[0] - 1.0).abs() < 1e-5 && (drawn.color[1] - 0.5).abs() < 1e-5);
         let deep = head([1., 0., 0.], 0.5);
         assert!(deep.color.iter().all(|v| (0.0..=1.0).contains(v)) && deep.color[0] == 1.0);
         assert!(deep.dimmer > 0.5 && deep.dimmer <= 1.0);

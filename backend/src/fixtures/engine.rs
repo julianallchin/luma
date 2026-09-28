@@ -2,7 +2,7 @@ use crate::models::fixtures::{
     Channel, ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
 };
 use crate::models::universe::{PrimitiveState, UniverseState};
-use luma_patterns::color_space::{srgb_encode, Gamut};
+use luma_patterns::color_space::Gamut;
 use std::collections::HashMap;
 
 /// Tolerance for "heads agree" — matches the master shutter channel's DMX resolution.
@@ -485,8 +485,7 @@ pub fn generate_dmx(
                 let color = match colors.iter().find(|(p, _)| std::ptr::eq(*p, prim)) {
                     Some((_, color)) => color,
                     None => {
-                        let color =
-                            HeadColor::new(prim, emitters, has_master_dimmer, has_color_wheel);
+                        let color = HeadColor::new(prim, emitters, has_color_wheel);
                         colors.push((prim, color));
                         &colors.last().expect("just pushed").1
                     }
@@ -822,19 +821,19 @@ struct HeadColor {
     yellow: f32,
     /// What a master dimmer channel gets.
     dimmer: f32,
-    /// The color, gamma-encoded sRGB at a peak of 1: what a color wheel's
-    /// slots, written as sRGB hex, are compared with.
+    /// The color as linear sRGB at a peak of 1. A color wheel's slots,
+    /// written as sRGB hex, are compared with it byte for byte, and its luma
+    /// dims a wheel fixture, as before the working space was Rec. 2020.
     srgb: [f32; 3],
 }
 
 impl HeadColor {
-    fn new(state: &PrimitiveState, emitters: Emitters, master_dimmer: bool, wheel: bool) -> Self {
+    fn new(state: &PrimitiveState, emitters: Emitters, wheel: bool) -> Self {
         let (levels, brightness) =
             Gamut::SRGB.split(state.color.map(f64::from), f64::from(state.dimmer));
-        let srgb = levels.map(|v| srgb_encode(v) as f32);
-        // With a master dimmer the emitters make the color and the dimmer
-        // its brightness; without one the emitters make both.
-        let scale = if master_dimmer { 1.0 } else { brightness };
+        let srgb = levels.map(|v| v as f32);
+        // The emitters make the color, at a peak of 1; a master dimmer, where
+        // there is one, makes its brightness.
         let mut color = Self {
             dimmer: if wheel {
                 // A wheel cannot dim its color, so a dark color dims the lamp.
@@ -848,7 +847,7 @@ impl HeadColor {
         let mut rest = levels;
         if emitters.subtractive {
             // A filter passes 1 − its level of the white lamp.
-            [color.cyan, color.magenta, color.yellow] = rest.map(|v| (1.0 - v * scale) as f32);
+            [color.cyan, color.magenta, color.yellow] = rest.map(|v| (1.0 - v) as f32);
             return color;
         }
         // Each extra emitter takes as much of the color as it can make; red,
@@ -865,12 +864,12 @@ impl HeadColor {
             for i in 0..3 {
                 rest[i] = (rest[i] - share * emitter[i]).max(0.0);
             }
-            (share * scale) as f32
+            share as f32
         };
         color.white = take(emitters.white, WHITE_EMITTER);
         color.amber = take(emitters.amber, AMBER_EMITTER);
         color.lime = take(emitters.lime, LIME_EMITTER);
-        [color.red, color.green, color.blue] = rest.map(|v| (v * scale) as f32);
+        [color.red, color.green, color.blue] = rest.map(|v| v as f32);
         color
     }
 
@@ -1065,7 +1064,7 @@ mod tests {
 
     /// A head's color on a wheel fixture with no master dimmer.
     fn wheel(state: &PrimitiveState) -> HeadColor {
-        HeadColor::new(state, Emitters::default(), false, true)
+        HeadColor::new(state, Emitters::default(), true)
     }
 
     #[test]
@@ -1953,7 +1952,7 @@ mod tests {
                 map_value(
                     &channel,
                     &fast,
-                    &HeadColor::new(&fast, Emitters::default(), true, false),
+                    &HeadColor::new(&fast, Emitters::default(), false),
                     540.0,
                     270.0,
                     1.0,
@@ -2016,29 +2015,17 @@ mod tests {
         luma_patterns::color_space::from_srgb(rgb)
     }
 
-    /// A color in sRGB drives an RGB fixture's emitters at its linear levels,
-    /// and the master dimmer at its brightness.
+    /// A stored clip drives an sRGB-primary RGB fixture as it did before
+    /// the working space was Rec. 2020: its old numbers were linear sRGB, and
+    /// the row conversion changes primaries only.
     #[test]
-    fn an_srgb_color_drives_rgb_emitters_at_its_linear_levels() {
-        let orange = srgb([1.0, 0.5, 0.0]);
-        let half = (luma_patterns::color_space::srgb_decode(0.5) * 255.0).round() as u8;
-        assert_eq!(
-            drive(&["MasterDimmer", "Red", "Green", "Blue"], orange, 1.0),
-            [255, 255, half, 0]
-        );
-        assert_eq!(
-            drive(&["MasterDimmer", "Red", "Green", "Blue"], orange, 0.5),
-            [128, 255, half, 0]
-        );
-    }
-
-    /// Without a master dimmer the emitters carry the brightness too.
-    #[test]
-    fn rgb_without_a_dimmer_dims_its_emitters() {
-        let full = drive(&["Red", "Green", "Blue"], srgb([1.0, 1.0, 1.0]), 1.0);
-        let half = drive(&["Red", "Green", "Blue"], srgb([1.0, 1.0, 1.0]), 0.5);
-        assert_eq!(full, [255, 255, 255]);
-        assert_eq!(half, [128, 128, 128]);
+    fn a_converted_color_drives_the_dmx_it_did_before() {
+        let orange = luma_patterns::color_space::from_linear_srgb([1.0, 0.5, 0.0]);
+        let names = ["MasterDimmer", "Red", "Green", "Blue"];
+        assert_eq!(drive(&names, orange, 1.0), [255, 255, 128, 0]);
+        assert_eq!(drive(&names, orange, 0.5), [128, 255, 128, 0]);
+        // Without a master dimmer the emitters get the color, as before.
+        assert_eq!(drive(&["Red", "Green", "Blue"], orange, 0.5), [255, 128, 0]);
     }
 
     /// A green deeper than sRGB is the nearest green the fixture has, at the

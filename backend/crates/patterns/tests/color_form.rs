@@ -1,10 +1,12 @@
 //! `color@1` and the space source. The four old color forms were merged into
 //! `color@1`; `fixtures/old_color_forms.json` holds their light, recorded
-//! before they were deleted, for presets and varied inputs. When the working
-//! space became linear Rec. 2020 its inputs were converted by
-//! `rec2020_upgrade` and the light of the 26 cases with a color other than
-//! white recorded again (`examples/rec2020_presets.rs`): light is color times
-//! brightness, which cannot be converted after the product.
+//! before they were deleted, for presets and varied inputs. It was recorded
+//! when colors were linear sRGB: its inputs are converted as stored rows are
+//! (`rec2020_upgrade`), and the light is compared back in linear sRGB. The
+//! cases marked `rerecorded` read a gradient between stops: gradients now
+//! blend in OKLab of the light itself, where they blended the stored numbers
+//! as if gamma-encoded, so their light was recorded again
+//! (`examples/rec2020_presets.rs`). Every other case keeps its old light.
 use luma_patterns::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -23,12 +25,22 @@ struct Case {
     label: String,
     form: String,
     inputs: BTreeMap<String, Value>,
-    /// Per time, per cell: the light as RGB.
+    /// Per time, per cell: the light as linear sRGB.
     rgb: Vec<Vec<[f64; 3]>>,
+    /// Recorded again when gradients began to blend the light itself.
+    #[serde(default)]
+    rerecorded: bool,
 }
 
 fn recording() -> Recording {
-    serde_json::from_str(include_str!("fixtures/old_color_forms.json")).unwrap()
+    let mut recording: Recording =
+        serde_json::from_str(include_str!("fixtures/old_color_forms.json")).unwrap();
+    for case in &mut recording.cases {
+        let stored = serde_json::to_value(&case.inputs).unwrap();
+        let converted = rec2020_upgrade::convert_clip_inputs(&case.form, &stored).unwrap();
+        case.inputs = serde_json::from_value(converted).unwrap();
+    }
+    recording
 }
 
 fn program(recording: &Recording, form: &str, inputs: &BTreeMap<String, Value>) -> PreparedGraph {
@@ -48,7 +60,7 @@ fn program(recording: &Recording, form: &str, inputs: &BTreeMap<String, Value>) 
     .unwrap()
 }
 
-/// The light of a clip, per time and cell, as RGB.
+/// The light of a clip, per time and cell, as linear sRGB.
 fn light(
     recording: &Recording,
     form: &str,
@@ -66,18 +78,21 @@ fn light(
             recording
                 .cells
                 .iter()
-                .map(|cell| lit[&cell.id].rgb())
+                .map(|cell| color_space::Gamut::SRGB.fit(lit[&cell.id].rgb()))
                 .collect()
         })
         .collect()
 }
+
+/// Float noise through the change of primaries and back.
+const TOLERANCE: f64 = 1e-7;
 
 fn same_light(label: &str, got: &[Vec<[f64; 3]>], want: &[Vec<[f64; 3]>]) {
     for (t, (got, want)) in got.iter().zip(want).enumerate() {
         for (cell, (got, want)) in got.iter().zip(want).enumerate() {
             for ch in 0..3 {
                 assert!(
-                    (got[ch] - want[ch]).abs() < 1e-7,
+                    (got[ch] - want[ch]).abs() < TOLERANCE,
                     "{label}: time {t} cell {cell}: {got:?} != {want:?}"
                 );
             }
@@ -106,6 +121,26 @@ fn every_old_color_clip_converts_to_color_with_the_same_light() {
             "color.time@1"
         ]
     );
+}
+
+#[test]
+fn only_gradient_reads_were_recorded_again() {
+    let recording = recording();
+    for case in recording.cases.iter().filter(|case| case.rerecorded) {
+        let reads_a_gradient = case.inputs.values().any(|value| match value {
+            Value::Gradient(_) | Value::Hit(SourceCurve::Gradient(_)) => true,
+            Value::Time(SourceCurve::Gradient(_)) => true,
+            Value::Space(space) => space.gradient.is_some(),
+            _ => false,
+        });
+        assert!(reads_a_gradient, "{}", case.label);
+    }
+    let kept = recording
+        .cases
+        .iter()
+        .filter(|case| !case.rerecorded)
+        .count();
+    assert!(kept * 4 >= recording.cases.len() * 3, "{kept}");
 }
 
 #[test]
