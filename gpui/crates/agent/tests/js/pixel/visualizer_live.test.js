@@ -15,9 +15,9 @@
 fixture({
   seconds: 20,
   rig: 4,
-  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: ["color.time@1", "Rainbow"] }],
+  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: ["color@1", "Rainbow"] }],
 });
-const CLIP = "Color over time";
+const CLIP = "Color";
 
 const stageShot = () => app.screenshot({ node: app.snapshot().find({ role: "card", label: "Stage" }) });
 

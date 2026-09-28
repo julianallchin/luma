@@ -493,7 +493,7 @@ impl InsertChoice {
     }
 }
 
-/// A form's display name, such as "Chase" for `color.chase@1`.
+/// A form's display name, such as "Aim" for `aim@1`.
 fn form_name(form: &str) -> &'static str {
     document::form_definition(form).map_or("", |definition| definition.name.as_str())
 }

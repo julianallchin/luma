@@ -13,7 +13,7 @@ test(
   { fixture: { seconds: 60, clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 50 }] } },
   () => {
     // A clip is labelled by its form.
-    const CLIP = "Constant color";
+    const CLIP = "Color";
     const LAYOUT = ["Sidebar", "Waveform", "Clip inputs", "Stage"];
     nav.trackEditor("Test Venue", "Aurora");
     until("the clip", () => node("card", CLIP));

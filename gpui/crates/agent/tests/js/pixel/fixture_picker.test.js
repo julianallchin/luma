@@ -20,8 +20,8 @@ test("ticking a group changes the picture", { timeoutMs: 120000 }, () => {
   nav.expand();
   nav.stageOff();
 
-  // A clip is labelled by its form; the fixture's clip plays Constant color.
-  nav.step("the clip", "card", "Constant color");
+  // A clip is labelled by its form; the fixture's clip plays Color.
+  nav.step("the clip", "card", "Color");
   until("the strip", (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith("expression = ")));
   nav.step("the fixture picker", "button", "Pick fixtures");
   until("the picker", (s) => checkbox("left_movers") !== undefined);

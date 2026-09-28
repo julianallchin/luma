@@ -12,26 +12,26 @@ fixture({
   rig: 4,
   window: [1480, 1000],
   clips: [
-    { pattern: "pattern-rainbow", name: "Rainbow", start: 0.5, end: 4.5, preset: ["color.time@1", "Rainbow"] },
-    { pattern: "pattern-wash", name: "Wash", start: 5.0, end: 7.5 },
-    { pattern: "pattern-chase", name: "Chase", start: 1.5, end: 6.0, lane: 1, preset: ["color.chase@1", "Chase"] },
+    { pattern: "pattern-rainbow", name: "Rainbow", start: 0.5, end: 4.5, preset: ["color@1", "Rainbow"] },
+    { pattern: "pattern-wash", name: "Wash", start: 5.0, end: 7.5, preset: ["color.noise@1", "Drift"] },
+    { pattern: "pattern-chase", name: "Chase", start: 1.5, end: 6.0, lane: 1, preset: ["color.sparkle@1", "Random heads"] },
   ],
 });
 // Clips are labelled by their form.
-const MEASURED = "Color over time";
+const MEASURED = "Color";
 
 test("the clip body paints the heatmap rather than a flat fill", () => {
   nav.trackEditor("Test Venue", "Aurora");
   nav.expand();
   nav.stageOff();
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-  for (const label of ["Color over time preview", "Constant color preview", "Chase preview"]) {
+  for (const label of ["Color preview", "Noise preview", "Sparkle preview"]) {
     until(label, (s) => s.find({ role: "card", label }) !== undefined);
   }
   app.frames(8, { waitMs: 30 });
   // One clip selected, so the shot holds an opaque selected body beside the
   // translucent rest.
-  app.click(app.snapshot().find({ role: "card", label: "Chase" }));
+  app.click(app.snapshot().find({ role: "card", label: "Sparkle" }));
   app.frames(8, { waitMs: 30 });
   const shot = app.screenshot({ node: app.snapshot().find({ role: "card", label: `${MEASURED} preview` }) });
 

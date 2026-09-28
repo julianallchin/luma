@@ -18,7 +18,7 @@ fixture({
 });
 
 // A clip is labelled by its form.
-const CLIP = "Constant color";
+const CLIP = "Color";
 
 test("a lit clip reports a preview surface under its header", () => {
   nav.trackEditor("Test Venue", "Aurora");
