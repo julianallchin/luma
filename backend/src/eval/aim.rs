@@ -691,7 +691,7 @@ mod tests {
     }
 
     fn wash(start: f64, duration: f64, brightness: f64) -> CompiledAnnotation {
-        let mut clip = preset("color.constant@1", "Wash").clip(start, duration);
+        let mut clip = preset("color@1", "Wash").clip(start, duration);
         clip.inputs
             .insert("brightness".into(), p::Value::Proportion(brightness));
         layer(clip, 0)

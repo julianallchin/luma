@@ -432,7 +432,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
 
 fn keyframes<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>, key: &str) -> Option<&'a Keyframes> {
     inputs.get(key).map(|value| match value.control(0) {
-        Value::Time(curve) => curve,
+        Value::Time(SourceCurve::Keys(curve)) => curve,
         _ => unreachable!("validated curve input"),
     })
 }
@@ -586,7 +586,7 @@ fn choice<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>, key: &str) -> &'a st
         _ => unreachable!("validated choice input"),
     }
 }
-fn axis<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>) -> &'a MappingSpec {
+fn axis(inputs: &BTreeMap<String, EvaluatedValue>) -> &MappingSpec {
     match inputs["axis"].control(0) {
         Value::Mapping(spec) => spec,
         _ => unreachable!("validated axis input"),

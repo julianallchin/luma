@@ -38,8 +38,9 @@ pub use envelope::Envelope;
 pub use features::*;
 pub use field_ops::FieldMath;
 pub use forms::{
-    axis_presets, blend_modes, input_order, is_form, palette_steps, path_presets, shape_presets,
-    steps_path, FORMS, MAX_WIDTH,
+    axis_presets, blend_modes, input_order, is_form, palette_steps, path_presets,
+    movement_inputs, progress_presets, shape_presets, steps_path, upgrade, FORMS,
+    MAX_WIDTH,
 };
 pub use graph::*;
 pub use mapping::*;

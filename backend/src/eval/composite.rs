@@ -111,7 +111,7 @@ mod tests {
         z: i64,
     ) -> CompiledAnnotation {
         let mut clip = p::presets()
-            .preset("color.constant@1", "Wash")
+            .preset("color@1", "Wash")
             .unwrap()
             .clip(0.0, 4.0);
         clip.inputs.insert("color".into(), p::Value::Color(color));

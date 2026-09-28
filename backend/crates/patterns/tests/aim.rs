@@ -360,13 +360,16 @@ fn a_direction_path_and_a_wandering_direction() {
     set(
         &mut inputs,
         "direction",
-        Value::Time(Keyframes::with_eases(
-            [
-                (0.0, Key::Color([1.0, 0.0, 0.0])),
-                (1.0, Key::Color([0.0, 1.0, 0.0])),
-            ],
-            &[],
-        )),
+        Value::Time(
+            Keyframes::with_eases(
+                [
+                    (0.0, Key::Color([1.0, 0.0, 0.0])),
+                    (1.0, Key::Color([0.0, 1.0, 0.0])),
+                ],
+                &[],
+            )
+            .into(),
+        ),
     );
     let s = 0.5_f64.sqrt();
     for aim in directions(&cells, &inputs, LENGTH / 2.0) {
@@ -439,8 +442,8 @@ fn offset_is_a_blend_for_aim_only() {
     assert!(check("aim@1", "Circle", BlendMode::Offset).is_ok());
     assert!(check("aim@1", "Circle", BlendMode::Replace).is_ok());
     for (form, name) in [
-        ("color.constant@1", "Wash"),
-        ("color.chase@1", "Chase"),
+        ("color@1", "Wash"),
+        ("color@1", "Chase"),
         ("strobe.constant@1", "Strobe"),
     ] {
         let error = check(form, name, BlendMode::Offset).unwrap_err().0;
@@ -448,7 +451,7 @@ fn offset_is_a_blend_for_aim_only() {
         assert!(check(form, name, BlendMode::Add).is_ok(), "{form}");
     }
     assert!(blend_modes("aim@1").contains(&BlendMode::Offset));
-    assert!(!blend_modes("color.constant@1").contains(&BlendMode::Offset));
+    assert!(!blend_modes("color@1").contains(&BlendMode::Offset));
 }
 
 /// Spread is degrees of phase across the axis: 360° is one whole cycle, so

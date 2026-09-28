@@ -73,11 +73,49 @@ fn render(form: &str, inputs: &BTreeMap<String, Value>, beat: f64) -> Vec<f64> {
 fn lit(values: &[f64]) -> Vec<bool> {
     values.iter().map(|v| *v > 1e-9).collect()
 }
+/// Set an input. A chase's `axis`, `shape`, `path`, `travel`, `width`,
+/// `width_relative` and `boundary` are parts of its moving brightness, and
+/// a color fade's `colors` and `curve` are parts of its color per hit.
 fn set(inputs: &mut BTreeMap<String, Value>, key: &str, value: Value) {
-    assert!(inputs.insert(key.into(), value).is_some(), "{key}");
+    if let Some(old) = inputs.get_mut(key) {
+        *old = value;
+        return;
+    }
+    if let Some(Value::Space(space)) = inputs.get_mut("brightness") {
+        let movement = space.movement.as_mut().expect("a moving brightness");
+        match (key, value) {
+            ("axis", Value::Mapping(axis)) => space.axis = axis,
+            ("shape", Value::Envelope(shape)) => space.curve = Some(shape),
+            ("path", Value::Envelope(path)) => movement.path = path,
+            ("travel", travel) => movement.travel = travel,
+            ("width", width) => movement.width = width,
+            ("width_relative", Value::Boolean(relative)) => movement.width_relative = relative,
+            ("boundary", Value::Boundary(boundary)) => movement.boundary = boundary,
+            (key, value) => panic!("{key}: {value:?}"),
+        }
+        return;
+    }
+    let Some(Value::Hit(SourceCurve::Gradient(read))) = inputs.get_mut("color") else {
+        panic!("{key}")
+    };
+    match (key, value) {
+        ("colors", Value::Gradient(gradient)) => read.gradient = gradient,
+        ("curve", Value::Envelope(curve)) => read.curve = curve,
+        (key, value) => panic!("{key}: {value:?}"),
+    }
 }
-fn curve(points: &[[f64; 2]], ease: Ease) -> Keyframes {
-    Keyframes::numbers(points, &vec![ease; points.len() - 1])
+/// The axis of a clip's space source.
+fn axis_of(inputs: &BTreeMap<String, Value>) -> Value {
+    inputs
+        .values()
+        .find_map(|value| match value {
+            Value::Space(space) => Some(Value::Mapping(space.axis.clone())),
+            _ => None,
+        })
+        .expect("a space source")
+}
+fn curve(points: &[[f64; 2]], ease: Ease) -> SourceCurve {
+    Keyframes::numbers(points, &vec![ease; points.len() - 1]).into()
 }
 
 #[test]
@@ -206,9 +244,9 @@ fn input_order_names_every_input_of_each_form_once() {
 fn form_inputs_must_be_complete_known_and_promotable() {
     let (form, inputs) = preset("Chase");
     let mut missing = inputs.clone();
-    missing.remove("width");
+    missing.remove("every");
     let error = prepare(&form, &missing).unwrap_err();
-    assert!(error.0.contains("missing input width"), "{error}");
+    assert!(error.0.contains("missing input every"), "{error}");
 
     let mut unknown = inputs.clone();
     unknown.insert("delay".into(), Value::Beats(1.0));
@@ -218,26 +256,22 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         .contains("unknown input delay"));
 
     let mut several_missing = inputs.clone();
-    several_missing.remove("width");
-    several_missing.remove("travel");
+    several_missing.remove("every");
+    several_missing.remove("alpha");
     let error = prepare(&form, &several_missing).unwrap_err();
     assert!(
-        error.0.contains("travel") && error.0.contains("width"),
+        error.0.contains("alpha") && error.0.contains("every"),
         "one error should name every missing input, not just the first: {error}"
     );
 
     let mut score = Score::default();
-    let mut clip = presets()
-        .preset("color.chase@1", "Chase")
-        .unwrap()
-        .clip(0.0, 4.0);
+    let mut clip = presets().preset("color@1", "Chase").unwrap().clip(0.0, 4.0);
     clip.inputs = missing;
     score.clips.insert("clip".into(), clip);
     assert!(score.validate(&standard_library()).is_err());
 
     let ramp = curve(&[[0.0, 0.0], [1.0, 1.0]], Ease::Linear);
     for (key, value) in [
-        ("axis", Value::Time(ramp.clone())),
         ("color", Value::Hit(ramp.clone())),
         (
             "color",
@@ -246,12 +280,12 @@ fn form_inputs_must_be_complete_known_and_promotable() {
                 range: [0.0, 1.0],
             }),
         ),
-        ("shape", Value::Time(ramp.clone())),
         // A curve must stay within the input's range: width 0 to 4.
         (
             "width",
             Value::Time(curve(&[[0.0, 0.0], [1.0, 5.0]], Ease::Linear)),
         ),
+        ("travel", Value::Number(2.0)),
         (
             "alpha",
             Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Ease::Linear)),
@@ -274,9 +308,9 @@ fn form_inputs_must_be_complete_known_and_promotable() {
     assert!(prepare(&sparkle, &inputs).is_err());
 
     // Promotable sources are data on the form's inputs.
-    let chase = &standard_library().definitions["color.chase@1"];
+    let color = &standard_library().definitions["color@1"];
     assert_eq!(
-        chase.inputs["alpha"].promotable,
+        color.inputs["alpha"].promotable,
         [
             SourceKind::Time,
             SourceKind::Hit,
@@ -284,8 +318,11 @@ fn form_inputs_must_be_complete_known_and_promotable() {
             SourceKind::Audio
         ]
     );
-    assert_eq!(chase.inputs["every"].promotable, [SourceKind::Time]);
-    assert!(chase.inputs["axis"].promotable.is_empty());
+    assert_eq!(
+        color.inputs["color"].promotable,
+        [SourceKind::Time, SourceKind::Hit, SourceKind::Space]
+    );
+    assert_eq!(color.inputs["every"].promotable, [SourceKind::Time]);
 }
 
 #[test]
@@ -419,11 +456,7 @@ fn a_stroke_wider_than_the_axis_keeps_the_rig_partly_lit() {
 fn clipped_strokes_enter_and_leave_fully() {
     for name in ["Chase", "Wave", "Ripple"] {
         let (form, mut inputs) = preset(name);
-        set(
-            &mut inputs,
-            "axis",
-            presets().preset("color.chase@1", "Chase").unwrap().inputs["axis"].clone(),
-        );
+        set(&mut inputs, "axis", axis_of(&preset("Chase").1));
         // A rest between strokes: every 4, travel 2.
         let mut rest = inputs.clone();
         set(&mut rest, "every", Value::Beats(4.0));
@@ -438,11 +471,7 @@ fn clipped_strokes_enter_and_leave_fully() {
 fn back_to_back_strokes_are_never_cut_off() {
     for name in ["Wave", "Ripple"] {
         let (form, mut inputs) = preset(name);
-        set(
-            &mut inputs,
-            "axis",
-            presets().preset("color.chase@1", "Chase").unwrap().inputs["axis"].clone(),
-        );
+        set(&mut inputs, "axis", axis_of(&preset("Chase").1));
         let program = prepare(&form, &inputs).unwrap();
         let beats: Vec<f64> = (0..=800)
             .map(|step| START + f64::from(step) * 0.01)
@@ -533,10 +562,13 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
     set(
         &mut inputs,
         "travel",
-        Value::Time(Keyframes::numbers(
-            &[[0.0, 2.0], [0.5, 1.0], [1.0, 3.0]],
-            &[Ease::EaseInOut, Ease::Bezier([0.2, 0.0, 0.8, 0.75])],
-        )),
+        Value::Time(
+            Keyframes::numbers(
+                &[[0.0, 2.0], [0.5, 1.0], [1.0, 3.0]],
+                &[Ease::EaseInOut, Ease::Bezier([0.2, 0.0, 0.8, 0.75])],
+            )
+            .into(),
+        ),
     );
     let program = prepare(&form, &inputs).unwrap();
     let beats: Vec<f64> = (0..160).map(|step| START + f64::from(step) * 0.1).collect();
@@ -675,7 +707,7 @@ fn a_sparkle_never_lights_every_head() {
 #[test]
 fn pulse_is_a_wash_with_a_brightness_per_hit() {
     let (form, mut inputs) = preset("Pulse");
-    assert_eq!(form, "color.constant@1");
+    assert_eq!(form, "color@1");
     assert_eq!(render(&form, &inputs, 0.25), vec![1.0; 8]);
     for (beat, expected) in [(0.75, 0.5), (1.25, 1.0), (1.75, 0.5), (15.9, 0.2)] {
         for value in render(&form, &inputs, beat) {
@@ -709,14 +741,15 @@ fn pulse_is_a_wash_with_a_brightness_per_hit() {
     set(&mut inputs, "brightness", Value::Proportion(0.25));
     set(&mut inputs, "every", Value::Beats(1.0));
     assert_eq!(render(&form, &inputs, 0.5), vec![0.25; 8]);
-    let wash = &standard_library().definitions["color.constant@1"];
+    let wash = &standard_library().definitions["color@1"];
     assert_eq!(
         wash.inputs["brightness"].promotable,
         [
             SourceKind::Time,
             SourceKind::Hit,
             SourceKind::Noise,
-            SourceKind::Audio
+            SourceKind::Audio,
+            SourceKind::Space
         ]
     );
     assert_eq!(wash.inputs["every"].promotable, [SourceKind::Time]);
@@ -1043,7 +1076,7 @@ fn a_score_holds_only_form_clips_with_finite_timing() {
     score.clips.insert(
         "chase".into(),
         presets()
-            .preset("color.chase@1", "Chase")
+            .preset("color@1", "Chase")
             .unwrap()
             .clip(START, 4.0),
     );
@@ -1079,13 +1112,14 @@ fn a_changed_clip_with_an_envelope_out_of_range_is_refused() {
     stored.clips.insert(
         "chase".into(),
         presets()
-            .preset("color.chase@1", "Chase")
+            .preset("color@1", "Chase")
             .unwrap()
             .clip(START, 4.0),
     );
     let mut candidate = stored.clone();
-    candidate.clips.get_mut("chase").unwrap().inputs.insert(
-        "path".into(),
+    set(
+        &mut candidate.clips.get_mut("chase").unwrap().inputs,
+        "shape",
         Value::Envelope(Envelope::linear(vec![[0.0, 1.1], [1.0, 0.0]])),
     );
     let error = candidate.validate_changes(&library, &stored).unwrap_err().0;
@@ -1117,17 +1151,13 @@ fn stepped_color_curves_show_each_palette_stop_without_blending() {
                 .collect(),
         }),
     );
-    let Some(Author::Choice { options, .. }) =
-        &standard_library().definitions["color.time@1"].inputs["curve"].author
-    else {
-        panic!("curve choices")
-    };
+    let options = progress_presets();
     let steps = options
         .iter()
-        .find(|option| option.label == "Steps (4)")
+        .find(|(label, _)| *label == "Steps (4)")
         .unwrap();
-    assert_eq!(steps.value, Value::Envelope(palette_steps(4)));
-    set(&mut inputs, "curve", steps.value.clone());
+    assert_eq!(steps.1, Value::Envelope(palette_steps(4)));
+    set(&mut inputs, "curve", steps.1.clone());
     set(&mut inputs, "every", Value::Beats(8.0));
     for (beat, expected) in [1.0, 3.0, 5.0, 7.0].into_iter().zip(palette) {
         for color in colors(&form, &inputs, beat) {
@@ -1135,10 +1165,7 @@ fn stepped_color_curves_show_each_palette_stop_without_blending() {
         }
     }
     for label in ["Steps (2)", "Steps (3)", "Steps (6)", "Steps (8)"] {
-        assert!(
-            options.iter().any(|option| option.label == label),
-            "{label}"
-        );
+        assert!(options.iter().any(|(name, _)| *name == label), "{label}");
     }
 }
 
@@ -1155,7 +1182,7 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
         "value": {"points": [[0.0, 0.2, handles], [0.5, 0.6], [1.0, 1.0]]}
     }))
     .unwrap();
-    let Value::Time(curve) = &stored else {
+    let Value::Time(SourceCurve::Keys(curve)) = &stored else {
         unreachable!()
     };
     curve.validate().unwrap();
@@ -1178,14 +1205,14 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
     assert!(bad.validate().is_err());
     let mut high = curve.clone();
     high.points[0].ease = Ease::Bezier([0.1, 1.5, 0.2, 0.5]);
-    set(&mut inputs, "alpha", Value::Time(high));
+    set(&mut inputs, "alpha", Value::Time(high.into()));
     assert!(prepare(&form, &inputs).is_err());
 }
 
 #[test]
 fn a_fixture_span_chases_every_bar_at_once() {
     let (form, mut inputs) = preset("Chase");
-    let Value::Mapping(mut axis) = inputs["axis"].clone() else {
+    let Value::Mapping(mut axis) = axis_of(&inputs) else {
         panic!("axis")
     };
     axis.span = Span::Fixture;
@@ -1204,7 +1231,7 @@ fn a_fixture_span_chases_every_bar_at_once() {
 #[test]
 fn round_axes_need_a_plane_and_axes_have_no_per_group() {
     let (form, inputs) = preset("Ripple");
-    let Value::Mapping(axis) = inputs["axis"].clone() else {
+    let Value::Mapping(axis) = axis_of(&inputs) else {
         panic!("axis")
     };
     assert_eq!(axis.plane, Some(AxisPlane::Auto));

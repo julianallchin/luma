@@ -26,6 +26,7 @@ pub enum ValueType {
     Hit,
     Noise,
     Audio,
+    Space,
     /// A named option of a choice input; the input's options list the names.
     Choice,
     /// A vector in stage U, V, Z: an aim direction or a point in metres.
@@ -111,11 +112,13 @@ pub enum Value {
     Mask(BTreeMap<String, f64>),
     Lighting(BTreeMap<String, crate::FixtureOutput>),
     /// One curve over the whole clip.
-    Time(crate::Keyframes),
+    Time(crate::SourceCurve),
     /// One curve over the life of each event.
-    Hit(crate::Keyframes),
+    Hit(crate::SourceCurve),
     Noise(crate::NoiseSource),
     Audio(crate::AudioLevel),
+    /// Values along an axis of the heads, still or moving.
+    Space(crate::SpaceSource),
     /// One named option, such as `"figure_8"`.
     Choice(String),
     /// U, V, Z: stage right, downstage, up.
@@ -154,6 +157,7 @@ impl Value {
             Self::Hit(_) => ValueType::Hit,
             Self::Noise(_) => ValueType::Noise,
             Self::Audio(_) => ValueType::Audio,
+            Self::Space(_) => ValueType::Space,
             Self::Choice(_) => ValueType::Choice,
             Self::Vector(_) => ValueType::Vector,
         }
@@ -165,6 +169,7 @@ impl Value {
             Self::Hit(_) => crate::SourceKind::Hit,
             Self::Noise(_) => crate::SourceKind::Noise,
             Self::Audio(_) => crate::SourceKind::Audio,
+            Self::Space(_) => crate::SourceKind::Space,
             _ => return None,
         })
     }
@@ -193,6 +198,7 @@ impl Value {
             Self::Time(curve) | Self::Hit(curve) => return curve.validate(),
             Self::Noise(noise) => return noise.validate(),
             Self::Audio(audio) => return audio.validate(),
+            Self::Space(space) => return space.validate(),
             Self::Mapping(m) => return m.validate(),
             Self::Coordinates(m) => return m.validate(),
             Self::Field(m) => m.iter().all(|(id, v)| !id.is_empty() && v.is_finite()),
