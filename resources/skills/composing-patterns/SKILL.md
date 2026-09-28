@@ -34,15 +34,25 @@ edit = luma.track.edit()
 def defaults(form):
     return {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
 
-wash = defaults("color.constant@1")
+wash = defaults("color@1")
 wash.update(color="#1030ff", alpha=.3)
-edit.add_clip("color.constant@1", seconds=(0.0, luma.track.duration_s),
+edit.add_clip("color@1", seconds=(0.0, luma.track.duration_s),
               selection="all", inputs=wash)
 
-chase = defaults("color.chase@1")
-chase.update(axis="z", every=1, travel=2, width=.3,
-             alpha={"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.2}})
-clip = edit.add_clip("color.chase@1", seconds=(0.0, luma.track.duration_s),
+# A chase is a moving space source on brightness: one stroke per hit of
+# `every`, `travel` beats to cross the axis.
+chase = defaults("color@1")
+chase.update(
+    every=1,
+    brightness={"type": "space", "value": {
+        "axis": {"source": {"kind": "z"}, "per_group": False, "reverse": False},
+        "curve": {"points": [[0, 1], [1, 1]]},  # brightness across the stroke
+        "move": {"path": {"points": [[0, 0], [1, 1]]},
+                 "travel": {"type": "beats", "value": 2},
+                 "width": {"type": "number", "value": .3},
+                 "width_relative": True, "boundary": "clip"}}},
+    alpha={"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.2}})
+clip = edit.add_clip("color@1", seconds=(0.0, luma.track.duration_s),
                      selection="led_bars_vertical", inputs=chase, blend="screen")
 edit.check()
 ```

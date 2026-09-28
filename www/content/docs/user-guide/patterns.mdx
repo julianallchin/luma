@@ -11,10 +11,7 @@ A clip plays one **form**. A form is a shipped graph with a fixed set of inputs.
 
 | Form | What it does |
 |------|--------------|
-| `color.constant@1` | All selected heads one color, at a brightness that can follow each hit |
-| `color.time@1` | A color gradient over time, all heads equal |
-| `color.space@1` | A gradient laid across the rig. Each head gets a fixed color from its position |
-| `color.chase@1` | Strokes travel across the heads. Each event starts one stroke |
+| `color@1` | One color. Color and brightness are fixed, over time, per hit, across space, or a stroke that travels across space (a chase) |
 | `color.sparkle@1` | Each event lights a random share of the heads |
 | `color.noise@1` | Soft brightness that wanders across space and time |
 | `strobe.constant@1` | Fixture shutter strobe at Rate × Alpha |
@@ -32,15 +29,31 @@ An input takes a fixed value, or a **source** where the form allows it:
 |--------|---------|
 | Fixed | One value, on all heads, for the whole clip |
 | Over time | One curve over the whole clip, all heads equal |
-| Per hit | One curve over the life of each event |
+| Per hit | One curve over the life of each hit |
 | Noise | Smooth random wandering over time |
 | Audio | The energy of one frequency range of the track's full mix |
+| Space | Values along an axis of the heads: a gradient for a color, a curve for brightness |
+
+On a color, Over time and Per hit can read a gradient. A curve gives the position in the gradient over the clip or over each hit. This is a color fade; with **Every** set, it repeats every few beats, as in Rainbow.
+
+## Space and chases
+
+A Space source has an **axis**: the source (X, Y, Z, order, radial, angle or random), the span (the selection, each fixture or each group), an optional mirror, and a plane for radial and angle. Each head reads the gradient or the curve at its position on the axis. The Gradient preset is a Space gradient on color.
+
+Brightness can also **move**. Then its curve is one stroke, from the tail (0) to the head (1), and the stroke travels along the axis once per hit of **Every**. Heads outside a stroke are dark. The movement sets:
+
+- **Path**: where the stroke is over its life. A backward path runs the other way.
+- **Travel**: beats for one stroke to cross the axis. 0 is the whole clip.
+- **Width**: the size of the stroke, a share of the axis or of the gap between strokes.
+- **Boundary**: Clip (a stroke enters and leaves fully) or Wrap.
+
+Chase, Wave, Ripple, Spin, Bounce, Alternating sides, Stepped chase and Grow are presets of a moving brightness. While brightness moves, Per hit sources on the other inputs follow each stroke.
 
 ## Add a Clip
 
 Open the picker in the track editor. It lists the presets. Choose one. Luma copies its values into a new clip. Edit the inputs in the clip inspector.
 
-Layers combine forms. For a rainbow that chases, put a color layer under a chase layer in `multiply`.
+Layers combine forms. Often one clip is enough: for a rainbow that chases, give color a gradient over time and give brightness a moving Space source.
 
 The [node reference](/docs/node-reference/forms) shows the inputs of each form.
 

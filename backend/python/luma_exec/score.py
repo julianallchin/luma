@@ -1,16 +1,15 @@
 """Form clips over the same typed document GPUI edits.
 
     edit = luma.track.edit()
-    form = edit.definition("color.chase@1")  # every input, with its default
-    clip = edit.add_clip("color.chase@1", beats=(32, 48), selection="bars",
+    form = edit.definition("color@1")  # every input, with its default
+    clip = edit.add_clip("color@1", beats=(32, 48), selection="bars",
                          inputs={key: spec["default"] for key, spec in form["inputs"].items()})
     edit.check()
     edit.window(beats=(32, 36)).output.heatmap()
     edit.apply()
 
-A clip plays one form: color.constant@1, color.time@1, color.space@1,
-color.chase@1, color.sparkle@1, color.noise@1, strobe.constant@1 or aim@1. It holds
-a value for every input of its form. source() is the exact score document,
+A clip plays one form: color@1, color.sparkle@1, color.noise@1,
+strobe.constant@1 or aim@1. It holds a value for every input of its form. source() is the exact score document,
 suitable for an agent workspace or a one-shot model.
 
 Every curve has one format: a list of points, each [x, value] or
@@ -24,13 +23,26 @@ at this value and jump at the next point) or [x1, y1, x2, y2], a CSS
 cubic-bezier local to the segment: x is a share of the segment's length, y a
 share of the change to the next value, every number in 0..1.
 
-A plain "envelope" input, such as color.time@1's curve, holds values 0..1:
+A plain "envelope" input holds values 0..1:
     {"type": "envelope", "value": {"points": [[0, 0, "ease-in-out"], [1, 1]]}}
 A signal socket takes the same curve as a "time" source (over the clip) or a
 "hit" source (over each event), with numbers in the input's unit or colors:
     {"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}
 Tag a curve on a signal socket "time" or "hit", never "envelope"; the core
-rejects an envelope there.
+rejects an envelope there. On a color, a "time" or "hit" source can read a
+gradient at positions from a curve:
+    {"type": "hit", "value": {"gradient": {"stops": [...]},
+                              "curve": {"points": [[0, 0], [1, 1]]}}}
+A "space" source lays values along an axis of the heads: a gradient on a
+color, a curve of 0..1 on brightness. Add "move" for a chase: one stroke per
+hit of every, with the curve as brightness across the stroke:
+    {"type": "space", "value": {
+        "axis": {"source": {"kind": "u"}, "per_group": False, "reverse": False},
+        "curve": {"points": [[0, 1], [1, 1]]},
+        "move": {"path": {"points": [[0, 0], [1, 1]]},
+                 "travel": {"type": "beats", "value": 2},
+                 "width": {"type": "number", "value": 0.2},
+                 "width_relative": True, "boundary": "clip"}}}
 """
 from __future__ import annotations
 
@@ -65,7 +77,7 @@ def _typed(kind, value):
         spec = kind["signal"]
         if isinstance(value, dict) and "type" in value:
             if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field",
-                                     "time", "hit", "noise", "audio"}:
+                                     "time", "hit", "noise", "audio", "space"}:
                 raise TrackError(
                     f"a signal socket needs a numerical value or a source, not {value['type']!r}; "
                     'a curve here is a "time" (over the clip) or "hit" (over each event) source, '
@@ -367,7 +379,20 @@ class Edit:
         return json.dumps(self._candidate, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
     def _inputs(self, graph, inputs):
-        schema = self.definition(graph)["inputs"]
+        try:
+            schema = self.definition(graph)["inputs"]
+        except TrackError:
+            # Not a form here, perhaps an old id: the native validator reads
+            # it, or refuses it. Without a schema, values must be tagged.
+            result = {}
+            for key, value in (inputs or {}).items():
+                value = _plain(value)
+                if not (isinstance(value, dict) and set(value) == {"type", "value"}):
+                    raise TrackError(
+                        f"{graph} is not a known form, so {key!r} needs a tagged value "
+                        '{"type": ..., "value": ...}; use color@1 and its definition')
+                result[key] = value
+            return result
         result = {}
         for key, value in (inputs or {}).items():
             if key not in schema:
@@ -377,7 +402,7 @@ class Edit:
 
     def add_clip(self, form, *, id=None, beats=None, bars=None, seconds=None,
                  selection="all", z=None, blend="replace", seed=None, inputs=None):
-        """Stage a clip of a form ID, such as "color.chase@1", and return it.
+        """Stage a clip of a form ID, such as "color@1", and return it.
 
         inputs must give a value for every input of the form; read
         definition(form)["inputs"] for their types and defaults. A missing or

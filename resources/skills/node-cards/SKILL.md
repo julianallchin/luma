@@ -31,17 +31,28 @@ is one level deep.
   default), `"ease-in"`, `"ease-out"`, `"ease-in-out"`, `"hold"` (jump at the
   next point) or `[x1, y1, x2, y2]`, a CSS cubic-bezier local to the segment,
   every number in 0..1. The last point has no ease.
-- `hit` — one curve over the life of each event (chase, sparkle, and the
-  hits of `color.constant@1`).
+- `hit` — one curve over the life of each hit: each `every` period of
+  `color@1`, each stroke of its moving brightness, each sparkle event.
+- On a color input, `time` and `hit` can read a gradient instead of color
+  keys: `{"type": "hit", "value": {"gradient": {"stops": [...]}, "curve":
+  {"points": [[0, 0], [1, 1]]}}}`. The curve gives the gradient position
+  (0..1) over progress. Gradients blend in OKLab.
 - `noise` — `{"type": "noise", "value": {"speed": 4, "range": [0.2, 1]}}`,
   smooth random wandering.
 - `audio` — energy of a frequency range of the mix, scaled over the clip:
   `{"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.3}}`.
   Add `"threshold"` (0..1) to gate quiet energy. Ranges: Kick 40–100,
   Bass 20–250, Mids 250–4000, Highs 4000–16000, Full 20–16000.
+- `space` — values laid along an axis of the heads (see [Axis](#axis)).
+  On a color, a gradient:
+  `{"type": "space", "value": {"axis": {...}, "gradient": {"stops": [...]}}}`.
+  On brightness, a curve of 0..1 values:
+  `{"type": "space", "value": {"axis": {...}, "curve": {"points": [[0, 0], [1, 1]]}}}`.
+  Each head reads the value at its position on the axis. Add `"move"` to
+  make a chase (see [color@1](#color1)). Only brightness moves.
 
-Segments are `hold`, `linear`, `step` or `bezier`. Promotable key below:
-**T** time, **H** hit, **N** noise, **A** audio.
+Promotable key below: **T** time, **H** hit, **N** noise, **A** audio,
+**S** space.
 
 ## Axis
 
@@ -52,49 +63,67 @@ need a plane; the shorthand gives `{"kind": "auto"}`. The full value is
 `"span"` (`fixture` or `group`: each fixture or group gets its own axis),
 `"plane"` for radial and angle (`auto`, `up_down`, `front_back`, `left_right`,
 `{"kind": "custom", "normal": [u, v, z]}`) and `"mirror"`. An axis has no
-reverse; use a backward path. Radial and angle read around the centroid of
+reverse and no `per_group`; use a backward path, or the group span. Radial and angle read around the centroid of
 the span.
 
-## color.constant@1
+## color@1
 
-All selected heads one color. `color` (T), `brightness` (multiplies the
-color; T H N A), `every` (beats between hits; 0 is one hit over the clip; T),
-`alpha` (T N A). Only `brightness = hit[...]` reads the hits; each hit lasts
-until the next. Brightness darkens the light; alpha is how much the clip
-covers the layers under it.
-Presets: **Wash** (brightness 1, every 0), **Pulse** (brightness
-`hit[hold then drop]`, every 1).
+One color on the selected heads. Each input is fixed, over time, per hit,
+across space, or across space and time.
 
-## color.time@1
+- `color` (T H S) — the color. A gradient per hit or over time for a color
+  fade; a space gradient for colors across the rig.
+- `brightness` (proportion; T H N A S) — multiplies the color. A hit curve
+  for a pulse; a space curve for brightness across the rig; a moving space
+  source for a chase.
+- `every` (beats between hits; 0 is one hit over the clip; T). A hit source
+  plays once per hit; each hit lasts until the next. A moving space source
+  sends one stroke per hit.
+- `alpha` (T H N A) — how much the clip covers the layers under it.
 
-A color gradient over time, all heads equal. `colors` (gradient), `curve`
-(envelope over the clip), `every` (beats; 0 plays the gradient once over the
-clip, N repeats it every N beats; T), `alpha` (T N A).
-Presets: **Color fade** (every 0), **Rainbow** (hue gradient, every 4).
+### Chase: a moving space source on brightness
 
-## color.space@1
+```json
+{"type": "space", "value": {
+  "axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false},
+  "curve": {"points": [[0, 1], [1, 1]]},
+  "move": {"path": {"points": [[0, 0], [1, 1]]},
+           "travel": {"type": "beats", "value": 2},
+           "width": {"type": "number", "value": 0.2},
+           "width_relative": true, "boundary": "clip"}}}
+```
 
-A gradient laid across the rig. Each head gets a fixed color from its
-position. `colors` (gradient), `axis`, `alpha` (T N A). Preset: **Gradient**.
-
-## color.chase@1
-
-Strokes travel across the heads. Each event starts one stroke.
-
-- `color` (T), `axis` (default `u`), `every` (beats between strokes; T),
-  `travel` (beats for one stroke to cross the axis; T),
-  `width` (0..4; T H) with `width_relative` (true: share of the gap between
-  strokes; false: share of the axis), `shape` (brightness across the stroke),
-  `path` (position over the stroke's life), `boundary` (`clip` or `wrap`),
-  `alpha` (T H N A).
-- Strokes on the axis at once = `travel / every`. With `clip`, a stroke enters
-  and leaves fully. `every` 0 is one stroke per clip; `travel` 0 is the whole
+- `curve` is the brightness across the stroke, from its tail (0) to its head
+  (1) in the direction of travel. Heads outside a stroke get 0.
+- `path` (curve 0..1) — where the stroke is over its life: 0 is the axis
+  start, 1 its end. A backward path runs the other way.
+- `travel` (beats for one stroke to cross the axis; 0 is the whole clip; a
+  beats value or a `time` curve of beats).
+- `width` (0..4; a number or a `time` or `hit` curve) with `width_relative`
+  (true: share of the gap between strokes; false: share of the axis).
+- `boundary` — `clip` (a stroke enters and leaves fully) or `wrap`.
+- Strokes on the axis at once = `travel / every`. `every` 0 is one stroke per
   clip.
+- With a moving brightness, hit sources on other inputs (alpha) follow each
+  stroke's life. A color cannot take a hit source then; use a time source.
 
-Presets: **Chase**, **Wave** (soft, width abs 100%), **Ripple** (radial),
-**Spin** (angle), **Bounce**, **Alternating sides** (x, two steps, travel =
-every), **Stepped chase**, **Grow** (radial, fixture span: each fixture lights
-from its middle out to both ends and stays lit; one stroke over the clip).
+Presets:
+
+| Preset | color | brightness | every |
+|---|---|---|---|
+| **Wash** | white | 1 | 0 |
+| **Pulse** | white | `hit[hold then drop]` | 1 |
+| **Color fade** | hit gradient orange → blue | 1 | 0 |
+| **Rainbow** | hit hue gradient | 1 | 4 |
+| **Gradient** | space gradient magenta → blue along `u` | 1 | 0 |
+| **Chase** | white | moving, hard stroke, width 0.2 relative | 2 |
+| **Wave** | white | moving, soft stroke, width 1 of the axis | 2 |
+| **Ripple** | white | moving on a radial axis, soft | 2 |
+| **Spin** | white | moving on an angle axis, comet, `wrap` | 2 |
+| **Bounce** | white | moving, path there and back | 4 |
+| **Alternating sides** | white | moving, two held steps, width 0.5 | 2 |
+| **Stepped chase** | white | moving, four held steps | 4 |
+| **Grow** | white | moving on a radial axis, fixture span: each fixture lights from its middle out and stays lit | 0 |
 
 ## color.sparkle@1
 
@@ -104,7 +133,7 @@ Each event lights a random share of the heads.
   event; T), `coverage` (share of heads lit, below 1; T H N A), `brightness`
   (T H N A), `grain` (what one head is), `alpha` (T N A).
 - Sparkle is random heads only. A fixed coverage of 1 is rejected: all heads
-  on each hit is a `color.constant@1` Pulse.
+  on each hit is a `color@1` Pulse.
 - A new random set per event, from the clip seed. Overlapping events keep the
   maximum.
 
@@ -175,5 +204,6 @@ heads), **Circle** (18° circle wobble), **Figure-8** (25° figure-8 wobble),
 
 ## Layers
 
-Layers combine forms by blend mode. A rainbow that chases is a
-`color.time@1` clip with a `color.chase@1` clip above it in `multiply`.
+Layers combine forms by blend mode. Often one `color@1` clip is enough: a
+rainbow that chases is a color gradient over time (or per hit) with a moving
+space source on brightness.
