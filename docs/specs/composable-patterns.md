@@ -97,9 +97,9 @@ It lowers to the stroke graph (`core/event_life`, `coordinate_offset` and the
 envelope of the stroke), with one channel per live stroke. While a stroke
 moves, hit sources on the other inputs read each stroke's life.
 
-Old color form ids (`color.constant@1`, `color.time@1`, `color.space@1`,
-`color.chase@1`) are read as `color@1` on load (`luma_patterns::upgrade`) with
-the same light; rows are not migrated.
+The old color form ids (`color.constant@1`, `color.time@1`, `color.space@1`,
+`color.chase@1`) are not forms. The stored rows were migrated to `color@1` on
+2026-09-28, and an old id is refused like any unknown form.
 
 ## Persistence
 

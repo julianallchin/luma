@@ -44,8 +44,7 @@ layer already lit the head, the values blend:
 
 | Capability | Rule |
 |------------|------|
-| Color | `blend_color`, with the top dimmer as the opacity |
-| Dimmer | `blend_value` with the clip's blend mode, clamped to 0–1 |
+| Color and dimmer | `blend_light`, on the light (color times dimmer) |
 | Strobe | `blend_value` with the clip's blend mode, clamped to 0–1 |
 | Position | The top layer replaces the value |
 | Speed | Binary: above 0.5 is 1, else 0 |
@@ -81,16 +80,19 @@ and its motion's yaw and pitch. `offset_frame` turns the aim under the clip
 by it, with every angle times alpha (`offset_aim`). Over no aim the turn
 starts from the head's home.
 
-`blend_color` blends RGB in two steps:
+`blend_light` blends one head's light. The light is the color times the
+dimmer, in linear Rec. 2020. No light under a head is a dimmer of 0.
 
-1. It blends each channel with `blend_value`. In `value` mode it uses the
-   luminance of the top color (`0.299 R + 0.587 G + 0.114 B`) as the mix
-   amount instead.
-2. It mixes the result over the base color with the top opacity:
-   `result * opacity + base * (1 - opacity)`.
+- `replace` sets the top dimmer and moves the color toward the top color by
+  that dimmer. Over no light it takes the top color. Black on `replace`
+  paints black.
+- Every other mode applies `blend_value` to each channel of the light. The
+  new dimmer is the peak channel, and the color is the light divided by it.
+  So `add` and `screen` over black equal `add` and `screen` over nothing, and
+  `multiply` or `subtract` over nothing stay nothing.
 
-The compositor passes the top dimmer as the opacity. A dark layer therefore
-changes the color below it very little.
+`offset` never reaches `blend_value`: an `offset` clip goes through
+`offset_frame` instead.
 
 ## Sampling
 

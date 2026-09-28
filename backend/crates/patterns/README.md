@@ -109,19 +109,6 @@ A missing or unknown input is an error. A score holds form clips only.
   forms use. A period or life of 0 beats lasts the whole clip.
 - `presets()` reads `src/presets.json`: named presets (a form and every
   input value) and named curves for `time` and `hit` sources.
-- `rec2020_upgrade::convert_clip_inputs` (`src/forms/rec2020_upgrade.rs`)
-  is one-shot: it converts a stored clip's colors from the old working
-  space, linear sRGB (the renderer and DMX used the numbers as linear light),
-  to linear Rec. 2020 by a change of primaries only, for the one-time row
-  conversion, and is deleted after it runs. `examples/rec2020_presets.rs`
-  converted `src/presets.json` with it and checks the old color forms'
-  recording.
-- Old ids `color.constant@1`, `color.time@1`, `color.space@1` and
-  `color.chase@1` are not forms. Rows are not migrated: `upgrade`
-  (`src/forms/upgrade.rs`) reads such a clip as `color@1` with the same
-  light, and `Score` deserialization and the row loader call it.
-  `tests/fixtures/old_color_forms.json` holds the old forms' light for the
-  equivalence test.
 
 ## Host integration
 

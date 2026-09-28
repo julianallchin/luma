@@ -1,241 +1,58 @@
-//! `color@1` and the space source. The four old color forms were merged into
-//! `color@1`; `fixtures/old_color_forms.json` holds their light, recorded
-//! before they were deleted, for presets and varied inputs. It was recorded
-//! when colors were linear sRGB: its inputs are converted as stored rows are
-//! (`rec2020_upgrade`), and the light is compared back in linear sRGB. The
-//! cases marked `rerecorded` read a gradient between stops: gradients now
-//! blend in OKLab of the light itself, where they blended the stored numbers
-//! as if gamma-encoded, so their light was recorded again
-//! (`examples/rec2020_presets.rs`). Every other case keeps its old light.
+//! `color@1` and the space source.
 use luma_patterns::*;
-use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Deserialize)]
-struct Recording {
-    cells: Vec<Cell>,
-    start: f64,
-    duration: f64,
-    seed: u64,
-    times: Vec<f64>,
-    cases: Vec<Case>,
-}
-#[derive(Deserialize)]
-struct Case {
-    label: String,
-    form: String,
-    inputs: BTreeMap<String, Value>,
-    /// Per time, per cell: the light as linear sRGB.
-    rgb: Vec<Vec<[f64; 3]>>,
-    /// Recorded again when gradients began to blend the light itself.
-    #[serde(default)]
-    rerecorded: bool,
-}
-
-fn recording() -> Recording {
-    let mut recording: Recording =
-        serde_json::from_str(include_str!("fixtures/old_color_forms.json")).unwrap();
-    for case in &mut recording.cases {
-        let stored = serde_json::to_value(&case.inputs).unwrap();
-        let converted = rec2020_upgrade::convert_clip_inputs(&case.form, &stored).unwrap();
-        case.inputs = serde_json::from_value(converted).unwrap();
-    }
-    recording
-}
-
-fn program(recording: &Recording, form: &str, inputs: &BTreeMap<String, Value>) -> PreparedGraph {
-    PreparedGraph::new(
-        &standard_library(),
-        form,
-        inputs,
-        Frame {
-            cells: &recording.cells,
-            features: None,
-            beat: recording.start,
-            clip_start: recording.start,
-            clip_duration: recording.duration,
-            seed: recording.seed,
-        },
-    )
-    .unwrap()
-}
-
-/// The light of a clip, per time and cell, as linear sRGB.
-fn light(
-    recording: &Recording,
-    form: &str,
-    inputs: &BTreeMap<String, Value>,
-) -> Vec<Vec<[f64; 3]>> {
-    let program = program(recording, form, inputs);
-    recording
-        .times
-        .iter()
-        .map(|t| {
-            let result = program.evaluate(recording.start + t).unwrap();
-            let Value::Lighting(lit) = &result["lighting"] else {
-                panic!("expected lighting")
-            };
-            recording
-                .cells
-                .iter()
-                .map(|cell| color_space::Gamut::SRGB.fit(lit[&cell.id].rgb()))
-                .collect()
-        })
-        .collect()
-}
-
-/// Float noise through the change of primaries and back.
-const TOLERANCE: f64 = 1e-7;
-
-fn same_light(label: &str, got: &[Vec<[f64; 3]>], want: &[Vec<[f64; 3]>]) {
-    for (t, (got, want)) in got.iter().zip(want).enumerate() {
-        for (cell, (got, want)) in got.iter().zip(want).enumerate() {
-            for ch in 0..3 {
-                assert!(
-                    (got[ch] - want[ch]).abs() < TOLERANCE,
-                    "{label}: time {t} cell {cell}: {got:?} != {want:?}"
-                );
-            }
+/// Two rows of heads in group `a` and a column in group `b`.
+fn cells() -> Vec<Cell> {
+    let rows: [(&str, [[f64; 3]; 4]); 3] = [
+        (
+            "a",
+            [[0., 0., 3.], [1., 0., 3.], [2., 0., 3.], [3., 0., 3.]],
+        ),
+        (
+            "a",
+            [
+                [0.5, 2., 3.],
+                [1.8, 2., 3.2],
+                [3.1, 2., 3.4],
+                [4.4, 2., 3.6],
+            ],
+        ),
+        (
+            "b",
+            [[5., -0.5, 2.], [5., 0.4, 2.], [5., 1.3, 2.], [5., 2.2, 2.]],
+        ),
+    ];
+    let mut cells = Vec::new();
+    for (fixture, (group, heads)) in rows.into_iter().enumerate() {
+        for (head, uvz) in heads.into_iter().enumerate() {
+            cells.push(Cell {
+                id: format!("f{fixture}:{head}"),
+                group: group.into(),
+                world: uvz,
+                uvz,
+            });
         }
     }
+    cells
 }
 
-#[test]
-fn every_old_color_clip_converts_to_color_with_the_same_light() {
-    let recording = recording();
-    let mut forms = std::collections::BTreeSet::new();
-    for case in &recording.cases {
-        assert!(!is_form(&case.form), "{} is still a form", case.form);
-        forms.insert(case.form.as_str());
-        let (form, inputs) = upgrade(&case.form, &case.inputs)
-            .unwrap_or_else(|| panic!("{}: no conversion", case.label));
-        assert_eq!(form, "color@1");
-        same_light(&case.label, &light(&recording, form, &inputs), &case.rgb);
-    }
-    assert_eq!(
-        forms.into_iter().collect::<Vec<_>>(),
-        [
-            "color.chase@1",
-            "color.constant@1",
-            "color.space@1",
-            "color.time@1"
-        ]
-    );
-}
-
-#[test]
-fn only_gradient_reads_were_recorded_again() {
-    let recording = recording();
-    for case in recording.cases.iter().filter(|case| case.rerecorded) {
-        let reads_a_gradient = case.inputs.values().any(|value| match value {
-            Value::Gradient(_) | Value::Hit(SourceCurve::Gradient(_)) => true,
-            Value::Time(SourceCurve::Gradient(_)) => true,
-            Value::Space(space) => space.gradient.is_some(),
-            _ => false,
-        });
-        assert!(reads_a_gradient, "{}", case.label);
-    }
-    let kept = recording
-        .cases
-        .iter()
-        .filter(|case| !case.rerecorded)
-        .count();
-    assert!(kept * 4 >= recording.cases.len() * 3, "{kept}");
-}
-
-#[test]
-fn the_recording_is_not_all_dark() {
-    // The equivalence above means little over dark frames.
-    let recording = recording();
-    let lit = recording
-        .cases
-        .iter()
-        .filter(|case| case.rgb.iter().flatten().flatten().any(|v| *v > 0.01))
-        .count();
-    assert!(lit * 10 >= recording.cases.len() * 9, "{lit}");
-}
-
-#[test]
-fn every_old_preset_name_is_a_color_preset_with_the_same_light() {
-    let recording = recording();
-    for case in &recording.cases {
-        let Some(name) = case.label.strip_prefix("preset ") else {
-            continue;
-        };
-        let preset = presets()
-            .preset("color@1", name)
-            .unwrap_or_else(|| panic!("no color@1 preset {name}"));
-        same_light(
-            name,
-            &light(&recording, &preset.form, &preset.inputs),
-            &case.rgb,
-        );
-    }
-}
+const START: f64 = 8.0;
 
 fn clip_json(graph: &str, inputs: &BTreeMap<String, Value>) -> String {
     serde_json::json!({"clips": {"a": {
-        "graph": graph, "start": 8.0, "duration": 16.0, "seed": 7, "inputs": inputs
+        "graph": graph, "start": START, "duration": 16.0, "seed": 7, "inputs": inputs
     }}})
     .to_string()
 }
 
 #[test]
-fn an_old_clip_loads_as_color_and_saves_and_loads_the_same() {
-    let recording = recording();
-    let library = standard_library();
-    for case in recording.cases.iter().step_by(5) {
-        let loaded = Score::from_json(&library, &clip_json(&case.form, &case.inputs))
-            .unwrap_or_else(|e| panic!("{}: {e}", case.label));
-        let clip = &loaded.clips["a"];
-        assert_eq!(clip.graph, "color@1", "{}", case.label);
-        let saved = loaded.to_json(&library).unwrap();
-        assert!(!saved.contains("color.constant@1") && !saved.contains("color.chase@1"));
-        let again = Score::from_json(&library, &saved).unwrap();
-        assert_eq!(again, loaded, "{}", case.label);
-        same_light(
-            &case.label,
-            &light(
-                &recording,
-                &again.clips["a"].graph,
-                &again.clips["a"].inputs,
-            ),
-            &case.rgb,
-        );
-    }
+fn an_old_color_form_id_is_refused() {
+    let error = Score::from_json(&standard_library(), &clip_json("color.chase@1", &wash()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("color.chase@1 is not a form"), "{error}");
 }
-
-#[test]
-fn a_clip_row_read_back_upgrades_too() {
-    let recording = recording();
-    let case = recording
-        .cases
-        .iter()
-        .find(|case| case.form == "color.time@1")
-        .unwrap();
-    let clip = Clip {
-        graph: case.form.clone(),
-        start: 0.0,
-        duration: 4.0,
-        seed: 0,
-        selection_seed: None,
-        selection: Selection::all(),
-        z_index: 0,
-        blend_mode: BlendMode::Replace,
-        inputs: case.inputs.clone(),
-    }
-    .upgraded();
-    assert_eq!(clip.graph, "color@1");
-    assert!(matches!(
-        clip.inputs["color"],
-        Value::Hit(SourceCurve::Gradient(_))
-    ));
-    // A current clip passes through unchanged.
-    assert_eq!(clip.clone().upgraded(), clip);
-}
-
-// ---------------------------------------------------------------------------
-// The space source
 
 fn wash() -> BTreeMap<String, Value> {
     presets().preset("color@1", "Wash").unwrap().inputs.clone()
@@ -401,17 +218,29 @@ fn a_gradient_curve_needs_a_color_input() {
     assert!(check(&inputs).is_err());
 }
 
-/// Brightness per head at `beat` beats into a 16-beat clip over the
-/// recording's cells.
+/// Brightness per head at `beat` beats into a 16-beat clip over
+/// [`cells`].
 fn brightness(inputs: &BTreeMap<String, Value>, beat: f64) -> Vec<f64> {
-    let recording = recording();
-    let program = program(&recording, "color@1", inputs);
-    let result = program.evaluate(recording.start + beat).unwrap();
+    let cells = cells();
+    let program = PreparedGraph::new(
+        &standard_library(),
+        "color@1",
+        inputs,
+        Frame {
+            cells: &cells,
+            features: None,
+            beat: START,
+            clip_start: START,
+            clip_duration: 16.0,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    let result = program.evaluate(START + beat).unwrap();
     let Value::Lighting(lit) = &result["lighting"] else {
         panic!()
     };
-    recording
-        .cells
+    cells
         .iter()
         .map(|cell| lit[&cell.id].dimmer.unwrap_or(0.0))
         .collect()
@@ -424,12 +253,10 @@ fn a_still_brightness_across_space_follows_its_curve_along_the_axis() {
         "brightness".into(),
         space(serde_json::json!({"axis": axis(), "curve": ramp()})),
     );
-    let recording = recording();
     let level = brightness(&inputs, 3.0);
     // Along U the heads further right are brighter, and the ends reach the
     // ends of the curve.
-    let mut by_u: Vec<(f64, f64)> = recording
-        .cells
+    let mut by_u: Vec<(f64, f64)> = cells()
         .iter()
         .zip(&level)
         .map(|(cell, level)| (cell.uvz[0], *level))

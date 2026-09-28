@@ -1,12 +1,8 @@
 //! The strip's value picker: a `<Selector>` trigger plus its open menu, wired.
 //!
-//! The blend-mode cell is this widget verbatim. The blend names are
-//! deliberately **not** written down here: the canonical list is
-//! `luma_lib::models::node_graph::BlendMode` (and the score DSL's
-//! `blend_mode_name` beside it), and this crate deliberately does not depend
-//! on Luma's core. The
-//! integration matches exhaustively on `BlendMode` to produce `options`, so a
-//! new mode is a compile error there instead of a silent omission here.
+//! The blend-mode cell is this widget verbatim. The blend names are not
+//! written down here: the caller builds `options` from
+//! `luma_patterns::blend_modes`, the modes a clip's form takes.
 //!
 //! Open state is the caller's, as it is for every menu in this crate: the
 //! strip already owns "which cell has its menu open", and a second, hidden

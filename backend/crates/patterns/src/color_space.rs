@@ -378,8 +378,7 @@ mod tests {
     /// A gradient of sRGB colors, such as hex codes, blends as the editor
     /// showed it before: OKLab does not depend on the space it is read from.
     /// (Stored gradients were linear light, which the old engine blended as
-    /// if gamma-encoded; their midpoints do change. See
-    /// `tests/color_form.rs`.)
+    /// if gamma-encoded; their midpoints did change.)
     #[test]
     fn oklab_blending_matches_the_old_srgb_blending() {
         let colors = cube(5);

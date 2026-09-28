@@ -1,7 +1,7 @@
 //! The Selection arg value: *which* fixtures a clip targets.
 //!
 //! This is the one place the wire shape is spelled. Every producer and consumer
-//! — eval, the score DSL, the legacy upgrade, the graph validator, the strip UI,
+//! — eval, the score DSL, the graph validator, the strip UI,
 //! Python — goes through this type rather than re-spelling the object.
 //!
 //! ```json

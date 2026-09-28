@@ -97,8 +97,10 @@ impl BlendMode {
 #[inline]
 pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
     match mode {
-        // Offset turns an aim and never reaches light; it passes the top.
-        BlendMode::Replace | BlendMode::Offset => top,
+        BlendMode::Replace => top,
+        BlendMode::Offset => {
+            unreachable!("an Offset clip turns aim through `offset_aim` and blends no value")
+        }
         BlendMode::Add => (base + top).min(1.0),
         BlendMode::Multiply => base * top,
         BlendMode::Screen => 1.0 - (1.0 - base) * (1.0 - top),

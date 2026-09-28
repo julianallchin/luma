@@ -83,7 +83,7 @@ class ScoreTests(unittest.TestCase):
     def test_new_clips_get_nonoverlapping_layers_unless_explicitly_chosen(self):
         track = self.track()
         edit = track.edit()
-        graph = "color.chase@1"
+        graph = "color@1"
         first = edit.add_clip(graph, id="first", beats=(0, 4))
         second = edit.add_clip(graph, id="second", beats=(2, 6))
         adjacent = edit.add_clip(graph, id="adjacent", beats=(6, 8))
@@ -108,7 +108,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(_typed({"signal": {"unit": "proportion"}}, space), space)
 
     def track(self):
-        nodes = {"color.chase@1": {"name": "Chase", "inputs": {
+        nodes = {"color@1": {"name": "Color", "inputs": {
             key: {"name": key, "description": "", "value_type": kind, "rate": "frame", "default": {"type": kind, "value": default}}
             for key, kind, default in [("width", "proportion", .25), ("color", "color", [1., 1., 1.])]
         }, "outputs": {"lighting": {"value_type": "lighting", "rate": "frame"}},
@@ -141,7 +141,7 @@ class ScoreTests(unittest.TestCase):
         first = reconcile_facades(cached_first, None)
         held = first.track
         edit, stale = held.edit(), held.edit()
-        graph = "color.chase@1"
+        graph = "color@1"
         edit.add_clip(graph, id="clip", beats=(0, 1))
         second = reconcile_facades(load("score-a", "manifest-2"), first)
         self.assertIs(second.track, held)
@@ -182,7 +182,7 @@ class ScoreTests(unittest.TestCase):
                 "root": {"track": values, "nodes": track._nodes}}, workspace,
                 host_call=track._host_call)
         cached_a = snapshot("a", {})
-        cached_b = snapshot("b", {"other": {"graph": "color.chase@1", "start": 0, "duration": 4, "seed": 0}})
+        cached_b = snapshot("b", {"other": {"graph": "color@1", "start": 0, "duration": 4, "seed": 0}})
         live_a = reconcile_facades(cached_a, None)
         old_edit = live_a.track.edit()
         live_b = reconcile_facades(cached_b, live_a)
@@ -207,7 +207,7 @@ class ScoreTests(unittest.TestCase):
     def test_edits_and_windows_pin_their_revision_and_do_not_mutate_the_track(self):
         track = self.track()
         edit, stale = track.edit(), track.edit()
-        graph = "color.chase@1"
+        graph = "color@1"
         edit.add_clip(graph, id="clip", beats=(0, 4), inputs={"width": .8})
         window = edit.window(beats=(0, 4))
         self.assertEqual(len(track.clips), 0)
@@ -215,7 +215,7 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(stale.base_revision, "base")
         self.assertEqual(window._revision, "base")
         self.assertEqual(len(track.clips), 1)
-        self.assertEqual(track.document["clips"]["clip"]["graph"], "color.chase@1")
+        self.assertEqual(track.document["clips"]["clip"]["graph"], "color@1")
         with self.assertRaises(TypeError):
             track.document["clips"]["extra"] = {}
         with self.assertRaises(AttributeError):
@@ -224,7 +224,7 @@ class ScoreTests(unittest.TestCase):
     def test_override_reset_sets_selection_and_source_is_independent(self):
         track = self.track()
         edit = track.edit()
-        graph = "color.chase@1"
+        graph = "color@1"
         clip = edit.add_clip(graph, id="clip", beats=(0, 4), inputs={"width": .8})
         edit.update_clip(clip, selection="bars", inputs={"width": None})
         value = edit.candidate["clips"]["clip"]
@@ -267,7 +267,7 @@ class ScoreTests(unittest.TestCase):
         # wire shape.
         track = self.track()
         edit = track.edit()
-        graph = "color.chase@1"
+        graph = "color@1"
         first = edit.add_clip(graph, id="first", beats=(1, 4), selection="front")
         edit.add_clip(graph, id="second", beats=(2, 5), selection="rear", blend="add", z=1)
         original = edit.candidate
