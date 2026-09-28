@@ -99,7 +99,8 @@ source is one level deep: a source's own settings are plain values.
 - On a color input, `time[...]` and `hit[...]` can read a gradient instead
   of color keys: `{"gradient": {"stops": [...]}, "curve": {"points": [[0,
   0], [1, 1]]}}`. The curve gives the gradient position (0–1) at each
-  progress. The gradient blends in OKLab; color keys blend in RGB.
+  progress. The gradient blends in OKLab; color keys blend in RGB. Every
+  color is linear Rec. 2020, 0–1 per channel.
 - `audio` reads the full mix only. No stems, no drum events, no harmony.
   `from_hz` and `to_hz` set the frequency range (20–20,000 Hz, from < to).
   Named ranges only fill the two numbers: Kick 40–100, Bass 20–250, Mids

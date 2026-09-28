@@ -36,6 +36,12 @@ An input takes a fixed value, or a **source** where the form allows it:
 
 On a color, Over time and Per hit can read a gradient. A curve gives the position in the gradient over the clip or over each hit. This is a color fade; with **Every** set, it repeats every few beats, as in Rainbow.
 
+## Colors
+
+Luma keeps colors in Rec. 2020, a wider range than a screen's sRGB. LED fixtures can make many colors outside sRGB: deep red, cyan, lime and royal blue. The color picker reaches all of Rec. 2020. The hex field is sRGB. When a color is outside sRGB, the field shows the nearest sRGB color and says **Outside sRGB**.
+
+A fixture or a screen that cannot make a color shows the nearest color it can make. That color has the same hue and lightness, with less saturation.
+
 ## Space and chases
 
 A Space source has an **axis**: the source (X, Y, Z, order, radial, angle or random), the span (the selection, each fixture or each group), an optional mirror, and a plane for radial and angle. Each head reads the gradient or the curve at its position on the axis. The Gradient preset is a Space gradient on color.

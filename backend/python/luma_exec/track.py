@@ -148,9 +148,14 @@ class TrackOutput:
         return self._times_s
 
     def heatmap(self) -> Any:
-        """Plot final composited light color over the window (x=time, y=light)."""
+        """Plot final composited light color over the window (x=time, y=light).
+
+        The values are light in linear Rec. 2020; the plot shows them in sRGB.
+        """
         import matplotlib.pyplot as plt
         import numpy as np
+
+        from .color import to_display
 
         values = np.asarray(self.values)
         if values.ndim == 2:
@@ -159,7 +164,7 @@ class TrackOutput:
             raise TrackError(
                 "track.score_render tensor must have shape [light, time, channel>=3]"
             )
-        rgb = np.clip(values[:, :, :3], 0.0, 1.0)
+        rgb = to_display(np.clip(values[:, :, :3], 0.0, 1.0))
         light_count = rgb.shape[0]
         height = min(12.0, max(3.0, 1.8 + light_count * 0.16))
         fig, ax = plt.subplots(figsize=(12, height), dpi=100)

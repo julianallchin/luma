@@ -79,7 +79,7 @@ const CATEGORIES: &[Category] = &[
         slug: "color",
         title: "Color",
         description: "Gradient sampling.",
-        intro: "Colors are normalized RGB from 0 to 1. Gradients interpolate in the OKLab color space.",
+        intro: "Colors are light in linear Rec. 2020, 0 to 1 per channel. Gradients interpolate in the OKLab color space.",
         nodes: &[
             ("sample_gradient", "The color and opacity of a gradient at Position."),
         ],
