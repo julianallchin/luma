@@ -14,7 +14,7 @@ architecture is in [graph-editor-interaction.md](graph-editor-interaction.md).
 - One tensor runtime executes every graph (`backend/crates/patterns/src/runtime`,
   `prepared.rs`, `tensor.rs`). A host evaluates a whole time batch in one call.
   There is no per-sample graph run and no playback state.
-- Envelope is the one editable curve (`envelope.rs`). Saved ADSR and Beat
+- Envelope is the one editable curve (`gpui/crates/ui/src/arg/strip.rs`). Saved ADSR and Beat
   Envelope nodes convert to Envelope when a graph loads.
 - Seeds are u64 values. They are stored as decimal strings so JSON readers
   cannot round them.

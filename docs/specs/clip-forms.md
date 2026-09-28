@@ -446,15 +446,17 @@ one hit detected twice; the later one was deleted. The look changed where
 the padding hid the layers under it: that light now shows between hits.
 
 **One color form (2026-09-27).** `color.constant@1`, `color.time@1`,
-`color.space@1` and `color.chase@1` merged into `color@1`. Rows are not
-migrated. `luma_patterns::upgrade` reads an old clip as `color@1` when it is
-loaded, and the first save that changes the clip writes the new form. The
+`color.space@1` and `color.chase@1` merged into `color@1`. A one-time data
+migration on 2026-09-28 rewrote every stored clip and draft, on Supabase and
+in the local database, to `color@1` and linear Rec. 2020. The app reads only
+`color@1`: an old id is refused like any other unknown form. The
 Wash form keeps its inputs. Color over time becomes a color hit gradient with
 the same `every` and brightness 100%. Color across space becomes a color
 space gradient with brightness 100% and `every` 0. A chase becomes a moving
 space source on brightness: its axis, shape (the curve), path, travel, width,
 relative width and boundary go into the source; color, every and alpha stay.
-A recorded test shows the same light for every conversion.
+A recorded test showed the same light for every conversion before the
+migration ran.
 
 **Render check.** A dry run over a copy of the reference database renders
 every converted clip, old and new, at a fixed set of times on its real venue,

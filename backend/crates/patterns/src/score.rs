@@ -25,17 +25,6 @@ pub struct Clip {
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
 }
-impl Clip {
-    /// The clip with an old form id read as the form that replaced it; see
-    /// [`crate::upgrade`]. Every way a clip is loaded passes through here.
-    pub fn upgraded(mut self) -> Self {
-        if let Some((graph, inputs)) = crate::upgrade(&self.graph, &self.inputs) {
-            self.graph = graph.into();
-            self.inputs = inputs;
-        }
-        self
-    }
-}
 fn all_selection() -> crate::Selection {
     crate::Selection::all()
 }
@@ -44,27 +33,11 @@ fn replace_blend() -> crate::BlendMode {
 }
 
 /// Canonical score document: clips keyed by their stable identity. Every clip
-/// plays a shipped form. Reading one upgrades old form ids.
+/// plays a shipped form.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(from = "ScoreDocument")]
+#[serde(deny_unknown_fields)]
 pub struct Score {
     pub clips: BTreeMap<String, Clip>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScoreDocument {
-    clips: BTreeMap<String, Clip>,
-}
-impl From<ScoreDocument> for Score {
-    fn from(document: ScoreDocument) -> Self {
-        Self {
-            clips: document
-                .clips
-                .into_iter()
-                .map(|(id, clip)| (id, clip.upgraded()))
-                .collect(),
-        }
-    }
 }
 impl Score {
     pub fn validate(&self, base: &Library) -> Result<()> {

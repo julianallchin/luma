@@ -399,8 +399,8 @@ class Edit:
         try:
             schema = self.definition(graph)["inputs"]
         except TrackError:
-            # Not a form here, perhaps an old id: the native validator reads
-            # it, or refuses it. Without a schema, values must be tagged.
+            # Not a form here: the native validator decides, and refuses an
+            # unknown form. Without a schema, values must be tagged.
             result = {}
             for key, value in (inputs or {}).items():
                 value = _plain(value)

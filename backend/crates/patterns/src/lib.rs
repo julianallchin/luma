@@ -39,7 +39,7 @@ pub use features::*;
 pub use field_ops::FieldMath;
 pub use forms::{
     axis_presets, blend_modes, input_order, is_form, movement_inputs, palette_steps, path_presets,
-    progress_presets, rec2020_upgrade, shape_presets, steps_path, upgrade, FORMS, MAX_WIDTH,
+    progress_presets, shape_presets, steps_path, FORMS, MAX_WIDTH,
 };
 pub use graph::*;
 pub use mapping::*;
