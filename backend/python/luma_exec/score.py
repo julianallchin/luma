@@ -12,6 +12,11 @@ A clip plays one form: color@1, color.sparkle@1, color.noise@1,
 strobe.constant@1 or aim@1. It holds a value for every input of its form. source() is the exact score document,
 suitable for an agent workspace or a one-shot model.
 
+A color is light in linear Rec. 2020, three channels 0..1; its brightness is
+its peak channel. "#RRGGBB" is sRGB and is converted where a plain color or a
+gradient stop takes it. For a triple, in keyframes too, convert with
+luma.track.color("#ff8000") or luma.track.color([1, 0.5, 0]) (sRGB 0..1).
+
 Every curve has one format: a list of points, each [x, value] or
 [x, value, ease]:
     {"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}
@@ -54,6 +59,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from .color import from_srgb
 from .track import (TrackOutput, TrackError, TrackReadOnlyError,
                     TrackClosedError, TrackHostUnavailableError,
                     _ImmutableSnapshot, _field, _items,
@@ -107,9 +113,11 @@ def _typed(kind, value):
             raise TrackError("seed needs an integer from 0 through 18446744073709551615")
         value = str(value)
     if kind == "color" and isinstance(value, str):
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-            raise TrackError("color must be #RRGGBB or three normalized channels")
-        value = [int(value[index:index+2], 16) / 255 for index in (1, 3, 5)]
+        # Hex is sRGB; a stored color is linear Rec. 2020.
+        try:
+            value = from_srgb(value)
+        except ValueError:
+            raise TrackError("color must be #RRGGBB (sRGB) or three linear Rec. 2020 channels in 0..1") from None
     if kind == "gradient":
         if isinstance(value, list):
             value = {"stops": [{"t": stop[0], "color": stop[1]} for stop in value]}
@@ -180,6 +188,15 @@ class GraphTrack(_ImmutableSnapshot):
     def _require_active(self):
         if not self._active:
             raise TrackClosedError("this score is no longer in scope; use the current luma.track")
+
+    @staticmethod
+    def color(srgb):
+        """An sRGB color, "#RRGGBB" or three channels 0..1, as the linear
+        Rec. 2020 triple a score stores."""
+        try:
+            return from_srgb(srgb)
+        except ValueError as error:
+            raise TrackError(str(error)) from None
 
     def _call(self, method, payload):
         self._require_active()

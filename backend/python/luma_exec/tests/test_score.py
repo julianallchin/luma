@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from luma_exec.color import from_srgb, to_display
 from luma_exec.score import GraphTrack, _typed
 from luma_exec.track import TrackError
 
@@ -17,7 +18,7 @@ class ScoreTests(unittest.TestCase):
         original = copy.deepcopy(stops)
         typed = _typed("gradient", stops)["value"]
         self.assertEqual([stop["alpha"] for stop in typed["stops"]], [.2, 0.])
-        self.assertEqual(typed["stops"][0]["color"], [1., 0., 0.])
+        self.assertEqual(typed["stops"][0]["color"], from_srgb([1., 0., 0.]))
         self.assertEqual(stops, original)
         # Unknown fields must reach Rust's deny_unknown_fields checks, not vanish.
         stops["stops"][0]["opacity"] = .5
@@ -36,7 +37,7 @@ class ScoreTests(unittest.TestCase):
     def test_signal_sockets_accept_numbers_colors_and_unit_literals(self):
         signal = {"signal": {"unit": None, "channels": None}}
         self.assertEqual(_typed(signal, .25), {"type": "number", "value": .25})
-        self.assertEqual(_typed(signal, "#ff0000"), {"type": "color", "value": [1., 0., 0.]})
+        self.assertEqual(_typed(signal, "#ff0000"), {"type": "color", "value": from_srgb([1., 0., 0.])})
         angle = {"signal": {"unit": "degrees", "channels": "value"}}
         self.assertEqual(_typed(angle, 90), {"type": "degrees", "value": 90})
         seconds = {"signal": {"unit": "seconds", "channels": "value"}}
@@ -236,11 +237,26 @@ class ScoreTests(unittest.TestCase):
         edit.replace_source(source)
         self.assertEqual(json.loads(source), edit.candidate)
 
+    def test_colors_are_linear_rec2020_and_hex_is_srgb(self):
+        # sRGB red is the red column of ITU-R BT.2087's matrix.
+        for got, want in zip(GraphTrack.color("#ff0000"), [0.6274, 0.0691, 0.0164]):
+            self.assertAlmostEqual(got, want, places=4)
+        self.assertEqual(GraphTrack.color([1, 1, 1]), GraphTrack.color("#ffffff"))
+        for value in ["#fff", [2, 0, 0]]:
+            with self.assertRaises(TrackError):
+                GraphTrack.color(value)
+        # sRGB round-trips through the plot's display; a wider color stays in range.
+        for srgb in [[1., .5, 0.], [.2, .4, .6]]:
+            for got, want in zip(to_display(from_srgb(srgb)), srgb):
+                self.assertAlmostEqual(got, want, places=6)
+        self.assertTrue(((to_display([0., 1., 0.]) >= 0) & (to_display([0., 1., 0.]) <= 1)).all())
+
     def test_rich_values_keep_their_units(self):
-        self.assertEqual(_typed("color", "#ff0000"), {"type": "color", "value": [1., 0., 0.]})
+        self.assertEqual(_typed("color", "#ff0000"), {"type": "color", "value": from_srgb([1., 0., 0.])})
         self.assertEqual(_typed("envelope", [[0, 1], [1, 0]])["value"], {"points": [[0, 1], [1, 0]]})
         self.assertEqual(_typed("gradient", [(0, "#ff0000"), (1, "#0000ff")])["value"],
-                         {"stops": [{"t": 0, "color": [1., 0., 0.]}, {"t": 1, "color": [0., 0., 1.]}]})
+                         {"stops": [{"t": 0, "color": from_srgb([1., 0., 0.])},
+                                    {"t": 1, "color": from_srgb([0., 0., 1.])}]})
         with self.assertRaises(ValueError):
             _typed("beats", {"type": "proportion", "value": .5})
 

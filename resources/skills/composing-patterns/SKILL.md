@@ -73,8 +73,10 @@ edit.check()
 - **Axis shorthand.** `axis="z"` is the same as
   `{"source": {"kind": "z"}, "per_group": False, "reverse": False}`. Radial
   and angle also need `"plane"`; the shorthand gives the Auto plane.
-- **Inputs keep units.** Proportions are 0..1. Colors are RGB triples in 0..1
-  or `#RRGGBB`. Curves are points `[x, value]` or `[x, value, ease]`,
+- **Inputs keep units.** Proportions are 0..1. Colors are linear Rec. 2020
+  triples in 0..1, or `#RRGGBB` (sRGB, converted for you). Convert an sRGB
+  color for a keyframe with `luma.track.color("#ff8000")`. Rec. 2020 holds
+  colors sRGB cannot: `[0, 1, 0]` is a deeper green than any hex code. Curves are points `[x, value]` or `[x, value, ease]`,
   x from 0 to 1, for example
   `{"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}`. An
   envelope's values are 0..1.
@@ -88,7 +90,7 @@ The composited output is available as numbers:
 ```python
 view = edit.window(seconds=(55.0, 65.0))
 out = view.output
-vals = out.values          # numpy, shape [light, time, rgb], 0..1
+vals = out.values          # numpy, [light, time, rgb], linear Rec. 2020 0..1
 ids = out.light_ids        # "fixture_id:head_index", same order as axis 0
 t = out.times_s            # seconds, same order as axis 1
 bright = vals.max(axis=2)  # [light, time]

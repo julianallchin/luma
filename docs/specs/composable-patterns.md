@@ -65,9 +65,11 @@ specific node. Time durations have beat units; spatial proportions and
 normalized positions have distinct types.
 
 Gradient is the color equivalent of Envelope: the same ordered stops may be
-sampled along clip progress or a mapped per-head coordinate. Colors use
-normalized sRGB channels, and Gradient interpolates perceptually in OKLab,
-matching the existing library and the native editor. Masks multiply color
+sampled along clip progress or a mapped per-head coordinate. Colors are
+linear Rec. 2020, 0–1 per channel, and Gradient interpolates perceptually in
+OKLab, matching the native editor. Fixtures and the visualizer map a color
+their emitters cannot make to the nearest one they can
+(`backend/crates/patterns/src/color_space.rs`). Masks multiply color
 before output separates chromaticity and dimmer. A dimmer-only output preserves
 underlying color. Noise is a deterministic function of spatial coordinates,
 musical time and the clip seed.

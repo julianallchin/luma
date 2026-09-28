@@ -11,8 +11,10 @@ a missing or unknown input fails `edit.check()`. Start from the defaults:
 inputs = {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
 ```
 
-Units: `proportion` is 0..1; `beats` are musical beats; colors are RGB in
-0..1 or `#RRGGBB`. Every form has `alpha` (proportion): how much the clip
+Units: `proportion` is 0..1; `beats` are musical beats; colors are linear
+Rec. 2020 triples in 0..1 (brightness is the peak channel), or `#RRGGBB`,
+which is sRGB and is converted for you. For a triple from a hex code, use
+`luma.track.color("#ff8000")`. Every form has `alpha` (proportion): how much the clip
 counts. It multiplies brightness and is the clip's opacity. Use it instead of
 a clip fade.
 
