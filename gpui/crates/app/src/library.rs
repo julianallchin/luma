@@ -1717,6 +1717,19 @@ impl Library {
         )
     }
 
+    /// The heads `selection` resolves to in the venue, with their places.
+    pub(crate) fn selection_cells(
+        &self,
+        venue_id: &str,
+        selection: &Selection,
+        seed: u64,
+    ) -> impl Future<Output = Result<Vec<luma_patterns::Cell>, LibraryError>> + use<> {
+        self.call(
+            "selection_cells",
+            json!({ "venueId": venue_id, "selection": selection.to_value(), "seed": seed }),
+        )
+    }
+
     pub(crate) fn preview_definition_frames(
         &self,
         request: luma_lib::models::composable_patterns::ComposablePreviewRequest,

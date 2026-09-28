@@ -275,6 +275,23 @@ pub fn cached_view<T: gpui::Render>(
     element
 }
 
+/// The content of a deferred draw — a menu, a popover — whose nodes belong
+/// to the view that deferred it.
+///
+/// gpui prepaints a deferred draw with only that view on its stack, so a view
+/// nested in the content (a number field in a color picker) pushes its nodes
+/// as a view no cached region has seen. When the region is reused, it
+/// replays only the deferred nodes of views it knows, and the field's nodes
+/// would vanish from every frame after the first. This names the deferring
+/// view as their owner.
+pub fn deferred_content(element: impl IntoElement) -> gpui::AnyElement {
+    #[cfg(feature = "agent")]
+    let element = imp::Owned {
+        element: element.into_any_element(),
+    };
+    element.into_any_element()
+}
+
 #[cfg(feature = "agent")]
 pub use imp::{Instrumented, NodeRegistry};
 
@@ -316,6 +333,12 @@ mod imp {
         /// Cached views' work on their deferred nodes, done at the root's
         /// paint — the first moment every deferred draw has prepainted.
         pending: Vec<Pending>,
+        /// The views whose deferred content is prepainting, innermost last:
+        /// see [`super::deferred_content`].
+        owners: Vec<EntityId>,
+        /// Views seen inside deferred content, and the view that owns them,
+        /// so a draw one of them defers in turn has the same owner.
+        owned: std::collections::HashMap<EntityId, EntityId>,
     }
 
     impl Global for NodeRegistry {}
@@ -383,11 +406,20 @@ mod imp {
             registry.views.clear();
             registry.deferred_from = None;
             registry.pending.clear();
+            registry.owners.clear();
+            registry.owned.clear();
         }
 
         fn push(window: &Window, cx: &mut App, node: impl FnOnce(usize) -> Node) {
-            let view = window.current_view();
+            let current = window.current_view();
             let registry = cx.default_global::<NodeRegistry>();
+            let view = match registry.owners.last() {
+                Some(&owner) => {
+                    registry.owned.insert(current, owner);
+                    owner
+                }
+                None => current,
+            };
             let node = node(registry.nodes.len());
             registry.push_from(node, view);
         }
@@ -682,6 +714,72 @@ mod imp {
                 window,
                 cx,
             );
+        }
+    }
+
+    /// See [`super::deferred_content`].
+    pub(super) struct Owned {
+        pub(super) element: gpui::AnyElement,
+    }
+
+    impl IntoElement for Owned {
+        type Element = Self;
+
+        fn into_element(self) -> Self {
+            self
+        }
+    }
+
+    impl Element for Owned {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, ()) {
+            (self.element.request_layout(window, cx), ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&InspectorElementId>,
+            _: Bounds<Pixels>,
+            _: &mut (),
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            let current = window.current_view();
+            let registry = cx.default_global::<NodeRegistry>();
+            let owner = registry.owned.get(&current).copied().unwrap_or(current);
+            registry.owners.push(owner);
+            self.element.prepaint(window, cx);
+            cx.default_global::<NodeRegistry>().owners.pop();
+        }
+
+        fn paint(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&InspectorElementId>,
+            _: Bounds<Pixels>,
+            _: &mut (),
+            _: &mut (),
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            self.element.paint(window, cx);
         }
     }
 
