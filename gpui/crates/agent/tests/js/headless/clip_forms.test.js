@@ -270,7 +270,22 @@ test("a stop's swatch opens the color picker from a form row",
     app.key("enter");
     until("the hex", () => hex().label === "Color point hex = #00FF00");
     settle();
-    expect(formClip().inputs.color.value.gradient.stops[1].color).toEqual([0, 1, 0]);
+    // Hex is sRGB; the stop stores light in linear Rec. 2020: sRGB green is
+    // the green column of ITU-R BT.2087's matrix, inside sRGB.
+    const green = formClip().inputs.color.value.gradient.stops[1].color;
+    [0.3293, 0.9195, 0.0880].forEach((want, k) =>
+      assert(Math.abs(green[k] - want) < 1e-3, `sRGB green stored as ${JSON.stringify(green)}`));
+    assert(!app.snapshot().find({ role: "text", label: "Color point outside srgb" }), "sRGB green is inside sRGB");
+
+    // The picker reaches Rec. 2020's own green, which sRGB cannot show.
+    const hue = node("slider", "Color point:hue").bounds;
+    app.drag({ x: hue.x + hue.width / 3 - 24, y: hue.y + hue.height / 2 }, { dx: 24, dy: 0 });
+    const sv = node("slider", "Color point:sv").bounds;
+    app.drag({ x: sv.x + sv.width / 2, y: sv.y + sv.height / 2 }, { dx: sv.width, dy: -sv.height });
+    until("outside sRGB", (s) => s.find({ role: "text", label: "Color point outside srgb" }));
+    settle();
+    const wide = formClip().inputs.color.value.gradient.stops[1].color;
+    assert(wide[1] > 0.99 && wide[0] < 0.1 && wide[2] < 0.1, `Rec. 2020 green stored as ${JSON.stringify(wide)}`);
   });
 
 test("a number strip's point dragged outside it keeps following and clamps",

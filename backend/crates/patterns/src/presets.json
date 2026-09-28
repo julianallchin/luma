@@ -15,19 +15,19 @@
     {"name": "Color fade", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [1.0, 0.2, 0.0]}, {"t": 1.0, "color": [0.0, 0.3, 1.0]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
+      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.638304734, 0.099538459, 0.019305099]}, {"t": 1.0, "color": [0.067429412, 0.078708494, 0.902041256]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
       "every": {"type": "beats", "value": 0.0}
     }},
     {"name": "Rainbow", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [1, 0, 0]}, {"t": 0.16666666666666666, "color": [1, 1, 0]}, {"t": 0.3333333333333333, "color": [0, 1, 0]}, {"t": 0.5, "color": [0, 1, 1]}, {"t": 0.6666666666666666, "color": [0, 0, 1]}, {"t": 0.8333333333333334, "color": [1, 0, 1]}, {"t": 1.0, "color": [1, 0, 0]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
+      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.627403896, 0.069097289, 0.016391439]}, {"t": 0.16666666666666666, "color": [0.956686934, 0.988637684, 0.104404747]}, {"t": 0.3333333333333333, "color": [0.329283038, 0.919540395, 0.088013308]}, {"t": 0.5, "color": [0.372596104, 0.930902711, 0.983608561]}, {"t": 0.6666666666666666, "color": [0.043313066, 0.011362316, 0.895595253]}, {"t": 0.8333333333333334, "color": [0.670716962, 0.080459605, 0.911986692]}, {"t": 1.0, "color": [0.627403896, 0.069097289, 0.016391439]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
       "every": {"type": "beats", "value": 4.0}
     }},
     {"name": "Gradient", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "gradient": {"stops": [{"t": 0.0, "color": [1.0, 0.0, 0.5]}, {"t": 1.0, "color": [0.0, 0.6, 1.0]}]}}},
+      "color": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "gradient": {"stops": [{"t": 0.0, "color": [0.636674674, 0.071529292, 0.208085668]}, {"t": 1.0, "color": [0.148205117, 0.304278946, 0.923631609]}]}}},
       "every": {"type": "beats", "value": 0.0}
     }},
     {"name": "Chase", "form": "color@1", "inputs": {
@@ -123,14 +123,14 @@
     }},
     {"name": "Atmosphere", "form": "color.noise@1", "inputs": {
       "alpha": {"type": "proportion", "value": 0.7},
-      "color": {"type": "color", "value": [0.35, 0.55, 1.0]},
+      "color": {"type": "color", "value": [0.193047024, 0.26039585, 0.920413853]},
       "contrast": {"type": "proportion", "value": 0.1},
       "scale": {"type": "proportion", "value": 1.0},
       "speed": {"type": "beats", "value": 16.0}
     }},
     {"name": "Aurora", "form": "color.noise@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [0.2, 1.0, 0.55]},
+      "color": {"type": "color", "value": [0.361456276, 0.92481924, 0.324342358]},
       "contrast": {"type": "proportion", "value": 0.8},
       "scale": {"type": "proportion", "value": 0.3},
       "speed": {"type": "beats", "value": 4.0}
@@ -291,12 +291,12 @@
     {"name": "Cut out", "input": "alpha", "curve": {"points": [[0, 1, "hold"], [0.5, 0], [1, 0]]}}
   ],
   "gradients": [
-    {"name": "Rainbow", "gradient": {"stops": [{"t": 0, "color": [1, 0, 0]}, {"t": 0.2, "color": [1, 1, 0]}, {"t": 0.4, "color": [0, 1, 0]}, {"t": 0.6, "color": [0, 1, 1]}, {"t": 0.8, "color": [0, 0, 1]}, {"t": 1, "color": [1, 0, 1]}]}},
-    {"name": "Warm", "gradient": {"stops": [{"t": 0, "color": [1, 0.85, 0.4]}, {"t": 0.5, "color": [1, 0.45, 0.1]}, {"t": 1, "color": [0.85, 0.1, 0.15]}]}},
-    {"name": "Cool", "gradient": {"stops": [{"t": 0, "color": [0.6, 1, 0.95]}, {"t": 0.5, "color": [0.1, 0.6, 1]}, {"t": 1, "color": [0.35, 0.15, 0.9]}]}},
-    {"name": "Fire", "gradient": {"stops": [{"t": 0, "color": [0.15, 0, 0]}, {"t": 0.4, "color": [0.9, 0.1, 0]}, {"t": 0.75, "color": [1, 0.55, 0]}, {"t": 1, "color": [1, 0.95, 0.6]}]}},
-    {"name": "Ocean", "gradient": {"stops": [{"t": 0, "color": [0, 0.1, 0.3]}, {"t": 0.5, "color": [0, 0.45, 0.7]}, {"t": 1, "color": [0.3, 0.9, 0.85]}]}},
-    {"name": "Sunset", "gradient": {"stops": [{"t": 0, "color": [0.35, 0.1, 0.55]}, {"t": 0.5, "color": [0.95, 0.25, 0.4]}, {"t": 1, "color": [1, 0.7, 0.2]}]}},
+    {"name": "Rainbow", "gradient": {"stops": [{"t": 0, "color": [0.627403896, 0.069097289, 0.016391439]}, {"t": 0.2, "color": [0.956686934, 0.988637684, 0.104404747]}, {"t": 0.4, "color": [0.329283038, 0.919540395, 0.088013308]}, {"t": 0.6, "color": [0.372596104, 0.930902711, 0.983608561]}, {"t": 0.8, "color": [0.043313066, 0.011362316, 0.895595253]}, {"t": 1, "color": [0.670716962, 0.080459605, 0.911986692]}]}},
+    {"name": "Warm", "gradient": {"stops": [{"t": 0, "color": [0.861046091, 0.706994274, 0.19629914]}, {"t": 0.5, "color": [0.684028498, 0.226126084, 0.040386859]}, {"t": 1, "color": [0.438357648, 0.057259404, 0.029785804]}]}},
+    {"name": "Cool", "gradient": {"stops": [{"t": 0, "color": [0.567689391, 0.951663636, 0.890319366]}, {"t": 0.5, "color": [0.154493476, 0.304971496, 0.923795897]}, {"t": 1, "color": [0.103603868, 0.033918932, 0.708575391]}]}},
+    {"name": "Fire", "gradient": {"stops": [{"t": 0, "color": [0.012301288, 0.001354766, 0.000321381]}, {"t": 0.4, "color": [0.497325885, 0.063624448, 0.013788962]}, {"t": 0.75, "color": [0.714095364, 0.311187823, 0.039563002]}, {"t": 1, "color": [0.934264818, 0.891112642, 0.380012741]}]}},
+    {"name": "Ocean", "gradient": {"stops": [{"t": 0, "color": [0.00647255, 0.010048557, 0.066474603]}, {"t": 0.5, "color": [0.075594234, 0.162005097, 0.416235321]}, {"t": 1, "color": [0.335207637, 0.736981551, 0.690318806]}]}},
+    {"name": "Sunset", "gradient": {"stops": [{"t": 0, "color": [0.077746016, 0.019150789, 0.238315593]}, {"t": 0.5, "color": [0.580900427, 0.109789271, 0.13806248]}, {"t": 1, "color": [0.77635275, 0.481416878, 0.085468853]}]}},
     {"name": "B/W", "gradient": {"stops": [{"t": 0, "color": [0, 0, 0]}, {"t": 1, "color": [1, 1, 1]}]}}
   ]
 }

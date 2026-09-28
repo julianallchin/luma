@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 pub(crate) mod ops;
 mod pace;
+pub mod rec2020_upgrade;
 mod upgrade;
 
 pub use upgrade::upgrade;

@@ -249,8 +249,8 @@ fn sample_times(start: f64, end: f64, bpm: Option<f64>) -> Vec<f64> {
         .collect()
 }
 
-/// Row-major `[light, time, rgb]`, using one concept of light: RGB already
-/// darkened by dimmer. Missing primitives are black.
+/// Row-major `[light, time, rgb]`, using one concept of light: linear
+/// Rec. 2020 already darkened by dimmer. Missing primitives are black.
 fn rgb_light_tensor(frames: &[UniverseState], light_ids: &[String]) -> Vec<f32> {
     let mut values = Vec::with_capacity(light_ids.len() * frames.len() * 3);
     for light_id in light_ids {

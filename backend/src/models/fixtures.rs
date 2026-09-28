@@ -29,6 +29,7 @@ pub enum ChannelColour {
     Cyan,
     Magenta,
     Yellow,
+    Lime,
     None,
 }
 
@@ -181,7 +182,7 @@ impl Channel {
     /// one of a closed set the DMX path can act on. QLC+ files carry colour
     /// controls that answer the first question and not the second — an HSV par
     /// is `IntensityHue` / `IntensitySaturation`, a six-colour engine adds
-    /// `IntensityLime` and `IntensityIndigo` — and a classifier that only asked
+    /// `IntensityIndigo` — and a classifier that only asked
     /// the mixer's question called every full-colour par patched in HSV mode a
     /// colourless dimmer.
     #[must_use]
@@ -192,7 +193,7 @@ impl Channel {
         self.preset.as_deref().is_some_and(|preset| {
             matches!(
                 preset,
-                "IntensityHue" | "IntensitySaturation" | "IntensityLime" | "IntensityIndigo"
+                "IntensityHue" | "IntensitySaturation" | "IntensityIndigo"
             )
         })
     }
@@ -206,6 +207,10 @@ impl Channel {
                 "IntensityWhite" => return ChannelColour::White,
                 "IntensityAmber" => return ChannelColour::Amber,
                 "IntensityUV" => return ChannelColour::UV,
+                "IntensityCyan" => return ChannelColour::Cyan,
+                "IntensityMagenta" => return ChannelColour::Magenta,
+                "IntensityYellow" => return ChannelColour::Yellow,
+                "IntensityLime" => return ChannelColour::Lime,
                 _ => {}
             }
         }
@@ -230,6 +235,8 @@ impl Channel {
             ChannelColour::Magenta
         } else if name.contains("yellow") {
             ChannelColour::Yellow
+        } else if name.contains("lime") {
+            ChannelColour::Lime
         } else {
             ChannelColour::None
         }

@@ -19,7 +19,7 @@
 use std::rc::Rc;
 
 use super::color::{ColorArg, ColorArgEditor, ColorArgEvent, ColorOpacity};
-use super::gradient::{gradient_fill, Gradient, GradientStop};
+use super::gradient::{gradient_fill, Gradient, GradientStop, Light};
 use super::number::{format_value, DraftedNumber, NumberEvent};
 use super::preset_picker::{luma_preset_picker, Thumb};
 use super::select::MenuVisibility;
@@ -30,8 +30,8 @@ use crate::{
 use gpui::prelude::*;
 use gpui::{
     canvas, div, fill, linear_color_stop, linear_gradient, point, px, size, App, Background,
-    Bounds, Context, Entity, EventEmitter, MouseButton, PathBuilder, Pixels, Point, Rgba,
-    SharedString, Subscription, Window,
+    Bounds, Context, Entity, EventEmitter, MouseButton, PathBuilder, Pixels, Point, SharedString,
+    Subscription, Window,
 };
 use luma_patterns::{CurvePoint, Ease, Envelope, Key, Keyframes};
 
@@ -42,8 +42,8 @@ pub enum StripValue {
     Number(Envelope),
     /// Color stops with opacity, and no eases. Any number of stops, from none.
     Gradient(Gradient),
-    /// Color keyframes, blended in RGB, with an ease per segment. Its ends
-    /// stay at x 0 and 1.
+    /// Color keyframes, blended in RGB (linear Rec. 2020), with an ease per
+    /// segment. Its ends stay at x 0 and 1.
     Colors(Keyframes),
 }
 
@@ -423,17 +423,16 @@ impl CurveStrip {
             });
             subscriptions.push(cx.subscribe(&editor, |this, _, event: &ColorArgEvent, cx| {
                 let ColorArgEvent::Changed(color) = *event;
-                let [r, g, b] = color.rgb;
                 this.edit_selected(cx, |value, i| {
                     let a = value.color(i).map_or(1., |c| c.a);
-                    value.set_color(i, Rgba { r, g, b, a });
+                    value.set_color(i, Light { rgb: color.rgb, a });
                 });
             }));
             subscriptions.push(cx.subscribe(&editor, |this, _, event: &ColorOpacity, cx| {
                 let ColorOpacity(a) = *event;
                 this.edit_selected(cx, |value, i| {
                     if let Some(c) = value.color(i) {
-                        value.set_color(i, Rgba { a, ..c });
+                        value.set_color(i, Light { a, ..c });
                     }
                 });
             }));
@@ -506,7 +505,7 @@ impl CurveStrip {
                 };
                 let alpha = matches!(self.value, StripValue::Gradient(_));
                 editor.update(cx, |editor, cx| {
-                    editor.set_value(ColorArg::decode([c.r, c.g, c.b], 1.), cx);
+                    editor.set_value(ColorArg::decode(c.rgb, 1.), cx);
                     if alpha {
                         editor.set_opacity(c.a, cx);
                     }
@@ -711,7 +710,7 @@ impl Render for CurveStrip {
                 let p = value.point(i);
                 let chosen = i == self.selected;
                 let marker = if color {
-                    let c = value.color(i).unwrap_or(gpui::white().into());
+                    let c = value.color(i).unwrap_or(Light::WHITE);
                     div()
                         .absolute()
                         .left(gpui::relative(p[0] as f32))
@@ -720,7 +719,7 @@ impl Render for CurveStrip {
                         .mt(px(-STOP / 2.))
                         .size(px(STOP))
                         .rounded(px(3.))
-                        .bg(Rgba { a: 1., ..c })
+                        .bg(Light { a: 1., ..c }.display())
                         .border_color(if chosen {
                             ladder::foreground()
                         } else {
@@ -856,7 +855,7 @@ impl Render for CurveStrip {
                         .rounded(px(1.))
                         .border_1()
                         .border_color(crate::glass::hairline(0.24))
-                        .bg(c)
+                        .bg(c.display())
                         .agent_node(Role::Text, format!("{id} head {}", i + 1))
                 }))
         });
@@ -1045,15 +1044,6 @@ pub(crate) fn paint_envelope(
     }
 }
 
-fn rgba([r, g, b]: [f64; 3]) -> Rgba {
-    Rgba {
-        r: r as f32,
-        g: g as f32,
-        b: b as f32,
-        a: 1.,
-    }
-}
-
 fn key_color(key: &Key) -> [f64; 3] {
     match *key {
         Key::Color(rgb) => rgb,
@@ -1205,46 +1195,41 @@ impl StripValue {
     }
 
     /// A color point's color, with its opacity.
-    fn color(&self, i: usize) -> Option<Rgba> {
+    fn color(&self, i: usize) -> Option<Light> {
         match self {
             Self::Number(_) => None,
             Self::Gradient(gradient) => gradient.stops().get(i).map(|stop| stop.color),
-            Self::Colors(keys) => keys.points.get(i).map(|p| rgba(key_color(&p.value))),
+            Self::Colors(keys) => keys
+                .points
+                .get(i)
+                .map(|p| Light::opaque(key_color(&p.value))),
         }
     }
 
-    fn set_color(&mut self, i: usize, color: Rgba) {
+    fn set_color(&mut self, i: usize, color: Light) {
         match self {
             Self::Number(_) => {}
             Self::Gradient(gradient) => gradient.set_color(i, color),
             Self::Colors(keys) => {
-                keys.points[i].value =
-                    Key::Color([color.r, color.g, color.b].map(|v| f64::from(v).clamp(0., 1.)));
+                keys.points[i].value = Key::Color(color.channels().map(|v| v.clamp(0., 1.)));
             }
         }
     }
 
     /// What a head at `x` gets: the color there, or white at the number's
     /// level.
-    fn head_color(&self, x: f64) -> Rgba {
+    fn head_color(&self, x: f64) -> Light {
         match self {
-            Self::Number(curve) => {
-                let level = curve.sample(x).clamp(0., 1.) as f32;
-                Rgba {
-                    r: level,
-                    g: level,
-                    b: level,
-                    a: 1.,
-                }
-            }
+            Self::Number(curve) => Light::opaque([curve.sample(x).clamp(0., 1.); 3]),
             Self::Gradient(gradient) => gradient.color_at(x as f32),
-            Self::Colors(keys) => rgba(keys.sample(x)),
+            Self::Colors(keys) => Light::opaque(keys.sample(x)),
         }
     }
 
     /// A color's fill, laid in a flex row the height of the fill. A
-    /// gradient is exact in OKLab; keyframes blend in RGB, so each eased
-    /// segment is cut in eight pieces and a hold is flat.
+    /// gradient is exact in OKLab; keyframes blend in linear RGB, so each
+    /// eased segment is cut in eight pieces and a hold is flat. Every color
+    /// is shown mapped into sRGB.
     fn fill(&self) -> Vec<gpui::Div> {
         let radius = crate::radius::CAP;
         match self {
@@ -1259,10 +1244,16 @@ impl StripValue {
                     let ease = keys.ease(i);
                     let mix = |t: f64| {
                         let share = ease.apply(t);
-                        rgba(std::array::from_fn(|ch| a[ch] + (b[ch] - a[ch]) * share))
+                        Light::opaque(std::array::from_fn(|ch| a[ch] + (b[ch] - a[ch]) * share))
+                            .display()
                     };
                     if ease == Ease::Hold {
-                        pieces.push(div().h_full().w(gpui::relative(span as f32)).bg(rgba(a)));
+                        pieces.push(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(span as f32))
+                                .bg(Light::opaque(a).display()),
+                        );
                         continue;
                     }
                     for k in 0..PIECES {
@@ -1292,14 +1283,13 @@ impl StripValue {
             Self::Colors(keys) => {
                 Thumb::Gradient(Gradient::new(keys.points.iter().map(|p| GradientStop {
                     t: p.x as f32,
-                    color: rgba(key_color(&p.value)),
+                    color: Light::opaque(key_color(&p.value)),
                 })))
             }
         }
     }
 
-    /// The same value, to within half an 8-bit step, since some hosts store
-    /// colors as hex.
+    /// The same value, to within half an 8-bit step.
     fn close(&self, other: &Self) -> bool {
         let near = |a: f64, b: f64| (a - b).abs() <= 0.5 / 255. + 1e-4;
         let same_ease = |a: Ease, b: Ease| match (a, b) {
@@ -1317,14 +1307,12 @@ impl StripValue {
                 a.stops().len() == b.stops().len()
                     && a.stops().iter().zip(b.stops()).all(|(a, b)| {
                         near(a.t.into(), b.t.into())
-                            && [
-                                (a.color.r, b.color.r),
-                                (a.color.g, b.color.g),
-                                (a.color.b, b.color.b),
-                                (a.color.a, b.color.a),
-                            ]
-                            .iter()
-                            .all(|(a, b)| near((*a).into(), (*b).into()))
+                            && a.color
+                                .rgb
+                                .iter()
+                                .chain([&a.color.a])
+                                .zip(b.color.rgb.iter().chain([&b.color.a]))
+                                .all(|(a, b)| near((*a).into(), (*b).into()))
                     })
             }
             (Self::Colors(a), Self::Colors(b)) => {
@@ -1349,11 +1337,9 @@ pub fn gradient_presets() -> Vec<(SharedString, StripValue)> {
         .map(|preset| {
             let stops = preset.gradient.stops.iter().map(|stop| GradientStop {
                 t: stop.t as f32,
-                color: Rgba {
-                    r: stop.color[0] as f32,
-                    g: stop.color[1] as f32,
-                    b: stop.color[2] as f32,
+                color: Light {
                     a: stop.alpha as f32,
+                    ..Light::opaque(stop.color)
                 },
             });
             (
@@ -1385,7 +1371,7 @@ pub fn color_keys(gradient: &Gradient) -> Keyframes {
     let mut points: Vec<(f64, Key)> = Vec::new();
     for stop in gradient.stops() {
         let t = f64::from(stop.t).clamp(0., 1.);
-        let color = Key::Color([stop.color.r, stop.color.g, stop.color.b].map(f64::from));
+        let color = Key::Color(stop.color.channels());
         if points.is_empty() && t > 0. {
             points.push((0., color));
         }
@@ -1490,7 +1476,10 @@ mod tests {
         let before = value.head_color(0.3);
         let i = value.insert(0.3).unwrap();
         let after = value.color(i).unwrap();
-        assert!((before.r - after.r).abs() < 1e-6 && (before.b - after.b).abs() < 1e-6);
+        assert!(
+            (before.rgb[0] - after.rgb[0]).abs() < 1e-6
+                && (before.rgb[2] - after.rgb[2]).abs() < 1e-6
+        );
     }
 
     #[test]
@@ -1498,11 +1487,11 @@ mod tests {
         let gradient = Gradient::new([
             GradientStop {
                 t: 0.25,
-                color: gpui::black().into(),
+                color: Light::BLACK,
             },
             GradientStop {
                 t: 0.75,
-                color: gpui::white().into(),
+                color: Light::WHITE,
             },
         ]);
         let keys = color_keys(&gradient);

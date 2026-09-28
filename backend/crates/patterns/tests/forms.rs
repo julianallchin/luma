@@ -357,7 +357,15 @@ fn time_and_space_gradients() {
     let (form, inputs) = preset("Color fade");
     let first = colors(&form, &inputs, 0.0);
     assert!(first.iter().all(|c| *c == first[0]));
-    assert!((first[0][0] - 1.0).abs() < 1e-9 && first[0][2] < 1e-9);
+    // The fade starts at its gradient's first color.
+    let Value::Hit(SourceCurve::Gradient(read)) = &inputs["color"] else {
+        panic!("a color fade reads a gradient per hit")
+    };
+    let start = read.gradient.stops[0].color;
+    assert!(first[0]
+        .iter()
+        .zip(start)
+        .all(|(a, b)| (a - b).abs() < 1e-9));
     assert_ne!(colors(&form, &inputs, 8.0)[0], first[0]);
 
     let (form, inputs) = preset("Rainbow");
@@ -366,8 +374,13 @@ fn time_and_space_gradients() {
 
     let (form, inputs) = preset("Gradient");
     let across = colors(&form, &inputs, 0.0);
-    assert!((across[0][0] - 1.0).abs() < 1e-9);
-    assert!((across[7][2] - 1.0).abs() < 1e-9);
+    // The ends of the axis get the gradient's ends.
+    let Value::Space(space) = &inputs["color"] else {
+        panic!("a gradient across space")
+    };
+    let stops = &space.gradient.as_ref().unwrap().stops;
+    let same = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    assert!(same(across[0], stops[0].color) && same(across[7], stops[1].color));
     assert_eq!(across, colors(&form, &inputs, 3.0));
 }
 

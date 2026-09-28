@@ -14,9 +14,13 @@
 //!
 //! GPUI draws each adjacent pair in OKLab, matching the runtime's perceptual
 //! interpolation. The bar is flat before the first stop and after the last.
+//! Stops are light colors, linear Rec. 2020; the bar shows each end mapped
+//! into sRGB ([`Light::display`]).
 
+pub use super::color::Light;
 use gpui::prelude::*;
-use gpui::{div, linear_color_stop, linear_gradient, px, Rgba};
+use gpui::{div, linear_color_stop, linear_gradient, px};
+use luma_patterns::color_space;
 
 /// One stop: a position along the bar and the color there.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,7 +28,7 @@ pub struct GradientStop {
     /// `0..=1` along the bar. The [`Gradient`] holding this stop keeps it in
     /// range and in order.
     pub t: f32,
-    pub color: Rgba,
+    pub color: Light,
 }
 
 /// The ordered stop set. Constructed through [`Gradient::new`], which is where
@@ -59,10 +63,10 @@ impl Gradient {
     /// The interpolated color at `t`: flat past either end, perceptual OKLab
     /// interpolation between stops, matching playback and the painted bar.
     #[must_use]
-    pub fn color_at(&self, t: f32) -> Rgba {
+    pub fn color_at(&self, t: f32) -> Light {
         let t = t.clamp(0., 1.);
         let (Some(first), Some(last)) = (self.stops.first(), self.stops.last()) else {
-            return gpui::black().into();
+            return Light::BLACK;
         };
         if t < first.t {
             return first.color;
@@ -73,15 +77,9 @@ impl Gradient {
         let right = self.stops.partition_point(|stop| stop.t <= t);
         let (a, b) = (self.stops[right - 1], self.stops[right]);
         let mix = (t - a.t) / (b.t - a.t);
-        let [r, g, blue] = luma_patterns::oklab::interpolate(
-            [a.color.r, a.color.g, a.color.b],
-            [b.color.r, b.color.g, b.color.b],
-            mix,
-        );
-        Rgba {
-            r,
-            g,
-            b: blue,
+        Light {
+            rgb: color_space::interpolate(a.color.channels(), b.color.channels(), f64::from(mix))
+                .map(|v| v as f32),
             a: a.color.a + (b.color.a - a.color.a) * mix,
         }
     }
@@ -94,7 +92,7 @@ impl Gradient {
         let stop = GradientStop {
             t,
             color: if self.stops.is_empty() {
-                gpui::white().into()
+                Light::WHITE
             } else {
                 self.color_at(t)
             },
@@ -119,7 +117,7 @@ impl Gradient {
         t
     }
 
-    pub fn set_color(&mut self, index: usize, color: Rgba) {
+    pub fn set_color(&mut self, index: usize, color: Light) {
         self.stops[index].color = color;
     }
 
@@ -141,7 +139,12 @@ pub fn gradient_fill(gradient: &Gradient, radius: f32) -> Vec<gpui::Div> {
     let stops = gradient.stops();
     let mut segments: Vec<gpui::Div> = Vec::with_capacity(stops.len() + 1);
     if let Some(first) = stops.first().filter(|first| first.t > 0.) {
-        segments.push(div().h_full().w(gpui::relative(first.t)).bg(first.color));
+        segments.push(
+            div()
+                .h_full()
+                .w(gpui::relative(first.t))
+                .bg(first.color.display()),
+        );
     }
     for pair in stops.windows(2) {
         segments.push(
@@ -150,14 +153,19 @@ pub fn gradient_fill(gradient: &Gradient, radius: f32) -> Vec<gpui::Div> {
                 .w(gpui::relative(pair[1].t - pair[0].t))
                 .bg(linear_gradient(
                     90.,
-                    linear_color_stop(pair[0].color, 0.),
-                    linear_color_stop(pair[1].color, 1.),
+                    linear_color_stop(pair[0].color.display(), 0.),
+                    linear_color_stop(pair[1].color.display(), 1.),
                 )
                 .color_space(gpui::ColorSpace::Oklab)),
         );
     }
     if let Some(last) = stops.last().filter(|last| last.t < 1.) {
-        segments.push(div().h_full().w(gpui::relative(1. - last.t)).bg(last.color));
+        segments.push(
+            div()
+                .h_full()
+                .w(gpui::relative(1. - last.t))
+                .bg(last.color.display()),
+        );
     }
     let last_segment = segments.len().saturating_sub(1);
     segments
@@ -178,10 +186,8 @@ mod tests {
     fn stop(t: f32, r: f32) -> GradientStop {
         GradientStop {
             t,
-            color: Rgba {
-                r,
-                g: 0.,
-                b: 0.,
+            color: Light {
+                rgb: [r, 0., 0.],
                 a: 1.,
             },
         }
@@ -245,7 +251,7 @@ mod tests {
         assert_sorted(&g);
         assert_eq!(g.stops()[1].color, inserted_color);
         for t in [0.1, 0.5, 0.75, 0.9] {
-            assert!((g.color_at(t).r - before.color_at(t).r).abs() < 1e-5);
+            assert!((g.color_at(t).rgb[0] - before.color_at(t).rgb[0]).abs() < 1e-5);
         }
     }
 
@@ -258,25 +264,42 @@ mod tests {
         assert!(g.remove(0));
         assert!(!g.remove(0));
         assert!(g.stops().is_empty());
-        assert_eq!(g.color_at(0.5), gpui::black().into());
+        assert_eq!(g.color_at(0.5), Light::BLACK);
         assert_eq!(g.insert(0.5), 0);
         assert_eq!(g.stops().len(), 1);
-        assert_eq!(g.color_at(0.5), gpui::white().into());
+        assert_eq!(g.color_at(0.5), Light::WHITE);
     }
 
-    /// The sampler: flat past the ends, perceptual between.
+    /// The sampler: flat past the ends, and between them the engine's own
+    /// perceptual blend, so the bar shows what plays.
     #[test]
     fn color_at_interpolates() {
         let g = Gradient::new([stop(0.25, 0.), stop(0.75, 1.)]);
-        assert_eq!(g.color_at(0.).r, 0.);
-        assert_eq!(g.color_at(1.).r, 1.);
-        assert!((g.color_at(0.5).r - 0.388573).abs() < 1e-5);
+        assert_eq!(g.color_at(0.).rgb[0], 0.);
+        assert_eq!(g.color_at(1.).rgb[0], 1.);
+        let engine = color_space::interpolate([0.; 3], [1., 0., 0.], 0.5);
+        assert!((f64::from(g.color_at(0.5).rgb[0]) - engine[0]).abs() < 1e-6);
+    }
+
+    /// A color sRGB cannot show is painted as the nearest one it can, never
+    /// with a channel out of range.
+    #[test]
+    fn a_wide_color_displays_in_range() {
+        let green = Light {
+            rgb: [0., 1., 0.],
+            a: 1.,
+        };
+        let shown = green.display();
+        assert!([shown.r, shown.g, shown.b]
+            .iter()
+            .all(|v| (0. ..=1.).contains(v)));
+        assert!(shown.g > 0.8 && shown.r < 0.5 && shown.b < 0.5, "{shown:?}");
     }
 
     #[test]
     fn coincident_stops_select_the_color_after_the_jump() {
         let g = Gradient::new([stop(0., 0.), stop(0.5, 0.), stop(0.5, 1.), stop(1., 1.)]);
-        assert_eq!(g.color_at(0.499).r, 0.);
-        assert_eq!(g.color_at(0.5).r, 1.);
+        assert_eq!(g.color_at(0.499).rgb[0], 0.);
+        assert_eq!(g.color_at(0.5).rgb[0], 1.);
     }
 }

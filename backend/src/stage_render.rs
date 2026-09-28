@@ -315,9 +315,14 @@ pub fn primitive_state(
         .primitives
         .get(&format!("{id}:{head}"))
         .or_else(|| state.primitives.get(id))?;
+    // The renderer works in linear light with sRGB primaries and presents it
+    // in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by the
+    // same rule a fixture's emitters use.
+    let (color, dimmer) =
+        luma_patterns::color_space::Gamut::SRGB.split(p.color.map(f64::from), f64::from(p.dimmer));
     Some(scene_desc::PrimitiveState {
-        dimmer: p.dimmer,
-        color: p.color,
+        dimmer: dimmer as f32,
+        color: color.map(|v| v as f32),
         strobe: p.strobe,
         position: p.position,
         // Fixture wheel slots are not in `UniverseState` yet. Open is the
@@ -1024,6 +1029,38 @@ mod tests {
         assert!(geometry.pieces().is_empty());
     }
 
+    /// Light is linear Rec. 2020; the renderer draws linear sRGB. An sRGB
+    /// red is the renderer's red at the same light, and a red deeper than
+    /// sRGB is the nearest red it has, never a negative channel.
+    #[test]
+    fn head_color_reaches_the_renderer_in_srgb() {
+        let head = |color: [f64; 3], dimmer: f32| {
+            let state = UniverseState {
+                primitives: [(
+                    "par".to_string(),
+                    PrimitiveState {
+                        dimmer,
+                        color: color.map(|v| v as f32),
+                        strobe: 0.0,
+                        position: [0.0, 0.0],
+                        speed: 1.0,
+                        aim: None,
+                    },
+                )]
+                .into(),
+            };
+            primitive_state(Some(&state), "par", 0).unwrap()
+        };
+        let red = luma_patterns::color_space::from_srgb([1., 0., 0.]);
+        let peak = red.iter().copied().fold(0., f64::max);
+        let drawn = head(red.map(|v| v / peak), (0.5 * peak) as f32);
+        assert!((drawn.dimmer - 0.5).abs() < 1e-5);
+        assert!(drawn.color[0] == 1.0 && drawn.color[1].max(drawn.color[2]) < 1e-5);
+        let deep = head([1., 0., 0.], 0.5);
+        assert!(deep.color.iter().all(|v| (0.0..=1.0).contains(v)) && deep.color[0] == 1.0);
+        assert!(deep.dimmer > 0.5 && deep.dimmer <= 1.0);
+    }
+
     #[test]
     fn head_state_falls_back_to_the_bare_fixture_id() {
         let mut state = UniverseState::default();
@@ -1031,7 +1068,7 @@ mod tests {
             "par".into(),
             PrimitiveState {
                 dimmer: 0.5,
-                color: [1.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0],
                 strobe: 0.0,
                 position: [0.0, 0.0],
                 speed: 1.0,

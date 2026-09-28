@@ -1,5 +1,6 @@
-//! One gradient value works in time and across a head field. Colors use
-//! normalized sRGB channels; gradients interpolate perceptually in OKLab.
+//! One gradient value works in time and across a head field. Colors are
+//! linear Rec. 2020 (see [`crate::color_space`]); gradients interpolate
+//! perceptually in OKLab.
 //! Sampling and masking happen before the output's color/dimmer split.
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -80,12 +81,7 @@ impl Gradient {
             return a.color;
         }
         let t = (position - a.t) / (b.t - a.t);
-        crate::oklab::interpolate(
-            a.color.map(|v| v as f32),
-            b.color.map(|v| v as f32),
-            t as f32,
-        )
-        .map(f64::from)
+        crate::color_space::interpolate(a.color, b.color, t)
     }
     pub fn sample_alpha(&self, position: f64) -> f64 {
         if self.stops.is_empty() {

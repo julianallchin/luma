@@ -6,6 +6,7 @@ mod catalog;
 mod clip_range;
 mod clock;
 mod color;
+pub mod color_space;
 mod curve;
 mod envelope;
 mod features;
@@ -14,7 +15,6 @@ mod forms;
 mod graph;
 mod inference;
 mod mapping;
-pub mod oklab;
 mod output;
 mod prepared;
 mod presets;
@@ -38,9 +38,8 @@ pub use envelope::Envelope;
 pub use features::*;
 pub use field_ops::FieldMath;
 pub use forms::{
-    axis_presets, blend_modes, input_order, is_form, palette_steps, path_presets,
-    movement_inputs, progress_presets, shape_presets, steps_path, upgrade, FORMS,
-    MAX_WIDTH,
+    axis_presets, blend_modes, input_order, is_form, movement_inputs, palette_steps, path_presets,
+    progress_presets, rec2020_upgrade, shape_presets, steps_path, upgrade, FORMS, MAX_WIDTH,
 };
 pub use graph::*;
 pub use mapping::*;

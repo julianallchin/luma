@@ -2,6 +2,7 @@ use crate::models::fixtures::{
     Channel, ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
 };
 use crate::models::universe::{PrimitiveState, UniverseState};
+use luma_patterns::color_space::{srgb_encode, Gamut};
 use std::collections::HashMap;
 
 /// Tolerance for "heads agree" — matches the master shutter channel's DMX resolution.
@@ -396,6 +397,9 @@ pub fn generate_dmx(
         });
 
         let has_color_wheel = def.has_color_wheel(mode);
+        let emitters = Emitters::of(def, mode);
+        // Each head's color in channel terms, worked out once per head.
+        let mut colors: Vec<(*const PrimitiveState, HeadColor)> = Vec::new();
 
         let [pan_max, tilt_max] = def.focus_range();
 
@@ -478,14 +482,23 @@ pub fn generate_dmx(
             let mapped = if channel.get_type() == ChannelType::Shutter {
                 shutter_action(channel, head_idx, &strobe_ctx)
             } else {
+                let color = match colors.iter().find(|(p, _)| std::ptr::eq(*p, prim)) {
+                    Some((_, color)) => color,
+                    None => {
+                        let color =
+                            HeadColor::new(prim, emitters, has_master_dimmer, has_color_wheel);
+                        colors.push((prim, color));
+                        &colors.last().expect("just pushed").1
+                    }
+                };
                 let m = map_value(
                     channel,
                     prim,
+                    color,
                     pan_max,
                     tilt_max,
                     max_dimmer,
                     has_master_dimmer,
-                    has_color_wheel,
                 );
                 apply_intensity_gate(m, channel, head_idx, &strobe_ctx)
             };
@@ -510,102 +523,45 @@ enum MapAction {
     Hold,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_value(
     channel: &crate::models::fixtures::Channel,
     state: &PrimitiveState,
+    color: &HeadColor,
     pan_max_deg: f32,
     tilt_max_deg: f32,
     max_dimmer: f32,
     has_master_dimmer: bool,
-    has_color_wheel: bool,
 ) -> MapAction {
     let ch_type = channel.get_type();
+    let emitter = |colour| {
+        MapAction::Set(scale_u8(
+            level_u8(color.level(colour)),
+            max_dimmer,
+            !has_master_dimmer,
+        ))
+    };
 
     match ch_type {
+        // A color's emitters, whether a definition files them under Intensity
+        // (QLC+'s `IntensityRed`) or Colour.
+        ChannelType::Intensity | ChannelType::Colour
+            if channel.get_colour() != ChannelColour::None =>
+        {
+            emitter(channel.get_colour())
+        }
         ChannelType::Intensity => {
-            // Check if it's a specific color intensity (some fixtures have "Red" channel type as Intensity)
-            // But get_type() usually separates Colour from Intensity.
-            // However, QLC+ might tag Red as IntensityRed preset.
-            // My get_type logic: IntensityRed -> Intensity.
-            // So I need to check colour too.
-
-            MapAction::Set(match channel.get_colour() {
-                ChannelColour::Red => scale_u8(
-                    (state.color[0] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                ),
-                ChannelColour::Green => scale_u8(
-                    (state.color[1] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                ),
-                ChannelColour::Blue => scale_u8(
-                    (state.color[2] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                ),
-                ChannelColour::White => 0, // TODO: Add white support to PrimitiveState
-                ChannelColour::Amber => 0,
-                ChannelColour::UV => 0,
-                ChannelColour::None => {
-                    // Master Dimmer - for color wheel fixtures, multiply by color luminance
-                    // since the wheel can't represent brightness
-                    let dimmer = if has_color_wheel {
-                        state.dimmer * color_luminance(state.color)
-                    } else {
-                        state.dimmer
-                    };
-                    scale_u8((dimmer * 255.0) as u8, max_dimmer, true)
-                }
-                _ => 0,
-            })
+            MapAction::Set(scale_u8(level_u8(color.dimmer), max_dimmer, true))
         }
-        ChannelType::Colour => {
-            // Colour group can be:
-            // - RGB/CMY/etc mixer channels (rarely tagged as Colour in QXF; often Intensity*)
-            // - Color wheel / color macro channel with capabilities describing colors
-            match channel.get_colour() {
-                ChannelColour::Red => MapAction::Set(scale_u8(
-                    (state.color[0] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                )),
-                ChannelColour::Green => MapAction::Set(scale_u8(
-                    (state.color[1] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                )),
-                ChannelColour::Blue => MapAction::Set(scale_u8(
-                    (state.color[2] * 255.0) as u8,
-                    max_dimmer,
-                    !has_master_dimmer,
-                )),
-                ChannelColour::White => MapAction::Set(0),
-                ChannelColour::Amber => MapAction::Set(0),
-                ChannelColour::UV => MapAction::Set(0),
-                ChannelColour::None => {
-                    if is_black(state.color) {
-                        MapAction::Hold
-                    } else {
-                        MapAction::Set(
-                            map_nearest_color_capability(channel, state.color).unwrap_or(0),
-                        )
-                    }
-                }
-                _ => MapAction::Set(0),
+        // A color wheel or macro channel: capabilities describing colors.
+        // Some fixtures (or sub-effects like rings) group such a wheel as
+        // Gobo; it engages only when its capabilities hold colors.
+        ChannelType::Colour | ChannelType::Gobo => {
+            if is_black(color.srgb) {
+                MapAction::Hold
+            } else {
+                MapAction::Set(map_nearest_color_capability(channel, color.srgb).unwrap_or(0))
             }
-        }
-        ChannelType::Gobo => {
-            // Some fixtures (or sub-effects like rings) represent "colors" via a wheel channel
-            // grouped as Gobo. Only engage this mapping if capability resources contain colors.
-            if is_black(state.color) {
-                return MapAction::Hold;
-            }
-            if let Some(v) = map_nearest_color_capability(channel, state.color) {
-                return MapAction::Set(v);
-            }
-            MapAction::Set(0)
         }
         // Pan and tilt go out exactly as the evaluator produced them. There used
         // to be a mirror here for fixtures within 28 degrees of upside-down
@@ -794,10 +750,145 @@ fn is_black(rgb: [f32; 3]) -> bool {
     rgb[0] <= 0.0001 && rgb[1] <= 0.0001 && rgb[2] <= 0.0001
 }
 
-/// Returns the perceived luminance of an RGB color (0.0 to 1.0).
-/// Uses the standard luminance coefficients for sRGB.
+/// Rec. 601 luma of a gamma-encoded color (0.0 to 1.0).
 fn color_luminance(rgb: [f32; 3]) -> f32 {
     0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+}
+
+/// A 0–1 level as a DMX byte.
+fn level_u8(level: f32) -> u8 {
+    (level.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Where a fixture's extra emitters sit, as linear sRGB at their full level.
+/// Fixture definitions do not say, so these are assumptions, like the sRGB
+/// primaries assumed for red, green and blue: a D65 white, a 590 nm amber
+/// and a phosphor lime (CIE xy 0.40, 0.55), each clipped into sRGB.
+const WHITE_EMITTER: [f64; 3] = [1.0, 1.0, 1.0];
+const AMBER_EMITTER: [f64; 3] = [1.0, 0.2, 0.0];
+const LIME_EMITTER: [f64; 3] = [0.66, 1.0, 0.0];
+
+/// The emitters a fixture mode mixes color with, besides red, green and
+/// blue.
+#[derive(Clone, Copy, Debug, Default)]
+struct Emitters {
+    white: bool,
+    amber: bool,
+    lime: bool,
+    /// Cyan, magenta and yellow filters on a white lamp, with no red, green
+    /// or blue emitters.
+    subtractive: bool,
+}
+
+impl Emitters {
+    fn of(def: &FixtureDefinition, mode: &Mode) -> Self {
+        let colours: Vec<ChannelColour> = mode
+            .channels
+            .iter()
+            .filter_map(|mc| def.channels.iter().find(|c| c.name == mc.name))
+            .filter(|c| matches!(c.get_type(), ChannelType::Intensity | ChannelType::Colour))
+            .map(Channel::get_colour)
+            .collect();
+        let has = |colour| colours.contains(&colour);
+        let additive =
+            has(ChannelColour::Red) || has(ChannelColour::Green) || has(ChannelColour::Blue);
+        Self {
+            white: has(ChannelColour::White),
+            amber: has(ChannelColour::Amber),
+            lime: has(ChannelColour::Lime),
+            subtractive: !additive
+                && (has(ChannelColour::Cyan)
+                    || has(ChannelColour::Magenta)
+                    || has(ChannelColour::Yellow)),
+        }
+    }
+}
+
+/// One head's light in the terms its channels take. The head's color is
+/// linear Rec. 2020; the fixture's red, green and blue emitters are assumed
+/// to have sRGB primaries, and [`Gamut::split`] maps a color they cannot make
+/// to the nearest one they can. Levels are linear light, as a DMX level
+/// is to a linear fixture.
+#[derive(Clone, Copy, Debug, Default)]
+struct HeadColor {
+    red: f32,
+    green: f32,
+    blue: f32,
+    white: f32,
+    amber: f32,
+    lime: f32,
+    cyan: f32,
+    magenta: f32,
+    yellow: f32,
+    /// What a master dimmer channel gets.
+    dimmer: f32,
+    /// The color, gamma-encoded sRGB at a peak of 1: what a color wheel's
+    /// slots, written as sRGB hex, are compared with.
+    srgb: [f32; 3],
+}
+
+impl HeadColor {
+    fn new(state: &PrimitiveState, emitters: Emitters, master_dimmer: bool, wheel: bool) -> Self {
+        let (levels, brightness) =
+            Gamut::SRGB.split(state.color.map(f64::from), f64::from(state.dimmer));
+        let srgb = levels.map(|v| srgb_encode(v) as f32);
+        // With a master dimmer the emitters make the color and the dimmer
+        // its brightness; without one the emitters make both.
+        let scale = if master_dimmer { 1.0 } else { brightness };
+        let mut color = Self {
+            dimmer: if wheel {
+                // A wheel cannot dim its color, so a dark color dims the lamp.
+                brightness as f32 * color_luminance(srgb)
+            } else {
+                brightness as f32
+            },
+            srgb,
+            ..Self::default()
+        };
+        let mut rest = levels;
+        if emitters.subtractive {
+            // A filter passes 1 − its level of the white lamp.
+            [color.cyan, color.magenta, color.yellow] = rest.map(|v| (1.0 - v * scale) as f32);
+            return color;
+        }
+        // Each extra emitter takes as much of the color as it can make; red,
+        // green and blue make the rest. The sum is the same light.
+        let mut take = |present: bool, emitter: [f64; 3]| {
+            if !present {
+                return 0.0;
+            }
+            let share = (0..3)
+                .filter(|&i| emitter[i] > 0.0)
+                .map(|i| rest[i] / emitter[i])
+                .fold(1.0, f64::min)
+                .max(0.0);
+            for i in 0..3 {
+                rest[i] = (rest[i] - share * emitter[i]).max(0.0);
+            }
+            (share * scale) as f32
+        };
+        color.white = take(emitters.white, WHITE_EMITTER);
+        color.amber = take(emitters.amber, AMBER_EMITTER);
+        color.lime = take(emitters.lime, LIME_EMITTER);
+        [color.red, color.green, color.blue] = rest.map(|v| (v * scale) as f32);
+        color
+    }
+
+    /// The level of the emitter of `colour`, 0–1.
+    fn level(&self, colour: ChannelColour) -> f32 {
+        match colour {
+            ChannelColour::Red => self.red,
+            ChannelColour::Green => self.green,
+            ChannelColour::Blue => self.blue,
+            ChannelColour::White => self.white,
+            ChannelColour::Amber => self.amber,
+            ChannelColour::Lime => self.lime,
+            ChannelColour::Cyan => self.cyan,
+            ChannelColour::Magenta => self.magenta,
+            ChannelColour::Yellow => self.yellow,
+            ChannelColour::UV | ChannelColour::None => 0.0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -972,6 +1063,11 @@ mod tests {
         assert_eq!(buf[53], 255);
     }
 
+    /// A head's color on a wheel fixture with no master dimmer.
+    fn wheel(state: &PrimitiveState) -> HeadColor {
+        HeadColor::new(state, Emitters::default(), false, true)
+    }
+
     #[test]
     fn maps_color_wheel_to_nearest_capability() {
         let channel = Channel {
@@ -1021,13 +1117,13 @@ mod tests {
         let state = prim(1.0, 0.95, 0.05, 0.05, 0.0);
         assert_eq!(
             // has_color_wheel = true since this is a color wheel test
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true),
+            map_value(&channel, &state, &wheel(&state), 540.0, 270.0, 1.0, false),
             MapAction::Set(10)
         );
 
         let state = prim(1.0, 0.05, 0.95, 0.05, 0.0);
         assert_eq!(
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true),
+            map_value(&channel, &state, &wheel(&state), 540.0, 270.0, 1.0, false),
             MapAction::Set(20)
         );
     }
@@ -1854,10 +1950,145 @@ mod tests {
             let channel = speed(preset);
             assert_eq!(channel.get_type(), ChannelType::Speed, "{preset}");
             assert_eq!(
-                map_value(&channel, &fast, 540.0, 270.0, 1.0, true, false),
+                map_value(
+                    &channel,
+                    &fast,
+                    &HeadColor::new(&fast, Emitters::default(), true, false),
+                    540.0,
+                    270.0,
+                    1.0,
+                    true
+                ),
                 MapAction::Set(fastest),
                 "{preset}"
             );
         }
+    }
+
+    // -- color into emitters ------------------------------------------------
+
+    fn intensity(name: &str) -> Channel {
+        Channel {
+            name: name.into(),
+            preset: Some(format!("Intensity{name}")),
+            group: None,
+            capabilities: vec![],
+        }
+    }
+
+    /// One fixture of the named intensity channels, in order, lit by a head
+    /// of `color` (linear Rec. 2020) at `dimmer`. The DMX bytes, in order.
+    fn drive(names: &[&str], color: [f64; 3], dimmer: f32) -> Vec<u8> {
+        let channels: Vec<Channel> = names.iter().map(|name| intensity(name)).collect();
+        let def = FixtureDefinition {
+            manufacturer: "T".into(),
+            model: "T".into(),
+            type_: "LED".into(),
+            modes: vec![Mode {
+                name: "M".into(),
+                channels: channels
+                    .iter()
+                    .enumerate()
+                    .map(|(number, c)| ModeChannel {
+                        number: number as u32,
+                        name: c.name.clone(),
+                    })
+                    .collect(),
+                heads: vec![],
+            }],
+            channels,
+            physical: None,
+        };
+        let defs = HashMap::from([("T/T.qxf".to_string(), def)]);
+        let head = luma_patterns::FixtureOutput::from_rgb(color);
+        let [r, g, b] = head.color.unwrap().map(|v| v as f32);
+        let peak = head.dimmer.unwrap() as f32;
+        let state = UniverseState {
+            primitives: HashMap::from([("fx".into(), prim(peak * dimmer, r, g, b, 0.0))]),
+        };
+        let buffer = generate_dmx(&state, &[fixture_at("fx", 1)], &defs, None, 1.0, 0.0)
+            .remove(&1)
+            .unwrap();
+        buffer[..names.len()].to_vec()
+    }
+
+    fn srgb(rgb: [f64; 3]) -> [f64; 3] {
+        luma_patterns::color_space::from_srgb(rgb)
+    }
+
+    /// A color in sRGB drives an RGB fixture's emitters at its linear levels,
+    /// and the master dimmer at its brightness.
+    #[test]
+    fn an_srgb_color_drives_rgb_emitters_at_its_linear_levels() {
+        let orange = srgb([1.0, 0.5, 0.0]);
+        let half = (luma_patterns::color_space::srgb_decode(0.5) * 255.0).round() as u8;
+        assert_eq!(
+            drive(&["MasterDimmer", "Red", "Green", "Blue"], orange, 1.0),
+            [255, 255, half, 0]
+        );
+        assert_eq!(
+            drive(&["MasterDimmer", "Red", "Green", "Blue"], orange, 0.5),
+            [128, 255, half, 0]
+        );
+    }
+
+    /// Without a master dimmer the emitters carry the brightness too.
+    #[test]
+    fn rgb_without_a_dimmer_dims_its_emitters() {
+        let full = drive(&["Red", "Green", "Blue"], srgb([1.0, 1.0, 1.0]), 1.0);
+        let half = drive(&["Red", "Green", "Blue"], srgb([1.0, 1.0, 1.0]), 0.5);
+        assert_eq!(full, [255, 255, 255]);
+        assert_eq!(half, [128, 128, 128]);
+    }
+
+    /// A green deeper than sRGB is the nearest green the fixture has, at the
+    /// same lightness, not a wrapped or clipped channel: green leads, and red
+    /// and blue stay low.
+    #[test]
+    fn a_color_outside_the_fixture_is_its_nearest_color() {
+        let [dimmer, red, green, blue] = drive(
+            &["MasterDimmer", "Red", "Green", "Blue"],
+            [0.0, 1.0, 0.0],
+            1.0,
+        )[..] else {
+            unreachable!()
+        };
+        assert!(dimmer > 128 && green == 255, "{dimmer} {green}");
+        assert!(red < 64 && blue < 64, "{red} {blue}");
+    }
+
+    /// A white emitter makes the white part of a color; red, green and blue
+    /// make the rest. An amber takes what it can of an orange.
+    #[test]
+    fn extra_emitters_take_their_share() {
+        let names = ["MasterDimmer", "Red", "Green", "Blue", "White"];
+        assert_eq!(
+            drive(&names, srgb([1.0, 1.0, 1.0]), 1.0),
+            [255, 0, 0, 0, 255]
+        );
+        assert_eq!(
+            drive(&names, srgb([1.0, 0.0, 0.0]), 1.0),
+            [255, 255, 0, 0, 0]
+        );
+        let names = ["MasterDimmer", "Red", "Green", "Blue", "Amber"];
+        let [_, red, green, _, amber] = drive(&names, srgb([1.0, 0.5, 0.0]), 1.0)[..] else {
+            unreachable!()
+        };
+        assert!(
+            amber == 255 && green > 0 && red == 0,
+            "{red} {green} {amber}"
+        );
+    }
+
+    /// Cyan, magenta and yellow filter a white lamp: white is no filter,
+    /// red is magenta and yellow, which take out green and blue.
+    #[test]
+    fn cmy_filters_subtract() {
+        let names = ["MasterDimmer", "Cyan", "Magenta", "Yellow"];
+        assert_eq!(drive(&names, srgb([1.0, 1.0, 1.0]), 1.0), [255, 0, 0, 0]);
+        assert_eq!(
+            drive(&names, srgb([1.0, 0.0, 0.0]), 1.0),
+            [255, 0, 255, 255]
+        );
     }
 }
