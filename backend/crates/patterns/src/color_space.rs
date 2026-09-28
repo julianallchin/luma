@@ -143,6 +143,12 @@ pub fn from_srgb(srgb: [f64; 3]) -> [f64; 3] {
     apply(&SRGB_TO_REC2020, srgb.map(srgb_decode)).map(|v| v.clamp(0., 1.))
 }
 
+/// Linear sRGB (sRGB primaries, no transfer curve) to linear Rec. 2020: a
+/// change of primaries only. The same light in 0–1 lands in 0–1.
+pub fn from_linear_srgb(linear: [f64; 3]) -> [f64; 3] {
+    apply(&SRGB_TO_REC2020, linear).map(|v| v.clamp(0., 1.))
+}
+
 /// `#rrggbb` (the `#` optional, sRGB) to linear Rec. 2020.
 pub fn from_hex(hex: &str) -> Option<[f64; 3]> {
     let digits = hex.trim().trim_start_matches('#');
@@ -369,8 +375,11 @@ mod tests {
         .map(|v| srgb_encode(v.clamp(0., 1.)))
     }
 
-    /// A stored gradient converted to Rec. 2020 blends to the converted old
-    /// blend: looks do not shift.
+    /// A gradient of sRGB colors, such as hex codes, blends as the editor
+    /// showed it before: OKLab does not depend on the space it is read from.
+    /// (Stored gradients were linear light, which the old engine blended as
+    /// if gamma-encoded; their midpoints do change. See
+    /// `tests/color_form.rs`.)
     #[test]
     fn oklab_blending_matches_the_old_srgb_blending() {
         let colors = cube(5);

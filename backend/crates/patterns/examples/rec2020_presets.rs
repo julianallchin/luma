@@ -1,14 +1,14 @@
 //! **One-shot**, deleted with `forms/rec2020_upgrade.rs`. Converts the
-//! colors of a `presets.json` from gamma sRGB to linear Rec. 2020 with
+//! colors of a `presets.json` from linear sRGB to linear Rec. 2020 with
 //! [`luma_patterns::rec2020_upgrade::convert_clip_inputs`], keeping the
 //! file's layout and key order. Only lines whose colors change are written
 //! again; a converted number is kept to nine places.
 //!
-//! `--old-color-forms FILE` converts the inputs of
-//! `tests/fixtures/old_color_forms.json` the same way and records their light
-//! again, as `color@1` after [`luma_patterns::upgrade`]. The old light was
-//! recorded in the old working space, and light is a product of color and
-//! brightness that cannot be split after the fact.
+//! `--old-color-forms FILE` evaluates each case of
+//! `tests/fixtures/old_color_forms.json` with its inputs converted the same
+//! way, as `color@1` after [`luma_patterns::upgrade`], and compares the light
+//! in linear sRGB. A case whose light changed is recorded again and marked
+//! `rerecorded`: only gradients, which now blend in OKLab of the light itself.
 //!
 //! ```text
 //! # write: old file in, converted file out
@@ -241,8 +241,8 @@ fn rerecord(path: &str) {
     let mut changed = 0;
     for case in recording["cases"].as_array_mut().unwrap() {
         let form = case["form"].as_str().unwrap().to_owned();
-        case["inputs"] = convert(&form, &case["inputs"]);
-        let inputs: BTreeMap<String, P> = serde_json::from_value(case["inputs"].clone()).unwrap();
+        let converted = convert(&form, &case["inputs"]);
+        let inputs: BTreeMap<String, P> = serde_json::from_value(converted).unwrap();
         let (form, inputs) = upgrade(&form, &inputs).unwrap();
         let frame = Frame {
             cells: &cells,
@@ -260,14 +260,18 @@ fn rerecord(path: &str) {
                 let P::Lighting(lit) = &result["lighting"] else {
                     panic!("expected lighting")
                 };
-                cells.iter().map(|cell| lit[&cell.id].rgb()).collect()
+                cells
+                    .iter()
+                    .map(|cell| luma_patterns::color_space::Gamut::SRGB.fit(lit[&cell.id].rgb()))
+                    .collect()
             })
             .collect();
         let rgb = json!(rgb);
         if !same(&case["rgb"], &rgb, 1e-7) {
             changed += 1;
+            case["rgb"] = rgb;
+            case["rerecorded"] = json!(true);
         }
-        case["rgb"] = rgb;
     }
     std::fs::write(path, serde_json::to_string(&recording).unwrap()).unwrap();
     println!("{changed} cases changed their light");

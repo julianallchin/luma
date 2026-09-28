@@ -66,7 +66,8 @@ the fixture's emitters once per head:
    Red, green and blue make the rest. The engine assumes a D65 white, a 590 nm
    amber and a lime at CIE xy (0.40, 0.55).
 4. A fixture with a master dimmer gets the brightness there. A fixture
-   without one gets the emitter levels times the brightness.
+   without one gets only the emitter levels: the brightness does not reach
+   it.
 5. A fixture with cyan, magenta and yellow and no red, green or blue has
    filters on a white lamp: each filter is 1 minus the level it passes.
 
@@ -74,8 +75,8 @@ A level is linear light: DMX 128 is half of the light of 255.
 
 ### Color wheels
 
-`map_nearest_color_capability` compares the requested color, as sRGB, with the
-color of each wheel slot. The distance adds a saturation penalty. A gray request
+`map_nearest_color_capability` compares the requested color, as linear sRGB
+at a peak of 1, with the color of each wheel slot. The distance adds a saturation penalty. A gray request
 therefore prefers a white slot over a saturated slot.
 
 ## Strobe
