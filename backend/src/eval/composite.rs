@@ -15,7 +15,7 @@
 
 use crate::eval::{BlendMode, OutputBinding};
 use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
-use luma_patterns::{blend_aim, blend_light, blend_value};
+use luma_patterns::{blend_aim, blend_light, blend_value, offset_aim, Turn};
 
 /// A fresh, empty base frame: no head holds light yet.
 pub fn blank_frame() -> UniverseState {
@@ -45,10 +45,11 @@ pub(crate) fn nothing() -> PrimitiveState {
 /// - strobe: scalar `blend_value`, against 0 where `base` has no head
 /// - position: winner-takes-all when the top drives it
 /// - speed: binary (threshold 0.5)
-/// - aim: whatever the mode, blends toward the aim under it by alpha along
-///   the shortest arc ([`blend_aim`]). With no aim under it, the clip blends
-///   from the head's home: its alpha becomes the aim's weight, and the
-///   solver aims at `slerp(home, direction, weight)`.
+/// - aim: a Replace clip blends toward its aim by alpha along the shortest
+///   arc ([`blend_aim`]). With no aim under it, the clip blends from the
+///   head's home: its alpha becomes the aim's weight, and the solver aims at
+///   `slerp(home, direction, weight)`. An Offset clip does not come here; see
+///   [`offset_frame`].
 pub fn composite_frame(
     base: &mut UniverseState,
     top: &UniverseState,
@@ -78,6 +79,20 @@ pub fn composite_frame(
         if let (true, Some(top)) = (bindings.aim, tp.aim) {
             bp.aim = blend_aim(bp.aim.map(HeadAim::to_aim), top.to_aim()).map(HeadAim::from_aim);
         }
+    }
+}
+
+/// Composite one Offset aim clip onto `base` in place: each head's `turn`
+/// turns the aim under it, or its `home` when it has none
+/// ([`offset_aim`]).
+pub fn offset_frame<'a>(
+    base: &mut UniverseState,
+    turns: impl IntoIterator<Item = (&'a String, &'a Turn)>,
+    home: impl Fn(&str) -> [f64; 3],
+) {
+    for (id, turn) in turns {
+        let head = base.primitives.entry(id.clone()).or_insert_with(nothing);
+        head.aim = offset_aim(head.aim.map(HeadAim::to_aim), home(id), turn).map(HeadAim::from_aim);
     }
 }
 
@@ -114,6 +129,15 @@ mod tests {
             world: [0.0; 3],
             uvz: [0.0; 3],
         }];
+        compile_on(clip, mode, z, cells)
+    }
+
+    fn compile_on(
+        clip: p::Clip,
+        mode: p::BlendMode,
+        z: i64,
+        cells: Vec<p::Cell>,
+    ) -> CompiledAnnotation {
         let prepared = p::PreparedGraph::new(
             &p::standard_library(),
             &clip.graph,
@@ -212,6 +236,185 @@ mod tests {
         ]);
         assert_eq!(both.dimmer, 1.0);
         assert_eq!(both.aim.unwrap().direction, [1.0, 0.0, 0.0]);
+    }
+
+    /// Five heads on a truss along stage right, 1 m apart.
+    fn truss() -> Vec<p::Cell> {
+        (0..5)
+            .map(|i| {
+                let uvz = [f64::from(i) - 2.0, 0.0, 6.0];
+                p::Cell {
+                    id: format!("truss:{i}"),
+                    group: "movers".into(),
+                    world: p::Cell::stage_coordinates(uvz),
+                    uvz,
+                }
+            })
+            .collect()
+    }
+
+    /// The `aim@1` preset `name` on the truss over beats 0–4, changed by
+    /// `edit`.
+    fn aim_on_truss(
+        name: &str,
+        mode: p::BlendMode,
+        z: i64,
+        edit: impl FnOnce(&mut std::collections::BTreeMap<String, p::Value>),
+    ) -> CompiledAnnotation {
+        let mut clip = p::presets().preset("aim@1", name).unwrap().clip(0.0, 4.0);
+        edit(&mut clip.inputs);
+        compile_on(clip, mode, z, truss())
+    }
+
+    /// Each truss head's aim at `t` seconds, as a direction and a weight.
+    fn truss_aims(layers: Vec<CompiledAnnotation>, t: f32) -> Vec<([f64; 3], f64)> {
+        let frame = Scene::new(layers)
+            .render(&[t], Scope::Composite, &mut Arena::default())
+            .remove(0);
+        truss()
+            .iter()
+            .map(|cell| {
+                let aim = frame.primitives[&cell.id].aim.expect("an aim");
+                (aim.direction.map(f64::from), f64::from(aim.weight))
+            })
+            .collect()
+    }
+
+    fn same_aims(a: &[([f64; 3], f64)], b: &[([f64; 3], f64)]) {
+        for ((da, wa), (db, wb)) in a.iter().zip(b) {
+            assert!(
+                da.iter().zip(db).all(|(x, y)| (x - y).abs() < 1e-5) && (wa - wb).abs() < 1e-6,
+                "{a:?} != {b:?}"
+            );
+        }
+    }
+
+    fn degrees(a: [f64; 3], b: [f64; 3]) -> f64 {
+        let (a, b) = (p::aim::unit(a), p::aim::unit(b));
+        (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees()
+    }
+
+    /// A position to the right of and below the presets' rest.
+    const PLACE: [f64; 3] = [0.6, 0.0, -0.8];
+
+    fn position(z: i64) -> CompiledAnnotation {
+        aim_on_truss("Position", p::BlendMode::Replace, z, |inputs| {
+            inputs.insert("direction".into(), p::Value::Vector(PLACE));
+        })
+    }
+
+    fn at(inputs: &mut std::collections::BTreeMap<String, p::Value>, direction: [f64; 3]) {
+        inputs.insert("direction".into(), p::Value::Vector(direction));
+    }
+
+    /// A stage-right axis, mirrored left–right through the middle head.
+    fn mirrored(inputs: &mut std::collections::BTreeMap<String, p::Value>) {
+        inputs.insert(
+            "axis".into(),
+            p::Value::Mapping(p::MappingSpec {
+                source: p::MappingSource::U,
+                per_group: false,
+                reverse: false,
+                mirror: Some(p::MirrorPlane {
+                    normal: [1.0, 0.0, 0.0],
+                    offset: 0.0,
+                }),
+                span: p::Span::Selection,
+                plane: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn an_offset_circle_circles_around_the_position_under_it() {
+        for t in [0.3, 1.1, 2.6] {
+            // The circle's own direction is not used: it circles PLACE, with
+            // and without a mirror.
+            for axis in [|_: &mut _| {}, mirrored] {
+                let offset = truss_aims(
+                    vec![
+                        position(0),
+                        aim_on_truss("Circle", p::BlendMode::Offset, 1, axis),
+                    ],
+                    t,
+                );
+                let there = truss_aims(
+                    vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |i| {
+                        axis(i);
+                        at(i, PLACE);
+                    })],
+                    t,
+                );
+                same_aims(&offset, &there);
+            }
+            // Replace is unchanged: the circle at its own direction.
+            let replaced = truss_aims(
+                vec![
+                    position(0),
+                    aim_on_truss("Circle", p::BlendMode::Replace, 1, |_| {}),
+                ],
+                t,
+            );
+            let alone = truss_aims(
+                vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |_| {})],
+                t,
+            );
+            same_aims(&replaced, &alone);
+        }
+    }
+
+    #[test]
+    fn an_offset_at_alpha_zero_leaves_the_aim_under_it() {
+        let under = truss_aims(vec![position(0)], 1.1);
+        let over = truss_aims(
+            vec![
+                position(0),
+                aim_on_truss("Circle", p::BlendMode::Offset, 1, |i| {
+                    i.insert("alpha".into(), p::Value::Proportion(0.0));
+                }),
+            ],
+            1.1,
+        );
+        same_aims(&over, &under);
+    }
+
+    #[test]
+    fn stacked_offsets_compose_bottom_to_top() {
+        let fan = || aim_on_truss("Fan", p::BlendMode::Offset, 1, mirrored);
+        let circle = |z| aim_on_truss("Circle", p::BlendMode::Offset, z, mirrored);
+        let t = 1.1;
+        // A fan, then a circle: one clip at PLACE with that fan and circle.
+        let stacked = truss_aims(vec![position(0), fan(), circle(2)], t);
+        let fan_degrees = p::presets().preset("aim@1", "Fan").unwrap().inputs["fan"].clone();
+        let one = truss_aims(
+            vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |i| {
+                mirrored(i);
+                at(i, PLACE);
+                i.insert("fan".into(), fan_degrees);
+            })],
+            t,
+        );
+        same_aims(&stacked, &one);
+        // A circle, then a fan: the fan leans each head off the circle as
+        // far as it leans the head off the position alone.
+        let circled = truss_aims(vec![position(0), circle(1)], t);
+        let fanned = truss_aims(vec![position(0), fan()], t);
+        let mut fan = fan();
+        fan.z_index = 2;
+        let both = truss_aims(vec![position(0), circle(1), fan], t);
+        let mut spread = 0.0_f64;
+        for n in 0..both.len() {
+            let lean = degrees(fanned[n].0, PLACE);
+            spread = spread.max(lean);
+            assert!(
+                (degrees(both[n].0, circled[n].0) - lean).abs() < 1e-3,
+                "head {n}: {both:?} vs {circled:?}"
+            );
+        }
+        assert!(spread > 1.0, "the fan spreads the heads: {fanned:?}");
     }
 
     #[test]

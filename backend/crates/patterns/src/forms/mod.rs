@@ -24,10 +24,15 @@ pub fn is_form(id: &str) -> bool {
     FORMS.contains(&id)
 }
 
-/// Whether clips of form `id` blend with `replace` only. An aim clip always
-/// blends toward the aim under it by alpha.
-pub fn replace_only(id: &str) -> bool {
-    id == "aim@1"
+/// The blend modes a clip of form `id` takes, in the order a picker lists
+/// them. An aim either replaces the aim under it or turns it; light takes
+/// the light modes.
+pub fn blend_modes(id: &str) -> &'static [BlendMode] {
+    if id == "aim@1" {
+        &[BlendMode::Replace, BlendMode::Offset]
+    } else {
+        &BlendMode::LIGHT
+    }
 }
 
 /// A form's inputs in the order an editor shows them. The definition keeps
@@ -955,7 +960,10 @@ fn named_choice(mut input: Input, names: &[(&str, &str)]) -> Input {
 
 /// Where the heads of a clip point: a base (one direction, or a point every
 /// head points at), a fan across the axis, and a motion around it. The
-/// output is a direction per head, never pan or tilt; its length is alpha.
+/// lighting output is a direction per head, never pan or tilt; its length is
+/// alpha. A Replace clip plays it. An Offset clip plays the `turn` output
+/// instead: the fan and motion alone, which the compositor applies to the
+/// aim under the clip.
 fn aim() -> Definition {
     let mut body = Body::default();
     // Shape cycles and hits for a fan per hit count `every`.
@@ -1007,6 +1015,17 @@ fn aim() -> Definition {
             ("axis", i("axis")),
         ],
     );
+    body.node(
+        "turn",
+        "core/aim_turn",
+        vec![
+            ("fan", i("fan")),
+            ("yaw", c("motion", "yaw")),
+            ("pitch", c("motion", "pitch")),
+            ("alpha", i("alpha")),
+            ("axis", i("axis")),
+        ],
+    );
     let aim = body.multiply("aim", c("moved", "direction"), i("alpha"));
     let degrees = |name: &str, description: &str, promotable: &[SourceKind], low: f64| {
         number(
@@ -1021,7 +1040,7 @@ fn aim() -> Definition {
             90.0,
         )
     };
-    body.form_with(
+    let mut definition = body.form_with(
         "Aim",
         vec![
             (
@@ -1147,7 +1166,7 @@ fn aim() -> Definition {
                 "alpha",
                 input(
                     "Alpha",
-                    "Blend toward the aim under this clip",
+                    "How much the clip counts: in Replace, the blend toward its aim; in Offset, the share of its fan and motion",
                     Value::Proportion(1.0),
                     Rate::Frame,
                     &[Time, Hit, Noise, Audio],
@@ -1155,7 +1174,24 @@ fn aim() -> Definition {
             ),
         ],
         vec![("aim", aim)],
-    )
+    );
+    definition.outputs.insert(
+        crate::aim::TURN_OUTPUT.into(),
+        Output {
+            value_type: ValueType::Signal(SignalType::new(
+                Unit::Number,
+                Channels::components(crate::aim::TURN_CHANNELS).expect("nine channels"),
+            )),
+            rate: Rate::Frame,
+        },
+    );
+    let crate::Body::Graph(graph) = &mut definition.body else {
+        unreachable!("a form is a graph")
+    };
+    graph
+        .outputs
+        .insert(crate::aim::TURN_OUTPUT.into(), c("turn", "turn"));
+    definition
 }
 
 // ---------------------------------------------------------------------------

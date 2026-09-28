@@ -135,13 +135,13 @@ Fixture shutter strobe at Rate × Alpha.
 
 ## Aim
 
-`aim@1` · Graph of 9 nodes
+`aim@1` · Graph of 10 nodes
 
-Points moving heads: a base aim, a fan across the axis and a motion shape.
+Points moving heads: a base aim, a fan across the axis and a motion shape. In Offset blend, the fan and motion turn the aim under the clip instead.
 
 | Input | Name | Type | Rate | Default | Description |
 |---|---|---|---|---|---|
-| `alpha` | Alpha | Signal (0–1, one channel) | per frame | `1` | Blend toward the aim under this clip |
+| `alpha` | Alpha | Signal (0–1, one channel) | per frame | `1` | How much the clip counts: in Replace, the blend toward its aim; in Offset, the share of its fan and motion |
 | `axis` | Axis | Mapping | fixed | `source order` | How the heads are laid out, for fan and spread |
 | `base` | Base | Choice | fixed | `—` | What the heads rest on: one direction, or a point they all point at |
 | `direction` | Direction | Signal (number, 3 channels) | per frame | `—` | The aim in U (stage right), V (downstage), Z (up), when base is direction |
@@ -157,4 +157,5 @@ Points moving heads: a base aim, a fan across the axis and a motion shape.
 | Output | Type | Rate |
 |---|---|---|
 | `lighting` | Lighting | per frame |
+| `turn` | Signal (number, 9 channels) | per frame |
 

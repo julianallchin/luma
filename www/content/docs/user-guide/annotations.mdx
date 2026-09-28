@@ -52,7 +52,7 @@ For each head:
 - **Position** is taken from the top clip.
 - **Speed** is taken from the top clip and is 0 or 1.
 
-The nine blend modes and their formulas are in the [blend mode table](/docs/architecture/compositor#blend-modes).
+The nine light blend modes and their formulas are in the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes one of two modes instead. **Replace** points the heads at the clip's aim. **Offset** ignores the clip's base, and its fan and motion turn the aim under it. Alpha scales the degrees. Over no aim, it starts from the head's home. Offset clips stack, so one movement clip can run over many positions.
 
 ## Next Steps
 

@@ -1,6 +1,7 @@
 // An aim clip from the outside: placed from the preset browser, its sheet
 // shows the base's rows and the motion's rows that apply, direction as turn
-// and tilt, and no blend mode. A motion of none hides the shape's rows.
+// and tilt, and a blend of Replace or Offset. A motion of none hides the
+// shape's rows; Offset hides the base's rows.
 
 fixture({ seconds: 20, graph_score: { clips: {} }, rig: 4, window: [1400, 1000] });
 
@@ -36,8 +37,8 @@ const aimRows = () => inSheet("row").filter((label) => AIM_ROWS.includes(label))
 
 test("an aim sheet shows the rows its base and motion use", () => {
   placeAimWave();
-  // A direction base with a shape; no blend mode.
-  expect(aimRows()).toEqual(["Base", "Direction", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
+  // A direction base with a shape.
+  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
   // Direction reads as turn and tilt, with the stored vector under them.
   const sliders = inSheet("slider");
   assert(sliders.some((l) => l.startsWith("Direction: Turn = ")) && sliders.some((l) => l.startsWith("Direction: Tilt = ")),
@@ -52,7 +53,7 @@ test("an aim sheet shows the rows its base and motion use", () => {
   app.click(node("button", "None"));
   until("motion none", (s) => s.find({ role: "select", label: "None" }));
   settle();
-  expect(aimRows()).toEqual(["Base", "Direction", "Fan", "Axis", "Motion"]);
+  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion"]);
 
   const clip = onlyClip();
   expect(clip.graph).toBe("aim@1");
@@ -60,6 +61,41 @@ test("an aim sheet shows the rows its base and motion use", () => {
   expect(clip.inputs.motion).toEqual({ type: "choice", value: "none" });
   // A hidden input keeps its value.
   expect(clip.inputs.shape).toEqual({ type: "choice", value: "swing_up_down" });
+});
+
+// An aim offers two blends. Offset turns the aim under the clip, so the
+// base's rows go; Replace brings them back. Base and direction keep their
+// values while hidden.
+test("an aim blends replace or offset", () => {
+  placeAimWave();
+  const blend = () => {
+    const r = node("row", "Blend").bounds;
+    return app.snapshot().findAll({ role: "select" })
+      .find((n) => n.bounds.y >= r.y && n.bounds.y < r.y + r.height);
+  };
+  expect(blend().label).toBe("Replace");
+  app.click(blend());
+  until("the blend menu", (s) => s.find({ role: "button", label: "Offset" }));
+  const modes = app.snapshot().findAll({ role: "button" }).map((n) => n.label)
+    .filter((l) => ["Replace", "Offset", "Add", "Multiply", "Screen"].includes(l));
+  expect(modes).toEqual(["Replace", "Offset"]);
+  const before = onlyClip();
+  app.click(node("button", "Offset"));
+  until("offset", (s) => s.find({ role: "select", label: "Offset" }));
+  settle();
+  expect(aimRows()).toEqual(["Blend", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
+  const offset = onlyClip();
+  expect(offset.blend_mode).toBe("offset");
+  expect(offset.inputs.base).toEqual(before.inputs.base);
+  expect(offset.inputs.direction).toEqual(before.inputs.direction);
+
+  app.click(blend());
+  until("the blend menu", (s) => s.find({ role: "button", label: "Replace" }));
+  app.click(node("button", "Replace"));
+  until("replace", (s) => s.find({ role: "select", label: "Replace" }));
+  settle();
+  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
+  expect(onlyClip().blend_mode).toBe("replace");
 });
 
 // The axis rows offer the Mirror control of the old mapping editor: Off,

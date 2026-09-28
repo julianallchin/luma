@@ -917,10 +917,12 @@ pub(super) fn rows(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<Any
     rows
 }
 
-/// Whether an `aim@1` row does not apply to the clip's base and motion: the
+/// Whether an `aim@1` row does not apply to the clip's blend, base and
+/// motion: an Offset clip has no base, so base, direction and point go; the
 /// direction or the point by the base; shape, size, spread and speed by the
 /// motion. `every` paces a shape and a fan per hit.
 fn aim_hides(built: &Built, key: &str) -> bool {
+    let offset = built.blend == BlendMode::Offset;
     let stored = |key: &str| {
         built
             .cells
@@ -939,8 +941,9 @@ fn aim_hides(built: &Built, key: &str) -> bool {
         .and_then(serde_json::Value::as_str)
         == Some("hit");
     match key {
-        "direction" => base != "direction",
-        "point" => base != "point",
+        "base" => offset,
+        "direction" => offset || base != "direction",
+        "point" => offset || base != "point",
         "shape" | "spread" => motion != "shape",
         "size" => motion == "none",
         "speed" => motion != "noise",

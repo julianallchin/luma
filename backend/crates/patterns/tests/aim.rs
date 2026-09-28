@@ -427,6 +427,30 @@ fn aim_inputs_are_checked() {
     assert!(score.validate(&library).unwrap_err().0.contains("replace"));
 }
 
+/// An aim clip replaces or offsets the aim under it; light never offsets.
+#[test]
+fn offset_is_a_blend_for_aim_only() {
+    let library = standard_library();
+    let check = |form: &str, name: &str, mode: BlendMode| {
+        let mut clip = presets().preset(form, name).unwrap().clip(0.0, 4.0);
+        clip.blend_mode = mode;
+        Score::validate_clip(&library, "clip", &clip)
+    };
+    assert!(check("aim@1", "Circle", BlendMode::Offset).is_ok());
+    assert!(check("aim@1", "Circle", BlendMode::Replace).is_ok());
+    for (form, name) in [
+        ("color.constant@1", "Wash"),
+        ("color.chase@1", "Chase"),
+        ("strobe.constant@1", "Strobe"),
+    ] {
+        let error = check(form, name, BlendMode::Offset).unwrap_err().0;
+        assert!(error.contains("offset"), "{form}: {error}");
+        assert!(check(form, name, BlendMode::Add).is_ok(), "{form}");
+    }
+    assert!(blend_modes("aim@1").contains(&BlendMode::Offset));
+    assert!(!blend_modes("color.constant@1").contains(&BlendMode::Offset));
+}
+
 /// Spread is degrees of phase across the axis: 360° is one whole cycle, so
 /// the two end heads move alike; 720° on five heads makes every other head
 /// alike; a negative spread runs the wave the other way.

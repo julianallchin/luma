@@ -53,3 +53,15 @@ pub fn try_eval(
         None => Ok(times.iter().map(|_| composite::blank_frame()).collect()),
     }
 }
+
+/// Each head's aim turn at `times`, for a plan whose clip blends with Offset.
+pub(crate) fn try_turns(
+    plan: &Plan,
+    times: &[f32],
+    scratch: &mut Arena,
+) -> Result<Vec<BTreeMap<String, luma_patterns::Turn>>, String> {
+    match &plan.program {
+        Some(program) => program.turns(times, scratch),
+        None => Ok(times.iter().map(|_| BTreeMap::new()).collect()),
+    }
+}

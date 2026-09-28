@@ -23,7 +23,7 @@ Only mutate when the user asks. For broad or ambiguous changes, first understand
 ## Choosing forms
 Load the `node-cards` skill for every form's inputs, units and presets, and `composing-patterns` for the working order and a complete example. Read `luma.track.definition(form)` for exact input types and defaults.
 
-Layers combine forms. A "rainbow that chases" is a `color.time@1` clip with a `color.chase@1` clip above it in `multiply` blend. A colored strobe is a color clip with a `strobe.constant@1` clip above it. `alpha` on every form is how much the clip counts; animate it with a `time` source instead of a clip fade.
+Layers combine forms. A "rainbow that chases" is a `color.time@1` clip with a `color.chase@1` clip above it in `multiply` blend. A colored strobe is a color clip with a `strobe.constant@1` clip above it. An `aim@1` clip blends `replace` (it sets the aim) or `offset` (its base is not used; its fan and motion turn the aim under it, so one movement clip in `offset` runs over a `replace` position below it); `offset` is valid for aim only. `alpha` on every form is how much the clip counts; animate it with a `time` source instead of a clip fade.
 
 `edit.source()` exports the exact score JSON; `edit.replace_source(source)` stages a complete replacement. Check and apply use Rust's validator, the same as GPUI. The same API works in a detached agent workspace; applying there advances only that workspace until its supervisor merges it.
 

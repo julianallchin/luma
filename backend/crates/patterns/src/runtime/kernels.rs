@@ -66,7 +66,8 @@ pub(crate) fn run(
         | Primitive::AimBase
         | Primitive::AimFan
         | Primitive::AimMotion
-        | Primitive::AimOffset => crate::forms::ops::run(op, inputs, outputs, batch),
+        | Primitive::AimOffset
+        | Primitive::AimTurn => crate::forms::ops::run(op, inputs, outputs, batch),
         Primitive::JoinChannels => numeric("value", signal("a").join_channels(signal("b"))?),
         Primitive::ChannelMaximum => {
             let source = signal("value");

@@ -73,6 +73,14 @@ value.
 
 The default blend mode of a clip is `replace`.
 
+An aim clip takes `replace` or `offset` only, and no light clip takes
+`offset` (`blend_modes` in `backend/crates/patterns/src/forms/mod.rs`). A
+`replace` aim blends toward the clip's aim by alpha along the shortest arc
+(`blend_aim`). An `offset` aim gives a turn per head instead: its fan's lean
+and its motion's yaw and pitch. `offset_frame` turns the aim under the clip
+by it, with every angle times alpha (`offset_aim`). Over no aim the turn
+starts from the head's home.
+
 `blend_color` blends RGB in two steps:
 
 1. It blends each channel with `blend_value`. In `value` mode it uses the

@@ -782,9 +782,9 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
 // -- the write paths ----------------------------------------------------------
 
 impl Luma {
-    /// A blend pick from the sheet: every selected clip takes the mode, in
-    /// one committed write. A clip of a replace-only form (aim) keeps
-    /// replace.
+    /// A blend pick from the sheet: every selected clip whose form takes
+    /// the mode takes it, in one committed write. An aim takes replace or
+    /// offset; light takes the light modes.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
         self.track_command(
             move |editor| {
@@ -794,7 +794,7 @@ impl Luma {
                 let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
                 for clip in &mut clips {
                     if editor.selected.contains(&clip.id)
-                        && !luma_patterns::replace_only(&clip.pattern)
+                        && luma_patterns::blend_modes(&clip.pattern).contains(&mode)
                     {
                         clip.blend = mode;
                     }
@@ -1032,14 +1032,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
-                    // An aim blends by alpha only: it offers no blend mode.
-                    .when(
-                        !built
-                            .pattern
-                            .as_deref()
-                            .is_some_and(luma_patterns::replace_only),
-                        |el| el.child(named("Blend", blend_select(state, built, app))),
-                    )
+                    .child(named("Blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
         )
@@ -1062,16 +1055,21 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     }
 }
 
-/// The blend row: the canonical nine, from [`BlendMode::ALL`] and nowhere
-/// else, applied to the whole selection on pick.
+/// The blend row: the modes the selection's form takes
+/// ([`luma_patterns::blend_modes`]; the light modes for mixed forms),
+/// applied to the whole selection on pick.
 fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
-    let names: Vec<&str> = BlendMode::ALL.iter().map(|mode| mode.name()).collect();
+    let modes = built
+        .pattern
+        .as_deref()
+        .map_or(&BlendMode::LIGHT[..], luma_patterns::blend_modes);
+    let names: Vec<&str> = modes.iter().map(|mode| mode.label()).collect();
     let open = menu_visibility(state, Menu::Blend);
     let toggle = app.clone();
     let pick = app.clone();
     luma_arg_select(
         "blend",
-        built.blend.name(),
+        built.blend.label(),
         &names,
         open,
         move |_, cx| {
@@ -1087,7 +1085,7 @@ fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
         move |index, _, cx| {
             pick.update(cx, |this, cx| {
                 this.with_track_editor(cx, |editor| editor.sheet.open = None);
-                this.sheet_blend(BlendMode::ALL[index], cx);
+                this.sheet_blend(modes[index], cx);
             });
         },
     )
