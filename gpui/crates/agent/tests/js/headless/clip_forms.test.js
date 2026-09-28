@@ -1,8 +1,8 @@
 // Form clips from the outside: a placed form clip's sheet shows the form's
 // inputs, and the sheet edits them — a choice, a promotion to a curve over
-// time, a pick from the curve thumbnails and back to a fixed value, the
-// gradient editor, the envelope editor, and a field that commits on blur. A
-// chase is a color whose brightness moves across space.
+// time, a pick from the curve thumbnails and back to a fixed value, a
+// color's strip, a number's strip, and a field that commits on blur. A chase
+// is a color whose brightness moves across space.
 
 // One clip of a shipped preset over beats 2–6 (seconds 1–3), keyed `form-clip`.
 const clipOf = (form, preset) => ({ pattern: "form-clip", name: preset, start: 1, end: 3, preset: [form, preset] });
@@ -91,14 +91,14 @@ test("the sheet edits a choice and promotes an input to a curve and back", () =>
   app.click(node("button", "Comet"));
   until("comet", (s) => s.find({ role: "select", label: "Comet" }));
   settle();
-  expect(app.snapshot().find({ role: "card", label: "Envelope curve" })).toBe(undefined);
+  expect(app.snapshot().find({ role: "card", label: "Brightness strip" })).toBe(undefined);
   // Custom opens the shape's editor, and a named shape shuts it again.
   app.click(inRow("Shape", "select", "Comet"));
   app.click(node("button", "Custom"));
-  until("the shape editor", (s) => s.find({ role: "card", label: "Envelope curve" }));
+  until("the shape editor", (s) => s.find({ role: "card", label: "Brightness strip" }));
   app.click(inRow("Shape", "select", "Comet"));
   app.click(node("button", "Comet"));
-  until("the shape editor hidden", (s) => !s.find({ role: "card", label: "Envelope curve" }));
+  until("the shape editor hidden", (s) => !s.find({ role: "card", label: "Brightness strip" }));
   settle();
   const comet = library.shapes().find((s) => s.name === "Comet").value.value;
   expect(formClip().inputs.brightness.value.curve).toEqual(comet);
@@ -109,7 +109,7 @@ test("the sheet edits a choice and promotes an input to a curve and back", () =>
   expect(offered[0]).toBe("Fixed");
   expect(offered).toContain("↗ Over time");
   app.click(node("button", "↗ Over time"));
-  until("the curve editor", (s) => s.find({ role: "card", label: "Envelope curve" }));
+  until("the curve editor", (s) => s.find({ role: "card", label: "Every strip" }));
   inRow("Every", "select", "↗ Over time");
   settle();
 
@@ -122,7 +122,7 @@ test("the sheet edits a choice and promotes an input to a curve and back", () =>
   until("swell", (s) => s.find({ role: "select", label: "Swell" }));
   settle();
   expect(app.snapshot().find({ role: "button", label: "Swell" })).toBe(undefined);
-  expect(app.snapshot().find({ role: "card", label: "Envelope curve" })).toBe(undefined);
+  expect(app.snapshot().find({ role: "card", label: "Every strip" })).toBe(undefined);
   expect(formClip().inputs.every.type).toBe("time");
 
   // Back to fixed takes the curve's first value. Swell starts at zero, and a
@@ -147,7 +147,7 @@ test("a curve input offers its curves and Custom opens the editor", { fixture: {
   app.click(inRow("Brightness", "select", "Fixed"));
   app.click(node("button", "↗ Over time"));
   // A flat curve is no preset: Custom, with its editor open.
-  until("the curve editor", (s) => s.find({ role: "card", label: "Envelope curve" }));
+  until("the curve editor", (s) => s.find({ role: "card", label: "Brightness strip" }));
   settle();
   // The editor drops its own presets beside the picker.
   const editorPresets = ["Hard", "Soft", "Triangle"].filter((l) => app.snapshot().find({ role: "button", label: l }));
@@ -185,7 +185,7 @@ test("a curve input offers its curves and Custom opens the editor", { fixture: {
   settle();
   expect(app.snapshot().find({ role: "card", label: "Presets" })).toBe(undefined);
   // Picking a preset hides the editor again.
-  expect(app.snapshot().find({ role: "card", label: "Envelope curve" })).toBe(undefined);
+  expect(app.snapshot().find({ role: "card", label: "Brightness strip" })).toBe(undefined);
 
   // The pick stores the curve, scaled to the brightness's range.
   const brightness = formClip().inputs.brightness;
@@ -193,24 +193,42 @@ test("a curve input offers its curves and Custom opens the editor", { fixture: {
   expectScaled(brightness.value, library.curves("brightness").find((c) => c.name === "Swell").curve);
 });
 
-const gradientStops = () => app.snapshot().findAll({ role: "slider" }).filter((n) => n.label.startsWith("graph-gradient:stop:"));
+const colorStops = () => app.snapshot().findAll({ role: "slider" }).filter((n) => n.label.startsWith("Color point "));
 
-test("the gradient editor adds, drags off and picks a preset",
+test("a color strip adds a stop, moves it in x only, removes it and picks a preset",
   { fixture: { clips: [clipOf("color@1", "Color fade")] } }, () => {
     open();
     app.click(node("card", "Color"));
-    until("the gradient", (s) => s.find({ role: "card", label: "graph-gradient bar" }));
-    const before = gradientStops().length;
+    until("the strip", (s) => s.find({ role: "card", label: "Color strip" }));
+    const before = colorStops().length;
     expect(before).toBe(2);
-    // A click on the bar adds a stop.
-    app.click(node("card", "graph-gradient bar"));
-    until("a stop added", () => gradientStops().length === before + 1);
+    // A double-click adds a stop, here in the middle.
+    app.click(node("card", "Color strip"), { count: 2 });
+    until("a stop added", () => colorStops().length === before + 1);
     settle();
-    // A stop dragged off goes.
-    app.drag(gradientStops()[1], { dx: 0, dy: 90 }, { steps: 6 });
-    until("dragged off", () => gradientStops().length === before);
+    const stored = () => formClip().inputs.color.value.gradient.stops;
+    expect(stored().length).toBe(before + 1);
+    // A drag moves the new stop along x; the drag's y goes nowhere.
+    const b = node("card", "Color strip").bounds;
+    const added = colorStops()[1];
+    app.drag(added, { dx: b.width * 0.2, dy: 30 }, { steps: 6 });
     settle();
-    app.click(node("select", "Custom"));
+    const moved = colorStops()[1];
+    assert(moved.bounds.x > added.bounds.x + b.width * 0.1, `the stop did not move right: ${added.bounds.x} → ${moved.bounds.x}`);
+    expect(moved.bounds.y).toBe(added.bounds.y);
+    const t = stored()[1].t;
+    assert(t > 0.6 && t < 0.8, `the stored stop is at ${t}`);
+    // A right-click removes it.
+    app.click(colorStops()[1], { button: "right" });
+    until("removed", () => colorStops().length === before);
+    settle();
+    expect(stored().length).toBe(before);
+
+    // The strip's preset chip sits over it.
+    const chip = app.snapshot().findAll({ role: "select" })
+      .filter((n) => n.bounds.y < b.y)
+      .sort((a, c) => c.bounds.y - a.bounds.y)[0];
+    app.click(chip);
     app.click(node("button", "Fire"));
     until("fire", (s) => s.find({ role: "select", label: "Fire" }));
     settle();
@@ -227,31 +245,35 @@ test("the gradient editor adds, drags off and picks a preset",
     });
   });
 
-test.skip("bug: a stop's color picker does not open from a gradient in a form row (its swatch click shows no hex field)",
+test("a stop's swatch opens the color picker from a form row",
   { fixture: { clips: [clipOf("color@1", "Color fade")] } }, () => {
-    const hex = () => app.snapshot().findAll({ role: "input" }).find((n) => n.label.startsWith("Stop color hex = "));
-    const opacity = () => app.snapshot().findAll({ role: "input" }).find((n) => n.label.startsWith("Stop color opacity = "));
+    const hex = () => app.snapshot().findAll({ role: "input" }).find((n) => n.label.startsWith("Color point hex = "));
+    const opacity = () => app.snapshot().findAll({ role: "input" }).find((n) => n.label.startsWith("Color point opacity = "));
     open();
     app.click(node("card", "Color"));
-    until("the gradient", (s) => s.find({ role: "card", label: "graph-gradient bar" }));
-    app.click(node("card", "graph-gradient bar"));
-    until("a stop added", () => gradientStops().length === 3);
+    until("the strip", (s) => s.find({ role: "card", label: "Color strip" }));
+    app.click(node("card", "Color strip"), { count: 2 });
+    until("a stop added", () => colorStops().length === 3);
     settle();
     // Hex and opacity live in the picker.
     assert(!hex() && !opacity(), "hex and opacity show outside the picker");
-    app.click(node("button", "Stop color swatch"));
+    app.click(node("button", "Color point swatch"));
     until("the picker", () => hex());
-    // The new stop is selected and carries the bar's color there.
-    expect(hex().label).toBe("Stop color hex = #9964A2");
-    expect(opacity().label).toBe("Stop color opacity = 100");
+    // The new stop is selected and carries the strip's color there.
+    const [a, c] = [0, 2].map((i) => formClip().inputs.color.value.gradient.stops[i].color);
+    const shown = hex().label.slice(-7);
+    assert(shown !== "#000000" || a.concat(c).every((v) => v === 0), `the new stop shows ${shown}`);
+    expect(opacity().label).toBe("Color point opacity = 100");
     app.click(hex());
     app.key("secondary-a backspace");
     app.type(hex(), "#00ff00");
     app.key("enter");
-    until("the hex", () => hex().label === "Stop color hex = #00FF00");
+    until("the hex", () => hex().label === "Color point hex = #00FF00");
+    settle();
+    expect(formClip().inputs.color.value.gradient.stops[1].color).toEqual([0, 1, 0]);
   });
 
-test("an envelope point dragged outside the editor keeps following and clamps",
+test("a number strip's point dragged outside it keeps following and clamps",
   { fixture: { clips: [WASH], window: [1400, 1400] } }, () => {
     open();
     app.click(node("card", "Color"));
@@ -259,11 +281,11 @@ test("an envelope point dragged outside the editor keeps following and clamps",
     const low = { margin: 160, to: node("card", "Clip inputs").bounds.y + 140 };
     app.click(inRow("Brightness", "select", "Fixed", low));
     app.click(node("button", "↗ Over time"));
-    until("the curve editor", (s) => s.find({ role: "card", label: "Envelope curve" }));
+    until("the curve editor", (s) => s.find({ role: "card", label: "Brightness strip" }));
     settle();
-    const box = node("card", "Envelope curve").bounds;
+    const box = node("card", "Brightness strip").bounds;
     // Down and to the left, far past the box, and released out there.
-    app.drag(node("slider", "Envelope anchor 2"), { dx: -300, dy: box.height * 3 }, { steps: 8 });
+    app.drag(node("slider", "Brightness point 2"), { dx: -300, dy: box.height * 3 }, { steps: 8 });
     settle();
     const brightness = formClip().inputs.brightness;
     expect(brightness.type).toBe("time");

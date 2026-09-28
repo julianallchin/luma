@@ -44,7 +44,7 @@ test("a color across space shows its axis and the gradient along it", () => {
   app.click(inRow("Color", "select", "Fixed"));
   app.click(node("button", "↗ Across space"));
   until("the axis row", (s) => s.find({ role: "row", label: "Axis" }));
-  until("the gradient", (s) => s.find({ role: "card", label: "graph-gradient bar" }));
+  until("the gradient", (s) => s.find({ role: "card", label: "Color strip" }));
   inRow("Color", "select", "↗ Across space");
   // The axis row offers the axis presets, spans and, for X, a mirror.
   inRow("Axis", "select", "X");
@@ -79,7 +79,7 @@ test("a brightness across space shows a curve, and moving shows the stroke", () 
   app.click(node("button", "↗ Across space"));
   until("the axis row", (s) => s.find({ role: "row", label: "Axis" }));
   // A flat curve is no preset, so its editor is open.
-  until("the curve", (s) => s.find({ role: "card", label: "Envelope curve" }));
+  until("the curve", (s) => s.find({ role: "card", label: "Brightness strip" }));
   inRow("Along the axis", "select", "Custom");
   expect(app.snapshot().find({ role: "row", label: "Travel" })).toBe(undefined);
   settle();

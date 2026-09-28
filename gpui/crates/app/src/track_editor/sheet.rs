@@ -11,10 +11,10 @@ use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{ColorArg, ColorArgEditor, ColorArgEvent};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
 use luma_ui::arg::gradient::{Gradient, GradientStop};
-use luma_ui::arg::gradient_editor::{GradientChanged, GradientEditor};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::select::{luma_arg_select, MenuVisibility};
 use luma_ui::arg::signal::{SignalChanged, SignalEditor};
+use luma_ui::arg::strip::{CurveStrip, StripChanged, StripValue};
 use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
@@ -63,6 +63,16 @@ pub(crate) struct State {
     /// Debounce generation for the trailing commit; each live edit retires
     /// the timer before it.
     flush_gen: u64,
+    /// The heads of the primary clip's selection, for a strip across space.
+    heads: Heads,
+}
+
+/// The heads a selection resolves to, asked once per venue, selection and
+/// seed. `cells` is `None` until the answer lands.
+#[derive(Default)]
+struct Heads {
+    key: Option<(String, String, u64)>,
+    cells: Option<Rc<[luma_patterns::Cell]>>,
 }
 
 impl Default for State {
@@ -77,6 +87,7 @@ impl Default for State {
             closing: None,
             burst: false,
             flush_gen: 0,
+            heads: Heads::default(),
         }
     }
 }
@@ -148,19 +159,16 @@ struct Cell {
 
 enum Widget {
     Invalid(String),
-    Envelope(Entity<luma_ui::arg::envelope::EnvelopeEditor>),
+    /// A curve or a gradient: see [`CurveStrip`].
+    Strip(Entity<CurveStrip>),
     Choice(Vec<luma_lib::models::node_graph::ParamOption>),
     Color(Entity<ColorArgEditor>),
     Scalar(Entity<DraftedNumber>),
     Signal(Entity<SignalEditor>),
     Selection(Entity<GroupExpressionEditor>),
-    Gradient(Entity<GradientEditor>),
     /// A form input's named choices. The row reads the stored value. A
     /// choice of curves also holds the editor for a custom curve.
-    Preset(
-        &'static [luma_patterns::Preset],
-        Option<Entity<luma_ui::arg::envelope::EnvelopeEditor>>,
-    ),
+    Preset(&'static [luma_patterns::Preset], Option<Entity<CurveStrip>>),
     /// Sparkle's grain: a head, a fixture, or a clump; holds the clump size.
     Grain(Entity<DraftedNumber>),
     /// `every` of a color over time: once, or a period in beats.
@@ -180,10 +188,7 @@ enum Widget {
     Point(Vec<[Entity<DraftedNumber>; 3]>),
     /// A gradient read over time or per hit: the gradient, and the curve of
     /// positions in it.
-    GradientCurve(
-        Entity<GradientEditor>,
-        Entity<luma_ui::arg::envelope::EnvelopeEditor>,
-    ),
+    GradientCurve(Entity<CurveStrip>, Entity<CurveStrip>),
     /// A space source: see [`SpaceFields`].
     Space(SpaceFields),
 }
@@ -192,9 +197,8 @@ enum Widget {
 /// curve (a number) along it, and a moving stroke's path, travel and width.
 struct SpaceFields {
     axis: AxisFields,
-    gradient: Option<Entity<GradientEditor>>,
-    curve: Option<Entity<luma_ui::arg::envelope::EnvelopeEditor>>,
-    path: Entity<luma_ui::arg::envelope::EnvelopeEditor>,
+    along: Entity<CurveStrip>,
+    path: Entity<CurveStrip>,
     travel: Entity<DraftedNumber>,
     width: Entity<DraftedNumber>,
 }
@@ -382,6 +386,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         return;
     };
     browser::leave(editor);
+    ensure_heads(editor, cx);
     let pattern = shared_pattern(editor);
     let defs = pattern
         .as_ref()
@@ -462,6 +467,54 @@ fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
                     .map(SharedString::from)
                     .collect();
                 editor.sheet.groups = Groups::Ready(Rc::new(names));
+            });
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Ask for the heads of the primary clip's selection when one of its inputs
+/// lies across space, once per venue, selection and seed.
+fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
+    let Some(clip) = primary_clip(editor) else {
+        return;
+    };
+    let across = clip
+        .args
+        .as_object()
+        .is_some_and(|args| args.values().any(|value| value["type"] == "space"));
+    let Some(core) = clip.core.as_ref().filter(|_| across) else {
+        return;
+    };
+    let seed = core.selection_seed.unwrap_or(core.seed);
+    let selection = core.selection.clone();
+    let key = (
+        editor.venue_id.clone(),
+        selection.to_value().to_string(),
+        seed,
+    );
+    if editor.sheet.heads.key.as_ref() == Some(&key) {
+        return;
+    }
+    editor.sheet.heads = Heads {
+        key: Some(key.clone()),
+        cells: None,
+    };
+    cx.spawn(async move |this, cx| {
+        let Ok(pending) = this.update(cx, |this, _| {
+            this.library.selection_cells(&key.0, &selection, seed)
+        }) else {
+            return;
+        };
+        let cells = pending.await;
+        this.update(cx, |this, cx| {
+            this.with_track_editor(cx, |editor| {
+                if editor.sheet.heads.key.as_ref() != Some(&key) {
+                    return;
+                }
+                // A selection that does not resolve has no heads to show.
+                editor.sheet.heads.cells = Some(cells.unwrap_or_default().into());
             });
         })
         .ok();
@@ -571,22 +624,24 @@ fn plain_widget(
         match def.arg_type {
             PatternArgType::Envelope => {
                 let points = envelope_value(&stored, &def.default_value);
-                let entity = cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
+                let entity = cx.new(|_| {
+                    CurveStrip::new(def.name.clone(), StripValue::Number(points))
+                        .with_presets(luma_ui::arg::strip::envelope_presets())
+                });
                 let arg_id = def.id.clone();
                 subs.push(cx.subscribe(
                     &entity,
-                    move |this: &mut Luma,
-                          _,
-                          event: &luma_ui::arg::envelope::EnvelopeChanged,
-                          cx| {
-                        this.arg_live(
-                            &arg_id,
-                            serde_json::to_value(&event.0).expect("validated envelope"),
-                            cx,
-                        );
+                    move |this: &mut Luma, _, event: &StripChanged, cx| {
+                        if let StripValue::Number(curve) = &event.0 {
+                            this.arg_live(
+                                &arg_id,
+                                serde_json::to_value(curve).expect("validated envelope"),
+                                cx,
+                            );
+                        }
                     },
                 ));
-                Widget::Envelope(entity)
+                Widget::Strip(entity)
             }
             PatternArgType::Color => {
                 let value = color_from_wire(&stored, &def.default_value);
@@ -686,15 +741,20 @@ fn plain_widget(
             }
             PatternArgType::Gradient => {
                 let value = gradient_from_wire(&stored, &def.default_value);
-                let entity = cx.new(|cx| GradientEditor::new(value, window, cx));
+                let entity = cx.new(|_| {
+                    CurveStrip::new(def.name.clone(), StripValue::Gradient(value))
+                        .with_presets(luma_ui::arg::strip::gradient_presets())
+                });
                 let arg_id = def.id.clone();
                 subs.push(cx.subscribe(
                     &entity,
-                    move |this: &mut Luma, _, event: &GradientChanged, cx| {
-                        this.arg_live(&arg_id, gradient_to_wire(&event.0), cx);
+                    move |this: &mut Luma, _, event: &StripChanged, cx| {
+                        if let StripValue::Gradient(gradient) = &event.0 {
+                            this.arg_live(&arg_id, gradient_to_wire(gradient), cx);
+                        }
                     },
                 ));
-                Widget::Gradient(entity)
+                Widget::Strip(entity)
             }
         }
     }
@@ -762,9 +822,13 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
         }
         match &mut cell.widget {
             Widget::Invalid(_) => {}
-            Widget::Envelope(entity) => {
-                let points = envelope_value(&stored, &cell.def.default_value);
-                entity.update(cx, |editor, cx| editor.set_value(points, cx));
+            Widget::Strip(entity) => {
+                let value = if cell.def.arg_type == PatternArgType::Gradient {
+                    StripValue::Gradient(gradient_from_wire(&stored, &cell.def.default_value))
+                } else {
+                    StripValue::Number(envelope_value(&stored, &cell.def.default_value))
+                };
+                entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
             Widget::Choice(_)
             | Widget::Preset(..)
@@ -794,10 +858,6 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
             Widget::Selection(entity) => {
                 let expression = selection_from_wire(&stored).expression;
                 entity.update(cx, |editor, cx| editor.set_text(expression, cx));
-            }
-            Widget::Gradient(entity) => {
-                let value = gradient_from_wire(&stored, &cell.def.default_value);
-                entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
         }
         cell.synced = stored;
@@ -1165,7 +1225,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 },
             ))
         }
-        Widget::Envelope(entity) => one(div().child(entity.clone())),
+        Widget::Strip(entity) => one(div().child(entity.clone())),
         Widget::Color(entity) => one(div().child(entity.clone())),
         Widget::Scalar(entity) => one(div().child(entity.clone())),
         Widget::Signal(entity) => one(div().child(entity.clone())),
@@ -1192,7 +1252,6 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 .child(entity.clone())
                 .child(pick_chip))
         }
-        Widget::Gradient(entity) => one(div().child(entity.clone())),
         // Form rows draw these themselves.
         Widget::Preset(..)
         | Widget::Grain(_)

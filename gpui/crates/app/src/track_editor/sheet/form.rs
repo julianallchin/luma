@@ -8,9 +8,9 @@
 use super::*;
 use luma_lib::node_graph::lighting::decode;
 use luma_patterns as p;
-use luma_ui::arg::envelope::{EnvelopeChanged, EnvelopeEditor};
 use luma_ui::arg::number::format_value;
 use luma_ui::arg::preset_picker::{luma_preset_picker, Thumb};
+use luma_ui::arg::strip::{self, Clock, ClockSource, CurveStrip, HeadSource, StripValue};
 
 /// Inputs in beats that must stay above zero.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
@@ -352,7 +352,7 @@ fn mapping_mut(value: &mut p::Value) -> Option<&mut p::MappingSpec> {
     }
 }
 
-/// A pattern gradient in the gradient editor's terms.
+/// A pattern gradient in the strip's terms.
 fn ui_gradient(gradient: &p::Gradient) -> Gradient {
     Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
         t: stop.t as f32,
@@ -365,7 +365,7 @@ fn ui_gradient(gradient: &p::Gradient) -> Gradient {
     }))
 }
 
-/// The gradient editor's stops as a pattern gradient, in order and within
+/// The strip's stops as a pattern gradient, in order and within
 /// 0–1.
 fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
     let mut stops: Vec<p::ColorStop> = gradient
@@ -381,7 +381,7 @@ fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
     p::Gradient { stops }
 }
 
-/// Named curves in the envelope editor's 0–1 box.
+/// Named curves in the strip's 0–1 box.
 type Curves = Vec<(String, p::Envelope)>;
 
 fn curves_of(options: Vec<(&'static str, p::Value)>) -> Curves {
@@ -452,7 +452,7 @@ fn same_curve(a: &p::Keyframes, b: &p::Keyframes) -> bool {
         })
 }
 
-/// A number curve in the envelope editor's 0–1 box.
+/// A number curve in the strip's 0–1 box.
 fn envelope_of(slot: &Slot, curve: &p::Keyframes) -> p::Envelope {
     let [low, high] = slot.range();
     let envelope = curve.map(|key| {
@@ -469,54 +469,11 @@ fn envelope_of(slot: &Slot, curve: &p::Keyframes) -> p::Envelope {
     }
 }
 
-/// The envelope editor's box back as a curve in the input's unit. The eases
+/// The strip's box back as a curve in the input's unit. The eases
 /// are the same, so what is drawn is what plays.
 fn keyframes_of(slot: &Slot, envelope: &p::Envelope) -> p::Keyframes {
     let [low, high] = slot.range();
     envelope.map(|y| p::Key::Number(slot.fit(low + y * (high - low))))
-}
-
-/// A color curve as gradient stops: each point is a stop at its progress.
-fn gradient_of(curve: &p::Keyframes) -> Gradient {
-    Gradient::new(curve.points.iter().map(|point| {
-        let [r, g, b] = match point.value {
-            p::Key::Color(rgb) => rgb,
-            p::Key::Number(v) => [v; 3],
-        };
-        GradientStop {
-            t: point.x as f32,
-            color: Rgba {
-                r: r as f32,
-                g: g as f32,
-                b: b as f32,
-                a: 1.,
-            },
-        }
-    }))
-}
-
-/// Gradient stops as a color curve from 0 to 1. The end colors hold out to
-/// the ends, and of two stops at one place the first is kept.
-fn color_keys(gradient: &Gradient) -> p::Keyframes {
-    let mut points: Vec<(f64, p::Key)> = Vec::new();
-    for stop in gradient.stops() {
-        let t = f64::from(stop.t).clamp(0., 1.);
-        let color = p::Key::Color([
-            f64::from(stop.color.r),
-            f64::from(stop.color.g),
-            f64::from(stop.color.b),
-        ]);
-        if points.is_empty() && t > 0. {
-            points.push((0., color));
-        }
-        if points.last().is_none_or(|(x, _)| t > *x) {
-            points.push((t, color));
-        }
-    }
-    if let Some(&(_, color)) = points.last().filter(|(x, _)| *x < 1.) {
-        points.push((1., color));
-    }
-    p::Keyframes::with_eases(points, &[])
 }
 
 /// A direction as turn and tilt, in degrees. Turn 0 is downstage and grows
@@ -633,49 +590,138 @@ fn number_edit(
     })
 }
 
-/// A gradient editor for a gradient inside the stored value; `edit` puts
-/// the edited gradient back.
-fn gradient_editor(
-    gradient: &p::Gradient,
+/// A curve strip for a part of the stored value; `edit` puts the edited
+/// part back.
+fn strip_editor(
+    strip: CurveStrip,
     def: &PatternArgDef,
     spec: &'static p::Input,
-    window: &mut Window,
     cx: &mut Context<Luma>,
     subs: &mut Vec<Subscription>,
-    edit: fn(&p::Value, p::Gradient) -> Option<p::Value>,
-) -> Entity<GradientEditor> {
-    let entity = cx.new(|cx| GradientEditor::new(ui_gradient(gradient), window, cx));
+    edit: fn(&p::Value, StripValue) -> Option<p::Value>,
+) -> Entity<CurveStrip> {
+    let entity = cx.new(|_| strip);
     let def = def.clone();
     subs.push(cx.subscribe(
         &entity,
-        move |this: &mut Luma, _, event: &GradientChanged, cx| {
-            let gradient = pattern_gradient(&event.0);
-            this.form_edit(&def, spec, cx, |value| edit(value, gradient));
+        move |this: &mut Luma, _, event: &StripChanged, cx| {
+            let value = event.0.clone();
+            this.form_edit(&def, spec, cx, |stored| edit(stored, value));
         },
     ));
     entity
 }
 
-/// An envelope editor for a 0–1 curve inside the stored value; `edit` puts
-/// the edited curve back.
-fn envelope_editor(
-    envelope: p::Envelope,
-    def: &PatternArgDef,
-    spec: &'static p::Input,
-    cx: &mut Context<Luma>,
-    subs: &mut Vec<Subscription>,
-    edit: fn(&p::Value, p::Envelope) -> Option<p::Value>,
-) -> Entity<EnvelopeEditor> {
-    let entity = cx.new(|_| EnvelopeEditor::new(envelope).without_presets());
-    let def = def.clone();
-    subs.push(cx.subscribe(
-        &entity,
-        move |this: &mut Luma, _, event: &EnvelopeChanged, cx| {
-            let envelope = event.0.clone();
-            this.form_edit(&def, spec, cx, |value| edit(value, envelope));
-        },
-    ));
-    entity
+/// A gradient's strip, with the shipped gradients as presets.
+fn gradient_strip(id: String, gradient: &p::Gradient) -> CurveStrip {
+    CurveStrip::new(id, StripValue::Gradient(ui_gradient(gradient)))
+        .with_presets(strip::gradient_presets())
+}
+
+/// The clock of a strip over time: the clip for a `time` source, each hit
+/// for a `hit` source. It reads the primary clip each frame, so it follows a
+/// moved clip, a new `every` and the playhead.
+fn strip_clock(app: WeakEntity<Luma>, kind: p::SourceKind) -> ClockSource {
+    Rc::new(move |cx: &App| {
+        let app = app.upgrade()?;
+        let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+            return None;
+        };
+        clip_clock(editor, kind)
+    })
+}
+
+/// Where the playhead is in the primary clip's cycle, and how many beats the
+/// cycle spans. A `hit` cycle is one hit: hits come every `every` beats from
+/// the clip's start (0 is one hit over the clip) and last until the next
+/// one, or `duration` beats in a form that has it.
+fn clip_clock(editor: &Editor, kind: p::SourceKind) -> Option<Clock> {
+    let clip = primary_clip(editor)?;
+    let timeline = editor.beats.as_deref()?.timeline().ok()?;
+    let start = timeline.beat_at(clip.start).ok()?;
+    let length = timeline.beat_at(clip.end).ok()? - start;
+    let elapsed = timeline
+        .beat_at(f64::from(editor.transport.position))
+        .ok()?
+        - start;
+    if length <= 0. {
+        return None;
+    }
+    // A plain number of beats, as the sheet writes it, or a tagged one.
+    let beats = |key: &str| {
+        let value = clip.args.get(key)?;
+        value.as_f64().or_else(|| {
+            (value["type"] == "beats")
+                .then(|| value["value"].as_f64())
+                .flatten()
+        })
+    };
+    let inside = (0. ..=length).contains(&elapsed);
+    let (span, phase) = match (kind, beats("every")) {
+        (p::SourceKind::Hit, Some(every)) if every > 0. => {
+            let life = beats("duration").unwrap_or(every);
+            let into = elapsed.rem_euclid(every);
+            (life, (into <= life).then(|| into / life))
+        }
+        // Once over the clip, as `time` is.
+        (p::SourceKind::Hit, Some(_)) | (p::SourceKind::Time, _) => {
+            (length, Some(elapsed / length))
+        }
+        _ => return None,
+    };
+    Some(Clock {
+        beats: span,
+        phase: phase.filter(|_| inside),
+        playing: editor.transport.playing,
+    })
+}
+
+/// The place of each head on a space source's axis, while it lies still
+/// along it. Resolved again only when the axis, the heads or the seed
+/// change.
+fn strip_heads(app: WeakEntity<Luma>, def: &PatternArgDef, spec: &'static p::Input) -> HeadSource {
+    type Resolved = (p::MappingSpec, Rc<[p::Cell]>, u64, Rc<[f64]>);
+    let cache: Rc<std::cell::RefCell<Option<Resolved>>> = Rc::default();
+    let key = def.id.clone();
+    Rc::new(move |cx: &App| {
+        let app = app.upgrade()?;
+        let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+            return None;
+        };
+        let clip = primary_clip(editor)?;
+        let Ok(p::Value::Space(space)) = decode(spec.value_type, clip.args.get(&key)?) else {
+            return None;
+        };
+        if space.movement.is_some() {
+            return None;
+        }
+        let cells = editor.sheet.heads.cells.clone()?;
+        let seed = clip.core.as_ref().map_or(0, |clip| clip.seed);
+        let mut cache = cache.borrow_mut();
+        if let Some((axis, held, at, positions)) = cache.as_ref() {
+            if *axis == space.axis && Rc::ptr_eq(held, &cells) && *at == seed {
+                return Some(positions.clone());
+            }
+        }
+        let positions: Rc<[f64]> = space
+            .axis
+            .resolve(&cells, seed)
+            .ok()?
+            .coordinates
+            .iter()
+            .map(|coordinate| coordinate.position)
+            .collect();
+        *cache = Some((space.axis, cells, seed, positions.clone()));
+        Some(positions)
+    })
+}
+
+/// What a strip over time spans, for its caption.
+fn over(kind: Option<p::SourceKind>) -> &'static str {
+    match kind {
+        Some(p::SourceKind::Hit) => "Over each hit",
+        _ => "Over the clip",
+    }
 }
 
 /// The number fields of an axis: a custom plane's axis, and a mirror's
@@ -824,35 +870,79 @@ pub(super) fn widget(
             p::Value::Time(p::SourceCurve::Gradient(read))
             | p::Value::Hit(p::SourceCurve::Gradient(read)),
         ) => {
-            let gradient =
-                gradient_editor(&read.gradient, def, spec, window, cx, subs, |read, g| {
-                    edit_gradient_curve(read, |read| read.gradient = g)
-                });
-            let curve = envelope_editor(read.curve, def, spec, cx, subs, |value, e| {
-                edit_gradient_curve(value, |read| read.curve = e)
-            });
+            let gradient = strip_editor(
+                gradient_strip(name.clone(), &read.gradient),
+                def,
+                spec,
+                cx,
+                subs,
+                |value, edited| match edited {
+                    StripValue::Gradient(g) => {
+                        edit_gradient_curve(value, |read| read.gradient = pattern_gradient(&g))
+                    }
+                    _ => None,
+                },
+            );
+            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
+            let curve = strip_editor(
+                CurveStrip::new(format!("{name} curve"), StripValue::Number(read.curve))
+                    .over_time(strip_clock(cx.entity().downgrade(), mode)),
+                def,
+                spec,
+                cx,
+                subs,
+                |value, edited| match edited {
+                    StripValue::Number(e) => edit_gradient_curve(value, |read| read.curve = e),
+                    _ => None,
+                },
+            );
             Widget::GradientCurve(gradient, curve)
         }
         Some(p::Value::Space(space)) => {
             let axis = axis_fields(&name, &space.axis, def, spec, window, cx, subs);
-            let gradient = space.gradient.as_ref().map(|gradient| {
-                gradient_editor(gradient, def, spec, window, cx, subs, |value, g| {
-                    edit_space(value, |space| space.gradient = Some(g))
-                })
-            });
-            let curve = space.curve.clone().map(|curve| {
-                envelope_editor(curve, def, spec, cx, subs, |value, e| {
-                    edit_space(value, |space| space.curve = Some(e))
-                })
-            });
+            let heads = strip_heads(cx.entity().downgrade(), def, spec);
+            let along = match (&space.gradient, space.curve.clone()) {
+                (Some(gradient), _) => gradient_strip(name.clone(), gradient),
+                (None, curve) => CurveStrip::new(
+                    name.clone(),
+                    StripValue::Number(
+                        curve.unwrap_or_else(|| p::Envelope::linear(vec![[0., 1.], [1., 1.]])),
+                    ),
+                ),
+            };
+            let along = strip_editor(
+                along.across_space(heads),
+                def,
+                spec,
+                cx,
+                subs,
+                |value, edited| match edited {
+                    StripValue::Gradient(g) => {
+                        edit_space(value, |space| space.gradient = Some(pattern_gradient(&g)))
+                    }
+                    StripValue::Number(e) => edit_space(value, |space| space.curve = Some(e)),
+                    StripValue::Colors(_) => None,
+                },
+            );
             let movement = space
                 .movement
                 .as_deref()
                 .cloned()
                 .unwrap_or_else(new_movement);
-            let path = envelope_editor(movement.path.clone(), def, spec, cx, subs, |value, e| {
-                edit_movement(value, |movement| movement.path = e)
-            });
+            let path = strip_editor(
+                CurveStrip::new(
+                    format!("{name} path"),
+                    StripValue::Number(movement.path.clone()),
+                ),
+                def,
+                spec,
+                cx,
+                subs,
+                |value, edited| match edited {
+                    StripValue::Number(e) => edit_movement(value, |movement| movement.path = e),
+                    _ => None,
+                },
+            );
             let travel = number_field(
                 format!("{name}: Travel"),
                 start_number(&movement.travel).unwrap_or(0.),
@@ -883,8 +973,7 @@ pub(super) fn widget(
             }));
             Widget::Space(SpaceFields {
                 axis,
-                gradient,
-                curve,
+                along,
                 path,
                 travel,
                 width,
@@ -894,38 +983,42 @@ pub(super) fn widget(
             p::Value::Time(p::SourceCurve::Keys(curve))
             | p::Value::Hit(p::SourceCurve::Keys(curve)),
         ) if curve.is_color() => {
-            let hit = slot.mode == Some(p::SourceKind::Hit);
-            let entity =
-                cx.new(|cx| GradientEditor::new(gradient_of(&curve), window, cx).without_alpha(cx));
-            let def = def.clone();
-            subs.push(cx.subscribe(
-                &entity,
-                move |this: &mut Luma, _, event: &GradientChanged, cx| {
-                    let curve = color_keys(&event.0).into();
-                    let value = if hit {
-                        p::Value::Hit(curve)
-                    } else {
-                        p::Value::Time(curve)
-                    };
-                    this.arg_live(&def.id, document::wire_value(&value), cx);
-                },
-            ));
-            Widget::Gradient(entity)
+            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
+            let strip = CurveStrip::new(name, StripValue::Colors(curve))
+                .with_presets(strip::color_curve_presets())
+                .over_time(strip_clock(cx.entity().downgrade(), mode));
+            Widget::Strip(strip_editor(strip, def, spec, cx, subs, |value, edited| {
+                let StripValue::Colors(keys) = edited else {
+                    return None;
+                };
+                match value {
+                    p::Value::Time(_) => Some(p::Value::Time(keys.into())),
+                    p::Value::Hit(_) => Some(p::Value::Hit(keys.into())),
+                    _ => None,
+                }
+            }))
         }
         Some(
             p::Value::Time(p::SourceCurve::Keys(curve))
             | p::Value::Hit(p::SourceCurve::Keys(curve)),
         ) => {
-            let hit = slot.mode == Some(p::SourceKind::Hit);
-            let entity =
-                cx.new(|_| EnvelopeEditor::new(envelope_of(slot, &curve)).without_presets());
+            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
+            let clock = strip_clock(cx.entity().downgrade(), mode);
+            let entity = cx.new(|_| {
+                CurveStrip::new(name, StripValue::Number(envelope_of(slot, &curve)))
+                    .with_scale(slot.range(), slot.unit())
+                    .over_time(clock)
+            });
             let def = def.clone();
             let shape = *slot;
             subs.push(cx.subscribe(
                 &entity,
-                move |this: &mut Luma, _, event: &EnvelopeChanged, cx| {
-                    let curve = keyframes_of(&shape, &event.0).into();
-                    let value = if hit {
+                move |this: &mut Luma, _, event: &StripChanged, cx| {
+                    let StripValue::Number(envelope) = &event.0 else {
+                        return;
+                    };
+                    let curve = keyframes_of(&shape, envelope).into();
+                    let value = if mode == p::SourceKind::Hit {
                         p::Value::Hit(curve)
                     } else {
                         p::Value::Time(curve)
@@ -933,7 +1026,7 @@ pub(super) fn widget(
                     this.arg_live(&def.id, document::wire_value(&value), cx);
                 },
             ));
-            Widget::Envelope(entity)
+            Widget::Strip(entity)
         }
         Some(p::Value::Noise(noise)) => {
             let half = (FIELD_W - 8.) / 2.;
@@ -1082,7 +1175,7 @@ pub(super) fn widget(
                 return Widget::Axis(axis_fields(&name, mapping, def, spec, window, cx, subs));
             }
             if let Some(p::Author::Choice { options, .. }) = &spec.author {
-                // A choice of curves edits a custom curve in the envelope editor.
+                // A choice of curves edits a custom curve in a strip.
                 let editor = envelope_options(options).map(|curves| {
                     let envelope = match &value {
                         Some(p::Value::Envelope(envelope)) if envelope.validate().is_ok() => {
@@ -1093,13 +1186,16 @@ pub(super) fn widget(
                             Thumb::Gradient(_) => unreachable!("curve options"),
                         },
                     };
-                    let entity = cx.new(|_| EnvelopeEditor::new(envelope).without_presets());
+                    let entity =
+                        cx.new(|_| CurveStrip::new(name.clone(), StripValue::Number(envelope)));
                     let def = def.clone();
                     subs.push(cx.subscribe(
                         &entity,
-                        move |this: &mut Luma, _, event: &EnvelopeChanged, cx| {
-                            let value = p::Value::Envelope(event.0.clone());
-                            this.arg_live(&def.id, document::wire_value(&value), cx);
+                        move |this: &mut Luma, _, event: &StripChanged, cx| {
+                            if let StripValue::Number(envelope) = &event.0 {
+                                let value = p::Value::Envelope(envelope.clone());
+                                this.arg_live(&def.id, document::wire_value(&value), cx);
+                            }
                         },
                     ));
                     entity
@@ -1149,15 +1245,14 @@ pub(super) fn resync(
             Some(p::Value::Time(p::SourceCurve::Keys(_)) | p::Value::Hit(p::SourceCurve::Keys(_))),
         ) => true,
         (
-            Widget::Gradient(_) | Widget::Envelope(_),
+            Widget::Strip(_),
             Some(
                 p::Value::Time(p::SourceCurve::Gradient(_))
                 | p::Value::Hit(p::SourceCurve::Gradient(_)),
             ),
         ) => true,
         (Widget::Space(fields), Some(p::Value::Space(space))) => {
-            fields.gradient.is_some() != space.gradient.is_some()
-                || fields.curve.is_some() != space.curve.is_some()
+            fields.along.read(cx).value().is_color() != space.gradient.is_some()
         }
         _ => false,
     };
@@ -1183,24 +1278,18 @@ pub(super) fn resync(
             }
         }
         (
-            Widget::Envelope(entity),
+            Widget::Strip(entity),
             Some(
                 p::Value::Time(p::SourceCurve::Keys(curve))
                 | p::Value::Hit(p::SourceCurve::Keys(curve)),
             ),
         ) => {
-            let envelope = envelope_of(slot, &curve);
-            entity.update(cx, |editor, cx| editor.set_value(envelope, cx));
-        }
-        (
-            Widget::Gradient(entity),
-            Some(
-                p::Value::Time(p::SourceCurve::Keys(curve))
-                | p::Value::Hit(p::SourceCurve::Keys(curve)),
-            ),
-        ) => {
-            let gradient = gradient_of(&curve);
-            entity.update(cx, |editor, cx| editor.set_value(gradient, cx));
+            let value = if curve.is_color() {
+                StripValue::Colors(curve)
+            } else {
+                StripValue::Number(envelope_of(slot, &curve))
+            };
+            entity.update(cx, |editor, cx| editor.set_value(value, cx));
         }
         (
             Widget::GradientCurve(gradient, curve),
@@ -1209,24 +1298,28 @@ pub(super) fn resync(
                 | p::Value::Hit(p::SourceCurve::Gradient(read)),
             ),
         ) => {
-            let colors = ui_gradient(&read.gradient);
+            let colors = StripValue::Gradient(ui_gradient(&read.gradient));
             gradient.update(cx, |editor, cx| editor.set_value(colors, cx));
-            curve.update(cx, |editor, cx| editor.set_value(read.curve, cx));
+            let read = StripValue::Number(read.curve);
+            curve.update(cx, |editor, cx| editor.set_value(read, cx));
         }
         (Widget::Space(fields), Some(p::Value::Space(space))) => {
             resync_axis(&fields.axis, &space.axis, cx);
-            if let (Some(entity), Some(gradient)) = (&fields.gradient, &space.gradient) {
-                let colors = ui_gradient(gradient);
-                entity.update(cx, |editor, cx| editor.set_value(colors, cx));
-            }
-            if let (Some(entity), Some(curve)) = (&fields.curve, space.curve) {
-                entity.update(cx, |editor, cx| editor.set_value(curve, cx));
+            let along = match (&space.gradient, space.curve) {
+                (Some(gradient), _) => Some(StripValue::Gradient(ui_gradient(gradient))),
+                (None, curve) => curve.map(StripValue::Number),
+            };
+            if let Some(along) = along {
+                fields
+                    .along
+                    .update(cx, |editor, cx| editor.set_value(along, cx));
             }
             if let Some(movement) = space.movement {
                 let movement = *movement;
+                let path = StripValue::Number(movement.path);
                 fields
                     .path
-                    .update(cx, |editor, cx| editor.set_value(movement.path, cx));
+                    .update(cx, |editor, cx| editor.set_value(path, cx));
                 if let Some(n) = start_number(&movement.travel) {
                     fields.travel.update(cx, |field, cx| field.set_value(n, cx));
                 }
@@ -1258,7 +1351,8 @@ pub(super) fn resync(
         }
         (Widget::Preset(_, Some(entity)), Some(p::Value::Envelope(envelope))) => {
             if envelope.validate().is_ok() {
-                entity.update(cx, |editor, cx| editor.set_value(envelope, cx));
+                let value = StripValue::Number(envelope);
+                entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
         }
         (Widget::Preset(..), _) => {}
@@ -2070,7 +2164,7 @@ fn control(
             column()
                 .child(gradient.clone())
                 .child(luma_ui::caption(
-                    "Colors from the start to the end".to_string(),
+                    "Colors from the start of the gradient to its end".to_string(),
                 ))
                 .child(sub_row(
                     "Through the colors",
@@ -2096,7 +2190,10 @@ fn control(
                     ),
                 ))
                 .when(slot.editing || current.is_none(), |el| {
-                    el.child(curve.clone())
+                    el.child(curve.clone()).child(luma_ui::caption(format!(
+                        "{} · positions in the gradient",
+                        over(slot.mode)
+                    )))
                 })
         }
         Widget::Space(fields) => {
@@ -2115,7 +2212,13 @@ fn control(
                 slot.editing,
             )
         }
-        Widget::Envelope(entity) if slot.mode.is_some() => {
+        Widget::Strip(entity)
+            if slot.mode.is_some()
+                && !matches!(
+                    &value,
+                    Some(p::Value::Time(curve) | p::Value::Hit(curve)) if curve.is_color()
+                ) =>
+        {
             let curve = match &value {
                 Some(
                     p::Value::Time(p::SourceCurve::Keys(curve))
@@ -2154,13 +2257,15 @@ fn control(
                     },
                 ))
                 .when(custom, |el| {
-                    el.child(entity.clone())
-                        .child(luma_ui::caption(format!("Values {span}")))
+                    el.child(entity.clone()).child(luma_ui::caption(format!(
+                        "{} · values {span}",
+                        over(slot.mode)
+                    )))
                 })
         }
-        Widget::Gradient(entity) if slot.mode.is_some() => column().child(entity.clone()).child(
-            luma_ui::caption("Colors from the start to the end".to_string()),
-        ),
+        Widget::Strip(entity) if slot.mode.is_some() => column()
+            .child(entity.clone())
+            .child(luma_ui::caption(over(slot.mode).to_string())),
         Widget::Noise([speed, low, high]) => column()
             .child(arg_row("Speed (beats)", speed.clone()))
             .child(arg_row("Range", range_row(low, high)))
@@ -2220,7 +2325,7 @@ fn control(
         }
         Widget::Color(entity) => div().child(entity.clone()),
         Widget::Scalar(entity) => div().child(entity.clone()),
-        Widget::Gradient(entity) => div().child(entity.clone()),
+        Widget::Strip(entity) => div().child(entity.clone()),
         _ => return None,
     })
 }
@@ -2259,11 +2364,11 @@ fn space_control(
         ),
     );
     let mut rows = column().child(axis);
-    if let Some(gradient) = &fields.gradient {
+    if space.gradient.is_some() {
         return rows.child(sub_row(
             "Colors",
-            column().child(gradient.clone()).child(luma_ui::caption(
-                "From the start of the axis to its end".to_string(),
+            column().child(fields.along.clone()).child(luma_ui::caption(
+                "From the start of the axis to its end · a tick per head".to_string(),
             )),
         ));
     }
@@ -2283,7 +2388,8 @@ fn space_control(
             "From the start of the axis to its end",
         )
     };
-    if let (Some(curve), Some(editor)) = (&space.curve, &fields.curve) {
+    if let Some(curve) = &space.curve {
+        let editor = &fields.along;
         let current = curve_at(&curves, curve);
         let pick_def = def.clone();
         rows = rows.child(sub_row(
@@ -2609,7 +2715,7 @@ mod tests {
         };
         assert_eq!(curve_preset(&alpha, &flat), Some(0));
         for (at, preset) in alpha.curves().enumerate() {
-            // Stored, read back, and passed through the envelope editor.
+            // Stored, read back, and passed through the strip.
             let value = p::Value::Time(scaled(&alpha, &preset.curve).into());
             let wire = super::document::wire_value(&value);
             let Ok(p::Value::Time(p::SourceCurve::Keys(read))) =
@@ -2671,7 +2777,7 @@ mod tests {
     }
 
     #[test]
-    fn a_gradient_survives_the_gradient_editor() {
+    fn a_gradient_survives_the_strip() {
         let gradient = p::Gradient {
             stops: vec![
                 p::ColorStop {

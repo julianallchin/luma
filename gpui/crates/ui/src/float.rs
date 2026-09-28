@@ -1184,11 +1184,11 @@ fn hang(
     let card = card.child(dismiss.apply(div().occlude().child(frosted_card(content))));
     origin
         .child(
-            gpui::deferred(animate_popover(
+            gpui::deferred(crate::node::deferred_content(animate_popover(
                 id,
                 gpui::anchored().anchor(anchor).child(card),
                 closing,
-            ))
+            )))
             .priority(1),
         )
         .into_any_element()
@@ -1210,14 +1210,14 @@ pub fn anchored_at(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    gpui::deferred(animate_popover(
+    gpui::deferred(crate::node::deferred_content(animate_popover(
         id.into(),
         gpui::anchored()
             .position(at)
             .anchor(gpui::Anchor::TopLeft)
             .child(dismiss.apply(div().occlude().child(frosted_card(content)))),
         None,
-    ))
+    )))
     .priority(1)
     .into_any_element()
 }

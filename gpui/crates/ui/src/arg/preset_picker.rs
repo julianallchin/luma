@@ -12,9 +12,9 @@ use gpui::{canvas, div, px, App, Div, ElementId, SharedString, Window};
 use gpui_component::tooltip::Tooltip;
 use luma_patterns::Envelope;
 
-use super::envelope::paint_envelope;
 use super::gradient::{gradient_fill, Gradient};
 use super::select::MenuVisibility;
+use super::strip::paint_envelope;
 use crate::node::{Instrument, Role};
 use crate::{float, glass, ladder, select, CONTROL_HEIGHT};
 

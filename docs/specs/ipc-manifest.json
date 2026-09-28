@@ -3064,6 +3064,28 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "selection",
+          "rust": "Selection"
+        },
+        {
+          "name": "seed",
+          "rust": "u64"
+        }
+      ],
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
+      },
+      "name": "selection_cells",
+      "returns": "Vec<luma_patterns::Cell>"
+    },
+    {
+      "args": [
+        {
           "name": "email",
           "rust": "String"
         }
@@ -3513,7 +3535,7 @@
       "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 1,
+      "commandCount": 2,
       "domain": "composable_patterns",
       "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
     },
@@ -3738,7 +3760,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 150,
+    "commandCount": 151,
     "domainCount": 26,
     "eventCount": 13
   },

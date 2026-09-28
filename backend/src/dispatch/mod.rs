@@ -140,6 +140,11 @@ use prodjlink::DiscoveredDevice;
 
 commands! {
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
+    composable_patterns::selection_cells(
+        venue_id: String,
+        selection: Selection,
+        seed: u64,
+    ) -> Vec<luma_patterns::Cell>;
 
     agent_threads::agent_thread_list(
         agent_kind: Option<String>,
