@@ -52,7 +52,7 @@ test.skip("a sidebar slide costs the timeline no cliff over holding still", () =
   // cut by both edges, so its stretched image is a canvas-width picture. The
   // extra turns put a clip's body across both edges, not one.
   const widest = () =>
-    Math.max(0, ...app.snapshot().findAll({ role: "card" }).filter((n) => n.label === "Constant color").map((n) => n.bounds.width));
+    Math.max(0, ...app.snapshot().findAll({ role: "card" }).filter((n) => n.label === "Color").map((n) => n.bounds.width));
   const zoomIn = () => app.scroll(canvas(), { dy: 120, steps: 5, modifiers: ["secondary"] });
   for (let i = 0; i < 40 && widest() < canvas().bounds.width * 0.99; i += 1) zoomIn();
   for (let i = 0; i < 8; i += 1) zoomIn();

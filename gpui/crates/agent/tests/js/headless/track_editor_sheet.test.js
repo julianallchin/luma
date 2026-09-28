@@ -15,7 +15,7 @@
 // 6. A mixed selection offers no inputs, and clearing the selection brings
 //    the preset browser back. The timeline keeps its space throughout.
 
-// Two Constant color clips and one Chase. The Chase sits early on its own
+// Two Color clips and one Sparkle. The Sparkle sits early on its own
 // lane: the sheet overlays the right of the canvas, and a clip the test has
 // to click cannot live under it.
 fixture({
@@ -23,11 +23,11 @@ fixture({
   clips: [
     { pattern: "pat-glow", name: "Glow", start: 2, end: 5 },
     { pattern: "pat-glow-2", name: "Glow", start: 8, end: 11 },
-    { pattern: "pat-chase", name: "Chase", start: 4, end: 7, lane: 1, preset: ["color.chase@1", "Chase"] },
+    { pattern: "pat-chase", name: "Chase", start: 4, end: 7, lane: 1, preset: ["color.sparkle@1", "Random heads"] },
   ],
 });
 
-const FORM = "Constant color";
+const FORM = "Color";
 
 function open() {
   nav.track("Aurora");
@@ -146,7 +146,7 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   expect(readSheet().inputs.Brightness).toBe(batch);
 
   // 7. Mixed: one of each form offers no inputs. Escape clears it.
-  app.click(clip("Chase", 0), { modifiers: ["shift"] });
+  app.click(clip("Sparkle", 0), { modifiers: ["shift"] });
   until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns"));
   const mixed = readSheet();
   expect(mixed.texts).toContain("Mixed patterns");

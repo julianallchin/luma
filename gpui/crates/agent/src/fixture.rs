@@ -77,7 +77,7 @@ pub struct Clip {
     #[serde(default, rename = "lane")]
     pub z_index: i64,
     /// A shipped `[form, preset]` to play instead of Wash, e.g.
-    /// `["color.chase@1", "Chase"]`.
+    /// `["color@1", "Chase"]`.
     #[serde(default)]
     pub preset: Option<(String, String)>,
     #[serde(default)]
@@ -719,7 +719,7 @@ impl Fixture {
             let (form, preset) = clip
                 .preset
                 .as_ref()
-                .map_or(("color.constant@1", "Wash"), |(form, preset)| {
+                .map_or(("color@1", "Wash"), |(form, preset)| {
                     (form.as_str(), preset.as_str())
                 });
             let mut placed = luma_patterns::presets()
@@ -917,7 +917,7 @@ pub fn config_dir(name: &str) -> PathBuf {
 /// the score that holds clips as the document the editor saved,
 /// `{"op": "presets"}` the shipped form presets, `{"op": "curves", "input":
 /// …}` the curve presets an input offers, `{"op": "gradients"}` the named
-/// gradients and `{"op": "shapes"}` the named chase shapes. Read-only: a test
+/// gradients and `{"op": "shapes"}` the named stroke shapes. Read-only: a test
 /// writes through the app.
 pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
     let request: Value = serde_json::from_str(request).map_err(|error| error.to_string())?;

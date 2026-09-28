@@ -694,11 +694,13 @@ mod tests {
         };
         assert_eq!(names("bounce"), ["Bounce"]);
         let chases = names("chase");
-        assert!(chases.contains(&"Wave") && chases.contains(&"Stepped chase"));
+        assert!(chases.contains(&"Chase") && chases.contains(&"Stepped chase"));
         assert!(!chases.contains(&"Wash"));
-        // Chase and Aim each have a Wave.
+        // The form's name matches too: every color preset is a Color.
+        assert!(names("color").contains(&"Wave"));
+        // Color and Aim each have a Wave.
         let waves: Vec<&str> = matching("wave").iter().map(|p| p.form.as_str()).collect();
-        assert_eq!(waves, ["color.chase@1", "aim@1"]);
+        assert_eq!(waves, ["color@1", "aim@1"]);
         assert_eq!(matching("").len(), luma_patterns::presets().presets.len());
         assert!(matching("no such preset").is_empty());
     }
@@ -706,26 +708,25 @@ mod tests {
     #[test]
     fn presets_group_by_form_in_shipped_order() {
         let forms: Vec<&str> = grouped("").iter().map(|(form, _)| *form).collect();
+        assert_eq!(forms, ["Color", "Sparkle", "Noise", "Strobe", "Aim"]);
+        let color = &grouped("")[0].1;
         assert_eq!(
-            forms,
+            color.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             [
-                "Constant color",
-                "Color over time",
-                "Color across space",
+                "Wash",
+                "Pulse",
+                "Color fade",
+                "Rainbow",
+                "Gradient",
                 "Chase",
-                "Sparkle",
-                "Noise",
-                "Strobe",
-                "Aim"
+                "Wave",
+                "Ripple",
+                "Spin",
+                "Bounce",
+                "Alternating sides",
+                "Stepped chase",
+                "Grow"
             ]
-        );
-        let color_time = &grouped("")[1].1;
-        assert_eq!(
-            color_time
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>(),
-            ["Color fade", "Rainbow"]
         );
     }
 }

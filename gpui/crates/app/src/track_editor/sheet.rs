@@ -112,6 +112,10 @@ enum Menu {
     Plane(usize),
     /// The mirror menu of the axis at this index.
     Mirror(usize),
+    /// The curve presets of the space source at this index.
+    Shape(usize),
+    /// The path presets of the moving space source at this index.
+    Path(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every
@@ -174,6 +178,25 @@ enum Widget {
     /// A point in metres: U, V and Z fields, one set for a fixed value, one
     /// for each end of a curve over the clip.
     Point(Vec<[Entity<DraftedNumber>; 3]>),
+    /// A gradient read over time or per hit: the gradient, and the curve of
+    /// positions in it.
+    GradientCurve(
+        Entity<GradientEditor>,
+        Entity<luma_ui::arg::envelope::EnvelopeEditor>,
+    ),
+    /// A space source: see [`SpaceFields`].
+    Space(SpaceFields),
+}
+
+/// The controls of a space source: its axis, the gradient (a color) or the
+/// curve (a number) along it, and a moving stroke's path, travel and width.
+struct SpaceFields {
+    axis: AxisFields,
+    gradient: Option<Entity<GradientEditor>>,
+    curve: Option<Entity<luma_ui::arg::envelope::EnvelopeEditor>>,
+    path: Entity<luma_ui::arg::envelope::EnvelopeEditor>,
+    travel: Entity<DraftedNumber>,
+    width: Entity<DraftedNumber>,
 }
 
 /// The number fields of a form's axis.
@@ -751,7 +774,9 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
             | Widget::Audio(_)
             | Widget::Axis(_)
             | Widget::Direction(_)
-            | Widget::Point(_) => {}
+            | Widget::Point(_)
+            | Widget::GradientCurve(..)
+            | Widget::Space(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -1176,7 +1201,9 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
         | Widget::Audio(_)
         | Widget::Axis(_)
         | Widget::Direction(_)
-        | Widget::Point(_) => Vec::new(),
+        | Widget::Point(_)
+        | Widget::GradientCurve(..)
+        | Widget::Space(_) => Vec::new(),
     }
 }
 

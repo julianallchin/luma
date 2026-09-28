@@ -9,8 +9,8 @@ fixture({
   clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 15 }],
 });
 
-// A clip is labelled by its form; the fixture's clip plays Constant color.
-const CLIP = "Constant color";
+// A clip is labelled by its form; the fixture's clip plays Color.
+const CLIP = "Color";
 const node = (role, label) => app.snapshot().find({ role, label });
 const camera = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("CAMERA "))?.label;
 

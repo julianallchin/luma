@@ -152,7 +152,7 @@ impl Fades {
             eases.push(p::Ease::Linear);
             points.push([1., level]);
         }
-        p::Value::Time(p::Keyframes::numbers(&points, &eases))
+        p::Value::Time(p::Keyframes::numbers(&points, &eases).into())
     }
 
     /// Set the fade-in, leaving the fade-out room.
@@ -184,7 +184,7 @@ impl Alpha {
     fn sample(&self, progress: f64) -> f64 {
         match self {
             Self::Fades(fades) => match fades.value() {
-                p::Value::Time(curve) => curve.sample(progress)[0],
+                p::Value::Time(p::SourceCurve::Keys(curve)) => curve.sample(progress)[0],
                 _ => fades.level,
             },
             Self::Custom(curve) => curve.sample(progress)[0],
@@ -205,10 +205,12 @@ pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
     };
     match value {
         p::Value::Proportion(v) | p::Value::Number(v) => Some(Alpha::Fades(Fades::flat(v))),
-        p::Value::Time(curve) if !curve.is_color() => Some(match Fades::of_curve(&curve) {
-            Some(fades) => Alpha::Fades(fades),
-            None => Alpha::Custom(curve),
-        }),
+        p::Value::Time(p::SourceCurve::Keys(curve)) if !curve.is_color() => {
+            Some(match Fades::of_curve(&curve) {
+                Some(fades) => Alpha::Fades(fades),
+                None => Alpha::Custom(curve),
+            })
+        }
         _ => None,
     }
 }
@@ -308,7 +310,7 @@ impl Alpha {
     fn curve(&self) -> p::Keyframes {
         match self {
             Self::Fades(fades) => match fades.value() {
-                p::Value::Time(curve) => curve,
+                p::Value::Time(p::SourceCurve::Keys(curve)) => curve,
                 _ => p::Keyframes::numbers(&[[0., fades.level], [1., fades.level]], &[]),
             },
             Self::Custom(curve) => curve.clone(),
@@ -356,7 +358,7 @@ fn handles(frame: Frame, fades: Fades) -> Vec<(Part, Point<f32>)> {
     let top = frame.y(fades.level);
     // A bend handle sits on the line, halfway along its fade.
     let curve = match fades.value() {
-        p::Value::Time(curve) => Some(curve),
+        p::Value::Time(p::SourceCurve::Keys(curve)) => Some(curve),
         _ => None,
     };
     let on_line = |x: f64| {
@@ -434,7 +436,7 @@ pub(super) fn moved(grab: &Grab, span: (f64, f64), time: f64, rise: f32, height:
         (part, Some(fades)) => {
             dragged(part, fades, span, time, f64::from(rise / height.max(1.))).value()
         }
-        (_, None) => p::Value::Time(grab.curve.clone()),
+        (_, None) => p::Value::Time(grab.curve.clone().into()),
     }
 }
 
@@ -450,7 +452,7 @@ pub(super) fn lift(curve: &p::Keyframes, index: usize, by: f64) -> p::Value {
     }
     match Fades::of_curve(&curve) {
         Some(fades) => fades.value(),
-        None => p::Value::Time(curve),
+        None => p::Value::Time(curve.into()),
     }
 }
 
@@ -584,7 +586,9 @@ fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
     // and enough even samples between them for bends to read as curves.
     let mut xs: Vec<f64> = match alpha {
         Alpha::Fades(fades) => match fades.value() {
-            p::Value::Time(curve) => curve.points.iter().map(|point| point.x).collect(),
+            p::Value::Time(p::SourceCurve::Keys(curve)) => {
+                curve.points.iter().map(|point| point.x).collect()
+            }
             _ => Vec::new(),
         },
         Alpha::Custom(curve) => curve.points.iter().map(|point| point.x).collect(),
@@ -786,7 +790,7 @@ mod tests {
 
     fn curve(value: p::Value) -> p::Keyframes {
         match value {
-            p::Value::Time(curve) => curve,
+            p::Value::Time(p::SourceCurve::Keys(curve)) => curve,
             other => panic!("expected a curve, got {other:?}"),
         }
     }
@@ -942,10 +946,7 @@ mod tests {
         // The ramp lifts off zero: a custom curve, each point kept in 0–1.
         assert_eq!(
             lift(&curve(lowered), 0, 0.75),
-            p::Value::Time(p::Keyframes::numbers(
-                &[[0., 0.75], [0.25, 1.], [1., 0.5]],
-                &[]
-            ))
+            p::Value::Time(p::Keyframes::numbers(&[[0., 0.75], [0.25, 1.], [1., 0.5]], &[]).into())
         );
     }
 }

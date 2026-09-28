@@ -36,20 +36,22 @@ test("the browser lists presets by form, filters, and places on click", () => {
 
   // The list scrolls; the forms on screen come first, one caption each, and
   // the tiles follow the shipped order.
+  // Color holds thirteen presets, so the next form's caption is on screen
+  // under it.
   const captions = inBrowser("text");
-  expect(captions.length).toBeGreaterThan(3);
+  expect(captions.slice(0, 2)).toEqual(["Color", "Sparkle"]);
   expect(new Set(captions).size).toBe(captions.length);
   const tiles = inBrowser("row");
   expect(tiles.slice(0, 4)).toEqual(library.presets().slice(0, 4).map((p) => p.name));
   // Each tile shows the preset's strip on this rig once it renders.
   until("the thumbnails", (s) => s.find({ role: "card", label: "Wash thumbnail" }) && s.find({ role: "card", label: "Chase thumbnail" }));
 
-  // A search matches the form's name.
-  app.type(node("input", "Search presets…"), "chase");
+  // A search matches the form's name: every color preset is a Color.
+  app.type(node("input", "Search presets…"), "color");
   app.frames(2);
   const filtered = inBrowser("row");
-  for (const name of ["Chase", "Wave", "Bounce"]) expect(filtered).toContain(name);
-  assert(!filtered.includes("Wash"), `the search kept Wash: ${filtered}`);
+  for (const name of ["Wash", "Chase", "Wave", "Bounce"]) expect(filtered).toContain(name);
+  assert(!filtered.includes("Random heads"), `the search kept a sparkle: ${filtered}`);
 
   // A click places the preset; the placed clip is selected.
   app.click(node("row", "Bounce"));
@@ -59,10 +61,10 @@ test("the browser lists presets by form, filters, and places on click", () => {
   until("the browser back", (s) => s.find({ role: "card", label: "Presets" }));
 
   const clip = onlyClip();
-  expect(clip.graph).toBe("color.chase@1");
+  expect(clip.graph).toBe("color@1");
   expect(clip.selection.expression).toBe("all");
   // A placed clip copies every value of its preset.
-  expect(clip.inputs).toEqual(shipped("color.chase@1", "Bounce").inputs);
+  expect(clip.inputs).toEqual(shipped("color@1", "Bounce").inputs);
   // A click places four bars.
   assert(Math.abs(clip.duration - 16) < 0.01, `duration ${clip.duration}`);
 });
@@ -96,8 +98,8 @@ test("a row dragged onto the timeline shows where it lands and lands there", () 
   app.frames(8, { waitMs: 80 });
 
   const clip = onlyClip();
-  expect(clip.graph).toBe("color.chase@1");
-  expect(clip.inputs).toEqual(shipped("color.chase@1", "Ripple").inputs);
+  expect(clip.graph).toBe("color@1");
+  expect(clip.inputs).toEqual(shipped("color@1", "Ripple").inputs);
   // Where it was let go, not at the playhead.
   expect(clip.start).toBeGreaterThan(0);
 });

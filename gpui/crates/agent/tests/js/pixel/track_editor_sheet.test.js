@@ -8,8 +8,8 @@ fixture({
   clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 5 }],
 });
 
-// A clip is labelled by its form; the fixture's clip plays Constant color.
-const CLIP = "Constant color";
+// A clip is labelled by its form; the fixture's clip plays Color.
+const CLIP = "Color";
 const node = (role, label) => app.snapshot().find({ role, label });
 
 test("edit focus keeps the controls usable and renders both picker previews", () => {

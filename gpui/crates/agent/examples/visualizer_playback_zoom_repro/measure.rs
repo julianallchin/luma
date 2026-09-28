@@ -54,7 +54,7 @@ fn harness() -> Harness {
             .map(|lane| {
                 // Pulse moves every frame, so the score is never a still.
                 Clip {
-                    preset: Some(("color.constant@1".into(), "Pulse".into())),
+                    preset: Some(("color@1".into(), "Pulse".into())),
                     ..Clip::new(format!("pulse-{lane}"), "Pulse", 0., f64::from(SECONDS))
                 }
                 .lane(lane as i64)

@@ -369,7 +369,7 @@ test(
   "the missing-group dialog repairs saved score selectors",
   {
     fixture: {
-      clips: [{ pattern: "a", name: "Lost", start: 0, end: 2, preset: ["color.chase@1", "Chase"], selection: "lost_wash" }],
+      clips: [{ pattern: "a", name: "Lost", start: 0, end: 2, preset: ["color@1", "Chase"], selection: "lost_wash" }],
     },
   },
   () => {
