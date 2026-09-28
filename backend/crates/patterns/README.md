@@ -52,7 +52,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```json
 {
   "operation": "evaluate",
-  "definition": "color.chase@1",
+  "definition": "color@1",
   "cells": [
     {"id":"head-a","group":"bar","world":[0,0,0],"uvz":[0,0,0]},
     {"id":"head-b","group":"bar","world":[0,0,1],"uvz":[0,0,1]}
@@ -61,7 +61,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
   "clip_duration": 8,
   "seed": 42,
   "inputs": {
-    "travel": {"type":"beats","value":2}
+    "every": {"type":"beats","value":2}
   }
 }
 ```
@@ -72,19 +72,27 @@ cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin patt
 
 ## Clip forms
 
-A form is a shipped graph with a fixed interface: `color.constant@1`,
-`color.time@1`, `color.space@1`, `color.chase@1`, `color.sparkle@1`,
-`color.noise@1`, `strobe.constant@1` and `aim@1` (see
+A form is a shipped graph with a fixed interface: `color@1`,
+`color.sparkle@1`, `color.noise@1`, `strobe.constant@1` and `aim@1` (see
 `docs/specs/clip-forms.md` and `docs/specs/aim.md`).
 A form clip sets `graph` to the form id and holds a value for every input.
 A missing or unknown input is an error. A score holds form clips only.
 
 - An input takes a plain value or, where its `promotable` list allows, a
-  source: `time` and `hit` keyframe curves, `noise`, or `audio` (a band of
-  the full mix, scaled over the clip). Sources are tagged values, for example
-  `{"type":"time","value":{"points":[[0,2,"ease-out"],[1,0.5]]}}`. A `time`
-  or `hit` curve is the same `Curve` as an envelope, with numbers or colors.
-- `PreparedGraph::new` lowers each source into nodes of a copy of the form.
+  source: `time` and `hit` keyframe curves, `noise`, `audio` (a band of
+  the full mix, scaled over the clip) or `space`. Sources are tagged values,
+  for example `{"type":"time","value":{"points":[[0,2,"ease-out"],[1,0.5]]}}`.
+  A `time` or `hit` curve is the same `Curve` as an envelope, with numbers
+  or colors. For a color it can instead be
+  `{"gradient":{...},"curve":{...}}`: the curve gives the gradient position.
+- A `space` source is an axis (a mapping) with a `gradient` (a color) or a
+  `curve` (a number, 0–1) along it. An optional `move` (`path`, `travel`,
+  `width`, `width_relative`, `boundary`) makes the values a stroke that
+  travels along the axis once per hit of `every`: a chase. Hit sources then
+  follow each stroke. Only a number input moves.
+- `color@1` is color × max over strokes of (brightness × alpha).
+- `PreparedGraph::new` lowers each source into nodes of a copy of the form,
+  space sources first.
   A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
   is summed over the clip like an odometer, from a table built from the
   curve, so a sought frame equals a played frame.
@@ -93,6 +101,12 @@ A missing or unknown input is an error. A score holds form clips only.
   forms use. A period or life of 0 beats lasts the whole clip.
 - `presets()` reads `src/presets.json`: named presets (a form and every
   input value) and named curves for `time` and `hit` sources.
+- Old ids `color.constant@1`, `color.time@1`, `color.space@1` and
+  `color.chase@1` are not forms. Rows are not migrated: `upgrade`
+  (`src/forms/upgrade.rs`) reads such a clip as `color@1` with the same
+  light, and `Score` deserialization and the row loader call it.
+  `tests/fixtures/old_color_forms.json` holds the old forms' light for the
+  equivalence test.
 
 ## Host integration
 
@@ -110,12 +124,12 @@ accepts `request`:
 {
   "venueId": "venue UUID",
   "trackId": "track UUID",
-  "definition": "color.chase@1",
+  "definition": "color@1",
   "targets": [{"expression": "pixel_bars"}],
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
   "seed": 42,
-  "inputs": {"travel": {"type": "beats", "value": 2}}
+  "inputs": {"every": {"type": "beats", "value": 2}}
 }
 ```
 

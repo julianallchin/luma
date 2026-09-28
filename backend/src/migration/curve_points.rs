@@ -276,7 +276,8 @@ fn compare(old: &OldCurve, new: &Value) -> f64 {
     let sample = |x: f64| -> Vec<f64> {
         match new {
             Value::Envelope(e) => vec![e.sample(x)],
-            Value::Time(k) | Value::Hit(k) => {
+            Value::Time(luma_patterns::SourceCurve::Keys(k))
+            | Value::Hit(luma_patterns::SourceCurve::Keys(k)) => {
                 let v = k.sample(x);
                 if k.is_color() {
                     v.to_vec()

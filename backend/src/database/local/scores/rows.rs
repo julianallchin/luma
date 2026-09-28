@@ -30,6 +30,7 @@ impl Changed {
 
 /// One stored clip, in the column spellings the table uses. `seed` is decimal
 /// text because SQLite's integers are signed and a clip's seed is a full u64.
+#[derive(Clone)]
 struct ClipRow {
     graph: String,
     start: f64,
@@ -57,6 +58,8 @@ impl ClipRow {
         })
     }
 
+    /// The stored clip, with an old form id read as the form that replaced
+    /// it: rows are not migrated, and the next save writes the new form.
     fn into_clip(self) -> Result<Clip, String> {
         Ok(Clip {
             graph: self.graph,
@@ -68,7 +71,8 @@ impl ClipRow {
             z_index: self.z_index,
             blend_mode: from_json::<BlendMode>(&format!("\"{}\"", self.blend_mode))?,
             inputs: from_json(&self.inputs_json)?,
-        })
+        }
+        .upgraded())
     }
 
     /// The columns whose values differ, paired with the new value. An empty
@@ -134,6 +138,18 @@ pub async fn load_score(
     score_id: &str,
 ) -> Result<Score, String> {
     let mut score = Score::default();
+    for (key, row) in load_rows(connection, score_id).await? {
+        score.clips.insert(key, row.into_clip()?);
+    }
+    Ok(score)
+}
+
+/// One score's rows as stored, keyed by clip key.
+async fn load_rows(
+    connection: &mut SqliteConnection,
+    score_id: &str,
+) -> Result<std::collections::BTreeMap<String, ClipRow>, String> {
+    let mut clips = std::collections::BTreeMap::new();
     let rows = sqlx::query(
         "SELECT id, graph, start, duration, seed, selection_seed, selection_json,
                 z_index, blend_mode, inputs_json
@@ -145,11 +161,9 @@ pub async fn load_score(
     .map_err(|error| format!("failed to read the score's clips: {error}"))?;
     for row in rows {
         let id: String = row.try_get("id").map_err(|error| error.to_string())?;
-        score
-            .clips
-            .insert(key_of(score_id, &id)?, read_clip(&row)?.into_clip()?);
+        clips.insert(key_of(score_id, &id)?, read_clip(&row)?);
     }
-    Ok(score)
+    Ok(clips)
 }
 
 /// Write `candidate` onto the score's rows, touching only what differs.
@@ -163,26 +177,28 @@ pub async fn save_score(
     candidate: &Score,
 ) -> Result<Changed, String> {
     let mut changed = Changed::default();
-    let stored = load_score(&mut *connection, score_id).await?;
+    let stored = load_rows(&mut *connection, score_id).await?;
 
     for (id, clip) in &candidate.clips {
         let row = ClipRow::of(clip)?;
-        match stored.clips.get(id) {
+        match stored.get(id) {
             None => {
                 insert_clip(&mut *connection, score_id, uid, &row_id(score_id, id), &row).await?;
                 changed.inserted += 1;
             }
-            Some(current) => {
-                let updates = row.changes(&ClipRow::of(current)?);
-                if !updates.is_empty() {
-                    update_clip(&mut *connection, &row_id(score_id, id), &updates).await?;
+            Some(raw) => {
+                // A row of an old form reads as the form that replaced it, so
+                // that alone is no change. Once the clip changes, its row is
+                // written whole in the new form.
+                let current = ClipRow::of(&raw.clone().into_clip()?)?;
+                if !row.changes(&current).is_empty() {
+                    update_clip(&mut *connection, &row_id(score_id, id), &row.changes(raw)).await?;
                     changed.updated += 1;
                 }
             }
         }
     }
     for id in stored
-        .clips
         .keys()
         .filter(|id| !candidate.clips.contains_key(*id))
     {
@@ -435,5 +451,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stamp(pool).await, after);
+    }
+
+    /// Rows are not migrated: a row of an old color form loads as `color@1`,
+    /// an unchanged save leaves it alone, and the first change writes the
+    /// new form.
+    #[tokio::test]
+    async fn an_old_form_row_loads_new_and_saves_new_once_changed() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let old = serde_json::json!({
+                    "alpha": {"type": "proportion", "value": 1.0},
+                    "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
+                    "boundary": {"type": "boundary", "value": "clip"},
+                    "color": {"type": "color", "value": [1.0, 0.5, 0.0]},
+                    "every": {"type": "beats", "value": 2.0},
+                    "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
+                    "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
+                    "travel": {"type": "beats", "value": 2.0},
+                    "width": {"type": "number", "value": 0.2},
+                    "width_relative": {"type": "boolean", "value": true}
+        });
+        let mut row = ClipRow::of(&clip(1, 0.0)).unwrap();
+        row.graph = "color.chase@1".into();
+        row.inputs_json = old.to_string();
+        insert_clip(&mut connection, "s", "alice", &row_id("s", "a"), &row)
+            .await
+            .unwrap();
+        let stored_graph = |pool: sqlx::SqlitePool| async move {
+            sqlx::query_scalar::<_, String>("SELECT graph FROM clips WHERE id = 's:a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+
+        let mut score = load_score(&mut connection, "s").await.unwrap();
+        assert_eq!(score.clips["a"].graph, "color@1");
+        score.validate(&luma_patterns::standard_library()).unwrap();
+        assert_eq!(
+            save_score(&mut connection, "s", "alice", &score)
+                .await
+                .unwrap(),
+            Changed::default()
+        );
+        assert_eq!(stored_graph(pool.clone()).await, "color.chase@1");
+
+        score.clips.get_mut("a").unwrap().start = 4.0;
+        save_score(&mut connection, "s", "alice", &score)
+            .await
+            .unwrap();
+        assert_eq!(stored_graph(pool.clone()).await, "color@1");
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
     }
 }

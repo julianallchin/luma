@@ -1,129 +1,82 @@
 {
   "presets": [
-    {"name": "Wash", "form": "color.constant@1", "inputs": {
+    {"name": "Wash", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "brightness": {"type": "proportion", "value": 1.0},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
       "every": {"type": "beats", "value": 0.0}
     }},
-    {"name": "Pulse", "form": "color.constant@1", "inputs": {
+    {"name": "Pulse", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
       "brightness": {"type": "hit", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
       "every": {"type": "beats", "value": 1.0}
     }},
-    {"name": "Color fade", "form": "color.time@1", "inputs": {
+    {"name": "Color fade", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "colors": {"type": "gradient", "value": {"stops": [{"t": 0.0, "color": [1.0, 0.2, 0.0]}, {"t": 1.0, "color": [0.0, 0.3, 1.0]}]}},
-      "curve": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
+      "brightness": {"type": "proportion", "value": 1.0},
+      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [1.0, 0.2, 0.0]}, {"t": 1.0, "color": [0.0, 0.3, 1.0]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
       "every": {"type": "beats", "value": 0.0}
     }},
-    {"name": "Rainbow", "form": "color.time@1", "inputs": {
+    {"name": "Rainbow", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "colors": {"type": "gradient", "value": {"stops": [{"t": 0.0, "color": [1, 0, 0]}, {"t": 0.16666666666666666, "color": [1, 1, 0]}, {"t": 0.3333333333333333, "color": [0, 1, 0]}, {"t": 0.5, "color": [0, 1, 1]}, {"t": 0.6666666666666666, "color": [0, 0, 1]}, {"t": 0.8333333333333334, "color": [1, 0, 1]}, {"t": 1.0, "color": [1, 0, 0]}]}},
-      "curve": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
+      "brightness": {"type": "proportion", "value": 1.0},
+      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [1, 0, 0]}, {"t": 0.16666666666666666, "color": [1, 1, 0]}, {"t": 0.3333333333333333, "color": [0, 1, 0]}, {"t": 0.5, "color": [0, 1, 1]}, {"t": 0.6666666666666666, "color": [0, 0, 1]}, {"t": 0.8333333333333334, "color": [1, 0, 1]}, {"t": 1.0, "color": [1, 0, 0]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
       "every": {"type": "beats", "value": 4.0}
     }},
-    {"name": "Gradient", "form": "color.space@1", "inputs": {
+    {"name": "Gradient", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "colors": {"type": "gradient", "value": {"stops": [{"t": 0.0, "color": [1.0, 0.0, 0.5]}, {"t": 1.0, "color": [0.0, 0.6, 1.0]}]}}
+      "brightness": {"type": "proportion", "value": 1.0},
+      "color": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "gradient": {"stops": [{"t": 0.0, "color": [1.0, 0.0, 0.5]}, {"t": 1.0, "color": [0.0, 0.6, 1.0]}]}}},
+      "every": {"type": "beats", "value": 0.0}
     }},
-    {"name": "Chase", "form": "color.chase@1", "inputs": {
+    {"name": "Chase", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.2}, "width_relative": true, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
-      "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "number", "value": 0.2},
-      "width_relative": {"type": "boolean", "value": true}
+      "every": {"type": "beats", "value": 2.0}
     }},
-    {"name": "Wave", "form": "color.chase@1", "inputs": {
+    {"name": "Wave", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 1.0}, "width_relative": false, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}},
-      "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "number", "value": 1.0},
-      "width_relative": {"type": "boolean", "value": false}
+      "every": {"type": "beats", "value": 2.0}
     }},
-    {"name": "Ripple", "form": "color.chase@1", "inputs": {
+    {"name": "Ripple", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.4}, "width_relative": true, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}},
-      "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "number", "value": 0.4},
-      "width_relative": {"type": "boolean", "value": true}
+      "every": {"type": "beats", "value": 2.0}
     }},
-    {"name": "Spin", "form": "color.chase@1", "inputs": {
+    {"name": "Spin", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "angle"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}},
-      "boundary": {"type": "boundary", "value": "wrap"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "angle"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0], [0.95, 1.0], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.25}, "width_relative": true, "boundary": "wrap"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 1.0]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.95, 1.0], [1.0, 0.0]]}},
-      "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "number", "value": 0.25},
-      "width_relative": {"type": "boolean", "value": true}
+      "every": {"type": "beats", "value": 2.0}
     }},
-    {"name": "Bounce", "form": "color.chase@1", "inputs": {
+    {"name": "Bounce", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]}, "travel": {"type": "beats", "value": 4.0}, "width": {"type": "number", "value": 0.2}, "width_relative": false, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 4.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}},
-      "travel": {"type": "beats", "value": 4.0},
-      "width": {"type": "number", "value": 0.2},
-      "width_relative": {"type": "boolean", "value": false}
+      "every": {"type": "beats", "value": 4.0}
     }},
-    {"name": "Alternating sides", "form": "color.chase@1", "inputs": {
+    {"name": "Alternating sides", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.25, "hold"], [0.5, 0.75, "hold"], [1.0, 0.75]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.5}, "width_relative": false, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.25, "hold"], [0.5, 0.75, "hold"], [1.0, 0.75]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
-      "travel": {"type": "beats", "value": 2.0},
-      "width": {"type": "number", "value": 0.5},
-      "width_relative": {"type": "boolean", "value": false}
+      "every": {"type": "beats", "value": 2.0}
     }},
-    {"name": "Stepped chase", "form": "color.chase@1", "inputs": {
+    {"name": "Stepped chase", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "u"}, "per_group": false, "reverse": false}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.125, "hold"], [0.25, 0.375, "hold"], [0.5, 0.625, "hold"], [0.75, 0.875, "hold"], [1.0, 0.875]]}, "travel": {"type": "beats", "value": 4.0}, "width": {"type": "number", "value": 0.25}, "width_relative": false, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 4.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.125, "hold"], [0.25, 0.375, "hold"], [0.5, 0.625, "hold"], [0.75, 0.875, "hold"], [1.0, 0.875]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
-      "travel": {"type": "beats", "value": 4.0},
-      "width": {"type": "number", "value": 0.25},
-      "width_relative": {"type": "boolean", "value": false}
+      "every": {"type": "beats", "value": 4.0}
     }},
-    {"name": "Grow", "form": "color.chase@1", "inputs": {
+    {"name": "Grow", "form": "color@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}, "span": "fixture"}},
-      "boundary": {"type": "boundary", "value": "clip"},
+      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}, "span": "fixture"}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 0.5]]}, "travel": {"type": "beats", "value": 0.0}, "width": {"type": "number", "value": 1.25}, "width_relative": false, "boundary": "clip"}}},
       "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 0.0},
-      "path": {"type": "envelope", "value": {"points": [[0.0, 0.0], [1.0, 0.5]]}},
-      "shape": {"type": "envelope", "value": {"points": [[0.0, 1.0], [1.0, 1.0]]}},
-      "travel": {"type": "beats", "value": 0.0},
-      "width": {"type": "number", "value": 1.25},
-      "width_relative": {"type": "boolean", "value": false}
+      "every": {"type": "beats", "value": 0.0}
     }},
     {"name": "Dissolve", "form": "color.sparkle@1", "inputs": {
       "alpha": {"type": "proportion", "value": 1.0},

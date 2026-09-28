@@ -63,7 +63,7 @@ pub fn presets() -> &'static Presets {
 
 impl Presets {
     /// The preset of `form` called `name`. A name is unique within its form
-    /// only: Chase and Aim each have a Wave.
+    /// only: Color and Aim each have a Wave.
     pub fn preset(&self, form: &str, name: &str) -> Option<&FormPreset> {
         self.presets
             .iter()

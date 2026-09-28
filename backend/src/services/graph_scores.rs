@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn a_chase_strip_is_a_diagonal() {
-        let preview = preset_strip("color.chase@1", "Chase", 48);
+        let preview = preset_strip("color@1", "Chase", 48);
         assert_eq!((preview.width, preview.height), (64, 32));
         // One stroke crosses the rig over the first two beats: 32 columns.
         let rows: Vec<u32> = brightest(&preview)[..32]
@@ -527,14 +527,14 @@ mod tests {
         assert_eq!((position.pan.len(), position.tilt.len()), (1, 1));
         // A colour preset aims nothing.
         let wash = luma_patterns::presets()
-            .preset("color.constant@1", "Wash")
+            .preset("color@1", "Wash")
             .unwrap();
         assert!(stand_in_strip(wash, 16.0).unwrap().aim.is_none());
     }
 
     #[test]
     fn a_gradient_strip_is_bands_constant_over_time() {
-        let preview = preset_strip("color.space@1", "Gradient", 48);
+        let preview = preset_strip("color@1", "Gradient", 48);
         let pixel = |row: u32, col: u32| {
             let i = ((row * preview.width + col) * 4) as usize;
             preview.pixels[i..i + 3].to_vec()

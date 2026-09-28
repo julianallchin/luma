@@ -7,13 +7,13 @@ use std::collections::BTreeMap;
 
 pub(crate) mod ops;
 mod pace;
+mod upgrade;
+
+pub use upgrade::upgrade;
 
 /// Every form id. An id never changes meaning; a new meaning is a new version.
-pub const FORMS: [&str; 8] = [
-    "color.constant@1",
-    "color.time@1",
-    "color.space@1",
-    "color.chase@1",
+pub const FORMS: [&str; 5] = [
+    "color@1",
     "color.sparkle@1",
     "color.noise@1",
     "strobe.constant@1",
@@ -39,21 +39,7 @@ pub fn blend_modes(id: &str) -> &'static [BlendMode] {
 /// its inputs in a map, so the order lives here.
 pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
     Some(match id {
-        "color.constant@1" => &["color", "brightness", "every", "alpha"],
-        "color.time@1" => &["colors", "curve", "every", "alpha"],
-        "color.space@1" => &["colors", "axis", "alpha"],
-        "color.chase@1" => &[
-            "color",
-            "axis",
-            "every",
-            "travel",
-            "width",
-            "width_relative",
-            "shape",
-            "path",
-            "alpha",
-            "boundary",
-        ],
+        "color@1" => &["color", "brightness", "every", "alpha"],
         "color.sparkle@1" => &[
             "color",
             "every",
@@ -87,7 +73,7 @@ pub fn input_order(id: &str) -> Option<&'static [&'static str]> {
 /// the clip like an odometer instead of read frame by frame.
 const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
 
-use SourceKind::{Audio, Hit, Noise, Time};
+use SourceKind::{Audio, Hit, Noise, Space, Time};
 
 // ---------------------------------------------------------------------------
 // Building blocks
@@ -119,9 +105,8 @@ fn input(
 /// The most degrees of phase an aim's spread puts across the axis: four
 /// cycles, either way.
 pub const MAX_SPREAD: f64 = 1440.0;
-/// The widest chase stroke, in axis lengths.
+/// The widest stroke of a moving space source, in axis lengths.
 pub const MAX_WIDTH: f64 = 4.0;
-
 fn number(mut input: Input, min: f64, max: f64) -> Input {
     input.author = Some(Author::Number {
         min: Some(min),
@@ -320,8 +305,9 @@ pub fn shape_presets() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// Named curves for `color.time`: how the gradient is crossed over a pass.
-fn progress_presets() -> Vec<(&'static str, Value)> {
+/// Named curves for a gradient read over time or per hit: how one pass
+/// crosses the gradient.
+pub fn progress_presets() -> Vec<(&'static str, Value)> {
     vec![
         ("Linear", curve(&[[0., 0.], [1., 1.]], &[])),
         (
@@ -377,51 +363,12 @@ pub fn axis_presets() -> Vec<(&'static str, Value)> {
         ("Random", axis(MappingSource::Random)),
     ]
 }
-fn axis_input(default: MappingSource) -> Input {
-    choice(
-        input(
-            "Axis",
-            "Which way the heads are ordered",
-            axis(default),
-            Rate::Fixed,
-            &[],
-        ),
-        axis_presets(),
-        true,
-    )
-}
-
-fn gradient(stops: &[(f64, [f64; 3])]) -> Value {
-    Value::Gradient(Gradient {
-        stops: stops
-            .iter()
-            .map(|(t, color)| ColorStop {
-                t: *t,
-                color: *color,
-                alpha: 1.0,
-            })
-            .collect(),
-    })
-}
-fn colors_input() -> Input {
-    input(
-        "Colors",
-        "The gradient",
-        gradient(&[(0.0, [1.0, 0.0, 0.0]), (1.0, [0.0, 0.0, 1.0])]),
-        Rate::Fixed,
-        &[],
-    )
-}
-
 // ---------------------------------------------------------------------------
 // The forms
 
 pub(crate) fn definitions() -> Vec<(&'static str, Definition)> {
     vec![
-        ("color.constant@1", constant()),
-        ("color.time@1", time()),
-        ("color.space@1", space()),
-        ("color.chase@1", chase()),
+        ("color@1", color()),
         ("color.sparkle@1", sparkle()),
         ("color.noise@1", noise()),
         ("strobe.constant@1", strobe()),
@@ -429,22 +376,39 @@ pub(crate) fn definitions() -> Vec<(&'static str, Definition)> {
     ]
 }
 
-fn constant() -> Definition {
+/// One color: each input is fixed, or follows a source over time, per hit,
+/// across space or across space and time. A space source with `move` is a
+/// chase: a stroke that travels along its axis once per hit.
+fn color() -> Definition {
     let mut body = Body::default();
-    // One hit every `every` beats, for a brightness per hit. Zero is one hit
-    // over the whole clip.
+    // One hit every `every` beats; zero is one hit over the clip. A hit
+    // source reads the share of its hit that has passed. A moving space
+    // source sends one stroke per hit, and hit sources then follow each
+    // stroke's life instead.
     body.node("clock", "core/odometer", vec![("period", i("every"))]);
     body.node(
         "life",
         "core/fraction",
         vec![("value", c("clock", "turns"))],
     );
-    let bright = body.multiply("bright", i("brightness"), i("alpha"));
-    let color = body.multiply("color", i("color"), bright);
+    // A moving brightness has one channel per live stroke; the brightest
+    // stroke wins at each head.
+    let level = body.multiply("level", i("brightness"), i("alpha"));
+    body.node("mask", "core/channel_maximum", vec![("value", level)]);
+    let color = body.multiply("color", i("color"), c("mask", "value"));
     body.form(
-        "Constant color",
+        "Color",
         vec![
-            ("color", color_input()),
+            (
+                "color",
+                input(
+                    "Color",
+                    "Color of the light",
+                    Value::Color([1.0; 3]),
+                    Rate::Frame,
+                    &[Time, Hit, Space],
+                ),
+            ),
             (
                 "brightness",
                 input(
@@ -452,301 +416,223 @@ fn constant() -> Definition {
                     "Brightness of the light. Alpha is how much the clip covers the layers under it",
                     Value::Proportion(1.0),
                     Rate::Frame,
-                    &[Time, Hit, Noise, Audio],
+                    &[Time, Hit, Noise, Audio, Space],
                 ),
             ),
             (
                 "every",
                 every_input(
                     0.0,
-                    "Beats between hits; 0 is one hit over the clip",
+                    "Beats between hits; 0 is one hit over the clip. A hit source plays once per hit, and a moving space source sends one stroke per hit",
                     &[Time],
                 ),
             ),
-            ("alpha", alpha_input(&[Time, Noise, Audio])),
+            ("alpha", alpha_input(&[Time, Hit, Noise, Audio])),
         ],
         color,
     )
 }
 
-fn time() -> Definition {
-    let mut body = Body::default();
-    body.node("clock", "core/odometer", vec![("period", i("every"))]);
+/// A still space source: each head's position on the axis reads the
+/// gradient or the curve.
+fn still_space(body: &mut Body, key: &impl Fn(&str) -> String, space: &SpaceSource) -> Binding {
     body.node(
-        "phase",
-        "core/fraction",
-        vec![("value", c("clock", "turns"))],
+        &key("position"),
+        "mapped_position",
+        vec![("mapping", Value::Mapping(space.axis.clone()).into())],
     );
-    let shaped = body.envelope("shaped", c("phase", "value"), i("curve"));
-    body.node(
-        "sample",
-        "sample_gradient",
-        vec![("gradient", i("colors")), ("position", shaped)],
-    );
-    let color = body.multiply("color", c("sample", "color"), i("alpha"));
-    body.form(
-        "Color over time",
-        vec![
-            ("colors", colors_input()),
-            (
-                "curve",
-                choice(
-                    input(
-                        "Curve",
-                        "How one pass moves through the gradient",
-                        progress_presets().remove(0).1,
-                        Rate::Fixed,
-                        &[],
-                    ),
-                    progress_presets(),
-                    true,
-                ),
-            ),
-            (
-                "every",
-                every_input(
-                    0.0,
-                    "Beats for one pass; 0 plays the gradient once over the clip",
-                    &[Time],
-                ),
-            ),
-            ("alpha", alpha_input(&[Time, Noise, Audio])),
-        ],
-        color,
-    )
+    let position = c(&key("position"), "value");
+    match (&space.gradient, &space.curve) {
+        (Some(gradient), _) => {
+            body.node(
+                &key("sample"),
+                "sample_gradient",
+                vec![
+                    ("gradient", Value::Gradient(gradient.clone()).into()),
+                    ("position", position),
+                ],
+            );
+            c(&key("sample"), "color")
+        }
+        (None, Some(curve)) => body.envelope(
+            &key("value"),
+            position,
+            Value::Envelope(curve.clone()).into(),
+        ),
+        (None, None) => unreachable!("validated space source"),
+    }
 }
 
-fn space() -> Definition {
-    let mut body = Body::default();
-    body.node("position", "mapped_position", vec![("mapping", i("axis"))]);
-    body.node(
-        "sample",
-        "sample_gradient",
-        vec![
-            ("gradient", i("colors")),
-            ("position", c("position", "value")),
-        ],
-    );
-    let color = body.multiply("color", c("sample", "color"), i("alpha"));
-    body.form(
-        "Color across space",
-        vec![
-            ("colors", colors_input()),
-            ("axis", axis_input(MappingSource::U)),
-            ("alpha", alpha_input(&[Time, Noise, Audio])),
-        ],
-        color,
-    )
-}
-
-fn chase() -> Definition {
-    let mut body = Body::default();
-    body.node(
-        "life",
-        "core/event_life",
-        vec![("every", i("every")), ("life", i("travel"))],
-    );
-    let progress = c("life", "progress");
-    let position = body.envelope("position", progress.clone(), i("path"));
+/// A moving space source: one stroke per hit of `every`, each `travel`
+/// beats long, with the source's curve across it. Returns the stroke value,
+/// one channel per live stroke, and the strokes' life for hit sources.
+fn stroke(
+    body: &mut Body,
+    key: &impl Fn(&str) -> String,
+    space: &SpaceSource,
+    movement: &Movement,
+) -> (Binding, Binding) {
+    let mut life = vec![("every", i("every"))];
+    match &movement.travel {
+        Value::Time(curve) => life.push(("life_curve", Value::Time(curve.clone()).into())),
+        travel => life.push(("life", travel.clone().into())),
+    }
+    body.node(&key("life"), "core/event_life", life);
+    let progress = c(&key("life"), "progress");
+    let path: Binding = Value::Envelope(movement.path.clone()).into();
+    let shape: Binding = Value::Envelope(space.curve.clone().expect("validated curve")).into();
+    let axis: Binding = Value::Mapping(space.axis.clone()).into();
+    let boundary: Binding = Value::Boundary(movement.boundary).into();
+    let width = match &movement.width {
+        Value::Time(curve) => time_curve(
+            body,
+            &|part| key(&format!("width_{part}")),
+            Value::Time(curve.clone()),
+        ),
+        Value::Hit(curve) => {
+            body.node(
+                &key("width_curve"),
+                "core/curve",
+                vec![
+                    ("curve", Value::Time(curve.clone()).into()),
+                    ("progress", progress.clone()),
+                ],
+            );
+            c(&key("width_curve"), "value")
+        }
+        width => width.clone().into(),
+    };
+    let position = body.envelope(&key("position"), progress.clone(), path.clone());
     // Which way the stroke travels now. A still path (a step) keeps the
     // direction of the whole path.
-    let ahead_at = body.add("ahead_at", progress.clone(), n(1e-3));
-    let behind_at = body.subtract("behind_at", progress, n(1e-3));
-    let ahead = body.envelope("ahead", ahead_at, i("path"));
-    let behind = body.envelope("behind", behind_at, i("path"));
-    let velocity = body.subtract("velocity", ahead, behind);
-    let path_end = body.envelope("path_end", Value::Proportion(1.0).into(), i("path"));
-    let path_start = body.envelope("path_start", Value::Proportion(0.0).into(), i("path"));
-    let overall = body.subtract("overall", path_end, path_start);
-    let moving_back = body.greater("moving_back", n(0.0), velocity.clone());
-    let moving_on = body.greater("moving_on", velocity, n(0.0));
-    let net_back = body.greater("net_back", n(0.0), overall);
-    let moving = body.add("moving", moving_back.clone(), moving_on);
-    let still = body.subtract("still", n(1.0), moving);
-    let still_back = body.multiply("still_back", still, net_back);
-    let backward = body.add("backward", moving_back, still_back);
+    let ahead_at = body.add(&key("ahead_at"), progress.clone(), n(1e-3));
+    let behind_at = body.subtract(&key("behind_at"), progress, n(1e-3));
+    let ahead = body.envelope(&key("ahead"), ahead_at, path.clone());
+    let behind = body.envelope(&key("behind"), behind_at, path.clone());
+    let velocity = body.subtract(&key("velocity"), ahead, behind);
+    let path_end = body.envelope(
+        &key("path_end"),
+        Value::Proportion(1.0).into(),
+        path.clone(),
+    );
+    let path_start = body.envelope(
+        &key("path_start"),
+        Value::Proportion(0.0).into(),
+        path.clone(),
+    );
+    let overall = body.subtract(&key("overall"), path_end, path_start);
+    let moving_back = body.greater(&key("moving_back"), n(0.0), velocity.clone());
+    let moving_on = body.greater(&key("moving_on"), velocity, n(0.0));
+    let net_back = body.greater(&key("net_back"), n(0.0), overall);
+    let moving = body.add(&key("moving"), moving_back.clone(), moving_on);
+    let still = body.subtract(&key("still"), n(1.0), moving);
+    let still_back = body.multiply(&key("still_back"), still, net_back);
+    let backward = body.add(&key("backward"), moving_back, still_back);
     // Overrun: with a clip boundary and a gliding path, the stroke enters
     // fully from outside and leaves fully. Path 0–1 maps onto centers from
     // -w/2 to 1 + w/2. Stepped paths and wrap keep exact positions.
-    body.node("axis", "resolve_mapping", vec![("mapping", i("axis"))]);
+    body.node(&key("axis"), "resolve_mapping", vec![("mapping", axis)]);
     body.node(
-        "edge",
+        &key("edge"),
         "coordinate_offset",
         vec![
-            ("mapping", c("axis", "coordinates")),
+            ("mapping", c(&key("axis"), "coordinates")),
             ("position", Value::Position(0.0).into()),
-            ("boundary", i("boundary")),
+            ("boundary", boundary.clone()),
         ],
     );
-    body.node("glides", "core/path_glides", vec![("path", i("path"))]);
-    let open = body.subtract("open", n(1.0), c("edge", "wrapped"));
-    let overrun = body.multiply("overrun", open, c("glides", "value"));
+    body.node(&key("glides"), "core/path_glides", vec![("path", path)]);
+    let open = body.subtract(&key("open"), n(1.0), c(&key("edge"), "wrapped"));
+    let overrun = body.multiply(&key("overrun"), open, c(&key("glides"), "value"));
     // Width: a share of the axis, or relative to the gap between strokes.
     // g is the axis share between two stroke paths (every / travel). With
     // overrun, centers are (1 + w) × g apart, so strokes touch at rel 1 when
     // w = g / (1 - g); width = r g / (1 - r g), with r g capped at 4/5 (a
     // stroke four axes wide). Without overrun, width = r g, capped at 4.
     body.node(
-        "relative",
+        &key("relative"),
         "core/choose_number",
         vec![
-            ("condition", i("width_relative")),
+            ("condition", Value::Boolean(movement.width_relative).into()),
             ("yes", n(1.0)),
             ("no", n(0.0)),
         ],
     );
-    let absolute = body.subtract("absolute", n(1.0), c("relative", "value"));
-    let gap = body.multiply("gap_share", i("width"), c("life", "spacing"));
-    let cap_drop = body.multiply("cap_drop", overrun.clone(), n(MAX_WIDTH - 0.8));
-    let cap = body.subtract("gap_cap", n(MAX_WIDTH), cap_drop);
-    body.node("gap_capped", "core/minimum", vec![("a", gap), ("b", cap)]);
-    let grown = body.multiply("gap_grown", c("gap_capped", "value"), overrun.clone());
-    let rest = body.subtract("gap_rest", n(1.0), grown);
+    let absolute = body.subtract(&key("absolute"), n(1.0), c(&key("relative"), "value"));
+    let gap = body.multiply(&key("gap_share"), width.clone(), c(&key("life"), "spacing"));
+    let cap_drop = body.multiply(&key("cap_drop"), overrun.clone(), n(MAX_WIDTH - 0.8));
+    let cap = body.subtract(&key("gap_cap"), n(MAX_WIDTH), cap_drop);
     body.node(
-        "gap_width",
-        "core/divide",
-        vec![("a", c("gap_capped", "value")), ("b", rest)],
+        &key("gap_capped"),
+        "core/minimum",
+        vec![("a", gap), ("b", cap)],
     );
-    let gap_part = body.multiply("gap_part", c("gap_width", "value"), c("relative", "value"));
-    let axis_part = body.multiply("axis_part", i("width"), absolute);
-    let width = body.add("width", gap_part, axis_part);
+    let grown = body.multiply(
+        &key("gap_grown"),
+        c(&key("gap_capped"), "value"),
+        overrun.clone(),
+    );
+    let rest = body.subtract(&key("gap_rest"), n(1.0), grown);
     body.node(
-        "safe_width",
+        &key("gap_width"),
+        "core/divide",
+        vec![("a", c(&key("gap_capped"), "value")), ("b", rest)],
+    );
+    let gap_part = body.multiply(
+        &key("gap_part"),
+        c(&key("gap_width"), "value"),
+        c(&key("relative"), "value"),
+    );
+    let axis_part = body.multiply(&key("axis_part"), width, absolute);
+    let width = body.add(&key("width"), gap_part, axis_part);
+    body.node(
+        &key("safe_width"),
         "core/maximum",
         vec![("a", width.clone()), ("b", n(1e-9))],
     );
-    let from_middle = body.subtract("from_middle", position.clone(), n(0.5));
-    let stretch = body.multiply("stretch", from_middle, width.clone());
-    let stretch = body.multiply("stretch_on", stretch, overrun.clone());
-    let center = body.add("center", position, stretch);
+    let from_middle = body.subtract(&key("from_middle"), position.clone(), n(0.5));
+    let stretch = body.multiply(&key("stretch"), from_middle, width.clone());
+    let stretch = body.multiply(&key("stretch_on"), stretch, overrun.clone());
+    let center = body.add(&key("center"), position, stretch);
     // Phase across the stroke: 0 at the tail, 1 at the head.
     body.node(
-        "offset",
+        &key("offset"),
         "coordinate_offset",
         vec![
-            ("mapping", c("axis", "coordinates")),
+            ("mapping", c(&key("axis"), "coordinates")),
             ("position", center),
-            ("boundary", i("boundary")),
+            ("boundary", boundary),
         ],
     );
     body.node(
-        "across",
+        &key("across"),
         "core/divide",
-        vec![("a", c("offset", "value")), ("b", c("safe_width", "value"))],
+        vec![
+            ("a", c(&key("offset"), "value")),
+            ("b", c(&key("safe_width"), "value")),
+        ],
     );
-    let phase = body.add("phase", c("across", "value"), n(0.5));
-    let mirrored = body.subtract("mirrored", n(1.0), phase.clone());
-    let flip = body.subtract("flip", mirrored, phase.clone());
-    let flip_back = body.multiply("flip_back", flip, backward);
-    let directed = body.add("directed", phase.clone(), flip_back);
+    let phase = body.add(&key("phase"), c(&key("across"), "value"), n(0.5));
+    let mirrored = body.subtract(&key("mirrored"), n(1.0), phase.clone());
+    let flip = body.subtract(&key("flip"), mirrored, phase.clone());
+    let flip_back = body.multiply(&key("flip_back"), flip, backward);
+    let directed = body.add(&key("directed"), phase.clone(), flip_back);
     // Without overrun the stroke covers its edges, so exact positions
     // (steps) leave no head dark at a boundary. With overrun the edges are
     // open, so a stroke is dark as it starts and as it ends.
-    let closed = body.subtract("closed", n(1.0), overrun);
-    let edge = body.multiply("edge_width", closed, n(2e-6));
-    let tail = body.add("tail", phase.clone(), edge.clone());
-    let head = body.add("head", n(1.0), edge);
-    let after_tail = body.greater("after_tail", tail, n(0.0));
-    let before_head = body.greater("before_head", head, phase);
-    let visible = body.greater("visible", width, n(0.0));
-    let stroke = body.envelope("stroke", directed, i("shape"));
-    let lit = body.multiply("lit", stroke, after_tail);
-    let lit = body.multiply("lit_head", lit, before_head);
-    let lit = body.multiply("lit_visible", lit, visible);
-    let lit = body.multiply("lit_live", lit, c("life", "present"));
-    let lit = body.multiply("lit_alpha", lit, i("alpha"));
-    body.node("mask", "core/channel_maximum", vec![("value", lit)]);
-    let color = body.multiply("color", i("color"), c("mask", "value"));
-    body.form(
-        "Chase",
-        vec![
-            ("color", color_input()),
-            ("axis", axis_input(MappingSource::U)),
-            ("every", every_input(2.0, "Beats between strokes", &[Time])),
-            (
-                "travel",
-                input(
-                    "Travel",
-                    "Beats for one stroke to cross the whole axis",
-                    Value::Beats(2.0),
-                    Rate::Fixed,
-                    &[Time],
-                ),
-            ),
-            (
-                "width",
-                number(
-                    input(
-                        "Width",
-                        "Stroke size: a share of the axis, or of the gap between strokes. \
-                         Above 1 a stroke is wider than the axis",
-                        Value::Number(0.2),
-                        Rate::Frame,
-                        &[Time, Hit],
-                    ),
-                    0.0,
-                    MAX_WIDTH,
-                ),
-            ),
-            (
-                "width_relative",
-                input(
-                    "Relative width",
-                    "Width is a share of the gap between strokes; otherwise of the axis",
-                    Value::Boolean(true),
-                    Rate::Fixed,
-                    &[],
-                ),
-            ),
-            (
-                "shape",
-                choice(
-                    input(
-                        "Shape",
-                        "Brightness across the stroke",
-                        shape_presets().remove(0).1,
-                        Rate::Fixed,
-                        &[],
-                    ),
-                    shape_presets(),
-                    true,
-                ),
-            ),
-            (
-                "path",
-                choice(
-                    input(
-                        "Path",
-                        "Where the stroke is over its life",
-                        path_presets().remove(0).1,
-                        Rate::Fixed,
-                        &[],
-                    ),
-                    path_presets(),
-                    true,
-                ),
-            ),
-            ("alpha", alpha_input(&[Time, Hit, Noise, Audio])),
-            (
-                "boundary",
-                choice(
-                    input(
-                        "Boundary",
-                        "What happens at the ends of the axis",
-                        Value::Boundary(Boundary::Clip),
-                        Rate::Fixed,
-                        &[],
-                    ),
-                    vec![
-                        ("Clip", Value::Boundary(Boundary::Clip)),
-                        ("Wrap", Value::Boundary(Boundary::Wrap)),
-                    ],
-                    false,
-                ),
-            ),
-        ],
-        color,
-    )
+    let closed = body.subtract(&key("closed"), n(1.0), overrun);
+    let edge = body.multiply(&key("edge_width"), closed, n(2e-6));
+    let tail = body.add(&key("tail"), phase.clone(), edge.clone());
+    let head = body.add(&key("head"), n(1.0), edge);
+    let after_tail = body.greater(&key("after_tail"), tail, n(0.0));
+    let before_head = body.greater(&key("before_head"), head, phase);
+    let visible = body.greater(&key("visible"), width, n(0.0));
+    let lit = body.envelope(&key("stroke"), directed, shape);
+    let lit = body.multiply(&key("lit"), lit, after_tail);
+    let lit = body.multiply(&key("lit_head"), lit, before_head);
+    let lit = body.multiply(&key("lit_visible"), lit, visible);
+    let lit = body.multiply(&key("lit_live"), lit, c(&key("life"), "present"));
+    (lit, c(&key("life"), "progress"))
 }
 
 fn sparkle() -> Definition {
@@ -1232,8 +1118,77 @@ pub(crate) fn check_inputs(
         && matches!(inputs.get("coverage"), Some(Value::Proportion(v)) if *v >= 1.0)
     {
         return Err(Error(format!(
-            "{id}.coverage: a fixed 100% lights every head; use a Wash (color.constant@1)"
+            "{id}.coverage: a fixed 100% lights every head; use a Wash (color@1)"
         )));
+    }
+    check_strokes(id, inputs)
+}
+
+/// Hit sources follow the strokes of a moving space source, one channel per
+/// live stroke. So a clip has one moving space source at most, and a color
+/// cannot follow its strokes.
+fn check_strokes(id: &str, inputs: &BTreeMap<String, Value>) -> Result<()> {
+    let moving = inputs
+        .values()
+        .filter(|value| matches!(value, Value::Space(space) if space.movement.is_some()))
+        .count();
+    if moving > 1 {
+        return Err(Error(format!(
+            "{id}: a clip has one moving space source at most"
+        )));
+    }
+    if moving == 1 {
+        if let Some((name, _)) = inputs
+            .iter()
+            .find(|(_, value)| matches!(value, Value::Hit(curve) if curve.is_color()))
+        {
+            return Err(Error(format!(
+                "{id}.{name}: a color hit source cannot follow the strokes of a moving space source; use a time source"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The `move` fields of a space source that take a value or a source, as
+/// inputs: an editor and the checks read them like form inputs.
+pub fn movement_inputs() -> [(&'static str, Input); 2] {
+    [
+        (
+            "travel",
+            input(
+                "Travel",
+                "Beats for one stroke to cross the whole axis; 0 is the whole clip",
+                Value::Beats(2.0),
+                Rate::Fixed,
+                &[Time],
+            ),
+        ),
+        (
+            "width",
+            number(
+                input(
+                    "Width",
+                    "Stroke size: a share of the axis, or of the gap between strokes. \
+                     Above 1 a stroke is wider than the axis",
+                    Value::Number(0.2),
+                    Rate::Frame,
+                    &[Time, Hit],
+                ),
+                0.0,
+                MAX_WIDTH,
+            ),
+        ),
+    ]
+}
+
+fn check_movement(movement: &Movement) -> Result<()> {
+    for (name, spec) in movement_inputs() {
+        let value = match name {
+            "travel" => &movement.travel,
+            _ => &movement.width,
+        };
+        check_value(name, &spec, value).map_err(|error| Error(format!("move.{name}: {error}")))?;
     }
     Ok(())
 }
@@ -1337,8 +1292,26 @@ fn check_value(name: &str, spec: &Input, value: &Value) -> Result<()> {
         })
     };
     let fits = match value {
-        Value::Time(curve) | Value::Hit(curve) => {
+        Value::Time(SourceCurve::Keys(curve)) | Value::Hit(SourceCurve::Keys(curve)) => {
             curve.is_color() == (color || vector) && within(Box::new(curve.values()))
+        }
+        Value::Time(SourceCurve::Gradient(_)) | Value::Hit(SourceCurve::Gradient(_)) => color,
+        // A color reads a still gradient; a number reads a curve, still or
+        // moving.
+        Value::Space(space) => {
+            if color {
+                space.gradient.is_some() && space.movement.is_none()
+            } else {
+                let fits = !vector
+                    && !speed
+                    && space.curve.as_ref().is_some_and(|curve| {
+                        within(Box::new(curve.points.iter().map(|point| point.value)))
+                    });
+                if let (true, Some(movement)) = (fits, &space.movement) {
+                    check_movement(movement)?;
+                }
+                fits
+            }
         }
         Value::Noise(NoiseSource { range, .. }) => {
             !color && !speed && within(Box::new(range.iter().copied()))
@@ -1384,7 +1357,13 @@ pub(crate) fn lower(
         unreachable!("forms are graphs")
     };
     let mut plain = BTreeMap::new();
-    for (name, value) in inputs {
+    let mut hits = hit_progress(graph);
+    // Space sources first: a moving one adds the strokes that hit sources
+    // then follow, and its clock reads `every` before a speed curve on
+    // `every` rewires the clocks.
+    let mut order: Vec<(&String, &Value)> = inputs.iter().collect();
+    order.sort_by_key(|(_, value)| !matches!(value, Value::Space(_)));
+    for (name, value) in order {
         if value.source_kind().is_none() {
             plain.insert(name.clone(), value.clone());
             continue;
@@ -1398,19 +1377,37 @@ pub(crate) fn lower(
                 clocks(graph, name, &curve);
                 time_curve(&mut body, &key, curve)
             }
+            Value::Space(space) => match &space.movement {
+                None => still_space(&mut body, &key, space),
+                Some(movement) => {
+                    let (lit, life) = stroke(&mut body, &key, space, movement);
+                    hits = Some(life);
+                    lit
+                }
+            },
+            Value::Time(SourceCurve::Gradient(read)) => {
+                body.node(&key("clock"), "clip_time", vec![]);
+                gradient_curve(&mut body, &key, read, c(&key("clock"), "progress"))
+            }
             Value::Time(curve) => time_curve(&mut body, &key, Value::Time(curve.clone())),
             Value::Hit(curve) => {
-                let progress = hit_progress(graph)
+                let progress = hits
+                    .clone()
                     .ok_or_else(|| Error(format!("{id} has no events for a hit source")))?;
-                body.node(
-                    &key("curve"),
-                    "core/curve",
-                    vec![
-                        ("curve", Value::Time(curve.clone()).into()),
-                        ("progress", progress),
-                    ],
-                );
-                c(&key("curve"), "value")
+                match curve {
+                    SourceCurve::Gradient(read) => gradient_curve(&mut body, &key, read, progress),
+                    SourceCurve::Keys(_) => {
+                        body.node(
+                            &key("curve"),
+                            "core/curve",
+                            vec![
+                                ("curve", Value::Time(curve.clone()).into()),
+                                ("progress", progress),
+                            ],
+                        );
+                        c(&key("curve"), "value")
+                    }
+                }
             }
             Value::Noise(noise) => {
                 body.node(
@@ -1507,9 +1504,32 @@ pub(crate) fn lower(
     Ok(Some((lowered, plain)))
 }
 
+/// A gradient read at the positions a curve gives over `progress`.
+fn gradient_curve(
+    body: &mut Body,
+    key: &impl Fn(&str) -> String,
+    read: &GradientCurve,
+    progress: Binding,
+) -> Binding {
+    let position = body.envelope(
+        &key("position"),
+        progress,
+        Value::Envelope(read.curve.clone()).into(),
+    );
+    body.node(
+        &key("sample"),
+        "sample_gradient",
+        vec![
+            ("gradient", Value::Gradient(read.gradient.clone()).into()),
+            ("position", position),
+        ],
+    );
+    c(&key("sample"), "color")
+}
+
 /// Where a hit source reads the life of its event: the `life` node's
-/// progress. A form with events has an event life there; the Wash has the
-/// fraction of its hit clock.
+/// progress. Sparkle has an event life there; `color@1` has the fraction of
+/// its hit clock, unless a moving space source gives its strokes' life.
 fn hit_progress(graph: &Graph) -> Option<Binding> {
     match graph.nodes.get("life")?.definition.as_str() {
         "core/event_life" => Some(c("life", "progress")),
