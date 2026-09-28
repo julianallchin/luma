@@ -29,7 +29,7 @@ Rules:
 
 A clip keeps its row: timing, selection, seed, z-index, blend mode, inputs.
 
-- `graph` names a form with a version, for example `color.chase@1`. It never
+- `graph` names a form with a version, for example `color@1`. It never
   names a score-local graph. Score-local definitions are removed.
 - `inputs` holds **every** input of the form. A clip is always created from a
   preset, and a preset sets all inputs, so no input is ever missing. A clip
@@ -40,8 +40,10 @@ A clip keeps its row: timing, selection, seed, z-index, blend mode, inputs.
   replaces clip fades. For aim (later spec) it is the blend toward this clip's
   aim, so a move is `alpha = time[0 → 1]`.
 
-Layers combine forms. A "rainbow that chases" is a color layer with a chase
-layer on top in `multiply`. There is no multiplying of forms inside one value.
+Layers combine forms. Inside one `color@1` clip, color and brightness each
+follow their own source, so a "rainbow that chases" is one clip: a color
+gradient over time and a moving space source on brightness. There is no
+multiplying of forms inside one value.
 
 **Blending.** A layer blends onto the light under it: color × dimmer, per
 head. No clip on a head is no light. A head that a lower clip left dark is
@@ -79,9 +81,10 @@ source is one level deep: a source's own settings are plain values.
 |---|---|
 | plain | One value, all heads, all the time |
 | `time[...]` | One curve over the whole clip, all heads equal |
-| `hit[...]` | One curve over the life of each event (chase, sparkle, and the hits of `color.constant`) |
+| `hit[...]` | One curve over the life of each hit (each `every` period or stroke of `color@1`, each sparkle event) |
 | `noise(speed, range)` | Smooth random wandering over time |
 | `audio(from_hz, to_hz, floor, threshold)` | Energy of one frequency range of the track's mix |
+| `space(axis, values, move)` | Values along an axis of the heads; with `move`, a stroke that travels along it |
 
 - `time[...]` and `hit[...]` are keyframes over progress 0–1, in the one
   curve format that envelopes also use: points `[x, value]` or
@@ -93,6 +96,10 @@ source is one level deep: a source's own settings are plain values.
   `{"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [0.8, 1], [1, 0]]}`.
   Common curves are presets: ramp up, ramp down, swell, fade in, fade out,
   hold then drop.
+- On a color input, `time[...]` and `hit[...]` can read a gradient instead
+  of color keys: `{"gradient": {"stops": [...]}, "curve": {"points": [[0,
+  0], [1, 1]]}}`. The curve gives the gradient position (0–1) at each
+  progress. The gradient blends in OKLab; color keys blend in RGB.
 - `audio` reads the full mix only. No stems, no drum events, no harmony.
   `from_hz` and `to_hz` set the frequency range (20–20,000 Hz, from < to).
   Named ranges only fill the two numbers: Kick 40–100, Bass 20–250, Mids
@@ -118,82 +125,50 @@ The engine turns each source into graph nodes when it prepares the clip.
 
 ## Forms
 
-Promotable key: **T** time, **H** hit, **N** noise, **A** audio, **—** plain
-only.
+Promotable key: **T** time, **H** hit, **N** noise, **A** audio, **S**
+space, **—** plain only.
 
-### `color.constant@1`
+### `color@1`
 
-All selected heads one color, at one brightness.
+One color on the selected heads. Each input is fixed, over time, per hit,
+across space, or across space and time.
 
 | Input | Type | Promotable | Meaning |
 |---|---|---|---|
-| color | color | T | |
-| brightness | proportion | T H N A | Multiplies the color |
-| every | beats, or none | T | Time between hits |
-| alpha | proportion | T N A | |
+| color | color | T H S | |
+| brightness | proportion | T H N A S | Multiplies the color |
+| every | beats | T | Time between hits |
+| alpha | proportion | T H N A | |
 
 - **brightness** darkens this clip's light. **alpha** is how much the clip
   covers the layers under it. A clip at brightness 50% and alpha 100% is a
   dim light that hides what is under it; at brightness 100% and alpha 50% it
   is a full light at half opacity.
-- **every** has the meaning of `every` on `color.time`: 0 (none, the
-  default) is one hit over the whole clip, N is a hit every N beats. Only
-  `brightness = hit[...]` reads the hits; each hit lives until the next one.
-  With a plain brightness, `every` has no effect.
+- **every**: 0 (the default) is one hit over the whole clip, N is a hit every
+  N beats. A `hit[...]` source plays once per hit; each hit lives until the
+  next one. A moving space source sends one stroke per hit. With no hit
+  source and no moving space source, `every` has no effect.
+- A color gradient per hit is a color fade; with `every` N it repeats every N
+  beats (Rainbow).
 
-Presets: Wash (brightness 100%, every none), Pulse (brightness
-`hit[hold then drop]`, every 1b).
+#### Space source
 
-### `color.time@1`
+Stored form:
 
-A color gradient over time, all heads equal.
+```json
+{"type": "space", "value": {
+  "axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false},
+  "gradient": {"stops": [...]}}}
+```
 
-| Input | Type | Promotable |
-|---|---|---|
-| colors | gradient | — |
-| curve | curve preset or curve | — |
-| every | beats, or none | T |
-| alpha | proportion | T N A |
-
-With `every` = none, the gradient plays once over the clip. With `every` = N
-beats, it repeats every N beats. `every` means "repeat period" in every form,
-and 0 beats is once over the clip in every form. On chase and sparkle, a
-`travel` or `duration` of 0 beats is the whole clip.
-Presets: Color fade (none), Rainbow (hue gradient, every 4b).
-
-### `color.space@1`
-
-A gradient laid across the rig. Each head gets a fixed color from its
-position. It does not move.
-
-| Input | Type | Promotable |
-|---|---|---|
-| colors | gradient | — |
-| axis | axis | — |
-| alpha | proportion | T N A |
-
-Preset: Gradient.
-
-### `color.chase@1`
-
-Strokes travel across the heads. Each event starts one stroke.
-
-| Input | Type | Promotable | Meaning |
-|---|---|---|---|
-| color | color | T | Stroke color |
-| axis | axis | — | Which way the heads are ordered |
-| every | beats | T | Time between strokes |
-| travel | beats | T | Time for one stroke to cross the whole axis |
-| width | number 0–4 + rel/abs | T H | Stroke size |
-| shape | shape preset or curve | — | Brightness across the stroke |
-| path | path preset or curve | — | Where the stroke is over its life |
-| alpha | proportion | T H N A | |
-| Advanced: boundary | clip / wrap | — | What happens at the ends |
+on a color, or `"curve": {"points": [...]}` (values 0–1) in place of
+`"gradient"` on brightness. Each head reads the gradient or the curve at its
+position on the axis. A still space source does not change over time.
 
 - **axis** is `order`, `x`, `y`, `z`, `radial`, `angle`, `random` or a
   custom `vector(u, v, z)`, with an optional `mirror`. Axis has no
-  `reverse`; path owns direction. Every axis (chase, `color.space`, aim)
-  also has:
+  `reverse` and no `per_group`; a backward path owns direction and the group
+  span owns grouping. Every axis (a space source, aim) also has:
   - **Random**: each head's coordinate comes from the clip's seed and the
     head id. Within each span the heads take the evenly spaced values
     `i / (n − 1)` (one head: 0.5) in a shuffled order, not independent
@@ -245,6 +220,28 @@ Strokes travel across the heads. Each event starts one stroke.
     position) of the span, in its plane. With the fixture span, each
     fixture turns around its own center. Radial is the distance within the
     plane, scaled 0–1 over the span.
+
+#### Moving space source: a chase
+
+A space source on brightness can move. Add `"move"`:
+
+```json
+"move": {"path": {"points": [[0, 0], [1, 1]]},
+         "travel": {"type": "beats", "value": 2},
+         "width": {"type": "number", "value": 0.2},
+         "width_relative": true, "boundary": "clip"}
+```
+
+Then the curve is one stroke: its brightness from the tail (0) to the head
+(1) in the direction of travel. Heads outside a stroke get 0. Each hit of
+`every` starts one stroke. `travel` is beats or a `time` curve of beats;
+`width` is a number 0–4 or a `time` or `hit` curve; `boundary` is `clip` or
+`wrap`. A color does not move: outside a stroke it would have no light.
+
+- With a moving brightness, `hit[...]` sources on the other inputs follow
+  each stroke's life, one channel per live stroke; where strokes overlap the
+  brightest wins. A color cannot take a hit source then; use a time source.
+  A clip has one moving space source at most.
 - **every** is beats. No `delay` and no `grid_aligned`: to shift, move the
   clip. A hit is a clip that you place on the timeline. One clip never holds
   a list of hit times: hits that do not repeat at a fixed period are
@@ -266,9 +263,9 @@ Strokes travel across the heads. Each event starts one stroke.
   `r g` capped at 4/5: at most a stroke four axes wide. When `every ≥ travel`
   a stroke has left before the next one enters, so rel 100% gives that widest
   stroke. Without overrun, absolute width is `r g`, capped at 4.
-- In storage, `width` holds the share and a separate boolean input
-  `width_relative` holds rel (true) or abs (false).
-- **shape** presets: hard, soft, comet, reverse comet, spike. No preset has
+- In storage, `width` holds the share and the boolean `width_relative`
+  holds rel (true) or abs (false).
+- **shape** (the source's curve) presets: hard, soft, comet, reverse comet, spike. No preset has
   more than one bump; more strokes come from `every`. An asymmetric shape
   follows the travel direction, so a comet tail trails when the path runs
   backward.
@@ -278,12 +275,21 @@ Strokes travel across the heads. Each event starts one stroke.
   positions at the centers of N equal parts, `(i + 0.5) / N`, and does not
   glide.
 
-The default axis is `x`.
+Presets:
 
-Presets: Chase, Wave (soft, width abs 100%), Ripple (radial, plane Auto),
-Spin (angle, plane Auto), Bounce (bounce),
+| Preset | color | brightness | every |
+|---|---|---|---|
+| Wash | white | 100% | 0 |
+| Pulse | white | `hit[hold then drop]` | 1b |
+| Color fade | hit gradient, linear | 100% | 0 |
+| Rainbow | hit hue gradient | 100% | 4b |
+| Gradient | space gradient along `x` | 100% | 0 |
+| Chase | white | moving, hard, width rel 20% | 2b |
+
+Moving-brightness presets also include Wave (soft, width abs 100%), Ripple
+(radial, plane Auto), Spin (angle, plane Auto, comet, wrap), Bounce (bounce),
 Alternating sides (x, `steps(2)`, travel = every, width abs 50%, hard),
-Stepped chase (`steps(N)`, width abs 1/N),
+Stepped chase (`steps(N)`, width abs 1/N), and
 Grow (radial, fixture span, plane Auto, width abs 125%, hard, path 0 → 0.5,
 every and travel 0: one stroke over the clip).
 
@@ -369,14 +375,14 @@ case to keep; the migration does not finish until the report is empty.
 
 | Definition today (clips) | Becomes |
 |---|---|
-| Color fade (340) | `color.time`, gradient and curve copied |
+| Color fade (340) | `color@1`, color a hit gradient: gradient and curve copied |
 | Pulse, Beat pulse, one-shot, drum bloom (~370) | `color.sparkle`, Pulse |
-| Chase, Beat chase, tide, Mirrored chase, Circle chase, Outward pulse, radial bloom (~290) | `color.chase` |
-| Wash, wash (141) | `color.constant` |
-| Alternating sides (20), Alternating colors, Stepped circle chase | `color.chase` with `steps(N)` |
+| Chase, Beat chase, tide, Mirrored chase, Circle chase, Outward pulse, radial bloom (~290) | `color@1`, brightness a moving space source |
+| Wash, wash (141) | `color@1` |
+| Alternating sides (20), Alternating colors, Stepped circle chase | `color@1`, moving brightness with a `steps(N)` path |
 | Random heads, Dissolve variants, shimmer (~40) | `color.sparkle` |
 | Noise wash, aurora, Atmosphere (~50) | `color.noise` |
-| Rainbow (13) | `color.time`, Rainbow |
+| Rainbow (13) | `color@1`, Rainbow |
 | Strobe output, strobe burst (~73) | `strobe.constant` |
 | A colored strobe (Bass strobe) | a color layer (the color product, as for a color clip) under `strobe.constant` |
 | A form × a curve over the clip (Tidal wave, Bounce, Gather, Bloom, drop1…, ~110) | the form, with the curve moved to `alpha = time[...]` |
@@ -389,13 +395,13 @@ Conversions of removed inputs:
   first event; the render check proves it per clip.
 - Drum triggers: one clip per analyzed hit, placed at the hit. The score no
   longer depends on drum analysis.
-- Harmony color (3): bake into a `color.time` curve.
-- Mapping `reverse`: `path = backward` on chase; reversed stops on a
-  gradient.
+- Harmony color (3): bake into a color curve.
+- Mapping `reverse`: a backward path on a moving space source; reversed
+  stops on a gradient.
 - Stem audio: the matching band of the mix. Output changes; the report lists
   these clips.
 
-**Wash brightness (2026-09-24).** `color.constant@1` gained `brightness`
+**Wash brightness (2026-09-24).** The Wash form (now `color@1`) gained `brightness`
 and `every` in place, and Pulse moved from sparkle to the Wash. Stored Wash
 clips got `brightness = 1` and `every = 0`, which renders the same
 (`color × 1 × alpha`). Every sparkle with a fixed coverage of 100% and paced
@@ -438,6 +444,17 @@ started about 0.02 beats after the previous chase of the same old clip were
 one hit detected twice; the later one was deleted. The look changed where
 the padding hid the layers under it: that light now shows between hits.
 
+**One color form (2026-09-27).** `color.constant@1`, `color.time@1`,
+`color.space@1` and `color.chase@1` merged into `color@1`. Rows are not
+migrated. `luma_patterns::upgrade` reads an old clip as `color@1` when it is
+loaded, and the first save that changes the clip writes the new form. The
+Wash form keeps its inputs. Color over time becomes a color hit gradient with
+the same `every` and brightness 100%. Color across space becomes a color
+space gradient with brightness 100% and `every` 0. A chase becomes a moving
+space source on brightness: its axis, shape (the curve), path, travel, width,
+relative width and boundary go into the source; color, every and alpha stay.
+A recorded test shows the same light for every conversion.
+
 **Render check.** A dry run over a copy of the reference database renders
 every converted clip, old and new, at a fixed set of times on its real venue,
 and reports the largest difference per clip. A conversion counts as exact below
@@ -477,7 +494,8 @@ to one onto the stored form.
 
 Slice 1 is Chase end to end: engine additions (curve hold/step, `alpha`,
 sources, relative width, `steps(N)`, direction-following
-shape, custom vector axis), `color.chase@1`, presets, the inspector with
+shape, custom vector axis), the chase form (now `color@1` with a moving
+brightness), presets, the inspector with
 promotion, and migration with the render check for the chase rows of the
 table. Slice 2 adds the other forms and the preset-only picker. Slice 3
 updates the Python API, skills, docs and removes the old recipes and
@@ -497,4 +515,4 @@ score-local definitions.
 1. Sparkle today has a no-repeat order (Random heads with shuffle off: a head
    does not light again until all others have). Keep it as an option, or
    always draw a fresh random set?
-2. `color.time` has an optional `every` (for Rainbow). Confirm.
+2. Settled: `every` on `color@1` repeats a color hit gradient (Rainbow).

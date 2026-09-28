@@ -93,6 +93,19 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(saved["second"]["z_index"], 1)
         self.assertEqual(saved["explicit"]["z_index"], 0)
 
+    def test_an_unknown_form_passes_tagged_inputs_to_the_native_validator(self):
+        edit = self.track().edit()
+        hit = {"type": "hit", "value": {"points": [[0, 1], [1, 0]]}}
+        clip = edit.add_clip("old.form@1", id="old", beats=(0, 4), inputs={"brightness": hit})
+        self.assertEqual(clip.graph, "old.form@1")
+        self.assertEqual(edit.candidate["clips"]["old"]["inputs"], {"brightness": hit})
+        with self.assertRaisesRegex(TrackError, "tagged value"):
+            edit.add_clip("old.form@1", id="bare", beats=(0, 4), inputs={"alpha": 0.5})
+
+    def test_a_space_source_passes_on_a_signal_socket(self):
+        space = {"type": "space", "value": {"axis": {"source": {"kind": "u"}}, "curve": {"points": [[0, 0], [1, 1]]}}}
+        self.assertEqual(_typed({"signal": {"unit": "proportion"}}, space), space)
+
     def track(self):
         nodes = {"color.chase@1": {"name": "Chase", "inputs": {
             key: {"name": key, "description": "", "value_type": kind, "rate": "frame", "default": {"type": kind, "value": default}}
