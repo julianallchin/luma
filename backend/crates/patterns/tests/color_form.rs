@@ -1,6 +1,10 @@
 //! `color@1` and the space source. The four old color forms were merged into
 //! `color@1`; `fixtures/old_color_forms.json` holds their light, recorded
-//! before they were deleted, for presets and varied inputs.
+//! before they were deleted, for presets and varied inputs. When the working
+//! space became linear Rec. 2020 its inputs were converted by
+//! `rec2020_upgrade` and the light of the 26 cases with a color other than
+//! white recorded again (`examples/rec2020_presets.rs`): light is color times
+//! brightness, which cannot be converted after the product.
 use luma_patterns::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;

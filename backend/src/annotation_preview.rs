@@ -144,9 +144,9 @@ pub(crate) fn render_preview(
                     .map_or([0.0; 3], shown)
             };
 
-            let r = (rgb[0] * 255.0).clamp(0.0, 255.0) as u8;
-            let g = (rgb[1] * 255.0).clamp(0.0, 255.0) as u8;
-            let b = (rgb[2] * 255.0).clamp(0.0, 255.0) as u8;
+            // Light is linear Rec. 2020; the strip is an sRGB picture.
+            let [r, g, b] = luma_patterns::color_space::to_display_srgb(rgb.map(f64::from))
+                .map(|channel| (channel * 255.0).round().clamp(0.0, 255.0) as u8);
 
             let idx = ((row as u32 * width + col as u32) * 4) as usize;
             pixels[idx] = r;
@@ -372,13 +372,21 @@ mod tests {
     use crate::models::universe::PrimitiveState;
 
     fn frame(lit: impl Iterator<Item = usize>) -> UniverseState {
+        // sRGB green, as a head's normalized linear Rec. 2020 color.
+        let green =
+            luma_patterns::FixtureOutput::from_rgb(luma_patterns::color_space::from_srgb([
+                0.0, 1.0, 0.0,
+            ]))
+            .color
+            .unwrap()
+            .map(|v| v as f32);
         let mut primitives = HashMap::new();
         for head in 0..64 {
             primitives.insert(
                 format!("head-{head:02}"),
                 PrimitiveState {
                     dimmer: 0.0,
-                    color: [0.0, 1.0, 0.0],
+                    color: green,
                     strobe: 0.0,
                     position: [0.0; 2],
                     speed: 1.0,

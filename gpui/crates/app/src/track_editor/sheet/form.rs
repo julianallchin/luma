@@ -356,11 +356,9 @@ fn mapping_mut(value: &mut p::Value) -> Option<&mut p::MappingSpec> {
 fn ui_gradient(gradient: &p::Gradient) -> Gradient {
     Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
         t: stop.t as f32,
-        color: Rgba {
-            r: stop.color[0] as f32,
-            g: stop.color[1] as f32,
-            b: stop.color[2] as f32,
+        color: Light {
             a: stop.alpha as f32,
+            ..Light::opaque(stop.color)
         },
     }))
 }
@@ -373,7 +371,7 @@ fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
         .iter()
         .map(|stop| p::ColorStop {
             t: f64::from(stop.t).clamp(0., 1.),
-            color: [stop.color.r, stop.color.g, stop.color.b].map(|v| f64::from(v).clamp(0., 1.)),
+            color: stop.color.channels().map(|v| v.clamp(0., 1.)),
             alpha: f64::from(stop.color.a).clamp(0., 1.),
         })
         .collect();

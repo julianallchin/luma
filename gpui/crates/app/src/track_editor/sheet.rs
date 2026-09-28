@@ -10,7 +10,7 @@ use luma_lib::models::selection::Selection;
 use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{ColorArg, ColorArgEditor, ColorArgEvent};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
-use luma_ui::arg::gradient::{Gradient, GradientStop};
+use luma_ui::arg::gradient::{Gradient, GradientStop, Light};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::select::{luma_arg_select, MenuVisibility};
 use luma_ui::arg::signal::{SignalChanged, SignalEditor};
@@ -221,8 +221,8 @@ struct AxisFields {
 //
 // The sheet's serialization edge: everything below speaks the widget kit's
 // typed values, everything above speaks the args JSON the score stores:
-// colors as 0–255 rgb with the tri-mode alpha, palettes as hex lists,
-// gradients as (color, t) stops.
+// colors as linear Rec. 2020 channels scaled to 0–255, unrounded, with the
+// tri-mode alpha, and gradients as (color, t) stops. A hex color is sRGB.
 
 fn color_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> ColorArg {
     let read = |value: &serde_json::Value, key: &str| value.get(key).and_then(|v| v.as_f64());
@@ -242,9 +242,9 @@ fn color_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> C
 fn color_to_wire(arg: ColorArg) -> serde_json::Value {
     let (rgb, alpha) = arg.encode();
     serde_json::json!({
-        "r": f64::from((rgb[0] * 255.).round()),
-        "g": f64::from((rgb[1] * 255.).round()),
-        "b": f64::from((rgb[2] * 255.).round()),
+        "r": f64::from(rgb[0]) * 255.,
+        "g": f64::from(rgb[1]) * 255.,
+        "b": f64::from(rgb[2]) * 255.,
         "a": f64::from(alpha),
     })
 }
@@ -273,29 +273,6 @@ fn selection_from_wire(value: &serde_json::Value) -> Selection {
     Selection::from_value(value).unwrap_or_else(Selection::all)
 }
 
-fn hex_to_rgba(hex: &str) -> Option<Rgba> {
-    let hex = hex.strip_prefix('#')?;
-    if hex.len() < 6 {
-        return None;
-    }
-    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
-    Some(Rgba {
-        r: f32::from(byte(0)?) / 255.,
-        g: f32::from(byte(2)?) / 255.,
-        b: f32::from(byte(4)?) / 255.,
-        a: 1.,
-    })
-}
-
-fn rgba_to_hex(color: Rgba) -> String {
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        (color.r * 255.).round() as u8,
-        (color.g * 255.).round() as u8,
-        (color.b * 255.).round() as u8
-    )
-}
-
 fn gradient_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> Gradient {
     let stops = |value: &serde_json::Value| -> Option<Vec<GradientStop>> {
         let list = value.get("stops")?.as_array()?;
@@ -306,21 +283,17 @@ fn gradient_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -
                     t: stop.get("t")?.as_f64()? as f32,
                     color: {
                         let color = stop.get("color")?;
-                        let mut color = if let Some(hex) = color.as_str() {
-                            hex_to_rgba(hex)?
-                        } else {
-                            let c = color.as_array()?;
-                            Rgba {
-                                r: c.first()?.as_f64()? as f32,
-                                g: c.get(1)?.as_f64()? as f32,
-                                b: c.get(2)?.as_f64()? as f32,
-                                a: 1.0,
-                            }
+                        let rgb = match color.as_str() {
+                            Some(hex) => luma_patterns::color_space::from_hex(hex.get(..7)?)?,
+                            None => serde_json::from_value(color.clone()).ok()?,
                         };
-                        if let Some(alpha) = stop.get("alpha").and_then(serde_json::Value::as_f64) {
-                            color.a = alpha as f32;
+                        Light {
+                            a: stop
+                                .get("alpha")
+                                .and_then(serde_json::Value::as_f64)
+                                .unwrap_or(1.) as f32,
+                            ..Light::opaque(rgb)
                         }
-                        color
                     },
                 })
             })
@@ -335,7 +308,7 @@ fn gradient_to_wire(gradient: &Gradient) -> serde_json::Value {
         "stops": gradient
             .stops()
             .iter()
-            .map(|stop| serde_json::json!({ "color": rgba_to_hex(stop.color), "t": f64::from(stop.t), "alpha": f64::from(stop.color.a) }))
+            .map(|stop| serde_json::json!({ "color": stop.color.channels(), "t": f64::from(stop.t), "alpha": f64::from(stop.color.a) }))
             .collect::<Vec<_>>(),
     })
 }

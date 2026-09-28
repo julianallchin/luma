@@ -97,7 +97,8 @@ impl Curve<Key> {
 
 /// What a `time` or `hit` source gives over progress 0–1: keyframes, or a
 /// gradient read at positions that follow a curve. The gradient blends in
-/// OKLab like every gradient; color keyframes blend in RGB.
+/// OKLab like every gradient; color keyframes blend per channel, in linear
+/// Rec. 2020.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum SourceCurve {

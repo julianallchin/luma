@@ -23,6 +23,14 @@ It has no database, playback-device state or separate scalar execution engine.
   accept animation after starting with a constant value.
 - `band_energy` reads the energy of a frequency band of the track's full mix.
   The host prepares the mix once; a missing analysis is an error.
+- Every light color is linear Rec. 2020, 0–1 per channel, with no tag:
+  stored colors, gradient stops, color keyframes, presets, the compositor
+  and `FixtureOutput`. Brightness is the peak channel. `src/color_space.rs`
+  holds the conversions: OKLab for blending, sRGB hex for people, and
+  `Gamut` for emitters. A color that a fixture's emitters or the display
+  cannot make is mapped to the nearest one they can, in OKLab, by reducing
+  chroma at constant lightness and hue. A fixture's red, green and blue are
+  assumed to have sRGB primaries.
 - Gradients interpolate perceptually in OKLab and keep stop opacity through
   serialization and native editing; absent opacity means one.
 - Output is the only terminal. It accepts independent color, dimmer, pan/tilt,
@@ -101,6 +109,11 @@ A missing or unknown input is an error. A score holds form clips only.
   forms use. A period or life of 0 beats lasts the whole clip.
 - `presets()` reads `src/presets.json`: named presets (a form and every
   input value) and named curves for `time` and `hit` sources.
+- `rec2020_upgrade::convert_clip_inputs` (`src/forms/rec2020_upgrade.rs`)
+  is one-shot: it converts a stored clip's colors from gamma sRGB, the old
+  working space, to linear Rec. 2020 for the one-time row conversion, and is
+  deleted after it runs. `examples/rec2020_presets.rs` converted
+  `src/presets.json` and the old color forms' recording with it.
 - Old ids `color.constant@1`, `color.time@1`, `color.space@1` and
   `color.chase@1` are not forms. Rows are not migrated: `upgrade`
   (`src/forms/upgrade.rs`) reads such a clip as `color@1` with the same

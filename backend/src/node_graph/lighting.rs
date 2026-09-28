@@ -47,6 +47,8 @@ pub fn wire_value(value: &p::Value) -> Value {
         p::Value::Gradient(gradient) => {
             serde_json::to_value(gradient).expect("serializable gradient")
         }
+        // The inspector's color wire: linear Rec. 2020 channels scaled to
+        // 0–255, unrounded. Not sRGB bytes.
         p::Value::Color(rgb) => {
             json!({"r": rgb[0]*255., "g": rgb[1]*255., "b": rgb[2]*255., "a": 1.})
         }
@@ -125,13 +127,7 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
                         object.remove("a");
                     } else if let Some(hex) = rgb.as_str() {
                         if hex.starts_with('#') && hex.len() == 9 {
-                            let rgba = u32::from_str_radix(&hex[1..], 16)
-                                .map_err(|_| "Invalid gradient color")?;
-                            rgb = json!([
-                                ((rgba >> 24) & 255) as f64 / 255.,
-                                ((rgba >> 16) & 255) as f64 / 255.,
-                                ((rgba >> 8) & 255) as f64 / 255.
-                            ]);
+                            rgb = json!(&hex[..7]);
                         }
                     }
                     let color = decode(ValueType::Color, &rgb)?;
@@ -173,17 +169,11 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
             value["g"].as_f64().unwrap_or(0.) / 255.,
             value["b"].as_f64().unwrap_or(0.) / 255.
         ]),
+        // Hex is sRGB, as everywhere people write it; the value is linear
+        // Rec. 2020.
         ValueType::Color if value.as_str().is_some_and(|s| s.starts_with('#')) => {
-            let hex = value.as_str().unwrap().trim_start_matches('#');
-            let n = u32::from_str_radix(hex, 16).map_err(|_| "Invalid color")?;
-            if hex.len() != 6 {
-                return Err("Color needs six hex digits".into());
-            }
-            json!([
-                ((n >> 16) & 255) as f64 / 255.,
-                ((n >> 8) & 255) as f64 / 255.,
-                (n & 255) as f64 / 255.
-            ])
+            json!(p::color_space::from_hex(value.as_str().unwrap())
+                .ok_or("Color needs six hex digits")?)
         }
         ValueType::Boolean if value.is_string() => match value.as_str() {
             Some("true") => json!(true),

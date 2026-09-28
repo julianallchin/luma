@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 
 /// One head's contribution, preserving the distinction between an unwritten
 /// capability and a capability explicitly written as zero. A pattern applies
-/// color; brightness is its peak channel, split out here as the dimmer the
-/// compositor and fixtures expect. Chromaticity stays normalized.
+/// color, linear Rec. 2020; brightness is its peak channel, split out here as
+/// the dimmer the compositor and fixtures expect. The color stays normalized
+/// to a peak of 1. A fixture or the display turns the pair into its own
+/// emitters with [`crate::color_space::Gamut::split`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureOutput {
