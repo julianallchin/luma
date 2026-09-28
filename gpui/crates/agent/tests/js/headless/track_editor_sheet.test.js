@@ -94,7 +94,7 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   expect(populated.inputs.start).toBe(undefined);
   expect(populated.inputs.end).toBe(undefined);
   expect(populated.inputs.expression).toContain("all");
-  expect(populated.selects).toContain("replace");
+  expect(populated.selects).toContain("Replace");
   expect(populated.texts).toContain(FORM);
 
   // 2. Every row the form declares is inside the sheet.

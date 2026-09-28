@@ -12,14 +12,32 @@ pub enum BlendMode {
     Lighten,
     Value,
     Subtract,
+    /// An aim clip's fan and motion turn the aim under it
+    /// ([`crate::aim::offset_aim`]). Only aim takes it
+    /// ([`crate::blend_modes`]).
+    Offset,
 }
 
 impl BlendMode {
-    /// Every mode, in the order every picker lists them. The one canonical
-    /// list — the score DSL, the track-edit hasher, and both hosts' blend
-    /// selects all read it from here rather than keeping a spelling of their
-    /// own.
-    pub const ALL: [Self; 9] = [
+    /// Every mode. The one canonical list — the score DSL, the track-edit
+    /// hasher, and both hosts' blend selects all read it (or a form's share
+    /// of it, [`crate::blend_modes`]) from here rather than keeping a
+    /// spelling of their own.
+    pub const ALL: [Self; 10] = [
+        Self::Replace,
+        Self::Add,
+        Self::Multiply,
+        Self::Screen,
+        Self::Max,
+        Self::Min,
+        Self::Lighten,
+        Self::Value,
+        Self::Subtract,
+        Self::Offset,
+    ];
+
+    /// The modes that blend light, in the order a picker lists them.
+    pub const LIGHT: [Self; 9] = [
         Self::Replace,
         Self::Add,
         Self::Multiply,
@@ -46,6 +64,24 @@ impl BlendMode {
             Self::Lighten => "lighten",
             Self::Value => "value",
             Self::Subtract => "subtract",
+            Self::Offset => "offset",
+        }
+    }
+
+    /// The mode's name in a picker, in sentence case.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Replace => "Replace",
+            Self::Add => "Add",
+            Self::Multiply => "Multiply",
+            Self::Screen => "Screen",
+            Self::Max => "Max",
+            Self::Min => "Min",
+            Self::Lighten => "Lighten",
+            Self::Value => "Value",
+            Self::Subtract => "Subtract",
+            Self::Offset => "Offset",
         }
     }
 
@@ -61,7 +97,8 @@ impl BlendMode {
 #[inline]
 pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
     match mode {
-        BlendMode::Replace => top,
+        // Offset turns an aim and never reaches light; it passes the top.
+        BlendMode::Replace | BlendMode::Offset => top,
         BlendMode::Add => (base + top).min(1.0),
         BlendMode::Multiply => base * top,
         BlendMode::Screen => 1.0 - (1.0 - base) * (1.0 - top),

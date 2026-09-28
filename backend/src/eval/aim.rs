@@ -266,7 +266,7 @@ impl Lit {
                 let times: Vec<f32> = (first..count.min(first + LIT_CHUNK))
                     .map(|i| start + i as f32 * LIT_STEP)
                     .collect();
-                let frames = super::scene::composite(layers, &times, scratch)?;
+                let frames = super::scene::composite(layers, &times, scratch, Some(rig))?;
                 for (t, frame) in times.iter().zip(&frames) {
                     for (id, was, runs) in &mut heads {
                         let now = frame.primitives.get(*id).is_some_and(lit);
@@ -421,7 +421,7 @@ impl Aiming {
             let mut sources: Vec<f32> = moves.iter().map(|m| m.2).collect();
             sources.sort_by(f32::total_cmp);
             sources.dedup();
-            let aims = super::scene::composite(layers, &sources, scratch)?;
+            let aims = super::scene::composite(layers, &sources, scratch, Some(&self.rig))?;
             for (k, id, source) in moves {
                 let at = sources
                     .binary_search_by(|t| t.total_cmp(&source))
@@ -765,6 +765,43 @@ mod tests {
         let state = aim_at(&scene, 3.0);
         assert!(state.dimmer > 0.0);
         assert!(along(&state, FIRST), "{state:?}");
+    }
+
+    #[test]
+    fn an_offset_over_no_aim_starts_from_home() {
+        // A head on the floor: home is straight up, not the fallback down.
+        let mut rig = Rig::default();
+        rig.insert("fx:0".into(), head(&pose([PI, 0.0, 0.0]), &mover(540, 270)));
+        let home = rig.head("fx:0").unwrap().home();
+        let circle = |alpha: f64, mode, direction| {
+            let mut clip = preset("aim@1", "Circle").clip(0.0, 4.0);
+            clip.inputs
+                .insert("alpha".into(), p::Value::Proportion(alpha));
+            clip.inputs
+                .insert("direction".into(), p::Value::Vector(direction));
+            let mut layer = layer(clip, 0);
+            layer.blend_mode = mode;
+            layer
+        };
+        let offset = |alpha| {
+            let scene = Scene::new(vec![circle(alpha, p::BlendMode::Offset, FIRST)])
+                .with_rig(rig.clone())
+                .unwrap();
+            aim_at(&scene, 1.3).aim.expect("an aim")
+        };
+        let from_home = Scene::new(vec![circle(1.0, p::BlendMode::Replace, home)]);
+        let expected = aim_at(&from_home, 1.3).aim.unwrap();
+        let full = offset(1.0);
+        assert_eq!(full.weight, 1.0);
+        assert!(
+            degrees_between(
+                full.direction.map(f64::from),
+                expected.direction.map(f64::from)
+            ) < 1e-3,
+            "{full:?} != {expected:?}"
+        );
+        // Over no aim, alpha is the weight, as for a Replace clip.
+        assert_eq!(offset(0.5).weight, 0.5);
     }
 
     #[test]

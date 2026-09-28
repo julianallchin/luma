@@ -85,10 +85,14 @@ impl Score {
             .ok_or_else(|| Error(format!("clip {id}: unknown form {}", clip.graph)))?;
         crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
             .map_err(|error| Error(format!("clip {id}: {error}")))?;
-        // Aim always blends toward the aim under it by alpha.
-        if crate::forms::replace_only(&clip.graph) && clip.blend_mode != crate::BlendMode::Replace {
+        let modes = crate::forms::blend_modes(&clip.graph);
+        if !modes.contains(&clip.blend_mode) {
+            let names: Vec<&str> = modes.iter().map(|mode| mode.name()).collect();
             return Err(Error(format!(
-                "clip {id}: an aim clip blends with replace only"
+                "clip {id}: {} does not blend with {}; use {}",
+                clip.graph,
+                clip.blend_mode.name(),
+                names.join(", ")
             )));
         }
         // Check fixed timing/value relationships without binding venue geometry.

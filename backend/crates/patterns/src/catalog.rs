@@ -217,6 +217,7 @@ pub fn standard_library() -> Library {
                 ("core/aim_fan", Primitive::AimFan),
                 ("core/aim_motion", Primitive::AimMotion),
                 ("core/aim_offset", Primitive::AimOffset),
+                ("core/aim_turn", Primitive::AimTurn),
                 ("envelope", Primitive::Envelope),
                 ("output", Primitive::Output),
                 ("resolve_mapping", Primitive::ResolveMapping),

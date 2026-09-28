@@ -72,6 +72,7 @@ const CATEGORIES: &[Category] = &[
             ("core/aim_fan", "Spreads the aims of the heads across the axis by Fan degrees."),
             ("core/aim_motion", "Moves each aim along a shape. Spread sets the phase difference across the axis. Size sets the size in degrees."),
             ("core/aim_offset", "Turns each aim left/right and up/down by a number of degrees."),
+            ("core/aim_turn", "The fan's lean and the motion's left/right and up/down per head, with Alpha, for an Offset clip. The compositor turns the aim under the clip by it."),
         ],
     },
     Category {
@@ -96,7 +97,7 @@ const CATEGORIES: &[Category] = &[
             ("color.sparkle@1", "Each event lights a random share of the heads."),
             ("color.noise@1", "Soft brightness that wanders across space and time."),
             ("strobe.constant@1", "Fixture shutter strobe at Rate × Alpha."),
-            ("aim@1", "Points moving heads: a base aim, a fan across the axis and a motion shape."),
+            ("aim@1", "Points moving heads: a base aim, a fan across the axis and a motion shape. In Offset blend, the fan and motion turn the aim under the clip instead."),
         ],
     },
     Category {

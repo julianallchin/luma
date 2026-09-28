@@ -197,6 +197,7 @@ pub enum Primitive {
     AimFan,
     AimMotion,
     AimOffset,
+    AimTurn,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {

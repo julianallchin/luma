@@ -509,7 +509,8 @@ class Edit:
 
 
 # Discovery and validation use the same mode vocabulary.
-Edit.add_clip.__doc__ += "\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
+Edit.add_clip.__doc__ += ("\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
+                          " An aim@1 clip takes replace or offset; offset is for aim@1 only.")
 
 
 class Window(_ImmutableSnapshot):

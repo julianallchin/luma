@@ -131,9 +131,20 @@ strobe clip above it.
 ## aim@1
 
 Where the heads of a clip point: a rest aim (or a point every head points
-at), an optional fan across the axis, and optional motion around it. Always
-blends `replace_only`: an aim clip blends toward the aim under it by `alpha`,
-so stack aim clips to move a subset of heads without resetting the rest.
+at), an optional fan across the axis, and optional motion around it. It
+takes two blend modes:
+
+- `replace` (default): the clip blends toward its own aim by `alpha`, so
+  stack aim clips to move a subset of heads without resetting the rest.
+- `offset`: `base`, `direction` and `point` are not used. The fan and motion
+  turn the aim under the clip, per head, per frame; `alpha` scales their
+  degrees. Over no aim it starts from the head's home. Offset clips stack:
+  a `replace` Position, an `offset` Circle above it and an `offset` Fan above
+  that give a fanned circle around the position. One movement clip in
+  `offset` runs over many positions.
+
+No other blend mode is valid for aim, and no color or strobe clip takes
+`offset`.
 
 - `base` (choice: `direction`, `point`) — whether the rest aim is one
   direction or a point every head points at.
@@ -152,7 +163,8 @@ so stack aim clips to move a subset of heads without resetting the rest.
   cycle, 0 = all together; T).
 - `speed` (beats for `noise` motion to wander one step; T), used when
   `motion` is `noise`.
-- `alpha` (blend toward the aim under this clip; T H N A).
+- `alpha` (in `replace`, the blend toward this clip's aim; in `offset`, the
+  share of its fan and motion degrees; T H N A).
 
 Presets: **Position** (rest direction, no fan or motion), **Fan** (40°
 static fan), **Converge** (`base` point, heads aim at one point), **Bloom**

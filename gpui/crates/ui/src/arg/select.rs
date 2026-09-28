@@ -1,6 +1,6 @@
 //! The strip's value picker: a `<Selector>` trigger plus its open menu, wired.
 //!
-//! The blend-mode cell is this widget verbatim. The nine blend names are
+//! The blend-mode cell is this widget verbatim. The blend names are
 //! deliberately **not** written down here: the canonical list is
 //! `luma_lib::models::node_graph::BlendMode` (and the score DSL's
 //! `blend_mode_name` beside it), and this crate deliberately does not depend

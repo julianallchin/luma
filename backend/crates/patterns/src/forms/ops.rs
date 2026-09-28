@@ -1,6 +1,7 @@
 //! Primitives that forms are built from: an odometer clock, event life, a
 //! keyframe curve, a random share of heads, a test for a gliding path and
-//! the aim steps (base, fan, motion, offset). None of them keeps state.
+//! the aim steps (base, fan, motion, offset, and the turn an Offset clip
+//! gives the aim under it). None of them keeps state.
 use super::pace::Pace;
 use crate::runtime::{Batch, EvaluatedValue};
 use crate::*;
@@ -355,6 +356,59 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             ],
             vec![("direction", vector())],
         ),
+        Primitive::AimTurn => (
+            "Aim turn",
+            vec![
+                (
+                    "fan",
+                    port(
+                        "Fan",
+                        "Degrees",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "yaw",
+                    port(
+                        "Left/right",
+                        "Degrees toward the right of the aim",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "pitch",
+                    port(
+                        "Up/down",
+                        "Degrees toward the up of the aim",
+                        signal(Unit::Number),
+                        Rate::Frame,
+                        Some(Value::Number(0.0)),
+                    ),
+                ),
+                (
+                    "alpha",
+                    port(
+                        "Alpha",
+                        "The share of every angle that applies",
+                        signal(Unit::Proportion),
+                        Rate::Frame,
+                        Some(Value::Proportion(1.0)),
+                    ),
+                ),
+                ("axis", axis_port()),
+            ],
+            vec![(
+                "turn",
+                ValueType::Signal(SignalType::new(
+                    Unit::Number,
+                    Channels::components(crate::aim::TURN_CHANNELS).expect("nine channels"),
+                )),
+            )],
+        ),
         _ => return None,
     };
     Some(Definition {
@@ -514,12 +568,14 @@ pub(crate) fn run(
                 )?,
             )?]))
         }
-        Primitive::AimBase | Primitive::AimFan | Primitive::AimMotion | Primitive::AimOffset => {
-            aim_step(op, inputs, batch)?
-                .into_iter()
-                .map(|(key, value)| numeric(key, value))
-                .collect()
-        }
+        Primitive::AimBase
+        | Primitive::AimFan
+        | Primitive::AimMotion
+        | Primitive::AimOffset
+        | Primitive::AimTurn => aim_step(op, inputs, batch)?
+            .into_iter()
+            .map(|(key, value)| numeric(key, value))
+            .collect(),
         _ => unreachable!("form primitive"),
     }
 }
@@ -626,21 +682,11 @@ fn aim_step(
             )]
         }
         Primitive::AimFan => {
-            let leans = axis(inputs).leans(batch.frame.cells, batch.frame.seed)?;
-            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
+            let leans = fan_leans(axis(inputs), batch.frame.cells, batch.frame.seed)?;
             vec![(
                 "direction",
                 directions(&|n, t| {
-                    let (share, toward) = leans
-                        .get(fixtures[n].as_str())
-                        .copied()
-                        .unwrap_or((0.0, [0.0; 3]));
-                    // A head on the low side of the mirror leans the mirror
-                    // image of the way it would.
-                    let toward = match mirrored.get(fixtures[n].as_str()) {
-                        Some(normal) => aim::reflect(toward, *normal),
-                        None => toward,
-                    };
+                    let (share, toward) = leans(&fixtures[n]);
                     let fan = get("fan", row("fan", n), t);
                     Ok(aim::lean(direction(n, t), toward, fan * share))
                 })?,
@@ -651,21 +697,43 @@ fn aim_step(
             vec![(
                 "direction",
                 directions(&|n, t| {
-                    let (yaw, pitch) = (
+                    Ok(aim::mirrored_offset(
+                        direction(n, t),
                         get("yaw", row("yaw", n), t),
                         get("pitch", row("pitch", n), t),
-                    );
-                    Ok(match mirrored.get(fixtures[n].as_str()) {
-                        // A head on the low side of the mirror takes the
-                        // mirror image of the offset: reflect its aim, offset
-                        // it there, reflect back. The aim itself is kept.
-                        Some(normal) => aim::reflect(
-                            aim::offset(aim::reflect(direction(n, t), *normal), yaw, pitch),
-                            *normal,
-                        ),
-                        None => aim::offset(direction(n, t), yaw, pitch),
-                    })
+                        mirrored.get(fixtures[n].as_str()).copied(),
+                    ))
                 })?,
+            )]
+        }
+        Primitive::AimTurn => {
+            let leans = fan_leans(axis(inputs), batch.frame.cells, batch.frame.seed)?;
+            let mirrored = axis(inputs).mirrored(batch.frame.cells)?;
+            let mut values = Array3::zeros((fixtures.len(), times, aim::TURN_CHANNELS));
+            for (n, id) in fixtures.iter().enumerate() {
+                let (share, toward) = leans(id);
+                for t in 0..times {
+                    let fan = get("fan", row("fan", n), t) * share;
+                    let turn = aim::Turn {
+                        lean: toward.map(|v| v * fan),
+                        yaw: get("yaw", row("yaw", n), t),
+                        pitch: get("pitch", row("pitch", n), t),
+                        mirror: mirrored.get(id.as_str()).copied(),
+                        alpha: get("alpha", row("alpha", n), t),
+                    };
+                    for (ch, v) in turn.channels().into_iter().enumerate() {
+                        values[[n, t, ch]] = v;
+                    }
+                }
+            }
+            vec![(
+                "turn",
+                Signal::new(
+                    values,
+                    Unit::Number,
+                    Channels::components(aim::TURN_CHANNELS)?,
+                    Some(fixtures.to_vec().into()),
+                )?,
             )]
         }
         Primitive::AimMotion => {
@@ -733,6 +801,24 @@ fn aim_step(
             vec![("yaw", degrees(yaw)?), ("pitch", degrees(pitch)?)]
         }
         _ => unreachable!("aim step"),
+    })
+}
+
+/// Each head's share of the fan and the way it leans. A head on the low
+/// side of the mirror leans the mirror image of the way it would.
+fn fan_leans(
+    axis: &MappingSpec,
+    cells: &[Cell],
+    seed: u64,
+) -> Result<impl Fn(&str) -> (f64, [f64; 3])> {
+    let leans = axis.leans(cells, seed)?;
+    let mirrored = axis.mirrored(cells)?;
+    Ok(move |id: &str| {
+        let (share, toward) = leans.get(id).copied().unwrap_or((0.0, [0.0; 3]));
+        match mirrored.get(id) {
+            Some(normal) => (share, crate::aim::reflect(toward, *normal)),
+            None => (share, toward),
+        }
     })
 }
 

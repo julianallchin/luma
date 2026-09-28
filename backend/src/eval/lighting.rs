@@ -75,6 +75,28 @@ impl Program {
             .map_err(|error| error.to_string())
     }
 
+    /// Each head's [`p::Turn`] at each of `times`, one map per time, for an
+    /// aim clip that blends with Offset.
+    pub(crate) fn turns(
+        &self,
+        times: &[f32],
+        scratch: &mut Arena,
+    ) -> Result<Vec<BTreeMap<String, p::Turn>>, String> {
+        if times.is_empty() {
+            return Ok(vec![]);
+        }
+        scratch.values = self.sample(times)?;
+        let value = scratch
+            .values
+            .get(p::aim::TURN_OUTPUT)
+            .ok_or("an Offset clip needs an aim graph")?;
+        let turns = p::Turn::read(value, &self.ids, times.len()).map_err(|e| e.to_string())?;
+        Ok(turns
+            .into_iter()
+            .map(|row| self.ids.iter().cloned().zip(row).collect())
+            .collect())
+    }
+
     pub(crate) fn render(
         &self,
         times: &[f32],

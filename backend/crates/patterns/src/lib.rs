@@ -28,7 +28,7 @@ mod tensor;
 mod value;
 mod value_noise;
 
-pub use aim::{blend_aim, Aim};
+pub use aim::{blend_aim, offset_aim, Aim, Turn};
 pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
 pub use clock::*;
@@ -38,7 +38,7 @@ pub use envelope::Envelope;
 pub use features::*;
 pub use field_ops::FieldMath;
 pub use forms::{
-    axis_presets, input_order, is_form, palette_steps, path_presets, replace_only, shape_presets,
+    axis_presets, blend_modes, input_order, is_form, palette_steps, path_presets, shape_presets,
     steps_path, FORMS, MAX_WIDTH,
 };
 pub use graph::*;
