@@ -146,7 +146,10 @@ pub fn convert(kind: &str, value: &Json) -> Result<Converted, String> {
             })
             .collect::<Vec<_>>()
     });
-    let new: Value = serde_json::from_value(json!({"type": kind, "value": value}))
+    // Historical Hit curves have the same points as Time; the source migration
+    // separately transfers their clocks.
+    let curve_kind = if kind == "hit" { "time" } else { kind };
+    let new: Value = serde_json::from_value(json!({"type": curve_kind, "value": value}))
         .map_err(|e| format!("the converted curve does not read: {e}"))?;
     new.validate()
         .map_err(|e| format!("the converted curve is not valid: {e}"))?;
@@ -276,8 +279,10 @@ fn compare(old: &OldCurve, new: &Value) -> f64 {
     let sample = |x: f64| -> Vec<f64> {
         match new {
             Value::Envelope(e) => vec![e.sample(x)],
-            Value::Time(luma_patterns::SourceCurve::Keys(k))
-            | Value::Hit(luma_patterns::SourceCurve::Keys(k)) => {
+            Value::Time(luma_patterns::TimeSource {
+                curve: luma_patterns::SourceCurve::Keys(k),
+                ..
+            }) => {
                 let v = k.sample(x);
                 if k.is_color() {
                     v.to_vec()

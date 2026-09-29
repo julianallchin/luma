@@ -51,6 +51,7 @@ pub(crate) fn run(
     let series = |values: Vec<f64>, unit| Signal::series(&values, unit);
     let time = batch.clock;
     match op {
+        Primitive::Source(op) => crate::forms::source_ops::run(op, inputs, batch),
         Primitive::ClipRange => {
             crate::clip_range::sample_count(fixed("samples")?)?;
             let value = signal("value");

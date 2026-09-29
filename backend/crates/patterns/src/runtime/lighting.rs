@@ -14,7 +14,7 @@ pub struct LightingSignal {
     writes: [bool; 6],
 }
 impl LightingSignal {
-    pub(super) fn terminal(
+    pub(crate) fn terminal(
         inputs: &BTreeMap<String, EvaluatedValue>,
         fixtures: &[String],
     ) -> Result<Self> {

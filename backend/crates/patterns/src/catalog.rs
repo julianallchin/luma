@@ -22,6 +22,9 @@ fn field(name: &str, description: &str, value: Value, rate: Rate) -> Input {
     input(name, description, value.value_type(), rate, Some(value))
 }
 fn primitive_definition(p: Primitive) -> Definition {
+    if let Primitive::Source(op) = p {
+        return op.definition();
+    }
     if let Some(definition) = crate::forms::ops::definition(p) {
         return definition;
     }

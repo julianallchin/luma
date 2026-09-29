@@ -1,270 +1,35 @@
 {
   "presets": [
-    {"name": "Wash", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 0.0}
-    }},
-    {"name": "Pulse", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "hit", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 1.0}
-    }},
-    {"name": "Color fade", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.693260504, 0.253005368, 0.0339941]}, {"t": 1.0, "color": [0.142097977, 0.287224434, 0.921999246]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
-      "every": {"type": "beats", "value": 0.0}
-    }},
-    {"name": "Rainbow", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "hit", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.627403896, 0.069097289, 0.016391439]}, {"t": 0.16666666666666666, "color": [0.956686934, 0.988637684, 0.104404747]}, {"t": 0.3333333333333333, "color": [0.329283038, 0.919540395, 0.088013308]}, {"t": 0.5, "color": [0.372596104, 0.930902711, 0.983608561]}, {"t": 0.6666666666666666, "color": [0.043313066, 0.011362316, 0.895595253]}, {"t": 0.8333333333333334, "color": [0.670716962, 0.080459605, 0.911986692]}, {"t": 1.0, "color": [0.627403896, 0.069097289, 0.016391439]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}}},
-      "every": {"type": "beats", "value": 4.0}
-    }},
-    {"name": "Gradient", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "gradient": {"stops": [{"t": 0.0, "color": [0.649060429, 0.074778447, 0.464189065]}, {"t": 1.0, "color": [0.240882889, 0.563086553, 0.948403238]}]}}},
-      "every": {"type": "beats", "value": 0.0}
-    }},
-    {"name": "Chase", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.2}, "width_relative": true, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0}
-    }},
-    {"name": "Wave", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 1.0}, "width_relative": false, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0}
-    }},
-    {"name": "Ripple", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.4}, "width_relative": true, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0}
-    }},
-    {"name": "Spin", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "angle"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0], [0.95, 1.0], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.25}, "width_relative": true, "boundary": "wrap"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0}
-    }},
-    {"name": "Bounce", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "move": {"path": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]}, "travel": {"type": "beats", "value": 4.0}, "width": {"type": "number", "value": 0.2}, "width_relative": false, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 4.0}
-    }},
-    {"name": "Alternating sides", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.25, "hold"], [0.5, 0.75, "hold"], [1.0, 0.75]]}, "travel": {"type": "beats", "value": 2.0}, "width": {"type": "number", "value": 0.5}, "width_relative": false, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 2.0}
-    }},
-    {"name": "Stepped chase", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.125, "hold"], [0.25, 0.375, "hold"], [0.5, 0.625, "hold"], [0.75, 0.875, "hold"], [1.0, 0.875]]}, "travel": {"type": "beats", "value": 4.0}, "width": {"type": "number", "value": 0.25}, "width_relative": false, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 4.0}
-    }},
-    {"name": "Grow", "form": "color@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}, "span": "fixture"}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "move": {"path": {"points": [[0.0, 0.0], [1.0, 0.5]]}, "travel": {"type": "beats", "value": 0.0}, "width": {"type": "number", "value": 1.25}, "width_relative": false, "boundary": "clip"}}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "every": {"type": "beats", "value": 0.0}
-    }},
-    {"name": "Dissolve", "form": "color.sparkle@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "coverage": {"type": "hit", "value": {"points": [[0, 1], [1, 0]]}},
-      "duration": {"type": "beats", "value": 4.0},
-      "every": {"type": "beats", "value": 4.0},
-      "grain": {"type": "number", "value": 1.0}
-    }},
-    {"name": "Build", "form": "color.sparkle@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "coverage": {"type": "hit", "value": {"points": [[0, 0], [1, 1]]}},
-      "duration": {"type": "beats", "value": 4.0},
-      "every": {"type": "beats", "value": 4.0},
-      "grain": {"type": "number", "value": 1.0}
-    }},
-    {"name": "Random heads", "form": "color.sparkle@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "coverage": {"type": "proportion", "value": 0.5},
-      "duration": {"type": "beats", "value": 1.0},
-      "every": {"type": "beats", "value": 1.0},
-      "grain": {"type": "number", "value": 1.0}
-    }},
-    {"name": "Shimmer", "form": "color.sparkle@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "brightness": {"type": "hit", "value": {"points": [[0, 0], [0.15, 1], [1, 0]]}},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "coverage": {"type": "proportion", "value": 0.3},
-      "duration": {"type": "beats", "value": 0.5},
-      "every": {"type": "beats", "value": 0.125},
-      "grain": {"type": "number", "value": 1.0}
-    }},
-    {"name": "Drift", "form": "color.noise@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [1.0, 1.0, 1.0]},
-      "contrast": {"type": "proportion", "value": 0.3},
-      "scale": {"type": "proportion", "value": 0.5},
-      "speed": {"type": "beats", "value": 8.0}
-    }},
-    {"name": "Atmosphere", "form": "color.noise@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 0.7},
-      "color": {"type": "color", "value": [0.4440101, 0.541293584, 0.949739576]},
-      "contrast": {"type": "proportion", "value": 0.1},
-      "scale": {"type": "proportion", "value": 1.0},
-      "speed": {"type": "beats", "value": 16.0}
-    }},
-    {"name": "Aurora", "form": "color.noise@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "color": {"type": "color", "value": [0.478586004, 0.939609127, 0.583868985]},
-      "contrast": {"type": "proportion", "value": 0.8},
-      "scale": {"type": "proportion", "value": 0.3},
-      "speed": {"type": "beats", "value": 4.0}
-    }},
-    {"name": "Strobe", "form": "strobe.constant@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "rate": {"type": "proportion", "value": 0.9}
-    }},
-    {"name": "Position", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "none"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 0.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Fan", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 40.0},
-      "motion": {"type": "choice", "value": "none"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 0.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Converge", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "point"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "none"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 0.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Bloom", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "plane": {"kind": "auto"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.0, -1.0]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "time", "value": {"points": [[0, 0], [1, 40]]}},
-      "motion": {"type": "choice", "value": "none"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 0.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Sweep", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 8.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "shape"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 45.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Wave", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "shape"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_up_down"},
-      "size": {"type": "number", "value": 25.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 216.0}
-    }},
-    {"name": "Circle", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.643, -0.766]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "shape"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "circle"},
-      "size": {"type": "number", "value": 18.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Figure-8", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "shape"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "figure_8"},
-      "size": {"type": "number", "value": 25.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }},
-    {"name": "Ballyhoo", "form": "aim@1", "inputs": {
-      "alpha": {"type": "proportion", "value": 1.0},
-      "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}},
-      "base": {"type": "choice", "value": "direction"},
-      "direction": {"type": "vector", "value": [0.0, 0.819, -0.574]},
-      "every": {"type": "beats", "value": 4.0},
-      "fan": {"type": "number", "value": 0.0},
-      "motion": {"type": "choice", "value": "noise"},
-      "point": {"type": "vector", "value": [0.0, 0.0, 0.0]},
-      "shape": {"type": "choice", "value": "swing_left_right"},
-      "size": {"type": "number", "value": 40.0},
-      "speed": {"type": "beats", "value": 4.0},
-      "spread": {"type": "number", "value": 0.0}
-    }}
+    {"name": "Wash", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "proportion", "value": 1.0}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Pulse", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "time", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]], "events": {"every": {"type": "beats", "value": 1.0}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Color fade", "form": "color@1", "inputs": {"color": {"type": "time", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.693260504, 0.253005368, 0.0339941]}, {"t": 1.0, "color": [0.142097977, 0.287224434, 0.921999246]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "events": {"every": {"type": "beats", "value": 0.0}}}}, "brightness": {"type": "proportion", "value": 1.0}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Rainbow", "form": "color@1", "inputs": {"color": {"type": "time", "value": {"gradient": {"stops": [{"t": 0.0, "color": [0.627403896, 0.069097289, 0.016391439]}, {"t": 0.16666666666666666, "color": [0.956686934, 0.988637684, 0.104404747]}, {"t": 0.3333333333333333, "color": [0.329283038, 0.919540395, 0.088013308]}, {"t": 0.5, "color": [0.372596104, 0.930902711, 0.983608561]}, {"t": 0.6666666666666666, "color": [0.043313066, 0.011362316, 0.895595253]}, {"t": 0.8333333333333334, "color": [0.670716962, 0.080459605, 0.911986692]}, {"t": 1.0, "color": [0.627403896, 0.069097289, 0.016391439]}]}, "curve": {"points": [[0.0, 0.0], [1.0, 1.0]]}, "events": {"every": {"type": "beats", "value": 4.0}}}}, "brightness": {"type": "proportion", "value": 1.0}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Gradient", "form": "color@1", "inputs": {"color": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "gradient": {"stops": [{"t": 0.0, "color": [0.649060429, 0.074778447, 0.464189065]}, {"t": 1.0, "color": [0.240882889, 0.563086553, 0.948403238]}]}}}, "brightness": {"type": "proportion", "value": 1.0}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Chase", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "width": {"type": "number", "value": 0.2}, "width_relative": true, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [1.0, 1.0]], "events": {"every": {"type": "beats", "value": 2.0}, "life": {"type": "beats", "value": 2.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Wave", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "width": {"type": "number", "value": 1.0}, "width_relative": false, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [1.0, 1.0]], "events": {"every": {"type": "beats", "value": 2.0}, "life": {"type": "beats", "value": 2.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Ripple", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "width": {"type": "number", "value": 0.4}, "width_relative": true, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [1.0, 1.0]], "events": {"every": {"type": "beats", "value": 2.0}, "life": {"type": "beats", "value": 2.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Spin", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "angle"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}}, "curve": {"points": [[0.0, 0.0], [0.95, 1.0], [1.0, 0.0]]}, "width": {"type": "number", "value": 0.25}, "width_relative": true, "boundary": "wrap", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [1.0, 1.0]], "events": {"every": {"type": "beats", "value": 2.0}, "life": {"type": "beats", "value": 2.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Bounce", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 0.0, [0.4, 0, 0.6, 1]], [0.5, 1.0, [0.4, 0, 0.6, 1]], [1.0, 0.0]]}, "width": {"type": "number", "value": 0.2}, "width_relative": false, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]], "events": {"every": {"type": "beats", "value": 4.0}, "life": {"type": "beats", "value": 4.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Alternating sides", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "width": {"type": "number", "value": 0.5}, "width_relative": false, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.25, "hold"], [0.5, 0.75, "hold"], [1.0, 0.75]], "events": {"every": {"type": "beats", "value": 2.0}, "life": {"type": "beats", "value": 2.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Stepped chase", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "u"}, "per_group": false, "reverse": false}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "width": {"type": "number", "value": 0.25}, "width_relative": false, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.125, "hold"], [0.25, 0.375, "hold"], [0.5, 0.625, "hold"], [0.75, 0.875, "hold"], [1.0, 0.875]], "events": {"every": {"type": "beats", "value": 4.0}, "life": {"type": "beats", "value": 4.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Grow", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "per_group": false, "reverse": false, "plane": {"kind": "auto"}, "span": "fixture"}, "curve": {"points": [[0.0, 1.0], [1.0, 1.0]]}, "width": {"type": "number", "value": 1.25}, "width_relative": false, "boundary": "clip", "offset": {"type": "time", "value": {"points": [[0.0, 0.0], [1.0, 0.5]], "events": {"every": {"type": "beats", "value": 0.0}, "life": {"type": "beats", "value": 0.0}}}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Dissolve", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "random", "value": {"events": {"every": {"type": "beats", "value": 4.0}, "life": {"type": "beats", "value": 4.0}}, "grain": "head", "coverage": {"type": "time", "value": {"points": [[0, 1], [1, 0]]}}, "level": {"type": "proportion", "value": 1.0}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Build", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "random", "value": {"events": {"every": {"type": "beats", "value": 4.0}, "life": {"type": "beats", "value": 4.0}}, "grain": "head", "coverage": {"type": "time", "value": {"points": [[0, 0], [1, 1]]}}, "level": {"type": "proportion", "value": 1.0}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Random heads", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "random", "value": {"events": {"every": {"type": "beats", "value": 1.0}, "life": {"type": "beats", "value": 1.0}}, "grain": "head", "coverage": {"type": "proportion", "value": 0.5}, "level": {"type": "proportion", "value": 1.0}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Shimmer", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "brightness": {"type": "random", "value": {"events": {"every": {"type": "beats", "value": 0.125}, "life": {"type": "beats", "value": 0.5}}, "grain": "head", "coverage": {"type": "proportion", "value": 0.3}, "level": {"type": "time", "value": {"points": [[0, 0], [0.15, 1], [1, 0]]}}}}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Drift", "form": "color@1", "inputs": {"color": {"type": "color", "value": [1.0, 1.0, 1.0]}, "fade": {"type": "proportion", "value": 1.0}, "brightness": {"type": "noise", "value": {"speed": {"type": "beats", "value": 8.0}, "scale": {"type": "proportion", "value": 0.5}, "contrast": {"type": "proportion", "value": 0.3}, "range": [{"type": "number", "value": 0}, {"type": "number", "value": 1}]}}}},
+    {"name": "Atmosphere", "form": "color@1", "inputs": {"color": {"type": "color", "value": [0.4440101, 0.541293584, 0.949739576]}, "fade": {"type": "proportion", "value": 0.7}, "brightness": {"type": "noise", "value": {"speed": {"type": "beats", "value": 16.0}, "scale": {"type": "proportion", "value": 1.0}, "contrast": {"type": "proportion", "value": 0.1}, "range": [{"type": "number", "value": 0}, {"type": "number", "value": 1}]}}}},
+    {"name": "Aurora", "form": "color@1", "inputs": {"color": {"type": "color", "value": [0.478586004, 0.939609127, 0.583868985]}, "fade": {"type": "proportion", "value": 1.0}, "brightness": {"type": "noise", "value": {"speed": {"type": "beats", "value": 4.0}, "scale": {"type": "proportion", "value": 0.3}, "contrast": {"type": "proportion", "value": 0.8}, "range": [{"type": "number", "value": 0}, {"type": "number", "value": 1}]}}}},
+    {"name": "Strobe", "form": "strobe.constant@1", "inputs": {"rate": {"type": "proportion", "value": 0.9}, "fade": {"type": "proportion", "value": 1.0}}},
+    {"name": "Position", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "number", "value": 0}, "vertical": {"type": "number", "value": 0}}},
+    {"name": "Fan", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "space", "value": {"axis": {"source": {"kind": "order"}, "per_group": false, "reverse": false}, "curve": {"points": [[0, 0], [1, 1]]}, "gain": {"type": "number", "value": 40.0}}}, "horizontal": {"type": "number", "value": 0}, "vertical": {"type": "number", "value": 0}}},
+    {"name": "Converge", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "point"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "number", "value": 0}, "vertical": {"type": "number", "value": 0}}},
+    {"name": "Bloom", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.0, -1.0]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "radial"}, "plane": {"kind": "auto"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "space", "value": {"axis": {"source": {"kind": "radial"}, "plane": {"kind": "auto"}, "per_group": false, "reverse": false}, "curve": {"points": [[0, 0], [1, 1]]}, "gain": {"type": "time", "value": {"points": [[0, 0], [1, 40]], "events": {"every": {"type": "number", "value": 0}}}}}}, "horizontal": {"type": "number", "value": 0}, "vertical": {"type": "number", "value": 0}}},
+    {"name": "Sweep", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 8.0}}, "points": [[0.0, 0, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0, "sine-out"], [0.75, -1, "sine-in"], [1.0, 0]], "gain": {"type": "number", "value": 45.0}, "phase": {"type": "number", "value": 0}}}, "vertical": {"type": "number", "value": 0}}},
+    {"name": "Wave", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "number", "value": 0}, "vertical": {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 4.0}}, "points": [[0.0, 0, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0, "sine-out"], [0.75, -1, "sine-in"], [1.0, 0]], "gain": {"type": "number", "value": 25.0}, "phase": {"type": "space", "value": {"axis": {"source": {"kind": "order"}, "per_group": false, "reverse": false}, "curve": {"points": [[0, 0], [1, 1]]}, "gain": {"type": "number", "value": -0.6}}}}}}},
+    {"name": "Circle", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.643, -0.766]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 4.0}}, "points": [[0.0, 1, "sine-in"], [0.25, 0, "sine-out"], [0.5, -1, "sine-in"], [0.75, 0, "sine-out"], [1.0, 1]], "gain": {"type": "number", "value": 18.0}, "phase": {"type": "number", "value": 0}}}, "vertical": {"type": "time", "value": {"events": {"same_as": "horizontal"}, "points": [[0.0, 0, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0, "sine-out"], [0.75, -1, "sine-in"], [1.0, 0]], "gain": {"type": "number", "value": 18.0}, "phase": {"type": "number", "value": 0}}}}},
+    {"name": "Figure-8", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.766, -0.643]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 4.0}}, "points": [[0.0, 0, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0, "sine-out"], [0.75, -1, "sine-in"], [1.0, 0]], "gain": {"type": "number", "value": 25.0}, "phase": {"type": "number", "value": 0}}}, "vertical": {"type": "time", "value": {"events": {"same_as": "horizontal"}, "points": [[0.0, 0, "sine-out"], [0.125, 1, "sine-in"], [0.25, 0, "sine-out"], [0.375, -1, "sine-in"], [0.5, 0, "sine-out"], [0.625, 1, "sine-in"], [0.75, 0, "sine-out"], [0.875, -1, "sine-in"], [1.0, 0]], "gain": {"type": "number", "value": 12.5}, "phase": {"type": "number", "value": 0}}}}},
+    {"name": "Ballyhoo", "form": "aim@1", "inputs": {"base": {"type": "choice", "value": "direction"}, "direction": {"type": "vector", "value": [0.0, 0.819, -0.574]}, "point": {"type": "vector", "value": [0.0, 0.0, 0.0]}, "axis": {"type": "mapping", "value": {"source": {"kind": "order"}, "per_group": false, "reverse": false}}, "fade": {"type": "proportion", "value": 1.0}, "lean": {"type": "vector", "value": [0, 0, 0]}, "horizontal": {"type": "noise", "value": {"speed": {"type": "beats", "value": 4.0}, "range": [{"type": "number", "value": -40.0}, {"type": "number", "value": 40.0}], "independent": true, "key": "1", "grain": "head"}}, "vertical": {"type": "noise", "value": {"speed": {"type": "beats", "value": 4.0}, "range": [{"type": "number", "value": -40.0}, {"type": "number", "value": 40.0}], "independent": true, "key": "2", "grain": "head"}}}}
   ],
   "frequencies": [
     {"name": "Kick", "from_hz": 40, "to_hz": 100},
@@ -281,14 +46,14 @@
     {"name": "Fade out", "curve": {"points": [[0, 1, "ease-in-out"], [1, 0]]}},
     {"name": "Hold then drop", "curve": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}},
     {"name": "Spike", "curve": {"points": [[0, 0], [0.15, 1], [1, 0]]}},
-    {"name": "Full", "input": "alpha", "curve": {"points": [[0, 1], [1, 1]]}},
-    {"name": "Fade in", "input": "alpha", "curve": {"points": [[0, 0, "ease-in-out"], [1, 1]]}},
-    {"name": "Fade out", "input": "alpha", "curve": {"points": [[0, 1, "ease-in-out"], [1, 0]]}},
-    {"name": "Fade in-out", "input": "alpha", "curve": {"points": [[0, 0], [0.15, 1], [0.85, 1], [1, 0]]}},
-    {"name": "Swell", "input": "alpha", "curve": {"points": [[0, 0, "ease-in-out"], [0.8, 1, "ease-in-out"], [1, 0]]}},
-    {"name": "Breathe", "input": "alpha", "curve": {"points": [[0, 0, "ease-in-out"], [0.5, 1, "ease-in-out"], [1, 0]]}},
-    {"name": "Cut in", "input": "alpha", "curve": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]}},
-    {"name": "Cut out", "input": "alpha", "curve": {"points": [[0, 1, "hold"], [0.5, 0], [1, 0]]}}
+    {"name": "Full", "input": "fade", "curve": {"points": [[0, 1], [1, 1]]}},
+    {"name": "Fade in", "input": "fade", "curve": {"points": [[0, 0, "ease-in-out"], [1, 1]]}},
+    {"name": "Fade out", "input": "fade", "curve": {"points": [[0, 1, "ease-in-out"], [1, 0]]}},
+    {"name": "Fade in-out", "input": "fade", "curve": {"points": [[0, 0], [0.15, 1], [0.85, 1], [1, 0]]}},
+    {"name": "Swell", "input": "fade", "curve": {"points": [[0, 0, "ease-in-out"], [0.8, 1, "ease-in-out"], [1, 0]]}},
+    {"name": "Breathe", "input": "fade", "curve": {"points": [[0, 0, "ease-in-out"], [0.5, 1, "ease-in-out"], [1, 0]]}},
+    {"name": "Cut in", "input": "fade", "curve": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]}},
+    {"name": "Cut out", "input": "fade", "curve": {"points": [[0, 1, "hold"], [0.5, 0], [1, 0]]}}
   ],
   "gradients": [
     {"name": "Rainbow", "gradient": {"stops": [{"t": 0, "color": [0.627403896, 0.069097289, 0.016391439]}, {"t": 0.2, "color": [0.956686934, 0.988637684, 0.104404747]}, {"t": 0.4, "color": [0.329283038, 0.919540395, 0.088013308]}, {"t": 0.6, "color": [0.372596104, 0.930902711, 0.983608561]}, {"t": 0.8, "color": [0.043313066, 0.011362316, 0.895595253]}, {"t": 1, "color": [0.670716962, 0.080459605, 0.911986692]}]}},

@@ -118,7 +118,7 @@ mod tests {
         clip.inputs
             .insert("brightness".into(), p::Value::Proportion(brightness));
         clip.inputs
-            .insert("alpha".into(), p::Value::Proportion(alpha));
+            .insert("fade".into(), p::Value::Proportion(alpha));
         compile(clip, mode, z)
     }
 
@@ -172,7 +172,7 @@ mod tests {
         clip.inputs
             .insert("direction".into(), p::Value::Vector(direction));
         clip.inputs
-            .insert("alpha".into(), p::Value::Proportion(alpha));
+            .insert("fade".into(), p::Value::Proportion(alpha));
         compile(clip, p::BlendMode::Replace, z)
     }
 
@@ -326,6 +326,13 @@ mod tests {
                 plane: None,
             }),
         );
+        if let Some(p::Value::Space(space)) = inputs.get_mut("lean") {
+            space.axis.source = p::MappingSource::U;
+            space.axis.mirror = Some(p::MirrorPlane {
+                normal: [1., 0., 0.],
+                offset: 0.,
+            });
+        }
     }
 
     #[test]
@@ -373,7 +380,7 @@ mod tests {
             vec![
                 position(0),
                 aim_on_truss("Circle", p::BlendMode::Offset, 1, |i| {
-                    i.insert("alpha".into(), p::Value::Proportion(0.0));
+                    i.insert("fade".into(), p::Value::Proportion(0.0));
                 }),
             ],
             1.1,
@@ -388,12 +395,12 @@ mod tests {
         let t = 1.1;
         // A fan, then a circle: one clip at PLACE with that fan and circle.
         let stacked = truss_aims(vec![position(0), fan(), circle(2)], t);
-        let fan_degrees = p::presets().preset("aim@1", "Fan").unwrap().inputs["fan"].clone();
+        let fan_degrees = p::presets().preset("aim@1", "Fan").unwrap().inputs["lean"].clone();
         let one = truss_aims(
             vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |i| {
+                i.insert("lean".into(), fan_degrees);
                 mirrored(i);
                 at(i, PLACE);
-                i.insert("fan".into(), fan_degrees);
             })],
             t,
         );

@@ -97,7 +97,62 @@ fn close(a: [f64; 3], b: [f64; 3]) {
     );
 }
 fn set(inputs: &mut BTreeMap<String, Value>, key: &str, value: Value) {
-    assert!(inputs.insert(key.into(), value).is_some(), "{key}");
+    if key == "alpha" {
+        inputs.insert("fade".into(), value);
+        return;
+    }
+    if key == "fan" {
+        if !matches!(inputs.get("lean"), Some(Value::Space(_))) {
+            let mut space = presets().preset("aim@1", "Fan").unwrap().inputs["lean"].clone();
+            if let Value::Space(s) = &mut space {
+                if let Value::Mapping(axis) = &inputs["axis"] {
+                    s.axis = axis.clone();
+                }
+            }
+            inputs.insert("lean".into(), space);
+        }
+        let Value::Space(space) = inputs.get_mut("lean").unwrap() else {
+            panic!()
+        };
+        space.gain = Box::new(value);
+        return;
+    }
+    if key == "axis" {
+        let Value::Mapping(axis) = &value else {
+            panic!()
+        };
+        if let Some(Value::Space(space)) = inputs.get_mut("lean") {
+            space.axis = axis.clone();
+        }
+        for name in ["horizontal", "vertical"] {
+            if let Some(Value::Time(time)) = inputs.get_mut(name) {
+                if let Value::Space(space) = time.phase.as_mut() {
+                    space.axis = axis.clone();
+                }
+            }
+        }
+    }
+    if key == "spread" {
+        for name in ["horizontal", "vertical"] {
+            if let Some(Value::Time(time)) = inputs.get_mut(name) {
+                if let Value::Space(space) = time.phase.as_mut() {
+                    space.gain = Box::new(Value::Number(-value.scalar_value().unwrap() / 360.));
+                }
+            }
+        }
+        return;
+    }
+    if key == "every" {
+        for name in ["horizontal", "vertical"] {
+            if let Some(Value::Time(time)) = inputs.get_mut(name) {
+                if let Some(Events::Own(clock)) = &mut time.events {
+                    clock.every = Box::new(value.clone());
+                }
+            }
+        }
+        return;
+    }
+    inputs.insert(key.into(), value);
 }
 
 #[test]
@@ -379,8 +434,13 @@ fn a_direction_path_and_a_wandering_direction() {
         &mut inputs,
         "direction",
         Value::Noise(NoiseSource {
-            speed: 2.0,
-            range: [-1.0, 1.0],
+            speed: Box::new(Value::Beats(2.0)),
+            range: [Box::new(Value::Number(-1.0)), Box::new(Value::Number(1.0))],
+            scale: None,
+            contrast: Box::new(Value::Number(0.)),
+            grain: Grain::Head,
+            independent: false,
+            key: None,
         }),
     );
     let first = directions(&cells, &inputs, 0.0);
@@ -405,16 +465,16 @@ fn aim_inputs_are_checked() {
         score.validate(&library)
     };
     let mut inputs = preset("Sweep");
-    set(&mut inputs, "every", Value::Beats(0.0));
+    set(&mut inputs, "every", Value::Beats(-1.0));
     assert!(check(&inputs).unwrap_err().0.contains("every"));
     let mut inputs = preset("Position");
     set(&mut inputs, "shape", Value::Choice("zigzag".into()));
-    assert!(check(&inputs).unwrap_err().0.contains("zigzag"));
+    assert!(check(&inputs).unwrap_err().0.contains("shape"));
     let mut inputs = preset("Position");
     set(&mut inputs, "direction", Value::Vector([0.0; 3]));
     assert!(check(&inputs).is_err());
     let mut inputs = preset("Position");
-    set(&mut inputs, "fan", Value::Number(120.0));
+    set(&mut inputs, "fan", Value::Number(f64::NAN));
     assert!(check(&inputs).is_err());
     let mut inputs = preset("Position");
     set(&mut inputs, "direction", Value::Color([1.0, 0.0, 0.0]));
@@ -492,11 +552,7 @@ fn a_spread_stored_as_a_share_of_a_cycle_is_refused() {
     let mut score = Score::default();
     score.clips.insert("clip".into(), clip);
     let error = score.validate(&library).unwrap_err().0;
-    assert!(
-        error.contains("spread") && error.contains("degrees"),
-        "{error}"
-    );
-    assert!(error.contains("216"), "{error}");
+    assert!(error.contains("unknown input spread"), "{error}");
 }
 
 /// A random axis gives the heads the evenly spaced phases of an order axis,

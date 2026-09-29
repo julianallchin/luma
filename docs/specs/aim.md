@@ -1,5 +1,7 @@
 # Aim
 
+> The source and Aim interfaces below are superseded by [the September 28 source model](../design/2026-09-28-sources-implementation.md).
+
 Status: agreed with the user on 2026-09-24. Scope: pan and tilt of moving
 heads. This spec follows [clip-forms.md](./clip-forms.md): the same clip row,
 input sources, presets and rules apply unless this spec says otherwise.

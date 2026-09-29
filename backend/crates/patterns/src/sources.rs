@@ -1,5 +1,5 @@
 //! Clip input sources. A form input takes a plain value of its type or one of
-//! these. A form lowers each source into graph nodes when a clip is prepared.
+//! these. A form prepares the source tree once for seekable evaluation.
 use crate::{Boundary, Curve, Ease, Envelope, Error, Gradient, MappingSpec, Result, Value};
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Time,
-    Hit,
+    Random,
     Noise,
     Audio,
     Space,
@@ -53,8 +53,7 @@ impl<'de> Deserialize<'de> for Key {
     }
 }
 
-/// Keyframes over progress 0–1: the clip for `time`, one event's life for
-/// `hit`.
+/// Keyframes over event progress 0–1.
 pub type Keyframes = Curve<Key>;
 
 impl Curve<Key> {
@@ -95,7 +94,7 @@ impl Curve<Key> {
     }
 }
 
-/// What a `time` or `hit` source gives over progress 0–1: keyframes, or a
+/// What a Time source gives over progress 0–1: keyframes, or a
 /// gradient read at positions that follow a curve. The gradient blends in
 /// OKLab like every gradient; color keyframes blend per channel, in linear
 /// Rec. 2020.
@@ -176,11 +175,115 @@ impl SourceCurve {
     }
 }
 
-/// Values laid out along an axis of the heads. The axis gives each head a
-/// position 0–1; `gradient` (a color input) or `curve` (a number input)
-/// gives the value at that position. With `move`, the values are a stroke
-/// that travels along the axis once per hit: they run across the stroke from
-/// its tail (0) to its head (1), and the heads outside it get 0.
+/// A clock belongs to a source. Omitting it inherits the enclosing clock;
+/// an explicit zero period always means the whole clip.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Events {
+    SameAs { same_as: String },
+    Own(EventClock),
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventClock {
+    pub every: Box<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub life: Option<Box<Value>>,
+}
+impl Events {
+    pub fn clip() -> Self {
+        Self::Own(EventClock {
+            every: Box::new(Value::Beats(0.)),
+            life: None,
+        })
+    }
+    pub fn repeating(every: Value, life: Option<Value>) -> Self {
+        Self::Own(EventClock {
+            every: Box::new(every),
+            life: life.map(Box::new),
+        })
+    }
+}
+fn zero() -> Box<Value> {
+    Box::new(Value::Number(0.))
+}
+fn one() -> Box<Value> {
+    Box::new(Value::Number(1.))
+}
+fn beats() -> Box<Value> {
+    Box::new(Value::Beats(4.))
+}
+fn width() -> Box<Value> {
+    Box::new(Value::Number(0.2))
+}
+fn is_zero(v: &Value) -> bool {
+    v.scalar_value() == Some(0.)
+}
+fn is_one(v: &Value) -> bool {
+    v.scalar_value() == Some(1.)
+}
+fn boundary() -> Boundary {
+    Boundary::Clip
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TimeSource {
+    #[serde(flatten)]
+    pub curve: SourceCurve,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Events>,
+    /// A phase shift in turns. Sources allow a spatial wave or a second axis
+    /// following the same clock with a quarter-turn shift.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub phase: Box<Value>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub gain: Box<Value>,
+}
+impl From<SourceCurve> for TimeSource {
+    fn from(curve: SourceCurve) -> Self {
+        Self {
+            curve,
+            events: None,
+            phase: zero(),
+            gain: one(),
+        }
+    }
+}
+impl From<Keyframes> for TimeSource {
+    fn from(curve: Keyframes) -> Self {
+        SourceCurve::Keys(curve).into()
+    }
+}
+impl std::ops::Deref for TimeSource {
+    type Target = SourceCurve;
+    fn deref(&self) -> &SourceCurve {
+        &self.curve
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Grain {
+    #[default]
+    Head,
+    Fixture,
+    Clump2,
+    Clump4,
+    Clump8,
+}
+impl Grain {
+    pub fn size(self) -> usize {
+        match self {
+            Self::Head => 1,
+            Self::Fixture => 0,
+            Self::Clump2 => 2,
+            Self::Clump4 => 4,
+            Self::Clump8 => 8,
+        }
+    }
+}
+
+/// A spatial curve, optionally a stroke positioned by another source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpaceSource {
@@ -189,84 +292,52 @@ pub struct SpaceSource {
     pub gradient: Option<Gradient>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curve: Option<Envelope>,
-    #[serde(rename = "move", default, skip_serializing_if = "Option::is_none")]
-    pub movement: Option<Box<Movement>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Box<Value>>,
+    #[serde(default = "width")]
+    pub width: Box<Value>,
+    #[serde(default)]
+    pub width_relative: bool,
+    #[serde(default = "boundary")]
+    pub boundary: Boundary,
+    #[serde(default)]
+    pub grain: Grain,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub gain: Box<Value>,
 }
 
-/// How a stroke travels along the axis. Each hit of the form's `every`
-/// starts one stroke.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Movement {
-    /// Where the stroke is over its life: 0 is the axis start, 1 its end.
-    pub path: Envelope,
-    /// Beats for one stroke to cross the whole axis; 0 is the whole clip. A
-    /// `beats` value or a `time` curve of beats.
-    pub travel: Value,
-    /// Stroke size: a share of the axis, or of the gap between strokes. A
-    /// `number` value, or a `time` or `hit` curve of numbers.
-    pub width: Value,
-    /// Width is a share of the gap between strokes; otherwise of the axis.
-    pub width_relative: bool,
-    /// What happens at the ends of the axis: `clip` or `wrap`.
-    pub boundary: Boundary,
+pub struct RandomSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Events>,
+    #[serde(default)]
+    pub grain: Grain,
+    pub coverage: Box<Value>,
+    #[serde(default = "one")]
+    pub level: Box<Value>,
 }
 
-impl SpaceSource {
-    pub fn validate(&self) -> Result<()> {
-        self.axis.validate()?;
-        if self.axis.reverse {
-            return Err(Error(
-                "an axis has no reverse; choose a backward path".into(),
-            ));
-        }
-        if self.axis.per_group {
-            return Err(Error(
-                "an axis has no per_group; choose the group span".into(),
-            ));
-        }
-        match (&self.gradient, &self.curve) {
-            (Some(gradient), None) => gradient.validate()?,
-            (None, Some(curve)) => curve.validate()?,
-            _ => {
-                return Err(Error(
-                    "a space source needs a gradient (color) or a curve (number), not both".into(),
-                ))
-            }
-        }
-        if let Some(movement) = &self.movement {
-            movement.validate()?;
-        }
-        Ok(())
-    }
-}
-
-impl Movement {
-    pub fn validate(&self) -> Result<()> {
-        self.path
-            .validate()
-            .map_err(|e| Error(format!("move.path: {e}")))?;
-        if !matches!(self.boundary, Boundary::Clip | Boundary::Wrap) {
-            return Err(Error("move.boundary must be clip or wrap".into()));
-        }
-        // The form checks the ranges, as it checked the chase's inputs.
-        self.travel
-            .validate()
-            .map_err(|e| Error(format!("move.travel: {e}")))?;
-        self.width
-            .validate()
-            .map_err(|e| Error(format!("move.width: {e}")))?;
-        Ok(())
-    }
-}
-
-/// Smooth random wandering between `range[0]` and `range[1]`. `speed` is the
-/// time for one wander, in beats.
+/// Smooth noise: no scale means uniform across the selection. A positive
+/// scale gives spatial noise. Identity grain gives independent head wandering.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoiseSource {
-    pub speed: f64,
-    pub range: [f64; 2],
+    #[serde(default = "beats")]
+    pub speed: Box<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Box<Value>>,
+    #[serde(default = "zero")]
+    pub contrast: Box<Value>,
+    pub range: [Box<Value>; 2],
+    #[serde(default)]
+    pub grain: Grain,
+    /// Independent wandering rather than a continuous spatial field.
+    #[serde(default)]
+    pub independent: bool,
+    /// Stable noise coordinates survive moving a source inside another one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 /// The energy of a frequency range of the track's full mix. The energy is
@@ -279,22 +350,12 @@ pub struct AudioLevel {
     pub from_hz: f64,
     pub to_hz: f64,
     pub floor: f64,
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "audio_zero")]
     pub threshold: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub gain: Box<Value>,
 }
 
-fn is_zero(value: &f64) -> bool {
-    *value == 0.0
-}
-
-impl NoiseSource {
-    pub fn validate(&self) -> Result<()> {
-        if !self.speed.is_finite() || self.speed <= 0.0 {
-            return Err(Error("noise speed must be positive beats".into()));
-        }
-        range(self.range)
-    }
-}
 impl AudioLevel {
     pub const MIN_HZ: f64 = 20.0;
     pub const MAX_HZ: f64 = 20000.0;
@@ -316,10 +377,36 @@ impl AudioLevel {
         Ok(())
     }
 }
-fn range(range: [f64; 2]) -> Result<()> {
-    if range.iter().all(|v| v.is_finite()) {
+fn audio_zero(v: &f64) -> bool {
+    *v == 0.
+}
+
+impl TimeSource {
+    pub fn validate(&self) -> Result<()> {
+        self.curve.validate()
+    }
+}
+impl SpaceSource {
+    pub fn validate(&self) -> Result<()> {
+        self.axis.validate()?;
+        match (&self.gradient, &self.curve) {
+            (Some(g), None) => g.validate()?,
+            (None, Some(c)) => c.validate()?,
+            _ => return Err(Error("Space needs a gradient or curve, not both".into())),
+        }
+        if !matches!(self.boundary, Boundary::Clip | Boundary::Wrap) {
+            return Err(Error("Space boundary must be clip or wrap".into()));
+        }
         Ok(())
-    } else {
-        Err(Error("a source range must be finite".into()))
+    }
+}
+impl NoiseSource {
+    pub fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+}
+impl RandomSource {
+    pub fn validate(&self) -> Result<()> {
+        Ok(())
     }
 }

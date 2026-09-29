@@ -286,6 +286,25 @@ pub fn section_heading(text: impl Into<SharedString>) -> Div {
     label(text).px(px(8.0)).pb(px(4.0))
 }
 
+/// A heading over a group of labelled rows inside one setting, such as a
+/// source's Range, Motion and Look. Flush with the rows and a step brighter
+/// and heavier than their [`label`]s, so it never reads as one of them. Every
+/// group but the `first` starts with a hairline [`divider`] and air above it.
+pub fn group_heading(text: impl Into<SharedString>, first: bool) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .when(!first, |heading| heading.pt(px(6.0)).child(divider()))
+        .child(
+            div()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(ladder::foreground_90())
+                .child(text.into()),
+        )
+}
+
 /// The scroll viewport for a picker's list, with its vertical gutters on a
 /// **wrapper** outside the scroller.
 ///

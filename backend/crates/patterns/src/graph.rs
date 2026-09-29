@@ -172,6 +172,10 @@ pub struct Graph {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
+    // Compiler-generated kernels carry prepared tables; authored JSON cannot
+    // construct their internal tensor layouts.
+    #[serde(skip)]
+    Source(crate::forms::SourceOp),
     Output,
     FieldBinary(crate::FieldMath),
     Fraction,
@@ -208,7 +212,16 @@ impl Primitive {
     pub(crate) fn reads_time(self) -> bool {
         matches!(
             self,
-            Self::Odometer | Self::EventLife | Self::ClipTime | Self::BandEnergy
+            Self::Odometer
+                | Self::EventLife
+                | Self::ClipTime
+                | Self::BandEnergy
+                | Self::Source(
+                    crate::forms::SourceOp::ClockTable
+                        | crate::forms::SourceOp::Clock
+                        | crate::forms::SourceOp::Events
+                        | crate::forms::SourceOp::ClipProgress
+                )
         )
     }
 }
@@ -217,6 +230,7 @@ impl Primitive {
 pub enum Body {
     Primitive(Primitive),
     Graph(Graph),
+    Form(crate::forms::FormKind),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -351,6 +365,19 @@ impl Library {
                 .map_err(|error| Error(format!("graph {id}, input {name}: {error}")))?;
         }
         let complexity = match &def.body {
+            Body::Form(kind) => {
+                let canonical = crate::forms::definitions()
+                    .into_iter()
+                    .find(|(_, form)| matches!(&form.body, Body::Form(k) if k == kind))
+                    .expect("every form kind has a definition")
+                    .1;
+                if def.inputs != canonical.inputs || def.outputs != canonical.outputs {
+                    return Err(Error(format!(
+                        "{id}: form interface differs from its evaluator"
+                    )));
+                }
+                Complexity { nodes: 1, depth: 1 }
+            }
             Body::Primitive(p) => {
                 // Primitive interfaces are owned by the kernel catalog, not editable JSON.
                 let canonical = crate::catalog::primitive(*p);

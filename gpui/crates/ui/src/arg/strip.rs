@@ -972,7 +972,7 @@ fn labelled(name: &'static str, field: impl IntoElement) -> gpui::Div {
 }
 
 /// A line per beat over `beats`, a stronger one per bar of four.
-fn paint_grid(window: &mut Window, bounds: Bounds<Pixels>, beats: f64, over_color: bool) {
+pub(crate) fn paint_grid(window: &mut Window, bounds: Bounds<Pixels>, beats: f64, over_color: bool) {
     if !(beats.is_finite() && beats > 0.) {
         return;
     }

@@ -77,32 +77,102 @@ fn lit(values: &[f64]) -> Vec<bool> {
 /// `width_relative` and `boundary` are parts of its moving brightness, and
 /// a color fade's `colors` and `curve` are parts of its color per hit.
 fn set(inputs: &mut BTreeMap<String, Value>, key: &str, value: Value) {
+    let key = if key == "alpha" { "fade" } else { key };
+    if let Some(Value::Random(random)) = inputs.get_mut("brightness") {
+        match key {
+            "coverage" => {
+                random.coverage = Box::new(value);
+                return;
+            }
+            "brightness" => {
+                random.level = Box::new(value);
+                return;
+            }
+            "grain" => {
+                random.grain = match value.scalar_value().unwrap() as usize {
+                    0 => Grain::Fixture,
+                    1 => Grain::Head,
+                    2 => Grain::Clump2,
+                    4 => Grain::Clump4,
+                    _ => Grain::Clump8,
+                };
+                return;
+            }
+            "every" | "duration" => {
+                let Events::Own(clock) = random.events.as_mut().unwrap() else {
+                    panic!()
+                };
+                if key == "every" {
+                    clock.every = Box::new(value)
+                } else {
+                    clock.life = Some(Box::new(value))
+                };
+                return;
+            }
+            _ => {}
+        }
+    }
     if let Some(old) = inputs.get_mut(key) {
         *old = value;
         return;
     }
     if let Some(Value::Space(space)) = inputs.get_mut("brightness") {
-        let movement = space.movement.as_mut().expect("a moving brightness");
         match (key, value) {
             ("axis", Value::Mapping(axis)) => space.axis = axis,
             ("shape", Value::Envelope(shape)) => space.curve = Some(shape),
-            ("path", Value::Envelope(path)) => movement.path = path,
-            ("travel", travel) => movement.travel = travel,
-            ("width", width) => movement.width = width,
-            ("width_relative", Value::Boolean(relative)) => movement.width_relative = relative,
-            ("boundary", Value::Boundary(boundary)) => movement.boundary = boundary,
-            (key, value) => panic!("{key}: {value:?}"),
+            ("width", width) => space.width = Box::new(width),
+            ("width_relative", Value::Boolean(relative)) => space.width_relative = relative,
+            ("boundary", Value::Boundary(boundary)) => space.boundary = boundary,
+            (key, value) => {
+                let Value::Time(time) = space.offset.as_deref_mut().unwrap() else {
+                    panic!()
+                };
+                match (key, value) {
+                    ("path", Value::Envelope(path)) => {
+                        time.curve = SourceCurve::Keys(path.map(|v| Key::Number(*v)))
+                    }
+                    ("every", value) => {
+                        let Some(Events::Own(clock)) = &mut time.events else {
+                            panic!()
+                        };
+                        clock.every = Box::new(value);
+                    }
+                    ("travel", value) => {
+                        let Some(Events::Own(clock)) = &mut time.events else {
+                            panic!()
+                        };
+                        clock.life = Some(Box::new(value));
+                    }
+                    _ => panic!("unknown spatial input"),
+                }
+            }
         }
         return;
     }
-    let Some(Value::Hit(SourceCurve::Gradient(read))) = inputs.get_mut("color") else {
+    if key == "every" {
+        if let Some(Value::Time(time)) = inputs.get_mut("brightness") {
+            time.events = Some(Events::repeating(value, None));
+        } else if let Some(Value::Time(time)) = inputs.get_mut("color") {
+            time.events = Some(Events::repeating(value, None));
+        }
+        return;
+    }
+    let Some(Value::Time(TimeSource {
+        curve: SourceCurve::Gradient(read),
+        ..
+    })) = inputs.get_mut("color")
+    else {
         panic!("{key}")
     };
     match (key, value) {
-        ("colors", Value::Gradient(gradient)) => read.gradient = gradient,
-        ("curve", Value::Envelope(curve)) => read.curve = curve,
-        (key, value) => panic!("{key}: {value:?}"),
+        ("colors", Value::Gradient(g)) => read.gradient = g,
+        ("curve", Value::Envelope(c)) => read.curve = c,
+        _ => panic!("{key}"),
     }
+}
+fn hit(mut curve: TimeSource) -> Value {
+    curve.events = None;
+    Value::Time(curve)
 }
 /// The axis of a clip's space source.
 fn axis_of(inputs: &BTreeMap<String, Value>) -> Value {
@@ -114,8 +184,11 @@ fn axis_of(inputs: &BTreeMap<String, Value>) -> Value {
         })
         .expect("a space source")
 }
-fn curve(points: &[[f64; 2]], ease: Ease) -> SourceCurve {
-    Keyframes::numbers(points, &vec![ease; points.len() - 1]).into()
+fn curve(points: &[[f64; 2]], ease: Ease) -> TimeSource {
+    TimeSource {
+        events: Some(Events::clip()),
+        ..Keyframes::numbers(points, &vec![ease; points.len() - 1]).into()
+    }
 }
 
 #[test]
@@ -197,7 +270,7 @@ fn every_preset_is_complete_valid_and_places_as_a_clip() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        names("alpha"),
+        names("fade"),
         [
             "Full",
             "Fade in",
@@ -244,9 +317,9 @@ fn input_order_names_every_input_of_each_form_once() {
 fn form_inputs_must_be_complete_known_and_promotable() {
     let (form, inputs) = preset("Chase");
     let mut missing = inputs.clone();
-    missing.remove("every");
+    missing.remove("brightness");
     let error = prepare(&form, &missing).unwrap_err();
-    assert!(error.0.contains("missing input every"), "{error}");
+    assert!(error.0.contains("missing inputs brightness"), "{error}");
 
     let mut unknown = inputs.clone();
     unknown.insert("delay".into(), Value::Beats(1.0));
@@ -256,11 +329,11 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         .contains("unknown input delay"));
 
     let mut several_missing = inputs.clone();
-    several_missing.remove("every");
-    several_missing.remove("alpha");
+    several_missing.remove("brightness");
+    several_missing.remove("fade");
     let error = prepare(&form, &several_missing).unwrap_err();
     assert!(
-        error.0.contains("alpha") && error.0.contains("every"),
+        error.0.contains("fade") && error.0.contains("brightness"),
         "one error should name every missing input, not just the first: {error}"
     );
 
@@ -272,12 +345,17 @@ fn form_inputs_must_be_complete_known_and_promotable() {
 
     let ramp = curve(&[[0.0, 0.0], [1.0, 1.0]], Ease::Linear);
     for (key, value) in [
-        ("color", Value::Hit(ramp.clone())),
+        ("color", hit(ramp.clone())),
         (
             "color",
             Value::Noise(NoiseSource {
-                speed: 4.0,
-                range: [0.0, 1.0],
+                speed: Box::new(Value::Beats(4.0)),
+                range: [Box::new(Value::Number(0.0)), Box::new(Value::Number(1.0))],
+                scale: None,
+                contrast: Box::new(Value::Number(0.)),
+                grain: Grain::Head,
+                independent: false,
+                key: None,
             }),
         ),
         // A curve must stay within the input's range: width 0 to 4.
@@ -285,7 +363,6 @@ fn form_inputs_must_be_complete_known_and_promotable() {
             "width",
             Value::Time(curve(&[[0.0, 0.0], [1.0, 5.0]], Ease::Linear)),
         ),
-        ("travel", Value::Number(2.0)),
         (
             "alpha",
             Value::Time(curve(&[[0.0, 0.0], [1.0, 2.0]], Ease::Linear)),
@@ -304,25 +381,15 @@ fn form_inputs_must_be_complete_known_and_promotable() {
         );
     }
     let (sparkle, mut inputs) = preset("Random heads");
-    set(&mut inputs, "alpha", Value::Hit(ramp));
+    set(
+        &mut inputs,
+        "alpha",
+        Value::Time(TimeSource {
+            events: Some(Events::repeating(Value::Beats(2.), None)),
+            ..ramp
+        }),
+    );
     assert!(prepare(&sparkle, &inputs).is_err());
-
-    // Promotable sources are data on the form's inputs.
-    let color = &standard_library().definitions["color@1"];
-    assert_eq!(
-        color.inputs["alpha"].promotable,
-        [
-            SourceKind::Time,
-            SourceKind::Hit,
-            SourceKind::Noise,
-            SourceKind::Audio
-        ]
-    );
-    assert_eq!(
-        color.inputs["color"].promotable,
-        [SourceKind::Time, SourceKind::Hit, SourceKind::Space]
-    );
-    assert_eq!(color.inputs["every"].promotable, [SourceKind::Time]);
 }
 
 #[test]
@@ -358,7 +425,11 @@ fn time_and_space_gradients() {
     let first = colors(&form, &inputs, 0.0);
     assert!(first.iter().all(|c| *c == first[0]));
     // The fade starts at its gradient's first color.
-    let Value::Hit(SourceCurve::Gradient(read)) = &inputs["color"] else {
+    let Value::Time(TimeSource {
+        curve: SourceCurve::Gradient(read),
+        ..
+    }) = &inputs["color"]
+    else {
         panic!("a color fade reads a gradient per hit")
     };
     let start = read.gradient.stops[0].color;
@@ -612,7 +683,7 @@ fn time_curves_on_speed_inputs_are_seek_safe() {
             Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Ease::Linear)),
         );
         set(&mut sparkle, "duration", Value::Beats(0.05));
-        let program = prepare("color.sparkle@1", &sparkle).unwrap();
+        let program = prepare("color@1", &sparkle).unwrap();
         let mut count = 0;
         let mut was_lit = false;
         let mut beat = from;
@@ -682,7 +753,7 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
     set(
         &mut inputs,
         "brightness",
-        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
+        hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
     );
     set(&mut inputs, "duration", Value::Beats(2.0));
     // Two events overlap: event 0 is at 0.375 and event 1 at 0.875. A head
@@ -703,16 +774,15 @@ fn sparkle_hit_curves_follow_each_event_and_overlaps_keep_the_maximum() {
 }
 
 #[test]
-fn a_sparkle_never_lights_every_head() {
+fn full_random_coverage_lights_every_head() {
     let (form, mut inputs) = preset("Random heads");
     set(&mut inputs, "coverage", Value::Proportion(1.0));
-    let error = prepare(&form, &inputs).unwrap_err();
-    assert!(error.0.contains("use a Wash"), "{error}");
+    assert!(render(&form, &inputs, 0.5).iter().all(|v| *v == 1.));
     // A curve may pass through 100%.
     set(
         &mut inputs,
         "coverage",
-        Value::Hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
+        hit(curve(&[[0.0, 1.0], [1.0, 0.0]], Ease::Linear)),
     );
     prepare(&form, &inputs).unwrap();
 }
@@ -754,18 +824,6 @@ fn pulse_is_a_wash_with_a_brightness_per_hit() {
     set(&mut inputs, "brightness", Value::Proportion(0.25));
     set(&mut inputs, "every", Value::Beats(1.0));
     assert_eq!(render(&form, &inputs, 0.5), vec![0.25; 8]);
-    let wash = &standard_library().definitions["color@1"];
-    assert_eq!(
-        wash.inputs["brightness"].promotable,
-        [
-            SourceKind::Time,
-            SourceKind::Hit,
-            SourceKind::Noise,
-            SourceKind::Audio,
-            SourceKind::Space
-        ]
-    );
-    assert_eq!(wash.inputs["every"].promotable, [SourceKind::Time]);
 }
 
 #[test]
@@ -857,15 +915,72 @@ fn noise_and_strobe_forms() {
     }
 }
 
+/// `noise_value`, which the clip sheet's preview draws, gives what playback
+/// gives each head: shared, spatial and per-unit noise, heads and clumps.
+#[test]
+fn noise_value_matches_playback() {
+    let (form, mut inputs) = preset("Wash");
+    let settings = NoiseSettings {
+        speed: 3.0,
+        scale: 0.4,
+        contrast: 0.6,
+        range: [0.1, 0.9],
+    };
+    for (scale, independent, grain) in [
+        (None, false, Grain::Head),
+        (Some(0.4), false, Grain::Head),
+        (Some(0.4), false, Grain::Clump2),
+        (None, true, Grain::Head),
+        (None, true, Grain::Clump4),
+    ] {
+        let source = NoiseSource {
+            speed: Box::new(Value::Beats(settings.speed)),
+            scale: scale.map(|s| Box::new(Value::Number(s))),
+            contrast: Box::new(Value::Number(settings.contrast)),
+            range: settings.range.map(|v| Box::new(Value::Number(v))),
+            grain,
+            independent,
+            key: None,
+        };
+        set(&mut inputs, "brightness", Value::Noise(source.clone()));
+        let program = prepare(&form, &inputs).unwrap();
+        let size = grain.size();
+        for beat in [0.0, 1.3, 7.75] {
+            let result = program.evaluate(START + beat).unwrap();
+            let lit = lighting(&result["lighting"]);
+            for (n, id) in heads().iter().enumerate() {
+                // Heads of a clump read from its first head, at its centre;
+                // U spans the clump centres.
+                let first = n - n % size;
+                let unit = &heads()[first];
+                let margin = (size - 1) as f64 / 2.;
+                let u = first as f64 / (7. - 2. * margin);
+                let expected =
+                    noise_value(&source, settings, "brightness", 7, unit, [u, 0.5], beat).unwrap();
+                assert!(
+                    (lit[id].dimmer.unwrap() - expected).abs() < 1e-12,
+                    "{scale:?} {independent} {grain:?} {id} at {beat}: {:?} vs {expected}",
+                    lit[id].dimmer
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn noise_and_audio_sources_stay_in_their_range() {
     let (form, mut inputs) = preset("Wash");
     set(
         &mut inputs,
-        "alpha",
+        "brightness",
         Value::Noise(NoiseSource {
-            speed: 2.0,
-            range: [0.25, 0.75],
+            speed: Box::new(Value::Beats(2.0)),
+            range: [Box::new(Value::Number(0.25)), Box::new(Value::Number(0.75))],
+            scale: None,
+            contrast: Box::new(Value::Number(0.)),
+            grain: Grain::Head,
+            independent: false,
+            key: None,
         }),
     );
     let values: Vec<f64> = (0..32)
@@ -888,12 +1003,13 @@ fn noise_and_audio_sources_stay_in_their_range() {
     }
     set(
         &mut inputs,
-        "alpha",
+        "brightness",
         Value::Audio(AudioLevel {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 0.3,
             threshold: 0.0,
+            gain: Box::new(Value::Number(1.)),
         }),
     );
     let program = prepare(&form, &inputs).unwrap();
@@ -919,12 +1035,13 @@ fn noise_and_audio_sources_stay_in_their_range() {
     // energy at or above it gives floor + (1 - floor) × energy.
     set(
         &mut inputs,
-        "alpha",
+        "brightness",
         Value::Audio(AudioLevel {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 0.3,
             threshold: 0.5,
+            gain: Box::new(Value::Number(1.)),
         }),
     );
     let gated = prepare(&form, &inputs)
@@ -952,27 +1069,31 @@ fn noise_and_audio_sources_stay_in_their_range() {
             to_hz: 55.0,
             floor: 0.3,
             threshold: 0.0,
+            gain: Box::new(Value::Number(1.)),
         },
         AudioLevel {
             from_hz: 10.0,
             to_hz: 55.0,
             floor: 0.3,
             threshold: 0.0,
+            gain: Box::new(Value::Number(1.)),
         },
         AudioLevel {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 1.5,
             threshold: 0.0,
+            gain: Box::new(Value::Number(1.)),
         },
         AudioLevel {
             from_hz: 55.0,
             to_hz: 130.0,
             floor: 0.3,
             threshold: 1.5,
+            gain: Box::new(Value::Number(1.)),
         },
     ] {
-        set(&mut inputs, "alpha", Value::Audio(bad));
+        set(&mut inputs, "brightness", Value::Audio(bad));
         assert!(prepare(&form, &inputs).is_err());
     }
     let named: Vec<_> = presets()
@@ -993,12 +1114,12 @@ fn sources_are_tagged_values_in_stored_clips() {
     .unwrap();
     assert_eq!(
         value,
-        Value::Time(curve(&[[0.0, 2.0], [1.0, 0.5]], Ease::Linear))
+        Value::Time(Keyframes::numbers(&[[0.0, 2.0], [1.0, 0.5]], &[]).into())
     );
     for json in [
-        serde_json::json!({"type": "hit", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}}),
+        serde_json::json!({"type": "time", "value": {"points": [[0, 1, "hold"], [0.5, 1], [1, 0]]}}),
         serde_json::json!({"type": "time", "value": {"points": [[0, [1, 0, 0], "ease-in"], [1, [0, 0, 1]]]}}),
-        serde_json::json!({"type": "noise", "value": {"speed": 4.0, "range": [0.2, 1.0]}}),
+        serde_json::json!({"type": "noise", "value": {"speed": {"type":"beats","value":4.0}, "range": [{"type":"number","value":0.2},{"type":"number","value":1.0}]}}),
         serde_json::json!({"type": "audio", "value": {"from_hz": 40.0, "to_hz": 100.0, "floor": 0.3}}),
     ] {
         let value: Value = serde_json::from_value(json.clone()).unwrap();
@@ -1061,7 +1182,7 @@ fn hit_width_grows_each_stroke_over_its_life() {
     set(
         &mut inputs,
         "width",
-        Value::Hit(curve(&[[0.0, 0.1], [1.0, 0.6]], Ease::Linear)),
+        hit(curve(&[[0.0, 0.1], [1.0, 0.6]], Ease::Linear)),
     );
     // Hold the stroke in the middle of the axis, so only the width moves.
     set(
@@ -1195,7 +1316,11 @@ fn bezier_sources_play_exactly_what_the_envelope_draws() {
         "value": {"points": [[0.0, 0.2, handles], [0.5, 0.6], [1.0, 1.0]]}
     }))
     .unwrap();
-    let Value::Time(SourceCurve::Keys(curve)) = &stored else {
+    let Value::Time(TimeSource {
+        curve: SourceCurve::Keys(curve),
+        ..
+    }) = &stored
+    else {
         unreachable!()
     };
     curve.validate().unwrap();
@@ -1276,10 +1401,16 @@ fn a_random_axis_chases_each_head_once_in_a_stable_order() {
     set(&mut inputs, "width", Value::Number(0.05));
     set(&mut inputs, "width_relative", Value::Boolean(false));
     // The beat at which each head is brightest, for two strokes.
-    let every = match inputs["every"] {
-        Value::Beats(every) => every,
-        _ => panic!("every"),
+    let Value::Space(space) = &inputs["brightness"] else {
+        panic!()
     };
+    let Value::Time(time) = space.offset.as_deref().unwrap() else {
+        panic!()
+    };
+    let Some(Events::Own(clock)) = &time.events else {
+        panic!()
+    };
+    let every = clock.every.scalar_value().unwrap();
     let peaks = |from: f64| {
         let mut best = vec![(0.0, f64::NEG_INFINITY); 8];
         for step in 0..400 {
