@@ -11,13 +11,13 @@
 
 // The clip spans the whole track, so an unlit frame is never a legitimate
 // outcome. Rainbow cycles through saturated hues every four beats (two
-// seconds at the fixture's 120 bpm), and it is labelled by its form.
+// seconds at the fixture's 120 bpm), and it is labelled by its name.
 fixture({
   seconds: 20,
   rig: 4,
-  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: ["color@1", "Rainbow"] }],
+  clips: [{ pattern: "pattern-rainbow", name: "Rainbow", start: 0, end: 20, preset: "Rainbow" }],
 });
-const CLIP = "Color";
+const CLIP = "Rainbow";
 
 const stageShot = () => app.screenshot({ node: app.snapshot().find({ role: "card", label: "Stage" }) });
 
