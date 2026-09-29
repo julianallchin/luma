@@ -4,7 +4,7 @@ const CLIP = { pattern: "pat-glow", name: "Glow", start: 2, end: 5 };
 fixture({ seconds: 20, clips: [CLIP], rig: 4, window: [1400, 900] });
 
 const node = (role, label) => app.snapshot().find({ role, label });
-// A clip is labelled by its form; the fixture's clip plays Color.
+// A clip is labelled by its name; the fixture's clip is a Wash.
 const CARD = "Wash";
 
 test(

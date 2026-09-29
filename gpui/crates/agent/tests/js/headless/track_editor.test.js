@@ -6,8 +6,8 @@
 // can tell a repaint from a write. Playback is the opposite: nothing is
 // written, and the evidence is that the transport moved on its own.
 
-// Two clips on two lanes. A clip is labelled by its form, so both read
-// Color; they are told apart by where they start.
+// Two clips on two lanes. A clip is labelled by its name, and both are
+// Washes; they are told apart by where they start.
 fixture({
   seconds: 20,
   clips: [
@@ -18,7 +18,7 @@ fixture({
   window: [1600, 900],
 });
 
-const FORM = "Color";
+const FORM = "Wash";
 const DRAG_X = 100;
 
 function read() {
