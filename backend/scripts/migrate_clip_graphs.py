@@ -49,6 +49,7 @@ MAJOR_AXIS = "major axis becomes best-fit line"
 FAN_GAIN_AT_START = "fan gain on an animated direction taken at clip start"
 PATH = "direction path off a line (exact, nested vector curves)"
 ORDER = "order axis reads (i + 0.5) / n (decision 6)"
+WRAP_RING = "wrapped line or radial axis is a ring; its ends no longer meet (decision 41)"
 
 
 class Unmappable(Exception):
@@ -652,6 +653,8 @@ class Clip:
             self.notes.add(ORDER)
         else:
             hard(f"unknown axis {kind}")
+        if wrap and kind in ("line", "radial"):
+            self.notes.add(WRAP_RING)
         return self.g.add("space", {"heads": heads, "direction": direction,
                                     "offset": offset, "width": width},
                           {"kind": kind, "wrap": "yes" if wrap else "no"})

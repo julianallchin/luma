@@ -151,7 +151,7 @@ impl Kernel {
                     "dir_y",
                     "dir_z",
                 ]),
-                &["kind", "has_direction"],
+                &["kind", "has_direction", "wrap"],
                 &["value"],
             ),
             Kernel::Stroke => (
@@ -581,6 +581,7 @@ pub(crate) fn run(
             let direction = [s("dir_x"), s("dir_y"), s("dir_z")];
             let kind = f("kind")? as u8;
             let given = f("has_direction")? != 0.;
+            let wrap = f("wrap")? != 0.;
             let groups = spans(span, heads);
             if kind == 1 {
                 let (_, times, width) = rank.values().dim();
@@ -638,16 +639,22 @@ pub(crate) fn run(
                         }
                     };
                     // Line and radial run from the lowest head (0) to the
-                    // highest (1); all at one value read 0.5.
+                    // highest (1); all at one value read 0.5. Wrapped, the
+                    // axis is a ring of `count` places: the ends sit one
+                    // mean spacing apart, as `order` cells do, and never on
+                    // one place.
                     let coordinate: Vec<f64> = if kind != 3 {
                         let min = raw.iter().copied().fold(f64::INFINITY, f64::min);
                         let max = raw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        let count = raw.len() as f64;
                         raw.iter()
                             .map(|v| {
-                                if max - min > 1e-12 {
-                                    (v - min) / (max - min)
-                                } else {
+                                if max - min <= 1e-12 {
                                     0.5
+                                } else if wrap {
+                                    ((v - min) / (max - min) * (count - 1.) + 0.5) / count
+                                } else {
+                                    (v - min) / (max - min)
                                 }
                             })
                             .collect()

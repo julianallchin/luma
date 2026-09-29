@@ -357,10 +357,36 @@ fn a_wrapped_stroke_wider_than_half_the_axis_is_exact() {
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
     let light = play(&ramp, &line(), &[1.]);
-    // Head 0 is 0.4 past the start: halfway along the stroke. Head 10
-    // comes before the wrap, so earlier along it.
-    assert!((light[[0, 0, DIMMER]] - 0.5).abs() < 1e-9);
-    assert!(light[[10, 0, DIMMER]] < light[[0, 0, DIMMER]]);
+    // The ramp climbs from head 7 to head 11 and goes on across the wrap
+    // from head 0 to head 4.
+    let ramp: Vec<f64> = [7, 8, 9, 10, 11, 0, 1, 2, 3, 4]
+        .iter()
+        .map(|n| light[[*n, 0, DIMMER]])
+        .collect();
+    assert!(ramp.windows(2).all(|w| w[0] < w[1]), "{ramp:?}");
+}
+
+#[test]
+fn a_wrapped_line_is_a_ring_whose_ends_do_not_meet() {
+    // A stroke one spacing wide lights one head wherever it is, also just
+    // below 0, where a pill enters. If the lowest and the highest head sat
+    // on one place, it would light both ends there.
+    let heads = line().len();
+    for k in -1..heads as i32 {
+        let offset = (4. * k as f64 + 1.) / (4. * heads as f64);
+        let light = play(&stroke(offset, 1. / heads as f64, "yes"), &line(), &[1.]);
+        assert_eq!(
+            lit(&light, 0).len(),
+            1,
+            "offset {offset}: {:?}",
+            lit(&light, 0)
+        );
+    }
+    // Not wrapped, the ends stay at 0 and 1.
+    let light = play(&stroke(-0.01, 0.02, "no"), &line(), &[1.]);
+    assert_eq!(lit(&light, 0), vec![0]);
+    let light = play(&stroke(0.99, 0.02, "no"), &line(), &[1.]);
+    assert_eq!(lit(&light, 0), vec![heads - 1]);
 }
 
 fn frame(cells: &[Cell], beat: f64) -> Frame<'_> {

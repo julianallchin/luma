@@ -296,6 +296,7 @@ impl Lowering<'_> {
                     "has_direction",
                     number(if direction.is_some() { 1. } else { 0. }),
                 ),
+                ("wrap", number(if wrap { 1. } else { 0. })),
             ],
         );
         let stroke = self.kernel(

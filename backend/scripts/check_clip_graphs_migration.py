@@ -11,8 +11,8 @@ Without --old, exports 6ebfb8f4 with `git archive` into <dir>/luma-6ebfb8f4
 
 Both evaluators read NDJSON {clip, cells, beats} and answer {"ok": frames} or
 {"error": text}. Frames are dumped at 1/8 beat steps plus the exclusive end
-and the representable beat before it, on the 20-head stand-in rig the source
-migration used. Writes <dir>/parity.md and <dir>/parity.json. Never writes
+and the representable beat before it, on a 20-head stand-in rig spread on all
+three axes. Writes <dir>/parity.md and <dir>/parity.json. Never writes
 to the database or the network. Exits 1 on any hard difference.
 """
 import argparse
@@ -32,8 +32,11 @@ BASELINE = "6ebfb8f4"
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOLERANCE = 1e-6
 STATISTICS = 0.05
-CELLS = [dict(id=f"fixture{n // 4}:{n % 4}", group="all", world=[n % 5, n // 5, 3],
-              uvz=[n % 5, n // 5, 3]) for n in range(20)]
+# Heads spread on U, V and Z (not in one plane), so a clip on any axis moves
+# across the rig; a flat axis reads 0.5 on every head and hides the stroke.
+CELLS = [dict(id=f"fixture{n // 4}:{n % 4}", group="all",
+              world=[n % 5, n // 5, 3 + (3 * n) % 7 / 4],
+              uvz=[n % 5, n // 5, 3 + (3 * n) % 7 / 4]) for n in range(20)]
 NOT_COMPARED = {migrate.FAN, migrate.BLOOM}
 STATISTICAL = {migrate.NOISE, migrate.NOISE_SPATIAL, migrate.NOISE_INDEPENDENT}
 # Notes that are exact conversions, compared at full tolerance.
