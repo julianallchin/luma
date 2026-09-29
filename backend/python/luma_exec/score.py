@@ -335,6 +335,8 @@ class Edit:
             if error.code in ("invalid_clip", "invalid_score", "invalid_request"):
                 raise ClipError(_prefixed(label, id, str(error))) from None
             raise
+        if isinstance(result, dict) and result.get("error"):
+            raise ClipError(_prefixed(label, id, str(result["error"])))
         result = _check_result(result)
         if not result.ok:
             raise ClipError("\n".join(_prefixed(label, id, message) for message in result.errors))

@@ -142,8 +142,8 @@ class StrobeOutput:
 class TrackOutput:
     """The real composited output of one candidate window, loaded lazily.
 
-    `values` is light color [light, time, rgb]: linear Rec. 2020 times the
-    dimmer. `aim` and `strobe` hold the other channels.
+    `values` is light color [light, time, rgb]: linear Rec. 2020, already
+    darkened by the dimmer. `aim` and `strobe` hold the other channels.
     """
 
     def __init__(self, window) -> None:
@@ -297,9 +297,8 @@ class TrackOutput:
         if isinstance(response, Mapping) and self._channel_labels is None:
             self._channel_labels = _string_list(_field(response, "channels", default=None))
         if channels.ndim == 3 and channels.shape[2] > 3:
-            # The full lighting tensor: color is normalized RGB times the dimmer.
-            rgb = np.stack([self._channel(name) for name in ("r", "g", "b")], axis=-1)
-            values = rgb * self._channel("dimmer")[..., None]
+            # The full lighting tensor; its r, g, b already carry the dimmer.
+            values = np.stack([self._channel(name) for name in ("r", "g", "b")], axis=-1)
         else:
             values = channels
         self._values = _readonly(values)
