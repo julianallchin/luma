@@ -11,6 +11,11 @@
  * here), authored rows re-homed to a synthetic fixture owner so the write gate
  * is exercised without copying an auth secret. The cache dir points at the real
  * one so the managed venv is reused rather than rebuilt.
+ *
+ * The clip graph run (spec clip-graphs.md, phase 3 step 3) needs a real
+ * library with a track: it builds "Kick chase", checks it, reads the aim and
+ * RGB output, applies it, reads it back as Python, and shows one checker
+ * error. Those steps fail rather than skip when the library has no track.
  */
 
 import { copyFileSync, existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
@@ -112,7 +117,12 @@ try {
 	const prompts = await server.request<{ prompts: { name: string; description: string }[] }>(
 		"prompts/list",
 	);
-	check("prompts/list is every skill", prompts.prompts.length === 10, `${prompts.prompts.length}`);
+	const promptNames = prompts.prompts.map((p) => p.name);
+	check(
+		"prompts/list carries the clip graph skills",
+		["node-cards", "composing-patterns", "effect-catalog"].every((name) => promptNames.includes(name)),
+		promptNames.join(","),
+	);
 	check(
 		"a prompt carries its description, not its body",
 		Boolean(prompts.prompts[0]?.description) && !("messages" in (prompts.prompts[0] ?? {})),
@@ -185,7 +195,7 @@ try {
 	console.log("\n[open]");
 
 	if (!hasRealDb || !trackId) {
-		record("open a track", "skip", "no track in the scratch library");
+		record("open a track", "fail", "no track in the scratch library; the clip graph run needs one");
 	} else {
 		const opened = await server.callTool("open", {
 			track_id: trackId,
@@ -231,54 +241,100 @@ try {
 		const persisted = await server.callTool("python", { code: "'kernel' + ' persists'" });
 		check("the kernel is persistent", textOf(persisted).includes("kernel persists"), textOf(persisted).slice(0, 200));
 
+		// The clip graph run: build, check, read the output, apply, read back.
+		console.log("\n[clip graphs]");
+		const built = await server.callTool("python", {
+			code: [
+				"draft = luma.track.edit()",
+				"span = (0.0, min(8.0, luma.track.duration_s))",
+				"k = clock(every=1)",
+				'pos = curve(time(k), "Ramp up", low=-0.2, high=1)',
+				'width = curve(audio("Kick"), "Ramp up", low=0.05, high=0.4)',
+				'graph = color(brightness=curve(space(offset=pos, width=width), "On"))',
+				"z = max((c.z for c in luma.track.clips), default=-1) + 1",
+				'kick = draft.add_clip(graph, name="Kick chase", seconds=span, selection="all", z=z)',
+				"draft.check()",
+			].join("\n"),
+		});
+		check(
+			"a Kick chase builds and checks",
+			!built.isError && textOf(built).includes("CheckResult ok"),
+			textOf(built).slice(0, 600),
+		);
+
+		const output = await server.callTool("python", {
+			code: [
+				"view = draft.window(seconds=(span[0], min(span[0] + 4.0, span[1])))",
+				"out = view.output",
+				"(out.values.shape, out.aim.values.shape, out.aim.weight.shape, out.strobe.values.shape, float(out.values.max()))",
+			].join("\n"),
+		});
+		const shapes = textOf(output);
+		check(
+			"the window reads RGB, aim and strobe",
+			!output.isError && /\(\d+, \d+, 3\), \(\d+, \d+, 3\), \(\d+, \d+\), \(\d+, \d+\)/.test(shapes),
+			shapes.slice(0, 400),
+		);
+		console.log(`  output shapes -> ${shapes.trim()}`);
+
+		const readBack = await server.callTool("python", {
+			code: [
+				"draft.apply()",
+				'saved = [c for c in luma.track.clips if c.name == "Kick chase"]',
+				"print(saved[-1].graph.source())",
+			].join("\n"),
+		});
+		const source = textOf(readBack);
+		check(
+			"the applied clip reads back as Python",
+			!readBack.isError && source.includes("clock(every=1)") && source.includes("audio(") &&
+				source.trimEnd().split("\n").at(-1)?.startsWith("color(") === true,
+			source.slice(0, 600),
+		);
+		console.log(source.trim().split("\n").map((line) => `    ${line}`).join("\n"));
+
+		const wrong = await server.callTool("python", {
+			code: 'luma.track.edit().add_clip(color(brightness=time()), name="Wrong", seconds=(0.0, 4.0))',
+		});
+		const error = textOf(wrong);
+		check(
+			"a wrong wire shows the checker text",
+			wrong.isError === true && error.includes("ClipError") &&
+				error.includes("color1.brightness: expected") && error.includes("Example: "),
+			error.slice(0, 600),
+		);
+		console.log(`  ${error.trim().split("\n").at(-1)}`);
+
 		// Authorship. An external client is not the operator: everything this
 		// session writes must be labelled as the client (and the model it says
 		// is driving), not as `user`.
 		console.log("\n[authorship]");
-		const edit = await server.callTool("python", {
-			code: [
-				"draft = luma.track.edit()",
-				"if luma.track.clips:",
-				"    seed = luma.track.clips[0]",
-				"    z = max(c.z for c in luma.track.clips) + 1",
-				"    draft.add_clip(seed.pattern_id, seconds=(seed.start_s, seed.end_s), z=z, blend=seed.blend, args=dict(seed.args))",
-				"else:",
-				"    pattern = luma.patterns.summaries[0]",
-				"    draft.add_clip(pattern.id, seconds=(0.0, min(4.0, luma.track.duration_s)), z=0)",
-				"applied = draft.apply()",
-				"applied.applied",
-			].join("\n"),
-		});
-		if (edit.isError) {
-			record("an MCP edit is attributed to the client", "skip", textOf(edit).slice(0, 300));
-		} else {
-			const library = new Database(join(scratch, "luma.db"), { readonly: true });
-			try {
-				const revision = library
-					.query<{ actor: string; operation_kind: string }, []>(
-						`SELECT actor, operation_kind FROM authored_revisions
-						 WHERE operation_kind = 'score_edit'
-						 ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-					)
-					.get();
-				check(
-					"an MCP edit is attributed to the client and its model",
-					revision?.actor === `client:mcp_smoke/0:${SESSION_MODEL}`,
-					`actor=${revision?.actor ?? "no score_edit revision"}`,
-				);
-				const thread = library
-					.query<{ actor: string | null }, []>(
-						"SELECT actor FROM agent_threads ORDER BY updated_at DESC LIMIT 1",
-					)
-					.get();
-				check(
-					"open stamps the session's writer on the thread",
-					thread?.actor === `client:mcp_smoke/0:${SESSION_MODEL}`,
-					`actor=${thread?.actor ?? "null"}`,
-				);
-			} finally {
-				library.close();
-			}
+		const library = new Database(join(scratch, "luma.db"), { readonly: true });
+		try {
+			const revision = library
+				.query<{ actor: string; operation_kind: string }, []>(
+					`SELECT actor, operation_kind FROM authored_revisions
+					 WHERE operation_kind = 'score_edit'
+					 ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+				)
+				.get();
+			check(
+				"an MCP edit is attributed to the client and its model",
+				revision?.actor === `client:mcp_smoke/0:${SESSION_MODEL}`,
+				`actor=${revision?.actor ?? "no score_edit revision"}`,
+			);
+			const thread = library
+				.query<{ actor: string | null }, []>(
+					"SELECT actor FROM agent_threads ORDER BY updated_at DESC LIMIT 1",
+				)
+				.get();
+			check(
+				"open stamps the session's writer on the thread",
+				thread?.actor === `client:mcp_smoke/0:${SESSION_MODEL}`,
+				`actor=${thread?.actor ?? "null"}`,
+			);
+		} finally {
+			library.close();
 		}
 
 		console.log("\n[cancel + reset]");
