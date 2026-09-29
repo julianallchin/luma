@@ -448,7 +448,10 @@ impl Aiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::{lighting::compile_clip, Scene, Scope};
+    use crate::eval::{
+        lighting::{compile_clip, test_clip},
+        Scene, Scope,
+    };
     use crate::models::fixtures::{Channel, Focus, Mode, ModeChannel, Physical};
     use luma_patterns as p;
     use luma_scene::venue::{NodeKind, NodePose, Params};
@@ -660,7 +663,6 @@ mod tests {
         let prepared = p::PreparedGraph::new(
             &p::standard_library(),
             &clip.graph,
-            &clip.inputs,
             p::Frame {
                 features: None,
                 cells: &cells,
@@ -672,7 +674,7 @@ mod tests {
         )
         .unwrap();
         let clock = p::BeatTimeline::new((0..=12).map(f64::from).collect(), 0.0).unwrap();
-        let plan = compile_clip(&clip, clock, cells, prepared, "lighting").unwrap();
+        let plan = compile_clip(&clip, clock, cells, prepared).unwrap();
         CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
@@ -681,27 +683,17 @@ mod tests {
         }
     }
 
-    /// The shipped preset of `form` called `name`.
-    fn preset(form: &str, name: &str) -> &'static p::FormPreset {
-        p::presets()
-            .presets
-            .iter()
-            .find(|preset| preset.form == form && preset.name == name)
-            .expect("a shipped preset")
-    }
-
     fn wash(start: f64, duration: f64, brightness: f64) -> CompiledAnnotation {
-        let mut clip = preset("color@1", "Wash").clip(start, duration);
-        clip.inputs
-            .insert("brightness".into(), p::Value::Proportion(brightness));
-        layer(clip, 0)
+        let nodes = serde_json::json!({
+            "color1": {"kind": "color", "inputs": {"brightness": brightness}}});
+        layer(test_clip(nodes, start, duration), 0)
     }
 
     fn aim(start: f64, duration: f64, direction: [f64; 3]) -> CompiledAnnotation {
-        let mut clip = preset("aim@1", "Position").clip(start, duration);
-        clip.inputs
-            .insert("direction".into(), p::Value::Vector(direction));
-        layer(clip, 1)
+        let nodes = serde_json::json!({
+            "aim1": {"kind": "aim", "settings": {"base": "direction"},
+                     "inputs": {"direction": direction}}});
+        layer(test_clip(nodes, start, duration), 1)
     }
 
     fn rig() -> Rig {
@@ -774,11 +766,11 @@ mod tests {
         rig.insert("fx:0".into(), head(&pose([PI, 0.0, 0.0]), &mover(540, 270)));
         let home = rig.head("fx:0").unwrap().home();
         let circle = |alpha: f64, mode, direction| {
-            let mut clip = preset("aim@1", "Circle").clip(0.0, 4.0);
-            clip.inputs
-                .insert("fade".into(), p::Value::Proportion(alpha));
-            clip.inputs
-                .insert("direction".into(), p::Value::Vector(direction));
+            let mut clip = p::presets().clip("Circle").unwrap().clip(0.0, 4.0);
+            let id = clip.graph.output().unwrap().0.to_owned();
+            let inputs = &mut clip.graph.nodes.get_mut(&id).unwrap().inputs;
+            inputs.insert("alpha".into(), p::clip_graph::Input::Number(alpha));
+            inputs.insert("direction".into(), p::clip_graph::Input::Vector(direction));
             let mut layer = layer(clip, 0);
             layer.blend_mode = mode;
             layer

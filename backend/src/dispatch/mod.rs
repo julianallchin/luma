@@ -275,6 +275,8 @@ commands! {
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::apply_score_document(score_id: String, score: luma_patterns::Score) -> ();
     scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
+    scores::clip_graph_definitions() -> Value;
+    scores::clip_presets() -> Value;
 
     distribute::distribute(
         venue_id: String,

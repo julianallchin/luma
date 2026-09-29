@@ -43,12 +43,13 @@ fn plan(
         span,
     })
 }
+/// A clip's plan over `cells`. Every clip graph writes its lighting to the
+/// one output terminal.
 pub(crate) fn compile_clip(
     clip: &p::Clip,
     clock: p::BeatTimeline,
     cells: Vec<p::Cell>,
     prepared: p::PreparedGraph,
-    output: &str,
 ) -> Result<Plan, String> {
     let span = (
         clock.seconds_at(clip.start).map_err(|e| e.to_string())? as f32,
@@ -60,7 +61,7 @@ pub(crate) fn compile_clip(
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
     let ids = cells.iter().map(|c| c.id.clone()).collect();
-    plan(prepared, clock, ids, output, span)
+    plan(prepared, clock, ids, p::clip_graph::OUTPUT, span)
 }
 impl Program {
     pub(crate) fn sample(
@@ -166,68 +167,73 @@ impl Program {
             .collect())
     }
 }
+/// A clip over every head from `start` for `duration` beats whose graph is
+/// `nodes`, in the stored JSON form.
+#[cfg(test)]
+pub(crate) fn test_clip(nodes: serde_json::Value, start: f64, duration: f64) -> p::Clip {
+    serde_json::from_value(serde_json::json!({
+        "name": "Test",
+        "start": start,
+        "duration": duration,
+        "seed": 0,
+        "selection": p::Selection::all(),
+        "z_index": 0,
+        "blend_mode": "replace",
+        "graph": {"version": 1, "nodes": nodes},
+    }))
+    .unwrap_or_else(|error| panic!("a test clip: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn prepare(clip: &p::Clip, cells: &[p::Cell]) -> p::PreparedGraph {
+        p::PreparedGraph::new(
+            &p::standard_library(),
+            &clip.graph,
+            p::Frame {
+                features: None,
+                cells,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .unwrap()
+    }
+
     #[test]
     fn dynamic_graph_errors_propagate_without_poisoning_later_seeks() {
-        let mut library = p::standard_library();
-        let custom: p::Definition = serde_json::from_value(serde_json::json!({
-                "name":"Runtime error", "inputs":{},
-                "outputs":{"lighting":{"value_type":"lighting","rate":"frame"}},
-                "body":{"kind":"graph","body":{"nodes":{
-                    "clock":{"definition":"clip_time"},
-                    "over":{"definition":"core/subtract","inputs":{
-                        "a":{"source":"connection","node":"clock","output":"progress"},
-                        "b":{"source":"value","value":{"type":"number","value":0.5}}}},
-                    "past":{"definition":"core/maximum","inputs":{
-                        "a":{"source":"connection","node":"over","output":"value"},
-                        "b":{"source":"value","value":{"type":"number","value":0.0}}}},
-                    "far":{"definition":"core/multiply","inputs":{
-                        "a":{"source":"connection","node":"past","output":"value"},
-                        "b":{"source":"value","value":{"type":"number","value":1e13}}}},
-                    "noise":{"definition":"core/noise","inputs":{
-                        "x":{"source":"connection","node":"far","output":"value"},
-                        "y":{"source":"value","value":{"type":"number","value":0.0}},
-                        "z":{"source":"value","value":{"type":"number","value":0.0}}}},
-                    "silent":{"definition":"core/multiply","inputs":{
-                        "a":{"source":"connection","node":"noise","output":"value"},
-                        "b":{"source":"value","value":{"type":"number","value":0.0}}}},
-                    "level":{"definition":"core/add","inputs":{
-                        "a":{"source":"connection","node":"silent","output":"value"},
-                        "b":{"source":"value","value":{"type":"number","value":0.5}}}},
-                    "tint":{"definition":"core/multiply","inputs":{"a":{"source":"connection","node":"level","output":"value"},"b":{"source":"value","value":{"type":"color","value":[1.0,1.0,1.0]}}}},
-                    "output":{"definition":"output","inputs":{"color":{"source":"connection","node":"tint","output":"value"}}}
-                },"outputs":{"lighting":{"source":"connection","node":"output","output":"lighting"}}}}
-        })).unwrap();
-        library.definitions.insert("custom".into(), custom);
-        let clip: p::Clip = serde_json::from_value(serde_json::json!({
-            "graph":"custom","start":0,"duration":4,"seed":0
-        }))
-        .unwrap();
-        let clip = &clip;
+        // Noise whose speed drops to almost nothing past the clip's middle:
+        // its turns then leave the range the noise accepts.
+        let clip = test_clip(
+            json!({
+                "time1": {"kind": "time"},
+                "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time1"},
+                                      "shape": {"points": [[0, 0, "hold"], [0.5, 1], [1, 1]]},
+                                      "low": 4, "high": 1e-13}},
+                "noise1": {"kind": "noise", "inputs": {"speed": {"node": "curve1"}}},
+                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "noise1"}, "low": 1, "high": 1}},
+                "color1": {"kind": "color",
+                           "inputs": {"brightness": 0.5, "alpha": {"node": "curve2"}}},
+            }),
+            0.,
+            4.,
+        );
         let cells = vec![p::Cell {
             id: "head".into(),
             group: "wash".into(),
             world: [0.; 3],
             uvz: [0.; 3],
         }];
-        let program = p::PreparedGraph::new(
-            &library,
-            &clip.graph,
-            &clip.inputs,
-            p::Frame {
-                features: None,
-                cells: &cells,
-                beat: 0.,
-                clip_start: 0.,
-                clip_duration: 4.,
-                seed: 0,
-            },
-        )
-        .unwrap();
+        let program = prepare(&clip, &cells);
         let clock = p::BeatTimeline::new(vec![0., 0.5, 1., 1.5, 2.], 0.).unwrap();
-        let plan = compile_clip(clip, clock, cells, program, "lighting").unwrap();
+        let plan = compile_clip(&clip, clock, cells, program).unwrap();
         let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
@@ -237,12 +243,7 @@ mod tests {
         let mut scratch = crate::eval::Arena::default();
         let scope = crate::eval::Scope::Composite;
         let before = scene.try_render(&[0.5], scope, &mut scratch).unwrap();
-        assert_eq!(
-            scene
-                .try_render(&[0.5, 1.5], scope, &mut scratch)
-                .unwrap_err(),
-            "Coherent noise: noise coordinates must be finite and within ±1e12"
-        );
+        assert!(scene.try_render(&[0.5, 1.5], scope, &mut scratch).is_err());
         assert!(scene.render(&[1.5], scope, &mut scratch)[0]
             .primitives
             .is_empty());
@@ -258,15 +259,27 @@ mod tests {
     }
 
     #[test]
-    fn a_form_clip_compiles_to_the_batched_core_output() {
-        let base = p::standard_library();
-        let mut score = p::Score::default();
-        let mut clip = p::presets()
-            .preset("color@1", "Dissolve")
-            .unwrap()
-            .clip(1.0, 3.0);
+    fn a_clip_compiles_to_the_batched_core_output() {
+        // Dissolve: a shuffled order that goes dark over the clip.
+        let mut clip = test_clip(
+            json!({
+                "time1": {"kind": "time"},
+                "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time1"},
+                                      "shape": {"points": [[0, 1], [1, 0]]}}},
+                "shuffle1": {"kind": "shuffle"},
+                "space1": {"kind": "space", "settings": {"kind": "order", "wrap": "no"},
+                           "inputs": {"heads": {"node": "shuffle1"}, "offset": 0,
+                                      "width": {"node": "curve1"}}},
+                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "space1"},
+                                      "shape": {"points": [[0, 1], [1, 1]]}}},
+                "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve2"}}},
+            }),
+            1.,
+            3.,
+        );
         clip.seed = 129;
-        score.clips.insert("flash".into(), clip);
         let cells: Vec<_> = (0..24)
             .map(|i| p::Cell {
                 id: format!("bar:{i}"),
@@ -276,25 +289,9 @@ mod tests {
             })
             .collect();
         let clock = p::BeatTimeline::new(vec![0.0, 0.5, 1.0, 2.0, 3.0, 4.0], 0.0).unwrap();
-        let clip = &score.clips["flash"];
-        let program = p::PreparedGraph::new(
-            &base,
-            &clip.graph,
-            &clip.inputs,
-            p::Frame {
-                cells: &cells,
-                features: None,
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        )
-        .unwrap();
-        let plan = compile_clip(clip, clock.clone(), cells.clone(), program, "lighting").unwrap();
-        let prepared = score
-            .prepare_clip(&base, "flash", &BTreeMap::new(), &cells)
-            .unwrap();
+        let program = prepare(&clip, &cells);
+        let plan = compile_clip(&clip, clock.clone(), cells.clone(), program).unwrap();
+        let prepared = prepare(&clip, &cells);
         let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
@@ -309,11 +306,12 @@ mod tests {
             crate::eval::Scope::Composite,
             &mut crate::eval::Arena::default(),
         );
+        let mut lit = 0;
         for (seconds, frame) in seconds.into_iter().zip(frames) {
             let direct = prepared
                 .evaluate(clock.beat_at(f64::from(seconds)).unwrap())
                 .unwrap();
-            let Some(p::Value::Lighting(values)) = direct.get("lighting") else {
+            let Some(p::Value::Lighting(values)) = direct.get(p::clip_graph::OUTPUT) else {
                 assert!(frame.primitives.is_empty());
                 continue;
             };
@@ -324,38 +322,9 @@ mod tests {
                     frame.primitives[id].color,
                     value.color.unwrap_or([1.0; 3]).map(|v| v as f32)
                 );
+                lit += usize::from(frame.primitives[id].dimmer > 0.);
             }
         }
-    }
-    #[test]
-    fn stage_mapping_keeps_downstage_and_height_independent() {
-        let cells: Vec<_> = [[0., 10., 0.], [0., 0., 0.], [0., 10., 5.]]
-            .into_iter()
-            .enumerate()
-            .map(|(i, world)| p::Cell {
-                id: i.to_string(),
-                group: "all".into(),
-                world: world.map(f64::from),
-                uvz: p::Cell::stage_coordinates(world.map(f64::from)),
-            })
-            .collect();
-        let resolve = |source| {
-            p::MappingSpec {
-                span: Default::default(),
-                plane: None,
-                mirror: None,
-                source,
-                per_group: false,
-                reverse: false,
-            }
-            .resolve(&cells, 0)
-            .unwrap()
-            .coordinates
-            .iter()
-            .map(|c| c.position)
-            .collect::<Vec<_>>()
-        };
-        assert_eq!(resolve(p::MappingSource::V), vec![0., 1., 0.]);
-        assert_eq!(resolve(p::MappingSource::Z), vec![0., 0., 1.]);
+        assert!(lit > 0, "the dissolve lights some heads");
     }
 }

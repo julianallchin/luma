@@ -1,7 +1,7 @@
-//! The composable-pattern preview boundary. Graph/input schemas come directly
-//! from luma-patterns; the native and JSON hosts use the same definitions.
+//! The clip-graph preview boundary. The graph type comes directly from
+//! luma-patterns; the native and JSON hosts use the same one.
 use super::{selection::Selection, universe::UniverseState};
-use luma_patterns::{Cell, Value};
+use luma_patterns::{Cell, ClipGraph};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -10,9 +10,8 @@ use std::collections::BTreeMap;
 pub struct ComposablePreviewRequest {
     pub venue_id: String,
     pub track_id: String,
-    pub definition: String,
-    #[serde(default)]
-    pub inputs: BTreeMap<String, Value>,
+    /// The clip graph to preview, such as a shipped preset's.
+    pub graph: ClipGraph,
     /// Each selection is one mapping group. Overlaps are rejected rather than
     /// silently assigning a cell to an arbitrary coordinate frame.
     pub targets: Vec<Selection>,

@@ -49,21 +49,13 @@ pub(crate) async fn preview(
         return Err("preview exceeds one million cell samples; request fewer times".into());
     }
     let library = standard_library();
-    let definition = library
-        .definitions
-        .get(&request.definition)
-        .ok_or_else(|| format!("unknown graph {}", request.definition))?;
-    let lighting = definition
-        .lighting_output()
-        .ok_or_else(|| "connect this graph's signals to Output before previewing it".to_string())?
-        .to_owned();
+    luma_patterns::clip_graph::check(&request.graph).map_err(|error| error.to_string())?;
     let start = clock
         .beat_at(request.clip_start)
         .map_err(|e| e.to_string())?;
     let prepared = PreparedGraph::new(
         &library,
-        &request.definition,
-        &request.inputs,
+        &request.graph,
         Frame {
             features: None,
             beat: start,
@@ -100,7 +92,7 @@ pub(crate) async fn preview(
         .map_err(|e| e.to_string())?;
     let output = prepared.evaluate_batch(&beats).map_err(|e| e.to_string())?;
     let light = output
-        .get(&lighting)
+        .get(luma_patterns::clip_graph::OUTPUT)
         .and_then(|v| v.lighting())
         .ok_or("pattern did not produce fixture output")?;
     let writes = light.writes();
