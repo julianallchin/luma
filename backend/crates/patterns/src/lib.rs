@@ -3,6 +3,7 @@
 pub mod aim;
 mod blend;
 mod catalog;
+pub mod clip_graph;
 mod clip_range;
 mod clock;
 mod color;
@@ -31,6 +32,7 @@ mod value_noise;
 pub use aim::{blend_aim, offset_aim, Aim, Turn};
 pub use blend::{blend_light, blend_value, BlendMode};
 pub use catalog::standard_library;
+pub use clip_graph::ClipGraph;
 pub use clock::*;
 pub use color::{ColorStop, Gradient};
 pub use curve::{Curve, CurvePoint, Ease};

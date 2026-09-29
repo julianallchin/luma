@@ -1,12 +1,14 @@
-use crate::{Error, Frame, Library, PreparedGraph, Result, Value};
+use crate::clip_graph::ClipGraph;
+use crate::{Error, Library, PreparedGraph, Result, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
-    /// The form this clip plays, with its version, e.g. `color@1`.
-    pub graph: String,
+    /// What the clip is called. The checker requires one.
+    #[serde(default)]
+    pub name: String,
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
@@ -22,8 +24,8 @@ pub struct Clip {
     pub z_index: i64,
     #[serde(default = "replace_blend")]
     pub blend_mode: crate::BlendMode,
-    #[serde(default)]
-    pub inputs: BTreeMap<String, Value>,
+    /// The clip's own graph ([`crate::clip_graph`]).
+    pub graph: ClipGraph,
 }
 fn all_selection() -> crate::Selection {
     crate::Selection::all()
@@ -33,7 +35,7 @@ fn replace_blend() -> crate::BlendMode {
 }
 
 /// Canonical score document: clips keyed by their stable identity. Every clip
-/// plays a shipped form.
+/// owns one graph.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Score {
@@ -64,53 +66,17 @@ impl Score {
 
     /// One clip's checks, so a player can leave out a clip that fails them
     /// and still play the rest of the score.
-    pub fn validate_clip(base: &Library, id: &str, clip: &Clip) -> Result<()> {
+    pub fn validate_clip(_base: &Library, id: &str, clip: &Clip) -> Result<()> {
         crate::graph::identity(id)?;
         clip.selection.validate()?;
-        if !clip.start.is_finite()
-            || !clip.duration.is_finite()
-            || clip.duration <= 0.0
-            || !(clip.start + clip.duration).is_finite()
-        {
-            return Err(Error(format!(
-                "clip {id}: clip needs finite start and positive duration"
-            )));
-        }
-        if !crate::forms::is_form(&clip.graph) {
-            return Err(Error(format!("clip {id}: {} is not a form", clip.graph)));
-        }
-        let definition = base
-            .definitions
-            .get(&clip.graph)
-            .ok_or_else(|| Error(format!("clip {id}: unknown form {}", clip.graph)))?;
-        crate::forms::check_inputs(&clip.graph, definition, &clip.inputs)
-            .map_err(|error| Error(format!("clip {id}: {error}")))?;
-        let modes = crate::forms::blend_modes(&clip.graph);
-        if !modes.contains(&clip.blend_mode) {
-            let names: Vec<&str> = modes.iter().map(|mode| mode.name()).collect();
-            return Err(Error(format!(
-                "clip {id}: {} does not blend with {}; use {}",
-                clip.graph,
-                clip.blend_mode.name(),
-                names.join(", ")
-            )));
-        }
-        // Check fixed timing/value relationships without binding venue geometry.
-        PreparedGraph::new_validated(
-            base,
-            &clip.graph,
-            &clip.inputs,
-            Frame {
-                features: None,
-                cells: &[],
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        )
-        .map_err(|error| Error(format!("clip {id}: {error}")))?;
-        Ok(())
+        crate::clip_graph::check_clip(clip).map_err(|error| {
+            let name = clip.name.trim();
+            if name.is_empty() {
+                Error(format!("clip ({id}): {error}"))
+            } else {
+                Error(format!("clip {name} ({id}): {error}"))
+            }
+        })
     }
     pub fn to_json(&self, base: &Library) -> Result<String> {
         self.validate(base)?;
@@ -135,26 +101,11 @@ impl Score {
             .clips
             .get(clip_id)
             .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
-        let mut inputs = host_inputs.clone();
-        inputs.extend(clip.inputs.clone());
-        let program = PreparedGraph::new(
-            base,
-            &clip.graph,
-            &inputs,
-            Frame {
-                features: None,
-                cells,
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        )?;
-        Ok(PreparedClip {
-            program,
-            start: clip.start,
-            end: clip.start + clip.duration,
-        })
+        // Phase 1 of clip-graphs: the graph lowering lands in phase 2.
+        let _ = (host_inputs, cells, clip);
+        Err(Error(format!(
+            "clip {clip_id}: clip graphs do not play yet (lowering lands in phase 2)"
+        )))
     }
     pub fn evaluate_clip(
         &self,
