@@ -580,7 +580,8 @@ mod tests {
         assert!(registry.get("finding-things-in-audio").is_some());
         assert!(registry.get("node-cards").is_some());
         assert!(registry.get("composing-patterns").is_some());
-        assert_eq!(registry.iter().count(), 12);
+        assert!(registry.get("effect-catalog").is_some());
+        assert_eq!(registry.iter().count(), 13);
         assert!(registry.listing().contains("<available_skills>"));
         assert!(
             !registry.listing().contains("SKILL.md")
