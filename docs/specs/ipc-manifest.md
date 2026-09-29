@@ -7,7 +7,7 @@ The machine-readable form is [`ipc-manifest.json`](./ipc-manifest.json); the per
 prose and the event names in it are the only hand-written parts and are carried across by
 name.
 
-**151 commands** across **26 domains** · **13 events**
+**153 commands** across **26 domains** · **13 events**
 
 ## Domains
 
@@ -31,7 +31,7 @@ name.
 | `perform` | 8 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `backend/src/dispatch/handlers/render_engine.rs` |
-| `scores` | 9 | `backend/src/dispatch/handlers/scores.rs` |
+| `scores` | 11 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
 | `stage` | 13 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 1 | `backend/src/dispatch/handlers/sync.rs` |
@@ -39,7 +39,7 @@ name.
 | `tracks` | 7 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 5 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **151** | |
+| **total** | **153** | |
 
 ## Commands
 
@@ -260,6 +260,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score` | `()` |
 | `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
+| `clip_graph_definitions` | — | `Value` |
+| `clip_presets` | — | `Value` |
 
 ### `settings`
 

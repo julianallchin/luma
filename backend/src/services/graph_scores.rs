@@ -391,9 +391,24 @@ fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
     rig
 }
 
+/// A stand-in track for a clip that follows a band: every band hits on
+/// each beat and decays until the next, like a four-on-the-floor kick.
+#[derive(Debug)]
+struct BeatPulse;
+
+impl luma_patterns::FeatureSource for BeatPulse {
+    fn sample(
+        &self,
+        _request: &luma_patterns::FeatureRequest,
+        beat: f64,
+    ) -> luma_patterns::Result<f64> {
+        Ok((1. - beat.rem_euclid(1.)).powi(2))
+    }
+}
+
 /// A single clip's strip over `cells` as stand-in heads (see
-/// [`stand_in_rig`]), on a 120 BPM grid, with no track features. Only the
-/// scene is made up: [`strip`] samples it as it does a real clip's.
+/// [`stand_in_rig`]), on a 120 BPM grid, with [`BeatPulse`] for every band.
+/// Only the scene is made up: [`strip`] samples it as it does a real clip's.
 fn synthetic_strip(
     clip: &luma_patterns::Clip,
     cells: &[luma_patterns::Cell],
@@ -416,6 +431,13 @@ fn synthetic_strip(
         },
     )
     .map_err(|error| error.to_string())?;
+    let prepared = if prepared.feature_requests().is_empty() {
+        prepared
+    } else {
+        prepared
+            .with_features(std::sync::Arc::new(BeatPulse))
+            .map_err(|error| error.to_string())?
+    };
     let plan = crate::eval::lighting::compile_clip(clip, clock, cells.to_vec(), prepared)
         .map_err(|error| error.to_string())?;
     let span = plan.span;
@@ -563,7 +585,12 @@ mod tests {
         for row in 0..preview.height {
             assert_eq!(pixel(row, 0), pixel(row, preview.width - 1), "row {row}");
         }
-        // Magenta at one end of the rig, blue at the other.
-        assert!(pixel(0, 0)[0] > 200 && pixel(preview.height - 1, 0)[2] > 200);
+        // Magenta at one end of the rig, blue at the other. Rec. 2020 blue
+        // leaves the display gamut, so it shows as the strongest channel.
+        let (first, last) = (pixel(0, 0), pixel(preview.height - 1, 0));
+        assert!(
+            first[0] > 200 && last[2] > last[0] && last[2] > last[1],
+            "{first:?} … {last:?}"
+        );
     }
 }

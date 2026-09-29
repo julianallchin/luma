@@ -49,7 +49,6 @@ pub(crate) async fn preview(
         return Err("preview exceeds one million cell samples; request fewer times".into());
     }
     let library = standard_library();
-    luma_patterns::clip_graph::check(&request.graph).map_err(|error| error.to_string())?;
     let start = clock
         .beat_at(request.clip_start)
         .map_err(|e| e.to_string())?;
