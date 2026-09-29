@@ -342,11 +342,13 @@ class Edit:
             raise ClipError("\n".join(_prefixed(label, id, message) for message in result.errors))
 
     def add_clip(self, graph, *, name=None, beats=None, bars=None, seconds=None,
-                 selection="all", z=None, blend="replace", seed=None, id=None):
+                 selection="all", z=None, blend=None, seed=None, id=None):
         """Stage a clip and return it. The checker runs on it at once.
 
         graph is a Graph from color(), aim() or strobe(), preset("Chase"),
-        or a preset name. name is required unless the graph is a preset.
+        or a preset name. name is required unless the graph is a preset;
+        a preset also gives its blend mode (motion presets are offset).
+        With no blend and no preset, the blend is replace.
         Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
         seconds=(0,16). Beats start at zero; bars at one. selection is a
         group expression. Clips composite bottom-up by integer z; omit z to
@@ -368,7 +370,7 @@ class Edit:
                      if clip["start"] < end and start < clip["start"] + clip["duration"]),
                     default=-1) + 1
         value = {"name": str(name), "start": start, "duration": end - start, "seed": _seed(seed),
-                 "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend),
+                 "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend or graph.blend or "replace"),
                  "graph": graph.json()}
         self._check_clip(id, value)
         self._candidate["clips"][id] = value

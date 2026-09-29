@@ -91,18 +91,19 @@ def install_presets(presets):
     presets = _plain(presets) or {}
     clips = {}
     for name, value in _named(presets.get("clips")).items():
-        graph = value.get("graph", value) if isinstance(value, dict) else value
-        clips[name] = graph
+        if "graph" not in value:
+            value = {"graph": value}
+        clips[name] = {"graph": value["graph"], "blend_mode": value.get("blend_mode")}
     curves = {}
     for name, value in _named(presets.get("curves")).items():
         if isinstance(value, dict):
-            value = value.get("points", value.get("shape", value))
+            value = value.get("curve", value)
             value = value.get("points") if isinstance(value, dict) else value
         curves[name] = value
     gradients = {}
     for name, value in _named(presets.get("gradients")).items():
         if isinstance(value, dict):
-            value = value.get("stops", value.get("gradient", value))
+            value = value.get("gradient", value)
             value = value.get("stops") if isinstance(value, dict) else value
         gradients[name] = value
     bands = {}
@@ -388,9 +389,10 @@ def strobe(rate=None, alpha=None) -> "Graph":
 
 
 def preset(name) -> "Graph":
-    """A copy of a shipped clip preset, with its name. luma.presets.clips lists them."""
-    name, graph = _lookup("clips", name, "clip preset", 'preset("Chase")')
-    return Graph.from_json(graph, name=name)
+    """A copy of a shipped clip preset, with its name and blend mode.
+    luma.presets.clips lists them."""
+    name, record = _lookup("clips", name, "clip preset", 'preset("Chase")')
+    return Graph.from_json(record["graph"], name=name, blend=record["blend_mode"])
 
 
 # ---------------------------------------------------------------------------
@@ -447,18 +449,20 @@ class Graph:
     graph.nodes    id -> NodeRecord(kind, settings, inputs)
     graph.output   the output NodeRecord (color, aim or strobe)
     graph.name     the preset name, when it came from a preset
+    graph.blend    the preset blend mode, when it came from a preset
     graph.json()   the stored JSON
     graph.source() Python that rebuilds this graph
     """
 
-    __slots__ = ("_output", "_nodes", "_ids", "name")
+    __slots__ = ("_output", "_nodes", "_ids", "name", "blend")
 
-    def __init__(self, output, name=None):
+    def __init__(self, output, name=None, blend=None):
         object.__setattr__(self, "_output", output)
         nodes = _reachable(output) if output is not None else []
         object.__setattr__(self, "_nodes", nodes)
         object.__setattr__(self, "_ids", _assign_ids(nodes))
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "blend", blend)
 
     def __setattr__(self, name, value):
         raise AttributeError("a graph is immutable; build a new one")
@@ -501,14 +505,14 @@ class Graph:
         return "\n".join(lines)
 
     @classmethod
-    def from_json(cls, data, name=None):
+    def from_json(cls, data, name=None, blend=None):
         """Rebuild a graph from its stored JSON. Unknown kinds pass through for the checker."""
         data = _plain(data) or {}
         if not isinstance(data, dict):
             raise ClipError(f"graph: expected a graph object with nodes; got {data!r}")
         stored = data.get("nodes") or {}
         if not stored:
-            return cls(None, name=name)
+            return cls(None, name=name, blend=blend)
 
         def depends(record):
             return [value["node"] for value in (record.get("inputs") or {}).values()
@@ -545,7 +549,7 @@ class Graph:
         if len(outputs) != 1:
             names = ", ".join(sorted(node._id for node in outputs)) or "none"
             raise ClipError(f"graph: expected one output node; got {names}. Example: one clip per output")
-        graph = cls(outputs[0], name=name)
+        graph = cls(outputs[0], name=name, blend=blend)
         missing = set(stored) - {graph._ids[id(node)] for node in graph._nodes}
         if missing:
             raise ClipError(f"graph: expected every node to reach the output; {', '.join(sorted(missing))} does not")
