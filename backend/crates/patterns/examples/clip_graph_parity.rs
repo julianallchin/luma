@@ -24,7 +24,7 @@ fn evaluate(library: &Library, raw: &serde_json::Value) -> Result<serde_json::Va
     let score = Score {
         clips: BTreeMap::from([("comparison".into(), clip)]),
     };
-    let program = score.prepare_clip(library, "comparison", &Default::default(), &cells)?;
+    let program = score.prepare_clip(library, "comparison", &cells)?;
     let frames = beats
         .iter()
         .map(|beat| program.evaluate(*beat))
