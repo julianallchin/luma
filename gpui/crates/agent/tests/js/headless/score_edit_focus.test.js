@@ -5,7 +5,7 @@ fixture({ seconds: 20, clips: [CLIP], rig: 4, window: [1400, 900] });
 
 const node = (role, label) => app.snapshot().find({ role, label });
 // A clip is labelled by its form; the fixture's clip plays Color.
-const CARD = "Color";
+const CARD = "Wash";
 
 test(
   "the inspector stays open and swaps between presets and clip inputs",
@@ -13,7 +13,7 @@ test(
   () => {
     const read = () => {
       const shot = app.snapshot();
-      const inspector = shot.find({ role: "card", label: "Clip inputs" }) ?? shot.find({ role: "card", label: "Presets" });
+      const inspector = shot.find({ role: "card", label: "Clip graph" }) ?? shot.find({ role: "card", label: "Presets" });
       return {
         showing: inspector?.label ?? null,
         width: inspector?.bounds.width ?? 0,
@@ -39,7 +39,7 @@ test(
     const selecting = sample();
     until("the clip's controls", () => node("button", "Pick fixtures"));
     const opened = read();
-    expect(opened.showing).toBe("Clip inputs");
+    expect(opened.showing).toBe("Clip graph");
     app.click(node("card", "Waveform"));
     const clearing = sample();
     until("the presets again", () => node("card", "Presets"));
@@ -62,10 +62,10 @@ test("the inspector stays above the timeline and pickers accept keyboard input",
   until("the clip", () => node("card", CARD));
   app.click(node("card", CARD));
   until("the clip's controls", () => node("button", "Pick fixtures"));
-  const before = node("card", "Clip inputs").bounds;
+  const before = node("card", "Clip graph").bounds;
   app.drag(node("slider", "Stage height"), { dx: 0, dy: 140 });
   app.frames(4);
-  const inspector = node("card", "Clip inputs").bounds;
+  const inspector = node("card", "Clip graph").bounds;
   const wave = node("card", "Waveform").bounds;
   // A shorter stage gives the inspector room, and it stays above the
   // timeline with its controls on screen.

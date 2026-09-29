@@ -9,10 +9,10 @@
 // The editor labels a clip by its form, so each clip here plays a different
 // form to be told apart on screen.
 const FORMS = {
-  alpha: { preset: ["color@1", "Wash"], label: "Color" },
-  bravo: { preset: ["color.sparkle@1", "Random heads"], label: "Sparkle" },
-  charlie: { preset: ["color.noise@1", "Drift"], label: "Noise" },
-  cap: { preset: ["strobe.constant@1", "Strobe"], label: "Strobe" },
+  alpha: { preset: "Wash", label: "Wash" },
+  bravo: { preset: "Random heads", label: "Random heads" },
+  charlie: { preset: "Clouds", label: "Clouds" },
+  cap: { preset: "Strobe", label: "Strobe" },
 };
 const clip = (name, start, end, lane) =>
   ({ pattern: `pattern-${name}`, name, start, end, lane, preset: FORMS[name].preset });
