@@ -1,7 +1,7 @@
 //! The preset browser: what the inspector shows while no clip is selected.
 //!
-//! The shipped presets, grouped by form, one row each: the name, and a
-//! strip of the preset (time across, heads down along the form's axis). The
+//! The shipped presets, grouped by output kind, one row each: the name, and
+//! a strip of the preset (time across, heads down). The
 //! strip is the timeline's clip strip on this rig, rendered once per preset
 //! on every head. Until that lands, or when there is no score to
 //! render it against, the row shows the same strip on a stand-in rig, a
@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 
 use luma_lib::models::universe::UniverseState;
 use luma_lib::services::graph_scores::ClipPreview;
-use luma_patterns::FormPreset;
+use luma_patterns::ClipPreset;
 use luma_ui::text_input::TextInput;
 
 use super::*;
@@ -56,7 +56,7 @@ pub(crate) struct State {
     /// Prepared single-clip programs, newest last.
     prepared: VecDeque<(Key, Arc<ClipPreview>)>,
     /// Where a preset carried over the timeline would land.
-    drop: Option<(&'static FormPreset, InsertMenu)>,
+    drop: Option<(&'static ClipPreset, InsertMenu)>,
     /// What the stage plays instead of the score.
     audition: Option<Audition>,
 }
@@ -147,12 +147,14 @@ fn fetch_stand_ins(editor: &mut Editor, cx: &mut Context<Luma>) {
             .background_executor()
             .spawn(async move {
                 luma_patterns::presets()
-                    .presets
+                    .clips
                     .iter()
                     .filter_map(|preset| {
-                        let row =
-                            luma_lib::services::graph_scores::stand_in_strip(preset, THUMB_BEATS)
-                                .ok()?;
+                        let row = luma_lib::services::graph_scores::stand_in_strip(
+                            &preset.graph,
+                            THUMB_BEATS,
+                        )
+                        .ok()?;
                         Some((key(preset), Preview::decode(row, None)?))
                     })
                     .collect::<HashMap<_, _>>()
@@ -190,28 +192,22 @@ impl Editor {
     /// timeline.
     pub(in crate::track_editor) fn drop_ghost(&self) -> Option<DropGhost> {
         let (preset, menu) = self.sheet.browser.drop?;
+        let mut clip = Clip {
+            id: "drop-ghost".into(),
+            output: SharedString::default(),
+            label: SharedString::default(),
+            summary: SharedString::default(),
+            color: ladder::pattern(""),
+            start: menu.start,
+            end: menu.end,
+            row: menu.row,
+            z: 0,
+            blend: preset.blend_mode,
+            core: Some(preset.clip(0., 1.)),
+        };
+        clip.refresh();
         Some(DropGhost {
-            clip: Clip {
-                id: "drop-ghost".into(),
-                pattern: preset.form.clone().into(),
-                label: preset.name.clone().into(),
-                color: ladder::pattern(&preset.form),
-                start: menu.start,
-                end: menu.end,
-                row: menu.row,
-                z: 0,
-                blend: BlendMode::Replace,
-                args: serde_json::Value::Object(
-                    preset
-                        .inputs
-                        .iter()
-                        .map(|(key, value)| {
-                            (key.clone(), super::super::document::wire_value(value))
-                        })
-                        .collect(),
-                ),
-                core: None,
-            },
+            clip,
             strip: strip(&self.sheet.browser, preset),
             insert: menu.insert,
         })
@@ -220,7 +216,7 @@ impl Editor {
 
 /// A preset's strip: on the real rig once it has rendered, else on the
 /// stand-in rig.
-fn strip(browser: &State, preset: &FormPreset) -> Option<Preview> {
+fn strip(browser: &State, preset: &ClipPreset) -> Option<Preview> {
     match browser.thumbs.get(&key(preset)) {
         Some(Thumbnail::Ready(preview)) => Some(preview.clone()),
         _ => browser
@@ -231,31 +227,31 @@ fn strip(browser: &State, preset: &FormPreset) -> Option<Preview> {
     }
 }
 
-/// What tells a preset apart: its form and its name. A name is unique only
-/// within its form; Chase and Aim each have a Wave.
-fn key(preset: &FormPreset) -> String {
-    format!("{}/{}", preset.form, preset.name)
+/// What tells a preset apart: its name, unique across kinds.
+fn key(preset: &ClipPreset) -> String {
+    preset.name.clone()
 }
 
 /// The presets matching the query, in shipped order. A query matches a
-/// preset's name or its form's name.
-fn matching(query: &str) -> Vec<&'static FormPreset> {
+/// preset's name or its output kind.
+fn matching(query: &str) -> Vec<&'static ClipPreset> {
     let query = query.trim().to_lowercase();
     luma_patterns::presets()
-        .presets
+        .clips
         .iter()
         .filter(|preset| {
             preset.name.to_lowercase().contains(&query)
-                || form_name(&preset.form).to_lowercase().contains(&query)
+                || preset.output_kind().label().to_lowercase().contains(&query)
         })
         .collect()
 }
 
-/// The matching presets by form, forms in the order they first appear.
-fn grouped(query: &str) -> Vec<(&'static str, Vec<&'static FormPreset>)> {
-    let mut groups: Vec<(&'static str, Vec<&'static FormPreset>)> = Vec::new();
+/// The matching presets by output kind, kinds in the order they first
+/// appear.
+fn grouped(query: &str) -> Vec<(&'static str, Vec<&'static ClipPreset>)> {
+    let mut groups: Vec<(&'static str, Vec<&'static ClipPreset>)> = Vec::new();
     for preset in matching(query) {
-        let form = form_name(&preset.form);
+        let form = preset.output_kind().label();
         match groups.iter_mut().find(|(name, _)| *name == form) {
             Some((_, presets)) => presets.push(preset),
             None => groups.push((form, vec![preset])),
@@ -295,7 +291,7 @@ fn lane_selection(editor: &Editor, row: usize, time: f64) -> Option<luma_pattern
 /// audition.
 fn single_clip_score(
     editor: &Editor,
-    preset: &FormPreset,
+    preset: &ClipPreset,
     start: f64,
     duration: f64,
     selection: &luma_patterns::Selection,
@@ -369,7 +365,7 @@ fn fetch_thumbnail(editor: &mut Editor, cx: &mut Context<Luma>) {
 impl Luma {
     /// The pointer entered or left a tile. Entering plays the preset on the
     /// stage once its program is ready; leaving gives the stage back at once.
-    fn hover_preset(&mut self, preset: &'static FormPreset, over: bool, cx: &mut Context<Self>) {
+    fn hover_preset(&mut self, preset: &'static ClipPreset, over: bool, cx: &mut Context<Self>) {
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
             return;
         };
@@ -443,7 +439,7 @@ impl Luma {
 
     /// A click on a tile: place the preset at the playhead on the selected
     /// lane.
-    fn place_preset(&mut self, preset: &'static FormPreset, cx: &mut Context<Self>) {
+    fn place_preset(&mut self, preset: &'static ClipPreset, cx: &mut Context<Self>) {
         let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
             return;
         };
@@ -465,7 +461,7 @@ impl Luma {
             active: 0,
         };
         let selection = target_selection(editor);
-        self.insert_pattern(menu, InsertChoice(preset), selection, cx);
+        self.insert_pattern(menu, InsertChoice::Preset(preset), selection, cx);
     }
 
     /// A tile dropped on the timeline at `at`, a window position: place the
@@ -489,13 +485,13 @@ impl Luma {
         if let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() {
             editor.sheet.browser.drop = None;
         }
-        self.insert_pattern(menu, InsertChoice(drag.0), selection, cx);
+        self.insert_pattern(menu, InsertChoice::Preset(drag.0), selection, cx);
     }
 }
 
 /// What a tile drag carries.
 #[derive(Clone, Copy)]
-pub(in crate::track_editor) struct PresetDrag(&'static FormPreset);
+pub(in crate::track_editor) struct PresetDrag(&'static ClipPreset);
 
 /// What follows the pointer during a drag: the preset's strip and name.
 struct Carried {
@@ -606,7 +602,7 @@ pub(super) fn body(state: &Editor, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-fn row(preset: &'static FormPreset, strip: Option<Preview>, app: &Entity<Luma>) -> AnyElement {
+fn row(preset: &'static ClipPreset, strip: Option<Preview>, app: &Entity<Luma>) -> AnyElement {
     let name: SharedString = preset.name.clone().into();
     let key = format!("preset-row-{}", key(preset));
     let carried = strip.clone();
@@ -688,7 +684,7 @@ mod tests {
     use super::{grouped, matching};
 
     #[test]
-    fn a_query_matches_a_preset_or_its_form() {
+    fn a_query_matches_a_preset_or_its_output() {
         let names = |query: &str| -> Vec<&str> {
             matching(query).iter().map(|p| p.name.as_str()).collect()
         };
@@ -696,37 +692,17 @@ mod tests {
         let chases = names("chase");
         assert!(chases.contains(&"Chase") && chases.contains(&"Stepped chase"));
         assert!(!chases.contains(&"Wash"));
-        // The form's name matches too: every color preset is a Color.
-        assert!(names("color").contains(&"Wave"));
-        // Color and Aim each have a Wave.
-        let waves: Vec<&str> = matching("wave").iter().map(|p| p.form.as_str()).collect();
-        assert_eq!(waves, ["color@1", "aim@1"]);
-        assert_eq!(matching("").len(), luma_patterns::presets().presets.len());
+        // The output's name matches too: every aim preset is an Aim.
+        assert!(names("aim").contains(&"Sweep"));
+        assert_eq!(matching("").len(), luma_patterns::presets().clips.len());
         assert!(matching("no such preset").is_empty());
     }
 
     #[test]
-    fn presets_group_by_form_in_shipped_order() {
-        let forms: Vec<&str> = grouped("").iter().map(|(form, _)| *form).collect();
-        assert_eq!(forms, ["Color", "Sparkle", "Noise", "Strobe", "Aim"]);
+    fn presets_group_by_output_in_shipped_order() {
+        let kinds: Vec<&str> = grouped("").iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(kinds, ["Color", "Aim", "Strobe"]);
         let color = &grouped("")[0].1;
-        assert_eq!(
-            color.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
-            [
-                "Wash",
-                "Pulse",
-                "Color fade",
-                "Rainbow",
-                "Gradient",
-                "Chase",
-                "Wave",
-                "Ripple",
-                "Spin",
-                "Bounce",
-                "Alternating sides",
-                "Stepped chase",
-                "Grow"
-            ]
-        );
+        assert_eq!(color.first().map(|p| p.name.as_str()), Some("Wash"));
     }
 }

@@ -69,17 +69,16 @@ pub struct Clip {
     /// The clip's id in the score. A clip plays the Wash preset unless it
     /// names another.
     pub pattern: String,
-    /// What the test calls the clip. The editor labels a clip by its form.
+    /// What the test calls the clip. The clip takes its preset's name.
     pub name: String,
     /// Seconds.
     pub start: f64,
     pub end: f64,
     #[serde(default, rename = "lane")]
     pub z_index: i64,
-    /// A shipped `[form, preset]` to play instead of Wash, e.g.
-    /// `["color@1", "Chase"]`.
+    /// A shipped clip preset to play instead of Wash, e.g. `"Chase"`.
     #[serde(default)]
-    pub preset: Option<(String, String)>,
+    pub preset: Option<String>,
     #[serde(default)]
     pub seed: u64,
     /// The clip's selection expression, when not the whole venue.
@@ -716,15 +715,10 @@ impl Fixture {
     fn timeline(&self) -> Value {
         let mut clips = serde_json::Map::new();
         for clip in &self.clips {
-            let (form, preset) = clip
-                .preset
-                .as_ref()
-                .map_or(("color@1", "Wash"), |(form, preset)| {
-                    (form.as_str(), preset.as_str())
-                });
+            let preset = clip.preset.as_deref().unwrap_or("Wash");
             let mut placed = luma_patterns::presets()
-                .preset(form, preset)
-                .unwrap_or_else(|| panic!("no shipped preset {form} / {preset}"))
+                .clip(preset)
+                .unwrap_or_else(|| panic!("no shipped preset {preset}"))
                 .clip(
                     clip.start * BEATS_PER_SECOND,
                     (clip.end - clip.start) * BEATS_PER_SECOND,
@@ -915,10 +909,9 @@ pub fn config_dir(name: &str) -> PathBuf {
 /// What a test script may read back from its library: `{"op": "query",
 /// "sql": …}` gives rows as objects (a blob as its length), `{"op": "score"}`
 /// the score that holds clips as the document the editor saved,
-/// `{"op": "presets"}` the shipped form presets, `{"op": "curves", "input":
-/// …}` the curve presets an input offers, `{"op": "gradients"}` the named
-/// gradients and `{"op": "shapes"}` the named stroke shapes. Read-only: a test
-/// writes through the app.
+/// `{"op": "presets"}` the shipped clip presets, `{"op": "curves"}` the named
+/// curve shapes and `{"op": "gradients"}` the named gradients. Read-only: a
+/// test writes through the app.
 pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
     let request: Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -948,22 +941,13 @@ pub fn read_library(dir: &Path, request: &str) -> Result<String, String> {
                 serde_json::to_value(score).map_err(|error| error.to_string())
             }
             // The shipped catalogue a placed clip copies from, in menu order.
-            Some("presets") => serde_json::to_value(&luma_patterns::presets().presets)
+            Some("presets") => serde_json::to_value(&luma_patterns::presets().clips)
                 .map_err(|error| error.to_string()),
-            // As shipped, 0–1: the sheet scales a pick to the input's range.
-            Some("curves") => {
-                let input = request["input"].as_str().ok_or("curves needs an input")?;
-                let curves: Vec<_> = luma_patterns::presets().curves_for(input).collect();
-                serde_json::to_value(curves).map_err(|error| error.to_string())
-            }
+            // As shipped, values 0–1: a curve's low and high scale them.
+            Some("curves") => serde_json::to_value(&luma_patterns::presets().curves)
+                .map_err(|error| error.to_string()),
             Some("gradients") => serde_json::to_value(&luma_patterns::presets().gradients)
                 .map_err(|error| error.to_string()),
-            Some("shapes") => Ok(Value::Array(
-                luma_patterns::shape_presets()
-                    .into_iter()
-                    .map(|(name, value)| json!({ "name": name, "value": value }))
-                    .collect(),
-            )),
             other => Err(format!("unknown library op {other:?}")),
         };
         pool.close().await;

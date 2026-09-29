@@ -1,12 +1,11 @@
-//! The noise preview: what a Noise source gives, drawn with the patterns
-//! crate's own [`noise_value`], so it shows what playback does.
+//! The noise preview: what a noise node gives, drawn with the host's own
+//! sampler — the patterns crate's noise — so it shows what playback does.
 //!
 //! Over time, three heads at 15 %, 50 % and 85 % along a line rig draw a line
-//! each over 16 beats, Low at the bottom and High at the top. Along the rig,
-//! 48 heads show their level at the playhead's beat of the clip, so the strip
-//! shows what the lights show there. A clump grain groups the heads as a rig
-//! would. A setting that follows a source of its own is held at a fixed
-//! stand-in, and the preview says so.
+//! each over 16 beats, 0 at the bottom and 1 at the top. Along the rig, 48
+//! heads show their value at the playhead's beat of the clip, so the strip
+//! shows what the lights show there. A setting that follows a wire of its
+//! own is held at a fixed stand-in, and the preview says so.
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -15,7 +14,6 @@ use gpui::{
     canvas, div, fill, hsla, point, px, size, App, Bounds, Context, Div, Hsla, PathBuilder, Pixels,
     SharedString, Window,
 };
-use luma_patterns::{noise_value, NoiseSettings, NoiseSource, Value};
 
 use super::number::format_value;
 use crate::{
@@ -38,6 +36,24 @@ pub struct Transport {
 /// Reads the clip's transport.
 pub type TransportSource = Rc<dyn Fn(&App) -> Transport>;
 
+/// A noise node's settings as fixed numbers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Settings {
+    /// Beats per turn of the noise clock.
+    pub speed: f64,
+    /// The blob size, a share of the rig; `None` is one value for all heads.
+    pub scale: Option<f64>,
+    pub contrast: f64,
+    /// The settings that follow a wire, each with the stand-in it is shown
+    /// at, such as "speed at 4 beats".
+    pub held: Vec<String>,
+}
+
+/// The noise at a head: the settings, the clip's seed, the head's place
+/// (U, V, Z, 0–1 over the rig) and the beats since the clip start. `None`
+/// when the settings give no noise.
+pub type Sampler = Rc<dyn Fn(&Settings, u64, [f64; 3], f64) -> Option<f64>>;
+
 /// Beats the line graph spans.
 const SPAN: f64 = 16.;
 /// Heads along the rig strip.
@@ -53,40 +69,29 @@ const FRAME: Duration = Duration::from_millis(33);
 
 pub struct NoisePreview {
     id: SharedString,
-    source: Option<NoiseSource>,
-    /// The input's path as the form names it: the default noise key.
-    path: String,
-    /// Values are levels 0–1, so a head shows its value as it is rather than
-    /// its place between Low and High.
-    levels: bool,
+    settings: Option<Settings>,
+    sampler: Sampler,
     transport: TransportSource,
     drawn: Instant,
     watching: bool,
 }
 
 impl NoisePreview {
-    pub fn new(
-        id: impl Into<SharedString>,
-        path: impl Into<String>,
-        levels: bool,
-        transport: TransportSource,
-    ) -> Self {
+    pub fn new(id: impl Into<SharedString>, sampler: Sampler, transport: TransportSource) -> Self {
         Self {
             id: id.into(),
-            source: None,
-            path: path.into(),
-            levels,
+            settings: None,
+            sampler,
             transport,
             drawn: Instant::now(),
             watching: false,
         }
     }
 
-    /// A host-side write: the source as stored now, or `None` when it does
-    /// not read as a Noise source.
-    pub fn set_value(&mut self, source: Option<NoiseSource>, cx: &mut Context<Self>) {
-        if self.source != source {
-            self.source = source;
+    /// A host-side write: the node's settings as stored now.
+    pub fn set_value(&mut self, settings: Settings, cx: &mut Context<Self>) {
+        if self.settings.as_ref() != Some(&settings) {
+            self.settings = Some(settings);
             cx.notify();
         }
     }
@@ -117,69 +122,9 @@ impl NoisePreview {
     }
 }
 
-/// `source`'s numeric settings as fixed numbers, and the names of those that
-/// follow a source of their own with the stand-in each is shown at.
-fn settings(source: &NoiseSource) -> (NoiseSettings, Vec<String>) {
-    let mut held = Vec::new();
-    let mut fixed = |name: &str, value: &Value, stand_in: f64, unit: &str| {
-        value.scalar_value().unwrap_or_else(|| {
-            held.push(format!("{name} at {}{unit}", format_value(stand_in)));
-            stand_in
-        })
-    };
-    let settings = NoiseSettings {
-        speed: fixed("Speed", &source.speed, 4., " beats"),
-        scale: source
-            .scale
-            .as_ref()
-            .map_or(0.5, |scale| fixed("Scale", scale, 0.5, "")),
-        contrast: fixed("Contrast", &source.contrast, 0., ""),
-        range: [
-            fixed("Low", &source.range[0], 0., ""),
-            fixed("High", &source.range[1], 1., ""),
-        ],
-    };
-    (settings, held)
-}
-
-/// The preview rig: head `i`'s grain unit, the unit's first head and its
-/// place along the rig. Positions span the unit centres, as a rig's do.
-fn unit_of(i: usize, grain: usize) -> (usize, f64) {
-    let size = grain.max(1);
-    let first = i - i % size;
-    let units = HEADS.div_ceil(size);
-    let unit = first / size;
-    let place = if units > 1 {
-        unit as f64 / (units - 1) as f64
-    } else {
-        0.5
-    };
-    (first, place)
-}
-
-struct Reading {
-    settings: NoiseSettings,
-    source: NoiseSource,
-    path: String,
-    seed: u64,
-}
-
-impl Reading {
-    /// Head `i`'s value at `beats`, or `None` when the noise cannot be read.
-    fn at(&self, i: usize, beats: f64) -> Option<f64> {
-        let (first, place) = unit_of(i, self.source.grain.size());
-        noise_value(
-            &self.source,
-            self.settings,
-            &self.path,
-            self.seed,
-            &format!("preview:{first}"),
-            [place, 0.5],
-            beats,
-        )
-        .ok()
-        .filter(|v| v.is_finite())
-    }
+/// Head `i`'s place along the preview rig, 0–1.
+fn place(i: usize) -> f64 {
+    i as f64 / (HEADS - 1) as f64
 }
 
 /// A title in the verb/detail pattern: the name bright, the detail dim.
@@ -217,7 +162,7 @@ fn head_color(level: f64) -> Hsla {
 impl Render for NoisePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id.clone();
-        let Some(source) = self.source.clone() else {
+        let Some(settings) = self.settings.clone() else {
             return div().agent_node(Role::Card, format!("{id} preview"));
         };
         let transport = (self.transport)(cx);
@@ -228,47 +173,27 @@ impl Render for NoisePreview {
         }
         self.drawn = Instant::now();
         let beat = transport.beat;
-        let (settings, held) = settings(&source);
-        let reading = Rc::new(Reading {
-            settings,
-            source,
-            path: self.path.clone(),
-            seed: transport.seed,
-        });
+        let sampler = self.sampler.clone();
+        let at = |i: usize, beats: f64| {
+            sampler(&settings, transport.seed, [place(i), 0.5, 0.5], beats)
+                .filter(|v| v.is_finite())
+                .map(|v| v.clamp(0., 1.))
+        };
         // The graph pages through time 16 beats at a time, with a cursor at
         // the preview's beat.
         let page = (beat / SPAN).floor() * SPAN;
         let cursor = ((beat - page) / SPAN) as f32;
-        let [low, high] = settings.range;
-        let (bottom, top) = (low.min(high), low.max(high));
-        let height = |v: f64| {
-            if top - bottom < 1e-9 {
-                0.5
-            } else {
-                ((v - bottom) / (top - bottom)).clamp(0., 1.)
-            }
-        };
         let lines: Vec<Vec<Option<f64>>> = SAMPLED
             .iter()
-            .map(|at| {
-                let head = (at * (HEADS - 1) as f64).round() as usize;
+            .map(|share| {
+                let head = (share * (HEADS - 1) as f64).round() as usize;
                 (0..=STEPS)
-                    .map(|k| {
-                        reading
-                            .at(head, page + SPAN * k as f64 / STEPS as f64)
-                            .map(height)
-                    })
+                    .map(|k| at(head, page + SPAN * k as f64 / STEPS as f64))
                     .collect()
             })
             .collect();
-        let levels = self.levels;
-        let heads: Vec<Option<f64>> = (0..HEADS)
-            .map(|i| {
-                reading
-                    .at(i, beat)
-                    .map(|v| if levels { v.clamp(0., 1.) } else { height(v) })
-            })
-            .collect();
+        let heads: Vec<Option<f64>> = (0..HEADS).map(|i| at(i, beat)).collect();
+        let held = settings.held.clone();
         let readable = heads.iter().all(Option::is_some);
         let graph = div()
             .relative()
@@ -379,20 +304,5 @@ fn paint_heads(window: &mut Window, bounds: Bounds<Pixels>, heads: &[Option<f64>
         };
         let color = level.map_or(ladder::foreground_alpha(0.06), head_color);
         window.paint_quad(fill(cell, color).corner_radii(px(2.)));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Clump heads share a unit and a place; the places span the rig.
-    #[test]
-    fn clumps_group_the_preview_heads() {
-        assert_eq!(unit_of(0, 1), (0, 0.));
-        assert_eq!(unit_of(HEADS - 1, 1), (HEADS - 1, 1.));
-        assert_eq!(unit_of(5, 4), unit_of(4, 4));
-        assert_ne!(unit_of(8, 4), unit_of(4, 4));
-        assert_eq!(unit_of(HEADS - 1, 8).1, 1.);
     }
 }

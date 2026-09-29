@@ -295,7 +295,7 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
     editor.clipboard = None;
     editor.clips = Vec::new().into();
     editor.graph_score = None;
-    editor.sheet.invalidate_defs();
+    editor.sheet.invalidate();
     editor.composited = None;
     editor.dirty = false;
 }
@@ -309,10 +309,12 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
 #[derive(Clone)]
 struct Clip {
     id: SharedString,
-    pattern: SharedString,
-    /// The pattern's name, or a `Pattern <id>` fallback when the catalogue does
-    /// not know it.
+    /// The kind of the graph's output node: `color`, `aim` or `strobe`.
+    output: SharedString,
+    /// The clip's name, or its output kind while it has none.
     label: SharedString,
+    /// The graph's one-line summary, drawn after the name.
+    summary: SharedString,
     color: Rgba,
     start: f64,
     end: f64,
@@ -321,7 +323,6 @@ struct Clip {
     row: usize,
     z: i64,
     blend: BlendMode,
-    args: serde_json::Value,
     core: Option<luma_patterns::Clip>,
 }
 
@@ -335,6 +336,26 @@ impl Clip {
             z,
             ..self.clone()
         }
+    }
+
+    /// Read the pictures of the clip — output, label, summary, color — off
+    /// its authored body again, after an edit to it.
+    fn refresh(&mut self) {
+        let Some(core) = self.core.as_ref() else {
+            return;
+        };
+        let output = core
+            .graph
+            .output_kind()
+            .unwrap_or(luma_patterns::clip_graph::Kind::Color);
+        self.output = output.name().into();
+        self.label = if core.name.is_empty() {
+            output.label().into()
+        } else {
+            core.name.clone().into()
+        };
+        self.summary = core.graph.summary().into();
+        self.color = ladder::pattern(output.name());
     }
 }
 
@@ -476,26 +497,69 @@ struct InsertMenu {
     active: usize,
 }
 
-/// A shipped preset on offer in the insertion picker.
+/// A row of the insertion picker: a shipped preset, or a blank start with
+/// only an output node.
 #[derive(Clone, Copy)]
-struct InsertChoice(&'static luma_patterns::FormPreset);
-impl InsertChoice {
-    fn name(&self) -> &str {
-        &self.0.name
-    }
-    /// The preset's form and name: a name is unique only within its form.
-    fn id(&self) -> String {
-        format!("{}/{}", self.0.form, self.0.name)
-    }
-    /// The form the preset sets, which the picker shows beside its name.
-    fn origin(&self) -> &'static str {
-        form_name(&self.0.form)
-    }
+enum InsertChoice {
+    Preset(&'static luma_patterns::ClipPreset),
+    Blank(luma_patterns::clip_graph::Kind),
 }
 
-/// A form's display name, such as "Aim" for `aim@1`.
-fn form_name(form: &str) -> &'static str {
-    document::form_definition(form).map_or("", |definition| definition.name.as_str())
+impl InsertChoice {
+    /// The blank starts, after the presets.
+    const BLANKS: [luma_patterns::clip_graph::Kind; 3] = [
+        luma_patterns::clip_graph::Kind::Color,
+        luma_patterns::clip_graph::Kind::Aim,
+        luma_patterns::clip_graph::Kind::Strobe,
+    ];
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Preset(preset) => &preset.name,
+            Self::Blank(kind) => kind.label(),
+        }
+    }
+    /// What tells rows apart. Preset names are unique across kinds.
+    fn id(&self) -> String {
+        match self {
+            Self::Preset(preset) => preset.name.clone(),
+            Self::Blank(kind) => format!("blank-{}", kind.name()),
+        }
+    }
+    /// What the picker shows beside the name: the output kind, or "Blank".
+    fn origin(&self) -> &'static str {
+        match self {
+            Self::Preset(preset) => preset.output_kind().label(),
+            Self::Blank(_) => "Blank",
+        }
+    }
+    fn graph(&self) -> luma_patterns::ClipGraph {
+        match self {
+            Self::Preset(preset) => preset.graph.clone(),
+            Self::Blank(kind) => luma_patterns::ClipGraph::new([(
+                format!("{}1", kind.name()),
+                luma_patterns::clip_graph::Node::new(*kind),
+            )]),
+        }
+    }
+    /// A clip of this choice from `start` for `duration` beats. A blank
+    /// start is named after its output, as the checker wants a name.
+    fn clip(&self, start: f64, duration: f64) -> luma_patterns::Clip {
+        match self {
+            Self::Preset(preset) => preset.clip(start, duration),
+            Self::Blank(kind) => luma_patterns::Clip {
+                name: kind.label().into(),
+                start,
+                duration,
+                seed: 0,
+                selection_seed: None,
+                selection: luma_patterns::Selection::all(),
+                z_index: 0,
+                blend_mode: BlendMode::Replace,
+                graph: self.graph(),
+            },
+        }
+    }
 }
 
 /// The selection cursor: a point in time, or a rectangle of time × lanes.
@@ -1580,14 +1644,16 @@ impl Editor {
         self.menu_scroll.scroll_to_item(menu.active);
     }
 
-    /// The presets the picker lists for the current query, in menu order. A
-    /// query matches a preset's name or its form's name.
+    /// The presets the picker lists for the current query, in menu order,
+    /// then the blank starts. A query matches a row's name or its output
+    /// kind.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
         luma_patterns::presets()
-            .presets
+            .clips
             .iter()
-            .map(InsertChoice)
+            .map(InsertChoice::Preset)
+            .chain(InsertChoice::BLANKS.map(InsertChoice::Blank))
             .filter(|choice| {
                 choice.name().to_lowercase().contains(&query)
                     || choice.origin().to_lowercase().contains(&query)
@@ -3123,12 +3189,10 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(a, b)| {
             a.id == b.id
-                && a.pattern == b.pattern
                 && a.start == b.start
                 && a.end == b.end
                 && a.z == b.z
                 && a.blend == b.blend
-                && a.args == b.args
                 && a.core == b.core
         })
 }
@@ -4581,24 +4645,41 @@ fn paint_clip(
         return;
     }
     // The clip clips its own label: a name too long for the header is cut off
-    // at the edge.
+    // at the edge. The name is the verb, bright; the summary after it is the
+    // detail, dimmer.
     let text = Bounds {
         origin: point(box_.origin.x + px(8.), box_.origin.y),
         size: size(box_.size.width - px(16.), px(CLIP_HEADER)),
     };
     window.with_content_mask(Some(ContentMask { bounds: text }), |window| {
-        paint::line(
-            point(
-                box_.origin.x + px(9.),
-                box_.origin.y + px(12. - LABEL_SIZE * paint::ASCENT),
-            ),
-            &clip.label,
-            LABEL_SIZE,
-            FontWeight::NORMAL,
-            ink(clip.color),
+        let at = point(
+            box_.origin.x + px(9.),
+            box_.origin.y + px(12. - LABEL_SIZE * paint::ASCENT),
+        );
+        let color = ink(clip.color);
+        let name = paint::shape(&clip.label, LABEL_SIZE, FontWeight::NORMAL, color, window);
+        let width = name.width;
+        name.paint(
+            at,
+            px(LABEL_SIZE * paint::LINE_HEIGHT),
+            TextAlign::Left,
+            None,
             window,
             cx,
-        );
+        )
+        .ok();
+        if !clip.summary.is_empty() && clip.summary != clip.label {
+            let detail: SharedString = format!(" · {}", clip.summary).into();
+            paint::line(
+                point(at.x + width, at.y),
+                &detail,
+                LABEL_SIZE,
+                FontWeight::NORMAL,
+                fade(color, 0.55).into(),
+                window,
+                cx,
+            );
+        }
     });
 }
 
