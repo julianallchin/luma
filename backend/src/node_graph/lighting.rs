@@ -65,7 +65,7 @@ fn is_source(value: &Value) -> bool {
     value.get("value").is_some()
         && matches!(
             value.get("type").and_then(Value::as_str),
-            Some("time" | "hit" | "noise" | "audio" | "space")
+            Some("time" | "random" | "noise" | "audio" | "space")
         )
 }
 

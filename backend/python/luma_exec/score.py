@@ -8,9 +8,8 @@
     edit.window(beats=(32, 36)).output.heatmap()
     edit.apply()
 
-A clip plays one form: color@1, color.sparkle@1, color.noise@1,
-strobe.constant@1 or aim@1. It holds a value for every input of its form. source() is the exact score document,
-suitable for an agent workspace or a one-shot model.
+A clip plays color@1, aim@1 or strobe.constant@1, with a value for every
+input. Presets are saved inputs. source() is the exact score document.
 
 A color is light in linear Rec. 2020, three channels 0..1; its brightness is
 its peak channel. "#RRGGBB" is sRGB and is converted where a plain color or a
@@ -30,24 +29,28 @@ share of the change to the next value, every number in 0..1.
 
 A plain "envelope" input holds values 0..1:
     {"type": "envelope", "value": {"points": [[0, 0, "ease-in-out"], [1, 1]]}}
-A signal socket takes the same curve as a "time" source (over the clip) or a
-"hit" source (over each event), with numbers in the input's unit or colors:
-    {"type": "time", "value": {"points": [[0, 2, "ease-out"], [1, 0.5]]}}
-Tag a curve on a signal socket "time" or "hit", never "envelope"; the core
-rejects an envelope there. On a color, a "time" or "hit" source can read a
-gradient at positions from a curve:
-    {"type": "hit", "value": {"gradient": {"stops": [...]},
-                              "curve": {"points": [[0, 0], [1, 1]]}}}
-A "space" source lays values along an axis of the heads: a gradient on a
-color, a curve of 0..1 on brightness. Add "move" for a chase: one stroke per
-hit of every, with the curve as brightness across the stroke:
-    {"type": "space", "value": {
-        "axis": {"source": {"kind": "u"}, "per_group": False, "reverse": False},
-        "curve": {"points": [[0, 1], [1, 1]]},
-        "move": {"path": {"points": [[0, 0], [1, 1]]},
-                 "travel": {"type": "beats", "value": 2},
-                 "width": {"type": "number", "value": 0.2},
-                 "width_relative": True, "boundary": "clip"}}}
+A signal takes a fixed value or Time, Space, Random, Noise or Audio.
+Time merges clip and event curves:
+    {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 2},
+        "life": {"type": "beats", "value": 6}}, "points": [[0, 0], [1, 1]]}}
+Omitted events inherit the enclosing source's clock, or use the whole clip.
+Explicit every 0 always means over the clip. events.same_as follows another
+input's clock, including a Space input's offset. Phase is in turns; gain
+scales the result. Numeric source inputs can themselves take sources.
+Space reads a curve or gradient along an axis. Offset positions a stroke;
+its Time source supplies the events. Width, gain and offset take sources.
+Random has events, coverage, level and grain. Noise has speed, optional
+spatial scale, contrast, range and grain. No scale means uniform noise.
+Grain is head, fixture, clump2, clump4 or clump8.
+
+Color inputs are color, brightness and fade. Aim inputs are base
+(direction/point), direction, point, lean (a spatial vector), horizontal,
+vertical, axis and fade. Its offsets use the same sources: Space for a fan,
+Time for coordinated curves, Noise for wandering. Replace establishes an
+aim; Offset adds turns to the layers underneath. Overlapping position clips
+and clip fades create transitions; an Offset circle can run above both.
+Fade is fixed or a Time curve over the whole clip, never a repeating source.
+
 """
 from __future__ import annotations
 
@@ -83,10 +86,10 @@ def _typed(kind, value):
         spec = kind["signal"]
         if isinstance(value, dict) and "type" in value:
             if value["type"] not in {"signal", "number", "beats", "proportion", "position", "degrees", "seconds", "color", "field", "mask", "color_field",
-                                     "time", "hit", "noise", "audio", "space"}:
+                                     "time", "random", "noise", "audio", "space"}:
                 raise TrackError(
                     f"a signal socket needs a numerical value or a source, not {value['type']!r}; "
-                    'a curve here is a "time" (over the clip) or "hit" (over each event) source, '
+                    'a curve here is a "time" source (over the clip or with events), '
                     'e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
                     '— not "envelope", which is a different, unrelated value kind'
                 )
@@ -95,7 +98,7 @@ def _typed(kind, value):
             raise TrackError(
                 'a signal socket needs a numerical value or a tagged source, not a bare dict; '
                 'tag a curve explicitly, e.g. {"type": "time", "value": {"points": [[0, 0, "ease-in"], [1, 1]]}} '
-                'for one curve over the clip, or "hit" for one per event'
+                'for one curve over the clip, or add "events" for repeating curves'
             )
         rgb = spec.get("channels") == "rgb" or isinstance(value, (list, tuple)) or (isinstance(value, str) and value.startswith("#"))
         literal = "color" if rgb else spec.get("unit") or "number"

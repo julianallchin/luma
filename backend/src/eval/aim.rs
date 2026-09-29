@@ -776,7 +776,7 @@ mod tests {
         let circle = |alpha: f64, mode, direction| {
             let mut clip = preset("aim@1", "Circle").clip(0.0, 4.0);
             clip.inputs
-                .insert("alpha".into(), p::Value::Proportion(alpha));
+                .insert("fade".into(), p::Value::Proportion(alpha));
             clip.inputs
                 .insert("direction".into(), p::Value::Vector(direction));
             let mut layer = layer(clip, 0);

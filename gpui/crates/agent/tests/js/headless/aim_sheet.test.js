@@ -1,156 +1,75 @@
-// An aim clip from the outside: placed from the preset browser, its sheet
-// shows the base's rows and the motion's rows that apply, direction as turn
-// and tilt, and a blend of Replace or Offset. A motion of none hides the
-// shape's rows; Offset hides the base's rows.
-
-fixture({ seconds: 20, graph_score: { clips: {} }, rig: 4, window: [1400, 1000] });
-
-const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
-const inSheet = (role) => {
-  const p = node("card", "Clip inputs").bounds;
-  const inside = (n) => n.bounds.x >= p.x && n.bounds.x < p.x + p.width;
-  return app.snapshot().findAll({ role }).filter(inside).map((n) => n.label);
-};
-const settle = () => app.frames(16, { waitMs: 60 });
-const onlyClip = () => {
-  const clips = Object.values(library.score().clips);
-  expect(clips.length).toBe(1);
-  return clips[0];
-};
-
-// Aim's own Wave: the search matches the form's name, not Chase's.
-function placeAimWave() {
-  nav.venue("Test Venue");
-  nav.track("Aurora");
-  nav.expand();
-  nav.stageOff();
-  until("the waveform", (s) => s.find({ role: "card", label: "Waveform" }));
-  app.type(node("input", "Search presets…"), "aim");
-  app.frames(2);
-  app.click(node("row", "Wave"));
-  until("the aim inputs", (s) => s.find({ role: "row", label: "Motion" }));
-  settle();
+// Aim positions and source-driven offsets share the normal input editor.
+fixture({seconds:20,graph_score:{clips:{}},rig:4,window:[1400,1000]});
+const node=(role,label)=>until(label,s=>s.find({role,label})).find({role,label});
+const clip=()=>Object.values(library.score().clips)[0];
+function place(name="Wave") {
+  nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+  app.type(node("input","Search presets…"),"aim");
+  app.click(node("row",name));
+  until("clip persisted",()=>library.query("SELECT count(*) AS n FROM clips")[0].n>0);
+  until("aim placed",()=>clip()?.graph==="aim@1");
+  node("row","Horizontal offset");
 }
-
-const AIM_ROWS = ["Blend", "Base", "Direction", "Point", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread", "Speed", "Alpha"];
-const aimRows = () => inSheet("row").filter((label) => AIM_ROWS.includes(label));
-
-test("an aim sheet shows the rows its base and motion use", () => {
-  placeAimWave();
-  // A direction base with a shape.
-  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
-  // Direction reads as turn and tilt, with the stored vector under them.
-  const sliders = inSheet("slider");
-  assert(sliders.some((l) => l.startsWith("Direction: Turn = ")) && sliders.some((l) => l.startsWith("Direction: Tilt = ")),
-    `direction is not turn and tilt: ${sliders}`);
-  assert(inSheet("text").some((l) => /^U -?[\d.]+ · V [−-]?[\d.]+ · Z [−-]?[\d.]+$/.test(l)), "no stored vector under turn and tilt");
-
-  const r = node("row", "Motion").bounds;
-  const motion = app.snapshot().findAll({ role: "select", label: "Shape" })
-    .find((n) => n.bounds.y >= r.y && n.bounds.y < r.y + r.height);
-  assert(motion, "no Shape select in the Motion row");
-  app.click(motion);
-  app.click(node("button", "None"));
-  until("motion none", (s) => s.find({ role: "select", label: "None" }));
-  settle();
-  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion"]);
-
-  const clip = onlyClip();
-  expect(clip.graph).toBe("aim@1");
-  expect(clip.blend_mode).toBe("replace");
-  expect(clip.inputs.motion).toEqual({ type: "choice", value: "none" });
-  // A hidden input keeps its value.
-  expect(clip.inputs.shape).toEqual({ type: "choice", value: "swing_up_down" });
+function selectIn(row,label) {
+  let r=node("row",row).bounds;
+  const p=node("card","Clip inputs").bounds;
+  if(r.y<p.y+65 || r.y+r.height>p.y+p.height-20){app.scroll({x:p.x+p.width/2,y:p.y+p.height/2},{dy:p.y+100-r.y,steps:5});app.frames(2);r=node("row",row).bounds;}
+  return app.snapshot().findAll({role:"select",label}).find(n=>n.bounds.y>=r.y&&n.bounds.y<r.y+r.height);
+}
+test("Aim uses positions and numeric offset sources",()=>{
+  place();
+  for(const old of ["Motion","Shape","Amount","Spread","Fan","Alpha"])
+    assert(!app.snapshot().find({role:"row",label:old}),`old control ${old}`);
+  const fields=app.snapshot().findAll({role:"input"}).map(n=>n.label);
+  assert(fields.some(l=>l.startsWith("Direction: Turn ="))&&fields.some(l=>l.startsWith("Direction: Tilt =")),"direction has turn and tilt");
+  const direction=node("row","Direction").bounds;
+  assert(!app.snapshot().findAll({role:"select"}).some(n=>n.bounds.y>=direction.y&&n.bounds.y<direction.y+direction.height),"new positions are edited directly; clips provide transitions");
+  expect(clip().inputs.vertical.type).toBe("time");
+  app.click(selectIn("Horizontal offset","Fixed"));app.click(node("button","Noise"));
+  until("horizontal source saved",()=>clip().inputs.horizontal.type==="noise");
+  expect(clip().inputs.vertical.type).toBe("time");
+});
+test("Offset hides the base and Replace brings it back",()=>{
+  place();const before=clip().inputs.direction;
+  app.click(selectIn("Blend","Replace"));app.click(node("button","Offset"));
+  until("offset saved",()=>clip().blend_mode==="offset");
+  assert(!app.snapshot().find({role:"row",label:"Direction"}),"an offset has no base position");
+  expect(clip().inputs.direction).toEqual(before);
+  app.click(selectIn("Blend","Offset"));app.click(node("button","Replace"));
+  until("replace saved",()=>clip().blend_mode==="replace");node("row","Direction");
+});
+test("Aim mirrors its offset frame and clears the mirror on a nonspatial axis",()=>{
+  place("Position");
+  const axes=()=>app.snapshot().findAll({role:"row",label:"Axis"});
+  // Position has a fixed spatial offset, so only its offset frame has an axis.
+  app.click(selectIn("Axis","Order"));app.click(node("button","X"));
+  until("x frame saved",()=>clip().inputs.axis.value.source.kind==="u");
+  app.click(selectIn("Mirror","Off"));app.click(node("button","Left–right"));
+  until("mirror saved",()=>clip().inputs.axis.value.mirror?.normal[0]===1);
+  app.click(selectIn("Axis","X"));app.click(node("button","Random"));
+  until("random frame saved",()=>clip().inputs.axis.value.source.kind==="random");
+  assert(!clip().inputs.axis.value.mirror,"a nonspatial axis has no mirror");
 });
 
-// An aim offers two blends. Offset turns the aim under the clip, so the
-// base's rows go; Replace brings them back. Base and direction keep their
-// values while hidden.
-test("an aim blends replace or offset", () => {
-  placeAimWave();
-  const blend = () => {
-    const r = node("row", "Blend").bounds;
-    return app.snapshot().findAll({ role: "select" })
-      .find((n) => n.bounds.y >= r.y && n.bounds.y < r.y + r.height);
-  };
-  expect(blend().label).toBe("Replace");
-  app.click(blend());
-  until("the blend menu", (s) => s.find({ role: "button", label: "Offset" }));
-  const modes = app.snapshot().findAll({ role: "button" }).map((n) => n.label)
-    .filter((l) => ["Replace", "Offset", "Add", "Multiply", "Screen"].includes(l));
-  expect(modes).toEqual(["Replace", "Offset"]);
-  const before = onlyClip();
-  app.click(node("button", "Offset"));
-  until("offset", (s) => s.find({ role: "select", label: "Offset" }));
-  settle();
-  expect(aimRows()).toEqual(["Blend", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
-  const offset = onlyClip();
-  expect(offset.blend_mode).toBe("offset");
-  expect(offset.inputs.base).toEqual(before.inputs.base);
-  expect(offset.inputs.direction).toEqual(before.inputs.direction);
 
-  app.click(blend());
-  until("the blend menu", (s) => s.find({ role: "button", label: "Replace" }));
-  app.click(node("button", "Replace"));
-  until("replace", (s) => s.find({ role: "select", label: "Replace" }));
-  settle();
-  expect(aimRows()).toEqual(["Blend", "Base", "Direction", "Fan", "Axis", "Motion", "Shape", "Size", "Every", "Spread"]);
-  expect(onlyClip().blend_mode).toBe("replace");
-});
-
-// The axis rows offer the Mirror control of the old mapping editor: Off,
-// Left–right, Front–back, Up–down and Custom plane, with the plane's normal
-// for a custom plane and its offset whenever there is a mirror. Only a
-// spatial axis along a line takes a mirror: order and random hide the row,
-// and picking Random drops the mirror. Spread shows in degrees.
-test("an aim axis offers the mirror control", () => {
-  const fields = () => inSheet("slider").concat(inSheet("input"));
-  const field = (list, prefix) => list.some((l) => l.startsWith(prefix));
-  placeAimWave();
-  assert(!inSheet("text").includes("Mirror"), "an order axis offered a mirror");
-  // The spread the preset stored, shown in degrees.
-  const spread = onlyClip().inputs.spread.value;
-  assert(fields().concat(inSheet("text")).some((l) => l.includes(String(Math.round(spread)))),
-    `the stored spread ${spread} is not shown in degrees`);
-
-  app.click(node("select", "Order"));
-  until("the axis menu", (s) => s.find({ role: "button", label: "X" }));
-  app.click(node("button", "X"));
-  until("the x axis", (s) => s.find({ role: "select", label: "X" }));
-  settle();
-  expect(inSheet("text")).toContain("Mirror");
-  assert(!inSheet("text").includes("Offset"), "an offset showed without a mirror");
-
-  app.click(node("select", "Off"));
-  until("the mirror menu", (s) => s.find({ role: "button", label: "Custom plane" }));
-  const mirrors = app.snapshot().findAll({ role: "button" }).map((n) => n.label)
-    .filter((l) => ["Off", "Left–right", "Front–back", "Up–down", "Custom plane"].includes(l));
-  expect(mirrors).toEqual(["Off", "Left–right", "Front–back", "Up–down", "Custom plane"]);
-  app.click(node("button", "Custom plane"));
-  until("the custom plane", (s) => s.find({ role: "select", label: "Custom plane" }));
-  settle();
-  expect(inSheet("text")).toContain("Normal · U, V, Z");
-  expect(inSheet("text")).toContain("Offset");
-  assert(field(fields(), "Axis: Mirror U") && field(fields(), "Axis: Mirror offset"), `custom plane fields: ${fields()}`);
-
-  app.click(node("select", "Custom plane"));
-  until("the mirror menu", (s) => s.find({ role: "button", label: "Front–back" }));
-  app.click(node("button", "Front–back"));
-  until("front–back", (s) => s.find({ role: "select", label: "Front–back" }));
-  settle();
-  // A fixed plane shows only its offset.
-  assert(!inSheet("text").includes("Normal · U, V, Z"), "a fixed plane showed a normal");
-  expect(inSheet("text")).toContain("Offset");
-  assert(field(fields(), "Axis: Mirror offset"), `fixed plane fields: ${fields()}`);
-
-  app.click(node("select", "X"));
-  until("the axis menu", (s) => s.find({ role: "button", label: "Random" }));
-  app.click(node("button", "Random"));
-  until("random", (s) => s.find({ role: "select", label: "Random" }));
-  settle();
-  assert(!inSheet("text").includes("Mirror"), "a random axis kept its Mirror row");
-
-  const axis = onlyClip().inputs.axis.value;
-  expect(axis.source.kind).toBe("random");
-  expect(axis.mirror).toBe(undefined);
+test("motion size edits degrees and its curve has no extra multiplier",()=>{
+  place("Circle");
+  const before=clip().inputs.vertical;
+  app.click(selectIn("Size","Fixed"));
+  // Dismiss the source menu and edit the size itself.
+  app.key("escape");
+  const size=()=>app.snapshot().findAll({role:"input"}).find(n=>n.label.startsWith("Size ="));
+  assert(size(),"Circle exposes its size");
+  app.click(size());app.key("secondary-a backspace");app.type(size(),"32");app.key("enter");
+  until("size saved",()=>clip().inputs.horizontal.value.gain.value===32);
+  expect(clip().inputs.vertical).toEqual(before);
+  app.click(node("text","Form"));
+  app.key("secondary-z");
+  until("size undo",()=>clip().inputs.horizontal.value.gain.value!==32);
+  app.click(selectIn("Size","Fixed"));app.click(node("button","Time"));
+  until("size animation saved",()=>clip().inputs.horizontal.value.gain.type==="time");
+  const rows=app.snapshot().findAll({role:"row"}).map(n=>n.label);
+  assert(!rows.includes("Amount"),"motion size has no generic multiplier");
+  // Only horizontal and vertical motion have phase, not the nested size curve.
+  expect(rows.filter(name=>name==="Phase").length).toBe(2);
 });

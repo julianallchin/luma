@@ -79,22 +79,24 @@ impl PreparedGraph {
             requests: Vec::new(),
             baked: Vec::new(),
         };
-        // A form clip's sources become nodes of its own copy of the form.
-        let lowered = crate::forms::lower(library, definition, inputs)?;
-        let (root, inputs) = match &lowered {
-            Some((root, inputs)) => (root, inputs),
-            None => (&library.definitions[definition], inputs),
-        };
-        let bound = inputs
-            .iter()
-            .map(|(key, value)| {
-                Ok((
-                    key.clone(),
-                    Source::Constant(EvaluatedValue::literal(value)?),
-                ))
-            })
-            .collect::<Result<_>>()?;
-        prepared.outputs = prepared.lower_definition(library, definition, root, bound)?;
+        if let Body::Form(kind) = library.definitions[definition].body {
+            crate::forms::check_inputs(definition, &library.definitions[definition], inputs)?;
+            let (lowered_library, root) = crate::forms::lower(library, kind, inputs, frame)?;
+            prepared.outputs =
+                prepared.lower_definition(&lowered_library, definition, &root, BTreeMap::new())?;
+        } else {
+            let root = &library.definitions[definition];
+            let bound = inputs
+                .iter()
+                .map(|(key, value)| {
+                    Ok((
+                        key.clone(),
+                        Source::Constant(EvaluatedValue::literal(value)?),
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            prepared.outputs = prepared.lower_definition(library, definition, root, bound)?;
+        }
         // A nested definition may offer several independent outputs. Only the
         // connected ones belong to this program, including during preparation.
         let live = prepared.live_steps(prepared.steps.len(), &[], prepared.outputs.values());
@@ -312,6 +314,7 @@ impl PreparedGraph {
             }
         }
         match &definition.body {
+            Body::Form(_) => return Err(Error("forms cannot be nested inside graphs".into())),
             Body::Primitive(primitive) => {
                 let constants: BTreeMap<_, _> = inputs
                     .iter()

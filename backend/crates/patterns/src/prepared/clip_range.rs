@@ -10,7 +10,10 @@ impl PreparedGraph {
         let mut baked = vec![None; self.slots];
         let clock = crate::Signal::scalar(self.clip_start, crate::Unit::Number)?;
         for (index, step) in self.steps.iter().enumerate() {
-            let values = if step.primitive == Primitive::ClipRange {
+            let values = if step.primitive == Primitive::Source(crate::forms::SourceOp::ClockTable)
+            {
+                self.prepare_clock(index, features, &baked)?
+            } else if step.primitive == Primitive::ClipRange {
                 self.prepare_range(index, features, &baked)?
             } else if (!step.primitive.reads_time()
                 || step
@@ -35,6 +38,37 @@ impl PreparedGraph {
             }
         }
         Ok(baked)
+    }
+
+    fn prepare_clock(
+        &self,
+        index: usize,
+        features: Option<&dyn crate::FeatureSource>,
+        baked: &[Option<EvaluatedValue>],
+    ) -> Result<BTreeMap<String, EvaluatedValue>> {
+        let step = &self.steps[index];
+        let source = &step.inputs["period"];
+        let dependencies = self.live_steps(index, baked, [source]);
+        let beats: Vec<_> = if dependencies.is_empty() {
+            vec![self.clip_start]
+        } else {
+            (0..crate::forms::clock_table::SAMPLES)
+                .map(|i| {
+                    self.clip_start
+                        + self.clip_duration * i as f64
+                            / (crate::forms::clock_table::SAMPLES - 1) as f64
+                })
+                .collect()
+        };
+        let clock = crate::Signal::series(&beats, crate::Unit::Number)?;
+        let mut slots = baked.to_vec();
+        for parent in dependencies {
+            let step = &self.steps[parent];
+            for (key, value) in self.run_step(step, &beats, &clock, features, &slots)? {
+                slots[step.outputs[&key]] = Some(value);
+            }
+        }
+        self.run_step(step, &beats, &clock, features, &slots)
     }
 
     fn prepare_range(

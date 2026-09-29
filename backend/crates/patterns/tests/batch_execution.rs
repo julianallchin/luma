@@ -43,7 +43,7 @@ fn default_graphs_keep_all_time_samples_through_arithmetic_color_and_output() {
     let library = standard_library();
     let cells = cells();
     let times = [9.9, 2.0, 4.5, -0.2, 6.3, 2.0, 3.2];
-    let mut checked = 0;
+    let mut checked = Vec::new();
     for (id, definition) in &library.definitions {
         if definition
             .inputs
@@ -84,9 +84,14 @@ fn default_graphs_keep_all_time_samples_through_arithmetic_color_and_output() {
         program
             .evaluate_batch(&[])
             .unwrap_or_else(|e| panic!("empty {id}: {e}"));
-        checked += 1;
+        checked.push(id.as_str());
     }
-    assert!(checked >= 20, "only checked {checked} default graphs");
+    for form in FORMS {
+        assert!(
+            checked.contains(&form),
+            "the {form} defaults must exercise the tensor graph"
+        );
+    }
 }
 
 fn wired(node: &str, output: &str) -> Binding {

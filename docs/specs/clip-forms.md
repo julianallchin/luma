@@ -1,5 +1,7 @@
 # Clip forms
 
+> The source and Aim interfaces below are superseded by [the September 28 source model](../design/2026-09-28-sources-implementation.md).
+
 Status: draft for sign-off. Scope: color and strobe. Aim (pan/tilt) is a later
 spec. This spec replaces the authoring surface of
 [composable-patterns.md](./composable-patterns.md). The graph engine stays as

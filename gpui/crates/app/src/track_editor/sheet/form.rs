@@ -1,696 +1,1289 @@
-//! Form clip inputs. A form clip names a shipped form and holds a value for
-//! each of its inputs. The sheet shows them in the form's order, under the
-//! engine's names. Where the form allows it, an input can hold a source in
-//! place of a plain value: a curve over the clip or over each hit, noise, the
-//! level of a frequency range of the mix, or values along an axis of the
-//! heads, still or moving.
-
+//! One recursive editor for form inputs and the numeric inputs of sources.
 use super::*;
 use luma_lib::node_graph::lighting::decode;
 use luma_patterns as p;
-use luma_ui::arg::number::format_value;
-use luma_ui::arg::preset_picker::{luma_preset_picker, Thumb};
-use luma_ui::arg::strip::{self, Clock, ClockSource, CurveStrip, HeadSource, StripValue};
+use luma_ui::arg::noise::NoisePreview;
+use luma_ui::arg::strip::{self, CurveStrip, StripValue};
+use serde_json::{json, Value as Json};
 
-/// Inputs in beats that must stay above zero.
-const SPEEDS: [&str; 4] = ["every", "travel", "duration", "speed"];
-/// The least beats a speed input takes.
-const MIN_BEATS: f64 = 1. / 32.;
-/// The top of a speed curve's value axis, in beats.
-const CURVE_BEATS: f64 = 8.;
-/// Beats a new noise source takes to wander once.
-const NOISE_SPEED: f64 = 4.;
-/// The grain choices. A clump holds N heads; N is its own field.
-const GRAINS: [&str; 3] = ["Head", "Fixture", "Clump"];
-/// The two readings of a period that can be 0: once over the clip, or beats.
-const EVERY: [&str; 2] = ["Once", "Beats"];
-/// The period a switch from "Once" to "Beats" starts at.
-const EVERY_BEATS: f64 = 4.;
-/// How far from the venue's origin a point field reaches, in metres.
-const POINT_REACH: f64 = 100.;
-
-/// A form input's row: what the form says about the input, and which source
-/// the stored value holds.
 #[derive(Clone, Copy)]
 pub(super) struct Slot {
     form: &'static str,
     key: &'static str,
     spec: &'static p::Input,
-    speed: bool,
-    mode: Option<p::SourceKind>,
-    /// Custom was chosen in the row's preset picker: its editor shows even
-    /// while the value matches a preset.
-    editing: bool,
 }
-
 impl Slot {
-    /// The slot for `def` when `form` is a shipped form that has it.
-    pub(super) fn new(form: &str, def: &PatternArgDef, stored: &serde_json::Value) -> Option<Self> {
+    pub(super) fn new(form: &str, def: &PatternArgDef, _: &Json) -> Option<Self> {
         let form = *p::FORMS.iter().find(|id| **id == form)?;
         let (key, spec) = document::form_definition(form)?
             .inputs
             .get_key_value(&def.id)?;
-        Some(Self {
-            form,
-            key,
-            spec,
-            speed: SPEEDS.contains(&def.id.as_str()),
-            mode: decode(spec.value_type, stored)
-                .ok()
-                .and_then(|value| value.source_kind()),
-            editing: false,
-        })
-    }
-
-    /// A period where the sheet offers 0 beats, once over the clip: the
-    /// hits of a color.
-    fn once(&self) -> bool {
-        self.form == "color@1" && self.key == "every"
-    }
-
-    /// The bounds the form gives a number input, such as a chase width.
-    fn bounds(&self) -> Option<[f64; 2]> {
-        match self.spec.author {
-            Some(p::Author::Number {
-                min: Some(min),
-                max: Some(max),
-            }) => Some([min, max]),
-            _ => None,
-        }
-    }
-
-    /// The span a number curve's value axis covers, in the input's unit. A
-    /// vector's noise wanders on each of U, V and Z within −1 to 1.
-    fn range(&self) -> [f64; 2] {
-        if self.speed {
-            [0., CURVE_BEATS]
-        } else if self.vector() {
-            [-1., 1.]
-        } else {
-            self.bounds().unwrap_or([0., 1.])
-        }
-    }
-
-    /// A U, V, Z input: an aim direction or a point.
-    fn vector(&self) -> bool {
-        matches!(self.spec.default, Some(p::Value::Vector(_)))
-    }
-
-    /// The unit a number field of this input shows: beats for a speed,
-    /// degrees for an aim's fan, size and spread.
-    fn unit(&self) -> Option<&'static str> {
-        if self.speed {
-            Some("beats")
-        } else if self.form == "aim@1" && matches!(self.key, "fan" | "size" | "spread") {
-            Some("°")
-        } else {
-            None
-        }
-    }
-
-    /// `low–high` in the input's unit, for a caption.
-    fn span_text(&self, [low, high]: [f64; 2]) -> String {
-        let unit = match self.unit() {
-            Some("°") => "°".to_string(),
-            Some(unit) => format!(" {unit}"),
-            None => String::new(),
-        };
-        format!("{}–{}{unit}", format_value(low), format_value(high))
-    }
-
-    /// The shipped curve presets this input offers.
-    fn curves(&self) -> impl Iterator<Item = &'static p::CurvePreset> {
-        p::presets().curves_for(self.key)
-    }
-
-    /// A number the input accepts: speeds stay above zero, the rest within
-    /// the input's bounds, 0–1 by default.
-    fn fit(&self, value: f64) -> f64 {
-        if self.speed {
-            value.max(MIN_BEATS)
-        } else {
-            let [low, high] = self.range();
-            value.clamp(low, high)
-        }
-    }
-
-    /// A plain number in the input's own unit.
-    fn plain(&self, value: f64) -> p::Value {
-        match self.spec.default {
-            Some(p::Value::Beats(_)) => p::Value::Beats(value),
-            Some(p::Value::Proportion(_)) => p::Value::Proportion(value),
-            _ => p::Value::Number(value),
-        }
+        Some(Self { form, key, spec })
     }
 }
-
-/// What the promote menu calls each source.
-fn source_label(kind: p::SourceKind) -> &'static str {
-    match kind {
-        p::SourceKind::Time => "↗ Over time",
-        p::SourceKind::Hit => "↗ Per hit",
-        p::SourceKind::Noise => "↗ Noise",
-        p::SourceKind::Audio => "↗ Audio",
-        p::SourceKind::Space => "↗ Across space",
-    }
+#[derive(Clone)]
+struct Target {
+    form: &'static str,
+    def: PatternArgDef,
+    spec: &'static p::Input,
+    path: String,
 }
-
-/// What the promote menu calls a value that is not a source.
-const FIXED: &str = "Fixed";
-
-fn level(value: &p::Value) -> Option<f64> {
-    match value {
-        p::Value::Beats(v) | p::Value::Proportion(v) | p::Value::Number(v) => Some(*v),
-        _ => None,
-    }
-}
-
-/// The color a color source starts at.
-fn start_color(curve: &p::SourceCurve) -> [f64; 3] {
-    match curve {
-        p::SourceCurve::Keys(keys) => keys.sample(0.),
-        p::SourceCurve::Gradient(read) => read.gradient.sample(read.curve.sample(0.)),
-    }
-}
-
-/// The number a number value starts at: a plain number, or the start of a
-/// curve.
-fn start_number(value: &p::Value) -> Option<f64> {
-    match value {
-        p::Value::Time(p::SourceCurve::Keys(curve))
-        | p::Value::Hit(p::SourceCurve::Keys(curve)) => Some(curve.sample(0.)[0]),
-        other => level(other),
-    }
-}
-
-/// An axis along stage X over the whole selection: where a new space source
-/// starts.
-fn axis_x() -> p::MappingSpec {
-    match p::axis_presets()
-        .into_iter()
-        .find(|(name, _)| *name == "X")
-        .map(|(_, value)| value)
-    {
-        Some(p::Value::Mapping(mapping)) => mapping,
-        _ => unreachable!("an X axis preset"),
-    }
-}
-
-/// `value` converted to `to`. A plain value becomes a source that starts at
-/// it; a source becomes the plain value it starts at. Across space, a color
-/// fades from itself to black along the axis, and a number starts flat.
-fn promote(slot: &Slot, value: &p::Value, to: Option<p::SourceKind>) -> p::Value {
-    // A color or a vector: three channels.
-    let triple = match value {
-        p::Value::Color(rgb) | p::Value::Vector(rgb) => Some(*rgb),
-        p::Value::Time(curve) | p::Value::Hit(curve) if curve.is_color() => {
-            Some(start_color(curve))
+impl Target {
+    fn child(&self, path: &str) -> Self {
+        Self {
+            path: format!("{}{path}", self.path),
+            ..self.clone()
         }
-        p::Value::Space(space) => space.gradient.as_ref().map(|gradient| gradient.sample(0.)),
-        _ => None,
     }
-    .or_else(|| match (slot.vector(), &slot.spec.default) {
-        (true, Some(p::Value::Vector(v))) => Some(*v),
-        _ => None,
-    });
-    let number = match value {
-        p::Value::Noise(p::NoiseSource { range, .. }) => Some(range[1]),
-        // Audio at its loudest gives the top of the input: 1, or the most
-        // degrees of a fan or a size.
-        p::Value::Audio(_) => Some(slot.range()[1]),
-        p::Value::Space(space) => space.curve.as_ref().map(|curve| curve.sample(0.)),
-        other => start_number(other),
+    fn motion_size(&self) -> bool {
+        self.form == "aim@1"
+            && self.path.is_empty()
+            && matches!(self.def.id.as_str(), "horizontal" | "vertical" | "lean")
     }
-    .or_else(|| slot.spec.default.as_ref().and_then(level))
-    .unwrap_or(1.);
-    let number = slot.fit(number);
-    let key = triple.map_or(p::Key::Number(number), p::Key::Color);
-    let flat = || p::SourceCurve::from(p::Keyframes::with_eases([(0., key), (1., key)], &[]));
-    match to {
-        None => match triple {
-            Some(v) if slot.vector() => p::Value::Vector(v),
-            Some(rgb) => p::Value::Color(rgb),
-            None => slot.plain(number),
-        },
-        Some(p::SourceKind::Time) => p::Value::Time(flat()),
-        Some(p::SourceKind::Hit) => p::Value::Hit(flat()),
-        Some(p::SourceKind::Noise) => p::Value::Noise(p::NoiseSource {
-            speed: NOISE_SPEED,
-            range: if slot.vector() {
-                slot.range()
-            } else {
-                [number.min(0.), number.max(0.)]
-            },
-        }),
-        Some(p::SourceKind::Audio) => {
-            let first = &p::presets().frequencies[0];
-            p::Value::Audio(p::AudioLevel {
-                from_hz: first.from_hz,
-                to_hz: first.to_hz,
-                floor: 0.,
-                threshold: 0.,
-            })
-        }
-        Some(p::SourceKind::Space) => {
-            let stop = |t: f64, color: [f64; 3]| p::ColorStop {
-                t,
-                color,
-                alpha: 1.,
+    fn change(&self, this: &mut Luma, cx: &mut Context<Luma>, change: impl FnOnce(&mut Json)) {
+        let mut edited = None;
+        this.with_track_editor(cx, |editor| {
+            let Ok(value) = decode(self.spec.value_type, &stored_arg(editor, &self.def)) else {
+                return;
             };
-            let level = number.clamp(0., 1.);
-            p::Value::Space(match triple {
-                Some(rgb) => p::SpaceSource {
-                    axis: axis_x(),
-                    gradient: Some(p::Gradient {
-                        stops: vec![stop(0., rgb), stop(1., [0.; 3])],
-                    }),
-                    curve: None,
-                    movement: None,
-                },
-                None => p::SpaceSource {
-                    axis: axis_x(),
-                    gradient: None,
-                    curve: Some(p::Envelope::linear(vec![[0., level], [1., level]])),
-                    movement: None,
-                },
-            })
+            let Ok(mut raw) = serde_json::to_value(value) else {
+                return;
+            };
+            if let Some(at) = insert_at(&mut raw, &self.path) {
+                change(at);
+            }
+            match serde_json::from_value::<p::Value>(raw) {
+                Ok(value) => edited = Some(document::wire_value(&value)),
+                Err(error) => eprintln!("source edit is invalid: {error}"),
+            }
+        });
+        if let Some(value) = edited {
+            this.arg_live(&self.def.id, value, cx);
         }
     }
-}
-
-/// A stroke that starts moving: forward along the axis, with the chase's
-/// travel and width.
-fn new_movement() -> p::Movement {
-    let default = |key: &str| {
-        p::movement_inputs()
-            .into_iter()
-            .find(|(name, _)| *name == key)
-            .and_then(|(_, input)| input.default)
-            .expect("a movement default")
-    };
-    let path = match p::path_presets().remove(0).1 {
-        p::Value::Envelope(path) => path,
-        _ => unreachable!("paths are curves"),
-    };
-    p::Movement {
-        path,
-        travel: default("travel"),
-        width: default("width"),
-        width_relative: true,
-        boundary: p::Boundary::Clip,
+    fn set(&self, this: &mut Luma, cx: &mut Context<Luma>, value: Json) {
+        self.change(this, cx, |at| *at = value);
     }
 }
-
-/// `value` with its space source passed through `change`.
-fn edit_space(value: &p::Value, change: impl FnOnce(&mut p::SpaceSource)) -> Option<p::Value> {
-    match value {
-        p::Value::Space(space) => {
-            let mut space = space.clone();
-            change(&mut space);
-            Some(p::Value::Space(space))
+fn insert_at<'a>(value: &'a mut Json, path: &str) -> Option<&'a mut Json> {
+    let mut at = value;
+    for part in path.split('/').filter(|s| !s.is_empty()) {
+        if at.is_array() {
+            at = at.get_mut(part.parse::<usize>().ok()?)?;
+        } else {
+            if !at.is_object() {
+                *at = json!({});
+            }
+            at = at.as_object_mut()?.entry(part).or_insert(Json::Null);
         }
-        _ => None,
     }
+    Some(at)
 }
-
-/// `value` with its moving stroke passed through `change`.
-fn edit_movement(value: &p::Value, change: impl FnOnce(&mut p::Movement)) -> Option<p::Value> {
-    edit_space(value, |space| {
-        if let Some(movement) = space.movement.as_mut() {
-            change(movement);
-        }
-    })
+#[derive(Clone, Copy)]
+enum Units {
+    Number,
+    Beats,
+    Share,
+    Degrees,
+    Metres,
+    Hertz,
 }
-
-/// `value` with the gradient and curve of a gradient read over time or per
-/// hit passed through `change`.
-fn edit_gradient_curve(
-    value: &p::Value,
-    change: impl FnOnce(&mut p::GradientCurve),
-) -> Option<p::Value> {
-    match value {
-        p::Value::Time(p::SourceCurve::Gradient(read)) => {
-            let mut read = read.clone();
-            change(&mut read);
-            Some(p::Value::Time(p::SourceCurve::Gradient(read)))
-        }
-        p::Value::Hit(p::SourceCurve::Gradient(read)) => {
-            let mut read = read.clone();
-            change(&mut read);
-            Some(p::Value::Hit(p::SourceCurve::Gradient(read)))
-        }
-        _ => None,
-    }
-}
-
-/// The axis of an axis input or of a space source.
-fn mapping_mut(value: &mut p::Value) -> Option<&mut p::MappingSpec> {
-    match value {
-        p::Value::Mapping(mapping) => Some(mapping),
-        p::Value::Space(space) => Some(&mut space.axis),
-        _ => None,
-    }
-}
-
-/// A pattern gradient in the strip's terms.
-fn ui_gradient(gradient: &p::Gradient) -> Gradient {
-    Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
-        t: stop.t as f32,
-        color: Light {
-            a: stop.alpha as f32,
-            ..Light::opaque(stop.color)
-        },
-    }))
-}
-
-/// The strip's stops as a pattern gradient, in order and within
-/// 0–1.
-fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
-    let mut stops: Vec<p::ColorStop> = gradient
-        .stops()
-        .iter()
-        .map(|stop| p::ColorStop {
-            t: f64::from(stop.t).clamp(0., 1.),
-            color: stop.color.channels().map(|v| v.clamp(0., 1.)),
-            alpha: f64::from(stop.color.a).clamp(0., 1.),
-        })
-        .collect();
-    stops.sort_by(|a, b| a.t.total_cmp(&b.t));
-    p::Gradient { stops }
-}
-
-/// Named curves in the strip's 0–1 box.
-type Curves = Vec<(String, p::Envelope)>;
-
-fn curves_of(options: Vec<(&'static str, p::Value)>) -> Curves {
-    options
-        .into_iter()
-        .filter_map(|(name, value)| match value {
-            p::Value::Envelope(envelope) => Some((name.to_string(), envelope)),
+impl Units {
+    fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Beats => Some("beats"),
+            Self::Degrees => Some("°"),
+            Self::Metres => Some("m"),
+            Self::Hertz => Some("Hz"),
             _ => None,
-        })
-        .collect()
-}
-
-/// The curves a still number across space starts from: the shipped general
-/// curves, 0–1 along the axis.
-fn along_curves() -> Curves {
-    p::presets()
-        .curves
-        .iter()
-        .filter(|preset| preset.input.is_none())
-        .map(|preset| {
-            let envelope = preset.curve.map(|key| match key {
-                p::Key::Number(v) => v.clamp(0., 1.),
-                p::Key::Color(_) => 0.,
-            });
-            (preset.name.clone(), envelope)
-        })
-        .collect()
-}
-
-fn thumbs(curves: &Curves) -> Vec<(SharedString, Thumb)> {
-    curves
-        .iter()
-        .map(|(name, envelope)| (name.clone().into(), Thumb::Curve(envelope.clone())))
-        .collect()
-}
-
-fn curve_at(curves: &Curves, envelope: &p::Envelope) -> Option<usize> {
-    curves.iter().position(|(_, curve)| curve == envelope)
-}
-
-/// A named curve preset (values 0–1) scaled to the input's range. Eases are
-/// local to their segments, so they keep their shape.
-fn scaled(slot: &Slot, curve: &p::Keyframes) -> p::Keyframes {
-    let [low, high] = slot.range();
-    curve.map(|key| match key {
-        p::Key::Number(v) => p::Key::Number(slot.fit(low + v * (high - low))),
-        color => *color,
-    })
-}
-
-fn same_curve(a: &p::Keyframes, b: &p::Keyframes) -> bool {
-    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9;
-    let same_ease = |a: p::Ease, b: p::Ease| match (a, b) {
-        (p::Ease::Bezier(a), p::Ease::Bezier(b)) => a.iter().zip(&b).all(|(a, b)| close(*a, *b)),
-        (a, b) => a == b,
-    };
-    a.points.len() == b.points.len()
-        && a.points.iter().zip(&b.points).all(|(a, b)| {
-            close(a.x, b.x)
-                && same_ease(a.ease, b.ease)
-                && match (a.value, b.value) {
-                    (p::Key::Number(a), p::Key::Number(b)) => close(a, b),
-                    (p::Key::Color(a), p::Key::Color(b)) => {
-                        a.iter().zip(&b).all(|(a, b)| close(*a, *b))
-                    }
-                    _ => false,
-                }
-        })
-}
-
-/// A number curve in the strip's 0–1 box.
-fn envelope_of(slot: &Slot, curve: &p::Keyframes) -> p::Envelope {
-    let [low, high] = slot.range();
-    let envelope = curve.map(|key| {
-        let value = match key {
-            p::Key::Number(v) => *v,
-            p::Key::Color(_) => low,
-        };
-        ((value - low) / (high - low)).clamp(0., 1.)
-    });
-    if envelope.validate().is_ok() {
-        envelope
-    } else {
-        p::Envelope::linear(vec![[0., 0.], [1., 0.]])
+        }
+    }
+    fn bounds(self) -> [f64; 2] {
+        match self {
+            Self::Share => [0., 1.],
+            Self::Beats => [0., 1e9],
+            Self::Degrees => [-180., 180.],
+            Self::Metres => [-100., 100.],
+            Self::Number => [-1e9, 1e9],
+            Self::Hertz => [20., 20000.],
+        }
+    }
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Beats => "beats",
+            Self::Share => "proportion",
+            _ => "number",
+        }
     }
 }
-
-/// The strip's box back as a curve in the input's unit. The eases
-/// are the same, so what is drawn is what plays.
-fn keyframes_of(slot: &Slot, envelope: &p::Envelope) -> p::Keyframes {
-    let [low, high] = slot.range();
-    envelope.map(|y| p::Key::Number(slot.fit(low + y * (high - low))))
+pub(super) struct Field {
+    label: String,
+    target: Target,
+    value: Json,
+    units: Units,
+    sources: Vec<p::SourceKind>,
+    control: Control,
+    children: Vec<Field>,
+    shape: Json,
 }
-
-/// A direction as turn and tilt, in degrees. Turn 0 is downstage and grows
-/// toward stage right; tilt 0 is level and −90 is straight down. A direction
-/// straight up or down has no turn: `None`.
-fn turn_tilt([u, v, z]: [f64; 3]) -> (Option<f64>, f64) {
-    let flat = u.hypot(v);
-    let tilt = z.atan2(flat).to_degrees();
-    let turn = (flat > 1e-6).then(|| u.atan2(v).to_degrees());
-    (turn, tilt)
+enum Control {
+    None,
+    Number(Entity<DraftedNumber>, bool),
+    Vector(Vec<Entity<DraftedNumber>>),
+    Direction([Entity<DraftedNumber>; 2]),
+    Curve(Entity<CurveStrip>, [f64; 2], Option<usize>),
+    Gradient(Entity<CurveStrip>),
+    Choice(Vec<(&'static str, Json)>),
+    /// A section title between rows; it holds no value.
+    Heading,
+    /// What a Noise source gives, over time and along the rig.
+    NoisePreview(Entity<NoisePreview>),
 }
-
-/// The unit direction at `turn` and `tilt` degrees, to four places.
-fn direction_at(turn: f64, tilt: f64) -> [f64; 3] {
-    let (turn, tilt) = (turn.to_radians(), tilt.to_radians());
-    [tilt.cos() * turn.sin(), tilt.cos() * turn.cos(), tilt.sin()]
-        .map(|v| (v * 1e4).round() / 1e4 + 0.)
+const SOURCE_KINDS: [p::SourceKind; 5] = [
+    p::SourceKind::Time,
+    p::SourceKind::Space,
+    p::SourceKind::Random,
+    p::SourceKind::Noise,
+    p::SourceKind::Audio,
+];
+fn source_name(kind: p::SourceKind) -> &'static str {
+    match kind {
+        p::SourceKind::Time => "Time",
+        p::SourceKind::Space => "Space",
+        p::SourceKind::Random => "Random",
+        p::SourceKind::Noise => "Noise",
+        p::SourceKind::Audio => "Audio",
+    }
 }
-
-/// A stored vector, spelled for a caption: "U 0.00 · V 0.77 · Z −0.64".
-fn vector_text(v: [f64; 3]) -> String {
-    let part = |name: &str, v: f64| {
-        let text = format!("{:.2}", v.abs());
-        let sign = if v < 0. && text != "0.00" { "−" } else { "" };
-        format!("{name} {sign}{text}")
-    };
-    format!(
-        "{} · {} · {}",
-        part("U", v[0]),
-        part("V", v[1]),
-        part("Z", v[2])
-    )
-}
-
-/// The vectors a vector input shows: its value when fixed, the start and
-/// the end of a curve over the clip.
-fn vector_ends(value: &p::Value) -> Vec<[f64; 3]> {
-    let key = |key: &p::Key| match key {
-        p::Key::Color(v) => *v,
-        p::Key::Number(n) => [*n; 3],
-    };
+fn structure(value: &Json) -> Json {
     match value {
-        p::Value::Vector(v) => vec![*v],
-        p::Value::Time(p::SourceCurve::Keys(curve)) => {
-            match (curve.points.first(), curve.points.last()) {
-                (Some(first), Some(last)) => vec![key(&first.value), key(&last.value)],
-                _ => Vec::new(),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if key == "gain" || key == "phase" {
+                            json!({
+                                "shape": structure(value),
+                                "default": numeric(value) == if key == "gain" { 1. } else { 0. }
+                                    && value.get("value").is_some_and(Json::is_number)
+                            })
+                        } else if matches!(key.as_str(), "points" | "stops") && !value.is_object() {
+                            Json::Null
+                        } else {
+                            structure(value)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        Json::Array(_) => Json::Null,
+        Json::Number(_) => Json::Null,
+        other => other.clone(),
+    }
+}
+fn units(slot: &Slot) -> Units {
+    if slot.key == "point" {
+        Units::Metres
+    } else if matches!(slot.key, "horizontal" | "vertical" | "lean") {
+        Units::Degrees
+    } else if slot
+        .spec
+        .default
+        .as_ref()
+        .is_some_and(|v| matches!(v, p::Value::Proportion(_)))
+    {
+        Units::Share
+    } else {
+        Units::Number
+    }
+}
+fn value_at(raw: &Json, path: &str, fallback: &Json) -> Json {
+    raw.pointer(path)
+        .cloned()
+        .unwrap_or_else(|| fallback.clone())
+}
+fn numeric(value: &Json) -> f64 {
+    value
+        .as_f64()
+        .or_else(|| value.get("value").and_then(Json::as_f64))
+        .unwrap_or(0.)
+}
+fn curve_bounds(curve: &p::Keyframes, units: Units) -> [f64; 2] {
+    let [mut low, mut high] = match units {
+        Units::Beats => [1. / 64., 4.],
+        Units::Number => [0., 1.],
+        Units::Degrees => [-1., 1.],
+        other => other.bounds(),
+    };
+    for v in curve.values() {
+        low = low.min(v);
+        high = high.max(v);
+    }
+    if high - low < 1e-9 {
+        high = low + 1.;
+    }
+    [low, high]
+}
+fn normal_curve(
+    curve: &p::Keyframes,
+    [low, high]: [f64; 2],
+    component: Option<usize>,
+) -> p::Envelope {
+    curve.map(|key| {
+        let v = match key {
+            p::Key::Number(v) => *v,
+            p::Key::Color(v) => v[component.unwrap_or(0)],
+        };
+        ((v - low) / (high - low)).clamp(0., 1.)
+    })
+}
+fn default_source(kind: p::SourceKind, old: &Json, units: Units) -> Json {
+    let positive = matches!(units, Units::Beats);
+    let minimum = if positive { 1. / 64. } else { 0. };
+    let fixed = if positive {
+        numeric(old).max(minimum)
+    } else {
+        numeric(old)
+    };
+    let value = old
+        .get("value")
+        .filter(|v| v.is_array())
+        .cloned()
+        .unwrap_or(json!(fixed));
+    let axis = json!({"source":{"kind":"u"},"reverse":false,"per_group":false});
+    match kind {
+        p::SourceKind::Time => json!({"type":"time","value":{"points":[[0,value],[1,value]]}}),
+        p::SourceKind::Space => {
+            if old["type"] == "color" {
+                json!({"type":"space","value":{"axis":axis,"gradient":{"stops":[{"t":0,"color":value,"alpha":1},{"t":1,"color":[0,0,0],"alpha":1}]}}})
+            } else {
+                json!({"type":"space","value":{"axis":axis,"curve":{"points":[[0,if positive{0.125}else{0.}],[1,1]]},"gain":{"type":"number","value":if fixed==0.{1.}else{fixed}}}})
             }
         }
-        _ => Vec::new(),
-    }
-}
-
-/// `value` with end `end` (see [`vector_ends`]) passed through `edit`: the
-/// vector itself, or the first or last point of a curve over the clip.
-fn edit_vector_end(
-    value: &p::Value,
-    end: usize,
-    edit: impl FnOnce([f64; 3]) -> [f64; 3],
-) -> Option<p::Value> {
-    match value {
-        p::Value::Vector(v) => Some(p::Value::Vector(edit(*v))),
-        p::Value::Time(p::SourceCurve::Keys(curve)) if curve.is_color() => {
-            let mut curve = curve.clone();
-            let at = if end == 0 { 0 } else { curve.points.len() - 1 };
-            let p::Key::Color(v) = curve.points[at].value else {
-                return None;
-            };
-            curve.points[at].value = p::Key::Color(edit(v));
-            Some(p::Value::Time(curve.into()))
+        p::SourceKind::Random => {
+            json!({"type":"random","value":{"events":{"every":{"type":"beats","value":1}},"coverage":{"type":"proportion","value":if positive{1.}else{0.5}},"level":{"type":units.tag(),"value":if fixed==0.{1.}else{fixed}}}})
         }
-        _ => None,
+        p::SourceKind::Noise => {
+            json!({"type":"noise","value":{"speed":{"type":"beats","value":4},"range":[{"type":"number","value":minimum},{"type":"number","value":if fixed==0.{1.}else{fixed}}]}})
+        }
+        p::SourceKind::Audio => {
+            json!({"type":"audio","value":{"from_hz":20,"to_hz":150,"floor":if positive{0.125}else{0.},"threshold":0}})
+        }
     }
 }
-
-// -- widgets ------------------------------------------------------------------
-
-/// A number field, with its unit.
 fn number_field(
+    target: Target,
     label: String,
     value: f64,
-    [min, max]: [f64; 2],
-    width: f32,
-    unit: Option<&'static str>,
+    units: Units,
+    tagged: bool,
     window: &mut Window,
     cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
 ) -> Entity<DraftedNumber> {
-    cx.new(|cx| {
-        let field = DraftedNumber::new(label, value, min, max, width, window, cx);
-        match unit {
-            Some("beats") => field.with_unit("beats").with_per_unit("per beat", cx),
+    let [low, high] = units.bounds();
+    let entity = cx.new(|cx| {
+        let field = DraftedNumber::new(
+            label,
+            value,
+            low.min(value),
+            high.max(value),
+            FIELD_W,
+            window,
+            cx,
+        );
+        let field = match units.label() {
             Some(unit) => field.with_unit(unit),
             None => field,
+        };
+        if matches!(units, Units::Beats) {
+            field.with_per_unit("per beat", cx)
+        } else {
+            field
         }
-    })
-}
-
-/// A number field that edits one part of the stored value.
-fn number_edit(
-    def: &PatternArgDef,
-    spec: &'static p::Input,
-    field: &Entity<DraftedNumber>,
-    cx: &mut Context<Luma>,
-    edit: fn(&mut p::Value, f64),
-) -> Subscription {
-    let def = def.clone();
-    cx.subscribe(field, move |this: &mut Luma, _, event: &NumberEvent, cx| {
-        let NumberEvent::Committed(number) = *event;
-        this.form_edit(&def, spec, cx, |value| {
-            let mut value = value.clone();
-            edit(&mut value, number);
-            Some(value)
-        });
-    })
-}
-
-/// A curve strip for a part of the stored value; `edit` puts the edited
-/// part back.
-fn strip_editor(
-    strip: CurveStrip,
-    def: &PatternArgDef,
-    spec: &'static p::Input,
-    cx: &mut Context<Luma>,
-    subs: &mut Vec<Subscription>,
-    edit: fn(&p::Value, StripValue) -> Option<p::Value>,
-) -> Entity<CurveStrip> {
-    let entity = cx.new(|_| strip);
-    let def = def.clone();
+    });
     subs.push(cx.subscribe(
         &entity,
-        move |this: &mut Luma, _, event: &StripChanged, cx| {
-            let value = event.0.clone();
-            this.form_edit(&def, spec, cx, |stored| edit(stored, value));
+        move |this: &mut Luma, _, event: &NumberEvent, cx| {
+            let NumberEvent::Committed(value) = *event;
+            target.set(
+                this,
+                cx,
+                if tagged {
+                    json!({"type":units.tag(),"value":value})
+                } else {
+                    json!(value)
+                },
+            );
         },
     ));
     entity
 }
-
-/// A gradient's strip, with the shipped gradients as presets.
-fn gradient_strip(id: String, gradient: &p::Gradient) -> CurveStrip {
-    CurveStrip::new(id, StripValue::Gradient(ui_gradient(gradient)))
-        .with_presets(strip::gradient_presets())
-}
-
-/// The clock of a strip over time: the clip for a `time` source, each hit
-/// for a `hit` source. It reads the primary clip each frame, so it follows a
-/// moved clip, a new `every` and the playhead.
-fn strip_clock(app: WeakEntity<Luma>, kind: p::SourceKind) -> ClockSource {
-    Rc::new(move |cx: &App| {
-        let app = app.upgrade()?;
-        let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
-            return None;
-        };
-        clip_clock(editor, kind)
-    })
-}
-
-/// Where the playhead is in the primary clip's cycle, and how many beats the
-/// cycle spans. A `hit` cycle is one hit: hits come every `every` beats from
-/// the clip's start (0 is one hit over the clip) and last until the next
-/// one, or `duration` beats in a form that has it.
-fn clip_clock(editor: &Editor, kind: p::SourceKind) -> Option<Clock> {
-    let clip = primary_clip(editor)?;
-    let timeline = editor.beats.as_deref()?.timeline().ok()?;
-    let start = timeline.beat_at(clip.start).ok()?;
-    let length = timeline.beat_at(clip.end).ok()? - start;
-    let elapsed = timeline
-        .beat_at(f64::from(editor.transport.position))
-        .ok()?
-        - start;
-    if length <= 0. {
-        return None;
-    }
-    // A plain number of beats, as the sheet writes it, or a tagged one.
-    let beats = |key: &str| {
-        let value = clip.args.get(key)?;
-        value.as_f64().or_else(|| {
-            (value["type"] == "beats")
-                .then(|| value["value"].as_f64())
-                .flatten()
+fn curve_field(
+    target: Target,
+    label: String,
+    curve: p::Keyframes,
+    units: Units,
+    component: Option<usize>,
+    color: bool,
+    spatial: bool,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Control {
+    let range = curve_bounds(&curve, units);
+    let display = if color {
+        StripValue::Colors(curve)
+    } else {
+        StripValue::Number(normal_curve(&curve, range, component))
+    };
+    let clock_target = target.clone();
+    let app = cx.entity().downgrade();
+    let preset_key = target
+        .path
+        .trim_end_matches("/value")
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&target.def.id);
+    let mut strip = CurveStrip::new(label, display)
+        .with_presets(if color {
+            strip::color_curve_presets()
+        } else if spatial || preset_key == "offset" || preset_key == "curve" {
+            let presets = if spatial {
+                p::shape_presets()
+            } else if preset_key == "offset" {
+                p::path_presets()
+            } else {
+                p::progress_presets()
+            };
+            presets
+                .into_iter()
+                .filter_map(|(name, value)| match value {
+                    p::Value::Envelope(curve) => Some((name.into(), StripValue::Number(curve))),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            p::presets()
+                .curves_for(preset_key)
+                .map(|preset| {
+                    (
+                        preset.name.clone().into(),
+                        StripValue::Number(preset.curve.map(|key| match key {
+                            p::Key::Number(v) => *v,
+                            _ => 0.,
+                        })),
+                    )
+                })
+                .collect()
         })
+        .with_scale(range, units.label())
+        .over_time(Rc::new(move |cx| source_clock(&app, &clock_target, cx)));
+    if spatial {
+        strip = strip.across_space(source_heads(cx.entity().downgrade(), target.clone()));
+    }
+    let entity = cx.new(|_| strip);
+    subs.push(cx.subscribe(
+        &entity,
+        move |this: &mut Luma, _, event: &StripChanged, cx| {
+            let edited = event.0.clone();
+            target.change(this, cx, |at| match edited {
+                StripValue::Colors(curve) => {
+                    at["points"] = serde_json::to_value(curve.points).unwrap_or(Json::Null);
+                }
+                StripValue::Number(envelope) => {
+                    let old: Option<p::Keyframes> =
+                        serde_json::from_value(json!({"points":at["points"]})).ok();
+                    let keys =
+                        envelope.map(|v| p::Key::Number(range[0] + v * (range[1] - range[0])));
+                    let keys = if let (Some(ch), Some(old)) = (component, old) {
+                        p::Keyframes::with_eases(
+                            keys.points.iter().map(|p| {
+                                let mut v = old.sample(p.x);
+                                v[ch] = match p.value {
+                                    p::Key::Number(v) => v,
+                                    _ => 0.,
+                                };
+                                (p.x, p::Key::Color(v))
+                            }),
+                            &keys.points.iter().map(|p| p.ease).collect::<Vec<_>>(),
+                        )
+                    } else {
+                        keys
+                    };
+                    at["points"] = serde_json::to_value(keys.points).unwrap_or(Json::Null);
+                }
+                _ => {}
+            });
+        },
+    ));
+    Control::Curve(entity, range, component)
+}
+fn gradient_field(
+    target: Target,
+    label: String,
+    gradient: p::Gradient,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Control {
+    let strip = CurveStrip::new(label, StripValue::Gradient(ui_gradient(&gradient)))
+        .with_presets(strip::gradient_presets())
+        .across_space(source_heads(cx.entity().downgrade(), target.clone()));
+    let entity = cx.new(|_| strip);
+    subs.push(cx.subscribe(
+        &entity,
+        move |this: &mut Luma, _, event: &StripChanged, cx| {
+            if let StripValue::Gradient(g) = &event.0 {
+                target.set(
+                    this,
+                    cx,
+                    serde_json::to_value(pattern_gradient(g)).unwrap_or(Json::Null),
+                );
+            }
+        },
+    ));
+    Control::Gradient(entity)
+}
+fn choices(label: &str, target: Target, value: Json, options: Vec<(&'static str, Json)>) -> Field {
+    Field {
+        label: label.into(),
+        target,
+        value,
+        units: Units::Number,
+        sources: vec![],
+        control: Control::Choice(options),
+        children: vec![],
+        shape: Json::Null,
+    }
+}
+fn build_field(
+    label: String,
+    target: Target,
+    value: Json,
+    units: Units,
+    sources: Vec<p::SourceKind>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Field {
+    let mut field = Field {
+        label: label.clone(),
+        target: target.clone(),
+        value: value.clone(),
+        units,
+        sources,
+        control: Control::None,
+        children: vec![],
+        shape: structure(&value),
     };
-    let inside = (0. ..=length).contains(&elapsed);
-    let (span, phase) = match (kind, beats("every")) {
-        (p::SourceKind::Hit, Some(every)) if every > 0. => {
-            let life = beats("duration").unwrap_or(every);
-            let into = elapsed.rem_euclid(every);
-            (life, (into <= life).then(|| into / life))
-        }
-        // Once over the clip, as `time` is.
-        (p::SourceKind::Hit, Some(_)) | (p::SourceKind::Time, _) => {
-            (length, Some(elapsed / length))
-        }
-        _ => return None,
+    let kind = value["type"].as_str().unwrap_or("");
+    let child = |name: &str,
+                 path: &str,
+                 v: Json,
+                 u: Units,
+                 cx: &mut Context<Luma>,
+                 subs: &mut Vec<Subscription>,
+                 window: &mut Window| {
+        build_field(
+            name.into(),
+            target.child(path),
+            v,
+            u,
+            SOURCE_KINDS.to_vec(),
+            window,
+            cx,
+            subs,
+        )
     };
-    Some(Clock {
-        beats: span,
-        phase: phase.filter(|_| inside),
-        playing: editor.transport.playing,
+    let v = &value["value"];
+    match kind {
+        "number" | "proportion" | "beats" | "position" | "degrees" => {
+            field.control = Control::Number(
+                number_field(
+                    target,
+                    label,
+                    numeric(&value),
+                    units,
+                    true,
+                    window,
+                    cx,
+                    subs,
+                ),
+                true,
+            )
+        }
+        "vector" => {
+            let parts = v.as_array().cloned().unwrap_or_else(|| vec![json!(0); 3]);
+            if target.def.id == "direction" && target.path.is_empty() {
+                let vector: [f64; 3] = std::array::from_fn(|i| parts[i].as_f64().unwrap_or(0.));
+                let turn = vector[0].atan2(vector[1]).to_degrees();
+                let tilt = vector[2].atan2(vector[0].hypot(vector[1])).to_degrees();
+                let entities = std::array::from_fn(|axis| {
+                    let val = ((if axis == 0 { turn } else { tilt }) * 100.).round() / 100.;
+                    let name = format!("{label}: {}", if axis == 0 { "Turn" } else { "Tilt" });
+                    let entity = cx.new(|cx| {
+                        DraftedNumber::new(name, val, -180., 180., FIELD_W, window, cx)
+                            .with_unit("°")
+                    });
+                    let edit = target.clone();
+                    subs.push(cx.subscribe(
+                        &entity,
+                        move |this: &mut Luma, _, event: &NumberEvent, cx| {
+                            let NumberEvent::Committed(n) = *event;
+                            edit.change(this, cx, |v| {
+                                let a = &v["value"];
+                                let u = a[0].as_f64().unwrap_or(0.);
+                                let y = a[1].as_f64().unwrap_or(0.);
+                                let z = a[2].as_f64().unwrap_or(0.);
+                                let turn = if axis == 0 {
+                                    n
+                                } else {
+                                    u.atan2(y).to_degrees()
+                                }
+                                .to_radians();
+                                let tilt = if axis == 1 {
+                                    n
+                                } else {
+                                    z.atan2(u.hypot(y)).to_degrees()
+                                }
+                                .to_radians();
+                                v["value"] = json!([
+                                    tilt.cos() * turn.sin(),
+                                    tilt.cos() * turn.cos(),
+                                    tilt.sin()
+                                ]);
+                            });
+                        },
+                    ));
+                    entity
+                });
+                field.control = Control::Direction(entities);
+            } else {
+                field.control = Control::Vector(
+                    (0..3)
+                        .map(|i| {
+                            number_field(
+                                target.child(&format!("/value/{i}")),
+                                format!("{label}: {}", ["U", "V", "Z"][i]),
+                                parts[i].as_f64().unwrap_or(0.),
+                                units,
+                                false,
+                                window,
+                                cx,
+                                subs,
+                            )
+                        })
+                        .collect(),
+                );
+            }
+        }
+        "color" => {
+            // Keep the established color picker at the root of a Color input.
+        }
+        "time" => {
+            if let Ok(time) = serde_json::from_value::<p::TimeSource>(v.clone()) {
+                match time.curve {
+                    p::SourceCurve::Keys(keys)
+                        if keys.is_color()
+                            && target
+                                .spec
+                                .default
+                                .as_ref()
+                                .is_some_and(|v| matches!(v, p::Value::Vector(_))) =>
+                    {
+                        for ch in 0..3 {
+                            let mut part = choices(
+                                ["U", "V", "Z"][ch],
+                                target.child("/value"),
+                                v.clone(),
+                                vec![],
+                            );
+                            part.control = curve_field(
+                                target.child("/value"),
+                                format!("{label} {}", ["U", "V", "Z"][ch]),
+                                keys.clone(),
+                                units,
+                                Some(ch),
+                                false,
+                                false,
+                                cx,
+                                subs,
+                            );
+                            field.children.push(part);
+                        }
+                    }
+                    p::SourceCurve::Keys(keys) => {
+                        let color = keys.is_color();
+                        let curve_units = if target.motion_size() {
+                            Units::Number
+                        } else {
+                            units
+                        };
+                        field.control = curve_field(
+                            target.child("/value"),
+                            label.clone(),
+                            keys,
+                            curve_units,
+                            None,
+                            color,
+                            false,
+                            cx,
+                            subs,
+                        );
+                    }
+                    p::SourceCurve::Gradient(g) => {
+                        let mut gradient = choices(
+                            "Colors",
+                            target.child("/value/gradient"),
+                            v["gradient"].clone(),
+                            vec![],
+                        );
+                        gradient.control = gradient_field(
+                            gradient.target.clone(),
+                            label.clone(),
+                            g.gradient,
+                            cx,
+                            subs,
+                        );
+                        field.children.push(gradient);
+                        let keys = g.curve.map(|v| p::Key::Number(*v));
+                        let mut curve = choices(
+                            "Through the colors",
+                            target.child("/value/curve"),
+                            v["curve"].clone(),
+                            vec![],
+                        );
+                        curve.control = curve_field(
+                            curve.target.clone(),
+                            format!("{label} through colors"),
+                            keys,
+                            Units::Share,
+                            None,
+                            false,
+                            false,
+                            cx,
+                            subs,
+                        );
+                        field.children.push(curve);
+                    }
+                }
+                if target.def.id != "fade" {
+                    field
+                        .children
+                        .extend(event_fields(&target, v, window, cx, subs));
+                    if target.motion_size() || time.phase.scalar_value() != Some(0.) {
+                        field.children.push(child(
+                            "Phase",
+                            "/value/phase",
+                            serde_json::to_value(&time.phase).unwrap_or(Json::Null),
+                            Units::Number,
+                            cx,
+                            subs,
+                            window,
+                        ));
+                    }
+                    if target.motion_size() || time.gain.scalar_value() != Some(1.) {
+                        field.children.push(child(
+                            if target.motion_size() {
+                                "Size"
+                            } else {
+                                "Level"
+                            },
+                            "/value/gain",
+                            serde_json::to_value(&time.gain).unwrap_or(Json::Null),
+                            if target.motion_size() {
+                                Units::Degrees
+                            } else {
+                                Units::Share
+                            },
+                            cx,
+                            subs,
+                            window,
+                        ));
+                    }
+                }
+            }
+        }
+        "space" => {
+            let axis_target = target.child("/value/axis");
+            field.children.push(heading("Where", &target));
+            field
+                .children
+                .extend(mapping_fields(axis_target, &v["axis"], window, cx, subs));
+            if let Ok(g) = serde_json::from_value::<p::Gradient>(v["gradient"].clone()) {
+                field.control = gradient_field(
+                    target.child("/value/gradient"),
+                    format!("{label} colors"),
+                    g,
+                    cx,
+                    subs,
+                );
+            } else if let Ok(curve) = serde_json::from_value::<p::Envelope>(v["curve"].clone()) {
+                field.control = curve_field(
+                    target.child("/value/curve"),
+                    format!("{label} shape"),
+                    curve.map(|v| p::Key::Number(*v)),
+                    Units::Share,
+                    None,
+                    false,
+                    true,
+                    cx,
+                    subs,
+                );
+            }
+            field.children.push(grain_field(&target, v));
+            field.children.push(heading("Motion", &target));
+            field.children.push(choices("Motion",target.child("/value/offset"),v["offset"].clone(),vec![("Static",Json::Null),("Moving",json!({"type":"time","value":{"events":{"every":{"type":"beats","value":2}},"points":[[0,0],[1,1]]}}))]));
+            if !v["offset"].is_null() {
+                field.children.push(child(
+                    "Path",
+                    "/value/offset",
+                    v["offset"].clone(),
+                    Units::Share,
+                    cx,
+                    subs,
+                    window,
+                ));
+                field.children.push(heading("Stroke", &target));
+                field.children.push(child(
+                    "Width",
+                    "/value/width",
+                    v.get("width")
+                        .cloned()
+                        .unwrap_or(json!({"type":"number","value":0.2})),
+                    Units::Number,
+                    cx,
+                    subs,
+                    window,
+                ));
+                field.children.push(choices(
+                    "Width relative to",
+                    target.child("/value/width_relative"),
+                    v.get("width_relative").cloned().unwrap_or(json!(false)),
+                    vec![("Axis", json!(false)), ("Gap", json!(true))],
+                ));
+                field.children.push(choices(
+                    "Boundary",
+                    target.child("/value/boundary"),
+                    v.get("boundary").cloned().unwrap_or(json!("clip")),
+                    vec![("Clip", json!("clip")), ("Wrap", json!("wrap"))],
+                ));
+            }
+            let gain = v
+                .get("gain")
+                .cloned()
+                .unwrap_or(json!({"type":"number","value":1}));
+            if target.motion_size()
+                || serde_json::from_value::<p::Value>(gain.clone())
+                    .is_ok_and(|gain| gain.scalar_value() != Some(1.))
+            {
+                field.children.push(child(
+                    if target.motion_size() {
+                        "Size"
+                    } else {
+                        "Level"
+                    },
+                    "/value/gain",
+                    gain,
+                    units,
+                    cx,
+                    subs,
+                    window,
+                ));
+            }
+        }
+        "random" => {
+            field
+                .children
+                .extend(event_fields(&target, v, window, cx, subs));
+            field.children.push(grain_field(&target, v));
+            for (key, name) in [("coverage", "Coverage"), ("level", "Level")] {
+                field.children.push(child(
+                    name,
+                    &format!("/value/{key}"),
+                    v.get(key)
+                        .cloned()
+                        .unwrap_or(json!({"type":"proportion","value":1})),
+                    Units::Share,
+                    cx,
+                    subs,
+                    window,
+                ));
+            }
+        }
+        "noise" => {
+            let transport = clip_transport(cx.entity().downgrade());
+            let preview = cx.new(|_| {
+                NoisePreview::new(
+                    label.clone(),
+                    form_path(&target),
+                    matches!(units, Units::Share),
+                    transport,
+                )
+            });
+            preview.update(cx, |preview, cx| {
+                preview.set_value(serde_json::from_value(v.clone()).ok(), cx)
+            });
+            field.control = Control::NoisePreview(preview);
+            field.children.push(heading("Range", &target));
+            for i in 0..2 {
+                field.children.push(child(
+                    if i == 0 { "Low" } else { "High" },
+                    &format!("/value/range/{i}"),
+                    v["range"][i].clone(),
+                    units,
+                    cx,
+                    subs,
+                    window,
+                ));
+            }
+            field.children.push(heading("Motion", &target));
+            field.children.push(child(
+                "Speed",
+                "/value/speed",
+                v.get("speed")
+                    .cloned()
+                    .unwrap_or(json!({"type":"beats","value":4.})),
+                Units::Beats,
+                cx,
+                subs,
+                window,
+            ));
+            field.children.push(heading("Look", &target));
+            field.children.push(grain_field(&target, v));
+            field.children.push(choices(
+                "Space",
+                target.child("/value/scale"),
+                v["scale"].clone(),
+                vec![
+                    ("Uniform", Json::Null),
+                    ("Spatial", json!({"type":"number","value":0.5})),
+                ],
+            ));
+            for (key, name, default) in [("scale", "Scale", 0.5), ("contrast", "Contrast", 0.)] {
+                if key == "scale" && v[key].is_null() {
+                    continue;
+                }
+                field.children.push(child(
+                    name,
+                    &format!("/value/{key}"),
+                    v.get(key)
+                        .cloned()
+                        .unwrap_or(json!({"type":"proportion","value":default})),
+                    Units::Share,
+                    cx,
+                    subs,
+                    window,
+                ));
+            }
+            field.children.push(choices(
+                "Wandering",
+                target.child("/value/independent"),
+                v.get("independent").cloned().unwrap_or(json!(false)),
+                vec![("Together", json!(false)), ("Per unit", json!(true))],
+            ));
+        }
+        "audio" => {
+            field.children.push(choices(
+                "Band",
+                target.child("/value"),
+                json!({"from_hz":v["from_hz"],"to_hz":v["to_hz"]}),
+                p::presets()
+                    .frequencies
+                    .iter()
+                    .map(|band| {
+                        (
+                            band.name.as_str(),
+                            json!({"from_hz":band.from_hz,"to_hz":band.to_hz}),
+                        )
+                    })
+                    .collect(),
+            ));
+            for (key, name, u, default) in [
+                ("from_hz", "From Hz", Units::Hertz, 20.),
+                ("to_hz", "To Hz", Units::Hertz, 150.),
+                ("floor", "Floor", Units::Share, 0.),
+                ("threshold", "Threshold", Units::Share, 0.),
+            ] {
+                let target = target.child(&format!("/value/{key}"));
+                let val = v.get(key).cloned().unwrap_or(json!(default));
+                let mut f = choices(name, target.clone(), val.clone(), vec![]);
+                f.control = Control::Number(
+                    number_field(
+                        target,
+                        format!("{label}: {name}"),
+                        numeric(&val),
+                        u,
+                        false,
+                        window,
+                        cx,
+                        subs,
+                    ),
+                    false,
+                );
+                field.children.push(f);
+            }
+            field.children.push(child(
+                if target.motion_size() {
+                    "Size"
+                } else {
+                    "Level"
+                },
+                "/value/gain",
+                v.get("gain")
+                    .cloned()
+                    .unwrap_or(json!({"type":"number","value":1})),
+                units,
+                cx,
+                subs,
+                window,
+            ));
+        }
+        "mapping" => {
+            field
+                .children
+                .extend(mapping_fields(target.child("/value"), v, window, cx, subs))
+        }
+        "choice" => {
+            if let Some(p::Author::Choice { options, .. }) = &target.spec.author {
+                // The option labels are static catalog data.
+                field.control = Control::Choice(
+                    options
+                        .iter()
+                        .map(|o| {
+                            (
+                                o.label.as_str(),
+                                serde_json::to_value(&o.value).unwrap_or(Json::Null),
+                            )
+                        })
+                        .collect(),
+                );
+            }
+        }
+        _ => {}
+    }
+    field
+}
+fn heading(label: &str, target: &Target) -> Field {
+    let mut field = choices(label, target.clone(), Json::Null, vec![]);
+    field.control = Control::Heading;
+    field
+}
+/// The path the form lowering names a source by, "brightness/low" for
+/// "/value/range/0" under Brightness: a noise source's default key.
+fn form_path(target: &Target) -> String {
+    let mut parts = vec![target.def.id.as_str()];
+    let mut path = target
+        .path
+        .split('/')
+        .filter(|part| !matches!(*part, "" | "value" | "events"));
+    while let Some(part) = path.next() {
+        parts.push(match part {
+            "range" if path.next() == Some("0") => "low",
+            "range" => "high",
+            _ => part,
+        });
+    }
+    parts.join("/")
+}
+/// The clip's transport for a noise preview: beats since the clip start, the
+/// origin playback evaluates the clip from, or 0 while the playhead is
+/// outside the clip.
+fn clip_transport(app: WeakEntity<Luma>) -> luma_ui::arg::noise::TransportSource {
+    Rc::new(move |cx| {
+        let mut transport = luma_ui::arg::noise::Transport::default();
+        let Some(app) = app.upgrade() else {
+            return transport;
+        };
+        let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+            return transport;
+        };
+        let Some(clip) = primary_clip(editor) else {
+            return transport;
+        };
+        let timeline = editor.beats.as_deref().and_then(|b| b.timeline().ok());
+        let (start, length) = match (&clip.core, &timeline) {
+            (Some(core), _) => (Some(core.start), Some(core.duration)),
+            (None, Some(timeline)) => {
+                let start = timeline.beat_at(clip.start).ok();
+                let end = timeline.beat_at(clip.end).ok();
+                (start, start.zip(end).map(|(a, b)| b - a))
+            }
+            _ => (None, None),
+        };
+        transport.seed = clip.core.as_ref().map_or(0, |core| core.seed);
+        transport.playing = editor.transport.playing;
+        let now = timeline.and_then(|t| t.beat_at(f64::from(editor.transport.position)).ok());
+        if let (Some(now), Some(start), Some(length)) = (now, start, length) {
+            let elapsed = now - start;
+            if (0. ..=length).contains(&elapsed) {
+                transport.beat = elapsed;
+            }
+        }
+        transport
     })
 }
-
-/// The place of each head on a space source's axis, while it lies still
-/// along it. Resolved again only when the axis, the heads or the seed
-/// change.
-fn strip_heads(app: WeakEntity<Luma>, def: &PatternArgDef, spec: &'static p::Input) -> HeadSource {
+fn grain_field(target: &Target, value: &Json) -> Field {
+    choices(
+        "Grain",
+        target.child("/value/grain"),
+        value.get("grain").cloned().unwrap_or(json!("head")),
+        vec![
+            ("Head", json!("head")),
+            ("Fixture", json!("fixture")),
+            ("Clump of 2", json!("clump2")),
+            ("Clump of 4", json!("clump4")),
+            ("Clump of 8", json!("clump8")),
+        ],
+    )
+}
+fn event_fields(
+    target: &Target,
+    value: &Json,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Vec<Field> {
+    let clock = value.get("events").cloned().unwrap_or(Json::Null);
+    let mut opts = vec![
+        ("Inherit", Json::Null),
+        ("Over clip", json!({"every":{"type":"beats","value":0}})),
+        ("Repeat", json!({"every":{"type":"beats","value":2}})),
+    ];
+    let mut result = Vec::new();
+    // Cross-input clocks remain references when the leader's timing is edited.
+    for (key, label) in [
+        ("brightness", "Follow brightness"),
+        ("color", "Follow color"),
+        ("horizontal", "Follow horizontal"),
+        ("vertical", "Follow vertical"),
+    ] {
+        if target.def.id != key
+            && document::form_definition(target.form).is_some_and(|d| d.inputs.contains_key(key))
+        {
+            opts.push((label, json!({"same_as":key})));
+        }
+    }
+    result.push(choices(
+        "Events",
+        target.child("/value/events"),
+        clock.clone(),
+        opts,
+    ));
+    // Every 0 beats is "Over clip": one event, so Every and Duration do not apply.
+    let over_clip = numeric(&clock["every"]) == 0. && clock["every"]["type"] == "beats";
+    if clock.get("every").is_some() && !over_clip {
+        result.push(build_field(
+            "Every".into(),
+            target.child("/value/events/every"),
+            clock["every"].clone(),
+            Units::Beats,
+            SOURCE_KINDS.to_vec(),
+            window,
+            cx,
+            subs,
+        ));
+        {
+            result.push(choices(
+                "Duration",
+                target.child("/value/events/life"),
+                clock["life"].clone(),
+                vec![
+                    ("Same as every", Json::Null),
+                    ("Custom", json!({"type":"beats","value":2})),
+                ],
+            ));
+            if !clock["life"].is_null() {
+                result.push(build_field(
+                    "Custom duration".into(),
+                    target.child("/value/events/life"),
+                    clock["life"].clone(),
+                    Units::Beats,
+                    SOURCE_KINDS.to_vec(),
+                    window,
+                    cx,
+                    subs,
+                ));
+            }
+        }
+    }
+    result
+}
+fn mapping_fields(
+    target: Target,
+    value: &Json,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Vec<Field> {
+    let mut fields = vec![
+        choices(
+            "Axis",
+            target.child("/source/kind"),
+            value["source"]["kind"].clone(),
+            vec![
+                ("Order", json!("order")),
+                ("X", json!("u")),
+                ("Y", json!("v")),
+                ("Z", json!("z")),
+                ("Radial", json!("radial")),
+                ("Angle", json!("angle")),
+                ("Random", json!("random")),
+            ],
+        ),
+        choices(
+            "Span",
+            target.child("/span"),
+            value.get("span").cloned().unwrap_or(json!("selection")),
+            vec![
+                ("Selection", json!("selection")),
+                ("Fixture", json!("fixture")),
+                ("Group", json!("group")),
+            ],
+        ),
+    ];
+    if matches!(value["source"]["kind"].as_str(), Some("radial" | "angle")) {
+        fields.push(choices(
+            "Plane",
+            target.child("/plane"),
+            value
+                .get("plane")
+                .cloned()
+                .unwrap_or(json!({"kind":"auto"})),
+            vec![
+                ("Auto", json!({"kind":"auto"})),
+                ("Around up–down", json!({"kind":"up_down"})),
+                ("Around front–back", json!({"kind":"front_back"})),
+                ("Around left–right", json!({"kind":"left_right"})),
+                ("Custom", json!({"kind":"custom","normal":[0,-1,0]})),
+            ],
+        ));
+        if value["plane"]["kind"] == "custom" {
+            for i in 0..3 {
+                let t = target.child(&format!("/plane/normal/{i}"));
+                let v = value["plane"]["normal"][i].clone();
+                let mut f = choices(
+                    ["Plane U", "Plane V", "Plane Z"][i],
+                    t.clone(),
+                    v.clone(),
+                    vec![],
+                );
+                f.control = Control::Number(
+                    number_field(
+                        t,
+                        f.label.clone(),
+                        numeric(&v),
+                        Units::Number,
+                        false,
+                        window,
+                        cx,
+                        subs,
+                    ),
+                    false,
+                );
+                fields.push(f);
+            }
+        }
+    } else if matches!(
+        value["source"]["kind"].as_str(),
+        Some("u" | "v" | "z" | "vector" | "major_axis")
+    ) {
+        fields.push(choices(
+            "Mirror",
+            target.child("/mirror"),
+            value["mirror"].clone(),
+            vec![
+                ("Off", Json::Null),
+                ("Left–right", json!({"normal":[1,0,0],"offset":0})),
+                ("Front–back", json!({"normal":[0,1,0],"offset":0})),
+                ("Up–down", json!({"normal":[0,0,1],"offset":0})),
+            ],
+        ));
+        if value["mirror"].is_object() {
+            for (key, name) in [
+                ("normal/0", "Mirror U"),
+                ("normal/1", "Mirror V"),
+                ("normal/2", "Mirror Z"),
+                ("offset", "Mirror offset"),
+            ] {
+                let t = target.child(&format!("/mirror/{key}"));
+                let v = value["mirror"]
+                    .pointer(&format!("/{key}"))
+                    .cloned()
+                    .unwrap_or(json!(0));
+                let mut f = choices(name, t.clone(), v.clone(), vec![]);
+                f.control = Control::Number(
+                    number_field(
+                        t,
+                        name.into(),
+                        numeric(&v),
+                        Units::Number,
+                        false,
+                        window,
+                        cx,
+                        subs,
+                    ),
+                    false,
+                );
+                fields.push(f);
+            }
+        }
+    }
+    fields
+}
+pub(super) fn widget(
+    slot: &Slot,
+    def: &PatternArgDef,
+    stored: &Json,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+    subs: &mut Vec<Subscription>,
+) -> Widget {
+    let Ok(value) = decode(slot.spec.value_type, stored) else {
+        return Widget::Invalid("Unreadable input".into());
+    };
+    if matches!(value, p::Value::Color(_)) {
+        return super::plain_widget(def, stored, true, &[], window, cx, subs);
+    }
+    let raw = serde_json::to_value(value).unwrap_or(Json::Null);
+    let target = Target {
+        form: slot.form,
+        def: def.clone(),
+        spec: slot.spec,
+        path: String::new(),
+    };
+    Widget::Form(Box::new(build_field(
+        slot.spec.name.clone(),
+        target,
+        raw,
+        units(slot),
+        slot.spec.promotable.clone(),
+        window,
+        cx,
+        subs,
+    )))
+}
+fn source_heads(app: WeakEntity<Luma>, target: Target) -> strip::HeadSource {
     type Resolved = (p::MappingSpec, Rc<[p::Cell]>, u64, Rc<[f64]>);
     let cache: Rc<std::cell::RefCell<Option<Resolved>>> = Rc::default();
-    let key = def.id.clone();
-    Rc::new(move |cx: &App| {
+    Rc::new(move |cx| {
         let app = app.upgrade()?;
         let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
             return None;
         };
         let clip = primary_clip(editor)?;
-        let Ok(p::Value::Space(space)) = decode(spec.value_type, clip.args.get(&key)?) else {
+        let root = decode(target.spec.value_type, clip.args.get(&target.def.id)?).ok()?;
+        let raw = serde_json::to_value(root).ok()?;
+        let path = target
+            .path
+            .trim_end_matches("/value/curve")
+            .trim_end_matches("/value/gradient");
+        let p::Value::Space(space) = serde_json::from_value(raw.pointer(path)?.clone()).ok()?
+        else {
             return None;
         };
-        if space.movement.is_some() {
+        if space.offset.is_some() {
             return None;
         }
         let cells = editor.sheet.heads.cells.clone()?;
@@ -707,2134 +1300,494 @@ fn strip_heads(app: WeakEntity<Luma>, def: &PatternArgDef, spec: &'static p::Inp
             .ok()?
             .coordinates
             .iter()
-            .map(|coordinate| coordinate.position)
+            .map(|c| c.position)
             .collect();
         *cache = Some((space.axis, cells, seed, positions.clone()));
         Some(positions)
     })
 }
-
-/// What a strip over time spans, for its caption.
-fn over(kind: Option<p::SourceKind>) -> &'static str {
-    match kind {
-        Some(p::SourceKind::Hit) => "Over each hit",
-        _ => "Over the clip",
+fn source_clock(app: &WeakEntity<Luma>, target: &Target, cx: &App) -> Option<strip::Clock> {
+    let app = app.upgrade()?;
+    let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+        return None;
+    };
+    let clip = primary_clip(editor)?;
+    let timeline = editor.beats.as_deref()?.timeline().ok()?;
+    let start = timeline.beat_at(clip.start).ok()?;
+    let length = timeline.beat_at(clip.end).ok()? - start;
+    let elapsed = timeline
+        .beat_at(f64::from(editor.transport.position))
+        .ok()?
+        - start;
+    let root = decode(target.spec.value_type, clip.args.get(&target.def.id)?).ok()?;
+    let raw = serde_json::to_value(root).ok()?;
+    // An inherited curve reads the nearest enclosing clock, including a
+    // Space source's offset. Cross-input references follow that input's clock.
+    fn clock_at(value: &Json) -> Option<Json> {
+        if let Some(events) = value.get("events").filter(|e| !e.is_null()) {
+            return Some(events.clone());
+        }
+        if value["type"] == "space" {
+            return clock_at(&value["value"]["offset"]);
+        }
+        value.get("value").and_then(clock_at)
     }
-}
-
-/// The number fields of an axis: a custom plane's axis, and a mirror's
-/// normal and offset.
-fn axis_fields(
-    name: &str,
-    mapping: &p::MappingSpec,
-    def: &PatternArgDef,
-    spec: &'static p::Input,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-    subs: &mut Vec<Subscription>,
-) -> AxisFields {
-    let normal = plane_normal(mapping);
-    let third = (FIELD_W - 16.) / 3.;
-    let plane: [_; 3] = std::array::from_fn(|axis| {
-        number_field(
-            format!("{name}: Plane {}", ["U", "V", "Z"][axis]),
-            normal[axis],
-            [-1e9, 1e9],
-            third,
-            None,
-            window,
-            cx,
-        )
-    });
-    subs.push(number_edit(def, spec, &plane[0], cx, |value, n| {
-        set_normal(value, 0, n)
-    }));
-    subs.push(number_edit(def, spec, &plane[1], cx, |value, n| {
-        set_normal(value, 1, n)
-    }));
-    subs.push(number_edit(def, spec, &plane[2], cx, |value, n| {
-        set_normal(value, 2, n)
-    }));
-    let mirror = mirror_plane(mapping);
-    let normal: [_; 3] = std::array::from_fn(|axis| {
-        number_field(
-            format!("{name}: Mirror {}", ["U", "V", "Z"][axis]),
-            mirror.normal[axis],
-            [-1e9, 1e9],
-            third,
-            None,
-            window,
-            cx,
-        )
-    });
-    subs.push(number_edit(def, spec, &normal[0], cx, |value, n| {
-        set_mirror(value, |plane| plane.normal[0] = n)
-    }));
-    subs.push(number_edit(def, spec, &normal[1], cx, |value, n| {
-        set_mirror(value, |plane| plane.normal[1] = n)
-    }));
-    subs.push(number_edit(def, spec, &normal[2], cx, |value, n| {
-        set_mirror(value, |plane| plane.normal[2] = n)
-    }));
-    let offset = number_field(
-        format!("{name}: Mirror offset"),
-        mirror.offset,
-        [-1e9, 1e9],
-        FIELD_W,
-        Some("m"),
-        window,
-        cx,
-    );
-    subs.push(number_edit(def, spec, &offset, cx, |value, n| {
-        set_mirror(value, |plane| plane.offset = n)
-    }));
-    AxisFields {
-        plane,
-        normal,
-        offset,
-        custom_mirror: Rc::new(std::cell::Cell::new(
-            mirror_index(mapping.mirror.as_ref()) == CUSTOM_MIRROR,
-        )),
+    let mut path = target.path.as_str();
+    let mut events = None;
+    loop {
+        if let Some(at) = raw.pointer(path) {
+            events = clock_at(at);
+        }
+        if events.is_some() || path.is_empty() {
+            break;
+        }
+        path = path.rsplit_once('/').map_or("", |(parent, _)| parent);
     }
-}
-
-/// The control for a form input's current value.
-pub(super) fn widget(
-    slot: &Slot,
-    def: &PatternArgDef,
-    stored: &serde_json::Value,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-    subs: &mut Vec<Subscription>,
-) -> Widget {
-    let value = decode(slot.spec.value_type, stored).ok();
-    let spec = slot.spec;
-    let name = spec.name.clone();
-    let on_number =
-        |field: &Entity<DraftedNumber>, cx: &mut Context<Luma>, edit: fn(&mut p::Value, f64)| {
-            number_edit(def, spec, field, cx, edit)
+    for _ in 0..24 {
+        let Some(key) = events.as_ref().and_then(|e| e["same_as"].as_str()) else {
+            break;
         };
-    match value {
-        // A direction is edited as turn and tilt, which the row draws; a
-        // point as U, V and Z in metres. A curve edits its two ends.
-        Some(value) if slot.vector() && !vector_ends(&value).is_empty() => {
-            let ends = vector_ends(&value);
-            if slot.key == "direction" {
-                return Widget::Direction(
-                    ends.iter().map(|v| turn_tilt(*v).0.unwrap_or(0.)).collect(),
-                );
-            }
-            let names = if ends.len() == 1 {
-                vec![""]
-            } else {
-                vec!["Start ", "End "]
+        let spec = document::form_definition(target.form)?.inputs.get(key)?;
+        let leader = decode(spec.value_type, clip.args.get(key)?).ok()?;
+        events = clock_at(&serde_json::to_value(leader).ok()?);
+    }
+    let events = events.as_ref();
+    let (span, phase) = match events.and_then(|e| e.get("every")) {
+        Some(e) if e["value"].as_f64().is_some_and(|e| e > 0.) => {
+            let every = e["value"].as_f64()?;
+            let life = match events.and_then(|e| e.get("life")).filter(|v| !v.is_null()) {
+                Some(value) => value["value"].as_f64()?,
+                None => every,
             };
-            let third = (FIELD_W - 16.) / 3.;
-            Widget::Point(
-                ends.iter()
-                    .zip(names)
-                    .enumerate()
-                    .map(|(end, (v, prefix))| {
-                        std::array::from_fn(|axis| {
-                            let field = number_field(
-                                format!("{name}: {prefix}{}", ["U", "V", "Z"][axis]),
-                                v[axis],
-                                [-POINT_REACH, POINT_REACH],
-                                third,
-                                Some("m"),
-                                window,
-                                cx,
-                            );
-                            let def = def.clone();
-                            subs.push(cx.subscribe(
-                                &field,
-                                move |this: &mut Luma, _, event: &NumberEvent, cx| {
-                                    let NumberEvent::Committed(n) = *event;
-                                    this.form_edit(&def, spec, cx, |value| {
-                                        edit_vector_end(value, end, |mut v| {
-                                            v[axis] = n;
-                                            v
-                                        })
-                                    });
-                                },
-                            ));
-                            field
-                        })
-                    })
-                    .collect(),
-            )
+            let life = if life == 0. { length } else { life };
+            (life, elapsed.rem_euclid(every) / life)
         }
-        Some(
-            p::Value::Time(p::SourceCurve::Gradient(read))
-            | p::Value::Hit(p::SourceCurve::Gradient(read)),
-        ) => {
-            let gradient = strip_editor(
-                gradient_strip(name.clone(), &read.gradient),
-                def,
-                spec,
-                cx,
-                subs,
-                |value, edited| match edited {
-                    StripValue::Gradient(g) => {
-                        edit_gradient_curve(value, |read| read.gradient = pattern_gradient(&g))
-                    }
-                    _ => None,
-                },
-            );
-            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
-            let curve = strip_editor(
-                CurveStrip::new(format!("{name} curve"), StripValue::Number(read.curve))
-                    .over_time(strip_clock(cx.entity().downgrade(), mode)),
-                def,
-                spec,
-                cx,
-                subs,
-                |value, edited| match edited {
-                    StripValue::Number(e) => edit_gradient_curve(value, |read| read.curve = e),
-                    _ => None,
-                },
-            );
-            Widget::GradientCurve(gradient, curve)
-        }
-        Some(p::Value::Space(space)) => {
-            let axis = axis_fields(&name, &space.axis, def, spec, window, cx, subs);
-            let heads = strip_heads(cx.entity().downgrade(), def, spec);
-            let along = match (&space.gradient, space.curve.clone()) {
-                (Some(gradient), _) => gradient_strip(name.clone(), gradient),
-                (None, curve) => CurveStrip::new(
-                    name.clone(),
-                    StripValue::Number(
-                        curve.unwrap_or_else(|| p::Envelope::linear(vec![[0., 1.], [1., 1.]])),
-                    ),
-                ),
-            };
-            let along = strip_editor(
-                along.across_space(heads),
-                def,
-                spec,
-                cx,
-                subs,
-                |value, edited| match edited {
-                    StripValue::Gradient(g) => {
-                        edit_space(value, |space| space.gradient = Some(pattern_gradient(&g)))
-                    }
-                    StripValue::Number(e) => edit_space(value, |space| space.curve = Some(e)),
-                    StripValue::Colors(_) => None,
-                },
-            );
-            let movement = space
-                .movement
-                .as_deref()
-                .cloned()
-                .unwrap_or_else(new_movement);
-            let path = strip_editor(
-                CurveStrip::new(
-                    format!("{name} path"),
-                    StripValue::Number(movement.path.clone()),
-                ),
-                def,
-                spec,
-                cx,
-                subs,
-                |value, edited| match edited {
-                    StripValue::Number(e) => edit_movement(value, |movement| movement.path = e),
-                    _ => None,
-                },
-            );
-            let travel = number_field(
-                format!("{name}: Travel"),
-                start_number(&movement.travel).unwrap_or(0.),
-                [0., 1e9],
-                FIELD_W,
-                Some("beats"),
-                window,
-                cx,
-            );
-            subs.push(on_number(&travel, cx, |value, v| {
-                if let Some(changed) = edit_movement(value, |m| m.travel = p::Value::Beats(v)) {
-                    *value = changed;
-                }
-            }));
-            let width = number_field(
-                format!("{name}: Width"),
-                start_number(&movement.width).unwrap_or(0.),
-                [0., p::MAX_WIDTH],
-                FIELD_W,
-                None,
-                window,
-                cx,
-            );
-            subs.push(on_number(&width, cx, |value, v| {
-                if let Some(changed) = edit_movement(value, |m| m.width = p::Value::Number(v)) {
-                    *value = changed;
-                }
-            }));
-            Widget::Space(SpaceFields {
-                axis,
-                along,
-                path,
-                travel,
-                width,
-            })
-        }
-        Some(
-            p::Value::Time(p::SourceCurve::Keys(curve))
-            | p::Value::Hit(p::SourceCurve::Keys(curve)),
-        ) if curve.is_color() => {
-            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
-            let strip = CurveStrip::new(name, StripValue::Colors(curve))
-                .with_presets(strip::color_curve_presets())
-                .over_time(strip_clock(cx.entity().downgrade(), mode));
-            Widget::Strip(strip_editor(strip, def, spec, cx, subs, |value, edited| {
-                let StripValue::Colors(keys) = edited else {
-                    return None;
-                };
-                match value {
-                    p::Value::Time(_) => Some(p::Value::Time(keys.into())),
-                    p::Value::Hit(_) => Some(p::Value::Hit(keys.into())),
-                    _ => None,
-                }
-            }))
-        }
-        Some(
-            p::Value::Time(p::SourceCurve::Keys(curve))
-            | p::Value::Hit(p::SourceCurve::Keys(curve)),
-        ) => {
-            let mode = slot.mode.unwrap_or(p::SourceKind::Time);
-            let clock = strip_clock(cx.entity().downgrade(), mode);
-            let entity = cx.new(|_| {
-                CurveStrip::new(name, StripValue::Number(envelope_of(slot, &curve)))
-                    .with_scale(slot.range(), slot.unit())
-                    .over_time(clock)
-            });
-            let def = def.clone();
-            let shape = *slot;
-            subs.push(cx.subscribe(
-                &entity,
-                move |this: &mut Luma, _, event: &StripChanged, cx| {
-                    let StripValue::Number(envelope) = &event.0 else {
-                        return;
-                    };
-                    let curve = keyframes_of(&shape, envelope).into();
-                    let value = if mode == p::SourceKind::Hit {
-                        p::Value::Hit(curve)
+        Some(e) if e["value"].as_f64() != Some(0.) => return None,
+        _ => (length, elapsed / length),
+    };
+    Some(strip::Clock {
+        beats: span,
+        phase: ((0. ..=length).contains(&elapsed) && (0. ..=1.).contains(&phase)).then_some(phase),
+        playing: editor.transport.playing,
+    })
+}
+fn menu_id(target: &Target, suffix: &str) -> usize {
+    format!("{}{}{suffix}", target.def.id, target.path)
+        .bytes()
+        .fold(0xcbf29ce484222325usize, |h, b| {
+            (h ^ usize::from(b)).wrapping_mul(0x100000001b3)
+        })
+}
+fn select(
+    state: &Editor,
+    app: &Entity<Luma>,
+    target: &Target,
+    suffix: &str,
+    current: &str,
+    labels: &[&str],
+    pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
+) -> Div {
+    let menu = Menu::Choice(menu_id(target, suffix));
+    let toggle = app.clone();
+    let choose = app.clone();
+    let pick = Rc::new(pick);
+    luma_arg_select(
+        format!("{} {} {suffix}", target.def.name, target.path),
+        current,
+        labels,
+        menu_visibility(state, menu),
+        move |_, cx| {
+            toggle.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| {
+                    editor.sheet.open = if editor.sheet.open == Some(menu) {
+                        None
                     } else {
-                        p::Value::Time(curve)
-                    };
-                    this.arg_live(&def.id, document::wire_value(&value), cx);
+                        Some(menu)
+                    }
+                })
+            });
+        },
+        move |at, _, cx| {
+            let pick = pick.clone();
+            choose.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                pick(at, this, cx);
+            });
+        },
+    )
+}
+fn source_select(
+    state: &Editor,
+    app: &Entity<Luma>,
+    target: &Target,
+    value: &Json,
+    units: Units,
+    kinds: &[p::SourceKind],
+) -> Div {
+    let current = value
+        .get("type")
+        .and_then(Json::as_str)
+        .and_then(|t| {
+            kinds
+                .iter()
+                .find(|k| source_name(**k).eq_ignore_ascii_case(t))
+        })
+        .map(|k| source_name(*k))
+        .unwrap_or("Fixed");
+    let mut labels = vec!["Fixed"];
+    labels.extend(kinds.iter().map(|k| source_name(*k)));
+    let kinds = kinds.to_vec();
+    let target = target.clone();
+    let edit = target.clone();
+    select(
+        state,
+        app,
+        &target,
+        "source",
+        current,
+        &labels,
+        move |at, this, cx| {
+            edit.change(this, cx, |value| {
+                *value = if at == 0 {
+                    if let Some(default) = &edit.spec.default {
+                        if edit.path.is_empty()
+                            && matches!(default, p::Value::Vector(_) | p::Value::Color(_))
+                        {
+                            serde_json::to_value(default).unwrap_or(Json::Null)
+                        } else {
+                            json!({"type":units.tag(),"value":1})
+                        }
+                    } else {
+                        json!({"type":units.tag(),"value":1})
+                    }
+                } else {
+                    let mut source = default_source(kinds[at - 1], value, units);
+                    if edit.motion_size()
+                        && kinds[at - 1] == p::SourceKind::Time
+                        && value.get("value").is_some_and(Json::is_number)
+                    {
+                        source["value"]["points"] = json!([[0, 1], [1, 1]]);
+                        source["value"]["gain"] = json!({"type":"number","value":numeric(value)});
+                    }
+                    source
+                };
+            });
+        },
+    )
+}
+fn field_control(field: &Field, state: &Editor, app: &Entity<Luma>) -> Div {
+    let mut el = div().w_full().flex().flex_col().gap(px(8.));
+    match &field.control {
+        Control::Number(entity, _) => el = el.child(entity.clone()),
+        Control::Vector(parts) => {
+            for (i, entity) in parts.iter().enumerate() {
+                el = el.child(arg_row(["U", "V", "Z"][i], entity.clone()));
+            }
+        }
+        Control::Direction(parts) => {
+            for (i, entity) in parts.iter().enumerate() {
+                el = el.child(arg_row(["Turn", "Tilt"][i], entity.clone()));
+            }
+        }
+        Control::Curve(entity, ..) | Control::Gradient(entity) => el = el.child(entity.clone()),
+        Control::NoisePreview(entity) => el = el.child(entity.clone()),
+        Control::Choice(options) => {
+            let options = options.clone();
+            let labels: Vec<_> = options.iter().map(|(s, _)| *s).collect();
+            let current = options
+                .iter()
+                .position(|(_, v)| {
+                    if field.label == "Band" {
+                        v["from_hz"] == field.value["from_hz"] && v["to_hz"] == field.value["to_hz"]
+                    } else {
+                        v == &field.value
+                    }
+                })
+                .or_else(|| {
+                    if field.label == "Events" && field.value.get("every").is_some() {
+                        Some(if numeric(&field.value["every"]) == 0. {
+                            1
+                        } else {
+                            2
+                        })
+                    } else if field.label == "Motion"
+                        || field.label == "Space"
+                        || field.label == "Duration"
+                    {
+                        Some(usize::from(!field.value.is_null()))
+                    } else {
+                        None
+                    }
+                });
+            let target = field.target.clone();
+            let edit = target.clone();
+            let shown = current.map_or("Custom", |i| labels[i]).to_string();
+            el = el.child(select(
+                state,
+                app,
+                &target,
+                &field.label,
+                &shown,
+                &labels,
+                move |i, this, cx| {
+                    let chosen = options[i].1.clone();
+                    if edit.path.ends_with("/source/kind") {
+                        let parent = Target {
+                            path: edit.path.trim_end_matches("/source/kind").into(),
+                            ..edit.clone()
+                        };
+                        parent.change(this, cx, |axis| {
+                            axis["source"] = json!({"kind":chosen});
+                            let round = matches!(chosen.as_str(), Some("radial" | "angle"));
+                            if round {
+                                axis["plane"] = json!({"kind":"auto"});
+                                axis["mirror"] = Json::Null;
+                            } else {
+                                axis["plane"] = Json::Null;
+                            }
+                            if matches!(chosen.as_str(), Some("order" | "random")) {
+                                axis["mirror"] = Json::Null;
+                            }
+                        });
+                    } else if chosen.get("from_hz").is_some() {
+                        edit.change(this, cx, |value| {
+                            value["from_hz"] = chosen["from_hz"].clone();
+                            value["to_hz"] = chosen["to_hz"].clone();
+                        });
+                    } else {
+                        edit.set(this, cx, chosen);
+                    }
                 },
             ));
-            Widget::Strip(entity)
         }
-        Some(p::Value::Noise(noise)) => {
-            let half = (FIELD_W - 8.) / 2.;
-            let speed = number_field(
-                format!("{name}: Speed"),
-                noise.speed,
-                [MIN_BEATS, 1e9],
-                FIELD_W,
-                Some("beats"),
-                window,
-                cx,
+        Control::None | Control::Heading => {}
+    }
+    let mut first_heading = true;
+    for child in &field.children {
+        if matches!(child.control, Control::Heading) {
+            el = el.child(
+                luma_ui::float::group_heading(child.label.clone(), first_heading)
+                    .agent_node(Role::Text, child.label.clone()),
             );
-            let low = number_field(
-                format!("{name}: Low"),
-                noise.range[0],
-                slot.range(),
-                half,
-                slot.unit(),
-                window,
-                cx,
-            );
-            let high = number_field(
-                format!("{name}: High"),
-                noise.range[1],
-                slot.range(),
-                half,
-                slot.unit(),
-                window,
-                cx,
-            );
-            subs.push(on_number(&speed, cx, |value, v| {
-                if let p::Value::Noise(noise) = value {
-                    noise.speed = v;
-                }
-            }));
-            subs.push(on_number(&low, cx, |value, v| {
-                if let p::Value::Noise(noise) = value {
-                    noise.range[0] = v;
-                }
-            }));
-            subs.push(on_number(&high, cx, |value, v| {
-                if let p::Value::Noise(noise) = value {
-                    noise.range[1] = v;
-                }
-            }));
-            Widget::Noise([speed, low, high])
+            first_heading = false;
+            continue;
         }
-        Some(p::Value::Audio(audio)) => {
-            let half = (FIELD_W - 8.) / 2.;
-            let (min, max) = (p::AudioLevel::MIN_HZ, p::AudioLevel::MAX_HZ);
-            let hz = |label: String, value: f64, window: &mut Window, cx: &mut Context<Luma>| {
-                cx.new(|cx| {
-                    DraftedNumber::new(label, value, min, max, half, window, cx).with_unit("Hz")
-                })
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(luma_ui::caption(child.label.clone()))
+            .when(!child.sources.is_empty(), |el| {
+                el.child(source_select(
+                    state,
+                    app,
+                    &child.target,
+                    &child.value,
+                    child.units,
+                    &child.sources,
+                ))
+            });
+        el = el.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(header)
+                .child(grouped(child, field_control(child, state, app)))
+                .agent_node(Role::Row, child.label.clone()),
+        );
+    }
+    el
+}
+/// A source's own settings sit under it, behind a rule, so a nested Events
+/// or Every never reads as the parent's, and a top-level source's rows read
+/// as its own.
+fn grouped(field: &Field, control: Div) -> Div {
+    control.when(!field.children.is_empty(), |el| {
+        el.border_l_2()
+            .border_color(luma_ui::ladder::border())
+            .pl(px(10.))
+    })
+}
+fn sync_field(field: &mut Field, raw: &Json, cx: &mut Context<Luma>) {
+    let value = value_at(raw, &field.target.path, &field.value);
+    field.value = value.clone();
+    match &field.control {
+        Control::Number(entity, tagged) => {
+            let n = if *tagged {
+                numeric(&value)
+            } else {
+                value.as_f64().unwrap_or(0.)
             };
-            let from = hz(format!("{name}: From"), audio.from_hz, window, cx);
-            let to = hz(format!("{name}: To"), audio.to_hz, window, cx);
-            let percent = |label: &str, value: f64, window: &mut Window, cx: &mut Context<Luma>| {
-                cx.new(|cx| {
-                    DraftedNumber::new(
-                        format!("{name}: {label}"),
-                        value * 100.,
-                        0.,
-                        100.,
-                        FIELD_W,
-                        window,
-                        cx,
-                    )
-                    .with_unit("%")
-                })
-            };
-            let floor = percent("Floor", audio.floor, window, cx);
-            let threshold = percent("Threshold", audio.threshold, window, cx);
-            // A range that would cross is not stored.
-            subs.push(on_number(&from, cx, |value, v| {
-                if let p::Value::Audio(audio) = value {
-                    audio.from_hz = v.min(audio.to_hz - 1.);
-                }
-            }));
-            subs.push(on_number(&to, cx, |value, v| {
-                if let p::Value::Audio(audio) = value {
-                    audio.to_hz = v.max(audio.from_hz + 1.);
-                }
-            }));
-            subs.push(on_number(&floor, cx, |value, v| {
-                if let p::Value::Audio(audio) = value {
-                    audio.floor = (v / 100.).clamp(0., 1.);
-                }
-            }));
-            subs.push(on_number(&threshold, cx, |value, v| {
-                if let p::Value::Audio(audio) = value {
-                    audio.threshold = (v / 100.).clamp(0., 1.);
-                }
-            }));
-            Widget::Audio([from, to, floor, threshold])
+            entity.update(cx, |f, cx| f.set_value(n, cx));
         }
-        value => {
-            let current = value.as_ref().and_then(level);
-            if def.id == "grain" {
-                let entity = number_field(
-                    format!("{name}: Clump size"),
-                    current.filter(|n| *n >= 2.).unwrap_or(2.),
-                    [2., 64.],
-                    FIELD_W,
-                    None,
-                    window,
-                    cx,
-                );
-                subs.push(on_number(&entity, cx, |value, v| {
-                    *value = p::Value::Number(v.round())
-                }));
-                return Widget::Grain(entity);
-            }
-            if slot.once() {
-                let entity = number_field(
-                    format!("{name}: Beats"),
-                    current.unwrap_or(0.),
-                    [0., 1e9],
-                    FIELD_W,
-                    Some("beats"),
-                    window,
-                    cx,
-                );
-                subs.push(on_number(&entity, cx, |value, v| {
-                    *value = p::Value::Beats(v)
-                }));
-                return Widget::Every(entity);
-            }
-            if slot.speed {
-                // A speed stays above zero.
-                let entity = number_field(
-                    name,
-                    slot.fit(current.unwrap_or(MIN_BEATS)),
-                    [MIN_BEATS, 1e9],
-                    FIELD_W,
-                    Some("beats"),
-                    window,
-                    cx,
-                );
-                subs.push(on_number(&entity, cx, |value, v| {
-                    *value = p::Value::Beats(v)
-                }));
-                return Widget::Scalar(entity);
-            }
-            if let Some(p::Value::Mapping(mapping)) = &value {
-                return Widget::Axis(axis_fields(&name, mapping, def, spec, window, cx, subs));
-            }
-            if let Some(p::Author::Choice { options, .. }) = &spec.author {
-                // A choice of curves edits a custom curve in a strip.
-                let editor = envelope_options(options).map(|curves| {
-                    let envelope = match &value {
-                        Some(p::Value::Envelope(envelope)) if envelope.validate().is_ok() => {
-                            envelope.clone()
-                        }
-                        _ => match &curves[0].1 {
-                            Thumb::Curve(envelope) => envelope.clone(),
-                            Thumb::Gradient(_) => unreachable!("curve options"),
-                        },
-                    };
-                    let entity =
-                        cx.new(|_| CurveStrip::new(name.clone(), StripValue::Number(envelope)));
-                    let def = def.clone();
-                    subs.push(cx.subscribe(
-                        &entity,
-                        move |this: &mut Luma, _, event: &StripChanged, cx| {
-                            if let StripValue::Number(envelope) = &event.0 {
-                                let value = p::Value::Envelope(envelope.clone());
-                                this.arg_live(&def.id, document::wire_value(&value), cx);
-                            }
-                        },
-                    ));
-                    entity
+        Control::Vector(parts) => {
+            for (i, entity) in parts.iter().enumerate() {
+                entity.update(cx, |f, cx| {
+                    f.set_value(value["value"][i].as_f64().unwrap_or(0.), cx)
                 });
-                return Widget::Preset(options, editor);
             }
-            if let Some([min, max]) = slot.bounds() {
-                // A number with bounds of its own, such as a chase width.
-                let entity = number_field(
-                    name,
-                    slot.fit(current.unwrap_or(min)),
-                    [min, max],
-                    FIELD_W,
-                    slot.unit(),
-                    window,
-                    cx,
-                );
-                subs.push(on_number(&entity, cx, |value, v| {
-                    *value = p::Value::Number(v)
-                }));
-                return Widget::Scalar(entity);
-            }
-            plain_widget(def, stored, true, &[], window, cx, subs)
         }
+        Control::Direction(parts) => {
+            let a = &value["value"];
+            let u = a[0].as_f64().unwrap_or(0.);
+            let v = a[1].as_f64().unwrap_or(0.);
+            let z = a[2].as_f64().unwrap_or(0.);
+            for (entity, value) in parts
+                .iter()
+                .zip([u.atan2(v).to_degrees(), z.atan2(u.hypot(v)).to_degrees()])
+            {
+                entity.update(cx, |f, cx| f.set_value((value * 100.).round() / 100., cx));
+            }
+        }
+        Control::Curve(entity, range, component) => {
+            let curve = if value["type"] == "time" {
+                &value["value"]
+            } else if value["type"] == "space" {
+                &value["value"]["curve"]
+            } else {
+                &value
+            };
+            if let Ok(curve) =
+                serde_json::from_value::<p::Keyframes>(json!({"points":curve["points"]}))
+            {
+                let value = if curve.is_color() && component.is_none() {
+                    StripValue::Colors(curve)
+                } else {
+                    StripValue::Number(normal_curve(&curve, *range, *component))
+                };
+                entity.update(cx, |e, cx| e.set_value(value, cx));
+            }
+        }
+        Control::NoisePreview(entity) => {
+            let source = serde_json::from_value(value["value"].clone()).ok();
+            entity.update(cx, |preview, cx| preview.set_value(source, cx));
+        }
+        Control::Gradient(entity) => {
+            let value = if value["type"] == "space" {
+                &value["value"]["gradient"]
+            } else {
+                &value
+            };
+            if let Ok(g) = serde_json::from_value::<p::Gradient>(value.clone()) {
+                entity.update(cx, |e, cx| {
+                    e.set_value(StripValue::Gradient(ui_gradient(&g)), cx)
+                });
+            }
+        }
+        _ => {}
+    }
+    for child in &mut field.children {
+        sync_field(child, raw, cx);
     }
 }
-
-/// Push a stored value into a form row's controls. Rebuilds the control when
-/// the value changed between plain and a source, or between two sources.
-/// Returns false for a plain control the sheet itself refreshes.
 pub(super) fn resync(
     slot: &mut Slot,
     def: &PatternArgDef,
     widget: &mut Widget,
-    stored: &serde_json::Value,
+    stored: &Json,
     window: &mut Window,
     cx: &mut Context<Luma>,
     subs: &mut Vec<Subscription>,
 ) -> bool {
-    let value = decode(slot.spec.value_type, stored).ok();
-    let mode = value.as_ref().and_then(p::Value::source_kind);
-    // Keyframes and a gradient read along a curve are one source with two
-    // editors; a space source's editors follow a gradient or a curve.
-    let reshaped = match (&*widget, &value) {
-        (
-            Widget::GradientCurve(..),
-            Some(p::Value::Time(p::SourceCurve::Keys(_)) | p::Value::Hit(p::SourceCurve::Keys(_))),
-        ) => true,
-        (
-            Widget::Strip(_),
-            Some(
-                p::Value::Time(p::SourceCurve::Gradient(_))
-                | p::Value::Hit(p::SourceCurve::Gradient(_)),
-            ),
-        ) => true,
-        (Widget::Space(fields), Some(p::Value::Space(space))) => {
-            fields.along.read(cx).value().is_color() != space.gradient.is_some()
-        }
-        _ => false,
+    let Ok(value) = decode(slot.spec.value_type, stored) else {
+        return false;
     };
-    if mode != slot.mode || reshaped {
-        slot.mode = mode;
-        *widget = self::widget(slot, def, stored, window, cx, subs);
-        return true;
-    }
-    match (&mut *widget, value) {
-        (Widget::Direction(turns), Some(value)) => {
-            // A direction straight up or down keeps the turn it had.
-            for (held, v) in turns.iter_mut().zip(vector_ends(&value)) {
-                if let (Some(turn), _) = turn_tilt(v) {
-                    *held = turn;
-                }
-            }
+    let Ok(raw) = serde_json::to_value(&value) else {
+        return false;
+    };
+    match widget {
+        Widget::Form(field) if field.shape == structure(&raw) => {
+            sync_field(field, &raw, cx);
+            true
         }
-        (Widget::Point(sets), Some(value)) => {
-            for (fields, v) in sets.iter().zip(vector_ends(&value)) {
-                for (field, n) in fields.iter().zip(v) {
-                    field.update(cx, |field, cx| field.set_value(n, cx));
-                }
-            }
-        }
-        (
-            Widget::Strip(entity),
-            Some(
-                p::Value::Time(p::SourceCurve::Keys(curve))
-                | p::Value::Hit(p::SourceCurve::Keys(curve)),
-            ),
-        ) => {
-            let value = if curve.is_color() {
-                StripValue::Colors(curve)
-            } else {
-                StripValue::Number(envelope_of(slot, &curve))
-            };
-            entity.update(cx, |editor, cx| editor.set_value(value, cx));
-        }
-        (
-            Widget::GradientCurve(gradient, curve),
-            Some(
-                p::Value::Time(p::SourceCurve::Gradient(read))
-                | p::Value::Hit(p::SourceCurve::Gradient(read)),
-            ),
-        ) => {
-            let colors = StripValue::Gradient(ui_gradient(&read.gradient));
-            gradient.update(cx, |editor, cx| editor.set_value(colors, cx));
-            let read = StripValue::Number(read.curve);
-            curve.update(cx, |editor, cx| editor.set_value(read, cx));
-        }
-        (Widget::Space(fields), Some(p::Value::Space(space))) => {
-            resync_axis(&fields.axis, &space.axis, cx);
-            let along = match (&space.gradient, space.curve) {
-                (Some(gradient), _) => Some(StripValue::Gradient(ui_gradient(gradient))),
-                (None, curve) => curve.map(StripValue::Number),
-            };
-            if let Some(along) = along {
-                fields
-                    .along
-                    .update(cx, |editor, cx| editor.set_value(along, cx));
-            }
-            if let Some(movement) = space.movement {
-                let movement = *movement;
-                let path = StripValue::Number(movement.path);
-                fields
-                    .path
-                    .update(cx, |editor, cx| editor.set_value(path, cx));
-                if let Some(n) = start_number(&movement.travel) {
-                    fields.travel.update(cx, |field, cx| field.set_value(n, cx));
-                }
-                if let Some(n) = start_number(&movement.width) {
-                    fields.width.update(cx, |field, cx| field.set_value(n, cx));
-                }
-            }
-        }
-        (Widget::Noise([speed, low, high]), Some(p::Value::Noise(noise))) => {
-            speed.update(cx, |field, cx| field.set_value(noise.speed, cx));
-            low.update(cx, |field, cx| field.set_value(noise.range[0], cx));
-            high.update(cx, |field, cx| field.set_value(noise.range[1], cx));
-        }
-        (Widget::Audio([from, to, floor, threshold]), Some(p::Value::Audio(audio))) => {
-            from.update(cx, |field, cx| field.set_value(audio.from_hz, cx));
-            to.update(cx, |field, cx| field.set_value(audio.to_hz, cx));
-            floor.update(cx, |field, cx| field.set_value(audio.floor * 100., cx));
-            threshold.update(cx, |field, cx| field.set_value(audio.threshold * 100., cx));
-        }
-        (Widget::Grain(entity), Some(value)) => {
-            if let Some(n) = level(&value).filter(|n| *n >= 2.) {
-                entity.update(cx, |field, cx| field.set_value(n, cx));
-            }
-        }
-        (Widget::Every(entity), Some(value)) => {
-            if let Some(n) = level(&value) {
-                entity.update(cx, |field, cx| field.set_value(n, cx));
-            }
-        }
-        (Widget::Preset(_, Some(entity)), Some(p::Value::Envelope(envelope))) => {
-            if envelope.validate().is_ok() {
-                let value = StripValue::Number(envelope);
-                entity.update(cx, |editor, cx| editor.set_value(value, cx));
-            }
-        }
-        (Widget::Preset(..), _) => {}
-        (Widget::Axis(fields), Some(p::Value::Mapping(mapping))) => {
-            resync_axis(fields, &mapping, cx)
-        }
-        _ => return false,
-    }
-    true
-}
-
-fn resync_axis(fields: &AxisFields, mapping: &p::MappingSpec, cx: &mut Context<Luma>) {
-    for (field, n) in fields.plane.iter().zip(plane_normal(mapping)) {
-        field.update(cx, |field, cx| field.set_value(n, cx));
-    }
-    let mirror = mirror_plane(mapping);
-    for (field, n) in fields.normal.iter().zip(mirror.normal) {
-        field.update(cx, |field, cx| field.set_value(n, cx));
-    }
-    fields
-        .offset
-        .update(cx, |field, cx| field.set_value(mirror.offset, cx));
-}
-
-impl Luma {
-    /// Rewrite one form input from its stored value. `edit` returns `None`
-    /// to leave it as it is.
-    fn form_edit(
-        &mut self,
-        def: &PatternArgDef,
-        spec: &'static p::Input,
-        cx: &mut Context<Self>,
-        edit: impl FnOnce(&p::Value) -> Option<p::Value>,
-    ) {
-        let mut wire = None;
-        self.with_track_editor(cx, |editor| {
-            if let Ok(value) = decode(spec.value_type, &stored_arg(editor, def)) {
-                wire = edit(&value).map(|value| document::wire_value(&value));
-            }
-        });
-        if let Some(wire) = wire {
-            self.arg_live(&def.id, wire, cx);
+        Widget::Color(_) if matches!(value, p::Value::Color(_)) => false,
+        _ => {
+            *widget = self::widget(slot, def, stored, window, cx, subs);
+            true
         }
     }
 }
-
-// -- rendering ----------------------------------------------------------------
-
-/// The rows of a form clip: the selection, then each input in the form's
-/// order. The rare ones sit under "Advanced". An aim shows its base, then
-/// its motion, each without the rows that do not apply.
 pub(super) fn rows(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     let mut rows = Vec::new();
+    let base = built
+        .cells
+        .iter()
+        .find(|c| c.def.id == "base")
+        .and_then(|c| c.synced.as_str())
+        .unwrap_or("direction");
     for (index, cell) in built.cells.iter().enumerate() {
         let Some(slot) = &cell.form else {
             rows.extend(arg_rows(state, app, index, cell));
             continue;
         };
-        if slot.form == "aim@1" && aim_hides(built, slot.key) {
-            continue;
+        if slot.form == "aim@1" {
+            if built.blend == BlendMode::Offset
+                && matches!(slot.key, "base" | "direction" | "point")
+            {
+                continue;
+            }
+            if (slot.key == "direction" && base != "direction")
+                || (slot.key == "point" && base != "point")
+            {
+                continue;
+            }
         }
-        // An aim's motion group.
-        if slot.form == "aim@1" && cell.def.id == "motion" {
-            rows.push(luma_ui::float::divider().into_any_element());
+        let control = match &cell.widget {
+            Widget::Form(field) => grouped(field, field_control(field, state, app)),
+            Widget::Color(entity) => div().child(entity.clone()),
+            Widget::Invalid(error) => div().child(error.clone()),
+            _ => continue,
+        };
+        let mut accessories = Vec::new();
+        let fixed_position = slot.form == "aim@1"
+            && matches!(slot.key, "direction" | "point")
+            && decode(slot.spec.value_type, &cell.synced)
+                .is_ok_and(|value| value.source_kind().is_none());
+        if !fixed_position && !slot.spec.promotable.is_empty() {
+            let target = Target {
+                form: slot.form,
+                def: cell.def.clone(),
+                spec: slot.spec,
+                path: String::new(),
+            };
+            if let Ok(value) = decode(slot.spec.value_type, &cell.synced) {
+                accessories.push(
+                    source_select(
+                        state,
+                        app,
+                        &target,
+                        &serde_json::to_value(value).unwrap_or(Json::Null),
+                        units(slot),
+                        &slot.spec.promotable,
+                    )
+                    .into_any_element(),
+                );
+            }
         }
-        match control(state, app, index, cell, slot) {
-            Some(control) => rows.push(row(state, app, index, cell, slot, control)),
-            None => rows.extend(arg_rows(state, app, index, cell)),
-        }
+        rows.push(sheet_row(&slot.spec.name, accessories, control));
     }
     rows
 }
-
-/// Whether an `aim@1` row does not apply to the clip's blend, base and
-/// motion: an Offset clip has no base, so base, direction and point go; the
-/// direction or the point by the base; shape, size, spread and speed by the
-/// motion. `every` paces a shape and a fan per hit.
-fn aim_hides(built: &Built, key: &str) -> bool {
-    let offset = built.blend == BlendMode::Offset;
-    let stored = |key: &str| {
-        built
-            .cells
-            .iter()
-            .find(|cell| cell.def.id == key)
-            .map(|cell| &cell.synced)
-    };
-    let choice = |key: &str| {
-        stored(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-    };
-    let (base, motion) = (choice("base"), choice("motion"));
-    let fan_per_hit = stored("fan")
-        .and_then(|fan| fan.get("type"))
-        .and_then(serde_json::Value::as_str)
-        == Some("hit");
-    match key {
-        "base" => offset,
-        "direction" => offset || base != "direction",
-        "point" => offset || base != "point",
-        "shape" | "spread" => motion != "shape",
-        "size" => motion == "none",
-        "speed" => motion != "noise",
-        "every" => motion != "shape" && !fan_per_hit,
-        _ => false,
-    }
-}
-
-/// A labelled form row. The header line carries the promote menu.
-fn row(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    cell: &Cell,
-    slot: &Slot,
-    control: Div,
-) -> AnyElement {
-    let name = slot.spec.name.as_str();
-    let promote = (!slot.spec.promotable.is_empty()).then(|| {
-        div()
-            .w(px(MODE_W))
-            .flex()
-            .flex_col()
-            .child(promote_select(state, app, index, cell, slot))
-            .into_any_element()
-    });
-    sheet_row(name, promote.into_iter().collect(), control)
-}
-
-/// The menu that switches an input between a fixed value and a source.
-fn promote_select(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    cell: &Cell,
-    slot: &Slot,
-) -> Div {
-    let kinds = slot.spec.promotable.clone();
-    let labels: Vec<&str> = std::iter::once(FIXED)
-        .chain(kinds.iter().map(|kind| source_label(*kind)))
-        .collect();
-    let current = slot.mode.map_or(FIXED, source_label);
-    let toggle = app.clone();
-    let pick = app.clone();
-    let def = cell.def.clone();
-    let spec = slot.spec;
-    let mode = slot.mode;
-    let shape = *slot;
-    luma_arg_select(
-        format!("{}:source", slot.spec.name),
-        current,
-        &labels,
-        menu_visibility(state, Menu::Source(index)),
-        move |_, cx| {
-            toggle.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.open = if editor.sheet.open == Some(Menu::Source(index)) {
-                        None
-                    } else {
-                        Some(Menu::Source(index))
-                    };
-                });
-            });
+fn ui_gradient(gradient: &p::Gradient) -> Gradient {
+    Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
+        t: stop.t as f32,
+        color: Light {
+            a: stop.alpha as f32,
+            ..Light::opaque(stop.color)
         },
-        move |picked, _, cx| {
-            let to = picked.checked_sub(1).map(|at| kinds[at]);
-            pick.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.sheet.open = None);
-                if to == mode {
-                    return;
-                }
-                this.form_edit(&def, spec, cx, |value| Some(promote(&shape, value, to)));
-            });
-        },
-    )
-}
-
-/// A row of segments, one picked. Picking another runs `on_pick` with its
-/// index.
-fn segments(
-    app: &Entity<Luma>,
-    name: &str,
-    labels: &[&'static str],
-    chosen: usize,
-    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
-) -> Div {
-    let on_pick = Rc::new(on_pick);
-    luma_ui::float::segmented().children(labels.iter().enumerate().map(|(at, label)| {
-        let app = app.clone();
-        let on_pick = on_pick.clone();
-        let key = format!("{name}-{label}");
-        luma_ui::float::segment(*label, at == chosen, key.clone())
-            .id(SharedString::from(key))
-            .on_click(move |_, _, cx| {
-                if at == chosen {
-                    return;
-                }
-                app.update(cx, |this, cx| on_pick(at, this, cx));
-            })
-            .agent_node(Role::Button, format!("{name} {label}"))
     }))
 }
-
-/// Opens or closes this row's `Menu::Choice`.
-fn choice_toggle(app: &Entity<Luma>, index: usize) -> impl Fn(&mut Window, &mut App) + Clone {
-    menu_toggle(app, Menu::Choice(index))
-}
-
-/// Opens `menu`, or closes it when it is open.
-fn menu_toggle(app: &Entity<Luma>, menu: Menu) -> impl Fn(&mut Window, &mut App) + Clone {
-    let app = app.clone();
-    move |_, cx| {
-        app.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                editor.sheet.open = if editor.sheet.open == Some(menu) {
-                    None
-                } else {
-                    Some(menu)
-                };
-            });
-        });
-    }
-}
-
-/// A select that opens under `menu`.
-fn menu_select(
-    state: &Editor,
-    app: &Entity<Luma>,
-    menu: Menu,
-    id: String,
-    current: &str,
-    labels: &[&str],
-    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
-) -> Div {
-    luma_arg_select(
-        id,
-        current,
-        labels,
-        menu_visibility(state, menu),
-        menu_toggle(app, menu),
-        choice_pick(app, on_pick),
-    )
-}
-
-/// The axis the custom plane turns around, or the default one to start from.
-fn plane_normal(mapping: &p::MappingSpec) -> [f64; 3] {
-    match &mapping.plane {
-        Some(p::AxisPlane::Custom { normal }) => *normal,
-        _ => [0., -1., 0.],
-    }
-}
-
-fn set_normal(value: &mut p::Value, axis: usize, n: f64) {
-    if let Some(mapping) = mapping_mut(value) {
-        if let Some(p::AxisPlane::Custom { normal }) = &mut mapping.plane {
-            normal[axis] = n;
-        }
-    }
-}
-
-/// The mirror choices: a plane through the middle of the span, left–right
-/// (normal U), front–back (V) or up–down (Z), or a custom plane.
-const MIRRORS: [&str; 5] = ["Off", "Left–right", "Front–back", "Up–down", "Custom plane"];
-/// The index of Custom plane in [`MIRRORS`].
-const CUSTOM_MIRROR: usize = 4;
-
-/// Which of [`MIRRORS`] `mirror` is: a normal that is none of the fixed
-/// planes is a custom plane.
-fn mirror_index(mirror: Option<&p::MirrorPlane>) -> usize {
-    match mirror.map(|plane| plane.normal) {
-        None => 0,
-        Some([1., 0., 0.]) => 1,
-        Some([0., 1., 0.]) => 2,
-        Some([0., 0., 1.]) => 3,
-        Some(_) => CUSTOM_MIRROR,
-    }
-}
-
-/// The mirror plane, or the left–right plane to start from.
-fn mirror_plane(mapping: &p::MappingSpec) -> p::MirrorPlane {
-    mapping.mirror.clone().unwrap_or(p::MirrorPlane {
-        normal: [1., 0., 0.],
-        offset: 0.,
-    })
-}
-
-fn set_mirror(value: &mut p::Value, edit: impl FnOnce(&mut p::MirrorPlane)) {
-    if let Some(mapping) = mapping_mut(value) {
-        if let Some(plane) = &mut mapping.mirror {
-            edit(plane);
-        }
-    }
-}
-
-/// The named axes: the same for an axis input and a space source.
-fn axis_options() -> &'static [p::Preset] {
-    static OPTIONS: std::sync::OnceLock<Vec<p::Preset>> = std::sync::OnceLock::new();
-    OPTIONS.get_or_init(|| {
-        p::axis_presets()
-            .into_iter()
-            .map(|(label, value)| p::Preset {
-                label: label.into(),
-                value,
-            })
-            .collect()
-    })
-}
-
-/// The axis row: which way, what one axis spans, the mirror where the axis
-/// takes one and, for radial and angle, the plane. It edits an axis input
-/// or the axis of a space source.
-#[allow(clippy::too_many_arguments)]
-fn axis_control(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    name: &str,
-    def: PatternArgDef,
-    spec: &'static p::Input,
-    mapping: p::MappingSpec,
-    fields: &AxisFields,
-) -> Div {
-    let options = axis_options();
-    let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
-    let current = options.iter().position(
-        |option| matches!(&option.value, p::Value::Mapping(preset) if preset.source == mapping.source),
-    );
-    let edit =
-        move |this: &mut Luma, cx: &mut Context<Luma>, change: &dyn Fn(&mut p::MappingSpec)| {
-            this.form_edit(&def, spec, cx, |value| {
-                let mut value = value.clone();
-                change(mapping_mut(&mut value)?);
-                Some(value)
-            });
-        };
-    let edit = Rc::new(edit);
-    let pick_axis = edit.clone();
-    let pick_span = edit.clone();
-    let pick_mirror = edit.clone();
-    let pick_plane = edit;
-    let mirrors = mapping.source.takes_mirror();
-    let mirror = match mapping.mirror.as_ref() {
-        Some(_) if fields.custom_mirror.get() => CUSTOM_MIRROR,
-        plane => mirror_index(plane),
-    };
-    let custom_mirror = fields.custom_mirror.clone();
-    let round = mapping.plane.is_some();
-    let plane = mapping.plane.as_ref().map_or(0, p::AxisPlane::index);
-    let spans: Vec<&str> = p::Span::OPTIONS.iter().map(|(_, label)| *label).collect();
-    let span = p::Span::OPTIONS
+fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
+    let mut stops: Vec<_> = gradient
+        .stops()
         .iter()
-        .position(|(span, _)| *span == mapping.span)
-        .unwrap_or(0);
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(menu_select(
-            state,
-            app,
-            Menu::Choice(index),
-            name.to_string(),
-            current.map_or("Custom", |at| labels[at]),
-            &labels,
-            move |picked, this, cx| {
-                let p::Value::Mapping(preset) = &options[picked].value else {
-                    return;
-                };
-                // A new direction keeps the spans and, where it takes one,
-                // the mirror; radial and angle keep their plane, Auto when
-                // they had none.
-                pick_axis(this, cx, &|mapping| {
-                    mapping.source = preset.source.clone();
-                    if !mapping.source.takes_mirror() {
-                        mapping.mirror = None;
-                    }
-                    mapping.plane = match (&preset.plane, &mapping.plane) {
-                        (None, _) => None,
-                        (Some(_), Some(kept)) => Some(kept.clone()),
-                        (Some(plane), None) => Some(plane.clone()),
-                    };
-                });
-            },
-        ))
-        .child(arg_row(
-            "Spans",
-            menu_select(
-                state,
-                app,
-                Menu::Span(index),
-                format!("{name}: Spans"),
-                spans[span],
-                &spans,
-                move |picked, this, cx| {
-                    let span = p::Span::OPTIONS[picked].0;
-                    pick_span(this, cx, &|mapping| mapping.span = span);
-                },
-            ),
-        ))
-        .when(mirrors, |el| {
-            el.child(arg_row(
-                "Mirror",
-                menu_select(
-                    state,
-                    app,
-                    Menu::Mirror(index),
-                    format!("{name}: Mirror"),
-                    MIRRORS[mirror],
-                    &MIRRORS,
-                    move |picked, this, cx| {
-                        custom_mirror.set(picked == CUSTOM_MIRROR);
-                        // A new plane keeps the offset; Custom plane starts
-                        // from the plane there is.
-                        pick_mirror(this, cx, &|mapping| {
-                            let kept = mirror_plane(mapping);
-                            mapping.mirror = match picked {
-                                0 => None,
-                                1 => Some([1., 0., 0.]),
-                                2 => Some([0., 1., 0.]),
-                                3 => Some([0., 0., 1.]),
-                                _ => Some(kept.normal),
-                            }
-                            .map(|normal| p::MirrorPlane {
-                                normal,
-                                offset: kept.offset,
-                            });
-                        });
-                    },
-                ),
-            ))
-            .when(mirror == CUSTOM_MIRROR, |el| {
-                el.child(arg_row(
-                    "Normal · U, V, Z",
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.))
-                        .children(fields.normal.iter().cloned()),
-                ))
-            })
-            .when(mirror != 0, |el| {
-                el.child(arg_row("Offset", fields.offset.clone()))
-            })
+        .map(|stop| p::ColorStop {
+            t: f64::from(stop.t).clamp(0., 1.),
+            color: stop.color.channels().map(|v| v.clamp(0., 1.)),
+            alpha: f64::from(stop.color.a).clamp(0., 1.),
         })
-        .when(round, |el| {
-            el.child(arg_row(
-                "Plane",
-                menu_select(
-                    state,
-                    app,
-                    Menu::Plane(index),
-                    format!("{name}: Plane"),
-                    p::AxisPlane::OPTIONS[plane],
-                    &p::AxisPlane::OPTIONS,
-                    move |picked, this, cx| {
-                        pick_plane(this, cx, &|mapping| {
-                            let normal = plane_normal(mapping);
-                            mapping.plane = Some(match picked {
-                                1 => p::AxisPlane::UpDown,
-                                2 => p::AxisPlane::FrontBack,
-                                3 => p::AxisPlane::LeftRight,
-                                4 => p::AxisPlane::Custom { normal },
-                                _ => p::AxisPlane::Auto,
-                            });
-                        });
-                    },
-                ),
-            ))
-        })
-        .when(plane == 4, |el| {
-            el.child(arg_row(
-                "Axis · U, V, Z",
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.))
-                    .children(fields.plane.iter().cloned()),
-            ))
-        })
-}
-
-/// Closes the open menu, then runs `on_pick` with the picked index.
-fn choice_pick(
-    app: &Entity<Luma>,
-    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
-) -> impl Fn(usize, &mut Window, &mut App) + Clone {
-    let app = app.clone();
-    let on_pick = Rc::new(on_pick);
-    move |picked, _, cx| {
-        let on_pick = on_pick.clone();
-        app.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| editor.sheet.open = None);
-            on_pick(picked, this, cx);
-        });
-    }
-}
-
-/// A select that opens under this row's `Menu::Choice`.
-fn choice_select(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    id: String,
-    current: &str,
-    labels: &[&str],
-    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
-) -> Div {
-    luma_arg_select(
-        id,
-        current,
-        labels,
-        menu_visibility(state, Menu::Choice(index)),
-        choice_toggle(app, index),
-        choice_pick(app, on_pick),
-    )
-}
-
-/// A preset picker that opens under `menu`, one of this row's menus. Its
-/// Custom tile keeps the value and shows the row's editor.
-#[allow(clippy::too_many_arguments)]
-fn choice_presets(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    menu: Menu,
-    id: String,
-    value: &p::Envelope,
-    current: Option<usize>,
-    options: &[(SharedString, Thumb)],
-    on_pick: impl Fn(usize, &mut Luma, &mut Context<Luma>) + 'static,
-) -> Div {
-    let app_pick = app.clone();
-    let on_pick = Rc::new(on_pick);
-    luma_preset_picker(
-        id,
-        &Thumb::Curve(value.clone()),
-        current,
-        options,
-        true,
-        menu_visibility(state, menu),
-        menu_toggle(app, menu),
-        move |picked, _, cx| {
-            let on_pick = on_pick.clone();
-            app_pick.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.sheet.open = None;
-                    let slot = editor
-                        .sheet
-                        .built
-                        .as_mut()
-                        .and_then(|built| built.cells.get_mut(index))
-                        .and_then(|cell| cell.form.as_mut());
-                    if let Some(slot) = slot {
-                        slot.editing = picked.is_none();
-                    }
-                });
-                if let Some(at) = picked {
-                    on_pick(at, this, cx);
-                }
-            });
-        },
-    )
-}
-
-/// The shipped curve presets as the input's curves, each in the envelope
-/// editor's 0–1 box.
-fn curve_options(slot: &Slot) -> Vec<(SharedString, Thumb)> {
-    slot.curves()
-        .map(|preset| {
-            let curve = scaled(slot, &preset.curve);
-            (
-                preset.name.clone().into(),
-                Thumb::Curve(envelope_of(slot, &curve)),
-            )
-        })
-        .collect()
-}
-
-/// The preset `curve` equals, if any.
-fn curve_preset(slot: &Slot, curve: &p::Keyframes) -> Option<usize> {
-    slot.curves()
-        .position(|preset| same_curve(&scaled(slot, &preset.curve), curve))
-}
-
-/// A choice's options as named curves, when every option is an envelope.
-fn envelope_options(options: &[p::Preset]) -> Option<Vec<(SharedString, Thumb)>> {
-    options
-        .iter()
-        .map(|option| match &option.value {
-            p::Value::Envelope(envelope) => {
-                Some((option.label.clone().into(), Thumb::Curve(envelope.clone())))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The control under a form row's header, or `None` for a control the plain
-/// sheet draws.
-fn control(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    cell: &Cell,
-    slot: &Slot,
-) -> Option<Div> {
-    let name = slot.spec.name.as_str();
-    let def = cell.def.clone();
-    let spec = slot.spec;
-    let value = decode(spec.value_type, &cell.synced).ok();
-    let column = || div().w_full().flex().flex_col().gap(px(6.));
-    Some(match &cell.widget {
-        Widget::Direction(turns) => {
-            let ends = vector_ends(value.as_ref()?);
-            let timed = ends.len() > 1;
-            column().children(ends.into_iter().enumerate().map(|(end, v)| {
-                let (turn, tilt) = turn_tilt(v);
-                let turn = turn.unwrap_or_else(|| turns.get(end).copied().unwrap_or(0.));
-                let [turn_label, tilt_label] = match (timed, end) {
-                    (false, _) => ["Turn", "Tilt"],
-                    (true, 0) => ["Start turn", "Start tilt"],
-                    (true, _) => ["End turn", "End tilt"],
-                };
-                let turned = app.clone();
-                let turn_def = def.clone();
-                let turn_scrub = direction_scrub(
-                    &format!("{name}: {turn_label}"),
-                    turn,
-                    [-180., 180.],
-                    move |turn, cx| {
-                        turned.update(cx, |this, cx| {
-                            edit_widget(this, index, cx, |widget| {
-                                if let Widget::Direction(turns) = widget {
-                                    if let Some(held) = turns.get_mut(end) {
-                                        *held = turn;
-                                    }
-                                }
-                            });
-                            this.form_edit(&turn_def, spec, cx, |value| {
-                                edit_vector_end(value, end, |v| direction_at(turn, turn_tilt(v).1))
-                            });
-                        });
-                    },
-                );
-                let tilted = app.clone();
-                let tilt_def = def.clone();
-                let tilt_scrub = direction_scrub(
-                    &format!("{name}: {tilt_label}"),
-                    tilt,
-                    [-90., 90.],
-                    move |tilt, cx| {
-                        tilted.update(cx, |this, cx| {
-                            this.form_edit(&tilt_def, spec, cx, |value| {
-                                edit_vector_end(value, end, |_| direction_at(turn, tilt))
-                            });
-                        });
-                    },
-                );
-                column()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .child(arg_row(turn_label, turn_scrub))
-                            .child(arg_row(tilt_label, tilt_scrub)),
-                    )
-                    .child(luma_ui::caption(vector_text(v)))
-            }))
-        }
-        Widget::Point(sets) => {
-            let timed = sets.len() > 1;
-            column().children(sets.iter().enumerate().map(|(end, fields)| {
-                let label = match (timed, end) {
-                    (false, _) => "U, V, Z",
-                    (true, 0) => "Start · U, V, Z",
-                    (true, _) => "End · U, V, Z",
-                };
-                arg_row(
-                    label,
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.))
-                        .children(fields.iter().cloned()),
-                )
-            }))
-        }
-        Widget::Axis(fields) => {
-            let Some(p::Value::Mapping(mapping)) = value.or_else(|| spec.default.clone()) else {
-                return None;
-            };
-            axis_control(state, app, index, name, def, spec, mapping, fields)
-        }
-        Widget::Preset(options, editor) => {
-            let options: &'static [p::Preset] = options;
-            let current = options.iter().position(|option| {
-                document::close(&document::wire_value(&option.value), &cell.synced)
-            });
-            let pick = move |picked: usize, this: &mut Luma, cx: &mut Context<Luma>| {
-                this.arg_live(&def.id, document::wire_value(&options[picked].value), cx);
-            };
-            match (envelope_options(options), editor) {
-                (Some(curves), Some(editor)) => {
-                    let shown = match &value {
-                        Some(p::Value::Envelope(envelope)) => envelope.clone(),
-                        _ => match &curves[current.unwrap_or(0)].1 {
-                            Thumb::Curve(envelope) => envelope.clone(),
-                            Thumb::Gradient(_) => unreachable!("curve options"),
-                        },
-                    };
-                    column()
-                        .child(choice_presets(
-                            state,
-                            app,
-                            index,
-                            Menu::Choice(index),
-                            name.to_string(),
-                            &shown,
-                            current,
-                            &curves,
-                            pick,
-                        ))
-                        .when(slot.editing || current.is_none(), |el| {
-                            el.child(editor.clone())
-                        })
-                }
-                _ => {
-                    let labels: Vec<&str> =
-                        options.iter().map(|option| option.label.as_str()).collect();
-                    choice_select(
-                        state,
-                        app,
-                        index,
-                        name.to_string(),
-                        current.map_or("Custom", |at| labels[at]),
-                        &labels,
-                        pick,
-                    )
-                }
-            }
-        }
-        Widget::Grain(entity) => {
-            let n = value.as_ref().and_then(level).unwrap_or(1.);
-            let kind = match n {
-                n if n == 1. => 0,
-                n if n == 0. => 1,
-                _ => 2,
-            };
-            let clump = entity.clone();
-            column()
-                .child(choice_select(
-                    state,
-                    app,
-                    index,
-                    name.to_string(),
-                    GRAINS[kind],
-                    &GRAINS,
-                    move |picked, this, cx| {
-                        let n = match picked {
-                            0 => 1.,
-                            1 => 0.,
-                            _ => clump.read(cx).value().max(2.),
-                        };
-                        this.arg_live(&def.id, serde_json::json!(n), cx);
-                    },
-                ))
-                .when(kind == 2, |el| el.child(entity.clone()))
-        }
-        Widget::Every(entity) => {
-            let beats = value.as_ref().and_then(level).unwrap_or(0.);
-            let once = beats <= 0.;
-            let segments = luma_ui::float::segmented().children(EVERY.map(|label| {
-                let app = app.clone();
-                let id = def.id.clone();
-                let chosen = (label == EVERY[0]) == once;
-                let key = format!("{}-{label}", def.id);
-                luma_ui::float::segment(label, chosen, key.clone())
-                    .id(SharedString::from(key))
-                    .on_click(move |_, _, cx| {
-                        let beats = if label == EVERY[0] { 0. } else { EVERY_BEATS };
-                        if chosen {
-                            return;
-                        }
-                        app.update(cx, |this, cx| {
-                            this.arg_live(&id, serde_json::json!(beats), cx)
-                        });
-                    })
-                    .agent_node(Role::Button, format!("{name} {label}"))
-            }));
-            column()
-                .child(segments)
-                .when(!once, |el| el.child(entity.clone()))
-        }
-        Widget::GradientCurve(gradient, curve) => {
-            let Some(
-                p::Value::Time(p::SourceCurve::Gradient(read))
-                | p::Value::Hit(p::SourceCurve::Gradient(read)),
-            ) = value
-            else {
-                return None;
-            };
-            let curves = curves_of(p::progress_presets());
-            let current = curve_at(&curves, &read.curve);
-            column()
-                .child(gradient.clone())
-                .child(luma_ui::caption(
-                    "Colors from the start of the gradient to its end".to_string(),
-                ))
-                .child(sub_row(
-                    "Through the colors",
-                    choice_presets(
-                        state,
-                        app,
-                        index,
-                        Menu::Choice(index),
-                        format!("{name}: Through the colors"),
-                        &read.curve,
-                        current,
-                        &thumbs(&curves),
-                        move |picked, this, cx| {
-                            let Some((_, envelope)) =
-                                curves_of(p::progress_presets()).into_iter().nth(picked)
-                            else {
-                                return;
-                            };
-                            this.form_edit(&def, spec, cx, |value| {
-                                edit_gradient_curve(value, |read| read.curve = envelope)
-                            });
-                        },
-                    ),
-                ))
-                .when(slot.editing || current.is_none(), |el| {
-                    el.child(curve.clone()).child(luma_ui::caption(format!(
-                        "{} · positions in the gradient",
-                        over(slot.mode)
-                    )))
-                })
-        }
-        Widget::Space(fields) => {
-            let Some(p::Value::Space(space)) = value else {
-                return None;
-            };
-            space_control(
-                state,
-                app,
-                index,
-                name,
-                def,
-                spec,
-                &space,
-                fields,
-                slot.editing,
-            )
-        }
-        Widget::Strip(entity)
-            if slot.mode.is_some()
-                && !matches!(
-                    &value,
-                    Some(p::Value::Time(curve) | p::Value::Hit(curve)) if curve.is_color()
-                ) =>
-        {
-            let curve = match &value {
-                Some(
-                    p::Value::Time(p::SourceCurve::Keys(curve))
-                    | p::Value::Hit(p::SourceCurve::Keys(curve)),
-                ) => Some(curve),
-                _ => None,
-            };
-            let shown = curve.map_or_else(
-                || p::Envelope::linear(vec![[0., 0.], [1., 0.]]),
-                |curve| envelope_of(slot, curve),
-            );
-            let current = curve.and_then(|curve| curve_preset(slot, curve));
-            let shape = *slot;
-            let span = slot.span_text(slot.range());
-            let custom = slot.editing || current.is_none();
-            column()
-                .child(choice_presets(
-                    state,
-                    app,
-                    index,
-                    Menu::Choice(index),
-                    format!("{name}:curve"),
-                    &shown,
-                    current,
-                    &curve_options(slot),
-                    move |picked, this, cx| {
-                        let Some(preset) = shape.curves().nth(picked) else {
-                            return;
-                        };
-                        let curve = scaled(&shape, &preset.curve);
-                        this.form_edit(&def, spec, cx, |value| match value {
-                            p::Value::Time(_) => Some(p::Value::Time(curve.into())),
-                            p::Value::Hit(_) => Some(p::Value::Hit(curve.into())),
-                            _ => None,
-                        });
-                    },
-                ))
-                .when(custom, |el| {
-                    el.child(entity.clone()).child(luma_ui::caption(format!(
-                        "{} · values {span}",
-                        over(slot.mode)
-                    )))
-                })
-        }
-        Widget::Strip(entity) if slot.mode.is_some() => column()
-            .child(entity.clone())
-            .child(luma_ui::caption(over(slot.mode).to_string())),
-        Widget::Noise([speed, low, high]) => column()
-            .child(arg_row("Speed (beats)", speed.clone()))
-            .child(arg_row("Range", range_row(low, high)))
-            .when(slot.vector(), |el| {
-                el.child(luma_ui::caption(
-                    "U, V and Z each wander in this range".to_string(),
-                ))
-            }),
-        Widget::Audio([from, to, floor, threshold]) => {
-            // Named ranges only fill the two frequency fields.
-            let named = &p::presets().frequencies;
-            let mut labels: Vec<&str> = named.iter().map(|f| f.name.as_str()).collect();
-            labels.push("Custom");
-            let current = match &value {
-                Some(p::Value::Audio(audio)) => named
-                    .iter()
-                    .find(|f| f.from_hz == audio.from_hz && f.to_hz == audio.to_hz)
-                    .map_or("Custom", |f| f.name.as_str()),
-                _ => "Custom",
-            };
-            column()
-                .child(arg_row(
-                    "Frequency",
-                    choice_select(
-                        state,
-                        app,
-                        index,
-                        format!("{name}:frequency"),
-                        current,
-                        &labels,
-                        move |picked, this, cx| {
-                            let Some(range) = p::presets().frequencies.get(picked) else {
-                                return;
-                            };
-                            this.form_edit(&def, spec, cx, |value| match value {
-                                p::Value::Audio(audio) => Some(p::Value::Audio(p::AudioLevel {
-                                    from_hz: range.from_hz,
-                                    to_hz: range.to_hz,
-                                    ..audio.clone()
-                                })),
-                                _ => None,
-                            });
-                        },
-                    ),
-                ))
-                .child(arg_row("Range", range_row(from, to)))
-                .child(arg_row("Floor", floor.clone()))
-                // Energy below the threshold gives 0; 0% is no gate.
-                .child(arg_row("Threshold", threshold.clone()))
-                // The engine reads the level as a share of the input's top.
-                .when(slot.unit() == Some("°"), |el| {
-                    el.child(luma_ui::caption(format!(
-                        "Level 0–100% gives {}",
-                        slot.span_text([0., slot.range()[1]])
-                    )))
-                })
-        }
-        Widget::Color(entity) => div().child(entity.clone()),
-        Widget::Scalar(entity) => div().child(entity.clone()),
-        Widget::Strip(entity) => div().child(entity.clone()),
-        _ => return None,
-    })
-}
-
-/// A labelled part of a form row, named for the agent tree.
-fn sub_row(label: &str, control: impl IntoElement) -> impl IntoElement {
-    arg_row(label, control).agent_node(Role::Row, label)
-}
-
-/// A space source's rows: the axis, the gradient or the curve along it and,
-/// for a number, whether it moves and how.
-#[allow(clippy::too_many_arguments)]
-fn space_control(
-    state: &Editor,
-    app: &Entity<Luma>,
-    index: usize,
-    name: &str,
-    def: PatternArgDef,
-    spec: &'static p::Input,
-    space: &p::SpaceSource,
-    fields: &SpaceFields,
-    editing: bool,
-) -> Div {
-    let column = || div().w_full().flex().flex_col().gap(px(6.));
-    let axis = sub_row(
-        "Axis",
-        axis_control(
-            state,
-            app,
-            index,
-            &format!("{name} axis"),
-            def.clone(),
-            spec,
-            space.axis.clone(),
-            &fields.axis,
-        ),
-    );
-    let mut rows = column().child(axis);
-    if space.gradient.is_some() {
-        return rows.child(sub_row(
-            "Colors",
-            column().child(fields.along.clone()).child(luma_ui::caption(
-                "From the start of the axis to its end · a tick per head".to_string(),
-            )),
-        ));
-    }
-    let movement = space.movement.as_deref();
-    let moving = movement.is_some();
-    // A still curve reads along the axis; a moving one is the stroke.
-    let (label, curves, caption) = if moving {
-        (
-            "Shape",
-            curves_of(p::shape_presets()),
-            "Across the stroke, from its tail to its head",
-        )
-    } else {
-        (
-            "Along the axis",
-            along_curves(),
-            "From the start of the axis to its end",
-        )
-    };
-    if let Some(curve) = &space.curve {
-        let editor = &fields.along;
-        let current = curve_at(&curves, curve);
-        let pick_def = def.clone();
-        rows = rows.child(sub_row(
-            label,
-            column()
-                .child(choice_presets(
-                    state,
-                    app,
-                    index,
-                    Menu::Shape(index),
-                    format!("{name}: {label}"),
-                    curve,
-                    current,
-                    &thumbs(&curves),
-                    move |picked, this, cx| {
-                        let curves = if moving {
-                            curves_of(p::shape_presets())
-                        } else {
-                            along_curves()
-                        };
-                        let Some((_, envelope)) = curves.into_iter().nth(picked) else {
-                            return;
-                        };
-                        this.form_edit(&pick_def, spec, cx, |value| {
-                            edit_space(value, |space| space.curve = Some(envelope))
-                        });
-                    },
-                ))
-                .when(editing || current.is_none(), |el| el.child(editor.clone()))
-                .child(luma_ui::caption(caption.to_string())),
-        ));
-    }
-    let move_def = def.clone();
-    rows = rows.child(sub_row(
-        "Move",
-        segments(
-            app,
-            &format!("{name} move"),
-            &["Still", "Moving"],
-            usize::from(moving),
-            move |picked, this, cx| {
-                this.form_edit(&move_def, spec, cx, |value| {
-                    edit_space(value, |space| {
-                        space.movement = (picked == 1).then(|| Box::new(new_movement()));
-                    })
-                });
-            },
-        ),
-    ));
-    let Some(movement) = movement else {
-        return rows;
-    };
-    let paths = curves_of(p::path_presets());
-    let current = curve_at(&paths, &movement.path);
-    let path_def = def.clone();
-    let follows = |value: &p::Value| {
-        value
-            .source_kind()
-            .map(|_| luma_ui::caption("Follows a curve; a number here replaces it".to_string()))
-    };
-    let relative_def = def.clone();
-    let ends_def = def;
-    rows.child(sub_row(
-        "Path",
-        column()
-            .child(choice_presets(
-                state,
-                app,
-                index,
-                Menu::Path(index),
-                format!("{name}: Path"),
-                &movement.path,
-                current,
-                &thumbs(&paths),
-                move |picked, this, cx| {
-                    let Some((_, envelope)) = curves_of(p::path_presets()).into_iter().nth(picked)
-                    else {
-                        return;
-                    };
-                    this.form_edit(&path_def, spec, cx, |value| {
-                        edit_movement(value, |movement| movement.path = envelope)
-                    });
-                },
-            ))
-            .when(editing || current.is_none(), |el| {
-                el.child(fields.path.clone())
-            }),
-    ))
-    .child(sub_row(
-        "Travel",
-        column()
-            .child(fields.travel.clone())
-            .children(follows(&movement.travel))
-            .child(luma_ui::caption(
-                "Beats to cross the axis; 0 is the whole clip".to_string(),
-            )),
-    ))
-    .child(sub_row(
-        "Width",
-        column()
-            .child(fields.width.clone())
-            .children(follows(&movement.width))
-            .child(segments(
-                app,
-                &format!("{name} width"),
-                &["Of gap", "Of axis"],
-                usize::from(!movement.width_relative),
-                move |picked, this, cx| {
-                    this.form_edit(&relative_def, spec, cx, |value| {
-                        edit_movement(value, |movement| movement.width_relative = picked == 0)
-                    });
-                },
-            )),
-    ))
-    .child(sub_row(
-        "Ends",
-        segments(
-            app,
-            &format!("{name} ends"),
-            &["Clip", "Wrap"],
-            usize::from(movement.boundary == p::Boundary::Wrap),
-            move |picked, this, cx| {
-                let boundary = if picked == 0 {
-                    p::Boundary::Clip
-                } else {
-                    p::Boundary::Wrap
-                };
-                this.form_edit(&ends_def, spec, cx, |value| {
-                    edit_movement(value, |movement| movement.boundary = boundary)
-                });
-            },
-        ),
-    ))
-}
-
-/// A turn or a tilt: a scrub in whole degrees, half the column wide, so the
-/// two sit side by side.
-fn direction_scrub(
-    id: &str,
-    value: f64,
-    [min, max]: [f64; 2],
-    on_change: impl Fn(f64, &mut App) + 'static,
-) -> Stateful<Div> {
-    luma_ui::float::scrub_with_unit(
-        id.to_string(),
-        value,
-        min,
-        max,
-        1.,
-        (FIELD_W - 8.) / 2.,
-        "°",
-        move |value, _, cx| on_change(value, cx),
-    )
-}
-
-fn range_row(low: &Entity<DraftedNumber>, high: &Entity<DraftedNumber>) -> Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.))
-        .child(low.clone())
-        .child(high.clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        along_curves, curve_options, curve_preset, curves_of, direction_at, edit_vector_end,
-        envelope_of, envelope_options, keyframes_of, pattern_gradient, promote, same_curve, scaled,
-        turn_tilt, ui_gradient, vector_ends, vector_text, Slot, Thumb, CURVE_BEATS, MIN_BEATS,
-    };
-    use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
-    use luma_patterns as p;
-
-    fn slot(form: &str, key: &str) -> Slot {
-        let def = PatternArgDef {
-            id: key.into(),
-            name: key.into(),
-            arg_type: PatternArgType::Scalar,
-            default_value: serde_json::Value::Null,
-        };
-        Slot::new(form, &def, &serde_json::json!(1.0)).expect("a form input")
-    }
-
-    #[test]
-    fn promoting_starts_flat_at_the_fixed_value_and_returns_to_it() {
-        let every = slot("color@1", "every");
-        let time = promote(&every, &p::Value::Beats(2.), Some(p::SourceKind::Time));
-        assert_eq!(
-            time,
-            p::Value::Time(p::Keyframes::numbers(&[[0., 2.], [1., 2.]], &[]).into())
-        );
-        let p::Value::Time(p::SourceCurve::Keys(mut curve)) = time else {
-            unreachable!()
-        };
-        curve.points[0].value = p::Key::Number(3.);
-        assert_eq!(
-            promote(&every, &p::Value::Time(curve.into()), None),
-            p::Value::Beats(3.)
-        );
-
-        let color = slot("color@1", "color");
-        let red = p::Value::Color([1., 0., 0.]);
-        let curve = promote(&color, &red, Some(p::SourceKind::Time));
-        assert!(matches!(&curve, p::Value::Time(curve) if curve.is_color()));
-        assert_eq!(promote(&color, &curve, None), red);
-
-        let alpha = slot("color@1", "alpha");
-        assert_eq!(
-            promote(
-                &alpha,
-                &p::Value::Proportion(0.8),
-                Some(p::SourceKind::Audio)
-            ),
-            p::Value::Audio(p::AudioLevel {
-                from_hz: 40.,
-                to_hz: 100.,
-                floor: 0.,
-                threshold: 0.,
-            })
-        );
-    }
-
-    #[test]
-    fn a_curve_round_trips_through_the_envelope_box() {
-        let every = slot("color@1", "every");
-        let curve = p::Keyframes::numbers(
-            &[[0., 2.], [0.5, 4.], [1., 0.5]],
-            &[p::Ease::Hold, p::Ease::EaseInOut],
-        );
-        let envelope = envelope_of(&every, &curve);
-        assert!(envelope.validate().is_ok());
-        assert_eq!(
-            envelope,
-            p::Envelope::eased(
-                vec![[0., 0.25], [0.5, 0.5], [1., 0.0625]],
-                &[p::Ease::Hold, p::Ease::EaseInOut]
-            )
-        );
-        assert!(same_curve(&keyframes_of(&every, &envelope), &curve));
-    }
-
-    #[test]
-    fn drawn_handles_are_stored_and_read_back_as_drawn() {
-        // Handles far from any standard ease, on alpha (0–1) and on a speed.
-        let drawn = p::Envelope::eased(
-            vec![[0., 0.1], [0.4, 0.9], [1., 0.3]],
-            &[
-                p::Ease::Bezier([0.125, 0.875, 0.75, 0.125]),
-                p::Ease::Bezier([0.5, 0., 0.75, 1.]),
-            ],
-        );
-        let alpha = slot("color@1", "alpha");
-        let stored = keyframes_of(&alpha, &drawn);
-        assert_eq!(stored.ease(0), drawn.ease(0));
-        // Stored, read back, and shown again: the same handles.
-        let wire = super::document::wire_value(&p::Value::Time(stored.clone().into()));
-        let Ok(p::Value::Time(p::SourceCurve::Keys(read))) =
-            super::decode(alpha.spec.value_type, &wire)
-        else {
-            panic!("reads back")
-        };
-        assert_eq!(read, stored);
-        assert_eq!(envelope_of(&alpha, &read), drawn);
-        // What plays is what the editor draws.
-        for i in 0..=40 {
-            let x = f64::from(i) / 40.;
-            assert!((read.sample(x)[0] - drawn.sample(x)).abs() < 1e-12, "{x}");
-        }
-        // On a speed the values scale and the eases stay as drawn.
-        let travel = slot("color@1", "every");
-        let back = envelope_of(&travel, &keyframes_of(&travel, &drawn));
-        for (a, b) in back.points.iter().zip(&drawn.points) {
-            assert_eq!(a.ease, b.ease);
-        }
-    }
-
-    #[test]
-    fn curve_presets_scale_to_the_input() {
-        let travel = slot("color@1", "every");
-        let up = p::presets().curve("Ramp up").unwrap();
-        let curve = scaled(&travel, up);
-        assert_eq!(
-            curve.points.first().unwrap().value,
-            p::Key::Number(MIN_BEATS)
-        );
-        assert_eq!(
-            curve.points.last().unwrap().value,
-            p::Key::Number(CURVE_BEATS)
-        );
-    }
-
-    #[test]
-    fn the_curve_picker_finds_the_preset_a_curve_came_from() {
-        let travel = slot("color@1", "every");
-        let options = curve_options(&travel);
-        assert_eq!(options.len(), travel.curves().count());
-        assert!(options
-            .iter()
-            .all(|(_, thumb)| matches!(thumb, Thumb::Curve(e) if e.validate().is_ok())));
-        for (at, preset) in travel.curves().enumerate() {
-            assert_eq!(
-                curve_preset(&travel, &scaled(&travel, &preset.curve)),
-                Some(at)
-            );
-        }
-        let custom = p::Keyframes::numbers(&[[0., 3.], [1., 5.]], &[]);
-        assert_eq!(curve_preset(&travel, &custom), None);
-    }
-
-    #[test]
-    fn alpha_curves_match_after_a_round_trip() {
-        let alpha = slot("color@1", "alpha");
-        let names: Vec<_> = alpha.curves().map(|c| c.name.as_str()).collect();
-        assert_eq!(names[0], "Full");
-        assert!(!names.contains(&"Ramp up"), "{names:?}");
-        // A fixed alpha promoted to a curve is the flat "Full" curve.
-        let p::Value::Time(p::SourceCurve::Keys(flat)) =
-            promote(&alpha, &p::Value::Proportion(1.), Some(p::SourceKind::Time))
-        else {
-            unreachable!()
-        };
-        assert_eq!(curve_preset(&alpha, &flat), Some(0));
-        for (at, preset) in alpha.curves().enumerate() {
-            // Stored, read back, and passed through the strip.
-            let value = p::Value::Time(scaled(&alpha, &preset.curve).into());
-            let wire = super::document::wire_value(&value);
-            let Ok(p::Value::Time(p::SourceCurve::Keys(read))) =
-                super::decode(alpha.spec.value_type, &wire)
-            else {
-                panic!("{} reads back", preset.name)
-            };
-            assert_eq!(curve_preset(&alpha, &read), Some(at), "{}", preset.name);
-            let edited = keyframes_of(&alpha, &envelope_of(&alpha, &read));
-            assert_eq!(curve_preset(&alpha, &edited), Some(at), "{}", preset.name);
-        }
-    }
-
-    #[test]
-    fn space_shapes_paths_and_curves_are_valid_curves() {
-        for curves in [
-            curves_of(p::shape_presets()),
-            curves_of(p::path_presets()),
-            curves_of(p::progress_presets()),
-            along_curves(),
-        ] {
-            assert!(!curves.is_empty());
-            assert!(curves.iter().all(|(_, curve)| curve.validate().is_ok()));
-        }
-        let paths = curves_of(p::path_presets());
-        assert!(paths.iter().any(|(name, _)| name == "Steps (4)"));
-        // The aim's axis stays a select, not a curve.
-        let axis = slot("aim@1", "axis").spec;
-        if let Some(p::Author::Choice { options, .. }) = &axis.author {
-            assert!(envelope_options(options).is_none(), "axis stays a select");
-        }
-    }
-
-    #[test]
-    fn promoting_across_space_starts_from_the_fixed_value_and_returns_to_it() {
-        let color = slot("color@1", "color");
-        let red = p::Value::Color([1., 0., 0.]);
-        let space = promote(&color, &red, Some(p::SourceKind::Space));
-        let p::Value::Space(source) = &space else {
-            panic!("space")
-        };
-        assert!(source.curve.is_none() && source.movement.is_none());
-        assert_eq!(
-            source.gradient.as_ref().unwrap().stops[0].color,
-            [1., 0., 0.]
-        );
-        space.validate().unwrap();
-        assert_eq!(promote(&color, &space, None), red);
-
-        let brightness = slot("color@1", "brightness");
-        let half = p::Value::Proportion(0.5);
-        let space = promote(&brightness, &half, Some(p::SourceKind::Space));
-        let p::Value::Space(source) = &space else {
-            panic!("space")
-        };
-        assert!(source.gradient.is_none());
-        space.validate().unwrap();
-        assert_eq!(promote(&brightness, &space, None), half);
-    }
-
-    #[test]
-    fn a_gradient_survives_the_strip() {
-        let gradient = p::Gradient {
-            stops: vec![
-                p::ColorStop {
-                    t: 0.,
-                    color: [1., 0.5, 0.],
-                    alpha: 0.25,
-                },
-                p::ColorStop {
-                    t: 1.,
-                    color: [0., 0., 1.],
-                    alpha: 1.,
-                },
-            ],
-        };
-        let back = pattern_gradient(&ui_gradient(&gradient));
-        for (a, b) in back.stops.iter().zip(&gradient.stops) {
-            assert!((a.t - b.t).abs() < 1e-6 && (a.alpha - b.alpha).abs() < 1e-6);
-            for (x, y) in a.color.iter().zip(b.color) {
-                assert!((x - y).abs() < 1e-6);
-            }
-        }
-    }
-
-    #[test]
-    fn a_direction_reads_as_turn_and_tilt() {
-        // The resting aim: 40° down toward downstage.
-        let rest = [0., 0.766, -0.643];
-        let (turn, tilt) = turn_tilt(rest);
-        assert!(
-            turn.unwrap().abs() < 1e-9 && (tilt + 40.).abs() < 0.02,
-            "{tilt}"
-        );
-        assert_eq!(direction_at(0., -40.), [0., 0.766, -0.6428]);
-        // Turn grows toward stage right.
-        assert_eq!(direction_at(90., 0.), [1., 0., 0.]);
-        // Straight down says no turn.
-        assert_eq!(turn_tilt([0., 0., -1.]), (None, -90.));
-        assert_eq!(vector_text(rest), "U 0.00 · V 0.77 · Z −0.64");
-    }
-
-    #[test]
-    fn a_vector_promotes_to_a_curve_whose_ends_edit_apart() {
-        let direction = slot("aim@1", "direction");
-        let rest = p::Value::Vector([0., 0.766, -0.643]);
-        let curve = promote(&direction, &rest, Some(p::SourceKind::Time));
-        assert_eq!(vector_ends(&curve), vec![[0., 0.766, -0.643]; 2]);
-        let moved = edit_vector_end(&curve, 1, |_| [0., 0., -1.]).unwrap();
-        assert_eq!(
-            vector_ends(&moved),
-            vec![[0., 0.766, -0.643], [0., 0., -1.]]
-        );
-        assert_eq!(promote(&direction, &moved, None), rest);
-        let p::Value::Noise(noise) = promote(&direction, &rest, Some(p::SourceKind::Noise)) else {
-            panic!("noise")
-        };
-        assert_eq!(noise.range, [-1., 1.]);
-        // Audio reads 0–1 as 0 to the most degrees; fixed again, it is the top.
-        let fan = slot("aim@1", "fan");
-        let audio = promote(&fan, &p::Value::Number(30.), Some(p::SourceKind::Audio));
-        assert_eq!(promote(&fan, &audio, None), p::Value::Number(90.));
-    }
+        .collect();
+    stops.sort_by(|a, b| a.t.total_cmp(&b.t));
+    p::Gradient { stops }
 }

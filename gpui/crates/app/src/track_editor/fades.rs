@@ -14,7 +14,7 @@ use luma_lib::node_graph::lighting::decode;
 use luma_patterns as p;
 
 /// The input every form clip has.
-pub(super) const ALPHA: &str = "alpha";
+pub(super) const ALPHA: &str = "fade";
 
 /// The gap between the body's edges and the line at alpha 1 and alpha 0.
 const INSET: f32 = 3.;
@@ -184,7 +184,10 @@ impl Alpha {
     fn sample(&self, progress: f64) -> f64 {
         match self {
             Self::Fades(fades) => match fades.value() {
-                p::Value::Time(p::SourceCurve::Keys(curve)) => curve.sample(progress)[0],
+                p::Value::Time(p::TimeSource {
+                    curve: p::SourceCurve::Keys(curve),
+                    ..
+                }) => curve.sample(progress)[0],
                 _ => fades.level,
             },
             Self::Custom(curve) => curve.sample(progress)[0],
@@ -205,12 +208,13 @@ pub(super) fn alpha(clip: &Clip) -> Option<Alpha> {
     };
     match value {
         p::Value::Proportion(v) | p::Value::Number(v) => Some(Alpha::Fades(Fades::flat(v))),
-        p::Value::Time(p::SourceCurve::Keys(curve)) if !curve.is_color() => {
-            Some(match Fades::of_curve(&curve) {
-                Some(fades) => Alpha::Fades(fades),
-                None => Alpha::Custom(curve),
-            })
-        }
+        p::Value::Time(p::TimeSource {
+            curve: p::SourceCurve::Keys(curve),
+            ..
+        }) if !curve.is_color() => Some(match Fades::of_curve(&curve) {
+            Some(fades) => Alpha::Fades(fades),
+            None => Alpha::Custom(curve),
+        }),
         _ => None,
     }
 }
@@ -280,7 +284,7 @@ impl Part {
             Self::FadeOut => "fade out".into(),
             Self::BendIn => "fade in bend".into(),
             Self::BendOut => "fade out bend".into(),
-            Self::Segment(index) => format!("alpha {}", index + 1),
+            Self::Segment(index) => format!("fade {}", index + 1),
         }
     }
 
@@ -310,7 +314,10 @@ impl Alpha {
     fn curve(&self) -> p::Keyframes {
         match self {
             Self::Fades(fades) => match fades.value() {
-                p::Value::Time(p::SourceCurve::Keys(curve)) => curve,
+                p::Value::Time(p::TimeSource {
+                    curve: p::SourceCurve::Keys(curve),
+                    ..
+                }) => curve,
                 _ => p::Keyframes::numbers(&[[0., fades.level], [1., fades.level]], &[]),
             },
             Self::Custom(curve) => curve.clone(),
@@ -358,7 +365,10 @@ fn handles(frame: Frame, fades: Fades) -> Vec<(Part, Point<f32>)> {
     let top = frame.y(fades.level);
     // A bend handle sits on the line, halfway along its fade.
     let curve = match fades.value() {
-        p::Value::Time(p::SourceCurve::Keys(curve)) => Some(curve),
+        p::Value::Time(p::TimeSource {
+            curve: p::SourceCurve::Keys(curve),
+            ..
+        }) => Some(curve),
         _ => None,
     };
     let on_line = |x: f64| {
@@ -586,9 +596,10 @@ fn outline(frame: Frame, alpha: &Alpha) -> Vec<Point<f32>> {
     // and enough even samples between them for bends to read as curves.
     let mut xs: Vec<f64> = match alpha {
         Alpha::Fades(fades) => match fades.value() {
-            p::Value::Time(p::SourceCurve::Keys(curve)) => {
-                curve.points.iter().map(|point| point.x).collect()
-            }
+            p::Value::Time(p::TimeSource {
+                curve: p::SourceCurve::Keys(curve),
+                ..
+            }) => curve.points.iter().map(|point| point.x).collect(),
             _ => Vec::new(),
         },
         Alpha::Custom(curve) => curve.points.iter().map(|point| point.x).collect(),
@@ -790,7 +801,10 @@ mod tests {
 
     fn curve(value: p::Value) -> p::Keyframes {
         match value {
-            p::Value::Time(p::SourceCurve::Keys(curve)) => curve,
+            p::Value::Time(p::TimeSource {
+                curve: p::SourceCurve::Keys(curve),
+                ..
+            }) => curve,
             other => panic!("expected a curve, got {other:?}"),
         }
     }

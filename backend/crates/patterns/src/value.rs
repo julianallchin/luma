@@ -23,7 +23,7 @@ pub enum ValueType {
     Lighting,
     /// Clip input sources; see `sources`.
     Time,
-    Hit,
+    Random,
     Noise,
     Audio,
     Space,
@@ -112,9 +112,8 @@ pub enum Value {
     Mask(BTreeMap<String, f64>),
     Lighting(BTreeMap<String, crate::FixtureOutput>),
     /// One curve over the whole clip.
-    Time(crate::SourceCurve),
-    /// One curve over the life of each event.
-    Hit(crate::SourceCurve),
+    Time(crate::TimeSource),
+    Random(crate::RandomSource),
     Noise(crate::NoiseSource),
     Audio(crate::AudioLevel),
     /// Values along an axis of the heads, still or moving.
@@ -154,7 +153,7 @@ impl Value {
             Self::Mask(_) => ValueType::Mask,
             Self::Lighting(_) => ValueType::Lighting,
             Self::Time(_) => ValueType::Time,
-            Self::Hit(_) => ValueType::Hit,
+            Self::Random(_) => ValueType::Random,
             Self::Noise(_) => ValueType::Noise,
             Self::Audio(_) => ValueType::Audio,
             Self::Space(_) => ValueType::Space,
@@ -166,7 +165,7 @@ impl Value {
     pub fn source_kind(&self) -> Option<crate::SourceKind> {
         Some(match self {
             Self::Time(_) => crate::SourceKind::Time,
-            Self::Hit(_) => crate::SourceKind::Hit,
+            Self::Random(_) => crate::SourceKind::Random,
             Self::Noise(_) => crate::SourceKind::Noise,
             Self::Audio(_) => crate::SourceKind::Audio,
             Self::Space(_) => crate::SourceKind::Space,
@@ -195,7 +194,8 @@ impl Value {
                 true
             }
             Self::Envelope(e) => return e.validate(),
-            Self::Time(curve) | Self::Hit(curve) => return curve.validate(),
+            Self::Time(curve) => return curve.validate(),
+            Self::Random(source) => return source.validate(),
             Self::Noise(noise) => return noise.validate(),
             Self::Audio(audio) => return audio.validate(),
             Self::Space(space) => return space.validate(),

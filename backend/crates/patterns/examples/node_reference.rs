@@ -88,13 +88,11 @@ const CATEGORIES: &[Category] = &[
         slug: "forms",
         title: "Forms",
         description: "The shipped clip forms. A clip plays one form.",
-        intro: "Each form is a graph of the nodes on the other pages. A clip names one form and sets its inputs. An input takes a plain value or, where the form allows it, a source: time (one curve over the clip), hit (one curve per hit), noise, audio or space. A space source lays a gradient (for a color) or a curve (for a number) along an axis of the heads. With move, it is a stroke that travels along the axis once per hit: a chase.",
+        intro: "A clip names one form and sets its inputs. Numeric inputs accept Time, Space, Random, Noise and Audio sources. Time and Random own events (every and optional life) or inherit them; events.same_as follows another input. A Time offset on Space makes a chase. Grain groups heads, fixtures or clumps. Clip fade runs once over the whole clip.",
         nodes: &[
             ("color@1", "One color on the selected heads. Color and brightness are fixed or follow a source: over time, per hit, across space, or across space and time (a stroke that travels along an axis once per hit)."),
-            ("color.sparkle@1", "Each event lights a random share of the heads."),
-            ("color.noise@1", "Soft brightness that wanders across space and time."),
-            ("strobe.constant@1", "Fixture shutter strobe at Rate × Alpha."),
-            ("aim@1", "Points moving heads: a base aim, a fan across the axis and a motion shape. In Offset blend, the fan and motion turn the aim under the clip instead."),
+            ("strobe.constant@1", "Fixture shutter strobe at Rate × Clip fade."),
+            ("aim@1", "Points moving heads at a direction or target, with spatial, horizontal and vertical offsets. Replace establishes a position; Offset adds motion above it. Transition positions with clip fades."),
         ],
     },
     Category {
@@ -320,6 +318,7 @@ fn outputs_table(out: &mut String, definition: &Definition) {
 fn kind(definition: &Definition) -> String {
     match &definition.body {
         Body::Primitive(_) => "Built-in kernel".into(),
+        Body::Form(_) => "Prepared source program".into(),
         Body::Graph(graph) => match graph.nodes.len() {
             0 => "Graph with no nodes".into(),
             1 => "Graph of 1 node".into(),

@@ -298,6 +298,9 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
         float::field()
             .when(drafting, |field| field.key_context(DRAFT_CONTEXT))
             .w(px(self.width))
+            // Never wider than its column: a field nested under a source's
+            // rule gives up the rule's indent.
+            .max_w_full()
             .font_family(crate::fonts::MONO)
             .gap(px(4.))
             .child(div().flex_1().min_w_0().child(self.input.clone()))

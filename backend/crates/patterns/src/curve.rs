@@ -18,6 +18,9 @@ const EASES: &str = r#""linear", "ease-in", "ease-out", "ease-in-out", "hold" or
 pub enum Ease {
     #[default]
     Linear,
+    SineIn,
+    SineOut,
+    SineInOut,
     EaseIn,
     EaseOut,
     EaseInOut,
@@ -30,8 +33,11 @@ pub enum Ease {
 }
 
 impl Ease {
-    const NAMED: [(&'static str, Ease); 5] = [
+    const NAMED: [(&'static str, Ease); 8] = [
         ("linear", Ease::Linear),
+        ("sine-in", Ease::SineIn),
+        ("sine-out", Ease::SineOut),
+        ("sine-in-out", Ease::SineInOut),
         ("ease-in", Ease::EaseIn),
         ("ease-out", Ease::EaseOut),
         ("ease-in-out", Ease::EaseInOut),
@@ -43,6 +49,9 @@ impl Ease {
     pub fn handles(self) -> Option<[f64; 4]> {
         Some(match self {
             Self::Linear => [1. / 3., 1. / 3., 2. / 3., 2. / 3.],
+            Self::SineIn => [0.47, 0., 0.745, 0.715],
+            Self::SineOut => [0.39, 0.575, 0.565, 1.],
+            Self::SineInOut => [0.445, 0.05, 0.55, 0.95],
             Self::EaseIn => [0.42, 0., 1., 1.],
             Self::EaseOut => [0., 0., 0.58, 1.],
             Self::EaseInOut => [0.42, 0., 0.58, 1.],
@@ -55,6 +64,9 @@ impl Ease {
     pub fn apply(self, t: f64) -> f64 {
         match self {
             Self::Linear => t,
+            Self::SineIn => 1. - (std::f64::consts::FRAC_PI_2 * t).cos(),
+            Self::SineOut => (std::f64::consts::FRAC_PI_2 * t).sin(),
+            Self::SineInOut => (1. - (std::f64::consts::PI * t).cos()) / 2.,
             Self::Hold => 0.,
             _ => {
                 let [x1, y1, x2, y2] = self.handles().expect("a curved ease");

@@ -262,7 +262,7 @@ mod tests {
         let base = p::standard_library();
         let mut score = p::Score::default();
         let mut clip = p::presets()
-            .preset("color.sparkle@1", "Dissolve")
+            .preset("color@1", "Dissolve")
             .unwrap()
             .clip(1.0, 3.0);
         clip.seed = 129;

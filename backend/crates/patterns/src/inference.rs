@@ -83,6 +83,7 @@ impl Library {
                     })
                     .collect::<Result<BTreeMap<_, _>>>()?;
                 let (value_type, rate) = match &definition.body {
+                    Body::Form(_) => (port.value_type, port.rate),
                     Body::Graph(graph) => self.infer_binding(
                         &bound,
                         graph,

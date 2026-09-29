@@ -432,7 +432,10 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
 
 fn keyframes<'a>(inputs: &'a BTreeMap<String, EvaluatedValue>, key: &str) -> Option<&'a Keyframes> {
     inputs.get(key).map(|value| match value.control(0) {
-        Value::Time(SourceCurve::Keys(curve)) => curve,
+        Value::Time(TimeSource {
+            curve: SourceCurve::Keys(curve),
+            ..
+        }) => curve,
         _ => unreachable!("validated curve input"),
     })
 }

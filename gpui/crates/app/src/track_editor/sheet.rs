@@ -115,18 +115,6 @@ enum Groups {
 enum Menu {
     Choice(usize),
     Blend,
-    /// The plain-or-source menu of the form input at this index.
-    Source(usize),
-    /// The spans menu of the axis at this index.
-    Span(usize),
-    /// The plane menu of the axis at this index.
-    Plane(usize),
-    /// The mirror menu of the axis at this index.
-    Mirror(usize),
-    /// The curve presets of the space source at this index.
-    Shape(usize),
-    /// The path presets of the moving space source at this index.
-    Path(usize),
 }
 
 /// What the entities were built for, the entities themselves, and every
@@ -166,54 +154,7 @@ enum Widget {
     Scalar(Entity<DraftedNumber>),
     Signal(Entity<SignalEditor>),
     Selection(Entity<GroupExpressionEditor>),
-    /// A form input's named choices. The row reads the stored value. A
-    /// choice of curves also holds the editor for a custom curve.
-    Preset(&'static [luma_patterns::Preset], Option<Entity<CurveStrip>>),
-    /// Sparkle's grain: a head, a fixture, or a clump; holds the clump size.
-    Grain(Entity<DraftedNumber>),
-    /// `every` of a color over time: once, or a period in beats.
-    Every(Entity<DraftedNumber>),
-    /// A noise source: speed, then the low and high of its range.
-    Noise([Entity<DraftedNumber>; 3]),
-    /// An audio source: from and to in Hz, then the floor in percent.
-    Audio([Entity<DraftedNumber>; 4]),
-    /// A form's axis: its presets, spans, mirror and plane.
-    Axis(AxisFields),
-    /// An aim direction, as turn and tilt: one pair for a fixed value, one
-    /// for each end of a curve over the clip. Holds each pair's turn, which
-    /// a direction straight up or down does not say.
-    Direction(Vec<f64>),
-    /// A point in metres: U, V and Z fields, one set for a fixed value, one
-    /// for each end of a curve over the clip.
-    Point(Vec<[Entity<DraftedNumber>; 3]>),
-    /// A gradient read over time or per hit: the gradient, and the curve of
-    /// positions in it.
-    GradientCurve(Entity<CurveStrip>, Entity<CurveStrip>),
-    /// A space source: see [`SpaceFields`].
-    Space(SpaceFields),
-}
-
-/// The controls of a space source: its axis, the gradient (a color) or the
-/// curve (a number) along it, and a moving stroke's path, travel and width.
-struct SpaceFields {
-    axis: AxisFields,
-    along: Entity<CurveStrip>,
-    path: Entity<CurveStrip>,
-    travel: Entity<DraftedNumber>,
-    width: Entity<DraftedNumber>,
-}
-
-/// The number fields of a form's axis.
-struct AxisFields {
-    /// The custom plane's axis, U, V, Z.
-    plane: [Entity<DraftedNumber>; 3],
-    /// The custom mirror plane's normal, U, V, Z.
-    normal: [Entity<DraftedNumber>; 3],
-    /// How far the mirror plane is from the middle, in metres.
-    offset: Entity<DraftedNumber>,
-    /// Custom plane was picked, so its normal shows even when it is one of
-    /// the fixed planes.
-    custom_mirror: Rc<std::cell::Cell<bool>>,
+    Form(Box<form::Field>),
 }
 
 // -- wire codecs --------------------------------------------------------------
@@ -803,17 +744,7 @@ fn resync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
                 };
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
             }
-            Widget::Choice(_)
-            | Widget::Preset(..)
-            | Widget::Grain(_)
-            | Widget::Every(_)
-            | Widget::Noise(_)
-            | Widget::Audio(_)
-            | Widget::Axis(_)
-            | Widget::Direction(_)
-            | Widget::Point(_)
-            | Widget::GradientCurve(..)
-            | Widget::Space(_) => {}
+            Widget::Choice(_) | Widget::Form(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -1226,22 +1157,10 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 .child(pick_chip))
         }
         // Form rows draw these themselves.
-        Widget::Preset(..)
-        | Widget::Grain(_)
-        | Widget::Every(_)
-        | Widget::Noise(_)
-        | Widget::Audio(_)
-        | Widget::Axis(_)
-        | Widget::Direction(_)
-        | Widget::Point(_)
-        | Widget::GradientCurve(..)
-        | Widget::Space(_) => Vec::new(),
+        Widget::Form(_) => Vec::new(),
     }
 }
 
-/// The width of a row's mode menu ("Fixed", "↗ Over time"…), the same on
-/// every row.
-const MODE_W: f32 = 140.;
 /// Air between a row's header line and its control.
 const LABEL_GAP: f32 = 6.;
 
@@ -1284,22 +1203,6 @@ fn sentence_case(label: &str) -> String {
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
     })
-}
-
-/// Run `edit` against one cell's widget state, from inside a `Luma` update.
-fn edit_widget(
-    this: &mut Luma,
-    index: usize,
-    cx: &mut Context<Luma>,
-    edit: impl FnOnce(&mut Widget),
-) {
-    this.with_track_editor(cx, |editor| {
-        if let Some(built) = editor.sheet.built.as_mut() {
-            if let Some(cell) = built.cells.get_mut(index) {
-                edit(&mut cell.widget);
-            }
-        }
-    });
 }
 
 fn envelope_value(

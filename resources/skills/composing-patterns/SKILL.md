@@ -35,23 +35,23 @@ def defaults(form):
     return {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
 
 wash = defaults("color@1")
-wash.update(color="#1030ff", alpha=.3)
+wash.update(color="#1030ff", brightness=.3)
 edit.add_clip("color@1", seconds=(0.0, luma.track.duration_s),
               selection="all", inputs=wash)
 
-# A chase is a moving space source on brightness: one stroke per hit of
-# `every`, `travel` beats to cross the axis.
+# One moving stroke per event, with audio controlling its amount.
 chase = defaults("color@1")
-chase.update(
-    every=1,
-    brightness={"type": "space", "value": {
-        "axis": {"source": {"kind": "z"}, "per_group": False, "reverse": False},
-        "curve": {"points": [[0, 1], [1, 1]]},  # brightness across the stroke
-        "move": {"path": {"points": [[0, 0], [1, 1]]},
-                 "travel": {"type": "beats", "value": 2},
-                 "width": {"type": "number", "value": .3},
-                 "width_relative": True, "boundary": "clip"}}},
-    alpha={"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": 0.2}})
+chase.update(brightness={"type": "space", "value": {
+    "axis": {"source": {"kind": "u"}, "per_group": False, "reverse": False},
+    "curve": {"points": [[0, 1], [1, 1]]},
+    "offset": {"type": "time", "value": {
+        "points": [[0, 0], [1, 1]],
+        "events": {"every": {"type": "beats", "value": 1},
+                   "life": {"type": "beats", "value": 2}}}},
+    "width": {"type": "number", "value": .2},
+    "width_relative": True, "boundary": "clip",
+    "gain": {"type": "audio", "value": {"from_hz": 40, "to_hz": 100, "floor": .2}}
+}})
 clip = edit.add_clip("color@1", seconds=(0.0, luma.track.duration_s),
                      selection="led_bars_vertical", inputs=chase, blend="screen")
 edit.check()
@@ -111,7 +111,7 @@ Then render once at the loudest second to confirm the look.
 Find a loud second and a quiet second from `luma.audio.mix` RMS. Sweep the
 `floor` and `threshold` of an audio source and measure the lit fraction at
 both. Pick the values where the quiet section shows a little and the loud section reaches the top some of the
-time, not all of the time. Set it with `edit.update_clip(clip, inputs={"alpha": source})`.
+time, not all of the time. Set it with `edit.update_clip(clip, inputs={"brightness": source})`.
 
 ## Batches
 

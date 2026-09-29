@@ -92,12 +92,12 @@ fn a_space_source_is_checked() {
     expect(
         "color",
         serde_json::json!({"axis": axis(), "curve": ramp()}),
-        "does not fit",
+        "gradient",
     );
     expect(
         "brightness",
         serde_json::json!({"axis": axis(), "gradient": bw()}),
-        "does not fit",
+        "input",
     );
     expect(
         "brightness",
@@ -130,71 +130,34 @@ fn a_space_source_is_checked() {
         serde_json::json!({"axis": axis(), "curve": {"points": [[0, 0], [1, 2]]}}),
         "0..1",
     );
-    // Only a number moves: a color stroke has no light outside it.
-    let movement = serde_json::json!({
-        "path": ramp(), "travel": {"type": "beats", "value": 2}, "width": {"type": "number", "value": 0.2},
-        "width_relative": true, "boundary": "clip"
-    });
-    expect(
-        "color",
-        serde_json::json!({"axis": axis(), "gradient": bw(), "move": movement}),
-        "does not fit",
-    );
-    // A stroke's fields have the ranges of the chase they replace.
-    for (field, value, words) in [
-        (
-            "width",
-            serde_json::json!({"type": "number", "value": 5}),
-            "move.width",
-        ),
-        (
-            "travel",
-            serde_json::json!({"type": "beats", "value": -1}),
-            "move.travel",
-        ),
-        (
-            "travel",
-            serde_json::json!({"type": "number", "value": 2}),
-            "move.travel",
-        ),
-        ("boundary", serde_json::json!("natural"), "move.boundary"),
+    // Stroke controls validate at the source boundary.
+    for (field, value) in [
+        ("width", serde_json::json!({"type":"number","value":5})),
+        ("boundary", serde_json::json!("natural")),
     ] {
-        let mut movement = movement.clone();
-        movement[field] = value;
-        expect(
-            "brightness",
-            serde_json::json!({"axis": axis(), "curve": ramp(), "move": movement}),
-            words,
-        );
+        let mut source = serde_json::json!({"axis":axis(),"curve":ramp(),"offset":{"type":"time","value":{"events":{"every":{"type":"beats","value":2}},"points":[[0,0],[1,1]]}}});
+        source[field] = value;
+        expect("brightness", source, field);
     }
-    let mut unknown = movement.clone();
-    unknown["speed"] = 1.into();
-    let parsed = serde_json::from_value::<Value>(serde_json::json!({
-        "type": "space", "value": {"axis": axis(), "curve": ramp(), "move": unknown}
-    }));
+    let parsed = serde_json::from_value::<Value>(
+        serde_json::json!({"type":"space","value":{"axis":axis(),"curve":ramp(),"move":{}}}),
+    );
     assert!(parsed.is_err());
 }
 
 #[test]
-fn a_color_hit_cannot_follow_strokes() {
+fn color_can_follow_overlapping_strokes() {
     let mut inputs = chase();
-    inputs.insert(
-        "color".into(),
-        serde_json::from_value(
-            serde_json::json!({"type": "hit", "value": {"gradient": bw(), "curve": ramp()}}),
-        )
-        .unwrap(),
-    );
-    assert!(error(&inputs).contains("cannot follow the strokes"));
-    // Over time is fine.
-    inputs.insert(
-        "color".into(),
-        serde_json::from_value(
-            serde_json::json!({"type": "time", "value": {"gradient": bw(), "curve": ramp()}}),
-        )
-        .unwrap(),
-    );
+    let Value::Space(space) = inputs.get_mut("brightness").unwrap() else {
+        panic!()
+    };
+    let Value::Time(offset) = space.offset.as_deref_mut().unwrap() else {
+        panic!()
+    };
+    offset.events = Some(Events::repeating(Value::Beats(2.), Some(Value::Beats(6.))));
+    inputs.insert("color".into(),serde_json::from_value(serde_json::json!({"type":"time","value":{"events":{"same_as":"brightness"},"points":[[0,[1,0,0]],[1,[0,0,1]]]}})).unwrap());
     check(&inputs).unwrap();
+    assert!(brightness(&inputs, 5.).iter().any(|v| *v > 0.));
 }
 
 #[test]
@@ -207,7 +170,7 @@ fn a_gradient_curve_needs_a_color_input() {
         )
         .unwrap(),
     );
-    assert!(error(&inputs).contains("does not fit"));
+    assert!(error(&inputs).contains("input"));
     inputs.insert(
         "every".into(),
         serde_json::from_value(
@@ -272,17 +235,16 @@ fn a_still_brightness_across_space_follows_its_curve_along_the_axis() {
 }
 
 #[test]
-fn a_hit_on_alpha_follows_each_stroke() {
+fn an_inherited_curve_fades_each_stroke() {
     let mut inputs = chase();
-    // A stroke fades out over its life.
-    inputs.insert(
-        "alpha".into(),
-        serde_json::from_value(
-            serde_json::json!({"type": "hit", "value": {"points": [[0, 1], [1, 0]]}}),
-        )
-        .unwrap(),
+    let Value::Space(space) = inputs.get_mut("brightness").unwrap() else {
+        panic!()
+    };
+    space.gain = Box::new(
+        serde_json::from_value(serde_json::json!({"type":"time","value":{"points":[[0,1],[1,0]]}}))
+            .unwrap(),
     );
-    let early: f64 = brightness(&inputs, 4.2).into_iter().fold(0.0, f64::max);
-    let late: f64 = brightness(&inputs, 5.8).into_iter().fold(0.0, f64::max);
-    assert!(early > late && late > 0.0, "{early} {late}");
+    let early: f64 = brightness(&inputs, 4.2).into_iter().fold(0., f64::max);
+    let late: f64 = brightness(&inputs, 5.8).into_iter().fold(0., f64::max);
+    assert!(early > late && late > 0., "{early} {late}");
 }

@@ -47,19 +47,23 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaises(TrackError):
             _typed(signal, {"type": "boundary", "value": "wrap"})
 
-    def test_signal_sockets_accept_time_and_hit_curve_sources(self):
+    def test_signal_sockets_accept_source_events(self):
         signal = {"signal": {"unit": None, "channels": None}}
         curve = {"points": [[0, 0, "ease-in"], [0.5, 1, "hold"], [1, 0]]}
         self.assertEqual(_typed(signal, {"type": "time", "value": curve}),
                          {"type": "time", "value": curve})
-        self.assertEqual(_typed(signal, {"type": "hit", "value": curve}),
-                         {"type": "hit", "value": curve})
+        repeat = {"type": "time", "value": {**curve, "events": {"every": {"type": "beats", "value": 2}}}}
+        random = {"type": "random", "value": {"coverage": {"type": "proportion", "value": .5}}}
+        for source in [repeat, random]:
+            self.assertEqual(_typed(signal, source), source)
+        with self.assertRaises(TrackError):
+            _typed(signal, {"type": "hit", "value": curve})
 
     def test_signal_sockets_reject_an_envelope_tag_with_a_clear_message(self):
         # The core's Envelope value type has no signal_type(), so it can never
-        # satisfy a signal socket; a curve there must be tagged "time"/"hit".
+        # satisfy a signal socket; a curve there must be tagged "time".
         signal = {"signal": {"unit": None, "channels": None}}
-        with self.assertRaisesRegex(TrackError, "not 'envelope'|time.*hit"):
+        with self.assertRaisesRegex(TrackError, "not 'envelope'|time.*random"):
             _typed(signal, {"type": "envelope", "value": {"points": [[0, 0], [1, 1]]}})
 
     def test_a_bare_curve_dict_on_a_signal_socket_fails_locally_not_in_rust(self):

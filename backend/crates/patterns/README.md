@@ -80,35 +80,27 @@ cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin patt
 
 ## Clip forms
 
-A form is a shipped graph with a fixed interface: `color@1`,
-`color.sparkle@1`, `color.noise@1`, `strobe.constant@1` and `aim@1` (see
-`docs/specs/clip-forms.md` and `docs/specs/aim.md`).
-A form clip sets `graph` to the form id and holds a value for every input.
-A missing or unknown input is an error. A score holds form clips only.
+The shipped forms are `color@1`, `aim@1` and `strobe.constant@1`. Every
+clip holds all its form's inputs; missing or unknown inputs are errors.
+Color has color, brightness and clip fade. Aim has a position and numeric
+spatial/horizontal/vertical offsets. Presets are saved inputs.
 
-- An input takes a plain value or, where its `promotable` list allows, a
-  source: `time` and `hit` keyframe curves, `noise`, `audio` (a band of
-  the full mix, scaled over the clip) or `space`. Sources are tagged values,
-  for example `{"type":"time","value":{"points":[[0,2,"ease-out"],[1,0.5]]}}`.
-  A `time` or `hit` curve is the same `Curve` as an envelope, with numbers
-  or colors. For a color it can instead be
-  `{"gradient":{...},"curve":{...}}`: the curve gives the gradient position.
-- A `space` source is an axis (a mapping) with a `gradient` (a color) or a
-  `curve` (a number, 0–1) along it. An optional `move` (`path`, `travel`,
-  `width`, `width_relative`, `boundary`) makes the values a stroke that
-  travels along the axis once per hit of `every`: a chase. Hit sources then
-  follow each stroke. Only a number input moves.
-- `color@1` is color × max over strokes of (brightness × alpha).
-- `PreparedGraph::new` lowers each source into nodes of a copy of the form,
-  space sources first.
-  A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
-  is summed over the clip like an odometer, from a table built from the
-  curve, so a sought frame equals a played frame.
-- `core/event_life`, `core/odometer`, `core/curve`, `core/random_share`,
-  `core/path_glides` and the `core/aim_*` steps are the primitives only the
-  forms use. A period or life of 0 beats lasts the whole clip.
-- `presets()` reads `src/presets.json`: named presets (a form and every
-  input value) and named curves for `time` and `hit` sources.
+Inputs use Time, Space, Random, Noise and Audio sources. Source numeric
+inputs recursively accept sources. Time and Random own events, inherit an
+enclosing clock, or follow another input with `events.same_as`. Space offset
+from Time produces overlapping strokes. Brightness keeps the strongest
+event; a following color belongs to that event. Clip fade runs once over
+the whole clip. Shared grain groups heads, fixtures or clumps.
+
+Forms lower into the shared tensor graph during `PreparedGraph` preparation.
+Period sources integrate into fixed clock tables; evaluation has no playback
+history. Event channels travel on separate wires from RGB/vector components.
+Kernels evaluate whole fixture × time × event tensors. Static work folds once;
+Random ranks groups once per event, rather than once per head. There is no
+separate form interpreter.
+
+See [the source model](../../../docs/design/2026-09-28-sources-implementation.md)
+for schema, migration and verification details.
 
 ## Host integration
 
@@ -131,7 +123,7 @@ accepts `request`:
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
   "seed": 42,
-  "inputs": {"every": {"type": "beats", "value": 2}}
+  "inputs": {"color": {"type":"color","value":[1,1,1]}, "brightness": {"type":"proportion","value":1}, "fade": {"type":"proportion","value":1}}
 }
 ```
 

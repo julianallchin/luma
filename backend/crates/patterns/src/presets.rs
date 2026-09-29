@@ -1,5 +1,4 @@
-//! Shipped presets: named input values of a form, named curves for `time`
-//! and `hit` sources, named gradients, and named frequency ranges for
+//! Shipped presets: named input values of a form, named curves for Time sources, named gradients, and named frequency ranges for
 //! `audio` sources. The data lives in `presets.json`.
 use crate::{BlendMode, Clip, Error, Gradient, Keyframes, Library, Result, Selection, Value};
 use serde::{Deserialize, Serialize};
