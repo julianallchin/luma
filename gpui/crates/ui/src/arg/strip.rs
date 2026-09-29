@@ -29,11 +29,10 @@ use crate::{
 };
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, fill, linear_color_stop, linear_gradient, point, px, size, App, Background,
-    Bounds, Context, Entity, EventEmitter, MouseButton, PathBuilder, Pixels, Point, SharedString,
-    Subscription, Window,
+    canvas, div, fill, point, px, size, App, Background, Bounds, Context, Entity, EventEmitter,
+    MouseButton, PathBuilder, Pixels, Point, SharedString, Subscription, Window,
 };
-use luma_patterns::{CurvePoint, Ease, Envelope, Key, Keyframes};
+use luma_patterns::{Ease, Envelope};
 
 /// A value the strip edits.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,9 +41,6 @@ pub enum StripValue {
     Number(Envelope),
     /// Color stops with opacity, and no eases. Any number of stops, from none.
     Gradient(Gradient),
-    /// Color keyframes, blended in RGB (linear Rec. 2020), with an ease per
-    /// segment. Its ends stay at x 0 and 1.
-    Colors(Keyframes),
 }
 
 /// The strip's value after an edit: a drag let go, a point added or
@@ -176,6 +172,22 @@ impl CurveStrip {
         self.scale = [low, high];
         self.unit = unit;
         self
+    }
+
+    /// A host-side change of the scale, as when the curve's low or high
+    /// moves. The value field is made again on the next render.
+    pub fn set_scale(
+        &mut self,
+        scale: [f64; 2],
+        unit: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.scale != scale || self.unit != unit {
+            self.scale = scale;
+            self.unit = unit;
+            self.fields = None;
+            cx.notify();
+        }
     }
 
     /// x is time: a beat grid and a playhead from `clock`.
@@ -972,7 +984,12 @@ fn labelled(name: &'static str, field: impl IntoElement) -> gpui::Div {
 }
 
 /// A line per beat over `beats`, a stronger one per bar of four.
-pub(crate) fn paint_grid(window: &mut Window, bounds: Bounds<Pixels>, beats: f64, over_color: bool) {
+pub(crate) fn paint_grid(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    beats: f64,
+    over_color: bool,
+) {
     if !(beats.is_finite() && beats > 0.) {
         return;
     }
@@ -1044,24 +1061,14 @@ pub(crate) fn paint_envelope(
     }
 }
 
-fn key_color(key: &Key) -> [f64; 3] {
-    match *key {
-        Key::Color(rgb) => rgb,
-        Key::Number(v) => [v; 3],
-    }
-}
-
 impl StripValue {
-    /// The value as the strip keeps it: a number or color curve that does not
+    /// The value as the strip keeps it: a number curve that does not
     /// validate becomes a flat one, so every edit starts from a valid value.
     fn checked(self) -> Self {
         match self {
             Self::Number(curve) if curve.validate().is_err() => {
                 Self::Number(Envelope::linear(vec![[0., 0.], [1., 0.]]))
             }
-            Self::Colors(keys) if keys.validate().is_err() || !keys.is_color() => Self::Colors(
-                Keyframes::with_eases([(0., Key::Color([1.; 3])), (1., Key::Color([1.; 3]))], &[]),
-            ),
             value => value,
         }
     }
@@ -1079,7 +1086,6 @@ impl StripValue {
         match self {
             Self::Number(curve) => curve.points.len(),
             Self::Gradient(gradient) => gradient.stops().len(),
-            Self::Colors(keys) => keys.points.len(),
         }
     }
 
@@ -1088,7 +1094,6 @@ impl StripValue {
         match self {
             Self::Number(curve) => curve.point(i),
             Self::Gradient(gradient) => [f64::from(gradient.stops()[i].t), 0.5],
-            Self::Colors(keys) => [keys.points[i].x, 0.5],
         }
     }
 
@@ -1103,7 +1108,6 @@ impl StripValue {
     fn ease(&self, segment: usize) -> Option<Ease> {
         match self {
             Self::Number(curve) => Some(curve.ease(segment)),
-            Self::Colors(keys) => Some(keys.ease(segment)),
             Self::Gradient(_) => None,
         }
     }
@@ -1111,10 +1115,6 @@ impl StripValue {
     fn set_ease(&mut self, segment: usize, ease: Ease) -> Result<(), String> {
         match self {
             Self::Number(curve) => curve.set_ease(segment, ease).map_err(|e| e.to_string()),
-            Self::Colors(keys) if segment + 1 < keys.points.len() => {
-                keys.points[segment].ease = ease;
-                Ok(())
-            }
             _ => Err("this value has no eases".into()),
         }
     }
@@ -1138,15 +1138,6 @@ impl StripValue {
                     gradient.move_stop(i, x as f32);
                 }
             }
-            Self::Colors(keys) => {
-                let n = keys.points.len();
-                if i == 0 || i + 1 >= n {
-                    return;
-                }
-                let (a, b) = (keys.points[i - 1].x, keys.points[i + 1].x);
-                let margin = (b - a) * 1e-6;
-                keys.points[i].x = x.clamp(a + margin, b - margin);
-            }
         }
     }
 
@@ -1163,17 +1154,6 @@ impl StripValue {
         match self {
             Self::Number(curve) => curve.insert_point(x).map_err(|e| e.to_string()),
             Self::Gradient(gradient) => Ok(gradient.insert(x as f32)),
-            Self::Colors(keys) => {
-                if !(x > 0. && x < 1.) || keys.points.iter().any(|p| (p.x - x).abs() < 1e-9) {
-                    return Err("a new point must lie inside a segment".into());
-                }
-                let i = keys.points.partition_point(|p| p.x < x) - 1;
-                let ease = keys.ease(i);
-                let color = keys.sample(x);
-                keys.points
-                    .insert(i + 1, CurvePoint::eased(x, Key::Color(color), ease));
-                Ok(i + 1)
-            }
         }
     }
 
@@ -1184,13 +1164,6 @@ impl StripValue {
                 gradient.remove(i);
                 Ok(())
             }
-            Self::Colors(keys) => {
-                if i == 0 || i + 1 >= keys.points.len() {
-                    return Err("the end points cannot be removed".into());
-                }
-                keys.points.remove(i);
-                Ok(())
-            }
         }
     }
 
@@ -1199,10 +1172,6 @@ impl StripValue {
         match self {
             Self::Number(_) => None,
             Self::Gradient(gradient) => gradient.stops().get(i).map(|stop| stop.color),
-            Self::Colors(keys) => keys
-                .points
-                .get(i)
-                .map(|p| Light::opaque(key_color(&p.value))),
         }
     }
 
@@ -1210,9 +1179,6 @@ impl StripValue {
         match self {
             Self::Number(_) => {}
             Self::Gradient(gradient) => gradient.set_color(i, color),
-            Self::Colors(keys) => {
-                keys.points[i].value = Key::Color(color.channels().map(|v| v.clamp(0., 1.)));
-            }
         }
     }
 
@@ -1222,56 +1188,16 @@ impl StripValue {
         match self {
             Self::Number(curve) => Light::opaque([curve.sample(x).clamp(0., 1.); 3]),
             Self::Gradient(gradient) => gradient.color_at(x as f32),
-            Self::Colors(keys) => Light::opaque(keys.sample(x)),
         }
     }
 
-    /// A color's fill, laid in a flex row the height of the fill. A
-    /// gradient is exact in OKLab; keyframes blend in linear RGB, so each
-    /// eased segment is cut in eight pieces and a hold is flat. Every color
-    /// is shown mapped into sRGB.
+    /// A color's fill, laid in a flex row the height of the fill: exact in
+    /// OKLab, shown mapped into sRGB.
     fn fill(&self) -> Vec<gpui::Div> {
         let radius = crate::radius::CAP;
         match self {
             Self::Number(_) => Vec::new(),
             Self::Gradient(gradient) => gradient_fill(gradient, radius),
-            Self::Colors(keys) => {
-                const PIECES: usize = 8;
-                let mut pieces = Vec::new();
-                for (i, pair) in keys.points.windows(2).enumerate() {
-                    let (a, b) = (key_color(&pair[0].value), key_color(&pair[1].value));
-                    let span = pair[1].x - pair[0].x;
-                    let ease = keys.ease(i);
-                    let mix = |t: f64| {
-                        let share = ease.apply(t);
-                        Light::opaque(std::array::from_fn(|ch| a[ch] + (b[ch] - a[ch]) * share))
-                            .display()
-                    };
-                    if ease == Ease::Hold {
-                        pieces.push(
-                            div()
-                                .h_full()
-                                .w(gpui::relative(span as f32))
-                                .bg(Light::opaque(a).display()),
-                        );
-                        continue;
-                    }
-                    for k in 0..PIECES {
-                        let (t0, t1) = (k as f64 / PIECES as f64, (k + 1) as f64 / PIECES as f64);
-                        pieces.push(
-                            div()
-                                .h_full()
-                                .w(gpui::relative((span / PIECES as f64) as f32))
-                                .bg(linear_gradient(
-                                    90.,
-                                    linear_color_stop(mix(t0), 0.),
-                                    linear_color_stop(mix(t1), 1.),
-                                )),
-                        );
-                    }
-                }
-                pieces
-            }
         }
     }
 
@@ -1280,12 +1206,6 @@ impl StripValue {
         match self {
             Self::Number(curve) => Thumb::Curve(curve.clone()),
             Self::Gradient(gradient) => Thumb::Gradient(gradient.clone()),
-            Self::Colors(keys) => {
-                Thumb::Gradient(Gradient::new(keys.points.iter().map(|p| GradientStop {
-                    t: p.x as f32,
-                    color: Light::opaque(key_color(&p.value)),
-                })))
-            }
         }
     }
 
@@ -1315,15 +1235,6 @@ impl StripValue {
                                 .all(|(a, b)| near((*a).into(), (*b).into()))
                     })
             }
-            (Self::Colors(a), Self::Colors(b)) => {
-                a.points.len() == b.points.len()
-                    && a.points.iter().zip(&b.points).all(|(a, b)| {
-                        let (ca, cb) = (key_color(&a.value), key_color(&b.value));
-                        near(a.x, b.x)
-                            && same_ease(a.ease, b.ease)
-                            && ca.iter().zip(&cb).all(|(a, b)| near(*a, *b))
-                    })
-            }
             _ => false,
         }
     }
@@ -1348,45 +1259,6 @@ pub fn gradient_presets() -> Vec<(SharedString, StripValue)> {
             )
         })
         .collect()
-}
-
-/// The shipped gradients as color keyframes: each stop a point, the end
-/// colors held out to the ends.
-pub fn color_curve_presets() -> Vec<(SharedString, StripValue)> {
-    gradient_presets()
-        .into_iter()
-        .filter_map(|(name, value)| match value {
-            StripValue::Gradient(gradient) => {
-                Some((name, StripValue::Colors(color_keys(&gradient))))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Gradient stops as color keyframes from 0 to 1, linear between. The end
-/// colors hold out to the ends, and of two stops at one place the first is
-/// kept.
-pub fn color_keys(gradient: &Gradient) -> Keyframes {
-    let mut points: Vec<(f64, Key)> = Vec::new();
-    for stop in gradient.stops() {
-        let t = f64::from(stop.t).clamp(0., 1.);
-        let color = Key::Color(stop.color.channels());
-        if points.is_empty() && t > 0. {
-            points.push((0., color));
-        }
-        if points.last().is_none_or(|(x, _)| t > *x) {
-            points.push((t, color));
-        }
-    }
-    if let Some(&(_, color)) = points.last().filter(|(x, _)| *x < 1.) {
-        points.push((1., color));
-    }
-    if points.len() < 2 {
-        let color = points.first().map_or(Key::Color([1.; 3]), |(_, c)| *c);
-        points = vec![(0., color), (1., color)];
-    }
-    Keyframes::with_eases(points, &[])
 }
 
 /// The editor's own curves, for a host with no curve picker of its own.
@@ -1418,23 +1290,9 @@ fn soft_preset() -> Envelope {
 mod tests {
     use super::*;
 
-    fn colors() -> StripValue {
-        StripValue::Colors(Keyframes::with_eases(
-            [
-                (0., Key::Color([1., 0., 0.])),
-                (1., Key::Color([0., 0., 1.])),
-            ],
-            &[Ease::EaseIn],
-        ))
-    }
-
     #[test]
     fn a_preset_is_found_again() {
-        for presets in [
-            gradient_presets(),
-            color_curve_presets(),
-            envelope_presets(),
-        ] {
+        for presets in [gradient_presets(), envelope_presets()] {
             assert!(!presets.is_empty());
             for (at, (_, value)) in presets.iter().enumerate() {
                 assert_eq!(presets.iter().position(|(_, p)| p.close(value)), Some(at));
@@ -1448,56 +1306,16 @@ mod tests {
         assert!(!gradient_presets().iter().any(|(_, p)| p.close(&edited)));
     }
 
-    /// Color stops move in x only, and a curve's ends stay put.
+    /// A curve's ends stay put; its inner points move between neighbours.
     #[test]
-    fn color_points_move_in_x_between_their_neighbours() {
-        let mut value = colors();
+    fn curve_points_move_between_their_neighbours() {
+        let mut value = StripValue::Number(Envelope::linear(vec![[0., 0.], [1., 1.]]));
         let i = value.insert(0.5).unwrap();
         assert_eq!(i, 1);
-        // The new point keeps the segment's ease and changes no color.
-        assert_eq!(value.ease(1), Some(Ease::EaseIn));
         value.move_x(1, 2.);
         let x = value.point(1)[0];
         assert!(x < 1. && x > 0.99, "{x}");
         value.move_x(0, 0.5);
-        assert_eq!(value.point(0), [0., 0.5]);
-        assert!(value.remove(0).is_err());
-        value.remove(1).unwrap();
-        assert_eq!(value.len(), 2);
-        let StripValue::Colors(keys) = &value else {
-            unreachable!()
-        };
-        keys.validate().unwrap();
-    }
-
-    #[test]
-    fn a_new_color_point_is_the_color_there() {
-        let mut value = colors();
-        let before = value.head_color(0.3);
-        let i = value.insert(0.3).unwrap();
-        let after = value.color(i).unwrap();
-        assert!(
-            (before.rgb[0] - after.rgb[0]).abs() < 1e-6
-                && (before.rgb[2] - after.rgb[2]).abs() < 1e-6
-        );
-    }
-
-    #[test]
-    fn gradient_stops_become_keyframes_from_end_to_end() {
-        let gradient = Gradient::new([
-            GradientStop {
-                t: 0.25,
-                color: Light::BLACK,
-            },
-            GradientStop {
-                t: 0.75,
-                color: Light::WHITE,
-            },
-        ]);
-        let keys = color_keys(&gradient);
-        keys.validate().unwrap();
-        assert_eq!(keys.points.len(), 4);
-        assert_eq!(keys.sample(0.), [0.; 3]);
-        assert_eq!(keys.sample(1.), [1.; 3]);
+        assert_eq!(value.point(0)[0], 0.);
     }
 }

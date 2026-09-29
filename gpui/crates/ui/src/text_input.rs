@@ -571,6 +571,19 @@ impl TextInput {
     }
 
     /// Draw the text at `size` instead of [`TEXT_SIZE`].
+    /// What the field shows while it is empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            cx.notify();
+        }
+    }
+
     pub fn set_text_size(&mut self, size: f32, cx: &mut Context<Self>) {
         if self.text_size == size {
             return;
