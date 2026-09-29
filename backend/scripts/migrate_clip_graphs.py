@@ -33,6 +33,7 @@ LINES = {"u": [1, 0, 0], "v": [0, 1, 0], "z": [0, 0, 1]}
 RAMP_UP = [[0, 0], [1, 1]]
 ON = [[0, 1], [1, 1]]
 DEFAULT_DIRECTION = [0, 0.766, -0.643]
+EDGE = 4e-9  # see Clip.space: the old overrun stroke's open ends
 # Approximate classes of section 8.4, as report keys.
 FAN, BLOOM = "fan lean", "bloom lean"
 NOISE_INDEPENDENT, NOISE_SPATIAL, NOISE = "independent noise", "spatial noise", "noise stream"
@@ -560,6 +561,12 @@ class Clip:
             # Centre-anchored (with overrun) → start-anchored.
             offset = affine(offset, 1 + w0 * ov, -w0 / 2 * (1 + ov))
             width = w
+            if overrun and is_value(w):
+                # The old overrun stroke left out its two exact ends
+                # (1e-9 < x < 1 − 1e-9); the new stroke keeps them. Pull both
+                # ends in by a hair so heads that sit on an end stay dark.
+                offset = affine(offset, 1.0, w * EDGE)
+                width = w * (1 - 2 * EDGE)
         node = self.space_node(axis, grain, self.g.emit(offset), self.g.emit(width),
                                wrap and offset_value is not None)
         if kind == "color":
