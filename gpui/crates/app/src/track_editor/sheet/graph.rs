@@ -1,11 +1,11 @@
-//! The clip graph inspector. It is a tree, not a canvas: the output node is
-//! the top card, and every wired input shows the node that feeds it as a
-//! nested card under its row. A node that feeds two inputs shows its card
-//! once, at its first place in the tree, and a link chip at the others.
+//! The clip graph editor: the clip's graph as a node-and-wire canvas (see
+//! [`canvas`]). Each node is a card with its settings and one row per input;
+//! a value input shows its control, a wired input a port with the wire from
+//! the node that feeds it.
 //!
 //! Every edit goes through [`Luma::graph_live`], so a drag is one undo step
 //! and one write. The widgets are built once per graph shape (see
-//! [`edit::shape`]); a value that moves under them is pushed in, and a shape
+//! [`edit::layout`]); a value that moves under them is pushed in, and a shape
 //! change builds them again.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +19,7 @@ use p::clip_graph::{definition, ClipGraph, Input, Kind, Node};
 
 use super::*;
 
+pub(in crate::track_editor) mod canvas;
 pub(in crate::track_editor) mod edit;
 
 /// The shipped curve shapes, as the strips and the promotion defaults read
@@ -192,7 +193,7 @@ fn number_field(
             value * scale,
             low.min(value * scale),
             high.max(value * scale),
-            FIELD_W,
+            canvas::NODE_FIELD_W,
             window,
             cx,
         );
@@ -694,6 +695,17 @@ fn is_bound(graph: &ClipGraph, id: &str, input: &str) -> bool {
         && matches!(input, "low" | "high")
 }
 
+/// What an input goes back to when its wire is taken out: the value it held
+/// before, or a first value where empty has none to show.
+fn restore(graph: &ClipGraph, id: &str, input: &str, last: Option<&Input>) -> Option<Input> {
+    last.cloned().or_else(|| {
+        edit::empty(graph, id, input)
+            .is_none()
+            .then(|| edit::first_value(graph, id, input))
+            .flatten()
+    })
+}
+
 impl Luma {
     fn graph_pick(&mut self, id: &str, input: &str, pick: Pick, cx: &mut Context<Self>) {
         if matches!(pick, Pick::Links) {
@@ -710,12 +722,7 @@ impl Luma {
         let held_out = &mut held;
         self.graph_live(cx, |graph| match &pick {
             Pick::Value => {
-                let back = last.clone().or_else(|| {
-                    edit::empty(graph, &at, &name)
-                        .is_none()
-                        .then(|| edit::first_value(graph, &at, &name))
-                        .flatten()
-                });
+                let back = restore(graph, &at, &name, last.as_ref());
                 let wired = graph.nodes[&at]
                     .inputs
                     .get(&name)
@@ -740,11 +747,33 @@ impl Luma {
             });
         }
     }
+
+    /// Share `target` into an input from the Link… menu, keeping the value
+    /// it held for an unwire to give back.
+    fn graph_link(&mut self, id: &str, input: &str, target: &str, cx: &mut Context<Self>) {
+        let mut held = None;
+        let held_out = &mut held;
+        self.graph_live(cx, |graph| {
+            *held_out = graph
+                .nodes
+                .get(id)
+                .and_then(|node| node.inputs.get(input))
+                .filter(|value| value.source().is_none())
+                .cloned();
+            edit::link(graph, id, input, target);
+        });
+        if let Some(value) = held {
+            let key = (id.to_owned(), input.to_owned());
+            self.with_track_editor(cx, |editor| {
+                editor.sheet.last.insert(key, value);
+            });
+        }
+    }
 }
 
 // -- rendering ----------------------------------------------------------------
 
-struct Ctx<'a> {
+pub(super) struct Ctx<'a> {
     state: &'a Editor,
     controls: &'a Controls,
     graph: &'a ClipGraph,
@@ -775,101 +804,23 @@ fn visible(node: &Node, input: &str) -> bool {
     }
 }
 
-/// The graph editor under the blend row: the output node's card and its
-/// tree.
-pub(super) fn tree(
+/// The graph editor under the blend row: the clip's graph as a canvas.
+/// `wide` is whether the panel is widened, or `None` where it already fills
+/// its box.
+pub(super) fn editor(
     state: &Editor,
     controls: &Controls,
     graph: &ClipGraph,
     app: &Entity<Luma>,
-) -> Option<AnyElement> {
-    let root = edit::output(graph)?;
+    wide: Option<bool>,
+) -> AnyElement {
     let cx = Ctx {
         state,
         controls,
         graph,
         app,
     };
-    Some(card(&cx, &root, None, &mut BTreeSet::new()))
-}
-
-fn card(
-    cx: &Ctx,
-    id: &str,
-    parent: Option<(&str, &str)>,
-    placed: &mut BTreeSet<String>,
-) -> AnyElement {
-    placed.insert(id.to_owned());
-    let node = &cx.graph.nodes[id];
-    let label = edit::label(id);
-    let mut title = div()
-        .w_full()
-        .h(px(CONTROL_HEIGHT))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(6.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(ladder::foreground())
-                .child(label.clone()),
-        )
-        .child(div().flex_1());
-    if let Some((from, input)) = parent {
-        let app = cx.app.clone();
-        let (from, input) = (from.to_owned(), input.to_owned());
-        title = title.child(
-            icon_button(IconName::Close, Enabled::Yes)
-                .id(SharedString::from(format!("unwire-{id}")))
-                .on_click(move |_, _, cx| {
-                    let (from, input) = (from.clone(), input.clone());
-                    app.update(cx, |this, cx| {
-                        this.graph_pick(&from, &input, Pick::Value, cx)
-                    });
-                })
-                .agent_node(Role::Button, format!("Remove {label}")),
-        );
-    }
-    let rows: Vec<AnyElement> = definition(node.kind)
-        .inputs
-        .iter()
-        .filter(|(input, _)| visible(node, input))
-        .map(|(input, _)| row(cx, id, input, placed))
-        .collect();
-    let flash = match &cx.state.sheet.flash {
-        Some((flashed, since)) if flashed == id => {
-            1. - luma_ui::motion::exit_progress(&luma_ui::motion::HOVER_FADE, *since)
-        }
-        _ => 0.,
-    };
-    let cards = cx.state.sheet.cards.clone();
-    let key = id.to_owned();
-    div()
-        .relative()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(ROW_GAP))
-        .rounded(px(6.))
-        .when(flash > 0., |el| el.bg(luma_ui::glass::wash(0.2 * flash)))
-        .child(
-            canvas(
-                move |bounds, _, _| {
-                    cards.borrow_mut().insert(key.clone(), bounds);
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .size_full(),
-        )
-        .child(title)
-        .children(settings(cx, id, node))
-        .children(rows)
-        .children(cx.controls.noise.get(id).cloned())
-        .agent_node(Role::Card, label)
-        .into_any_element()
+    canvas::view(&cx, wide)
 }
 
 /// A node's settings as segmented controls, and a space's wrap as a switch.
@@ -938,37 +889,61 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     Some(column.into_any_element())
 }
 
-/// One input's row: its label and source chip, then its control, the card
-/// of the node wired there, or a link chip to that card.
-fn row(cx: &Ctx, id: &str, input: &str, placed: &mut BTreeSet<String>) -> AnyElement {
+/// One input's row: its port on the card's edge, its label and source chip,
+/// then its control while it holds a value. A wired input shows no control:
+/// its wire says where the value comes from.
+fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
     let label = input_label(input);
-    let accessories: Vec<AnyElement> = chip(cx.graph, id, input)
-        .map(|chip| source_chip(cx, id, input, chip))
-        .into_iter()
-        .collect();
+    let spec = edit::spec(cx.graph, id, input);
+    let wireable = spec.is_some_and(|spec| !matches!(spec.ty, Ty::Points | Ty::Gradient));
+    let mut accessories: Vec<AnyElement> = Vec::new();
+    if wireable {
+        accessories.push(canvas::port_slot(canvas::input_port(cx, id, input)).into_any_element());
+    }
+    accessories.extend(chip(cx.graph, id, input).map(|chip| source_chip(cx, id, input, chip)));
     let control = match node.inputs.get(input) {
-        Some(Input::Wire(to)) if placed.contains(to) => link_chip(cx, to),
-        Some(Input::Wire(to)) if cx.graph.nodes.contains_key(to) => div()
-            .w_full()
-            .border_l_2()
-            .border_color(ladder::border())
-            .pl(px(10.))
-            .child(card(cx, to, Some((id, input)), placed)),
-        _ => match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
-            Some(field) => field_element(field),
-            None => match edit::spec(cx.graph, id, input).map(|spec| spec.ty) {
-                Some(Ty::Heads | Ty::Clock | Ty::Coordinate) => div(),
-                _ => {
-                    let note = edit::empty_note(node.kind, input);
-                    div()
-                        .child(luma_ui::caption(note.to_string()))
-                        .opacity(ladder::DISABLED_OPACITY)
-                }
+        Some(Input::Wire(_)) => None,
+        _ => Some(
+            match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
+                Some(field) => field_element(field),
+                None => match spec.map(|spec| spec.ty) {
+                    Some(Ty::Heads | Ty::Clock | Ty::Coordinate) => {
+                        return header_row(&label, accessories)
+                    }
+                    _ => {
+                        let note = edit::empty_note(node.kind, input);
+                        div()
+                            .child(luma_ui::caption(note.to_string()))
+                            .opacity(ladder::DISABLED_OPACITY)
+                    }
+                },
             },
-        },
+        ),
     };
-    sheet_row(&label, accessories, control)
+    match control {
+        Some(control) => sheet_row(&label, accessories, control),
+        None => header_row(&label, accessories),
+    }
+}
+
+/// A row that is only its header line: a wired input, or one whose empty
+/// needs no words.
+fn header_row(label: &str, accessories: Vec<AnyElement>) -> AnyElement {
+    let label = sentence_case(label);
+    div()
+        .relative()
+        .w_full()
+        .h(px(CONTROL_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .child(luma_ui::caption(label.clone()))
+        .child(div().flex_1())
+        .children(accessories)
+        .agent_node(Role::Row, label)
+        .into_any_element()
 }
 
 fn field_element(field: &Field) -> Div {
@@ -989,30 +964,6 @@ fn field_element(field: &Field) -> Div {
         Field::Color(entity) => div().child(entity.clone()),
         Field::Strip(entity) => div().child(entity.clone()),
     }
-}
-
-/// "→ Clock 1": the node's card is elsewhere in the tree. A click scrolls to
-/// it and flashes it.
-fn link_chip(cx: &Ctx, to: &str) -> Div {
-    let text = format!("→ {}", edit::label(to));
-    let app = cx.app.clone();
-    let target = to.to_owned();
-    div().child(
-        luma_ui::float::chip()
-            .id(SharedString::from(format!(
-                "link-{to}-{}",
-                menu_key(to, &text)
-            )))
-            .child(text.clone())
-            .on_click(move |_, _, cx| {
-                let target = target.clone();
-                app.update(cx, |this, cx| {
-                    this.with_track_editor(cx, |editor| editor.sheet.reveal(&target));
-                    cx.notify();
-                });
-            })
-            .agent_node(Role::Button, text),
-    )
 }
 
 fn source_chip(cx: &Ctx, id: &str, input: &str, chip: Chip) -> AnyElement {
@@ -1069,9 +1020,7 @@ fn source_chip(cx: &Ctx, id: &str, input: &str, chip: Chip) -> AnyElement {
                     Some(pick) => this.graph_pick(&at, &name, pick, cx),
                     None => {
                         if let Some(target) = target {
-                            this.graph_live(cx, move |graph| {
-                                edit::link(graph, &at, &name, &target)
-                            });
+                            this.graph_link(&at, &name, &target, cx);
                         }
                     }
                 }
