@@ -317,3 +317,48 @@ fn noise_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
         }
     }
 }
+
+#[test]
+fn radial_runs_from_the_nearest_head_to_the_farthest() {
+    // Distances 1, 2 and 3 from the centre on each side.
+    let cells: Vec<Cell> = [-3., -2., -1., 1., 2., 3.]
+        .into_iter()
+        .enumerate()
+        .map(|(n, u)| cell(format!("h{n}"), [u, 0., 3.]))
+        .collect();
+    let radial = graph(json!({
+        "space1": {"kind": "space", "settings": {"kind": "radial", "wrap": "no"},
+                   "inputs": {"offset": 0, "width": 0.25}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 1]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let light = play(&radial, &cells, &[1.]);
+    assert_eq!(lit(&light, 0), vec![2, 3], "only the nearest heads read 0");
+    let far = graph(json!({
+        "space1": {"kind": "space", "settings": {"kind": "radial", "wrap": "no"},
+                   "inputs": {"offset": 0.9, "width": 0.1}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 1]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    assert_eq!(
+        lit(&play(&far, &cells, &[1.]), 0),
+        vec![0, 5],
+        "the farthest read 1"
+    );
+}
+
+#[test]
+fn a_wrapped_stroke_wider_than_half_the_axis_is_exact() {
+    // Start 0.6, width 0.8: lit from 0.6 through 1 and on from 0 to 0.4.
+    let light = play(&stroke(0.6, 0.8, "yes"), &line(), &[1.]);
+    let dark: Vec<usize> = (0..12).filter(|n| !lit(&light, 0).contains(n)).collect();
+    assert_eq!(dark, vec![5, 6]);
+    let ramp = graph(json!({
+        "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "yes"},
+                   "inputs": {"direction": [1, 0, 0], "offset": 0.6, "width": 0.8}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let light = play(&ramp, &line(), &[1.]);
+    // Head 0 is 0.4 past the start: halfway along the stroke. Head 10
+    // comes before the wrap, so earlier along it.
+    assert!((light[[0, 0, DIMMER]] - 0.5).abs() < 1e-9);
+    assert!(light[[10, 0, DIMMER]] < light[[0, 0, DIMMER]]);
+}
