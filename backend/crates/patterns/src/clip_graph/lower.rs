@@ -631,23 +631,71 @@ struct Role {
     turn: &'static [&'static str],
 }
 
-pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
-    let mut cells = frame.cells.to_vec();
-    cells.sort_by(|a, b| a.id.cmp(&b.id));
-    let fixtures: Arc<[String]> = cells
-        .iter()
-        .map(|c| c.id.clone())
-        .collect::<Vec<_>>()
-        .into();
-    let mut lowering = Lowering {
-        graph,
-        cells,
-        fixtures,
-        nodes: BTreeMap::new(),
-        clocks: HashMap::new(),
-        values: HashMap::new(),
-        heads: HashMap::new(),
+impl<'a> Lowering<'a> {
+    fn new(graph: &'a ClipGraph, frame: Frame<'_>) -> Self {
+        let mut cells = frame.cells.to_vec();
+        cells.sort_by(|a, b| a.id.cmp(&b.id));
+        let fixtures: Arc<[String]> = cells
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>()
+            .into();
+        Lowering {
+            graph,
+            cells,
+            fixtures,
+            nodes: BTreeMap::new(),
+            clocks: HashMap::new(),
+            values: HashMap::new(),
+            heads: HashMap::new(),
+        }
+    }
+}
+
+/// The output of [`lower_coordinate`] with the coordinate's value.
+pub(crate) const COORDINATE: &str = "x";
+/// The output of [`lower_coordinate`] that is 1 where a head is inside its
+/// stroke. Only a coordinate that can be outside (`space`) has it.
+pub(crate) const INSIDE: &str = "inside";
+
+/// Coordinate node `id` of a checked graph alone, per head and live event:
+/// its value as [`COORDINATE`], and [`INSIDE`] when it has a stroke. An
+/// editor reads it to mark where the heads fall on the coordinate.
+pub(crate) fn lower_coordinate(
+    graph: &ClipGraph,
+    id: &str,
+    frame: Frame<'_>,
+) -> Result<Definition> {
+    if !graph.nodes.contains_key(id) {
+        return Err(Error(format!("{id}: no such node")));
+    }
+    let mut lowering = Lowering::new(graph, frame);
+    let value = lowering.value(id)?;
+    let signal = Output {
+        value_type: ValueType::Signal(SignalType::ANY),
+        rate: Rate::Frame,
     };
+    let mut outputs = BTreeMap::from([(COORDINATE.to_string(), value.parts[0].clone())]);
+    if matches!(value.inside, Binding::Connection { .. }) {
+        outputs.insert(INSIDE.to_string(), value.inside);
+    }
+    let types = outputs
+        .keys()
+        .map(|name| (name.clone(), signal.clone()))
+        .collect();
+    Ok(Definition {
+        name: "Clip graph coordinate".into(),
+        inputs: BTreeMap::new(),
+        outputs: types,
+        body: Body::Graph(Graph {
+            nodes: lowering.nodes,
+            outputs,
+        }),
+    })
+}
+
+pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
+    let mut lowering = Lowering::new(graph, frame);
     let (id, out) = graph
         .output()
         .ok_or_else(|| Error("graph: expected one output node; got none".into()))?;

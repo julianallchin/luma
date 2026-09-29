@@ -32,6 +32,34 @@ pub(crate) fn coherent_noise(point: [f64; 4], seed: u64) -> Result<f64> {
     Ok(sum.clamp(0.0, 1.0))
 }
 
+/// Noise node `node`'s value at one head, as playback computes it (spec
+/// 2.3): `seed` is the clip's, `place` the head's position over its span's
+/// largest extent (0–1 on each axis), `beats` the beats since the clip
+/// start. `speed` is beats per turn; `scale` `None` gives one value for
+/// every head.
+pub fn sample_noise(
+    node: &str,
+    seed: u64,
+    place: [f64; 3],
+    beats: f64,
+    speed: f64,
+    scale: Option<f64>,
+    contrast: f64,
+) -> Result<f64> {
+    if speed.is_nan() || speed <= 0. {
+        return Err(Error(format!("{node}.speed needs beats above 0")));
+    }
+    let (p, size) = match scale {
+        Some(scale) => (place, scale.max(1e-6)),
+        None => ([0.; 3], 1.),
+    };
+    let raw = coherent_noise(
+        [p[0] / size, p[1] / size, p[2] / size, beats / speed],
+        seed ^ fnv(node),
+    )?;
+    Ok(((raw - 0.5) * (1. + 3. * contrast) + 0.5).clamp(0., 1.))
+}
+
 /// A stable 64-bit hash of a name (FNV-1a).
 pub(crate) fn fnv(name: &str) -> u64 {
     name.bytes().fold(0xcbf29ce484222325_u64, |h, b| {
