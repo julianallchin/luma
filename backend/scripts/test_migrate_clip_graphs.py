@@ -371,7 +371,7 @@ class Convert(unittest.TestCase):
 
     def test_clock_every_zero_with_life(self):
         nodes = self.brightness_clock(events=ev(0, 2))
-        self.assertEqual(nodes["clock1"], node("clock", {"every": 12.0, "duration": 2.0}))
+        self.assertEqual(nodes["clock1"], node("clock", {"every": 24.0, "duration": 2.0}))
 
     def test_clock_every(self):
         nodes = self.brightness_clock(events=ev(0.5))
@@ -406,14 +406,49 @@ class Convert(unittest.TestCase):
         cases = {
             "gain source on a gradient": ("color@1", color_inputs(color={"type": "space", "value": {
                 "axis": axis("u"), "gradient": g, "gain": time([[0.0, 0.0], [1.0, 1.0]])}})),
-            "vector path off a line": ("aim@1", aim_inputs(direction=time(
-                [[0.0, [0.0, 1.0, 0.0]], [0.5, [1.0, 0.0, 0.0]], [1.0, [0.0, 0.0, -1.0]]]))),
             "numbers and colors": ("color@1", color_inputs(
                 brightness=time([[0.0, 0.0], [1.0, [1.0, 1.0, 1.0]]]))),
         }
         for why, (form, inputs) in cases.items():
             with self.subTest(why=why), self.assertRaises(m.Unmappable):
                 m.convert_inputs(form, inputs, 8.0)
+
+    def test_vector_path_off_a_line(self):
+        # Two runs joined by a step at x 0.5; a held stretch is not a run.
+        nodes, notes = self.convert("aim@1", aim_inputs(direction=time(
+            [[0.0, [0.0, 1.0, 0.0], "ease-out"], [0.25, [0.0, 1.0, 0.0]], [0.5, [1.0, 0.0, 0.0]],
+             [1.0, [0.0, 0.0, -1.0]]])))
+        self.assertIn(m.PATH, notes)
+        outer = nodes[nodes["aim1"]["inputs"]["direction"]["node"]]["inputs"]
+        self.assertEqual(outer["shape"]["points"], [[0.0, 0.0, "hold"], [0.5, 1.0], [1.0, 1.0]])
+        first, second = nodes[outer["low"]["node"]]["inputs"], nodes[outer["high"]["node"]]["inputs"]
+        self.assertEqual(first["shape"]["points"], [[0.0, 0.0], [0.25, 0.0], [0.5, 1.0], [1.0, 1.0]])
+        self.assertEqual((first["low"], first["high"]), ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]))
+        self.assertEqual(second["shape"]["points"], [[0.0, 0.0], [0.5, 0.0], [1.0, 1.0]])
+        self.assertEqual((second["low"], second["high"]), ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]))
+
+    def test_wide_wrapped_stroke(self):
+        # Width 1.25 on a wrapped angle: the window starts half a turn before
+        # the middle and the shape is read from 0.5 − 0.5/1.25 = 0.1 on.
+        brightness = space(axis("angle", plane={"kind": "auto"}), [[0, 0], [0.5, 1], [1, 0]],
+                           width=n(1.25), boundary="wrap",
+                           offset=time([[0.0, 0.0], [1.0, 1.0]], events=ev(1)))
+        nodes, _ = self.convert("color@1", color_inputs(brightness=brightness))
+        self.assertAlmostEqual(nodes["curve1"]["inputs"]["low"], -0.5)
+        points = nodes["curve2"]["inputs"]["shape"]["points"]
+        self.assertEqual([p[0] for p in points], [0.0, 0.4, 0.8, 1.0])
+        for got, want in zip([p[1] for p in points], [0.2, 1.0, 0.2, 0.2]):
+            self.assertAlmostEqual(got, want)
+
+    def test_phase_wider_than_a_turn(self):
+        phase = space(axis("u"), [[0, 0], [1, 1]], gain=n(-2.0))
+        nodes, notes = self.convert("aim@1", aim_inputs(horizontal=time(
+            [[0.0, -1.0], [1.0, 1.0]], events=ev(4), gain=n(20), phase=phase)))
+        self.assertIn(m.PHASE_WRAP, notes)
+        points = nodes["curve1"]["inputs"]["shape"]["points"]
+        # −2x mod 1: from 1 down to 0 at x 0.5, then again from 1 down to 0.
+        self.assertEqual((points[0], points[-1]), ([0, 1.0], [1, 0.0]))
+        self.assertEqual(points[2], [0.5, 1.0])
 
     def test_document_mode(self):
         old = {"clips": {"a": {"graph": "strobe.constant@1", "start": 0.0, "duration": 4.0, "seed": 1,
