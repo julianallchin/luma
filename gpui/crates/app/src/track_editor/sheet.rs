@@ -141,6 +141,8 @@ struct Built {
     /// The graph shape every selected clip shares; `None` when they differ,
     /// which leaves only the name to edit.
     shape: Option<String>,
+    /// The primary graph's [`graph::edit::layout`] the widgets were built for.
+    layout: Option<String>,
     name: Entity<TextInput>,
     /// The name and placeholder the field was last pointed at.
     synced_name: (String, String),
@@ -212,19 +214,21 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         let built = build(editor, primary, window, cx);
         editor.sheet.built = Some(built);
     }
+    let graph = shape
+        .as_ref()
+        .and_then(|_| primary_clip(editor)?.core.as_ref())
+        .map(|core| core.graph.clone());
+    let layout = graph.as_ref().map(graph::edit::layout);
     let reshaped = editor
         .sheet
         .built
         .as_ref()
-        .is_some_and(|built| built.shape != shape);
+        .is_some_and(|built| built.shape != shape || built.layout != layout);
     if reshaped {
-        let graph = shape
-            .as_ref()
-            .and_then(|_| primary_clip(editor)?.core.as_ref())
-            .map(|core| core.graph.clone());
         let controls = graph.as_ref().map(|graph| graph::build(graph, window, cx));
         if let Some(built) = editor.sheet.built.as_mut() {
             built.shape = shape;
+            built.layout = layout;
             built.graph = graph;
             built.controls = controls;
         }
@@ -362,6 +366,7 @@ fn build(
         primary,
         count: editor.selected.len(),
         shape: None,
+        layout: None,
         name,
         synced_name: (name_text, placeholder),
         selection,
