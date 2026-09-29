@@ -1,0 +1,650 @@
+"""Clip graphs as Python: one small graph per clip.
+
+    k = clock(every=2)
+    pos = curve(time(k), "Ramp up", low=-0.2, high=1)
+    graph = color(brightness=curve(space(offset=pos, width=0.2), "On"))
+    edit.add_clip(graph, name="Chase", beats=(32, 48), selection="bars")
+
+Every builder is a bare function. It returns one node. A node goes into an
+input of another node: that is a wire. The same Python object wired twice is
+one node (a link). `color()`, `aim()` and `strobe()` make the output node and
+return a Graph.
+
+Values are plain: numbers, `(u, v, z)` tuples, `(r, g, b)` triples in linear
+Rec. 2020, or "#RRGGBB" (sRGB, converted). A shape is a curve preset name
+("Comet"), a list of `[x, v]` / `[x, v, ease]` points, or `{"points": ...}`.
+A gradient is a preset name ("Fire"), a list of `(t, color)` pairs, or
+`{"stops": ...}`. `None` is the empty input.
+
+Node ids are `<kind><n>`, numbered in creation order per kind. The same ids
+show in the UI and in checker errors. Python does no type checking: the Rust
+checker does, when you add or update a clip.
+"""
+from __future__ import annotations
+
+import copy
+import heapq
+import itertools
+import math
+import re
+from dataclasses import dataclass
+from types import MappingProxyType
+
+from .color import from_srgb
+
+
+BUILDERS = ("clock", "time", "space", "noise", "audio", "curve", "mirror",
+            "shuffle", "group", "split", "color", "aim", "strobe", "preset")
+OUTPUTS = ("color", "aim", "strobe")
+
+# Input order per kind: the builder signature order, used by source().
+_INPUTS = {
+    "clock": ("every", "duration"),
+    "time": ("clock", "phase"),
+    "space": ("heads", "direction", "offset", "width"),
+    "noise": ("heads", "speed", "scale", "contrast"),
+    "audio": ("low_hz", "high_hz"),
+    "curve": ("x", "shape", "low", "high", "gradient"),
+    "mirror": ("heads", "normal", "offset"),
+    "shuffle": ("heads", "clock"),
+    "group": ("heads", "size"),
+    "split": ("heads",),
+    "color": ("color", "brightness", "alpha"),
+    "aim": ("heads", "direction", "point", "yaw", "pitch", "alpha"),
+    "strobe": ("rate", "alpha"),
+}
+_SEQUENCE = itertools.count(1)
+_ID = re.compile(r"([a-z]+)([0-9]+)")
+
+
+class ClipError(ValueError):
+    """A clip graph the checker refused, or a value Python cannot write."""
+
+
+# ---------------------------------------------------------------------------
+# presets
+# ---------------------------------------------------------------------------
+
+_PRESETS = {"clips": {}, "curves": {}, "gradients": {}, "bands": {}}
+
+
+def _plain(value):
+    if isinstance(value, (str, bytes)) or value is None:
+        return value
+    if hasattr(value, "items"):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return copy.deepcopy(value)
+
+
+def _named(table):
+    """A preset table as {name: record}; a list of {"name": ...} records works too."""
+    table = _plain(table) or {}
+    if isinstance(table, list):
+        return {str(item["name"]): item for item in table}
+    return dict(table)
+
+
+def install_presets(presets):
+    """Install the shipped presets from the `presets` binding."""
+    presets = _plain(presets) or {}
+    clips = {}
+    for name, value in _named(presets.get("clips")).items():
+        graph = value.get("graph", value) if isinstance(value, dict) else value
+        clips[name] = graph
+    curves = {}
+    for name, value in _named(presets.get("curves")).items():
+        if isinstance(value, dict):
+            value = value.get("points", value.get("shape", value))
+            value = value.get("points") if isinstance(value, dict) else value
+        curves[name] = value
+    gradients = {}
+    for name, value in _named(presets.get("gradients")).items():
+        if isinstance(value, dict):
+            value = value.get("stops", value.get("gradient", value))
+            value = value.get("stops") if isinstance(value, dict) else value
+        gradients[name] = value
+    bands = {}
+    for name, value in _named(presets.get("bands")).items():
+        if isinstance(value, dict):
+            value = (value["low_hz"], value["high_hz"])
+        bands[name] = (float(value[0]), float(value[1]))
+    _PRESETS.update(clips=clips, curves=curves, gradients=gradients, bands=bands)
+
+
+def _lookup(table, name, what, example):
+    entries = _PRESETS[table]
+    if name in entries:
+        return name, copy.deepcopy(entries[name])
+    for key, value in entries.items():
+        if key.casefold() == name.casefold():
+            return key, copy.deepcopy(value)
+    known = ", ".join(sorted(entries)) or "none installed"
+    raise ClipError(f"unknown {what} {name!r}; known: {known}. Example: {example}")
+
+
+class Presets:
+    """`luma.presets`: shipped clips, curves, gradients and bands.
+
+    clips      name -> Graph (a fresh copy each time)
+    curves     name -> points
+    gradients  name -> stops
+    bands      name -> (low_hz, high_hz)
+
+    A name works where a shape, a gradient or a band goes:
+    curve(t, "Comet"), curve(t, gradient="Fire"), audio("Kick").
+    """
+
+    @property
+    def clips(self):
+        return MappingProxyType({name: preset(name) for name in _PRESETS["clips"]})
+
+    @property
+    def curves(self):
+        return MappingProxyType(copy.deepcopy(_PRESETS["curves"]))
+
+    @property
+    def gradients(self):
+        return MappingProxyType(copy.deepcopy(_PRESETS["gradients"]))
+
+    @property
+    def bands(self):
+        return MappingProxyType(dict(_PRESETS["bands"]))
+
+    def _luma_catalog_items(self):
+        return [(name, tuple(sorted(_PRESETS[name]))) for name in ("clips", "curves", "gradients", "bands")]
+
+    def __repr__(self):
+        return "<luma.presets " + " ".join(
+            f"{name}={len(_PRESETS[name])}" for name in ("clips", "curves", "gradients", "bands")) + ">"
+
+
+# ---------------------------------------------------------------------------
+# nodes
+# ---------------------------------------------------------------------------
+
+
+class Node:
+    """One node: a kind, its settings and its inputs. Immutable once built."""
+
+    __slots__ = ("kind", "settings", "inputs", "_seq", "_id")
+
+    def __init__(self, kind, settings=None, inputs=None, id=None):
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "settings", MappingProxyType(dict(settings or {})))
+        object.__setattr__(self, "inputs", MappingProxyType(
+            {key: value for key, value in (inputs or {}).items() if value is not None}))
+        object.__setattr__(self, "_seq", next(_SEQUENCE))
+        object.__setattr__(self, "_id", id)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("a node is immutable; build a new one")
+
+    def __repr__(self):
+        return f"<{type(self).__name__} {self.kind}>"
+
+
+class Clock(Node):
+    """A clock wire: goes into time.clock or shuffle.clock."""
+
+
+class Coordinate(Node):
+    """A raw 0-1 coordinate: goes into curve.x."""
+
+
+class Value(Node):
+    """A curve's output: a number, vector or color wire."""
+
+
+class Heads(Node):
+    """A heads wire from mirror, shuffle, group or split."""
+
+
+class _Output(Node):
+    """The output node of a graph."""
+
+
+_CLASSES = {"clock": Clock, "time": Coordinate, "space": Coordinate, "noise": Coordinate,
+            "audio": Coordinate, "curve": Value, "mirror": Heads, "shuffle": Heads,
+            "group": Heads, "split": Heads, "color": _Output, "aim": _Output, "strobe": _Output}
+
+
+def _number(value, where):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ClipError(f"{where}: expected a number; got {value!r}")
+    value = float(value)
+    if not math.isfinite(value):
+        raise ClipError(f"{where}: expected a finite number; got {value!r}")
+    return value
+
+
+def _input(value, where):
+    """A plain value or a wire, as the node stores it."""
+    if value is None or isinstance(value, Node):
+        if isinstance(value, _Output):
+            raise ClipError(f"{where}: an output node cannot feed an input. Example: {where.split('.')[-1]}=curve(time())")
+        return value
+    if isinstance(value, Graph):
+        raise ClipError(f"{where}: a graph is a whole clip, not an input. Example: {where.split('.')[-1]}=curve(time())")
+    if isinstance(value, str):
+        if value.startswith("#"):
+            try:
+                return from_srgb(value)
+            except ValueError as error:
+                raise ClipError(f"{where}: {error}") from None
+        raise ClipError(f"{where}: expected a number, a (u, v, z) tuple, an (r, g, b) triple, "
+                        f"\"#RRGGBB\" or a wire; got {value!r}")
+    if isinstance(value, (list, tuple)):
+        return [_number(item, where) for item in value]
+    return _number(value, where)
+
+
+def _shape(value, where):
+    if value is None or isinstance(value, Node):
+        return value
+    if isinstance(value, str):
+        return {"points": _lookup("curves", value, "curve preset", 'shape="Ramp up"')[1]}
+    value = _plain(value)
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return {"points": value}
+    raise ClipError(f"{where}: expected a curve preset name or points; got {value!r}")
+
+
+def _stop_color(color, where):
+    if isinstance(color, str):
+        return _input(color, where)
+    return [_number(item, where) for item in color]
+
+
+def _gradient(value, where):
+    if value is None or isinstance(value, Node):
+        return value
+    if isinstance(value, str):
+        return {"stops": _lookup("gradients", value, "gradient preset", 'gradient="Rainbow"')[1]}
+    value = _plain(value)
+    if isinstance(value, dict):
+        stops = value.get("stops", [])
+        return dict(value, stops=[dict(stop, color=_stop_color(stop["color"], where))
+                                  if isinstance(stop, dict) and "color" in stop else stop
+                                  for stop in stops])
+    if isinstance(value, list):
+        return {"stops": [{"t": _number(t, where), "color": _stop_color(color, where)}
+                          for t, color in value]}
+    raise ClipError(f"{where}: expected a gradient preset name, (t, color) pairs or stops; got {value!r}")
+
+
+def _make(kind, settings=None, **inputs):
+    return _CLASSES[kind](kind, settings, {key: _input(value, f"{kind}.{key}") for key, value in inputs.items()})
+
+
+# ---------------------------------------------------------------------------
+# builders
+# ---------------------------------------------------------------------------
+
+
+def clock(every, duration=None) -> Clock:
+    """Events every `every` beats, each living `duration` beats (default: every).
+
+    Duration above every makes events overlap on purpose (tails, many pills).
+    """
+    return _make("clock", every=every, duration=duration)
+
+
+def time(clock=None, phase=0) -> Coordinate:
+    """Progress 0-1: once over the clip, or over each event of `clock`.
+
+    `phase` (turns) adds and wraps; a curve over space on phase makes a wave.
+    """
+    return _make("time", clock=clock, phase=None if phase == 0 else phase)
+
+
+def _wrap(wrap, kind):
+    if wrap is None:
+        wrap = kind == "angle"
+    if isinstance(wrap, str):
+        return wrap
+    return "yes" if wrap else "no"
+
+
+def space(heads=None, direction=None, offset=None, width=None, kind="line", wrap=None) -> Coordinate:
+    """Position of each head along an axis, as a stroke from `offset` to `offset + width`.
+
+    kind: "line" (along direction; empty = best fit), "order" (rank),
+    "radial" (distance from the centre), "angle" (turns around the centre).
+    Heads outside the stroke read the curve's low (or black for a color curve).
+    """
+    return _make("space", {"kind": kind, "wrap": _wrap(wrap, kind)},
+                 heads=heads, direction=direction, offset=offset, width=width)
+
+
+def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
+    """Coherent value noise 0-1. No scale = one value for all heads; 0.02 = each head its own."""
+    return _make("noise", heads=heads, speed=speed, scale=scale, contrast=contrast)
+
+
+def audio(low_hz=None, high_hz=None) -> Coordinate:
+    """Energy of a band of the full mix, 0-1 over the clip. `audio("Kick")` takes a band preset."""
+    if isinstance(low_hz, str) and high_hz is None:
+        low_hz, high_hz = _lookup("bands", low_hz, "band preset", 'audio("Kick")')[1]
+    return _make("audio", low_hz=low_hz, high_hz=high_hz)
+
+
+def curve(x, shape=None, low=None, high=None, gradient=None) -> Value:
+    """Turn a coordinate into a value: low + shape(x) * (high - low), or gradient(shape(x)).
+
+    The kind follows the arguments: a gradient makes a color curve, tuple
+    low/high a vector curve, anything else a number curve.
+    """
+    def vector(value):
+        return (isinstance(value, (list, tuple))
+                or (isinstance(value, Value) and value.settings.get("kind") == "vector"))
+    kind = "color" if gradient is not None else "vector" if vector(low) or vector(high) else "number"
+    return Value("curve", {"kind": kind}, {
+        "x": _input(x, "curve.x"), "shape": _shape(shape, "curve.shape"),
+        "low": _input(low, "curve.low"), "high": _input(high, "curve.high"),
+        "gradient": _gradient(gradient, "curve.gradient")})
+
+
+def mirror(heads=None, normal=None, offset=None) -> Heads:
+    """Fold heads across a plane (empty normal = best fit). Aim yaw and pitch mirror too."""
+    return _make("mirror", heads=heads, normal=normal, offset=offset)
+
+
+def shuffle(heads=None, clock=None) -> Heads:
+    """A random order of the heads; a new order per event of `clock`. Read it with space(kind="order")."""
+    return _make("shuffle", heads=heads, clock=clock)
+
+
+def group(heads=None, size=None) -> Heads:
+    """Merge heads into units of `size` heads within a fixture (empty = one fixture)."""
+    return _make("group", heads=heads, size=size)
+
+
+def split(heads=None, by="fixture") -> Heads:
+    """Make each fixture (by="fixture") or venue group (by="group") its own span."""
+    return _make("split", {"by": by}, heads=heads)
+
+
+def color(color=None, brightness=None, alpha=None) -> "Graph":
+    """Color output: light = color * brightness * alpha. Empty color is white."""
+    return Graph(_make("color", color=color, brightness=brightness, alpha=alpha))
+
+
+def aim(heads=None, base="direction", direction=None, point=None, yaw=None, pitch=None, alpha=None) -> "Graph":
+    """Aim output. base: "direction" (along the vector), "point" (at the point),
+    "away" (from the point through each head). Then yaw turns right and pitch
+    up, in degrees. Heads from a mirror take the mirror image of yaw and pitch.
+    """
+    return Graph(_make("aim", {"base": base}, heads=heads, direction=direction, point=point,
+                       yaw=yaw, pitch=pitch, alpha=alpha))
+
+
+def strobe(rate=None, alpha=None) -> "Graph":
+    """Strobe output: shutter = rate * alpha."""
+    return Graph(_make("strobe", rate=rate, alpha=alpha))
+
+
+def preset(name) -> "Graph":
+    """A copy of a shipped clip preset, with its name. luma.presets.clips lists them."""
+    name, graph = _lookup("clips", name, "clip preset", 'preset("Chase")')
+    return Graph.from_json(graph, name=name)
+
+
+# ---------------------------------------------------------------------------
+# graph
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NodeRecord:
+    """A stored node: kind, settings, inputs (a wire is {"node": id})."""
+    kind: str
+    settings: MappingProxyType
+    inputs: MappingProxyType
+
+
+def _reachable(output):
+    seen, order, stack = set(), [], [output]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        order.append(node)
+        stack.extend(value for value in node.inputs.values() if isinstance(value, Node))
+    return order
+
+
+def _assign_ids(nodes):
+    ids, used = {}, set()
+    for node in sorted(nodes, key=lambda node: node._seq):
+        if node._id is not None and node._id not in used:
+            ids[id(node)] = node._id
+            used.add(node._id)
+    for node in sorted(nodes, key=lambda node: node._seq):
+        if id(node) in ids:
+            continue
+        number = 1
+        while f"{node.kind}{number}" in used:
+            number += 1
+        ids[id(node)] = f"{node.kind}{number}"
+        used.add(ids[id(node)])
+    return ids
+
+
+def _stored(value, ids):
+    if isinstance(value, Node):
+        return {"node": ids[id(value)]}
+    return copy.deepcopy(value)
+
+
+class Graph:
+    """One clip's graph: nodes wired into exactly one output node.
+
+    graph.nodes    id -> NodeRecord(kind, settings, inputs)
+    graph.output   the output NodeRecord (color, aim or strobe)
+    graph.name     the preset name, when it came from a preset
+    graph.json()   the stored JSON
+    graph.source() Python that rebuilds this graph
+    """
+
+    __slots__ = ("_output", "_nodes", "_ids", "name")
+
+    def __init__(self, output, name=None):
+        object.__setattr__(self, "_output", output)
+        nodes = _reachable(output) if output is not None else []
+        object.__setattr__(self, "_nodes", nodes)
+        object.__setattr__(self, "_ids", _assign_ids(nodes))
+        object.__setattr__(self, "name", name)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("a graph is immutable; build a new one")
+
+    def json(self):
+        nodes = {}
+        for node in sorted(self._nodes, key=lambda node: node._seq):
+            record = {"kind": node.kind}
+            if node.settings:
+                record["settings"] = dict(node.settings)
+            record["inputs"] = {key: _stored(value, self._ids) for key, value in node.inputs.items()}
+            nodes[self._ids[id(node)]] = record
+        return {"version": 1, "nodes": nodes}
+
+    @property
+    def nodes(self):
+        return MappingProxyType({key: NodeRecord(value["kind"], MappingProxyType(value.get("settings", {})),
+                                                 MappingProxyType(value["inputs"]))
+                                 for key, value in self.json()["nodes"].items()})
+
+    @property
+    def output(self):
+        if self._output is None:
+            return None
+        return self.nodes[self._ids[id(self._output)]]
+
+    def node(self, node_id):
+        """The builder node behind an id, to wire into a new graph."""
+        for node in self._nodes:
+            if self._ids[id(node)] == node_id:
+                return node
+        raise KeyError(node_id)
+
+    def source(self):
+        """Python that rebuilds this graph; the last line is the output call."""
+        lines = []
+        for node in sorted(self._nodes, key=lambda node: node._seq):
+            call = f"{node.kind}({', '.join(_arguments(node, self._ids))})"
+            lines.append(call if node is self._output else f"{self._ids[id(node)]} = {call}")
+        return "\n".join(lines)
+
+    @classmethod
+    def from_json(cls, data, name=None):
+        """Rebuild a graph from its stored JSON. Unknown kinds pass through for the checker."""
+        data = _plain(data) or {}
+        if not isinstance(data, dict):
+            raise ClipError(f"graph: expected a graph object with nodes; got {data!r}")
+        stored = data.get("nodes") or {}
+        if not stored:
+            return cls(None, name=name)
+
+        def depends(record):
+            return [value["node"] for value in (record.get("inputs") or {}).values()
+                    if isinstance(value, dict) and set(value) == {"node"}]
+
+        def key(node_id):
+            match = _ID.fullmatch(node_id)
+            return (int(match.group(2)), match.group(1)) if match else (0, node_id)
+
+        waiting = {node_id: set(depends(record)) & set(stored) for node_id, record in stored.items()}
+        ready = [(key(node_id), node_id) for node_id, deps in waiting.items() if not deps]
+        heapq.heapify(ready)
+        built = {}
+        while ready:
+            _, node_id = heapq.heappop(ready)
+            record = stored[node_id]
+            inputs = {}
+            for input_name, value in (record.get("inputs") or {}).items():
+                if isinstance(value, dict) and set(value) == {"node"}:
+                    if value["node"] not in built:
+                        raise ClipError(f"{node_id}.{input_name}: wire to unknown node {value['node']!r}")
+                    value = built[value["node"]]
+                inputs[input_name] = value
+            kind = record.get("kind")
+            built[node_id] = _CLASSES.get(kind, Node)(kind, record.get("settings"), inputs, id=node_id)
+            for other, deps in waiting.items():
+                if node_id in deps:
+                    deps.discard(node_id)
+                    if not deps and other not in built:
+                        heapq.heappush(ready, (key(other), other))
+        if len(built) != len(stored):
+            raise ClipError("graph: expected no cycle; got a loop of wires. Example: rebuild it with the builders")
+        outputs = [node for node in built.values() if isinstance(node, _Output)]
+        if len(outputs) != 1:
+            names = ", ".join(sorted(node._id for node in outputs)) or "none"
+            raise ClipError(f"graph: expected one output node; got {names}. Example: one clip per output")
+        graph = cls(outputs[0], name=name)
+        missing = set(stored) - {graph._ids[id(node)] for node in graph._nodes}
+        if missing:
+            raise ClipError(f"graph: expected every node to reach the output; {', '.join(sorted(missing))} does not")
+        return graph
+
+    def __eq__(self, other):
+        return isinstance(other, Graph) and self.json() == other.json()
+
+    def __hash__(self):
+        return hash(repr(self.json()))
+
+    def __repr__(self):
+        if self._output is None:
+            return "<Graph empty>"
+        title = f"Graph {self.name!r}" if self.name else "Graph"
+        return f"<{title}\n{self.source()}\n>"
+
+
+# ---------------------------------------------------------------------------
+# source text
+# ---------------------------------------------------------------------------
+
+
+def _literal(value):
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() and abs(value) < 1e15 else repr(value)
+    if isinstance(value, (list, tuple)):
+        items = ", ".join(_literal(item) for item in value)
+        return f"({items},)" if len(value) == 1 else f"({items})"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{key!r}: {_json_literal(item)}" for key, item in value.items()) + "}"
+    return repr(value)
+
+
+def _json_literal(value):
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{key!r}: {_json_literal(item)}" for key, item in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_json_literal(item) for item in value) + "]"
+    if isinstance(value, float):
+        return _literal(value)
+    return repr(value)
+
+
+def _preset_name(table, value):
+    for name, entry in _PRESETS[table].items():
+        if _plain(entry) == value:
+            return name
+    return None
+
+
+def _shape_literal(value):
+    points = value.get("points") if isinstance(value, dict) and set(value) == {"points"} else None
+    if points is not None:
+        name = _preset_name("curves", points)
+        return repr(name) if name else _json_literal(points)
+    return _json_literal(value)
+
+
+def _gradient_literal(value):
+    stops = value.get("stops") if isinstance(value, dict) and set(value) == {"stops"} else None
+    if stops is not None:
+        name = _preset_name("gradients", stops)
+        if name:
+            return repr(name)
+        if all(isinstance(stop, dict) and set(stop) == {"t", "color"} for stop in stops):
+            return "[" + ", ".join(f"({_literal(float(stop['t']))}, {_literal(stop['color'])})"
+                                   for stop in stops) + "]"
+    return _json_literal(value)
+
+
+_DEFAULT_SETTINGS = {"space": {"kind": "line"}, "aim": {"base": "direction"}, "split": {"by": "fixture"}}
+
+
+def _arguments(node, ids):
+    args = []
+    order = list(_INPUTS.get(node.kind, ())) + sorted(set(node.inputs) - set(_INPUTS.get(node.kind, ())))
+    for name in order:
+        if name not in node.inputs:
+            continue
+        value = node.inputs[name]
+        if isinstance(value, Node):
+            text = ids[id(value)]
+        elif name == "shape":
+            text = _shape_literal(value)
+        elif name == "gradient":
+            text = _gradient_literal(value)
+        else:
+            text = _literal(value)
+        args.append(f"{name}={text}")
+    settings = dict(node.settings)
+    if node.kind == "curve":
+        settings.pop("kind", None)
+    for name, value in settings.items():
+        if node.kind == "space" and name == "wrap":
+            if value != _wrap(None, settings.get("kind", "line")):
+                args.append(f"wrap={value == 'yes'}" if value in ("yes", "no") else f"wrap={value!r}")
+            continue
+        if _DEFAULT_SETTINGS.get(node.kind, {}).get(name) == value:
+            continue
+        args.append(f"{name}={value!r}")
+    return args

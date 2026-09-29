@@ -117,13 +117,41 @@ class CheckResult:
         return "\n".join(lines)
 
 
+# The 12 lighting channels, in the host's order, with the labels they may carry.
+_CHANNELS = {
+    "r": (0, ("r", "red")), "g": (1, ("g", "green")), "b": (2, ("b", "blue")),
+    "dimmer": (3, ("dimmer",)), "strobe": (6, ("strobe",)),
+    "aim_u": (8, ("aim_u", "u")), "aim_v": (9, ("aim_v", "v")), "aim_z": (10, ("aim_z", "z")),
+    "weight": (11, ("weight", "aim_weight")),
+}
+
+
+@dataclass(frozen=True)
+class AimOutput:
+    """Composited aim: `values` [light, time, 3] unit vectors in UVZ, `weight` [light, time]."""
+    values: Any
+    weight: Any
+
+
+@dataclass(frozen=True)
+class StrobeOutput:
+    """Composited strobe: `values` [light, time], shutter 0..1."""
+    values: Any
+
+
 class TrackOutput:
-    """The real composited RGB output of one candidate window, loaded lazily."""
+    """The real composited output of one candidate window, loaded lazily.
+
+    `values` is light color [light, time, rgb]: linear Rec. 2020 times the
+    dimmer. `aim` and `strobe` hold the other channels.
+    """
 
     def __init__(self, window) -> None:
         self._window = window
         self._tensor: Any = None
         self._values: Any = None
+        self._channels: Any = None
+        self._channel_labels: list[str] | None = None
         self._light_ids: list[str] | None = None
         self._times_s: Any = None
 
@@ -136,6 +164,31 @@ class TrackOutput:
     def values(self) -> Any:
         self._load()
         return self._values
+
+    @property
+    def aim(self) -> AimOutput:
+        """Aim per light and time: unit vectors in UVZ plus the aim weight."""
+        import numpy as np
+
+        self._load()
+        vector = np.stack([self._channel("aim_u"), self._channel("aim_v"), self._channel("aim_z")], axis=-1)
+        return AimOutput(_readonly(vector), _readonly(self._channel("weight")))
+
+    @property
+    def strobe(self) -> StrobeOutput:
+        """Strobe shutter per light and time, 0..1."""
+        self._load()
+        return StrobeOutput(_readonly(self._channel("strobe")))
+
+    def _channel(self, name: str) -> Any:
+        index, labels = _CHANNELS[name]
+        known = self._channel_labels or []
+        for label in labels:
+            if label in known:
+                return self._channels[:, :, known.index(label)]
+        if self._channels.ndim != 3 or self._channels.shape[2] <= index or (known and len(known) <= 3):
+            raise TrackError(f"the host rendered no {name} channel; this render has RGB only")
+        return self._channels[:, :, index]
 
     @property
     def light_ids(self) -> list[str] | None:
@@ -238,9 +291,18 @@ class TrackOutput:
 
         self._tensor = value
         raw_values = getattr(value, "values", value)
-        values = np.asarray(raw_values)
-        values.flags.writeable = False
-        self._values = values
+        channels = np.asarray(raw_values)
+        self._channels = channels
+        self._channel_labels = _axis_labels(value, "channel")
+        if isinstance(response, Mapping) and self._channel_labels is None:
+            self._channel_labels = _string_list(_field(response, "channels", default=None))
+        if channels.ndim == 3 and channels.shape[2] > 3:
+            # The full lighting tensor: color is normalized RGB times the dimmer.
+            rgb = np.stack([self._channel(name) for name in ("r", "g", "b")], axis=-1)
+            values = rgb * self._channel("dimmer")[..., None]
+        else:
+            values = channels
+        self._values = _readonly(values)
 
         if self._light_ids is None:
             self._light_ids = _axis_labels(value, "light") or _axis_labels(
@@ -253,6 +315,14 @@ class TrackOutput:
         if self._values is None:
             return "<TrackOutput lazy>"
         return f"<TrackOutput shape={tuple(self._values.shape)}>"
+
+
+def _readonly(values: Any) -> Any:
+    import numpy as np
+
+    values = np.array(values)
+    values.flags.writeable = False
+    return values
 
 
 def _check_result(response: Any) -> CheckResult:

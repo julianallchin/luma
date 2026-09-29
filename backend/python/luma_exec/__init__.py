@@ -6,7 +6,8 @@ Modules:
     display   Bounded, notebook-style repr of a cell's last expression.
     music     The track as heard: felt tempo, listening views, onsets and MERT.
     figures   Matplotlib figure capture into the workspace output area.
-    score     Staged, host-validated editing of the track's score of form clips.
+    clip      Clip graph builders (bare names in every cell) and the shipped presets.
+    score     Staged, host-checked editing of the track's score of clips.
     track     Errors, snapshots and window output shared by `score`.
 
 The worker and binding data plane remain domain-neutral. `score` is a small
@@ -14,4 +15,4 @@ Python domain facade over plain binding values and an injected host capability;
 it knows nothing about SQLite or process transport.
 """
 
-__all__ = ["bindings", "display", "figures", "music", "score", "track", "worker"]
+__all__ = ["bindings", "clip", "display", "figures", "music", "score", "track", "worker"]
