@@ -20,6 +20,7 @@ mod summary;
 pub use check::{blend_modes, check, check_clip};
 pub use kernels::Kernel;
 pub(crate) use lower::lower;
+pub use noise::sample_noise;
 
 /// The output of a prepared clip graph that carries its lighting.
 pub const OUTPUT: &str = "lighting";
@@ -382,6 +383,53 @@ impl ClipGraph {
             .map(|n| format!("{}{n}", kind.name()))
             .find(|id| !self.nodes.contains_key(id))
             .expect("a free id")
+    }
+
+    /// Where each head of `frame.cells` falls on coordinate node `id` at
+    /// `frame.beat`, as playback computes it: the node's value, or `None`
+    /// where a `space` node's stroke leaves the head outside. With several
+    /// live events a head reads the first one it is inside. An editor reads
+    /// this to mark the heads along a curve's x.
+    pub fn coordinate_at_heads(
+        &self,
+        id: &str,
+        frame: crate::Frame<'_>,
+    ) -> Result<Vec<Option<f64>>> {
+        frame.validate()?;
+        self.check()?;
+        let root = lower::lower_coordinate(self, id, frame)?;
+        let prepared = crate::PreparedGraph::lowered(&crate::standard_library(), &root, frame)?;
+        let out = prepared.evaluate_batch(&[frame.beat])?;
+        fn signal(value: &crate::EvaluatedValue) -> Result<&crate::Signal> {
+            value
+                .signal()
+                .ok_or_else(|| Error("a coordinate gives a value per head".into()))
+        }
+        let x = signal(&out[lower::COORDINATE])?;
+        let inside = out.get(lower::INSIDE).map(signal).transpose()?;
+        // A per-head signal lists its heads; a broadcast one has one row.
+        let row = |signal: &crate::Signal, id: &str| {
+            signal
+                .fixtures()
+                .map_or(Some(0), |ids| ids.iter().position(|f| f == id))
+        };
+        let events = x.values().dim().2;
+        Ok(frame
+            .cells
+            .iter()
+            .map(|cell| {
+                let n = row(x, &cell.id)?;
+                (0..events).find_map(|e| {
+                    let within = inside.is_none_or(|inside| {
+                        row(inside, &cell.id).is_some_and(|m| {
+                            let width = inside.values().dim().2;
+                            inside.values()[[m, 0, e.min(width - 1)]] > 0.5
+                        })
+                    });
+                    within.then(|| x.values()[[n, 0, e]])
+                })
+            })
+            .collect())
     }
 
     /// Node ids by their letters, then by their number, so `curve2` comes

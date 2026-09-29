@@ -362,3 +362,67 @@ fn a_wrapped_stroke_wider_than_half_the_axis_is_exact() {
     assert!((light[[0, 0, DIMMER]] - 0.5).abs() < 1e-9);
     assert!(light[[10, 0, DIMMER]] < light[[0, 0, DIMMER]]);
 }
+
+fn frame(cells: &[Cell], beat: f64) -> Frame<'_> {
+    Frame {
+        features: None,
+        cells,
+        beat,
+        clip_start: 0.,
+        clip_duration: 16.,
+        seed: 7,
+    }
+}
+
+#[test]
+fn a_space_node_gives_each_head_its_place_in_the_stroke() {
+    let cells = line();
+    let at = stroke(0., 0.5, "no")
+        .coordinate_at_heads("space1", frame(&cells, 1.))
+        .unwrap();
+    // The low half is inside, in order along the line; the rest is outside.
+    let inside: Vec<f64> = at.iter().flatten().copied().collect();
+    assert_eq!(inside.len(), 6);
+    assert!(at[..6].iter().all(Option::is_some));
+    assert!(at[6..].iter().all(Option::is_none));
+    assert!(inside.windows(2).all(|w| w[0] < w[1]));
+    assert!(inside.iter().all(|x| (0. ..=1.).contains(x)));
+    // Cell order is the caller's, not the id order.
+    let reversed: Vec<Cell> = cells.iter().rev().cloned().collect();
+    let back = stroke(0., 0.5, "no")
+        .coordinate_at_heads("space1", frame(&reversed, 1.))
+        .unwrap();
+    assert_eq!(back.iter().rev().copied().collect::<Vec<_>>(), at);
+}
+
+#[test]
+fn sample_noise_matches_the_noise_playback_reads() {
+    let cells = line();
+    let graph = graph(json!({
+        "noise1": {"kind": "noise", "inputs": {"speed": 4, "scale": 0.3, "contrast": 0.2}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "noise1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    for beat in [0., 2.5, 9.] {
+        let at = graph
+            .coordinate_at_heads("noise1", frame(&cells, beat))
+            .unwrap();
+        for (n, value) in at.iter().enumerate() {
+            // The line spans 11 m along U: head n sits at n / 11.
+            let place = [n as f64 / 11., 0., 0.];
+            let sampled = luma_patterns::clip_graph::sample_noise(
+                "noise1",
+                7,
+                place,
+                beat,
+                4.,
+                Some(0.3),
+                0.2,
+            )
+            .unwrap();
+            assert!(
+                (value.unwrap() - sampled).abs() < 1e-9,
+                "head {n} at beat {beat}"
+            );
+        }
+    }
+}

@@ -2,7 +2,7 @@
 //! the frame loop never walks definitions or repeats geometry solves.
 use crate::{
     runtime::{self, Batch, EvaluatedValue},
-    Binding, Body, Cell, Error, Frame, Graph, Library, Primitive, Result, Value,
+    Binding, Body, Cell, Definition, Error, Frame, Graph, Library, Primitive, Result, Value,
 };
 use std::collections::BTreeMap;
 mod clip_range;
@@ -47,7 +47,11 @@ impl PreparedGraph {
             ));
         }
         graph.check()?;
-        let root = crate::clip_graph::lower(graph, frame)?;
+        Self::lowered(library, &crate::clip_graph::lower(graph, frame)?, frame)
+    }
+
+    /// A lowered definition over the frame's cells, ready to evaluate.
+    pub(crate) fn lowered(library: &Library, root: &Definition, frame: Frame) -> Result<Self> {
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
@@ -66,7 +70,7 @@ impl PreparedGraph {
             requests: Vec::new(),
             baked: Vec::new(),
         };
-        prepared.outputs = prepared.lower_definition(library, "clip", &root, BTreeMap::new())?;
+        prepared.outputs = prepared.lower_definition(library, "clip", root, BTreeMap::new())?;
         // A nested definition may offer several independent outputs. Only the
         // connected ones belong to this program, including during preparation.
         let live = prepared.live_steps(prepared.steps.len(), &[], prepared.outputs.values());
