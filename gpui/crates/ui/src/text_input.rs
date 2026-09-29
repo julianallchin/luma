@@ -1397,9 +1397,12 @@ impl TextInput {
             _ => vec![run_for(display.len(), false)],
         };
 
+        // A one-line field never wraps: a wrapped line would push the start
+        // of the value onto a hidden first line and show only its tail.
+        let wrap = (self.mode != Mode::Search).then_some(width);
         let lines = window
             .text_system()
-            .shape_text(display, font_size, &runs, Some(width), None)
+            .shape_text(display, font_size, &runs, wrap, None)
             .map(|shaped| shaped.into_vec())
             .unwrap_or_default();
 

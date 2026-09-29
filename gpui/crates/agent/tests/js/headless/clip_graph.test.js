@@ -320,6 +320,24 @@ test("a direction is a plain U, V, Z vector, or best fit", () => {
   until("best fit again", () => nodes().space1.inputs?.direction === undefined);
 });
 
+test("a direction shows each component to three decimals", () => {
+  open("Chase");
+  source("Space 1", "Direction", "Best fit", "Value");
+  until("a direction stored", () => Array.isArray(nodes().space1.inputs?.direction));
+  const field = (axis) => nav.inGraph((s) => s.findAll({ role: "input" })
+    .find((n) => n.label.startsWith(`Space 1 direction: ${axis} = `)), `direction ${axis}`);
+  for (const [axis, value, index] of [["u", "0.56583", 0], ["z", "0.67219", 2]]) {
+    app.click(field(axis));
+    app.key("secondary-a backspace");
+    app.type(field(axis), value);
+    app.key("enter");
+    until(`${axis} stored`, () => nodes().space1.inputs.direction[index] === Number(value));
+  }
+  expect(nodes().space1.inputs.direction).toEqual([0.56583, 0, 0.67219]);
+  until("three decimals", () => ["u = 0.566", "v = 0", "z = 0.672"]
+    .every((end) => app.snapshot().find({ role: "input", label: `Space 1 direction: ${end}` })));
+});
+
 test("renaming stores the name and the timeline shows it", () => {
   open("Chase");
   const field = () => node("input", "Name");

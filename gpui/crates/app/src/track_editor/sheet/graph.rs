@@ -60,6 +60,9 @@ use edit::Ty;
 
 /// A vector's three fields share a row: U, V and Z.
 const VECTOR_GAP: f32 = 8.;
+/// A vector component shows at most this many decimals, so it fits its
+/// third of the row.
+const VECTOR_DECIMALS: usize = 3;
 const VECTOR_FIELD_W: f32 = (canvas::NODE_FIELD_W - 2. * VECTOR_GAP) / 3.;
 
 /// The widgets for one graph shape.
@@ -160,6 +163,7 @@ fn number_field(
     value: f64,
     spec: edit::Spec,
     width: f32,
+    decimals: usize,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Entity<DraftedNumber> {
@@ -174,7 +178,8 @@ fn number_field(
             width,
             window,
             cx,
-        );
+        )
+        .with_decimals(decimals, cx);
         match edit::suffix(spec.unit) {
             Some(unit) => field.with_unit(unit),
             None => field,
@@ -209,6 +214,7 @@ fn field(
                 *v,
                 spec,
                 canvas::NODE_FIELD_W,
+                luma_ui::arg::number::DECIMALS,
                 window,
                 cx,
             );
@@ -229,7 +235,15 @@ fn field(
             };
             let entities = [0, 1, 2].map(|axis| {
                 let name = format!("{}: {}", field_name(id, input), ["u", "v", "z"][axis]);
-                let entity = number_field(name, v[axis], spec, VECTOR_FIELD_W, window, cx);
+                let entity = number_field(
+                    name,
+                    v[axis],
+                    spec,
+                    VECTOR_FIELD_W,
+                    VECTOR_DECIMALS,
+                    window,
+                    cx,
+                );
                 let (at, input) = (id.to_owned(), input.to_owned());
                 subs.push(cx.subscribe(
                     &entity,
