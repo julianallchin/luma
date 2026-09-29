@@ -35,10 +35,11 @@
 //! hex of the nearest sRGB color and says so, and a typed hex is an sRGB
 //! color.
 
+use crate::rpx;
 use gpui::prelude::*;
 use gpui::{
-    div, linear_color_stop, linear_gradient, px, App, Context, Div, ElementId, Entity,
-    EventEmitter, Focusable, Hsla, Rgba, SharedString, Subscription, Window,
+    div, linear_color_stop, linear_gradient, App, Context, Div, ElementId, Entity, EventEmitter,
+    Focusable, Hsla, Rgba, SharedString, Subscription, Window,
 };
 
 use crate::drag::DragGhost;
@@ -315,7 +316,7 @@ pub fn luma_hsv_picker(
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(rpx(6.))
         .child(sv_square(&id, hsv, on_change.clone()))
         .child(hue_strip(&id, hsv, on_change))
 }
@@ -342,9 +343,9 @@ fn sv_square(
     div()
         .id(ElementId::Name(format!("{id}:sv").into()))
         .relative()
-        .w(px(PICKER_WIDTH))
-        .h(px(SV_HEIGHT))
-        .rounded(px(crate::radius::CONTROL))
+        .w(rpx(PICKER_WIDTH))
+        .h(rpx(SV_HEIGHT))
+        .rounded(rpx(crate::radius::CONTROL))
         .bg(linear_gradient(
             90.,
             linear_color_stop(gpui::white(), 0.),
@@ -354,7 +355,7 @@ fn sv_square(
             div()
                 .absolute()
                 .inset_0()
-                .rounded(px(crate::radius::CONTROL))
+                .rounded(rpx(crate::radius::CONTROL))
                 .bg(linear_gradient(
                     180.,
                     linear_color_stop(
@@ -375,9 +376,9 @@ fn sv_square(
                 .absolute()
                 .left(gpui::relative(hsv.s))
                 .top(gpui::relative(1. - hsv.v))
-                .ml(px(-4.))
-                .mt(px(-4.))
-                .size(px(8.))
+                .ml(rpx(-4.))
+                .mt(rpx(-4.))
+                .size(rpx(8.))
                 .rounded_full()
                 .border_1()
                 .border_color(gpui::white()),
@@ -425,15 +426,15 @@ fn hue_strip(
         .id(ElementId::Name(format!("{id}:hue").into()))
         .relative()
         .flex()
-        .w(px(PICKER_WIDTH))
-        .h(px(HUE_HEIGHT))
-        .rounded(px(crate::radius::CONTROL))
+        .w(rpx(PICKER_WIDTH))
+        .h(rpx(HUE_HEIGHT))
+        .rounded(rpx(crate::radius::CONTROL))
         // A content mask is a rectangle, so the end segments round themselves.
         .children([0., 60., 120., 180., 240., 300.].map(|from_deg| {
             segment(from_deg)
-                .when(from_deg == 0., |s| s.rounded_l(px(crate::radius::CONTROL)))
+                .when(from_deg == 0., |s| s.rounded_l(rpx(crate::radius::CONTROL)))
                 .when(from_deg == 300., |s| {
-                    s.rounded_r(px(crate::radius::CONTROL))
+                    s.rounded_r(rpx(crate::radius::CONTROL))
                 })
         }))
         .child(
@@ -441,8 +442,8 @@ fn hue_strip(
                 .absolute()
                 .left(gpui::relative(hsv.h.rem_euclid(360.) / 360.))
                 .top_0()
-                .ml(px(-1.))
-                .w(px(2.))
+                .ml(rpx(-1.))
+                .w(rpx(2.))
                 .h_full()
                 .rounded_full()
                 .bg(gpui::white()),
@@ -691,8 +692,8 @@ impl ColorArgEditor {
         let inherit = self.value.mode == ColorMode::Inherit;
         let base = div()
             .flex_shrink_0()
-            .size(px(CONTROL_HEIGHT))
-            .rounded(px(crate::radius::CHIP))
+            .size(rpx(CONTROL_HEIGHT))
+            .rounded(rpx(crate::radius::CHIP))
             .border_1()
             .border_color(crate::glass::hairline(0.12));
         if inherit {
@@ -738,18 +739,18 @@ impl ColorArgEditor {
                 .flex()
                 .items_center()
                 .justify_between()
-                .w(px(PICKER_WIDTH))
+                .w(rpx(PICKER_WIDTH))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(4.))
+                        .gap(rpx(4.))
                         .child(fields.hex.clone())
                         // The hex is the nearest sRGB color, not this one.
                         .when(!in_srgb(self.value.rgb), |hex| {
                             hex.child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(rpx(11.))
                                     .text_color(ladder::foreground_alpha(0.5))
                                     .child("Outside sRGB")
                                     .agent_node(Role::Text, format!("{} outside srgb", self.id)),
@@ -761,10 +762,10 @@ impl ColorArgEditor {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.))
+                            .gap(rpx(4.))
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(rpx(11.))
                                     .text_color(ladder::foreground_alpha(0.5))
                                     .child("Opacity"),
                             )
@@ -773,8 +774,8 @@ impl ColorArgEditor {
                 })
         });
         let plate = crate::float::popover_card()
-            .gap(px(6.))
-            .p(px(8.))
+            .gap(rpx(6.))
+            .p(rpx(8.))
             .child(picker)
             .children(fields);
         if let ColorMode::Mix(amount) = mode {
@@ -841,7 +842,7 @@ impl Render for ColorArgEditor {
             .relative()
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(rpx(4.))
             .when(!self.rgb_only, |el| el.child(select))
             .child(self.swatch(cx))
             .children(plate)

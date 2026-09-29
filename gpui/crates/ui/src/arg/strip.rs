@@ -16,6 +16,7 @@
 //! stronger, and the playhead, and follows the playhead itself while the
 //! transport runs. Across space, the host gives each head's place on the
 //! axis and the strip draws one tick per head in the color it gets.
+use crate::rpx;
 use std::rc::Rc;
 
 use super::color::{ColorArg, ColorArgEditor, ColorArgEvent, ColorOpacity};
@@ -29,7 +30,7 @@ use crate::{
 };
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, fill, point, px, size, App, Background, Bounds, Context, Entity, EventEmitter,
+    canvas, div, fill, point, size, App, Background, Bounds, Context, Entity, EventEmitter,
     MouseButton, PathBuilder, Pixels, Point, SharedString, Subscription, Window,
 };
 use luma_patterns::{Ease, Envelope};
@@ -653,7 +654,7 @@ impl Render for CurveStrip {
         let area = div()
             .relative()
             .w_full()
-            .h(px(if color { COLOR_H } else { NUMBER_H }))
+            .h(rpx(if color { COLOR_H } else { NUMBER_H }))
             .flex_none()
             .when(color, |area| {
                 area.child(
@@ -661,7 +662,7 @@ impl Render for CurveStrip {
                         .absolute()
                         .size_full()
                         .flex()
-                        .rounded(px(crate::radius::CAP))
+                        .rounded(rpx(crate::radius::CAP))
                         .border_1()
                         .border_color(crate::glass::hairline(0.10))
                         .bg(gpui::black())
@@ -698,13 +699,20 @@ impl Render for CurveStrip {
                             paint_grid(window, bounds, beats, color);
                         }
                         if let StripValue::Number(curve) = &painted {
-                            paint_envelope(window, bounds, curve, px(1.5), ladder::foreground());
+                            paint_envelope(
+                                window,
+                                bounds,
+                                curve,
+                                gpui::px(1.5 * crate::rem_scale(window)),
+                                ladder::foreground(),
+                            );
                             if let Some(segment) =
                                 segment.filter(|segment| curved(curve.ease(*segment)))
                             {
                                 let at = |p| at(bounds, p);
                                 let c = curve.controls(segment);
-                                let mut lines = PathBuilder::stroke(px(1.));
+                                let mut lines =
+                                    PathBuilder::stroke(gpui::px(crate::rem_scale(window)));
                                 lines.move_to(at(c[0]));
                                 lines.line_to(at(c[1]));
                                 lines.move_to(at(c[3]));
@@ -727,10 +735,10 @@ impl Render for CurveStrip {
                         .absolute()
                         .left(gpui::relative(p[0] as f32))
                         .top(gpui::relative(0.5))
-                        .ml(px(-STOP / 2.))
-                        .mt(px(-STOP / 2.))
-                        .size(px(STOP))
-                        .rounded(px(3.))
+                        .ml(rpx(-STOP / 2.))
+                        .mt(rpx(-STOP / 2.))
+                        .size(rpx(STOP))
+                        .rounded(rpx(3.))
                         .bg(Light { a: 1., ..c }.display())
                         .border_color(if chosen {
                             ladder::foreground()
@@ -745,9 +753,9 @@ impl Render for CurveStrip {
                         .absolute()
                         .left(gpui::relative(p[0] as f32))
                         .top(gpui::relative((1. - p[1]) as f32))
-                        .ml(px(-4.))
-                        .mt(px(-4.))
-                        .size(px(8.))
+                        .ml(rpx(-4.))
+                        .mt(rpx(-4.))
+                        .size(rpx(8.))
                         .rounded_full()
                         .border_1()
                         .border_color(if chosen {
@@ -775,9 +783,9 @@ impl Render for CurveStrip {
                     .absolute()
                     .left(gpui::relative(p[0] as f32))
                     .top(gpui::relative((1. - p[1]) as f32))
-                    .ml(px(-4.))
-                    .mt(px(-4.))
-                    .size(px(8.))
+                    .ml(rpx(-4.))
+                    .mt(rpx(-4.))
+                    .size(rpx(8.))
                     .rounded_full()
                     .border_1()
                     .border_color(crate::glass::hairline(0.24))
@@ -808,8 +816,8 @@ impl Render for CurveStrip {
                     .top_0()
                     .bottom_0()
                     .left(gpui::relative(phase as f32))
-                    .ml(px(-0.75))
-                    .w(px(1.5))
+                    .ml(rpx(-0.75))
+                    .w(rpx(1.5))
                     .bg(ladder::accent())
                     .agent_node(Role::Text, format!("{id} playhead"))
             }))
@@ -855,16 +863,16 @@ impl Render for CurveStrip {
             div()
                 .relative()
                 .w_full()
-                .h(px(TICK_H))
+                .h(rpx(TICK_H))
                 .children(heads.iter().enumerate().map(|(i, &x)| {
                     let c = value.head_color(x);
                     div()
                         .absolute()
                         .left(gpui::relative(x.clamp(0., 1.) as f32))
-                        .ml(px(-2.))
-                        .w(px(4.))
+                        .ml(rpx(-2.))
+                        .w(rpx(4.))
                         .h_full()
-                        .rounded(px(1.))
+                        .rounded(rpx(1.))
                         .border_1()
                         .border_color(crate::glass::hairline(0.24))
                         .bg(c.display())
@@ -875,9 +883,9 @@ impl Render for CurveStrip {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(4.))
-            .p(px(INSET))
-            .rounded(px(crate::radius::ROW))
+            .gap(rpx(4.))
+            .p(rpx(INSET))
+            .rounded(rpx(crate::radius::ROW))
             .border_1()
             .border_color(crate::glass::hairline(0.08))
             .bg(crate::glass::ink(0.03))
@@ -887,13 +895,13 @@ impl Render for CurveStrip {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(6.))
+            .gap(rpx(6.))
             .children(chip)
             .child(strip)
             .child(self.point_row(cx))
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(ladder::foreground_alpha(0.4))
                     .child(if self.value.len() == 0 {
                         "No colors · double-click adds one"
@@ -903,7 +911,7 @@ impl Render for CurveStrip {
             )
             .children(self.error.as_ref().map(|error| {
                 div()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(ladder::foreground_alpha(0.6))
                     .child(error.clone())
             }))
@@ -920,7 +928,7 @@ impl CurveStrip {
             .flex_row()
             .flex_wrap()
             .items_center()
-            .gap(px(8.));
+            .gap(rpx(8.));
         let Some(fields) = self.fields.as_ref().filter(|_| self.value.len() > 0) else {
             return row;
         };
@@ -973,10 +981,10 @@ fn labelled(name: &'static str, field: impl IntoElement) -> gpui::Div {
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(6.))
+        .gap(rpx(6.))
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(rpx(11.))
                 .text_color(ladder::foreground_alpha(0.5))
                 .child(name),
         )
@@ -1011,8 +1019,8 @@ pub(crate) fn paint_grid(
         let bar = beat % 4 == 0;
         let x = bounds.origin.x + bounds.size.width * (beat as f64 / beats) as f32;
         let line = Bounds {
-            origin: point(x - px(0.5), bounds.origin.y),
-            size: size(px(1.), bounds.size.height),
+            origin: point(x - gpui::px(0.5), bounds.origin.y),
+            size: size(gpui::px(1.), bounds.size.height),
         };
         window.paint_quad(fill(line, ladder::foreground_alpha(alpha(bar))));
         beat += step;

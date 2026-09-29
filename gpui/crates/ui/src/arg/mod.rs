@@ -35,12 +35,13 @@ pub mod select;
 pub mod signal;
 pub mod strip;
 
+use crate::rpx;
 use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, point, px, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
+    canvas, div, point, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
 };
 
 /// Where a stateless control's box landed, readable by its own mouse
@@ -134,7 +135,7 @@ pub fn arg_row(label: &str, control: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .items_start()
-        .gap(px(LABEL_GAP))
+        .gap(rpx(LABEL_GAP))
         .w_full()
         .child(crate::caption(label.to_string()))
         .child(control)

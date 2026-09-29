@@ -7,6 +7,7 @@
 //! store inside the design system.
 
 use crate::icons::IconName;
+use crate::rpx;
 use gpui::*;
 use gpui_component::Icon;
 
@@ -15,7 +16,7 @@ use crate::float::RowState;
 /// The 12px chevron a trigger ends with.
 pub(crate) fn chevron(color: Hsla) -> Icon {
     Icon::new(IconName::ChevronDown)
-        .size(px(12.))
+        .size(rpx(12.))
         .text_color(color)
 }
 
@@ -42,7 +43,7 @@ pub(crate) fn ghost_stack(
             .flex()
             .items_center()
             .justify_between()
-            .gap(px(8.))
+            .gap(rpx(8.))
             .child(text)
             .child(chevron(chevron_color))
     };
@@ -50,7 +51,7 @@ pub(crate) fn ghost_stack(
         .child(
             div()
                 .invisible()
-                .mx(px(pad))
+                .mx(rpx(pad))
                 .flex()
                 .flex_col()
                 .children(rows.into_iter().map(row)),
@@ -59,7 +60,7 @@ pub(crate) fn ghost_stack(
             div()
                 .absolute()
                 .inset_0()
-                .px(px(pad))
+                .px(rpx(pad))
                 .flex()
                 .items_center()
                 .child(row(visible).flex_1()),
