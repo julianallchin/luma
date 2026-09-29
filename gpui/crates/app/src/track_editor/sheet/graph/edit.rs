@@ -280,10 +280,19 @@ pub(crate) fn prune(graph: &mut ClipGraph) {
     graph.nodes.retain(|id, _| keep.contains(id));
 }
 
-/// A signature of the graph's shape: kinds, ids, settings, wires, and which
-/// inputs hold a value. Two graphs with one signature take one set of
-/// controls, and an edit applies to both.
+/// A signature of the graph's shape: kinds, ids, settings and wires. Clips
+/// of one shape are edited together.
 pub(crate) fn shape(graph: &ClipGraph) -> String {
+    signature(graph, false)
+}
+
+/// The shape and which inputs hold a value: what the widgets are built for.
+/// An input that gains or loses its value is a new widget.
+pub(crate) fn layout(graph: &ClipGraph) -> String {
+    signature(graph, true)
+}
+
+fn signature(graph: &ClipGraph, values: bool) -> String {
     let mut out = String::new();
     for (id, node) in &graph.nodes {
         out.push_str(&format!("{id}:{}", node.kind.name()));
@@ -293,7 +302,8 @@ pub(crate) fn shape(graph: &ClipGraph) -> String {
         for (name, input) in &node.inputs {
             match input {
                 Input::Wire(to) => out.push_str(&format!(" {name}<{to}")),
-                _ => out.push_str(&format!(" {name}")),
+                _ if values => out.push_str(&format!(" {name}")),
+                _ => {}
             }
         }
         out.push(';');

@@ -1,21 +1,21 @@
-// The inputs sheet, driven end to end.
+// The clip sheet, driven end to end.
 //
 // 1. Selecting a clip brings the sheet in; with nothing selected the
 //    inspector shows the preset browser. The sheet reads the clip's blend
-//    mode and inputs, and not its span: bounds are edited on the timeline.
-// 2. Every input is reachable: every row the form declares is inside the
+//    mode and graph, and not its span: bounds are edited on the timeline.
+// 2. Every input is reachable: every row of the output card is inside the
 //    sheet's own box.
 // 3. A scalar input edit is a document write: it survives leaving the screen
 //    and coming back, which a repaint would not.
-// 4. A same-form multi-selection batch-applies: the edit lands on the clip
-//    that was not under the field.
+// 4. A multi-selection of one graph shape batch-applies: the edit lands on
+//    the clip that was not under the field.
 // 5. Retarget, not reopen: clicking a second clip while the sheet is up
 //    leaves the sheet's box where it was and swaps its contents, and the
 //    timeline stays live underneath.
-// 6. A mixed selection offers no inputs, and clearing the selection brings
-//    the preset browser back. The timeline keeps its space throughout.
+// 6. A mixed selection offers only the name, and clearing the selection
+//    brings the preset browser back. The timeline keeps its space throughout.
 
-// Two Color clips and one Sparkle. The Sparkle sits early on its own
+// Two Wash clips and one Random heads. The Random heads sits early on its own
 // lane: the sheet overlays the right of the canvas, and a clip the test has
 // to click cannot live under it.
 fixture({
@@ -23,11 +23,12 @@ fixture({
   clips: [
     { pattern: "pat-glow", name: "Glow", start: 2, end: 5 },
     { pattern: "pat-glow-2", name: "Glow", start: 8, end: 11 },
-    { pattern: "pat-chase", name: "Chase", start: 4, end: 7, lane: 1, preset: ["color.sparkle@1", "Random heads"] },
+    { pattern: "pat-chase", name: "Chase", start: 4, end: 7, lane: 1, preset: "Random heads" },
   ],
 });
 
-const FORM = "Color";
+const FORM = "Wash";
+const BRIGHTNESS = "Color 1 brightness";
 
 function open() {
   nav.track("Aurora");
@@ -49,7 +50,7 @@ function readSheet() {
   const rows = {};
   for (const node of shot.findAll({ role: "row" })) rows[node.label] = node.bounds;
   return {
-    sheet: shot.find({ role: "card", label: "Clip inputs" })?.bounds ?? null,
+    sheet: shot.find({ role: "card", label: "Clip graph" })?.bounds ?? null,
     waveform: shot.find({ role: "card", label: "Waveform" })?.bounds ?? null,
     inputs,
     rows,
@@ -60,7 +61,7 @@ function readSheet() {
 
 const untilInput = (name) =>
   until(`the sheet to show ${name}`, (s) => s.findAll({ role: "input" }).some((n) => n.label.startsWith(`${name} = `)));
-const untilGone = () => until("the sheet to leave", (s) => s.find({ role: "card", label: "Clip inputs" }) === undefined);
+const untilGone = () => until("the sheet to leave", (s) => s.find({ role: "card", label: "Clip graph" }) === undefined);
 const clip = (label, index) =>
   app.snapshot().findAll({ role: "card", label }).sort((a, b) => a.bounds.x - b.bounds.x)[index];
 const waveform = () => app.snapshot().find({ role: "card", label: "Waveform" });
@@ -87,18 +88,17 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
 
   // 1. Select the first clip and wait for the schema round trip.
   app.click(clip(FORM, 0));
-  untilInput("Brightness");
+  untilInput(BRIGHTNESS);
   app.frames(12, { waitMs: 30 });
   const populated = readSheet();
-  const initial = populated.inputs.Brightness;
+  const initial = populated.inputs[BRIGHTNESS];
   expect(populated.inputs.start).toBe(undefined);
   expect(populated.inputs.end).toBe(undefined);
   expect(populated.inputs.expression).toContain("all");
   expect(populated.selects).toContain("Replace");
-  expect(populated.texts).toContain(FORM);
 
-  // 2. Every row the form declares is inside the sheet.
-  for (const name of ["Blend", "Selection", "Color", "Brightness", "Every"]) {
+  // 2. Every row of the output card is inside the sheet.
+  for (const name of ["Blend", "Selection", "Color", "Brightness", "Alpha"]) {
     const row = populated.rows[name];
     assert(row !== undefined, `no ${name} row`);
     assert(row.x >= populated.sheet.x - 1 && row.x + row.width <= populated.sheet.x + populated.sheet.width + 1,
@@ -107,24 +107,24 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
 
   // 3. The scalar edit shows at once, and survives a teardown and reopen.
   const next = String(Number(initial) === 50 ? 40 : 50);
-  retype("Brightness", next);
+  retype(BRIGHTNESS, next);
   const edited = readSheet();
-  expect(edited.inputs.Brightness).toBe(next);
+  expect(edited.inputs[BRIGHTNESS]).toBe(next);
   nav.closeTab();
   app.frames(6);
   open();
   app.click(clip(FORM, 0));
-  untilInput("Brightness");
+  untilInput(BRIGHTNESS);
   app.frames(12, { waitMs: 30 });
   const reopened = readSheet();
-  expect(reopened.inputs.Brightness).toBe(next);
+  expect(reopened.inputs[BRIGHTNESS]).toBe(next);
 
   // 4. Retarget in place: the same box, a different subject.
   app.click(clip(FORM, 1));
   app.frames(6, { waitMs: 30 });
   const retargeted = readSheet();
   expect(retargeted.sheet).toEqual(reopened.sheet);
-  expect(retargeted.inputs.Brightness).toBe(initial);
+  expect(retargeted.inputs[BRIGHTNESS]).toBe(initial);
 
   // 5. The timeline is live under an open sheet: a press on the waveform
   //    band clears the selection.
@@ -132,25 +132,26 @@ test("the sheet arrives, writes, batches, retargets and leaves", () => {
   untilGone();
   const throughClick = readSheet();
 
-  // 6. Batch: select both clips of the form, edit, then read the other one.
+  // 6. Batch: select both clips of one shape, edit, then read the other one.
   app.click(clip(FORM, 0));
-  untilInput("Brightness");
+  untilInput(BRIGHTNESS);
   app.click(clip(FORM, 1), { modifiers: ["shift"] });
-  until("the batch count", (s) => s.findAll({ role: "text" }).some((n) => n.label === `${FORM} (2)`));
+  until("the batch count", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 clips"));
+  untilInput(BRIGHTNESS);
   const batch = String(Number(next) - 10);
-  retype("Brightness", batch);
+  retype(BRIGHTNESS, batch);
   app.click(waveform());
   untilGone();
   app.click(clip(FORM, 1));
-  untilInput("Brightness");
-  expect(readSheet().inputs.Brightness).toBe(batch);
+  untilInput(BRIGHTNESS);
+  expect(readSheet().inputs[BRIGHTNESS]).toBe(batch);
 
-  // 7. Mixed: one of each form offers no inputs. Escape clears it.
-  app.click(clip("Sparkle", 0), { modifiers: ["shift"] });
-  until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 patterns"));
+  // 7. Mixed: two graph shapes offer only the name. Escape clears it.
+  app.click(clip("Random heads", 0), { modifiers: ["shift"] });
+  until("the mixed readout", (s) => s.findAll({ role: "text" }).some((n) => n.label === "2 clips") && !s.find({ role: "row", label: "Blend" }));
   const mixed = readSheet();
-  expect(mixed.texts).toContain("Mixed patterns");
-  expect(mixed.inputs.Brightness).toBe(undefined);
+  expect(app.snapshot().find({ role: "input", label: "Name" }) !== undefined).toBe(true);
+  expect(mixed.inputs[BRIGHTNESS]).toBe(undefined);
   app.key("escape");
   untilGone();
   const cleared = readSheet();
