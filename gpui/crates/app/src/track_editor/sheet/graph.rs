@@ -58,6 +58,10 @@ pub(in crate::track_editor) mod presets {
 
 use edit::Ty;
 
+/// A vector's three fields share a row: U, V and Z.
+const VECTOR_GAP: f32 = 8.;
+const VECTOR_FIELD_W: f32 = (canvas::NODE_FIELD_W - 2. * VECTOR_GAP) / 3.;
+
 /// The widgets for one graph shape.
 pub(super) struct Controls {
     /// The graph the widgets were last pointed at.
@@ -72,26 +76,11 @@ enum Field {
     Number(Entity<DraftedNumber>),
     /// U, V and Z.
     Vector([Entity<DraftedNumber>; 3]),
-    /// Turn and tilt of a direction.
-    Direction([Entity<DraftedNumber>; 2]),
     Color(Entity<ColorArgEditor>),
     Strip(Entity<CurveStrip>),
 }
 
 // -- values -------------------------------------------------------------------
-
-fn turn_tilt(v: [f64; 3]) -> [f64; 2] {
-    let round = |d: f64| (d * 100.).round() / 100.;
-    [
-        round(v[0].atan2(v[1]).to_degrees()),
-        round(v[2].atan2(v[0].hypot(v[1])).to_degrees()),
-    ]
-}
-
-fn from_turn_tilt([turn, tilt]: [f64; 2]) -> [f64; 3] {
-    let (turn, tilt) = (turn.to_radians(), tilt.to_radians());
-    [tilt.cos() * turn.sin(), tilt.cos() * turn.cos(), tilt.sin()]
-}
 
 fn ui_gradient(gradient: &p::Gradient) -> Gradient {
     Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
@@ -119,18 +108,6 @@ fn pattern_gradient(gradient: &Gradient) -> p::Gradient {
 
 fn color_arg(rgb: [f64; 3]) -> ColorArg {
     ColorArg::decode(rgb.map(|c| c as f32), 1.)
-}
-
-/// Whether a vector input reads as a direction: turn and tilt instead of
-/// U, V and Z. A curve's bound is a direction when it feeds one.
-fn is_direction(graph: &ClipGraph, id: &str, input: &str) -> bool {
-    match input {
-        "direction" => true,
-        "low" | "high" => {
-            edit::destination(graph, id).is_some_and(|(to, name)| is_direction(graph, &to, &name))
-        }
-        _ => false,
-    }
 }
 
 /// A curve's low and high as the strip's scale, with their unit, when both
@@ -182,6 +159,7 @@ fn number_field(
     name: String,
     value: f64,
     spec: edit::Spec,
+    width: f32,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Entity<DraftedNumber> {
@@ -193,7 +171,7 @@ fn number_field(
             value * scale,
             low.min(value * scale),
             high.max(value * scale),
-            canvas::NODE_FIELD_W,
+            width,
             window,
             cx,
         );
@@ -226,7 +204,14 @@ fn field(
     };
     Some(match (spec.ty, value) {
         (Ty::Number, Input::Number(v)) => {
-            let entity = number_field(field_name(id, input), *v, spec, window, cx);
+            let entity = number_field(
+                field_name(id, input),
+                *v,
+                spec,
+                canvas::NODE_FIELD_W,
+                window,
+                cx,
+            );
             let scale = edit::scale(spec.unit);
             subs.push(cx.subscribe(
                 &entity,
@@ -237,37 +222,6 @@ fn field(
             ));
             Field::Number(entity)
         }
-        (Ty::Vector, Input::Vector(v)) if is_direction(graph, id, input) => {
-            let angles = turn_tilt(*v);
-            let spec = edit::Spec {
-                ty: Ty::Number,
-                unit: Some(p::clip_graph::Unit::Degrees),
-                range: [-180., 180.],
-            };
-            let entities = [0, 1].map(|axis| {
-                let name = format!("{}: {}", field_name(id, input), ["turn", "tilt"][axis]);
-                let entity = number_field(name, angles[axis], spec, window, cx);
-                let (at, input) = (id.to_owned(), input.to_owned());
-                subs.push(cx.subscribe(
-                    &entity,
-                    move |this: &mut Luma, _, event: &NumberEvent, cx| {
-                        let NumberEvent::Committed(value) = *event;
-                        let (at, input) = (at.clone(), input.clone());
-                        this.graph_live(cx, move |graph| {
-                            let Some(Input::Vector(v)) = edit::shown(graph, &at, &input) else {
-                                return;
-                            };
-                            let mut angles = turn_tilt(v);
-                            angles[axis] = value;
-                            let turned = Input::Vector(from_turn_tilt(angles));
-                            edit::set_input(graph, &at, &input, Some(turned));
-                        });
-                    },
-                ));
-                entity
-            });
-            Field::Direction(entities)
-        }
         (Ty::Vector, Input::Vector(v)) => {
             let spec = edit::Spec {
                 ty: Ty::Number,
@@ -275,7 +229,7 @@ fn field(
             };
             let entities = [0, 1, 2].map(|axis| {
                 let name = format!("{}: {}", field_name(id, input), ["u", "v", "z"][axis]);
-                let entity = number_field(name, v[axis], spec, window, cx);
+                let entity = number_field(name, v[axis], spec, VECTOR_FIELD_W, window, cx);
                 let (at, input) = (id.to_owned(), input.to_owned());
                 subs.push(cx.subscribe(
                     &entity,
@@ -403,11 +357,6 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
         match (field, now) {
             (Field::Number(entity), Some(Input::Number(v))) => {
                 entity.update(cx, |field, cx| field.set_value(v * scale, cx));
-            }
-            (Field::Direction(entities), Some(Input::Vector(v))) => {
-                for (entity, value) in entities.iter().zip(turn_tilt(v)) {
-                    entity.update(cx, |field, cx| field.set_value(value, cx));
-                }
             }
             (Field::Vector(entities), Some(Input::Vector(v))) => {
                 for (entity, value) in entities.iter().zip(v) {
@@ -948,13 +897,9 @@ fn header_row(label: &str, accessories: Vec<AnyElement>) -> AnyElement {
 fn field_element(field: &Field) -> Div {
     match field {
         Field::Number(entity) => div().child(entity.clone()),
-        Field::Direction(parts) => parts.iter().zip(["Turn", "Tilt"]).fold(
-            div().flex().flex_col().gap(rpx(8.)),
-            |el, (entity, name)| el.child(arg_row(name, entity.clone())),
-        ),
         Field::Vector(parts) => parts.iter().zip(["U", "V", "Z"]).fold(
-            div().flex().flex_col().gap(rpx(8.)),
-            |el, (entity, name)| el.child(arg_row(name, entity.clone())),
+            div().flex().flex_row().gap(rpx(VECTOR_GAP)),
+            |el, (entity, name)| el.child(arg_row(name, entity.clone()).w(rpx(VECTOR_FIELD_W))),
         ),
         Field::Color(entity) => div().child(entity.clone()),
         Field::Strip(entity) => div().child(entity.clone()),

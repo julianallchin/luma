@@ -302,6 +302,24 @@ test("Delete removes the selected node", () => {
   expect(stored().name).toBe("Chase");
 });
 
+test("a direction is a plain U, V, Z vector, or best fit", () => {
+  open("Chase");
+  source("Space 1", "Direction", "Best fit", "Value");
+  until("a direction stored", () => Array.isArray(nodes().space1.inputs?.direction));
+  const field = (axis) => nav.inGraph((s) => s.findAll({ role: "input" })
+    .find((n) => n.label.startsWith(`Space 1 direction: ${axis} = `)), `direction ${axis}`);
+  for (const axis of ["u", "v", "z"]) field(axis);
+  expect(app.snapshot().findAll({ role: "input" }).some((n) => /turn|tilt/.test(n.label))).toBe(false);
+  app.click(field("v"));
+  app.key("secondary-a backspace");
+  app.type(field("v"), "0.5");
+  app.key("enter");
+  until("v stored", () => nodes().space1.inputs.direction[1] === 0.5);
+  expect(nodes().space1.inputs.direction).toEqual([1, 0.5, 0]);
+  source("Space 1", "Direction", "Value", "Best fit");
+  until("best fit again", () => nodes().space1.inputs?.direction === undefined);
+});
+
 test("renaming stores the name and the timeline shows it", () => {
   open("Chase");
   const field = () => node("input", "Name");
