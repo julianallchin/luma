@@ -50,6 +50,8 @@ FAN_GAIN_AT_START = "fan gain on an animated direction taken at clip start"
 PATH = "direction path off a line (exact, nested vector curves)"
 ORDER = "order axis reads (i + 0.5) / n (decision 6)"
 WRAP_RING = "wrapped line or radial axis is a ring; its ends no longer meet (decision 41)"
+FULL_TURN = "wrapped stroke that crosses once per event enters and leaves unwrapped (decision 42)"
+RAMPS = ([[0, 0], [1, 1]], [[0, 1], [1, 0]])
 
 
 class Unmappable(Exception):
@@ -679,6 +681,14 @@ class Clip:
             if keys:
                 glides = all(len(p) < 3 or p[2] != "hold" for p in keys)
                 overrun = body.get("boundary", "clip") == "clip" and glides
+                # A wrapped line stroke whose middle runs the whole axis once
+                # per event starts and ends half on each end: a ghost half at
+                # the far end at every event start. Enter and leave instead.
+                line = body["axis"]["source"]["kind"] in (*LINES, "vector", "major_axis")
+                if (line and body.get("boundary") == "wrap" and keys in RAMPS
+                        and not body.get("width_relative")):
+                    overrun = True
+                    self.notes.add(FULL_TURN)
                 ways = directions(keys)
                 backward = ways == {True}
                 if ways == {True, False}:
@@ -687,7 +697,7 @@ class Clip:
                     elif shape is None:
                         self.notes.add(ASYMMETRIC)
         gain = self.number(body["gain"], f"{path}/gain", clock) if "gain" in body else 1.0
-        wrap = body.get("boundary", "clip") == "wrap"
+        wrap = body.get("boundary", "clip") == "wrap" and not overrun
         width = wide = None
         if offset_value is not None:
             w = self.number(body.get("width", {"type": "number", "value": 0.2}),
