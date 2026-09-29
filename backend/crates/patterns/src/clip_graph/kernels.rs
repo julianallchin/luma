@@ -627,13 +627,7 @@ pub(crate) fn run(
                                 })
                                 .collect();
                             if kind == 2 {
-                                let distance: Vec<f64> =
-                                    flat.iter().map(|(x, y)| x.hypot(*y)).collect();
-                                let farthest = distance.iter().copied().fold(0., f64::max);
-                                if farthest <= 1e-9 {
-                                    continue;
-                                }
-                                distance.iter().map(|d| d / farthest).collect()
+                                flat.iter().map(|(x, y)| x.hypot(*y)).collect()
                             } else {
                                 flat.iter()
                                     .map(|(x, y)| {
@@ -643,7 +637,9 @@ pub(crate) fn run(
                             }
                         }
                     };
-                    let coordinate: Vec<f64> = if kind == 0 {
+                    // Line and radial run from the lowest head (0) to the
+                    // highest (1); all at one value read 0.5.
+                    let coordinate: Vec<f64> = if kind != 3 {
                         let min = raw.iter().copied().fold(f64::INFINITY, f64::min);
                         let max = raw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                         raw.iter()
@@ -681,11 +677,7 @@ pub(crate) fn run(
             for ((n, t, e), out) in x.indexed_iter_mut() {
                 let w = width.at(n, t, e);
                 let d = a.at(n, t, e) - offset.at(n, t, e);
-                let d = if wrap {
-                    (d + 0.5).rem_euclid(1.) - 0.5
-                } else {
-                    d
-                };
+                let d = if wrap { d.rem_euclid(1.) } else { d };
                 if w > 0. {
                     *out = d / w;
                     if (0. ..=1.).contains(out) {
