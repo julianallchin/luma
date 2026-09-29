@@ -12,7 +12,7 @@ test(
   "fullscreen restores the selection and layout and keeps the transport running",
   { fixture: { seconds: 60, clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 50 }] } },
   () => {
-    // A clip is labelled by its form.
+    // A clip is labelled by its name.
     const CLIP = "Wash";
     const LAYOUT = ["Sidebar", "Waveform", "Clip graph", "Stage"];
     nav.trackEditor("Test Venue", "Aurora");
