@@ -83,3 +83,4 @@ target-pixel/
 harness/perf/**/run-*/
 harness/perf/**/*.png
 experiments/powersync/run/
+__pycache__/
