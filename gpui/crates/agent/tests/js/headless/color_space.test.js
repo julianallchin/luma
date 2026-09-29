@@ -1,103 +1,134 @@
-// A color's input across space, from the outside: the source menu of the
-// color and of the brightness offers "Across space"; a color then shows its
-// axis and a gradient along it, a brightness its axis and a curve, and a
-// brightness that moves shows the stroke's path, travel and width.
+// Color and brightness over space, from the outside: the source chip of the
+// color and of the brightness offers "Over space". A color then reads a
+// gradient along a space node, a brightness a curve along a space node whose
+// offset moves over time; the space kind and wrap are stored on the node.
 
-const WASH = { pattern: "form-clip", name: "Wash", start: 1, end: 3, preset: ["color@1", "Wash"] };
+const WASH = { pattern: "graph-clip", name: "Wash", start: 1, end: 3, preset: "Wash" };
 fixture({ seconds: 20, clips: [WASH], rig: 4, window: [1400, 1400] });
 
 const node = (role, label) => until(label, (s) => s.find({ role, label })).find({ role, label });
-const settle = () => app.frames(16, { waitMs: 60 });
-const formClip = () => library.score().clips["form-clip"];
+const settle = () => app.frames(4);
+const stored = () => library.score().clips["graph-clip"];
+const nodes = () => stored().graph.nodes;
 
 function open() {
   nav.venue("Test Venue");
   nav.track("Aurora");
   nav.expand();
   nav.stageOff();
-  app.click(node("card", "Color"));
-  until("the form inputs", (s) => s.find({ role: "row", label: "Brightness" }));
+  app.click(node("card", "Wash"));
+  until("the graph", (s) => s.find({ role: "card", label: "Clip graph" }) && s.find({ role: "card", label: "Color 1" }));
+}
+
+const inside = (outer, inner) =>
+  inner.x >= outer.x - 0.5 && inner.y >= outer.y - 0.5 &&
+  inner.x + inner.width <= outer.x + outer.width + 0.5 && inner.y + inner.height <= outer.y + outer.height + 0.5;
+const area = (b) => b.width * b.height;
+
+// The innermost node card holding `bounds`, in snapshot `snap`.
+function cardOf(bounds, snap = app.snapshot()) {
+  return snap.findAll({ role: "card" })
+    .filter((c) => /^[A-Z][a-z]+ \d+$/.test(c.label) && inside(c.bounds, bounds))
+    .sort((a, b) => area(a.bounds) - area(b.bounds))[0];
 }
 
 // Scroll the sheet until `target` is inside it.
 function reveal(target) {
-  const p = node("card", "Clip inputs").bounds;
+  const p = node("card", "Clip graph").bounds;
   const b = target.bounds;
-  if (b.y < p.y + 70 || b.y + b.height > p.y + p.height - 12) {
-    app.scroll({ x: p.x + p.width / 2, y: p.y + p.height / 2 }, { dy: p.y + p.height / 3 - b.y, steps: 5 });
+  if (b.y < p.y + 90 || b.y + b.height > p.y + p.height - 12) {
+    const dy = p.y + p.height / 2 - b.y;
+    app.scroll({ x: p.x + p.width / 2, y: p.y + p.height / 2 }, { dy, steps: 5 });
     app.frames(3);
   }
 }
 
-// The control of `role` and `label` inside the row named `row`.
-function inRow(row, role, label) {
-  reveal(node("row", row));
-  const r = node("row", row).bounds;
-  const found = app.snapshot().findAll({ role, label }).find((n) => n.bounds.y >= r.y && n.bounds.y < r.y + r.height);
-  if (!found) throw new Error(`no ${role} ${label} in ${row}`);
+// The row `row` of the card `card` itself, not of a card nested in it.
+function rowOf(card, row) {
+  const find = () => {
+    const snap = app.snapshot();
+    return snap.findAll({ role: "row", label: row }).find((r) => cardOf(r.bounds, snap)?.label === card);
+  };
+  until(`${card} ${row}`, () => find());
+  reveal(find());
+  return find();
+}
+
+// The `role` node labelled `label` whose innermost card is `card`.
+function inCard(card, role, label) {
+  const find = () => {
+    const snap = app.snapshot();
+    return snap.findAll({ role, label }).find((n) => cardOf(n.bounds, snap)?.label === card);
+  };
+  until(`${card} ${label}`, () => find());
+  reveal(find());
+  return find();
+}
+
+// The control of `role` and `label` in `card`'s row `row`, above any card
+// nested in that row.
+function inRow(card, row, role, label) {
+  const r = rowOf(card, row).bounds;
+  const snap = app.snapshot();
+  const found = snap.findAll({ role, label })
+    .filter((n) => inside(r, n.bounds) && cardOf(n.bounds, snap)?.label === card)
+    .sort((a, b) => a.bounds.y - b.bounds.y)[0];
+  if (!found) throw new Error(`no ${role} ${label} in ${card} ${row}`);
   return found;
 }
 
-test("a color across space shows its axis and the gradient along it", () => {
+// Pick `option` from the source chip of `card`'s `row`, which reads `now`.
+function source(card, row, now, option) {
+  app.click(inRow(card, row, "select", now));
+  app.click(node("button", option));
+  settle();
+}
+
+test("a color over space reads a gradient along a space node", () => {
   open();
-  expect(app.snapshot().find({ role: "row", label: "Axis" })).toBe(undefined);
-  app.click(inRow("Color", "select", "Fixed"));
-  app.click(node("button", "↗ Across space"));
-  until("the axis row", (s) => s.find({ role: "row", label: "Axis" }));
-  until("the gradient", (s) => s.find({ role: "card", label: "Color strip" }));
-  inRow("Color", "select", "↗ Across space");
-  // The axis row offers the axis presets, spans and, for X, a mirror.
-  inRow("Axis", "select", "X");
-  inRow("Axis", "select", "Selection");
-  settle();
+  source("Color 1", "Color", "Value", "Over space");
+  until("the color wired", () => nodes().color1.inputs.color?.node);
+  const curve = nodes()[nodes().color1.inputs.color.node];
+  expect(curve.kind).toBe("curve");
+  expect(curve.settings?.kind).toBe("color");
+  const space = nodes()[curve.inputs.x.node];
+  expect(space.kind).toBe("space");
+  // The gradient ends at the color it had: the Wash's white.
+  const stops = curve.inputs.gradient.stops;
+  expect(stops.at(-1).color).toEqual([1, 1, 1]);
+  node("card", "Space 1");
+  inRow("Color 1", "Color", "select", "Over space");
+  node("card", "Curve 2 strip");
 
-  const color = formClip().inputs.color;
-  expect(color.type).toBe("space");
-  expect(color.value.axis.source.kind).toBe("u");
-  // The gradient starts at the color it had: the Wash's white.
-  expect(color.value.gradient.stops[0].color).toEqual([1, 1, 1]);
-  assert(color.value.move === undefined, "a color across space does not move");
+  // Another space kind is stored on the node.
+  app.click(inCard("Space 1", "button", "Radial"));
+  until("radial", () => nodes().space1.settings?.kind === "radial");
 
-  // Another axis is stored in the source.
-  app.click(inRow("Axis", "select", "X"));
-  app.click(node("button", "Radial"));
-  until("radial", (s) => s.find({ role: "select", label: "Radial" }));
-  settle();
-  expect(formClip().inputs.color.value.axis.source.kind).toBe("radial");
-
-  // Fixed again takes the gradient's start.
-  app.click(inRow("Color", "select", "↗ Across space"));
-  app.click(node("button", "Fixed"));
-  until("fixed", (s) => !s.find({ role: "row", label: "Axis" }));
-  settle();
-  expect(formClip().inputs.color).toEqual({ type: "color", value: [1, 1, 1] });
+  // Value again gives back the white.
+  source("Color 1", "Color", "Over space", "Value");
+  until("unwired", () => !nodes().color1.inputs.color?.node);
+  expect(nodes().color1.inputs.color).toEqual([1, 1, 1]);
+  expect(Object.values(nodes()).filter((n) => n.kind === "space").length).toBe(0);
 });
 
-test("a brightness across space shows a curve, and moving shows the stroke", () => {
+test("a brightness over space moves over time, and the wrap switch stores wrap", () => {
   open();
-  app.click(inRow("Brightness", "select", "Fixed"));
-  app.click(node("button", "↗ Across space"));
-  until("the axis row", (s) => s.find({ role: "row", label: "Axis" }));
-  // A flat curve is no preset, so its editor is open.
-  until("the curve", (s) => s.find({ role: "card", label: "Brightness strip" }));
-  inRow("Along the axis", "select", "Custom");
-  expect(app.snapshot().find({ role: "row", label: "Travel" })).toBe(undefined);
-  settle();
-  const still = formClip().inputs.brightness;
-  expect(still.type).toBe("space");
-  assert(still.value.curve && !still.value.gradient, `a brightness reads a curve: ${JSON.stringify(still)}`);
-
-  app.click(inRow("Move", "button", "Brightness move Moving"));
-  until("the stroke", (s) => s.find({ role: "row", label: "Travel" }));
-  for (const label of ["Shape", "Path", "Width", "Ends"]) node("row", label);
-  settle();
-  const moving = formClip().inputs.brightness.value.move;
-  assert(moving, "the brightness did not start moving");
-  expect(moving.boundary).toBe("clip");
-  expect(moving.width_relative).toBe(true);
+  source("Color 1", "Brightness", "Value", "Over space");
+  until("the brightness wired", () => nodes().color1.inputs.brightness?.node);
+  const curve = nodes()[nodes().color1.inputs.brightness.node];
+  expect(curve.kind).toBe("curve");
+  assert(curve.inputs.shape?.points && !curve.inputs.gradient, `a brightness reads a curve: ${JSON.stringify(curve)}`);
+  const space = nodes()[curve.inputs.x.node];
+  expect(space.kind).toBe("space");
+  expect(space.inputs.width).toBe(0.2);
+  // The stroke moves: the offset is a curve over time.
+  const offset = nodes()[space.inputs.offset.node];
+  expect(offset.kind).toBe("curve");
+  expect(nodes()[offset.inputs.x.node].kind).toBe("time");
+  inRow("Space 1", "Offset", "select", "Over time");
 
   // The stroke's ends wrap.
-  app.click(inRow("Ends", "button", "Brightness ends Wrap"));
-  settle();
-  expect(formClip().inputs.brightness.value.move.boundary).toBe("wrap");
+  app.click(inCard("Space 1", "button", "Wrap off"));
+  until("wrap stored", () => nodes().space1.settings?.wrap === "yes");
+  inCard("Space 1", "button", "Wrap on");
 });
