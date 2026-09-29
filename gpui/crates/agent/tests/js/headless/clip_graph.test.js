@@ -187,3 +187,14 @@ test("undo after a drag restores the graph in one step", { fixture: { clips: [cl
   app.key("secondary-z");
   until("undone", () => JSON.stringify(stored().graph) === before);
 });
+
+test("a noise source shows its preview in the noise card", { fixture: { clips: [clipOf("Wash")] } }, () => {
+  open("Wash");
+  source("Color 1", "Brightness", "Value", "Noise");
+  until("noise stored", () => Object.values(nodes()).some((n) => n.kind === "noise"));
+  const preview = node("card", "Noise 1 preview");
+  assert(inside(node("card", "Noise 1").bounds, preview.bounds), "the preview sits in the Noise 1 card");
+  node("text", "Noise 1 over time");
+  node("text", "Noise 1 along the rig");
+  expect(app.snapshot().find({ label: "These settings give no noise to show" })).toBe(undefined);
+});

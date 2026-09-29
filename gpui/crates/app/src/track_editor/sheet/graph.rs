@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use luma_patterns as p;
+use luma_ui::arg::noise;
 use luma_ui::arg::strip::{self, CurveStrip, StripChanged, StripValue};
 use luma_ui::icons::IconName;
 use luma_ui::{icon_button, Enabled};
@@ -61,6 +62,8 @@ pub(super) struct Controls {
     /// The graph the widgets were last pointed at.
     synced: ClipGraph,
     fields: BTreeMap<(String, String), Field>,
+    /// A preview per noise node.
+    noise: BTreeMap<String, Entity<noise::NoisePreview>>,
     _subs: Vec<Subscription>,
 }
 
@@ -312,8 +315,14 @@ fn field(
                 .with_scale(range, unit);
             let app = cx.entity().downgrade();
             let curve = id.to_owned();
-            if coordinate(graph, id).is_some_and(|(_, kind)| kind == Kind::Time) {
-                strip = strip.over_time(Rc::new(move |cx| clock_of(&app, &curve, cx)));
+            match coordinate(graph, id).map(|(_, kind)| kind) {
+                Some(Kind::Time) => {
+                    strip = strip.over_time(Rc::new(move |cx| clock_of(&app, &curve, cx)));
+                }
+                Some(Kind::Space) => {
+                    strip = strip.across_space(Rc::new(move |cx| heads_of(&app, &curve, cx)));
+                }
+                _ => {}
             }
             let entity = cx.new(|_| strip);
             subs.push(cx.subscribe(
@@ -361,9 +370,16 @@ pub(super) fn build(graph: &ClipGraph, window: &mut Window, cx: &mut Context<Lum
             }
         }
     }
+    let noise = graph
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.kind == Kind::Noise)
+        .map(|(id, node)| (id.clone(), noise_preview(id, node, cx)))
+        .collect();
     Controls {
         synced: graph.clone(),
         fields,
+        noise,
         _subs: subs,
     }
 }
@@ -415,6 +431,12 @@ pub(super) fn sync(controls: &mut Controls, graph: &ClipGraph, window: &mut Wind
             _ => {}
         }
     }
+    for (id, preview) in &controls.noise {
+        if let Some(node) = graph.nodes.get(id) {
+            let settings = noise_settings(node);
+            preview.update(cx, |preview, cx| preview.set_value(settings, cx));
+        }
+    }
     let _ = window;
     controls.synced = graph.clone();
 }
@@ -428,13 +450,7 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
     };
     let clip = primary_clip(editor)?;
     let graph = &clip.core.as_ref()?.graph;
-    let timeline = editor.beats.as_deref()?.timeline().ok()?;
-    let start = timeline.beat_at(clip.start).ok()?;
-    let length = timeline.beat_at(clip.end).ok()? - start;
-    let elapsed = timeline
-        .beat_at(f64::from(editor.transport.position))
-        .ok()?
-        - start;
+    let (_, length, elapsed) = clip_beats(editor, clip)?;
     let (time, _) = coordinate(graph, curve)?;
     let time = graph.nodes.get(&time)?;
     let phase_shift = match time.inputs.get("phase") {
@@ -461,6 +477,114 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
         beats: span,
         phase: inside.then_some((phase + phase_shift).rem_euclid(1.)),
         playing: editor.transport.playing,
+    })
+}
+
+/// The clip's beats: where the playhead is since the clip start, and how
+/// long the clip lasts.
+fn clip_beats(editor: &Editor, clip: &Clip) -> Option<(f64, f64, f64)> {
+    let timeline = editor.beats.as_deref()?.timeline().ok()?;
+    let start = timeline.beat_at(clip.start).ok()?;
+    let length = timeline.beat_at(clip.end).ok()? - start;
+    let now = timeline
+        .beat_at(f64::from(editor.transport.position))
+        .ok()?;
+    Some((start, length, now - start))
+}
+
+/// Where the clip's heads fall along a curve's space axis at the playhead:
+/// one place per head inside the stroke, as playback computes it.
+fn heads_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<Rc<[f64]>> {
+    let app = app.upgrade()?;
+    let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+        return None;
+    };
+    let clip = primary_clip(editor)?;
+    let core = clip.core.as_ref()?;
+    let (space, _) = coordinate(&core.graph, curve)?;
+    let cells = editor.sheet.heads.cells.clone()?;
+    let (start, length, elapsed) = clip_beats(editor, clip)?;
+    let places = core
+        .graph
+        .coordinate_at_heads(
+            &space,
+            p::Frame {
+                cells: &cells,
+                features: None,
+                beat: start + elapsed.clamp(0., length.next_down().max(0.)),
+                clip_start: start,
+                clip_duration: length,
+                seed: core.seed,
+            },
+        )
+        .ok()?;
+    Some(places.into_iter().flatten().collect())
+}
+
+/// A noise node's settings as the preview draws them: a wired one is held
+/// at its empty value, and the preview says so.
+fn noise_settings(node: &Node) -> noise::Settings {
+    let mut held = Vec::new();
+    let mut number = |input: &str, empty: f64, note: &str| match node.inputs.get(input) {
+        Some(Input::Number(v)) => Some(*v),
+        Some(_) => {
+            held.push(note.to_owned());
+            Some(empty)
+        }
+        None => None,
+    };
+    let speed = number("speed", 4., "speed at 4 beats").unwrap_or(4.);
+    let scale = number("scale", 0.25, "scale at 25 %");
+    let contrast = number("contrast", 0., "contrast at 0").unwrap_or(0.);
+    noise::Settings {
+        speed,
+        scale,
+        contrast,
+        held,
+    }
+}
+
+/// The noise preview of node `id`, sampled as playback samples it.
+fn noise_preview(id: &str, node: &Node, cx: &mut Context<Luma>) -> Entity<noise::NoisePreview> {
+    let at = id.to_owned();
+    let sampler: noise::Sampler = Rc::new(move |settings, seed, place, beats| {
+        p::clip_graph::sample_noise(
+            &at,
+            seed,
+            place,
+            beats,
+            settings.speed,
+            settings.scale,
+            settings.contrast,
+        )
+        .ok()
+    });
+    let app = cx.entity().downgrade();
+    let transport: noise::TransportSource = Rc::new(move |cx| {
+        let transport = |cx: &App| {
+            let app = app.upgrade()?;
+            let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
+                return None;
+            };
+            let clip = primary_clip(editor)?;
+            let (_, length, elapsed) = clip_beats(editor, clip)?;
+            Some(noise::Transport {
+                seed: clip.core.as_ref()?.seed,
+                beat: if (0. ..=length).contains(&elapsed) {
+                    elapsed
+                } else {
+                    0.
+                },
+                playing: editor.transport.playing,
+            })
+        };
+        transport(cx).unwrap_or_default()
+    });
+    let settings = noise_settings(node);
+    cx.new(|cx| {
+        let mut preview = noise::NoisePreview::new(edit::label(id), sampler, transport);
+        preview.set_value(settings, cx);
+        preview
     })
 }
 
@@ -743,6 +867,7 @@ fn card(
         .child(title)
         .children(settings(cx, id, node))
         .children(rows)
+        .children(cx.controls.noise.get(id).cloned())
         .agent_node(Role::Card, label)
         .into_any_element()
 }

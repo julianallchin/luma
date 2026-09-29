@@ -69,6 +69,17 @@ pub(crate) struct State {
     /// Where each node card was last painted, for a link chip to scroll to.
     cards: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     scroll: ScrollHandle,
+    /// The heads of the primary clip's selection, for the head marks of a
+    /// strip across space.
+    heads: Heads,
+}
+
+/// The heads a selection resolves to, asked once per venue, selection and
+/// seed. `cells` is `None` until the answer lands.
+#[derive(Default)]
+struct Heads {
+    key: Option<(String, String, u64)>,
+    cells: Option<Rc<[luma_patterns::Cell]>>,
 }
 
 impl Default for State {
@@ -87,6 +98,7 @@ impl Default for State {
             flash: None,
             cards: Rc::default(),
             scroll: ScrollHandle::new(),
+            heads: Heads::default(),
         }
     }
 }
@@ -189,6 +201,7 @@ fn shared_shape(editor: &Editor) -> Option<String> {
 pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     tick_menus(&mut editor.sheet, window, cx);
     ensure_groups(editor, cx);
+    ensure_heads(editor, cx);
     if editor.sheet.flash.as_ref().is_some_and(|(_, since)| {
         since.elapsed() < luma_ui::motion::span(&luma_ui::motion::HOVER_FADE)
     }) {
@@ -296,6 +309,55 @@ fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
                     .map(SharedString::from)
                     .collect();
                 editor.sheet.groups = Groups::Ready(Rc::new(names));
+            });
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Ask for the heads of the primary clip's selection when its graph lies
+/// across space, once per venue, selection and seed.
+fn ensure_heads(editor: &mut Editor, cx: &mut Context<Luma>) {
+    let Some(core) = primary_clip(editor).and_then(|clip| clip.core.as_ref()) else {
+        return;
+    };
+    if !core
+        .graph
+        .nodes
+        .values()
+        .any(|node| node.kind == Kind::Space)
+    {
+        return;
+    }
+    let seed = core.selection_seed.unwrap_or(core.seed);
+    let selection = core.selection.clone();
+    let key = (
+        editor.venue_id.clone(),
+        selection.to_value().to_string(),
+        seed,
+    );
+    if editor.sheet.heads.key.as_ref() == Some(&key) {
+        return;
+    }
+    editor.sheet.heads = Heads {
+        key: Some(key.clone()),
+        cells: None,
+    };
+    cx.spawn(async move |this, cx| {
+        let Ok(pending) = this.update(cx, |this, _| {
+            this.library.selection_cells(&key.0, &selection, seed)
+        }) else {
+            return;
+        };
+        let cells = pending.await;
+        this.update(cx, |this, cx| {
+            this.with_track_editor(cx, |editor| {
+                if editor.sheet.heads.key.as_ref() != Some(&key) {
+                    return;
+                }
+                // A selection that does not resolve has no heads to show.
+                editor.sheet.heads.cells = Some(cells.unwrap_or_default().into());
             });
         })
         .ok();

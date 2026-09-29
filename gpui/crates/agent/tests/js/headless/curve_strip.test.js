@@ -129,4 +129,32 @@ test("a strip on a clock spans one event", () => {
   expect(nodes().clock1.inputs.every).toBe(2);
 });
 
-test.skip("bug: no head ticks across space until the patterns crate gives a space node's head coordinates", () => {});
+const GRADIENT = { pattern: "graph-clip", name: "Gradient", start: 1, end: 3, preset: "Gradient" };
+
+test("a strip across space marks where each head falls", { fixture: { clips: [GRADIENT] } }, () => {
+  nav.venue("Test Venue");
+  nav.track("Aurora");
+  nav.expand();
+  nav.stageOff();
+  app.click(node("card", "Gradient"));
+  node("card", "Curve 1 strip");
+  const marks = () => app.snapshot().findAll({ role: "text" }).filter((n) => /^Curve 1 head \d+$/.test(n.label));
+  // Each mark's share of the strip's width, left to right.
+  const shares = () => {
+    const strip = node("card", "Curve 1 strip").bounds;
+    return marks().map((m) => (m.bounds.x + m.bounds.width / 2 - strip.x) / strip.width).sort((a, b) => a - b);
+  };
+  until("head marks", () => marks().length >= 2);
+  // A line over the whole axis runs from the lowest head at 0 to the highest at 1.
+  const line = shares();
+  assert(line.every((x) => x >= -0.01 && x <= 1.01), `marks off the strip: ${line}`);
+  assert(line[0] < 0.02 && line.at(-1) > 0.98, `a line spans the strip: ${line}`);
+  // In order, the heads sit evenly, each at the centre of its cell.
+  app.click(node("button", "Order"));
+  until("order stored", () => nodes().space1.settings.kind === "order");
+  const n = line.length;
+  until("even marks", () => {
+    const order = shares();
+    return order.length === n && order.every((x, i) => Math.abs(x - (i + 0.5) / n) < 0.02);
+  });
+});
