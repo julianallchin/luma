@@ -527,6 +527,14 @@ def test_host_call_payload_is_bounded_before_it_reaches_the_host():
 
 
 @test
+def test_clip_builders_are_bare_names_in_every_cell():
+    client = shared()
+    ok(client.execute("time = 5", manifest_rel=REV1))
+    result = ok(client.execute("color(brightness=curve(time(clock(every=2)), [[0, 0], [1, 1]])).json()['nodes']['clock1']"))
+    assert "every" in result["repr"], result["repr"]
+
+
+@test
 def test_ping():
     client = shared()
     frame = client.ping()
@@ -597,9 +605,9 @@ def run_stdlib_suites() -> int:
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(
         loader.loadTestsFromName(name)
-        for name in ("test_score", "test_venue", "test_worker")
+        for name in ("test_clip", "test_score", "test_venue", "test_worker")
     )
-    print("\n--- stdlib suites (test_score, test_venue, test_worker) ---")
+    print("\n--- stdlib suites (test_clip, test_score, test_venue, test_worker) ---")
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     return len(result.failures) + len(result.errors)
 
