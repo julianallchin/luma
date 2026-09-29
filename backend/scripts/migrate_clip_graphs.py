@@ -46,6 +46,9 @@ HOLD_FLIP = "reversed shape with a hold"
 PHASE_WRAP = "phase wider than one turn (wrapped)"
 COLOR_KEYS = "color keyframes blend in OKLab"
 MAJOR_AXIS = "major axis becomes best-fit line"
+FAN_GAIN_AT_START = "fan gain on an animated direction taken at clip start"
+PATH = "direction path off a line (exact, nested vector curves)"
+ORDER = "order axis reads (i + 0.5) / n (decision 6)"
 
 
 class Unmappable(Exception):
@@ -148,6 +151,90 @@ def flip(points):
         out.append(point)
     out[-1][0] = 1.0
     return out, holds
+
+
+NAMED_BEZIER = {"ease-in": [0.42, 0, 1, 1], "ease-out": [0, 0, 0.58, 1],
+                "ease-in-out": [0.42, 0, 0.58, 1]}
+SHIFTED_SINE = "shifted sine ease on a wide wrapped stroke"
+
+
+def bezier_at(c, u):
+    return [3 * (1 - u) ** 2 * u * c[0][k] + 3 * (1 - u) * u * u * c[1][k] + u ** 3
+            for k in range(2)]
+
+
+def solve_u(c, t):
+    lo, hi = 0.0, 1.0
+    for _ in range(80):
+        u = (lo + hi) / 2
+        lo, hi = (u, hi) if bezier_at(c, u)[0] < t else (lo, u)
+    return (lo + hi) / 2
+
+
+def sub_ease(ease, t0, t1, notes):
+    """The part of an ease between segment shares t0 and t1, as its own
+    ease, and the change done at t0 and t1. A cubic Bézier splits exactly
+    (de Casteljau); a sine ease does not."""
+    if ease in (None, "linear"):
+        return "linear", t0, t1
+    if ease == "hold":
+        return "hold", 0.0, 0.0
+    if isinstance(ease, str) and ease.startswith("sine"):
+        if notes is not None:
+            notes.add(SHIFTED_SINE)
+        return ease, ease_share(ease, t0), ease_share(ease, t1)
+    x1, y1, x2, y2 = NAMED_BEZIER.get(ease, ease) if isinstance(ease, str) else ease
+    pts = [[0.0, 0.0], [x1, y1], [x2, y2], [1.0, 1.0]]
+
+    def split(p, u):  # (left, right) control points at u
+        a = [[p[i][k] + (p[i + 1][k] - p[i][k]) * u for k in range(2)] for i in range(3)]
+        b = [[a[i][k] + (a[i + 1][k] - a[i][k]) * u for k in range(2)] for i in range(2)]
+        m = [b[0][k] + (b[1][k] - b[0][k]) * u for k in range(2)]
+        return [p[0], a[0], b[0], m], [m, b[1], a[2], p[3]]
+
+    ctrl = [[x1, y1], [x2, y2]]
+    u0, u1 = solve_u(ctrl, t0) if t0 > 0 else 0.0, solve_u(ctrl, t1) if t1 < 1 else 1.0
+    part = split(pts, u0)[1] if u0 > 0 else pts
+    if u1 < 1:
+        part = split(part, (u1 - u0) / (1 - u0))[0]
+    (ax, ay), (bx, by) = part[0], part[3]
+    if by - ay <= 0 or bx - ax <= 0:
+        return "linear", ay, by
+    handles = [(part[1][0] - ax) / (bx - ax), (part[1][1] - ay) / (by - ay),
+               (part[2][0] - ax) / (bx - ax), (part[2][1] - ay) / (by - ay)]
+    return [min(1.0, max(0.0, h)) for h in handles], ay, by
+
+
+def shift(points, start, length, notes=None):
+    """The shape read from `start` on: new(x) = old(x + start) for x in
+    0..length, then held. Each cut segment keeps its exact ease."""
+    end = start + length
+    out = []
+    for a, b in zip(points, points[1:]):
+        xa, xb = a[0], b[0]
+        lo, hi = max(xa, start), min(xb, end)
+        if hi <= lo and not (lo == hi == start and xb > start):
+            continue
+        ease = a[2] if len(a) > 2 else None
+        t0, t1 = (lo - xa) / (xb - xa), (hi - xa) / (xb - xa)
+        sub, s0, s1 = sub_ease(ease, t0, t1, notes)
+        va = a[1] + (b[1] - a[1]) * s0
+        point = [lo - start, va]
+        if sub != "linear" and hi > lo:
+            point.append(sub)
+        if not out or point[0] > out[-1][0]:
+            out.append(point)
+        if hi == end:
+            vb = b[1] if hi == xb else a[1] + (b[1] - a[1]) * s1
+            if ease == "hold" and hi < xb:
+                vb = a[1]
+            out.append([length, vb])
+            break
+    if out[-1][0] < 1:
+        out[-1] = out[-1][:2]
+        out.append([1.0, out[-1][1]])
+    out[0][0] = 0.0
+    return out
 
 
 def symmetric(points):
@@ -316,8 +403,10 @@ class Clip:
             life = {"type": "beats", "value": self.duration}  # an old period 0 is the clip
         constant = every["type"] in SCALARS
         if constant and float(every["value"]) == 0:
+            # Old "once with a life": one event. Every twice the clip keeps
+            # float rounding on the last beat from starting a second one.
             clock = None if life is None else self.g.add("clock", {
-                "every": self.duration,
+                "every": 2 * self.duration,
                 "duration": self.g.emit(self.number(life, f"{path}/life", None))}, share=False)
         else:
             if constant and float(every["value"]) < 0:
@@ -386,7 +475,12 @@ class Clip:
         eps = 1e-9
         out = []
         for (x0, v0), (x1, v1) in zip(pts, pts[1:]):
-            out.append([x0, v0 % 1.0])
+            # A falling run that starts on a whole turn starts from 1, not 0.
+            start = 1.0 if v1 < v0 and v0 % 1.0 == 0 else v0 % 1.0
+            if out and out[-1][0] == x0:
+                out[-1][1] = start
+            else:
+                out.append([x0, start])
             lo, hi = sorted((v0, v1))
             for n in range(math.floor(lo) + 1, math.ceil(hi)):
                 xc = x0 + (n - v0) / (v1 - v0) * (x1 - x0)
@@ -395,7 +489,8 @@ class Clip:
                     out.append([before, (v0 + (before - x0) / (x1 - x0) * (v1 - v0)) % 1.0])
                 if xc > out[-1][0]:
                     out.append([xc, 0.0 if v1 > v0 else 1.0])
-        out.append([pts[-1][0], pts[-1][1] % 1.0])
+        (_, before), (x_end, end) = pts[-2], pts[-1]
+        out.append([x_end, 1.0 if end > before and end % 1.0 == 0 else end % 1.0])
         return self.g.emit(Curve(phase.x, out, 0.0, 1.0))
 
     def time(self, body, path, inherited, kind):
@@ -459,12 +554,57 @@ class Clip:
         for v, t in zip(vectors, ts):
             on_line = [first[i] + t * axis[i] for i in range(3)]
             if dist(on_line, v) > 1e-9 * max(1.0, math.sqrt(length2)):
-                hard(f"{path}: a vector path with more than two points off a line")
+                self.notes.add(PATH)
+                return self.vector_steps(x, [p[0] for p in points], vectors, eases)
         lo, hi, norm = normalize(ts)
         low = [first[i] + lo * axis[i] for i in range(3)]
         high = [first[i] + hi * axis[i] for i in range(3)]
         shape = [[p[0], n, *e] for p, n, e in zip(points, norm, eases)]
         return Curve(x, shape, low, high, "vector")
+
+    def vector_steps(self, x, xs, vectors, eases):
+        """A path off a line, exactly. Its moving parts are cut into runs
+        whose points lie on one line; each run is one vector curve that
+        holds its end values outside it. Runs join by curves that step
+        from 0 to 1 where the next run starts: before the step the earlier
+        runs show (holding their last point), after it the later ones
+        (holding their first point, which is the same point)."""
+        n = len(vectors)
+        runs, i = [], 0
+        while i < n - 1:
+            if vectors[i + 1] == vectors[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n - 1 and vectors[j + 1] != vectors[j] and \
+                    collinear(vectors[i:j + 2]):
+                j += 1
+            runs.append((i, j))
+            i = j
+
+        def leaf(i, j):
+            first, far = vectors[i], max(vectors[i:j + 1], key=lambda v: dist(v, vectors[i]))
+            axis = [b - a for a, b in zip(first, far)]
+            length2 = sum(c * c for c in axis)
+            ts = [sum((v[c] - first[c]) * axis[c] for c in range(3)) / length2
+                  for v in vectors[i:j + 1]]
+            lo, hi, norm = normalize(ts)
+            shape = [[0.0, norm[0]]] if xs[i] > 0 else []
+            shape += [[xs[i + m], norm[m], *(eases[i + m] if m < j - i else [])]
+                      for m in range(j - i + 1)]
+            if xs[j] < 1:
+                shape.append([1.0, norm[-1]])
+            return Curve(x, shape, [first[c] + lo * axis[c] for c in range(3)],
+                         [first[c] + hi * axis[c] for c in range(3)], "vector")
+
+        def join(a, b):
+            if b == a + 1:
+                return leaf(*runs[a])
+            k = (a + b) // 2
+            return Curve(x, [[0.0, 0.0, "hold"], [xs[runs[k][0]], 1.0], [1.0, 1.0]],
+                         join(a, k), join(k, b), "vector")
+
+        return join(0, len(runs))
 
     def heads(self, axis, grain):
         """split → group → mirror, from a mapping and a grain (8.2)."""
@@ -508,7 +648,9 @@ class Clip:
             plane = axis.get("plane") or {"kind": "auto"}
             direction = (PLANES.get(plane["kind"]) or
                          (plane.get("normal") if plane["kind"] == "custom" else None))
-        elif kind != "order":
+        elif kind == "order":
+            self.notes.add(ORDER)
+        else:
             hard(f"unknown axis {kind}")
         return self.g.add("space", {"heads": heads, "direction": direction,
                                     "offset": offset, "width": width},
@@ -543,7 +685,7 @@ class Clip:
                         self.notes.add(ASYMMETRIC)
         gain = self.number(body["gain"], f"{path}/gain", clock) if "gain" in body else 1.0
         wrap = body.get("boundary", "clip") == "wrap"
-        width = None
+        width = wide = None
         if offset_value is not None:
             w = self.number(body.get("width", {"type": "number", "value": 0.2}),
                             f"{path}/width", clock)
@@ -567,6 +709,15 @@ class Clip:
                 # ends in by a hair so heads that sit on an end stay dark.
                 offset = affine(offset, 1.0, w * EDGE)
                 width = w * (1 - 2 * EDGE)
+            if wrap and w0 > 1:
+                if not is_value(w):
+                    hard(f"{path}: a varying wrapped width above 1")
+                # Wider than the axis: the old window ran half a turn either
+                # side of the stroke's middle; the new one runs one turn from
+                # its offset. Start the window half a turn before the middle
+                # and read the shape from 0.5 − 0.5/w on (shifted below).
+                offset = affine(offset, 1.0, w0 / 2 - 0.5)
+                wide = (0.5 - 0.5 / w0, 1 / w0)
         node = self.space_node(axis, grain, self.g.emit(offset), self.g.emit(width),
                                wrap and offset_value is not None)
         if kind == "color":
@@ -574,11 +725,14 @@ class Clip:
             if backward:
                 g = {"stops": [{"t": 1 - s["t"], "color": s["color"]}
                                for s in reversed(g["stops"])]}
-            return multiply(Curve(node, RAMP_UP, kind="color", gradient=g), gain)
+            ramp = RAMP_UP if wide is None else shift(RAMP_UP, *wide)
+            return multiply(Curve(node, ramp, kind="color", gradient=g), gain)
         if backward:
             shape, holds = flip(shape)
             if holds:
                 self.notes.add(HOLD_FLIP)
+        if wide is not None:
+            shape = shift(shape, *wide, self.notes)
         # Outside the stroke the old space gave 0, and a number curve gives
         # its low: keep low 0 and the shape as it was.
         return multiply(Curve(node, shape, 0.0, 1.0), gain)
@@ -684,13 +838,13 @@ class Clip:
                 fan = self.fan(body)
                 if yaw == 0.0:
                     yaw = fan
-                elif isinstance(direction, list):
+                else:
+                    if isinstance(direction, Curve) and not (is_value(fan.low) and is_value(fan.high)):
+                        self.notes.add(FAN_GAIN_AT_START)
                     # Yaw is taken: lean the direction itself, per head.
                     toward = LINES.get(source, [1, 0, 0])
                     direction = Curve(fan.x, fan.shape, leaned(direction, toward, fan.low),
                                       leaned(direction, toward, fan.high), "vector")
-                else:
-                    hard("a fan lean together with a yaw source on an animated direction")
         else:
             hard(f"lean: a {lean['type']} source")
         if direction == DEFAULT_DIRECTION:
@@ -751,6 +905,20 @@ def _zero_keys(body):
     return all(not any(p[1]) for p in body.get("points", []))
 
 
+def collinear(vectors):
+    first = vectors[0]
+    far = max(vectors, key=lambda v: dist(v, first))
+    axis = [b - a for a, b in zip(first, far)]
+    length2 = sum(c * c for c in axis)
+    if length2 == 0:
+        return True
+    for v in vectors:
+        t = sum((v[i] - first[i]) * axis[i] for i in range(3)) / length2
+        if dist([first[i] + t * axis[i] for i in range(3)], v) > 1e-9 * max(1.0, math.sqrt(length2)):
+            return False
+    return True
+
+
 def dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
@@ -771,7 +939,13 @@ def lean_direction(d, toward, degrees):
 
 def leaned(d, toward, degrees):
     """lean_direction for a number or a number curve with value ends; a
-    curve becomes a vector curve between the two leaned directions."""
+    curve becomes a vector curve between the two leaned directions. An
+    animated direction leans every vector it holds."""
+    if isinstance(d, Curve):
+        if not isinstance(degrees, (int, float)):
+            degrees = at_start(degrees)  # the caller notes FAN_GAIN_AT_START
+        return Curve(d.x, d.shape, leaned(d.low, toward, degrees),
+                     leaned(d.high, toward, degrees), "vector")
     if isinstance(degrees, (int, float)):
         return lean_direction(d, toward, degrees)
     if not (is_value(degrees.low) and is_value(degrees.high)):
