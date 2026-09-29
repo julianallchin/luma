@@ -15,6 +15,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import migrate_clip_graphs as m  # noqa: E402
+import fix_wrapped_strokes as fix  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CHECKED = []  # (test name, clip) for the checker batch
@@ -207,19 +208,38 @@ class Convert(unittest.TestCase):
         brightness = space(axis("u", mirror={"normal": [1.0, 0.0, 0.0], "offset": 0.5}),
                            [[0, 1], [1, 1]], grain="clump2", boundary="wrap",
                            width=n(0.2), width_relative=False, gain=n(0.5),
-                           offset=time([[0.0, 0.0], [1.0, 1.0]], events=ev(2, 2)))
+                           offset=time([[0.0, 0.0], [1.0, 0.5]], events=ev(2, 2)))
         nodes, _ = self.convert("color@1", color_inputs(brightness=brightness))
         self.assertEqual(nodes["group1"], node("group", {"size": 2.0}))
         self.assertEqual(nodes["mirror1"], node("mirror", {"heads": w("group1"),
                                                            "normal": [1.0, 0.0, 0.0], "offset": 0.5}))
         # Wrap: no overrun; the centre-anchored offset moves back by w/2.
         self.assertEqual(nodes["curve1"]["inputs"]["low"], -0.1)
-        self.assertEqual(nodes["curve1"]["inputs"]["high"], 0.9)
+        self.assertEqual(nodes["curve1"]["inputs"]["high"], 0.4)
         self.assertEqual(nodes["space1"], node("space", {
             "heads": w("mirror1"), "direction": [1, 0, 0], "offset": w("curve1"), "width": 0.2},
             {"kind": "line", "wrap": "yes"}))
         self.assertEqual(nodes["curve2"], node("curve", {
             "x": w("space1"), "shape": {"points": [[0, 1], [1, 1]]}, "high": 0.5}, {"kind": "number"}))
+
+    def test_wrapped_line_stroke_crossing_once_enters_and_leaves(self):
+        # Middle 0 → 1 per event, wrapped: it would start half on each end.
+        # It enters from −w and leaves at 1 unwrapped, as a clipped one does.
+        for keys in ([[0.0, 0.0], [1.0, 1.0]], [[0.0, 1.0], [1.0, 0.0]]):
+            brightness = space(axis("z"), [[0, 0], [0.5, 1], [1, 0]], width=n(0.2),
+                               boundary="wrap", offset=time(keys, events=ev(4, 8)))
+            nodes, notes = self.convert("color@1", color_inputs(brightness=brightness))
+            self.assertIn(m.FULL_TURN, notes)
+            self.assertEqual(nodes["space1"]["settings"]["wrap"], "no")
+            self.assertAlmostEqual(nodes["curve1"]["inputs"]["low"], -0.2)
+            self.assertAlmostEqual(nodes["curve1"]["inputs"]["high"], 1.0)
+        # An angle turns: it stays wrapped.
+        brightness = space(axis("angle", plane={"kind": "auto"}), [[0, 0], [0.5, 1], [1, 0]],
+                           width=n(0.2), boundary="wrap",
+                           offset=time([[0.0, 0.0], [1.0, 1.0]], events=ev(4)))
+        nodes, notes = self.convert("color@1", color_inputs(brightness=brightness))
+        self.assertNotIn(m.FULL_TURN, notes)
+        self.assertEqual(nodes["space1"]["settings"]["wrap"], "yes")
 
     def test_axis_sources(self):
         cases = [("u", {}, "line", [1, 0, 0]), ("v", {}, "line", [0, 1, 0]),
@@ -469,6 +489,34 @@ def checker():
             "clip_graph_parity", "--", "--check"]
 
 
+class FixWrappedStrokes(unittest.TestCase):
+    """The data fix turns an already migrated full-turn wrapped stroke into
+    the stroke the converter now writes, and nothing else."""
+
+    def graph(self, wrap="yes", low=-0.1, high=0.9, kind="line"):
+        return {"version": 1, "nodes": {
+            "clock1": node("clock", {"every": 4.0, "duration": 8.0}),
+            "time1": node("time", {"clock": w("clock1")}),
+            "curve1": node("curve", {"x": w("time1"), "shape": {"points": [[0.0, 0.0], [1.0, 1.0]]},
+                                     "low": low, "high": high}, {"kind": "number"}),
+            "space1": node("space", {"direction": [1, 0, 0], "offset": w("curve1"), "width": 0.2},
+                           {"kind": kind, "wrap": wrap}),
+            "curve2": node("curve", {"x": w("space1"), "shape": {"points": [[0, 0], [0.5, 1], [1, 0]]}},
+                           {"kind": "number"}),
+            "color1": node("color", {"brightness": w("curve2")})}}
+
+    def test_fixes_the_old_form_like_the_converter(self):
+        fixed = fix.fix(self.graph())["nodes"]
+        self.assertEqual(fixed["space1"]["settings"]["wrap"], "no")
+        self.assertEqual((fixed["curve1"]["inputs"]["low"], fixed["curve1"]["inputs"]["high"]),
+                         (-0.2, 1.0))
+
+    def test_leaves_other_strokes(self):
+        for graph in (self.graph(wrap="no"), self.graph(low=0.0, high=0.5),
+                      self.graph(kind="angle")):
+            self.assertIsNone(fix.fix(graph))
+
+
 class Checker(unittest.TestCase):
     """Runs after Convert: every expected graph passes the Rust checker."""
 
@@ -487,6 +535,7 @@ if __name__ == "__main__":
     suite = unittest.TestSuite()
     loader = unittest.TestLoader()
     suite.addTests(loader.loadTestsFromTestCase(Convert))
+    suite.addTests(loader.loadTestsFromTestCase(FixWrappedStrokes))
     suite.addTests(loader.loadTestsFromTestCase(Checker))
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)
