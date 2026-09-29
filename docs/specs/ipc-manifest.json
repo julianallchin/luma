@@ -355,6 +355,24 @@
       "returns": "bool"
     },
     {
+      "args": [],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "clip_graph_definitions",
+      "returns": "Value"
+    },
+    {
+      "args": [],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "clip_presets",
+      "returns": "Value"
+    },
+    {
       "args": [
         {
           "name": "scoreId",
@@ -3605,7 +3623,7 @@
       "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 11,
       "domain": "scores",
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
@@ -3760,7 +3778,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 151,
+    "commandCount": 153,
     "domainCount": 26,
     "eventCount": 13
   },

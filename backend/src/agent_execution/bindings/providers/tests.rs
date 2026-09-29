@@ -596,7 +596,14 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(clip["duration"], 7.5);
     assert_eq!(clip["z_index"], 3);
     assert_eq!(clip["blend_mode"], "add");
-    assert!(at(&v, "nodes").is_object());
+    // One definition per node kind, and the shipped presets.
+    assert_eq!(
+        at(&v, "nodes").as_array().map(Vec::len),
+        Some(luma_patterns::clip_graph::Kind::ALL.len())
+    );
+    assert!(at(&v, "presets")["clips"]
+        .as_array()
+        .is_some_and(|clips| !clips.is_empty()));
 
     // The worker synthesizes these; the host must not emit them (appendix A.4).
     assert!(v.get("meta").is_none());

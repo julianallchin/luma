@@ -308,9 +308,12 @@ mod tests {
         );
         let mut lit = 0;
         for (seconds, frame) in seconds.into_iter().zip(frames) {
-            let direct = prepared
-                .evaluate(clock.beat_at(f64::from(seconds)).unwrap())
-                .unwrap();
+            let beat = clock.beat_at(f64::from(seconds)).unwrap();
+            if beat < clip.start || beat >= clip.start + clip.duration {
+                assert!(frame.primitives.is_empty(), "outside the clip at {beat}");
+                continue;
+            }
+            let direct = prepared.evaluate(beat).unwrap();
             let Some(p::Value::Lighting(values)) = direct.get(p::clip_graph::OUTPUT) else {
                 assert!(frame.primitives.is_empty());
                 continue;
