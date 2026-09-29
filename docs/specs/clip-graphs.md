@@ -159,11 +159,14 @@ The raw axis coordinate `a` of a head, within its span:
 - `line`: projection of the head position on `direction`, scaled so the
   lowest head is 0 and the highest 1. Empty direction = the principal axis of
   the span's positions, signed so its largest component is positive (U before
-  V before Z on ties). One head, or all at one point: 0.5.
+  V before Z on ties). One head, or all at one point: 0.5. With `wrap` yes
+  the axis is a ring of the span's `n` units: `a' = (a·(n − 1) + 0.5) / n`,
+  so the ends sit one mean spacing apart and never on one place (for evenly
+  spaced heads this is the `order` cell).
 - `order`: the head's rank in the span's order, cell-centred:
   `(rank + 0.5) / n`. After `shuffle` the rank is the shuffled one.
 - `radial`: distance from the span's centroid in the plane, over the largest
-  distance. `direction` is the plane normal; empty = the direction of least
+  distance; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
   spread (`AxisPlane::Auto` today, with its sign snap).
 - `angle`: turns 0–1 around the centroid in that plane (`Mapping::circle` today).
 
@@ -172,7 +175,7 @@ as a share of the axis:
 
 ```
 d = a − offset                      (wrap no)
-d = ((a − offset + 0.5) mod 1) − 0.5 (wrap yes)
+d = (a − offset) mod 1               (wrap yes)
 x = d / width
 inside = width > 0 and 0 ≤ x ≤ 1
 ```
@@ -1182,3 +1185,4 @@ One line each; the alternative after "alt:".
 38. Multi-select editing works only when the selected clips share one graph shape; otherwise only the name field. alt: per-input intersection like today.
 39. Migrated clips are named after the matching shipped preset when their converted graph matches one, else `<Kind> · <summary>`. alt: leave names empty for humans to fill.
 40. Sparkle rain ships as a preset marked "needs vertical bars". alt: leave it out of the shipped list.
+41. A wrapped `line` or `radial` axis is a ring of the span's n units, `(a·(n − 1) + 0.5)/n`, so its lowest and highest heads never share one place (changed 2026-09-29; before, both read 0 and 1 and lit together as a pill entered). alt: keep 0–1 and light both ends.
