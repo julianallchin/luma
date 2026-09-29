@@ -13,7 +13,7 @@ pub(crate) fn definition() -> Definition {
         inputs: BTreeMap::from([
             (
                 "value".into(),
-                crate::signals::port("Signal", ValueType::Signal(SignalType::ANY), None),
+                crate::graph::port("Signal", ValueType::Signal(SignalType::ANY), None),
             ),
             (
                 "samples".into(),
@@ -26,8 +26,6 @@ pub(crate) fn definition() -> Definition {
                     rate: Rate::Fixed,
                     optional: false,
                     default: Some(Value::Number(1024.)),
-                    author: None,
-                    promotable: Vec::new(),
                 },
             ),
         ]),

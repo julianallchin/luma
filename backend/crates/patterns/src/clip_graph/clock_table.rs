@@ -1,4 +1,5 @@
-//! Integrated period tensors, built once during graph preparation.
+//! Integrated period tensors, built once during graph preparation. A clock
+//! whose period varies over the clip counts turns by integrating 1/period.
 use crate::*;
 use ndarray::Array3;
 pub(crate) const CELLS: usize = 256;
@@ -10,19 +11,16 @@ pub(crate) fn integrate(period: &Signal, frame: Frame<'_>) -> Result<Signal> {
     if channels != 1 {
         return Err(Error("clock periods need one value per head".into()));
     }
+    if period.values().iter().any(|p| !p.is_finite() || *p <= 0.) {
+        return Err(Error("clock periods must stay above 0 beats".into()));
+    }
     if times == 1 {
-        return period.map(
-            Unit::Number,
-            |p| if p == 0. { frame.clip_duration } else { p },
-        );
+        return Ok(period.clone());
     }
     if times != SAMPLES {
         return Err(Error(
             "clock table must be prepared over the whole clip".into(),
         ));
-    }
-    if period.values().iter().any(|p| !p.is_finite() || *p <= 0.) {
-        return Err(Error("clock periods must stay positive".into()));
     }
     let mut sums = Array3::zeros((heads, 1, CELLS + 3));
     let h = frame.clip_duration / (CELLS * STEPS) as f64;
@@ -46,7 +44,8 @@ pub(crate) fn integrate(period: &Signal, frame: Frame<'_>) -> Result<Signal> {
     )
 }
 
-pub(super) struct Clock<'a> {
+/// One head's row of a clock table.
+pub(crate) struct Clock<'a> {
     pub table: &'a Signal,
     pub head: usize,
     pub start: f64,
@@ -56,6 +55,7 @@ impl Clock<'_> {
     fn v(&self, i: usize) -> f64 {
         self.table.at(self.head, 0, i)
     }
+    /// Turns counted from the clip start.
     pub fn turns(&self, beat: f64) -> f64 {
         if self.table.values().dim().2 == 1 {
             return (beat - self.start) / self.v(0);
@@ -71,6 +71,7 @@ impl Clock<'_> {
         let k = (x.floor() as usize).min(CELLS - 1);
         self.v(k) + (self.v(k + 1) - self.v(k)) * (x - k as f64)
     }
+    /// The beat where the clock has counted `turns`.
     pub fn beat_at(&self, turns: f64) -> f64 {
         if self.table.values().dim().2 == 1 {
             return self.start + turns * self.v(0);

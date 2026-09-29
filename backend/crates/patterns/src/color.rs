@@ -4,7 +4,6 @@
 //! Sampling and masking happen before the output's color/dimmer split.
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,56 +97,4 @@ impl Gradient {
         let t = (position - a.t) / (b.t - a.t);
         a.alpha + (b.alpha - a.alpha) * t
     }
-}
-
-pub(crate) fn definition(op: Primitive) -> Option<Definition> {
-    use crate::signals::port;
-    let gradient = || {
-        port(
-            "Gradient",
-            ValueType::Gradient,
-            Some(Value::Gradient(Gradient::default())),
-        )
-    };
-    let (name, inputs, output, kind) = match op {
-        Primitive::SampleGradient => (
-            "Sample gradient",
-            vec![
-                ("gradient", gradient()),
-                (
-                    "position",
-                    port(
-                        "Position",
-                        ValueType::Proportion,
-                        Some(Value::Proportion(0.0)),
-                    ),
-                ),
-            ],
-            "color",
-            ValueType::Color,
-        ),
-        _ => return None,
-    };
-    let mut outputs = BTreeMap::from([(
-        output.into(),
-        Output {
-            value_type: kind,
-            rate: Rate::Frame,
-        },
-    )]);
-    if op == Primitive::SampleGradient {
-        outputs.insert(
-            "opacity".into(),
-            Output {
-                value_type: ValueType::Proportion,
-                rate: Rate::Frame,
-            },
-        );
-    }
-    Some(Definition {
-        name: name.into(),
-        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
-        outputs,
-        body: Body::Primitive(op),
-    })
 }

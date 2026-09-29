@@ -37,34 +37,21 @@ pub struct PreparedGraph {
     baked: Vec<Option<EvaluatedValue>>,
 }
 impl PreparedGraph {
-    pub fn new(
-        library: &Library,
-        definition: &str,
-        inputs: &BTreeMap<String, Value>,
-        frame: Frame,
-    ) -> Result<Self> {
-        library.validate(definition)?;
-        Self::new_validated(library, definition, inputs, frame)
-    }
-
-    /// The caller has already validated this library's reachable definitions.
-    /// Used by whole-score validation to share that work across repeated clips.
-    pub(crate) fn new_validated(
-        library: &Library,
-        definition: &str,
-        inputs: &BTreeMap<String, Value>,
-        frame: Frame,
-    ) -> Result<Self> {
+    /// A clip graph, checked and lowered onto kernels of `library` over the
+    /// frame's cells, ready to evaluate any beat of the clip.
+    pub fn new(library: &Library, graph: &crate::ClipGraph, frame: Frame) -> Result<Self> {
         frame.validate()?;
         if frame.features.is_some() {
             return Err(Error(
                 "bind owned track data with PreparedGraph::with_features".into(),
             ));
         }
+        graph.check()?;
+        let root = crate::clip_graph::lower(graph, frame)?;
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
-            output_types: library.definitions[definition].outputs.clone(),
+            output_types: root.outputs.clone(),
             slots: 0,
             cells: frame.cells.to_vec(),
             fixtures: {
@@ -79,24 +66,7 @@ impl PreparedGraph {
             requests: Vec::new(),
             baked: Vec::new(),
         };
-        if let Body::Form(kind) = library.definitions[definition].body {
-            crate::forms::check_inputs(definition, &library.definitions[definition], inputs)?;
-            let (lowered_library, root) = crate::forms::lower(library, kind, inputs, frame)?;
-            prepared.outputs =
-                prepared.lower_definition(&lowered_library, definition, &root, BTreeMap::new())?;
-        } else {
-            let root = &library.definitions[definition];
-            let bound = inputs
-                .iter()
-                .map(|(key, value)| {
-                    Ok((
-                        key.clone(),
-                        Source::Constant(EvaluatedValue::literal(value)?),
-                    ))
-                })
-                .collect::<Result<_>>()?;
-            prepared.outputs = prepared.lower_definition(library, definition, root, bound)?;
-        }
+        prepared.outputs = prepared.lower_definition(library, "clip", &root, BTreeMap::new())?;
         // A nested definition may offer several independent outputs. Only the
         // connected ones belong to this program, including during preparation.
         let live = prepared.live_steps(prepared.steps.len(), &[], prepared.outputs.values());
@@ -193,14 +163,6 @@ impl PreparedGraph {
     pub fn evaluate_batch(&self, beats: &[f64]) -> Result<BTreeMap<String, EvaluatedValue>> {
         self.evaluate_cached(beats, self.features.as_deref(), &self.baked)
     }
-    pub(crate) fn evaluate_using(
-        &self,
-        beats: &[f64],
-        features: Option<&dyn crate::FeatureSource>,
-    ) -> Result<BTreeMap<String, EvaluatedValue>> {
-        let baked = self.prepare_fixed(features)?;
-        self.evaluate_cached(beats, features, &baked)
-    }
     fn evaluate_cached(
         &self,
         beats: &[f64],
@@ -210,7 +172,6 @@ impl PreparedGraph {
         if beats.iter().any(|beat| !beat.is_finite()) {
             return Err(Error("musical time must be finite".into()));
         }
-        let clock = crate::Signal::series(beats, crate::Unit::Number)?;
         let mut slots = if baked.is_empty() {
             vec![None; self.slots]
         } else {
@@ -218,7 +179,7 @@ impl PreparedGraph {
         };
         for index in self.live_steps(self.steps.len(), baked, self.outputs.values()) {
             let step = &self.steps[index];
-            let outputs = self.run_step(step, beats, &clock, features, &slots)?;
+            let outputs = self.run_step(step, beats, features, &slots)?;
             for (name, value) in outputs {
                 slots[step.outputs[&name]] = Some(value);
             }
@@ -239,7 +200,6 @@ impl PreparedGraph {
         &self,
         step: &Step,
         beats: &[f64],
-        clock: &crate::Signal,
         features: Option<&dyn crate::FeatureSource>,
         slots: &[Option<EvaluatedValue>],
     ) -> Result<BTreeMap<String, EvaluatedValue>> {
@@ -255,7 +215,6 @@ impl PreparedGraph {
             &step.output_types,
             Batch {
                 times: beats,
-                clock,
                 fixtures: &self.fixtures,
                 frame: Frame {
                     features,
@@ -275,7 +234,11 @@ impl PreparedGraph {
         id: &str,
         inputs: BTreeMap<String, Source>,
     ) -> Result<BTreeMap<String, Source>> {
-        self.lower_definition(library, id, &library.definitions[id], inputs)
+        let definition = library
+            .definitions
+            .get(id)
+            .ok_or_else(|| Error(format!("the library has no {id}")))?;
+        self.lower_definition(library, id, definition, inputs)
     }
     fn lower_definition(
         &mut self,
@@ -314,7 +277,6 @@ impl PreparedGraph {
             }
         }
         match &definition.body {
-            Body::Form(_) => return Err(Error("forms cannot be nested inside graphs".into())),
             Body::Primitive(primitive) => {
                 let constants: BTreeMap<_, _> = inputs
                     .iter()
@@ -342,7 +304,6 @@ impl PreparedGraph {
                         &definition.inputs,
                         &definition.outputs,
                         Batch {
-                            clock: &crate::Signal::scalar(self.clip_start, crate::Unit::Number)?,
                             fixtures: &self.fixtures,
                             times: &[self.clip_start],
                             frame: Frame {

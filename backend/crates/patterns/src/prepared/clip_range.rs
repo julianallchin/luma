@@ -8,27 +8,26 @@ impl PreparedGraph {
         features: Option<&dyn crate::FeatureSource>,
     ) -> Result<Vec<Option<EvaluatedValue>>> {
         let mut baked = vec![None; self.slots];
-        let clock = crate::Signal::scalar(self.clip_start, crate::Unit::Number)?;
         for (index, step) in self.steps.iter().enumerate() {
-            let values = if step.primitive == Primitive::Source(crate::forms::SourceOp::ClockTable)
-            {
-                self.prepare_clock(index, features, &baked)?
-            } else if step.primitive == Primitive::ClipRange {
-                self.prepare_range(index, features, &baked)?
-            } else if (!step.primitive.reads_time()
-                || step
-                    .output_types
-                    .values()
-                    .any(|output| output.rate == crate::Rate::Fixed))
-                && step.inputs.values().all(|source| match source {
-                    Source::Constant(_) => true,
-                    Source::Slot(index) => baked[*index].is_some(),
-                })
-            {
-                self.run_step(step, &[self.clip_start], &clock, features, &baked)?
-            } else {
-                continue;
-            };
+            let values =
+                if step.primitive == Primitive::Kernel(crate::clip_graph::Kernel::ClockTable) {
+                    self.prepare_clock(index, features, &baked)?
+                } else if step.primitive == Primitive::ClipRange {
+                    self.prepare_range(index, features, &baked)?
+                } else if (!step.primitive.reads_time()
+                    || step
+                        .output_types
+                        .values()
+                        .any(|output| output.rate == crate::Rate::Fixed))
+                    && step.inputs.values().all(|source| match source {
+                        Source::Constant(_) => true,
+                        Source::Slot(index) => baked[*index].is_some(),
+                    })
+                {
+                    self.run_step(step, &[self.clip_start], features, &baked)?
+                } else {
+                    continue;
+                };
             for (key, value) in values {
                 if !step.primitive.reads_time()
                     || step.output_types[&key].rate == crate::Rate::Fixed
@@ -52,23 +51,22 @@ impl PreparedGraph {
         let beats: Vec<_> = if dependencies.is_empty() {
             vec![self.clip_start]
         } else {
-            (0..crate::forms::clock_table::SAMPLES)
+            (0..crate::clip_graph::clock_table::SAMPLES)
                 .map(|i| {
                     self.clip_start
                         + self.clip_duration * i as f64
-                            / (crate::forms::clock_table::SAMPLES - 1) as f64
+                            / (crate::clip_graph::clock_table::SAMPLES - 1) as f64
                 })
                 .collect()
         };
-        let clock = crate::Signal::series(&beats, crate::Unit::Number)?;
         let mut slots = baked.to_vec();
         for parent in dependencies {
             let step = &self.steps[parent];
-            for (key, value) in self.run_step(step, &beats, &clock, features, &slots)? {
+            for (key, value) in self.run_step(step, &beats, features, &slots)? {
                 slots[step.outputs[&key]] = Some(value);
             }
         }
-        self.run_step(step, &beats, &clock, features, &slots)
+        self.run_step(step, &beats, features, &slots)
     }
 
     fn prepare_range(
@@ -92,11 +90,10 @@ impl PreparedGraph {
             let beats: Vec<_> = (first..(first + 128).min(count))
                 .map(|i| self.clip_start + self.clip_duration * i as f64 / (count - 1) as f64)
                 .collect();
-            let clock = crate::Signal::series(&beats, crate::Unit::Number)?;
             let mut slots = baked.to_vec();
             for parent in &dependencies {
                 let step = &self.steps[*parent];
-                let values = self.run_step(step, &beats, &clock, features, &slots)?;
+                let values = self.run_step(step, &beats, features, &slots)?;
                 for (key, value) in values {
                     slots[step.outputs[&key]] = Some(value);
                 }
