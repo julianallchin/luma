@@ -13,14 +13,14 @@ test(
   { fixture: { seconds: 60, clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 50 }] } },
   () => {
     // A clip is labelled by its form.
-    const CLIP = "Color";
-    const LAYOUT = ["Sidebar", "Waveform", "Clip inputs", "Stage"];
+    const CLIP = "Wash";
+    const LAYOUT = ["Sidebar", "Waveform", "Clip graph", "Stage"];
     nav.trackEditor("Test Venue", "Aurora");
     until("the clip", () => node("card", CLIP));
     // In the track editor the stage carries no visualizer toolbar.
     expect(node("card", "Visualizer toolbar")).toBe(undefined);
     app.click(node("card", CLIP));
-    until("the inspector", () => node("card", "Clip inputs"));
+    until("the inspector", () => node("card", "Clip graph"));
     const before = cards(LAYOUT);
     app.click(node("button", "Play"));
     until("playing", () => node("button", "Pause"));
@@ -30,7 +30,7 @@ test(
     // The whole window, one stage, the editors hidden, the transport kept.
     expect(node("card", "Fullscreen visualizer").bounds).toEqual({ x: 0, y: 0, width: 1400, height: 900 });
     expect(app.snapshot().findAll({ role: "card", label: "Stage" }).length).toBe(1);
-    for (const label of ["Sidebar", "Waveform", "Clip inputs"]) expect(node("card", label)).toBe(undefined);
+    for (const label of ["Sidebar", "Waveform", "Clip graph"]) expect(node("card", label)).toBe(undefined);
     assert(node("button", "Pause") && node("card", "Visualizer toolbar"), "fullscreen lost the transport");
     const time = () => app.snapshot().findAll({ role: "text" }).find((n) => /^\d+:\d\d \/ \d+:\d\d$/.test(n.label))?.label;
     const firstTime = time();
