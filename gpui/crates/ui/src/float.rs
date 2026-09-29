@@ -11,8 +11,9 @@
 //! writes a colour or a corner down.
 
 use crate::icons::IconName;
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, px, AnimationExt, AnyElement, App, Div, FontWeight, SharedString, Window};
+use gpui::{div, AnimationExt, AnyElement, App, Div, FontWeight, SharedString, Window};
 use gpui_component::Icon;
 
 use crate::node::Instrument as _;
@@ -47,13 +48,13 @@ pub const HEADER_HEIGHT: f32 = 46.0;
 pub fn header_band() -> Div {
     band()
         .flex_none()
-        .h(px(HEADER_HEIGHT))
-        .rounded_t(px(radius::MODAL))
+        .h(rpx(HEADER_HEIGHT))
+        .rounded_t(rpx(radius::MODAL))
         .border_b_1()
         .border_color(glass::hairline(BAND_SEAM))
-        .pl(px(12.0))
-        .pr(px(10.0))
-        .gap(px(10.0))
+        .pl(rpx(12.0))
+        .pr(rpx(10.0))
+        .gap(rpx(10.0))
 }
 
 /// [`band`] at the bottom of a card: outer corners rounded, top edge a seam.
@@ -63,12 +64,12 @@ pub fn header_band() -> Div {
 pub fn footer_band() -> Div {
     band()
         .flex_none()
-        .rounded_b(px(radius::MODAL))
+        .rounded_b(rpx(radius::MODAL))
         .border_t_1()
         .border_color(glass::hairline(BAND_SEAM))
-        .px(px(12.0))
-        .py(px(FOOTER_PAD_Y))
-        .gap(px(12.0))
+        .px(rpx(12.0))
+        .py(rpx(FOOTER_PAD_Y))
+        .gap(rpx(12.0))
 }
 
 const FOOTER_PAD_Y: f32 = 8.0;
@@ -84,7 +85,7 @@ pub const FOOTER_HEIGHT: f32 = FOOTER_PAD_Y * 2.0 + KEY_CAP_HEIGHT + 1.0;
 
 /// Hairline divider between sections of a floating card.
 pub fn divider() -> Div {
-    div().h(px(1.0)).bg(glass::hairline(0.07))
+    div().h(rpx(1.0)).bg(glass::hairline(0.07))
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +185,11 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(10.0))
-            .px(px(ROW_INSET))
-            .py(px(6.0))
-            .rounded(px(radius::ROW))
-            .text_size(px(13.0))
+            .gap(rpx(10.0))
+            .px(rpx(ROW_INSET))
+            .py(rpx(6.0))
+            .rounded(rpx(radius::ROW))
+            .text_size(rpx(13.0))
             .cursor_pointer(),
         state,
         fade_key,
@@ -205,15 +206,15 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
 pub fn nav_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
     row_state_paint(
         div()
-            .h(px(NAV_ROW_HEIGHT))
+            .h(rpx(NAV_ROW_HEIGHT))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.0))
-            .px(px(ROW_INSET))
-            .rounded(px(radius::ROW))
-            .text_size(px(12.5))
+            .gap(rpx(8.0))
+            .px(rpx(ROW_INSET))
+            .rounded(rpx(radius::ROW))
+            .text_size(rpx(12.5))
             .cursor_pointer(),
         state,
         fade_key,
@@ -224,15 +225,15 @@ pub fn nav_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
 /// own leading hairline, so the two panes share one boundary.
 pub fn rail() -> Div {
     div()
-        .w(px(196.0))
+        .w(rpx(196.0))
         .flex_none()
         .border_l_1()
         .border_color(glass::hairline(BAND_SEAM))
-        .px(px(8.0))
-        .py(px(8.0))
+        .px(rpx(8.0))
+        .py(rpx(8.0))
         .flex()
         .flex_col()
-        .gap(px(2.0))
+        .gap(rpx(2.0))
 }
 
 /// A quiet word on glass — the name of a control, or (padded, as
@@ -243,7 +244,7 @@ pub fn rail() -> Div {
 pub fn label(text: impl Into<SharedString>) -> Div {
     div()
         .flex_none()
-        .text_size(px(11.0))
+        .text_size(rpx(11.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.55))
         .child(text.into())
@@ -263,7 +264,7 @@ pub fn field_row(label_text: impl Into<SharedString>, control: impl IntoElement)
         // its column would read as a text field, and the ghost stack that
         // sizes a picker to its widest option would have nothing to say.
         .items_start()
-        .gap(px(6.0))
+        .gap(rpx(6.0))
         .child(label(label_text))
         .child(control)
 }
@@ -275,7 +276,7 @@ pub fn inline_field_row(label_text: impl Into<SharedString>, control: impl IntoE
         .flex_row()
         .items_center()
         .justify_between()
-        .gap(px(12.0))
+        .gap(rpx(12.0))
         .w_full()
         .child(label(label_text))
         .child(control)
@@ -283,7 +284,7 @@ pub fn inline_field_row(label_text: impl Into<SharedString>, control: impl IntoE
 
 /// A quiet heading over a group of [`nav_row`]s.
 pub fn section_heading(text: impl Into<SharedString>) -> Div {
-    label(text).px(px(8.0)).pb(px(4.0))
+    label(text).px(rpx(8.0)).pb(rpx(4.0))
 }
 
 /// A heading over a group of labelled rows inside one setting, such as a
@@ -294,11 +295,11 @@ pub fn group_heading(text: impl Into<SharedString>, first: bool) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(10.0))
-        .when(!first, |heading| heading.pt(px(6.0)).child(divider()))
+        .gap(rpx(10.0))
+        .when(!first, |heading| heading.pt(rpx(6.0)).child(divider()))
         .child(
             div()
-                .text_size(px(12.0))
+                .text_size(rpx(12.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(ladder::foreground_90())
                 .child(text.into()),
@@ -318,21 +319,26 @@ pub fn group_heading(text: impl Into<SharedString>, first: bool) -> Div {
 /// The caller puts its `.id()`, `.overflow_y_scroll()` and rows on the element
 /// this returns as a child — `viewport()` is the wrapper.
 pub fn viewport() -> Div {
-    div().flex_1().min_h_0().py(px(6.0))
+    div().flex_1().min_h_0().py(rpx(6.0))
 }
 
 /// The row list inside a [`viewport`]: horizontal gutter and the app-wide list
 /// rhythm. The caller adds `.id()`, `.overflow_y_scroll()` and `.track_scroll()`.
 pub fn list() -> Div {
-    div().size_full().px(px(8.0)).flex().flex_col().gap(px(2.0))
+    div()
+        .size_full()
+        .px(rpx(8.0))
+        .flex()
+        .flex_col()
+        .gap(rpx(2.0))
 }
 
 /// The line a picker shows where its rows would be, when there are none.
 pub fn empty_row(message: impl Into<SharedString>) -> Div {
     div()
-        .px(px(14.0))
-        .py(px(16.0))
-        .text_size(px(12.5))
+        .px(rpx(14.0))
+        .py(rpx(16.0))
+        .text_size(rpx(12.5))
         .text_color(ladder::foreground_alpha(0.45))
         .child(message.into())
 }
@@ -348,10 +354,10 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
 pub fn check(checked: bool) -> AnyElement {
     if checked {
         Icon::new(IconName::Check)
-            .size(px(CHECK))
+            .size(rpx(CHECK))
             .into_any_element()
     } else {
-        div().size(px(CHECK)).into_any_element()
+        div().size(rpx(CHECK)).into_any_element()
     }
 }
 
@@ -363,11 +369,11 @@ const CHECK: f32 = 12.0;
 pub fn checkbox(checked: bool) -> Div {
     div()
         .flex_none()
-        .size(px(CHECKBOX))
+        .size(rpx(CHECKBOX))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(radius::CHIP))
+        .rounded(rpx(radius::CHIP))
         .bg(glass::ink(if checked { 0.16 } else { 0.08 }))
         .text_color(ladder::foreground())
         .child(check(checked))
@@ -389,16 +395,16 @@ pub const KEY_CAP_HEIGHT: f32 = 22.0;
 /// split by [`cap_split`].
 pub fn key_cap() -> Div {
     div()
-        .h(px(KEY_CAP_HEIGHT))
-        .px(px(6.0))
-        .rounded(px(radius::CAP))
+        .h(rpx(KEY_CAP_HEIGHT))
+        .px(rpx(6.0))
+        .rounded(rpx(radius::CAP))
         .flex()
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(4.0))
+        .gap(rpx(4.0))
         .bg(glass::ink(0.05))
-        .text_size(px(11.0))
+        .text_size(rpx(11.0))
         .font_family(crate::fonts::MONO)
         .text_color(ladder::foreground_alpha(0.70))
 }
@@ -425,13 +431,13 @@ const CAP_PRESSED: f32 = 0.09;
 
 /// The hairline between two glyphs sharing one [`key_cap`] (`[ ↑ | ↓ ]`).
 pub fn cap_split() -> Div {
-    div().w(px(1.0)).h(px(11.0)).bg(glass::hairline(0.10))
+    div().w(rpx(1.0)).h(rpx(11.0)).bg(glass::hairline(0.10))
 }
 
 /// The tiny verb after a [`key_cap`] ("Navigate", "Open").
 pub fn key_hint_label(label: impl Into<SharedString>) -> Div {
     div()
-        .text_size(px(10.5))
+        .text_size(rpx(10.5))
         .text_color(ladder::foreground_alpha(0.45))
         .child(label.into())
 }
@@ -442,7 +448,7 @@ const CAP_GLYPH: f32 = 12.5;
 
 fn cap_glyph(icon: IconName) -> Icon {
     Icon::new(icon)
-        .size(px(CAP_GLYPH))
+        .size(rpx(CAP_GLYPH))
         .text_color(ladder::foreground_alpha(0.70))
 }
 
@@ -481,7 +487,7 @@ fn hint_row() -> Div {
         .flex_row()
         .items_center()
         .flex_none()
-        .gap(px(5.0))
+        .gap(rpx(5.0))
 }
 
 // ---------------------------------------------------------------------------
@@ -531,16 +537,16 @@ pub fn btn_primary(label: impl Into<SharedString>) -> Div {
 pub fn btn_primary_chip() -> Div {
     btn_primary_paint(
         div()
-            .h(px(KEY_CAP_HEIGHT))
-            .px(px(8.0))
-            .rounded(px(radius::CAP))
+            .h(rpx(KEY_CAP_HEIGHT))
+            .px(rpx(8.0))
+            .rounded(rpx(radius::CAP))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .justify_center()
-            .gap(px(4.0))
-            .text_size(px(12.0))
+            .gap(rpx(4.0))
+            .text_size(rpx(12.0))
             .cursor_pointer(),
     )
 }
@@ -567,12 +573,12 @@ fn btn_shape() -> Div {
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(6.0))
+        .gap(rpx(6.0))
         .flex_shrink_0()
-        .h(px(32.0))
-        .px(px(12.0))
-        .rounded(px(radius::ROW))
-        .text_size(px(13.0))
+        .h(rpx(32.0))
+        .px(rpx(12.0))
+        .rounded(rpx(radius::ROW))
+        .text_size(rpx(13.0))
         .cursor_pointer()
 }
 
@@ -616,7 +622,7 @@ pub fn picker_chip(value: &str, options: &[&str]) -> Div {
 pub fn chip() -> Div {
     chip_plate(Enabled::Yes)
         .justify_center()
-        .px(px(PICKER_CHIP_PAD))
+        .px(rpx(PICKER_CHIP_PAD))
 }
 
 /// The plate both chips wear. Padding is left off because [`picker_chip`]'s
@@ -627,10 +633,10 @@ pub(crate) fn chip_plate(enabled: Enabled) -> Div {
         .flex()
         .items_center()
         .flex_shrink_0()
-        .gap(px(6.0))
-        .h(px(crate::CONTROL_HEIGHT))
-        .rounded(px(radius::ROW))
-        .text_size(px(12.0))
+        .gap(rpx(6.0))
+        .h(rpx(crate::CONTROL_HEIGHT))
+        .rounded(rpx(radius::ROW))
+        .text_size(rpx(12.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.9))
         .bg(glass::ink(0.06))
@@ -643,7 +649,7 @@ pub(crate) fn chip_plate(enabled: Enabled) -> Div {
         })
 }
 
-/// Comet's `px(10)` on its picker chips — and, through [`field`], on every
+/// Comet's `rpx(10)` on its picker chips — and, through [`field`], on every
 /// other control in the row, so a value in a chip and a value in a field are
 /// inset by the same amount and their text lines up.
 pub(crate) const PICKER_CHIP_PAD: f32 = 10.0;
@@ -675,14 +681,14 @@ pub fn field() -> Div {
         .flex()
         .items_center()
         .flex_shrink_0()
-        .h(px(crate::CONTROL_HEIGHT))
-        .px(px(PICKER_CHIP_PAD))
+        .h(rpx(crate::CONTROL_HEIGHT))
+        .px(rpx(PICKER_CHIP_PAD))
         .overflow_hidden()
-        .rounded(px(radius::ROW))
+        .rounded(rpx(radius::ROW))
         .border_1()
         .border_color(glass::hairline(0.08))
         .bg(glass::ink(0.03))
-        .text_size(px(12.0))
+        .text_size(rpx(12.0))
         .text_color(ladder::foreground())
 }
 
@@ -698,10 +704,10 @@ pub fn segmented() -> Div {
         .flex_row()
         .flex_shrink_0()
         .items_center()
-        .gap(px(SEGMENT_GAP))
-        .h(px(crate::CONTROL_HEIGHT))
-        .p(px(SEGMENT_GAP))
-        .rounded(px(radius::ROW))
+        .gap(rpx(SEGMENT_GAP))
+        .h(rpx(crate::CONTROL_HEIGHT))
+        .p(rpx(SEGMENT_GAP))
+        .rounded(rpx(radius::ROW))
         .border_1()
         .border_color(glass::hairline(0.08))
         .bg(glass::ink(0.03))
@@ -723,9 +729,9 @@ pub fn segment(
         .justify_center()
         .flex_1()
         .h_full()
-        .px(px(SEGMENT_PAD))
-        .rounded(px(radius::CONTROL))
-        .text_size(px(12.0))
+        .px(rpx(SEGMENT_PAD))
+        .rounded(rpx(radius::CONTROL))
+        .text_size(rpx(12.0))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
         .text_color(ladder::foreground_alpha(if chosen { 1.0 } else { 0.55 }))
@@ -747,8 +753,8 @@ pub fn switch(on: f32) -> Div {
     div()
         .relative()
         .flex_none()
-        .w(px(SWITCH_WIDTH))
-        .h(px(SWITCH_HEIGHT))
+        .w(rpx(SWITCH_WIDTH))
+        .h(rpx(SWITCH_HEIGHT))
         .rounded_full()
         .bg(motion::mix(
             glass::wash(0.15),
@@ -758,9 +764,9 @@ pub fn switch(on: f32) -> Div {
         .child(
             div()
                 .absolute()
-                .top(px(SWITCH_INSET))
-                .left(px(SWITCH_INSET + SWITCH_TRAVEL * on))
-                .size(px(SWITCH_KNOB))
+                .top(rpx(SWITCH_INSET))
+                .left(rpx(SWITCH_INSET + SWITCH_TRAVEL * on))
+                .size(rpx(SWITCH_KNOB))
                 .rounded_full()
                 .bg(motion::mix(
                     ladder::foreground_alpha(0.7),
@@ -895,8 +901,8 @@ fn scrub_box(
     let moved = id.clone();
     field()
         .relative()
-        .w(px(width))
-        .px(px(0.0))
+        .w(rpx(width))
+        .px(rpx(0.0))
         .child(
             div()
                 .absolute()
@@ -910,12 +916,12 @@ fn scrub_box(
             div()
                 .absolute()
                 .inset_0()
-                .px(px(PICKER_CHIP_PAD))
+                .px(rpx(PICKER_CHIP_PAD))
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(rpx(4.0))
                 .font_family(crate::fonts::MONO)
-                .text_size(px(11.0))
+                .text_size(rpx(11.0))
                 .text_color(ladder::foreground())
                 .child(div().flex_1().min_w_0().child(text.clone()))
                 .when_some(unit, |row, unit| {
@@ -993,13 +999,13 @@ pub fn popover_card() -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(2.0))
-        .p(px(4.0))
-        .rounded(px(radius::CARD))
+        .gap(rpx(2.0))
+        .p(rpx(4.0))
+        .rounded(rpx(radius::CARD))
         .border_1()
         .border_color(glass::hairline(0.10))
         .bg(glass::overlay())
-        .text_size(px(13.0))
+        .text_size(rpx(13.0))
         .text_color(ladder::foreground())
         .overflow_hidden()
 }
@@ -1187,8 +1193,8 @@ fn hang(
     closing: Option<f32>,
 ) -> AnyElement {
     let id = id.into();
-    let reserved = px(trigger + MENU_GAP);
-    let gap = px(MENU_GAP);
+    let reserved = rpx(trigger + MENU_GAP);
+    let gap = rpx(MENU_GAP);
     let mut origin = div().absolute().size_0();
     let (anchor, card) = match side {
         Side::Below => {
@@ -1246,16 +1252,16 @@ fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f
     let displacement = std::rc::Rc::new(std::cell::Cell::new(0.0));
     let offset = displacement.clone();
     let anchored = anchored.resolved_offset(move |anchor| {
-        let distance = px(offset.get());
+        let distance = gpui::px(offset.get());
         match anchor {
             gpui::Anchor::TopLeft | gpui::Anchor::TopRight | gpui::Anchor::TopCenter => {
-                gpui::point(px(0.0), -distance)
+                gpui::point(gpui::px(0.0), -distance)
             }
             gpui::Anchor::BottomLeft | gpui::Anchor::BottomRight | gpui::Anchor::BottomCenter => {
-                gpui::point(px(0.0), distance)
+                gpui::point(gpui::px(0.0), distance)
             }
-            gpui::Anchor::LeftCenter => gpui::point(-distance, px(0.0)),
-            gpui::Anchor::RightCenter => gpui::point(distance, px(0.0)),
+            gpui::Anchor::LeftCenter => gpui::point(-distance, gpui::px(0.0)),
+            gpui::Anchor::RightCenter => gpui::point(distance, gpui::px(0.0)),
         }
     });
     let spec = if closing.is_some() {
@@ -1430,13 +1436,13 @@ pub fn skeleton_rows(count: usize, view: gpui::EntityId, cx: &mut gpui::App) -> 
     div()
         .flex()
         .flex_col()
-        .gap(px(6.0))
-        .py(px(4.0))
+        .gap(rpx(6.0))
+        .py(rpx(4.0))
         .children((0..count).map(move |index| {
             let phase = motion::staggered_phase(delta, index, SKELETON_STAGGER);
             div()
-                .h(px(28.0))
-                .rounded(px(radius::CONTROL))
+                .h(rpx(28.0))
+                .rounded(rpx(radius::CONTROL))
                 .bg(glass::ink(0.04))
                 .opacity(SKELETON_DIM + SKELETON_LIFT * motion::pulse_wave(phase))
         }))
@@ -1456,9 +1462,9 @@ pub fn error_row(message: impl Into<SharedString>) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(6.0))
-        .p(px(8.0))
-        .text_size(px(12.0))
+        .gap(rpx(6.0))
+        .p(rpx(8.0))
+        .text_size(rpx(12.0))
         .text_color(ladder::danger())
         .child(message.into())
 }

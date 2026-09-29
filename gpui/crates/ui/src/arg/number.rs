@@ -12,9 +12,10 @@
 //! `escape` to cancel ahead of every binding around the field, and this
 //! wrapper gives them their meaning.
 
+use crate::rpx;
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    div, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Subscription, Window,
 };
 
@@ -297,17 +298,17 @@ impl<T: DraftValue> Render for DraftedNumber<T> {
         let drafting = self.input.read(cx).text() != self.shown();
         float::field()
             .when(drafting, |field| field.key_context(DRAFT_CONTEXT))
-            .w(px(self.width))
+            .w(rpx(self.width))
             // Never wider than its column: a field nested under a source's
             // rule gives up the rule's indent.
             .max_w_full()
             .font_family(crate::fonts::MONO)
-            .gap(px(4.))
+            .gap(rpx(4.))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .when_some(self.unit, |field, unit| {
                 let label = div()
                     .flex_none()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(crate::ladder::foreground_alpha(0.45));
                 match self.per {
                     None => field.child(label.child(unit)),

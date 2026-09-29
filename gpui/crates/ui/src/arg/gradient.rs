@@ -18,8 +18,9 @@
 //! into sRGB ([`Light::display`]).
 
 pub use super::color::Light;
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, linear_color_stop, linear_gradient, px};
+use gpui::{div, linear_color_stop, linear_gradient};
 use luma_patterns::color_space;
 
 /// One stop: a position along the bar and the color there.
@@ -173,8 +174,8 @@ pub fn gradient_fill(gradient: &Gradient, radius: f32) -> Vec<gpui::Div> {
         .enumerate()
         .map(|(at, segment)| {
             segment
-                .when(at == 0, |s| s.rounded_l(px(radius)))
-                .when(at == last_segment, |s| s.rounded_r(px(radius)))
+                .when(at == 0, |s| s.rounded_l(rpx(radius)))
+                .when(at == last_segment, |s| s.rounded_r(rpx(radius)))
         })
         .collect()
 }

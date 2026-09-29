@@ -12,7 +12,7 @@
 //! ([`apex`]). There is nothing below the floor, so depth is never a darker
 //! slice; a divider is a *lighter* hairline ([`trim`], [`border`]).
 //!
-//! Hue appears only for *meaning* ([`primary`], [`status_ok`], [`port`]).
+//! Hue appears only for *meaning* ([`primary`], [`status_ok`], [`signal`]).
 
 use gpui::{hsla, rgb, rgba, Hsla, Rgba};
 
@@ -326,6 +326,46 @@ pub fn foreground_alpha(alpha: f32) -> Hsla {
     color
 }
 
+// -- signals ------------------------------------------------------------------
+
+/// What a graph wire carries. Its port at each end and the wire itself take
+/// the one hue [`signal`] gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Signal {
+    Number,
+    Vector,
+    Color,
+    /// A clock's events.
+    Clock,
+    Heads,
+    Coordinate,
+}
+
+impl Signal {
+    pub const ALL: [Signal; 6] = [
+        Signal::Number,
+        Signal::Vector,
+        Signal::Color,
+        Signal::Clock,
+        Signal::Heads,
+        Signal::Coordinate,
+    ];
+}
+
+/// A signal's hue: one lightness and chroma for all six, so none shouts
+/// over the others, and hues far enough apart to tell at a wire's width.
+pub fn signal(kind: Signal) -> Hsla {
+    let hue = match kind {
+        Signal::Number => 75.,
+        Signal::Vector => 190.,
+        Signal::Color => 335.,
+        Signal::Clock => 140.,
+        Signal::Heads => 290.,
+        Signal::Coordinate => 245.,
+    };
+    crate::glass::oklch(0.76, 0.12, hue)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +427,16 @@ mod tests {
             HOVER,
         ];
         assert!(rungs.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    /// Every signal has its own hue.
+    #[test]
+    fn signals_differ() {
+        for (i, a) in Signal::ALL.iter().enumerate() {
+            for b in &Signal::ALL[i + 1..] {
+                assert_ne!(signal(*a), signal(*b), "{a:?} and {b:?}");
+            }
+        }
     }
 
     /// Planes are achromatic: hue on this ladder means *meaning*, never depth.

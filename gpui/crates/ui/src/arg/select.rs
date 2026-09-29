@@ -16,8 +16,9 @@
 //! always floats, so an opaque square slab opening a rounded translucent card
 //! was two components wearing one name. See `picker_chip`'s own note.
 
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, px, App, Div, ElementId, SharedString, Window};
+use gpui::{div, App, Div, ElementId, SharedString, Window};
 
 use crate::node::{Instrument, Role};
 use crate::{float, luma_select_item, CONTROL_HEIGHT};
@@ -116,14 +117,17 @@ pub fn luma_arg_select(
                 .iter()
                 .enumerate()
                 .fold(
-                    float::popover_card().min_w(px(144.)).gap(px(0.)).p(px(3.)),
+                    float::popover_card()
+                        .min_w(rpx(144.))
+                        .gap(rpx(0.))
+                        .p(rpx(3.)),
                     |menu, (index, option)| {
                         let on_pick = on_pick.clone();
                         menu.child(
                             luma_select_item(option, float::RowState::of(*option == value, false))
-                                .h(px(26.))
-                                .py(px(0.))
-                                .text_size(px(12.))
+                                .h(rpx(26.))
+                                .py(rpx(0.))
+                                .text_size(rpx(12.))
                                 .id(ElementId::Name(format!("{id}:{option}").into()))
                                 .on_click(move |_, window, cx| {
                                     if open {

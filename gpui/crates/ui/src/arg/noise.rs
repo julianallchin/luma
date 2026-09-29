@@ -6,12 +6,13 @@
 //! heads show their value at the playhead's beat of the clip, so the strip
 //! shows what the lights show there. A setting that follows a wire of its
 //! own is held at a fixed stand-in, and the preview says so.
+use crate::rpx;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, fill, hsla, point, px, size, App, Bounds, Context, Div, Hsla, PathBuilder, Pixels,
+    canvas, div, fill, hsla, point, size, App, Bounds, Context, Div, Hsla, PathBuilder, Pixels,
     SharedString, Window,
 };
 
@@ -132,8 +133,8 @@ fn title(name: &'static str, detail: String) -> Div {
     div()
         .flex()
         .items_baseline()
-        .gap(px(6.))
-        .text_size(px(11.))
+        .gap(rpx(6.))
+        .text_size(rpx(11.))
         .child(
             div()
                 .font_weight(gpui::FontWeight::MEDIUM)
@@ -198,7 +199,7 @@ impl Render for NoisePreview {
         let graph = div()
             .relative()
             .w_full()
-            .h(px(GRAPH_H))
+            .h(rpx(GRAPH_H))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -217,8 +218,8 @@ impl Render for NoisePreview {
                     .top_0()
                     .bottom_0()
                     .left(gpui::relative(cursor))
-                    .ml(px(-0.5))
-                    .w(px(1.))
+                    .ml(rpx(-0.5))
+                    .w(rpx(1.))
                     .bg(ladder::foreground_alpha(0.35)),
             )
             .agent_node(Role::Text, format!("{id} over time"));
@@ -227,15 +228,15 @@ impl Render for NoisePreview {
             move |bounds, _, window, _| paint_heads(window, bounds, &heads),
         )
         .w_full()
-        .h(px(RIG_H))
+        .h(rpx(RIG_H))
         .agent_node(Role::Text, format!("{id} along the rig"));
         div()
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .p(px(9.))
-            .rounded(px(crate::radius::ROW))
+            .gap(rpx(6.))
+            .p(rpx(9.))
+            .rounded(rpx(crate::radius::ROW))
             .border_1()
             .border_color(crate::glass::hairline(0.08))
             .bg(crate::glass::ink(0.03))
@@ -248,13 +249,13 @@ impl Render for NoisePreview {
             .child(rig)
             .children((!readable).then(|| {
                 div()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(ladder::foreground_alpha(0.5))
                     .child("These settings give no noise to show")
             }))
             .children((!held.is_empty()).then(|| {
                 div()
-                    .text_size(px(11.))
+                    .text_size(rpx(11.))
                     .text_color(ladder::foreground_alpha(0.4))
                     .child(format!("Shown with {}", held.join(", ")))
             }))
@@ -266,7 +267,7 @@ impl Render for NoisePreview {
 /// breaks the line.
 fn paint_line(window: &mut Window, bounds: Bounds<Pixels>, values: &[Option<f64>], color: Hsla) {
     let last = values.len().saturating_sub(1).max(1) as f32;
-    let mut path = PathBuilder::stroke(px(1.25));
+    let mut path = PathBuilder::stroke(gpui::px(1.25 * crate::rem_scale(window)));
     let mut drawing = false;
     let mut any = false;
     for (k, value) in values.iter().enumerate() {
@@ -300,9 +301,12 @@ fn paint_heads(window: &mut Window, bounds: Bounds<Pixels>, heads: &[Option<f64>
     for (i, level) in heads.iter().enumerate() {
         let cell = Bounds {
             origin: point(bounds.origin.x + width * i as f32, bounds.origin.y),
-            size: size(width - px(1.), bounds.size.height),
+            size: size(
+                width - gpui::px(crate::rem_scale(window)),
+                bounds.size.height,
+            ),
         };
         let color = level.map_or(ladder::foreground_alpha(0.06), head_color);
-        window.paint_quad(fill(cell, color).corner_radii(px(2.)));
+        window.paint_quad(fill(cell, color).corner_radii(gpui::px(2. * crate::rem_scale(window))));
     }
 }

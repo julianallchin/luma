@@ -53,6 +53,7 @@ pub mod paint;
 pub mod pane;
 pub mod pill;
 pub mod radius;
+pub mod rem_scale;
 pub mod runtime;
 pub mod scrub_number;
 pub mod sheet;
@@ -85,7 +86,26 @@ pub const TEXT_INPUT: &str = "TextInput";
 /// existed, which is exactly how a baseline drifts.
 pub const CONTROL_HEIGHT: f32 = 24.;
 
+/// The rem every length in this crate is written against.
+pub const BASE_REM: f32 = 16.;
+
+/// `n` logical pixels at the base rem, as rems. At the app's rem it is
+/// exactly `px(n)`; under a subtree drawn at another rem (the clip graph
+/// canvas's zoom, via `Window::with_rem_size`) it scales with it. Controls
+/// that may sit on the canvas size themselves with this, not `px`.
+pub fn rpx(n: f32) -> gpui::Rems {
+    gpui::rems(n / BASE_REM)
+}
+
+/// How much the rem the current subtree is drawn at magnifies [`rpx`]
+/// lengths: 1 outside a zoomed subtree. Painted code multiplies its pixel
+/// constants by this.
+pub fn rem_scale(window: &gpui::Window) -> f32 {
+    f32::from(window.rem_size()) / BASE_REM
+}
+
 pub use button::{button, icon_button, icon_toggle, toggle_paint, Enabled};
+pub use rem_scale::rem_scaled;
 pub use select::luma_select_item;
 pub use slider::luma_slider;
 pub use text::{caption, plate};
