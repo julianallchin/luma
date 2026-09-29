@@ -86,8 +86,6 @@ pub(crate) fn terminal_definition() -> crate::Definition {
         value_type: value.value_type(),
         rate: Rate::Frame,
         default: Some(value),
-        author: None,
-        promotable: Vec::new(),
     };
     Definition {
         name: "Apply".into(),
@@ -111,7 +109,7 @@ pub(crate) fn terminal_definition() -> crate::Definition {
             ),
         ]),
         outputs: BTreeMap::from([(
-            "lighting".into(),
+            crate::clip_graph::OUTPUT.into(),
             Output {
                 value_type: ValueType::Lighting,
                 rate: Rate::Frame,

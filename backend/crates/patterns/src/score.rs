@@ -1,5 +1,5 @@
 use crate::clip_graph::ClipGraph;
-use crate::{Error, Library, PreparedGraph, Result, Value};
+use crate::{Error, Frame, Library, PreparedGraph, Result, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -66,17 +66,33 @@ impl Score {
 
     /// One clip's checks, so a player can leave out a clip that fails them
     /// and still play the rest of the score.
-    pub fn validate_clip(_base: &Library, id: &str, clip: &Clip) -> Result<()> {
+    pub fn validate_clip(base: &Library, id: &str, clip: &Clip) -> Result<()> {
         crate::graph::identity(id)?;
         clip.selection.validate()?;
-        crate::clip_graph::check_clip(clip).map_err(|error| {
-            let name = clip.name.trim();
+        let name = clip.name.trim();
+        let prefix = |error: Error| {
             if name.is_empty() {
                 Error(format!("clip ({id}): {error}"))
             } else {
                 Error(format!("clip {name} ({id}): {error}"))
             }
-        })
+        };
+        crate::clip_graph::check_clip(clip).map_err(prefix)?;
+        // Lower it without venue geometry: fixed timing and values fail here.
+        PreparedGraph::new(
+            base,
+            &clip.graph,
+            Frame {
+                features: None,
+                cells: &[],
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .map_err(prefix)?;
+        Ok(())
     }
     pub fn to_json(&self, base: &Library) -> Result<String> {
         self.validate(base)?;
@@ -87,36 +103,45 @@ impl Score {
         score.validate(base)?;
         Ok(score)
     }
-    /// Bind clip overrides once. The resulting program owns its inputs and
-    /// geometry and can render any frame, including a backwards seek.
+    /// Prepare one clip over `cells`. The program owns its geometry and can
+    /// render any frame, including a backwards seek.
     pub fn prepare_clip(
         &self,
         base: &Library,
         clip_id: &str,
-        host_inputs: &BTreeMap<String, Value>,
         cells: &[crate::Cell],
     ) -> Result<PreparedClip> {
-        self.validate(base)?;
         let clip = self
             .clips
             .get(clip_id)
             .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
-        // Phase 1 of clip-graphs: the graph lowering lands in phase 2.
-        let _ = (host_inputs, cells, clip);
-        Err(Error(format!(
-            "clip {clip_id}: clip graphs do not play yet (lowering lands in phase 2)"
-        )))
+        Self::validate_clip(base, clip_id, clip)?;
+        let program = PreparedGraph::new(
+            base,
+            &clip.graph,
+            Frame {
+                features: None,
+                cells,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )?;
+        Ok(PreparedClip {
+            program,
+            start: clip.start,
+            end: clip.start + clip.duration,
+        })
     }
     pub fn evaluate_clip(
         &self,
         base: &Library,
         clip_id: &str,
-        host_inputs: &BTreeMap<String, Value>,
         beat: f64,
         cells: &[crate::Cell],
     ) -> Result<BTreeMap<String, Value>> {
-        self.prepare_clip(base, clip_id, host_inputs, cells)?
-            .evaluate(beat)
+        self.prepare_clip(base, clip_id, cells)?.evaluate(beat)
     }
 }
 

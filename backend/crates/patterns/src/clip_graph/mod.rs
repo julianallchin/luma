@@ -9,10 +9,20 @@
 //! ([`definitions`]), the one type checker ([`check`]) and the one-line
 //! summary ([`ClipGraph::summary`]).
 mod check;
+pub(crate) mod clock_table;
 mod definitions;
+mod heads;
+pub(crate) mod kernels;
+mod lower;
+mod noise;
 mod summary;
 
-pub use check::{check, check_clip};
+pub use check::{blend_modes, check, check_clip};
+pub use kernels::Kernel;
+pub(crate) use lower::lower;
+
+/// The output of a prepared clip graph that carries its lighting.
+pub const OUTPUT: &str = "lighting";
 pub use definitions::{
     definition, definitions, Definition, InputDef, InputType, Produces, SettingDef, Unit,
 };

@@ -1,6 +1,9 @@
-use crate::{Error, Frame, Result, Value, ValueType};
+//! The kernel graph a clip graph lowers onto: definitions of primitive
+//! kernels in a [`Library`], and graphs of kernel nodes wired together.
+//! [`crate::PreparedGraph`] flattens one into a batch program.
+use crate::{Error, Result, Value, ValueType};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -11,8 +14,8 @@ pub enum Rate {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
-    /// Optional terminal sockets are unwritten until bound. Their default is
-    /// an editor seed; required inputs use their default during execution.
+    /// Optional terminal sockets are unwritten until bound. Required inputs
+    /// use their default during execution.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
     pub name: String,
@@ -20,123 +23,20 @@ pub struct Input {
     pub value_type: ValueType,
     pub rate: Rate,
     pub default: Option<Value>,
-    /// How a person or agent writes a constant here. Wire compatibility is the
-    /// value type; this only shapes the control. Unset means the value type's
-    /// own editor.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author: Option<Author>,
-    /// Sources a form input accepts besides a plain value. Empty elsewhere.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub promotable: Vec<crate::SourceKind>,
 }
 
-/// A named literal offered by a control.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Preset {
-    pub label: String,
-    pub value: Value,
-}
-
-/// The built-in control kit. Every graph input is authored with one of these;
-/// a graph never draws its own controls.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Author {
-    /// A number field, with slider bounds when both are given.
-    Number {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        min: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max: Option<f64>,
-    },
-    /// Named literals in menu order. `custom` also offers the value type's own
-    /// editor for anything the menu does not name.
-    Choice {
-        options: Vec<Preset>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        custom: bool,
-    },
-    Toggle,
-    Color,
-    Curve,
-    Gradient,
-}
-
-impl Input {
-    /// The control this input is authored with: its declared author, or the
-    /// one implied by its value type.
-    pub fn author(&self) -> Option<Author> {
-        if let Some(author) = &self.author {
-            return Some(author.clone());
-        }
-        Some(match self.value_type {
-            ValueType::Boolean => Author::Toggle,
-            ValueType::Envelope => Author::Curve,
-            ValueType::Gradient => Author::Gradient,
-            kind => match kind.signal_type()? {
-                crate::SignalType {
-                    channels: Some(crate::Channels::Rgb),
-                    ..
-                } => Author::Color,
-                crate::SignalType {
-                    channels: Some(crate::Channels::Value) | None,
-                    unit,
-                } => Author::Number {
-                    min: match unit {
-                        Some(
-                            crate::Unit::Proportion | crate::Unit::Beats | crate::Unit::Seconds,
-                        ) => Some(0.0),
-                        _ => None,
-                    },
-                    max: (unit == Some(crate::Unit::Proportion)).then_some(1.0),
-                },
-                _ => return None,
-            },
-        })
-    }
-    pub(crate) fn validate_author(&self) -> Result<()> {
-        let Some(author) = &self.author else {
-            return Ok(());
-        };
-        let scalar = || {
-            self.value_type
-                .signal_type()
-                .is_some_and(|spec| matches!(spec.channels, Some(crate::Channels::Value) | None))
-        };
-        let valid = match author {
-            Author::Number { min, max } => {
-                scalar()
-                    && min.is_none_or(f64::is_finite)
-                    && max.is_none_or(f64::is_finite)
-                    && min.zip(*max).is_none_or(|(min, max)| min <= max)
-            }
-            Author::Choice { options, .. } => {
-                !options.is_empty()
-                    && options.iter().all(|preset| {
-                        !preset.label.trim().is_empty()
-                            && preset.value.validate().is_ok()
-                            && self.value_type.accepts(preset.value.value_type())
-                    })
-            }
-            Author::Toggle => self.value_type == ValueType::Boolean,
-            Author::Color => self
-                .value_type
-                .signal_type()
-                .is_some_and(|spec| spec.channels == Some(crate::Channels::Rgb)),
-            Author::Curve => self.value_type == ValueType::Envelope,
-            Author::Gradient => self.value_type == ValueType::Gradient,
-        };
-        if valid {
-            Ok(())
-        } else {
-            Err(Error(format!(
-                "control {author:?} does not fit a {} input",
-                self.value_type
-            )))
-        }
+/// A frame-rate input with no default.
+pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input {
+    Input {
+        optional: false,
+        name: name.into(),
+        description: name.into(),
+        value_type: kind,
+        rate: Rate::Frame,
+        default,
     }
 }
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
@@ -158,7 +58,7 @@ impl From<Value> for Binding {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Definition ID in the standard library.
+    /// Definition ID in the library.
     pub definition: String,
     #[serde(default)]
     pub inputs: BTreeMap<String, Binding>,
@@ -172,36 +72,13 @@ pub struct Graph {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
-    // Compiler-generated kernels carry prepared tables; authored JSON cannot
-    // construct their internal tensor layouts.
+    /// A clip graph kernel. Kernels carry prepared tables; authored JSON
+    /// cannot construct them.
     #[serde(skip)]
-    Source(crate::forms::SourceOp),
+    Kernel(crate::clip_graph::Kernel),
     Output,
-    FieldBinary(crate::FieldMath),
-    Fraction,
-    ChannelMaximum,
-    JoinChannels,
-    ClipTime,
     ClipRange,
     BandEnergy,
-    Noise,
-    SampleGradient,
-    FieldClamp,
-    FieldGreater,
-    ChooseNumber,
-    ResolveMapping,
-    CoordinateOffset,
-    Envelope,
-    Odometer,
-    EventLife,
-    SampleCurve,
-    RandomShare,
-    PathGlides,
-    AimBase,
-    AimFan,
-    AimMotion,
-    AimOffset,
-    AimTurn,
 }
 impl Primitive {
     pub(crate) fn reads_track(self) -> bool {
@@ -210,19 +87,11 @@ impl Primitive {
     /// All other primitives are pure functions of inputs and the prepared
     /// head domain/seed, and may be folded when their inputs are constant.
     pub(crate) fn reads_time(self) -> bool {
-        matches!(
-            self,
-            Self::Odometer
-                | Self::EventLife
-                | Self::ClipTime
-                | Self::BandEnergy
-                | Self::Source(
-                    crate::forms::SourceOp::ClockTable
-                        | crate::forms::SourceOp::Clock
-                        | crate::forms::SourceOp::Events
-                        | crate::forms::SourceOp::ClipProgress
-                )
-        )
+        match self {
+            Self::BandEnergy => true,
+            Self::Kernel(kernel) => kernel.reads_time(),
+            _ => false,
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -230,7 +99,6 @@ impl Primitive {
 pub enum Body {
     Primitive(Primitive),
     Graph(Graph),
-    Form(crate::forms::FormKind),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -241,37 +109,10 @@ pub struct Definition {
     pub outputs: BTreeMap<String, Output>,
     pub body: Body,
 }
-impl Definition {
-    pub fn lighting_output(&self) -> Option<&str> {
-        let mut outputs = self
-            .outputs
-            .iter()
-            .filter(|(_, output)| output.value_type == ValueType::Lighting);
-        let (name, _) = outputs.next()?;
-        outputs.next().is_none().then_some(name.as_str())
-    }
-    pub fn playable(&self) -> bool {
-        self.lighting_output().is_some()
-    }
-}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Library {
     pub definitions: BTreeMap<String, Definition>,
-}
-
-const MAX_DEFINITION_DEPTH: usize = 24;
-pub(crate) const MAX_GRAPH_NODES: usize = 128;
-const MAX_EXPANDED_NODES: usize = 8192;
-// A signal operation and its definition each contribute a stack level.
-// Composed envelope arithmetic needs more than 96; retain a finite bound below
-// the separate node/expansion budgets and use it in inference too.
-pub(crate) const MAX_EXECUTION_DEPTH: usize = 192;
-
-#[derive(Clone, Copy)]
-struct Complexity {
-    nodes: usize,
-    depth: usize,
 }
 
 pub(crate) fn identity(id: &str) -> Result<()> {
@@ -283,286 +124,5 @@ pub(crate) fn identity(id: &str) -> Result<()> {
             "identities starting with @ are reserved for editor controls".into(),
         ));
     }
-    Ok(())
-}
-
-impl Library {
-    /// Anonymous one-node graphs inherit their node's label in every authoring
-    /// surface. Identity remains the reference key, independently of the label.
-    pub fn display_name(&self, id: &str) -> String {
-        let mut id = id;
-        let mut visited = BTreeSet::new();
-        while visited.insert(id) {
-            let Some(definition) = self.definitions.get(id) else {
-                return "Missing graph".into();
-            };
-            if !definition.name.is_empty() {
-                return definition.name.clone();
-            }
-            if let Body::Graph(graph) = &definition.body {
-                if graph.nodes.len() == 1 {
-                    id = &graph.nodes.values().next().unwrap().definition;
-                    continue;
-                }
-            }
-            break;
-        }
-        "Custom graph".into()
-    }
-    pub fn validate(&self, id: &str) -> Result<()> {
-        self.validate_many(std::iter::once(id))
-    }
-    pub(crate) fn validate_many<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
-        let mut done = BTreeMap::new();
-        for id in ids {
-            self.validate_definition(id, &mut BTreeSet::new(), &mut done)?;
-        }
-        Ok(())
-    }
-    fn definition(&self, id: &str) -> Result<&Definition> {
-        self.definitions
-            .get(id)
-            .ok_or_else(|| Error(format!("unknown definition {id}")))
-    }
-    fn validate_definition(
-        &self,
-        id: &str,
-        visiting: &mut BTreeSet<String>,
-        done: &mut BTreeMap<String, Complexity>,
-    ) -> Result<()> {
-        if done.contains_key(id) {
-            return Ok(());
-        }
-        identity(id)?;
-        if visiting.len() >= MAX_DEFINITION_DEPTH {
-            return Err(Error(format!(
-                "graph nesting exceeds {MAX_DEFINITION_DEPTH} definitions"
-            )));
-        }
-        if !visiting.insert(id.into()) {
-            return Err(Error(format!("recursive graph definition {id}")));
-        }
-        let def = self.definition(id)?;
-        if def.inputs.len() > 64 || def.outputs.len() > 32 {
-            return Err(Error(format!(
-                "{id}: a definition supports at most 64 inputs and 32 outputs"
-            )));
-        }
-        for key in def.inputs.keys().chain(def.outputs.keys()) {
-            identity(key)?;
-        }
-        for (name, input) in &def.inputs {
-            if let Some(value) = &input.default {
-                value.validate().map_err(|error| {
-                    Error(format!("graph {id}, input {name}, default: {error}"))
-                })?;
-                if !input.value_type.accepts(value.value_type()) {
-                    return Err(Error(format!("{id}.{name}: default type mismatch")));
-                }
-            }
-            input
-                .validate_author()
-                .map_err(|error| Error(format!("graph {id}, input {name}: {error}")))?;
-        }
-        let complexity = match &def.body {
-            Body::Form(kind) => {
-                let canonical = crate::forms::definitions()
-                    .into_iter()
-                    .find(|(_, form)| matches!(&form.body, Body::Form(k) if k == kind))
-                    .expect("every form kind has a definition")
-                    .1;
-                if def.inputs != canonical.inputs || def.outputs != canonical.outputs {
-                    return Err(Error(format!(
-                        "{id}: form interface differs from its evaluator"
-                    )));
-                }
-                Complexity { nodes: 1, depth: 1 }
-            }
-            Body::Primitive(p) => {
-                // Primitive interfaces are owned by the kernel catalog, not editable JSON.
-                let canonical = crate::catalog::primitive(*p);
-                if serde_json::to_value(&def.inputs).unwrap()
-                    != serde_json::to_value(&canonical.inputs).unwrap()
-                    || serde_json::to_value(&def.outputs).unwrap()
-                        != serde_json::to_value(&canonical.outputs).unwrap()
-                {
-                    return Err(Error(format!(
-                        "{id}: primitive interface differs from its kernel"
-                    )));
-                }
-                Complexity { nodes: 1, depth: 1 }
-            }
-            Body::Graph(graph) => {
-                if def.inputs.values().any(|input| input.optional) {
-                    return Err(Error(
-                        "graph Inputs always supply a value; only Output sockets may be unwritten"
-                            .into(),
-                    ));
-                }
-                if graph.nodes.len() > MAX_GRAPH_NODES {
-                    return Err(Error(format!(
-                        "{id}: a graph supports at most {MAX_GRAPH_NODES} nodes"
-                    )));
-                }
-                for (name, node) in &graph.nodes {
-                    identity(name)?;
-                    self.validate_definition(&node.definition, visiting, done)?;
-                    let child = self.definition(&node.definition)?;
-                    for key in node.inputs.keys() {
-                        if !child.inputs.contains_key(key) {
-                            return Err(Error(format!("{name}: unknown input {key}")));
-                        }
-                    }
-                    for (key, input) in &child.inputs {
-                        match node.inputs.get(key) {
-                            Some(binding) => self
-                                .check_binding(def, graph, binding, input.value_type, input.rate)
-                                .map_err(|error| {
-                                    Error(format!("graph {id}, node {name}, input {key}: {error}"))
-                                })?,
-                            None if input.optional || input.default.is_some() => (),
-                            None => {
-                                return Err(Error(format!(
-                                    "{name}: required input {key} is unconnected"
-                                )))
-                            }
-                        }
-                    }
-                }
-                for (name, output) in &def.outputs {
-                    let binding = graph
-                        .outputs
-                        .get(name)
-                        .ok_or_else(|| Error(format!("{id}: missing output {name}")))?;
-                    self.check_binding(def, graph, binding, output.value_type, output.rate)
-                        .map_err(|error| Error(format!("graph {id}, output {name}: {error}")))?;
-                }
-                if graph.outputs.len() != def.outputs.len() {
-                    return Err(Error(format!("{id}: undeclared graph output")));
-                }
-                let mut finished = BTreeSet::new();
-                for name in graph.nodes.keys() {
-                    check_cycle(graph, name, &mut BTreeSet::new(), &mut finished)?;
-                }
-                let nodes = 1 + graph
-                    .nodes
-                    .values()
-                    .map(|node| done[&node.definition].nodes)
-                    .sum::<usize>();
-                if nodes > MAX_EXPANDED_NODES {
-                    return Err(Error(format!(
-                        "{id}: graph expansion exceeds {MAX_EXPANDED_NODES} nodes"
-                    )));
-                }
-                let mut depths = BTreeMap::new();
-                let mut depth = 1;
-                for name in graph.nodes.keys() {
-                    depth = depth.max(1 + execution_depth(graph, name, done, &mut depths));
-                }
-                if depth > MAX_EXECUTION_DEPTH {
-                    return Err(Error(format!(
-                        "{id}: execution dependency depth {depth} exceeds {MAX_EXECUTION_DEPTH}"
-                    )));
-                }
-                Complexity { nodes, depth }
-            }
-        };
-        visiting.remove(id);
-        done.insert(id.into(), complexity);
-        Ok(())
-    }
-    fn check_binding(
-        &self,
-        def: &Definition,
-        graph: &Graph,
-        binding: &Binding,
-        expected: ValueType,
-        rate: Rate,
-    ) -> Result<()> {
-        let (actual, actual_rate) = self.binding_type(&def.inputs, graph, binding)?;
-        if !expected.accepts(actual) {
-            return Err(Error(format!("expected {expected:?}, got {actual:?}")));
-        }
-        if rate == Rate::Fixed && actual_rate == Rate::Frame {
-            return Err(Error(
-                "frame-varying wire connected to a fixed input".into(),
-            ));
-        }
-        Ok(())
-    }
-    /// Authoring convenience API, using the same flattened tensor program as playback.
-    pub fn evaluate(
-        &self,
-        id: &str,
-        overrides: &BTreeMap<String, Value>,
-        frame: Frame,
-    ) -> Result<BTreeMap<String, Value>> {
-        let prepared = crate::PreparedGraph::new(
-            self,
-            id,
-            overrides,
-            Frame {
-                features: None,
-                ..frame
-            },
-        )?;
-        prepared
-            .evaluate_using(&[frame.beat], frame.features)?
-            .into_iter()
-            .map(|(key, value)| Ok((key, value.sample(0)?)))
-            .collect()
-    }
-}
-// Called only after wire cycles and child definitions have been validated.
-// Count nesting and upstream dependencies together before recursive lowering.
-fn execution_depth(
-    graph: &Graph,
-    id: &str,
-    definitions: &BTreeMap<String, Complexity>,
-    depths: &mut BTreeMap<String, usize>,
-) -> usize {
-    if let Some(depth) = depths.get(id) {
-        return *depth;
-    }
-    let node = &graph.nodes[id];
-    let upstream = node
-        .inputs
-        .values()
-        .filter_map(|binding| match binding {
-            Binding::Connection { node, .. } => {
-                Some(execution_depth(graph, node, definitions, depths))
-            }
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
-    let depth = 1 + definitions[&node.definition].depth + upstream;
-    depths.insert(id.into(), depth);
-    depth
-}
-
-pub(crate) fn check_cycle(
-    graph: &Graph,
-    name: &str,
-    visiting: &mut BTreeSet<String>,
-    done: &mut BTreeSet<String>,
-) -> Result<()> {
-    if done.contains(name) {
-        return Ok(());
-    }
-    if !visiting.insert(name.into()) {
-        return Err(Error(format!("wire cycle at {name}")));
-    }
-    let current = graph
-        .nodes
-        .get(name)
-        .ok_or_else(|| Error(format!("unknown node {name}")))?;
-    for b in current.inputs.values() {
-        if let Binding::Connection { node, .. } = b {
-            check_cycle(graph, node, visiting, done)?;
-        }
-    }
-    visiting.remove(name);
-    done.insert(name.into());
     Ok(())
 }
