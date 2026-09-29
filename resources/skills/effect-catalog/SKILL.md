@@ -6,7 +6,7 @@ description: Every lighting effect Luma knows, as the Python that builds its cli
 # Effect catalog
 
 Each row is one clip. The name is the shipped clip preset: `preset("Chase")`
-gives the same graph with its name. The Python builds the graph with the
+gives the same graph with its name and blend mode. The Python builds the graph with the
 bare builders; pass it to `edit.add_clip(graph, name=..., ...)`. Change the
 numbers to fit the music. Read `node-cards` for what each node does.
 

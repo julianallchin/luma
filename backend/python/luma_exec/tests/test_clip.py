@@ -32,7 +32,7 @@ CHASE_JSON = {
 }
 
 SINE = [[0, 0.5, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0.5, "sine-out"], [0.75, 0, "sine-in"], [1, 0.5]]
-PRESETS = {
+FIXTURE = {
     "curves": {
         "On": [[0, 1], [1, 1]], "Ramp up": [[0, 0], [1, 1]], "Ramp down": [[0, 1], [1, 0]],
         "Triangle": [[0, 0], [0.5, 1], [1, 0]],
@@ -48,8 +48,37 @@ PRESETS = {
     "gradients": {name: [{"t": 0, "color": [0, 0, 0]}, {"t": 1, "color": [1, 1, 1 - index / 10]}]
                   for index, name in enumerate(["Rainbow", "Warm", "Cool", "Fire", "Ocean", "Sunset", "B/W"])},
     "bands": {"Kick": [40, 100], "Bass": [20, 250], "Mids": [250, 4000], "Highs": [4000, 16000], "Full": [20, 16000]},
-    "clips": {"Chase": {"output": "color", "graph": CHASE_JSON}},
 }
+# The binding's shape: lists of named records, as presets.json ships them.
+PRESETS = {
+    "curves": [{"name": name, "curve": {"points": points}} for name, points in FIXTURE["curves"].items()],
+    "gradients": [{"name": name, "gradient": {"stops": stops}} for name, stops in FIXTURE["gradients"].items()],
+    "bands": [{"name": name, "low_hz": low, "high_hz": high} for name, (low, high) in FIXTURE["bands"].items()],
+    "clips": [{"name": "Chase", "blend_mode": "replace", "graph": CHASE_JSON},
+              {"name": "Sweep", "blend_mode": "offset", "graph": {"version": 1, "nodes": {
+                  "time1": {"kind": "time"},
+                  "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                             "inputs": {"x": {"node": "time1"}, "low": -45, "high": 45}},
+                  "aim1": {"kind": "aim", "settings": {"base": "direction"}, "inputs": {"yaw": {"node": "curve1"}}}}}}],
+}
+SHIPPED = Path(__file__).resolve().parents[3] / "crates/patterns/src/presets.json"
+
+
+def close(a, b):
+    """Equal JSON, with numbers equal to 1e-6."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(close(a[key], b[key]) for key in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(close(x, y) for x, y in zip(a, b))
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+        return abs(a - b) <= 1e-6
+    return a == b
+
+
+def normal(graph):
+    """Stored JSON with an absent inputs map written as empty."""
+    return {"version": graph["version"], "nodes": {
+        key: dict(node, inputs=node.get("inputs", {})) for key, node in graph["nodes"].items()}}
 
 D = (0, 0.766, -0.643)
 
@@ -210,6 +239,26 @@ class ClipBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ClipError, "unknown clip preset"):
             preset("Nothing")
 
+    @unittest.skipUnless(SHIPPED.exists(), "bug: presets.json is missing from the patterns crate")
+    def test_every_shipped_preset_round_trips_through_source(self):
+        shipped = json.loads(SHIPPED.read_text())
+        clip_module.install_presets(shipped)
+        try:
+            self.assertEqual(len(clip_module.Presets().clips), len(shipped["clips"]))
+            for record in shipped["clips"]:
+                with self.subTest(record["name"]):
+                    graph = preset(record["name"])
+                    self.assertEqual((graph.name, graph.blend), (record["name"], record["blend_mode"]))
+                    self.assertEqual(graph.json(), normal(record["graph"]))
+                    self.assertEqual(run(graph.source()).json(), normal(record["graph"]))
+            for name, code in CATALOG.items():
+                if name in clip_module._PRESETS["clips"]:
+                    with self.subTest(f"catalog {name}"):
+                        # presets.json rounds hex colors to 9 places.
+                        self.assertTrue(close(run(code).json(), preset(name).json()), name)
+        finally:
+            clip_module.install_presets(PRESETS)
+
 
 class ClipEditTests(unittest.TestCase):
     def setUp(self):
@@ -250,6 +299,10 @@ class ClipEditTests(unittest.TestCase):
         self.assertEqual(stored["graph"], CHASE_JSON)
         self.assertEqual(stored["name"], "Chase")
         self.assertEqual(first.graph, preset("Chase"))
+        self.assertEqual(first.blend, "replace")
+        sweep = edit.add_clip("Sweep", beats=(0, 4))
+        self.assertEqual((sweep.name, sweep.blend), ("Sweep", "offset"))
+        self.assertEqual(edit.add_clip("Sweep", beats=(0, 4), blend="replace").blend, "replace")
 
     def test_add_and_update_check_the_one_clip(self):
         edit = self.track().edit()
