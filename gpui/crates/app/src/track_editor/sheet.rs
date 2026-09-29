@@ -105,7 +105,7 @@ impl State {
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
     pub(crate) fn dismiss_menu(&mut self) -> bool {
-        self.open.take().is_some() | self.canvas.menu.take().is_some()
+        self.open.take().is_some() | self.canvas.menu.take().is_some() | self.canvas.cancel()
     }
 }
 
@@ -205,6 +205,9 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         editor.sheet.canvas = graph::canvas::State::default();
         let built = build(editor, primary, window, cx);
         editor.sheet.built = Some(built);
+    }
+    if editor.sheet.canvas.focus.is_none() {
+        editor.sheet.canvas.focus = Some(cx.focus_handle());
     }
     let graph = shape
         .as_ref()
@@ -886,16 +889,16 @@ fn sheet_row(label: &str, accessories: Vec<AnyElement>, control: Div) -> AnyElem
         .w_full()
         .flex()
         .flex_col()
-        .gap(px(LABEL_GAP))
+        .gap(luma_ui::rpx(LABEL_GAP))
         .child(
             div()
                 .relative()
                 .w_full()
-                .h(px(CONTROL_HEIGHT))
+                .h(luma_ui::rpx(CONTROL_HEIGHT))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.))
+                .gap(luma_ui::rpx(6.))
                 .child(luma_ui::caption(label.clone()))
                 .child(div().flex_1())
                 .children(accessories),

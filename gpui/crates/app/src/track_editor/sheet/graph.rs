@@ -14,7 +14,7 @@ use luma_patterns as p;
 use luma_ui::arg::noise;
 use luma_ui::arg::strip::{self, CurveStrip, StripChanged, StripValue};
 use luma_ui::icons::IconName;
-use luma_ui::{icon_button, Enabled};
+use luma_ui::{icon_button, rpx, Enabled};
 use p::clip_graph::{definition, ClipGraph, Input, Kind, Node};
 
 use super::*;
@@ -834,7 +834,7 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     if shown.is_empty() {
         return None;
     }
-    let mut column = div().w_full().flex().flex_col().gap(px(8.));
+    let mut column = div().w_full().flex().flex_col().gap(rpx(8.));
     for (name, setting) in shown {
         let current = node.setting(name).unwrap_or(setting.default);
         let mut track = luma_ui::float::segmented().w_full();
@@ -866,7 +866,7 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
             div()
                 .id(SharedString::from(format!("{id}-wrap")))
                 .w_full()
-                .h(px(CONTROL_HEIGHT))
+                .h(rpx(CONTROL_HEIGHT))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -896,10 +896,9 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
     let label = input_label(input);
     let spec = edit::spec(cx.graph, id, input);
-    let wireable = spec.is_some_and(|spec| !matches!(spec.ty, Ty::Points | Ty::Gradient));
     let mut accessories: Vec<AnyElement> = Vec::new();
-    if wireable {
-        accessories.push(canvas::port_slot(canvas::input_port(cx, id, input)).into_any_element());
+    if let Some(port) = canvas::input_port(cx, id, input) {
+        accessories.push(canvas::port_slot(port).into_any_element());
     }
     accessories.extend(chip(cx.graph, id, input).map(|chip| source_chip(cx, id, input, chip)));
     let control = match node.inputs.get(input) {
@@ -934,11 +933,11 @@ fn header_row(label: &str, accessories: Vec<AnyElement>) -> AnyElement {
     div()
         .relative()
         .w_full()
-        .h(px(CONTROL_HEIGHT))
+        .h(rpx(CONTROL_HEIGHT))
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(6.))
+        .gap(rpx(6.))
         .child(luma_ui::caption(label.clone()))
         .child(div().flex_1())
         .children(accessories)
@@ -949,18 +948,14 @@ fn header_row(label: &str, accessories: Vec<AnyElement>) -> AnyElement {
 fn field_element(field: &Field) -> Div {
     match field {
         Field::Number(entity) => div().child(entity.clone()),
-        Field::Direction(parts) => parts
-            .iter()
-            .zip(["Turn", "Tilt"])
-            .fold(div().flex().flex_col().gap(px(8.)), |el, (entity, name)| {
-                el.child(arg_row(name, entity.clone()))
-            }),
-        Field::Vector(parts) => parts
-            .iter()
-            .zip(["U", "V", "Z"])
-            .fold(div().flex().flex_col().gap(px(8.)), |el, (entity, name)| {
-                el.child(arg_row(name, entity.clone()))
-            }),
+        Field::Direction(parts) => parts.iter().zip(["Turn", "Tilt"]).fold(
+            div().flex().flex_col().gap(rpx(8.)),
+            |el, (entity, name)| el.child(arg_row(name, entity.clone())),
+        ),
+        Field::Vector(parts) => parts.iter().zip(["U", "V", "Z"]).fold(
+            div().flex().flex_col().gap(rpx(8.)),
+            |el, (entity, name)| el.child(arg_row(name, entity.clone())),
+        ),
         Field::Color(entity) => div().child(entity.clone()),
         Field::Strip(entity) => div().child(entity.clone()),
     }

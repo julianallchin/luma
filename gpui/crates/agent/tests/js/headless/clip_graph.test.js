@@ -72,7 +72,7 @@ function source(card, row, now, option) {
 // left edge of the graph, reading each card while it is wholly in view, and
 // take the pan back out.
 function placements() {
-  app.click(node("button", "Fit graph"));
+  app.click(node("button", "Actual size"));
   settle();
   const places = {};
   let panned = 0;
@@ -89,7 +89,7 @@ function placements() {
     app.frames(1);
     panned += step;
   }
-  app.click(node("button", "Fit graph"));
+  app.click(node("button", "Actual size"));
   settle();
   return places;
 }
@@ -121,7 +121,7 @@ test("the output sits in view at rest, and the view comes back to it", () => {
   const c = canvas();
   app.drag({ x: c.x + 20, y: c.y + c.height - 20 }, { dx: 300, dy: -200 }, { steps: 6 });
   assert(!inside(canvas(), color().bounds) || color().bounds.width < 200, "the drag panned the view");
-  app.click(node("button", "Fit graph"));
+  app.click(node("button", "Actual size"));
   until("Color 1 in view again", () => inside(canvas(), color().bounds) && color().bounds.width > 200);
 });
 
@@ -229,6 +229,77 @@ test("a curve widens its strip", { fixture: { clips: [clipOf("Pulse")] } }, () =
   node("button", "Narrow Curve 1");
   const wide = shown("card", "Curve 1 strip").bounds.width;
   assert(wide > narrow * 1.5, `the strip is ${wide} wide, was ${narrow}`);
+});
+
+const cardWidth = (label) => node("card", label).bounds.width;
+
+test("the zoom buttons and a Ctrl-scroll zoom the cards, about the pointer", () => {
+  open("Chase");
+  const rest = cardWidth("Color 1");
+  app.click(node("button", "Zoom in"));
+  node("text", "Zoom 120%");
+  assert(shown("card", "Color 1").bounds.width > rest * 1.1, "the card grew");
+  app.click(node("button", "Actual size"));
+  until("actual size", () => Math.abs(cardWidth("Color 1") - rest) < 0.5);
+  // What is under the pointer stays under it while the view zooms.
+  const card = shown("card", "Color 1").bounds;
+  const at = { x: card.x + card.width / 2, y: card.y + 20 };
+  app.scroll(at, { dy: 60, steps: 3, modifiers: ["secondary"] });
+  until("zoomed", () => !app.snapshot().find({ role: "text", label: "Zoom 100%" }));
+  // Measured on the card's left edge, which stays in view: the pointer
+  // keeps its distance from it in card widths.
+  const scale = Number(app.snapshot().findAll({ role: "text" }).find((n) => /^Zoom \d+%$/.test(n.label)).label.slice(5, -1)) / 100;
+  assert(scale > 1.1, `zoomed to ${scale}`);
+  const left = node("card", "Color 1").bounds.x;
+  const share = (at.x - left) / (rest * scale);
+  assert(Math.abs(share - (at.x - card.x) / rest) < 0.03, `the pointer's share of the card moved: ${share}`);
+  // The range ends: many steps out stop at half size.
+  for (let i = 0; i < 8; i++) app.click(node("button", "Zoom out"));
+  node("text", "Zoom 50%");
+  assert(Math.abs(cardWidth("Color 1") - rest / 2) < 1, "half size");
+});
+
+test("a middle-button drag pans, even over a card", () => {
+  open("Chase");
+  const before = node("card", "Color 1").bounds;
+  app.drag({ x: before.x + before.width / 2, y: before.y + 60 }, { dx: -120, dy: 40 }, { steps: 6, button: "middle" });
+  const after = node("card", "Color 1").bounds;
+  assert(Math.abs(after.x - (before.x - 120)) < 1 && Math.abs(after.y - (before.y + 40)) < 1,
+    `the card moved by ${after.x - before.x}, ${after.y - before.y}`);
+});
+
+test("hovering a wire lights both its ports", () => {
+  open("Chase");
+  const ends = () => [app.snapshot().find({ role: "button", label: "Curve 2 output port" }).bounds.width,
+    app.snapshot().find({ role: "button", label: "Color 1 brightness port" }).bounds.width];
+  shown("button", "Curve 2 output port");
+  const [out, into] = ends();
+  const mid = node("text", "Curve 2 → Color 1 brightness").bounds;
+  app.scroll({ x: mid.x + mid.width / 2, y: mid.y + mid.height / 2 }, { dy: 0 });
+  until("both ends lit", () => ends()[0] > out && ends()[1] > into);
+});
+
+test("a wire dropped near a port that takes it snaps onto it", { fixture: { clips: [clipOf("Pulse")] } }, () => {
+  open("Pulse");
+  source("Color 1", "Alpha", "Value", "Over time");
+  until("a second time", () => nodes().time2);
+  shown("button", "Clock 1 output port");
+  const from = shown("button", "Clock 1 output port").bounds;
+  const to = shown("button", "Time 2 clock port").bounds;
+  const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
+  // 18 px short of the port: outside its ring, inside its reach.
+  app.drag(start, { dx: to.x + to.width / 2 - start.x - 18, dy: to.y + to.height / 2 - start.y }, { steps: 8 });
+  until("linked", () => nodes().time2.inputs?.clock?.node === "clock1");
+});
+
+test("Delete removes the selected node", () => {
+  open("Chase");
+  const card = shown("card", "Space 1").bounds;
+  // Its title takes the keyboard.
+  app.drag({ x: card.x + 40, y: card.y + 22 }, { dx: 0, dy: 0 }, { steps: 1 });
+  app.key("delete");
+  until("space deleted", () => !nodes().space1);
+  expect(stored().name).toBe("Chase");
 });
 
 test("renaming stores the name and the timeline shows it", () => {

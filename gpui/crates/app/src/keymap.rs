@@ -50,6 +50,9 @@ pub(crate) mod context {
 
     // Tab contexts, declared by the tab's own root *inside* `WORKSPACE`.
     pub const TRACK_EDITOR: &str = "TrackEditor";
+    /// The clip graph canvas in the score inspector: it keeps the score's
+    /// undo while it has the keyboard.
+    pub const CLIP_GRAPH: &str = "ClipGraph";
     pub const VISUALIZER: &str = "Visualizer";
     pub const VISUALIZER_FULLSCREEN: &str = "VisualizerFullscreen";
     pub const PATCH: &str = "Patch";
@@ -306,6 +309,9 @@ pub(crate) fn init(cx: &mut App) {
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);
+    let graph = format!("{} && !{}", context::CLIP_GRAPH, context::TEXT_INPUT);
+    chord(&mut bindings, "z", UndoClips, &graph);
+    chord(&mut bindings, "shift-z", RedoClips, &graph);
     chord(&mut bindings, "z", UndoStage, &staging);
     chord(&mut bindings, "shift-z", RedoStage, &staging);
     chord(&mut bindings, "e", SplitClips, &editing);

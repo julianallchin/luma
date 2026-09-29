@@ -8,12 +8,25 @@
 //! painted under them from the port centres the cards record while they
 //! prepaint, in the same frame.
 //!
+//! Zoom draws the cards under a scaled rem ([`luma_ui::rem_scaled`]): every
+//! card length is [`rpx`], so the whole card, text and controls included,
+//! scales, and the wires follow the ports. Each wire and both its ports take
+//! the colour of what it carries ([`ladder::signal`]).
+//!
+//! Pointer conventions, as node editors have them: a mouse wheel zooms about
+//! the pointer, as does a pinch or a scroll with Ctrl or Cmd; a trackpad
+//! scroll pans, and so does dragging the ground with the left or middle
+//! button. The keyboard, once the canvas has focus: `+` and `-` zoom, `0` is
+//! actual size, Delete removes the selected node, Escape drops a wire drag.
+//!
 //! The pan, the wire drag and the pointer handling come from the graph editor
 //! this app had before clip graphs (`graph.rs`, removed in 6369a3b5): the
 //! wire's stub-and-fillet path, the press/move/release split with move and
-//! release on the window, and the drop onto the nearest port.
+//! release on the window, zoom about an anchor, and the drop onto the
+//! nearest port.
 
-use luma_ui::glass;
+use luma_ui::ladder::Signal;
+use luma_ui::{glass, rpx};
 
 use super::*;
 
@@ -28,17 +41,27 @@ pub(super) const NODE_FIELD_W: f32 = NODE_W - 2. * NODE_PAD;
 const COLUMN_GAP: f32 = 64.;
 const NODE_GAP: f32 = 16.;
 /// Air between the canvas edge and the cards at rest; the top leaves the
-/// toolbar its own band.
+/// toolbar its own band. Screen pixels: the anchor does not zoom.
 const CANVAS_PAD: f32 = 20.;
 const CANVAS_TOP: f32 = 52.;
-/// A port's ring, and the reach a drop still lands on it from.
+/// A port's ring.
 const PORT: f32 = 10.;
-const PORT_GRAB: f32 = 16.;
+/// How near a dragged wire's end snaps to a port that takes it, and how near
+/// the pointer must be to a wire to hover it, in screen pixels.
+const SNAP: f32 = 28.;
+const WIRE_HOVER: f32 = 6.;
 /// The horizontal run a wire leaves a port on before it turns, and the
-/// radius of that turn.
+/// radius of that turn, at zoom 1.
 const WIRE_STUB: f32 = 16.;
 const WIRE_FILLET: f32 = 10.;
 const WIRE_WIDTH: f32 = 1.5;
+/// The zoom range, and one keyboard or button step.
+const MIN_ZOOM: f32 = 0.5;
+const MAX_ZOOM: f32 = 1.5;
+const ZOOM_STEP: f32 = 1.2;
+/// Zoom per pixel of wheel travel, and per line of a mouse wheel.
+const ZOOM_PER_PIXEL: f32 = 0.004;
+const PIXELS_PER_LINE: f32 = 20.;
 
 /// Where a wire comes from: a node in the graph, or a new node not yet
 /// wired, which lives only on the canvas.
@@ -53,54 +76,197 @@ pub(in crate::track_editor) enum Source {
 #[derive(Clone, Debug)]
 pub(in crate::track_editor) struct Draft {
     pub kind: Kind,
-    /// Its top-left, from the canvas origin before the pan.
-    pub at: Point<Pixels>,
+    /// Its top-left from the cards' anchor (the top-right corner at rest),
+    /// at zoom 1.
+    pub at: Point<f32>,
 }
 
 pub(in crate::track_editor) enum Gesture {
     /// Moving the view; `last` is the previous pointer position.
     Pan { last: Point<Pixels> },
     /// Dragging a wire out of `from`. `detach` is the input it was picked up
-    /// from, which loses it on the drop.
+    /// from, which loses it on the drop. `snap` is the port that takes it
+    /// nearest the pointer, where the wire's end sits.
     Wire {
         from: Source,
         detach: Option<(String, String)>,
         at: Point<Pixels>,
+        snap: Option<(String, String)>,
     },
 }
+
+/// An input, by node and input name.
+type Port = (String, String);
 
 /// Where the ports were drawn this frame, in window space.
 #[derive(Default)]
 pub(in crate::track_editor) struct Geometry {
     canvas: Bounds<Pixels>,
+    /// The cards' box, at the zoom they were drawn at.
+    content: Bounds<Pixels>,
     outputs: Vec<(Source, Point<Pixels>)>,
-    inputs: Vec<((String, String), Point<Pixels>)>,
+    inputs: Vec<(Port, Point<Pixels>)>,
+}
+
+impl Geometry {
+    fn output(&self, from: &Source) -> Option<Point<Pixels>> {
+        self.outputs
+            .iter()
+            .find(|(source, _)| source == from)
+            .map(|(_, at)| *at)
+    }
+
+    fn input(&self, to: &Port) -> Option<Point<Pixels>> {
+        self.inputs
+            .iter()
+            .find(|(key, _)| key == to)
+            .map(|(_, at)| *at)
+    }
 }
 
 /// The canvas's own state, owned by the sheet. Reset when the subject
 /// changes.
-#[derive(Default)]
 pub(in crate::track_editor) struct State {
     /// How far the view moved from rest, where the output sits at the top
-    /// right.
+    /// right, in screen pixels.
     pub pan: Point<Pixels>,
+    pub zoom: f32,
     pub selected: Option<String>,
     pub gesture: Option<Gesture>,
+    /// The wire under the pointer, by the input it feeds.
+    pub hover: Option<Port>,
     pub drafts: Vec<Draft>,
     /// Curves whose strip is widened.
     pub wide: BTreeSet<String>,
     /// The add menu, at this window point.
     pub menu: Option<Point<Pixels>>,
     pub geometry: Rc<RefCell<Geometry>>,
+    /// Keyboard focus for the canvas's keys, made on the first sync.
+    pub focus: Option<FocusHandle>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            pan: Point::default(),
+            zoom: 1.,
+            selected: None,
+            gesture: None,
+            hover: None,
+            drafts: Vec::new(),
+            wide: BTreeSet::new(),
+            menu: None,
+            geometry: Rc::default(),
+            focus: None,
+        }
+    }
 }
 
 impl State {
-    fn dragging(&self) -> Option<(&Source, Option<&(String, String)>)> {
+    fn dragging(&self) -> Option<(&Source, Option<&Port>)> {
         match &self.gesture {
             Some(Gesture::Wire { from, detach, .. }) => Some((from, detach.as_ref())),
             _ => None,
         }
     }
+
+    /// Drop a wire being dragged, as if it never started.
+    pub(in crate::track_editor) fn cancel(&mut self) -> bool {
+        matches!(self.gesture.take(), Some(Gesture::Wire { .. }))
+    }
+
+    /// Where the cards' anchor is: the top-right corner of their box.
+    fn anchor(&self) -> Point<Pixels> {
+        let canvas = self.geometry.borrow().canvas;
+        point(
+            canvas.origin.x + canvas.size.width - px(CANVAS_PAD) + self.pan.x,
+            canvas.origin.y + px(CANVAS_TOP) + self.pan.y,
+        )
+    }
+
+    /// Zoom by `factor`, keeping what is under `about` where it is.
+    fn zoom_about(&mut self, about: Point<Pixels>, factor: f32) {
+        let zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let ratio = zoom / self.zoom;
+        let anchor = self.anchor();
+        self.pan = self.pan + (about - anchor) * (1. - ratio);
+        self.zoom = zoom;
+    }
+
+    fn centre(&self) -> Point<Pixels> {
+        self.geometry.borrow().canvas.center()
+    }
+
+    /// Frame the whole graph: the largest zoom in range it fits at, the
+    /// output kept in view when it cannot fit.
+    fn fit(&mut self) {
+        let (canvas, content) = {
+            let geometry = self.geometry.borrow();
+            (geometry.canvas, geometry.content)
+        };
+        let width = f32::from(content.size.width) / self.zoom;
+        let height = f32::from(content.size.height) / self.zoom;
+        if width <= 0. || height <= 0. {
+            return;
+        }
+        let room_w = f32::from(canvas.size.width) - 2. * CANVAS_PAD;
+        let room_h = f32::from(canvas.size.height) - CANVAS_TOP - CANVAS_PAD;
+        self.zoom = (room_w / width).min(room_h / height).clamp(MIN_ZOOM, 1.);
+        let spare = room_w - width * self.zoom;
+        self.pan = point(px(-(spare / 2.).max(0.)), px(0.));
+    }
+}
+
+/// What an input takes, as a signal: the colour of its port and of the wire
+/// into it.
+fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
+    Some(match edit::spec(graph, id, input)?.ty {
+        Ty::Number => Signal::Number,
+        Ty::Vector => Signal::Vector,
+        Ty::Color => Signal::Color,
+        Ty::Clock => Signal::Clock,
+        Ty::Heads => Signal::Heads,
+        Ty::Coordinate => Signal::Coordinate,
+        Ty::Points | Ty::Gradient => return None,
+    })
+}
+
+/// What a node of `kind` gives. A curve gives what its kind setting says.
+fn output_signal(kind: Kind, curve: Option<&str>) -> Signal {
+    match kind {
+        Kind::Clock => Signal::Clock,
+        Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => Signal::Coordinate,
+        Kind::Curve => match curve {
+            Some("vector") => Signal::Vector,
+            Some("color") => Signal::Color,
+            _ => Signal::Number,
+        },
+        _ => Signal::Heads,
+    }
+}
+
+fn source_signal(graph: &ClipGraph, drafts: &[Draft], from: &Source) -> Signal {
+    match from {
+        Source::Node(id) => graph.nodes.get(id).map_or(Signal::Number, |node| {
+            output_signal(node.kind, node.setting("kind"))
+        }),
+        Source::Draft(index) => output_signal(
+            drafts.get(*index).map_or(Kind::Curve, |draft| draft.kind),
+            None,
+        ),
+    }
+}
+
+/// A color curve's gradient ends, as display colours, for its wire.
+fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
+    let Some(Input::Gradient(gradient)) = graph.nodes.get(id)?.inputs.get("gradient") else {
+        return None;
+    };
+    let display = |stop: &p::ColorStop| -> Hsla { Light::opaque(stop.color).display().into() };
+    Some((
+        display(gradient.stops.first()?),
+        display(gradient.stops.last()?),
+    ))
 }
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
@@ -132,28 +298,46 @@ fn fits(graph: &ClipGraph, drafts: &[Draft], from: &Source, id: &str, input: &st
 
 // -- ports ----------------------------------------------------------------------
 
+/// How a port draws: its signal's colour, filled while wired, brighter and
+/// larger while lit (the hovered wire's ends, a drag's source and the port
+/// it snaps to), faint while a drag is on that it cannot take.
+#[derive(Clone, Copy, PartialEq)]
+enum Tone {
+    Rest,
+    Lit,
+    Faint,
+}
+
 /// A port's ring. It records its centre as it prepaints, which is where the
 /// wires meet it and what a drop is measured against.
-fn ring(filled: bool, hot: bool, record: impl Fn(Point<Pixels>) + 'static) -> Div {
-    let edge = if hot {
-        ladder::primary().into()
-    } else {
-        glass::hairline(0.45)
-    };
+fn ring(signal: Signal, filled: bool, tone: Tone, record: impl Fn(Point<Pixels>) + 'static) -> Div {
+    let mut edge = ladder::signal(signal);
+    match tone {
+        Tone::Faint => edge.a = 0.25,
+        Tone::Lit => edge.l = (edge.l + 0.12).min(0.95),
+        Tone::Rest => {}
+    }
+    let size = if tone == Tone::Lit { PORT + 2. } else { PORT };
     div()
-        .size(px(PORT))
+        .size(rpx(size))
         .flex_none()
         .rounded_full()
-        .border(px(1.5))
+        .border(rpx(1.5))
         .border_color(edge)
-        .bg(if filled { edge } else { ladder::card().into() })
+        .bg(if filled || tone == Tone::Lit {
+            edge
+        } else {
+            ladder::card().into()
+        })
         .child(canvas(move |bounds, _, _| record(bounds.center()), |_, _, _, _| {}).size_full())
 }
 
 /// An input's port, on the card's left edge. A press on a wired one picks
 /// its wire up.
-pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> AnyElement {
+pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> {
+    let signal = input_signal(cx.graph, id, input)?;
     let canvas = &cx.state.sheet.canvas;
+    let key: Port = (id.to_owned(), input.to_owned());
     let source = cx.graph.nodes[id]
         .inputs
         .get(input)
@@ -161,36 +345,41 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> AnyElement {
         .map(str::to_owned);
     let detached = canvas
         .dragging()
-        .is_some_and(|(_, detach)| detach == Some(&(id.to_owned(), input.to_owned())));
-    let hot = canvas
-        .dragging()
-        .is_some_and(|(from, _)| fits(cx.graph, &canvas.drafts, from, id, input));
+        .is_some_and(|(_, detach)| detach == Some(&key));
+    let tone = match (&canvas.gesture, canvas.dragging()) {
+        (Some(Gesture::Wire { snap, .. }), _) if snap.as_ref() == Some(&key) => Tone::Lit,
+        (_, Some((from, _))) if fits(cx.graph, &canvas.drafts, from, id, input) => Tone::Rest,
+        (_, Some(_)) => Tone::Faint,
+        _ if canvas.hover.as_ref() == Some(&key) => Tone::Lit,
+        _ => Tone::Rest,
+    };
     let geometry = canvas.geometry.clone();
-    let key = (id.to_owned(), input.to_owned());
     let app = cx.app.clone();
     let label = format!(
         "{} {} port",
         edit::label(id),
         input_label(input).to_lowercase()
     );
-    ring(source.is_some() && !detached, hot, move |at| {
-        geometry.borrow_mut().inputs.push((key.clone(), at));
-    })
-    .id(SharedString::from(format!("port-{id}-{input}")))
-    .occlude()
-    .when_some(source, |port, source| {
-        let (id, input) = (id.to_owned(), input.to_owned());
-        port.cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-                cx.stop_propagation();
-                let from = Source::Node(source.clone());
-                let detach = Some((id.clone(), input.clone()));
-                let at = event.position;
-                app.update(cx, |this, cx| this.canvas_wire_press(from, detach, at, cx));
-            })
-    })
-    .agent_node(Role::Button, label)
-    .into_any_element()
+    let recorded = key.clone();
+    Some(
+        ring(signal, source.is_some() && !detached, tone, move |at| {
+            geometry.borrow_mut().inputs.push((recorded.clone(), at));
+        })
+        .id(SharedString::from(format!("port-{id}-{input}")))
+        .occlude()
+        .when_some(source, |port, source| {
+            port.cursor_pointer()
+                .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let from = Source::Node(source.clone());
+                    let at = event.position;
+                    let detach = Some(key.clone());
+                    app.update(cx, |this, cx| this.canvas_wire_press(from, detach, at, cx));
+                })
+        })
+        .agent_node(Role::Button, label)
+        .into_any_element(),
+    )
 }
 
 /// A node's output port, on the card's right edge. A press drags a new wire
@@ -201,9 +390,17 @@ fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
         Source::Node(id) => !edit::references(cx.graph, id).is_empty(),
         Source::Draft(_) => false,
     };
-    let hot = canvas
-        .dragging()
-        .is_some_and(|(dragged, _)| *dragged == from);
+    let hovered = canvas.hover.as_ref().is_some_and(|(id, input)| {
+        matches!(&from, Source::Node(node)
+            if cx.graph.nodes[id].inputs.get(input).and_then(Input::source) == Some(node))
+    });
+    let tone = match canvas.dragging() {
+        Some((dragged, _)) if *dragged == from => Tone::Lit,
+        Some(_) => Tone::Faint,
+        None if hovered => Tone::Lit,
+        None => Tone::Rest,
+    };
+    let signal = source_signal(cx.graph, &canvas.drafts, &from);
     let geometry = canvas.geometry.clone();
     let recorded = from.clone();
     let app = cx.app.clone();
@@ -211,7 +408,7 @@ fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
         Source::Node(id) => format!("out-{id}"),
         Source::Draft(index) => format!("out-draft-{index}"),
     };
-    ring(wired, hot, move |at| {
+    ring(signal, wired, tone, move |at| {
         geometry.borrow_mut().outputs.push((recorded.clone(), at));
     })
     .id(SharedString::from(key))
@@ -234,13 +431,13 @@ fn output_port(cx: &Ctx, from: Source, label: String) -> AnyElement {
 fn plate(width: f32, selected: bool) -> Div {
     div()
         .relative()
-        .w(px(width))
+        .w(rpx(width))
         .flex_none()
         .flex()
         .flex_col()
-        .gap(px(ROW_GAP))
-        .p(px(NODE_PAD))
-        .rounded(px(luma_ui::radius::CARD))
+        .gap(rpx(ROW_GAP))
+        .p(rpx(NODE_PAD))
+        .rounded(rpx(luma_ui::radius::CARD))
         .bg(ladder::card())
         .border_1()
         .border_color(if selected {
@@ -248,6 +445,7 @@ fn plate(width: f32, selected: bool) -> Div {
         } else {
             glass::hairline(0.1)
         })
+        .text_size(rpx(12.))
         .block_mouse_except_scroll()
 }
 
@@ -257,14 +455,14 @@ fn title(label: &str, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div
     div()
         .relative()
         .w_full()
-        .h(px(CONTROL_HEIGHT))
+        .h(rpx(CONTROL_HEIGHT))
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(4.))
+        .gap(rpx(4.))
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(rpx(13.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(ladder::foreground())
                 .child(label.to_owned()),
@@ -274,8 +472,8 @@ fn title(label: &str, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div
         .children(port.map(|port| {
             div()
                 .absolute()
-                .right(px(-NODE_PAD - PORT / 2. - 1.))
-                .top(px((CONTROL_HEIGHT - PORT) / 2.))
+                .right(rpx(-NODE_PAD - PORT / 2. - 1.))
+                .top(rpx((CONTROL_HEIGHT - PORT) / 2.))
                 .child(port)
         }))
 }
@@ -285,8 +483,8 @@ fn title(label: &str, buttons: Vec<AnyElement>, port: Option<AnyElement>) -> Div
 pub(super) fn port_slot(port: AnyElement) -> Div {
     div()
         .absolute()
-        .left(px(-NODE_PAD - PORT / 2. - 1.))
-        .top(px((CONTROL_HEIGHT - PORT) / 2.))
+        .left(rpx(-NODE_PAD - PORT / 2. - 1.))
+        .top(rpx((CONTROL_HEIGHT - PORT) / 2.))
         .child(port)
 }
 
@@ -349,22 +547,22 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         .map(|(input, _)| row(cx, id, input))
         .collect();
     let selected = canvas.selected.as_deref() == Some(id);
-    let app = cx.app.clone();
-    let at = id.to_owned();
+    let (select, grab) = (cx.app.clone(), cx.app.clone());
+    let (at, grabbed) = (id.to_owned(), id.to_owned());
     plate(if wide { NODE_W_WIDE } else { NODE_W }, selected)
         .id(SharedString::from(format!("node-{id}")))
+        // A press anywhere on the card selects it; only its title takes the
+        // keyboard, so a press into a field keeps the field's focus.
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let at = at.clone();
-            app.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    let canvas = &mut editor.sheet.canvas;
-                    if canvas.selected.as_deref() != Some(at.as_str()) {
-                        canvas.selected = Some(at);
-                    }
-                })
-            });
+            select.update(cx, |this, cx| this.canvas_select(Some(at), false, cx));
         })
-        .child(title(&label, buttons, port))
+        .child(
+            title(&label, buttons, port).on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                let at = grabbed.clone();
+                grab.update(cx, |this, cx| this.canvas_select(Some(at), true, cx));
+            }),
+        )
         .children(settings(cx, id, node))
         .children(rows)
         .children(cx.controls.noise.get(id).cloned())
@@ -392,11 +590,10 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
         .agent_node(Role::Button, format!("Discard {label}"))
         .into_any_element();
     let port = output_port(cx, Source::Draft(index), label.clone());
-    let pan = cx.state.sheet.canvas.pan;
     div()
         .absolute()
-        .left(draft.at.x + pan.x)
-        .top(draft.at.y + pan.y)
+        .left(rpx(draft.at.x))
+        .top(rpx(draft.at.y))
         .child(
             plate(NODE_W, false)
                 .child(title(&label, vec![discard], Some(port)))
@@ -415,21 +612,30 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
     let state = &cx.state.sheet.canvas;
     let columns = edit::columns(cx.graph);
+    let geometry = state.geometry.clone();
     // Right to left in `columns`, so the sources come first on screen.
     let content = columns.iter().rev().fold(
         div()
             .absolute()
-            .top(px(CANVAS_TOP) + state.pan.y)
-            .right(px(CANVAS_PAD) - state.pan.x)
+            .top_0()
+            .right_0()
             .flex()
             .flex_row()
             .items_start()
-            .gap(px(COLUMN_GAP)),
+            .gap(rpx(COLUMN_GAP))
+            .child(
+                canvas(
+                    move |bounds, _, _| geometry.borrow_mut().content = bounds,
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            ),
         |row, column| {
             row.child(
                 column
                     .iter()
-                    .fold(div().flex().flex_col().gap(px(NODE_GAP)), |col, id| {
+                    .fold(div().flex().flex_col().gap(rpx(NODE_GAP)), |col, id| {
                         col.child(node_card(cx, id))
                     }),
             )
@@ -441,7 +647,16 @@ pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
         .enumerate()
         .map(|(index, draft)| draft_card(cx, index, draft))
         .collect();
-    div()
+    // A zero-size anchor at the cards' top-right corner: the cards hang left
+    // and down from it, and the drafts sit at their place from it.
+    let world = div()
+        .absolute()
+        .top(px(CANVAS_TOP) + state.pan.y)
+        .right(px(CANVAS_PAD) - state.pan.x)
+        .size_0()
+        .child(content)
+        .children(drafts);
+    let mut root = div()
         .id("clip-graph-canvas")
         .relative()
         .flex_1()
@@ -450,19 +665,39 @@ pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
         .overflow_hidden()
         .bg(ladder::background())
         .child(wires(cx))
-        .child(content)
-        .children(drafts)
+        .child(luma_ui::rem_scaled(
+            px(luma_ui::BASE_REM * state.zoom),
+            world,
+        ))
         .child(toolbar(cx, wide))
-        .children(add_menu(cx))
-        .agent_node(Role::Card, "Graph canvas")
+        .children(add_menu(cx));
+    if let Some(focus) = &state.focus {
+        let app = cx.app.clone();
+        let own = focus.clone();
+        root = root
+            .key_context(crate::keymap::context::CLIP_GRAPH)
+            .track_focus(focus)
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                // Keys typed into a field on a card are the field's.
+                if !own.is_focused(window) {
+                    return;
+                }
+                let key = event.keystroke.key.clone();
+                let handled = app.update(cx, |this, cx| this.canvas_key(&key, cx));
+                if handled {
+                    cx.stop_propagation();
+                }
+            });
+    }
+    root.agent_node(Role::Card, "Graph canvas")
         .into_any_element()
 }
 
-/// The buttons over the canvas's top-right corner: add a node, bring the
-/// view back to rest, and widen the panel.
+/// The buttons over the canvas's top-right corner: add a node, the zoom
+/// steps and actual size, fit, and widening the panel.
 fn toolbar(cx: &Ctx, wide: Option<bool>) -> Div {
+    let state = &cx.state.sheet.canvas;
     let add = cx.app.clone();
-    let fit = cx.app.clone();
     let mut bar = div()
         .absolute()
         .top(px(8.))
@@ -481,19 +716,35 @@ fn toolbar(cx: &Ctx, wide: Option<bool>) -> Div {
                     });
                 })
                 .agent_node(Role::Button, "Add node"),
-        )
-        .child(
-            luma_ui::button("Fit", Enabled::Yes)
-                .id("graph-fit")
+        );
+    let percent = format!("{:.0}%", state.zoom * 100.);
+    bar = bar.child(
+        div()
+            .size_0()
+            .agent_node(Role::Text, format!("Zoom {percent}")),
+    );
+    for (icon, text, name, key) in [
+        (Some(IconName::Minus), "", "Zoom out", "-"),
+        (None, percent.as_str(), "Actual size", "0"),
+        (Some(IconName::Plus), "", "Zoom in", "+"),
+        (None, "Fit", "Fit graph", "fit"),
+    ] {
+        let app = cx.app.clone();
+        let control = match icon {
+            Some(icon) => icon_button(icon, Enabled::Yes),
+            None => luma_ui::button(text, Enabled::Yes),
+        };
+        bar = bar.child(
+            control
+                .id(SharedString::from(format!("graph-{key}")))
                 .on_click(move |_, _, cx| {
-                    fit.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| {
-                            editor.sheet.canvas.pan = Point::default()
-                        })
+                    app.update(cx, |this, cx| {
+                        this.canvas_key(key, cx);
                     });
                 })
-                .agent_node(Role::Button, "Fit graph"),
+                .agent_node(Role::Button, name),
         );
+    }
     if let Some(wide) = wide {
         let app = cx.app.clone();
         let name = if wide {
@@ -544,6 +795,14 @@ fn add_menu(cx: &Ctx) -> Option<AnyElement> {
     }))
 }
 
+/// One wire as painted: its ends' ports and its colour, or its colour ends.
+struct Link {
+    from: Source,
+    to: Port,
+    color: Hsla,
+    gradient: Option<(Hsla, Hsla)>,
+}
+
 /// The wires, under the cards, from the port centres the cards recorded
 /// this frame; the wire being dragged; and the canvas's pointer handling.
 fn wires(cx: &Ctx) -> AnyElement {
@@ -551,24 +810,36 @@ fn wires(cx: &Ctx) -> AnyElement {
     let geometry = state.geometry.clone();
     let painted = state.geometry.clone();
     let detach = state.dragging().and_then(|(_, detach)| detach.cloned());
-    let links: Vec<(Source, (String, String))> = cx
-        .graph
+    let graph = cx.graph;
+    let links: Vec<Link> = graph
         .nodes
         .iter()
         .flat_map(|(id, node)| {
             node.wires().map(move |(input, from)| {
-                (
-                    Source::Node(from.to_owned()),
-                    (id.clone(), input.to_owned()),
-                )
+                let signal = input_signal(graph, id, input).unwrap_or(Signal::Number);
+                Link {
+                    from: Source::Node(from.to_owned()),
+                    to: (id.clone(), input.to_owned()),
+                    color: ladder::signal(signal),
+                    gradient: (signal == Signal::Color)
+                        .then(|| gradient_ends(graph, from))
+                        .flatten(),
+                }
             })
         })
-        .filter(|(_, to)| detach.as_ref() != Some(to))
+        .filter(|link| detach.as_ref() != Some(&link.to))
         .collect();
     let dragged = match &state.gesture {
-        Some(Gesture::Wire { from, at, .. }) => Some((from.clone(), *at)),
+        Some(Gesture::Wire { from, at, snap, .. }) => Some((
+            from.clone(),
+            *at,
+            snap.clone(),
+            ladder::signal(source_signal(graph, &state.drafts, from)),
+        )),
         _ => None,
     };
+    let hover = state.hover.clone();
+    let zoom = state.zoom;
     let app = cx.app.clone();
     canvas(
         move |bounds, window, _| {
@@ -581,57 +852,63 @@ fn wires(cx: &Ctx) -> AnyElement {
         },
         move |bounds, hitbox, window, cx| {
             let geometry = painted.borrow();
-            let output = |from: &Source| {
-                geometry
-                    .outputs
-                    .iter()
-                    .find(|(source, _)| source == from)
-                    .map(|(_, at)| *at)
-            };
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                for (from, to) in &links {
-                    let start = output(from);
-                    let end = geometry
-                        .inputs
-                        .iter()
-                        .find(|(key, _)| key == to)
-                        .map(|(_, at)| *at);
-                    if let (Some(start), Some(end)) = (start, end) {
-                        paint_wire(start, end, glass::hairline(0.4), WIRE_WIDTH, window);
-                        agent_paint_node(
-                            Role::Text,
-                            format!(
-                                "{} → {} {}",
-                                match from {
-                                    Source::Node(id) => edit::label(id),
-                                    Source::Draft(_) => String::new(),
-                                },
-                                edit::label(&to.0),
-                                input_label(&to.1).to_lowercase()
-                            ),
-                            Bounds::centered_at(
-                                point((start.x + end.x) / 2., (start.y + end.y) / 2.),
-                                size(px(4.), px(4.)),
-                            ),
-                            window,
-                            cx,
-                        );
+                for link in &links {
+                    let (Some(start), Some(end)) =
+                        (geometry.output(&link.from), geometry.input(&link.to))
+                    else {
+                        continue;
+                    };
+                    let lit = hover.as_ref() == Some(&link.to);
+                    let width = if lit { WIRE_WIDTH + 1.5 } else { WIRE_WIDTH };
+                    let path = wire_path(start, end, width * zoom, zoom);
+                    let paint: Background = match link.gradient {
+                        Some((a, b)) => {
+                            linear_gradient(90., linear_color_stop(a, 0.), linear_color_stop(b, 1.))
+                        }
+                        None if lit => link.color.into(),
+                        None => {
+                            let mut color = link.color;
+                            color.a = 0.85;
+                            color.into()
+                        }
+                    };
+                    if let Some(path) = path {
+                        window.paint_path(path, paint);
                     }
+                    let Source::Node(from) = &link.from else {
+                        continue;
+                    };
+                    agent_paint_node(
+                        Role::Text,
+                        format!(
+                            "{} → {} {}",
+                            edit::label(from),
+                            edit::label(&link.to.0),
+                            input_label(&link.to.1).to_lowercase()
+                        ),
+                        Bounds::centered_at(
+                            point((start.x + end.x) / 2., (start.y + end.y) / 2.),
+                            size(px(4.), px(4.)),
+                        ),
+                        window,
+                        cx,
+                    );
                 }
-                if let Some((from, at)) = &dragged {
-                    if let Some(start) = output(from) {
-                        paint_wire(
-                            start,
-                            *at,
-                            ladder::primary().into(),
-                            WIRE_WIDTH + 0.5,
-                            window,
-                        );
+                if let Some((from, at, snap, color)) = &dragged {
+                    let end = snap
+                        .as_ref()
+                        .and_then(|to| geometry.input(to))
+                        .unwrap_or(*at);
+                    if let Some(start) = geometry.output(from) {
+                        if let Some(path) = wire_path(start, end, (WIRE_WIDTH + 1.) * zoom, zoom) {
+                            window.paint_path(path, *color);
+                        }
                     }
                 }
             });
             drop(geometry);
-            listen(&app, &hitbox, window);
+            listen(&app, &hitbox, bounds, window);
         },
     )
     .absolute()
@@ -640,19 +917,25 @@ fn wires(cx: &Ctx) -> AnyElement {
 }
 
 /// This frame's pointer handlers. Press and wheel belong to the canvas's
-/// own ground; move and release are the window's, so a drag that leaves the
-/// canvas keeps tracking and ends wherever the button comes up.
-fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
+/// own ground (the middle button and the wheel reach through the cards);
+/// move and release are the window's, so a drag that leaves the canvas
+/// keeps tracking and ends wherever the button comes up.
+fn listen(app: &Entity<Luma>, hitbox: &Hitbox, bounds: Bounds<Pixels>, window: &mut Window) {
     let pressed = app.clone();
     let inside = hitbox.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-        if phase != DispatchPhase::Bubble || !inside.is_hovered(window) {
+        if phase != DispatchPhase::Bubble {
             return;
         }
         let at = event.position;
         match event.button {
-            MouseButton::Left => pressed.update(cx, |this, cx| this.canvas_pan_press(at, cx)),
-            MouseButton::Right => pressed.update(cx, |this, cx| {
+            MouseButton::Middle if bounds.contains(&at) => {
+                pressed.update(cx, |this, cx| this.canvas_pan_press(at, false, cx));
+            }
+            MouseButton::Left if inside.is_hovered(window) => {
+                pressed.update(cx, |this, cx| this.canvas_pan_press(at, true, cx));
+            }
+            MouseButton::Right if inside.is_hovered(window) => pressed.update(cx, |this, cx| {
                 this.with_track_editor(cx, |editor| editor.sheet.canvas.menu = Some(at))
             }),
             _ => {}
@@ -662,12 +945,16 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
         if phase == DispatchPhase::Bubble {
             let at = event.position;
-            moved.update(cx, |this, cx| this.canvas_move(at, cx));
+            moved.update(cx, |this, cx| {
+                this.canvas_move(at, bounds.contains(&at), cx)
+            });
         }
     });
     let released = app.clone();
     window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+        if phase == DispatchPhase::Bubble
+            && matches!(event.button, MouseButton::Left | MouseButton::Middle)
+        {
             let at = event.position;
             released.update(cx, |this, cx| this.canvas_release(at, cx));
         }
@@ -678,32 +965,66 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
         if phase != DispatchPhase::Bubble || !over.should_handle_scroll(window) {
             return;
         }
-        let delta = event.delta.pixel_delta(window.line_height());
-        wheeled.update(cx, |this, cx| this.canvas_pan_by(delta, cx));
+        let at = event.position;
+        let zoom_key = event.modifiers.control || event.modifiers.platform;
+        match event.delta {
+            // A mouse wheel: zoom, or pan across with Shift.
+            ScrollDelta::Lines(lines) if event.modifiers.shift => {
+                let across = lines.y * PIXELS_PER_LINE;
+                wheeled.update(cx, |this, cx| {
+                    this.canvas_pan_by(point(px(across), px(0.)), cx)
+                });
+            }
+            ScrollDelta::Lines(lines) => {
+                let factor = (lines.y * PIXELS_PER_LINE * ZOOM_PER_PIXEL).exp();
+                wheeled.update(cx, |this, cx| this.canvas_zoom(at, factor, cx));
+            }
+            // A trackpad: pan, or zoom with Ctrl or Cmd (a pinch arrives so
+            // on some platforms).
+            ScrollDelta::Pixels(delta) if zoom_key => {
+                let factor = (f32::from(delta.y) * ZOOM_PER_PIXEL).exp();
+                wheeled.update(cx, |this, cx| this.canvas_zoom(at, factor, cx));
+            }
+            ScrollDelta::Pixels(delta) => {
+                wheeled.update(cx, |this, cx| this.canvas_pan_by(delta, cx));
+            }
+        }
+    });
+    let pinched = app.clone();
+    let under = hitbox.clone();
+    window.on_mouse_event(move |event: &PinchEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && under.should_handle_scroll(window) {
+            let (at, factor) = (event.position, 1. + event.delta);
+            pinched.update(cx, |this, cx| this.canvas_zoom(at, factor, cx));
+        }
     });
 }
 
-/// A wire from an output port to an input port: out along a short stub,
-/// across, and in along another, the two turns rounded.
-fn paint_wire(
-    from: Point<Pixels>,
-    to: Point<Pixels>,
-    color: Hsla,
-    width: f32,
-    window: &mut Window,
-) {
-    let stub = px(WIRE_STUB);
-    let corners = [
+/// A wire's corner points: out along a short stub, across, and in along
+/// another. The same polyline is painted (rounded) and hovered.
+fn corners(from: Point<Pixels>, to: Point<Pixels>, zoom: f32) -> [Point<Pixels>; 4] {
+    let stub = px(WIRE_STUB * zoom);
+    [
         from,
         point(from.x + stub, from.y),
         point(to.x - stub, to.y),
         to,
-    ];
+    ]
+}
+
+/// A wire from an output port to an input port, the two turns rounded.
+fn wire_path(
+    from: Point<Pixels>,
+    to: Point<Pixels>,
+    width: f32,
+    zoom: f32,
+) -> Option<Path<Pixels>> {
+    let corners = corners(from, to, zoom);
     let mut path = PathBuilder::stroke(px(width));
     path.move_to(corners[0]);
     for index in 1..corners.len() - 1 {
         let (previous, corner, next) = (corners[index - 1], corners[index], corners[index + 1]);
-        let radius = WIRE_FILLET
+        let radius = (WIRE_FILLET * zoom)
             .min(distance(previous, corner) / 2.)
             .min(distance(corner, next) / 2.);
         if radius <= 0. {
@@ -717,13 +1038,23 @@ fn paint_wire(
     }
     path.line_to(corners[corners.len() - 1]);
     // Two ports at one point leave nothing to draw.
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
+    path.build().ok()
 }
 
 fn distance(from: Point<Pixels>, to: Point<Pixels>) -> f32 {
     f32::from(to.x - from.x).hypot(f32::from(to.y - from.y))
+}
+
+/// How far `at` is from the segment `a`–`b`.
+fn segment_distance(at: Point<Pixels>, a: Point<Pixels>, b: Point<Pixels>) -> f32 {
+    let length = distance(a, b);
+    if length == 0. {
+        return distance(at, a);
+    }
+    let t = (f32::from(at.x - a.x) * f32::from(b.x - a.x)
+        + f32::from(at.y - a.y) * f32::from(b.y - a.y))
+        / (length * length);
+    distance(at, toward(a, b, t.clamp(0., 1.) * length))
 }
 
 /// `from`, moved `by` toward `to`.
@@ -736,49 +1067,149 @@ fn toward(from: Point<Pixels>, to: Point<Pixels>, by: f32) -> Point<Pixels> {
     point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t)
 }
 
+/// The input port a wire from `from` would land on from `at`: the nearest
+/// that takes it within snapping reach.
+fn snap_target(
+    geometry: &Geometry,
+    graph: &ClipGraph,
+    drafts: &[Draft],
+    from: &Source,
+    at: Point<Pixels>,
+) -> Option<Port> {
+    geometry
+        .inputs
+        .iter()
+        .filter(|((id, input), _)| fits(graph, drafts, from, id, input))
+        .map(|(key, centre)| (key, distance(*centre, at)))
+        .filter(|(_, reach)| *reach <= SNAP)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(key, _)| key.clone())
+}
+
 // -- gestures ---------------------------------------------------------------------
 
+/// The primary clip's graph, as the canvas shows it.
+fn shown_graph(editor: &Editor) -> Option<ClipGraph> {
+    Some(primary_clip(editor)?.core.as_ref()?.graph.clone())
+}
+
 impl Luma {
-    fn canvas_pan_press(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn canvas_pan_press(&mut self, at: Point<Pixels>, clear: bool, cx: &mut Context<Self>) {
         self.with_track_editor(cx, |editor| {
             let canvas = &mut editor.sheet.canvas;
-            canvas.selected = None;
+            if clear {
+                canvas.selected = None;
+            }
             canvas.gesture = Some(Gesture::Pan { last: at });
         });
+        self.canvas_focus(cx);
+    }
+
+    /// Give the canvas the keyboard.
+    fn canvas_focus(&mut self, cx: &mut Context<Self>) {
+        let focus = self
+            .track_editor_ref()
+            .and_then(|editor| editor.sheet.canvas.focus.clone());
+        if let (Some(focus), Some(window)) = (focus, cx.active_window()) {
+            window
+                .update(cx, |_, window, cx| focus.focus(window, cx))
+                .ok();
+        }
+    }
+
+    fn canvas_select(&mut self, node: Option<String>, focus: bool, cx: &mut Context<Self>) {
+        let changed = self
+            .track_editor_ref()
+            .is_some_and(|editor| editor.sheet.canvas.selected != node);
+        if changed {
+            self.with_track_editor(cx, |editor| editor.sheet.canvas.selected = node);
+        }
+        if focus {
+            self.canvas_focus(cx);
+        }
     }
 
     fn canvas_wire_press(
         &mut self,
         from: Source,
-        detach: Option<(String, String)>,
+        detach: Option<Port>,
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
         self.with_track_editor(cx, |editor| {
-            editor.sheet.canvas.gesture = Some(Gesture::Wire { from, detach, at });
+            editor.sheet.canvas.gesture = Some(Gesture::Wire {
+                from,
+                detach,
+                at,
+                snap: None,
+            });
         });
+        self.canvas_focus(cx);
     }
 
-    /// A pointer move anywhere in the window: only a running gesture cares,
-    /// so an idle pointer redraws nothing.
-    fn canvas_move(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let moving = self
-            .track_editor_ref()
-            .is_some_and(|editor| editor.sheet.canvas.gesture.is_some());
-        if !moving {
+    /// A pointer move anywhere in the window. A running gesture follows it;
+    /// otherwise, over the canvas, the wire under it lights. Nothing redraws
+    /// unless something changed.
+    fn canvas_move(&mut self, at: Point<Pixels>, over: bool, cx: &mut Context<Self>) {
+        let Some(editor) = self.track_editor_ref() else {
             return;
-        }
-        self.with_track_editor(cx, |editor| {
-            let canvas = &mut editor.sheet.canvas;
-            match &mut canvas.gesture {
-                Some(Gesture::Pan { last }) => {
+        };
+        let canvas = &editor.sheet.canvas;
+        match &canvas.gesture {
+            Some(Gesture::Wire { from, .. }) => {
+                let snap = shown_graph(editor).and_then(|graph| {
+                    snap_target(&canvas.geometry.borrow(), &graph, &canvas.drafts, from, at)
+                });
+                self.with_track_editor(cx, |editor| {
+                    if let Some(Gesture::Wire {
+                        at: to, snap: s, ..
+                    }) = &mut editor.sheet.canvas.gesture
+                    {
+                        *to = at;
+                        *s = snap;
+                    }
+                });
+            }
+            Some(Gesture::Pan { .. }) => self.with_track_editor(cx, |editor| {
+                let canvas = &mut editor.sheet.canvas;
+                if let Some(Gesture::Pan { last }) = &mut canvas.gesture {
                     canvas.pan = canvas.pan + (at - *last);
                     *last = at;
                 }
-                Some(Gesture::Wire { at: to, .. }) => *to = at,
-                None => {}
+            }),
+            None => {
+                let hover = over
+                    .then(|| {
+                        let graph = shown_graph(editor)?;
+                        let geometry = canvas.geometry.borrow();
+                        let zoom = canvas.zoom;
+                        graph
+                            .nodes
+                            .iter()
+                            .flat_map(|(id, node)| {
+                                node.wires().map(move |(input, from)| {
+                                    (from.to_owned(), (id.clone(), input.to_owned()))
+                                })
+                            })
+                            .filter_map(|(from, to)| {
+                                let start = geometry.output(&Source::Node(from))?;
+                                let end = geometry.input(&to)?;
+                                let corners = corners(start, end, zoom);
+                                let near = corners
+                                    .windows(2)
+                                    .map(|pair| segment_distance(at, pair[0], pair[1]))
+                                    .fold(f32::MAX, f32::min);
+                                (near <= WIRE_HOVER).then_some((to, near))
+                            })
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(to, _)| to)
+                    })
+                    .flatten();
+                if hover != canvas.hover {
+                    self.with_track_editor(cx, |editor| editor.sheet.canvas.hover = hover);
+                }
             }
-        });
+        }
     }
 
     fn canvas_pan_by(&mut self, delta: Point<Pixels>, cx: &mut Context<Self>) {
@@ -788,9 +1219,59 @@ impl Luma {
         });
     }
 
-    /// The button came up: a wire lands on the input port under it, or, when
-    /// it was picked up from an input and dropped on nothing, that input
-    /// goes back to its last value.
+    fn canvas_zoom(&mut self, about: Point<Pixels>, factor: f32, cx: &mut Context<Self>) {
+        self.with_track_editor(cx, |editor| editor.sheet.canvas.zoom_about(about, factor));
+    }
+
+    /// A canvas key or toolbar button: `+`/`=` and `-` zoom about the
+    /// centre, `0` is actual size at rest, `fit` frames the graph, Delete or
+    /// Backspace removes the selected node, Escape drops a wire drag or the
+    /// selection. Returns whether the key meant something here.
+    fn canvas_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        match key {
+            "+" | "=" | "-" => {
+                let factor = if key == "-" {
+                    1. / ZOOM_STEP
+                } else {
+                    ZOOM_STEP
+                };
+                self.with_track_editor(cx, |editor| {
+                    let canvas = &mut editor.sheet.canvas;
+                    let centre = canvas.centre();
+                    canvas.zoom_about(centre, factor);
+                });
+            }
+            "0" => self.with_track_editor(cx, |editor| {
+                let canvas = &mut editor.sheet.canvas;
+                canvas.zoom = 1.;
+                canvas.pan = Point::default();
+            }),
+            "fit" => self.with_track_editor(cx, |editor| editor.sheet.canvas.fit()),
+            "delete" | "backspace" => {
+                let selected = self
+                    .track_editor_ref()
+                    .and_then(|editor| editor.sheet.canvas.selected.clone());
+                match selected {
+                    Some(id) => self.graph_delete_node(&id, cx),
+                    None => return false,
+                }
+            }
+            "escape" => {
+                let mut handled = false;
+                self.with_track_editor(cx, |editor| {
+                    let canvas = &mut editor.sheet.canvas;
+                    handled = canvas.cancel() || canvas.selected.take().is_some();
+                });
+                return handled;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The button came up: a wire lands on the port it snapped to, or the
+    /// input port under it; or, when it was picked up from an input and
+    /// dropped on nothing, that input goes back to its last value.
     fn canvas_release(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(editor) = self.track_editor_ref() else {
             return;
@@ -801,29 +1282,27 @@ impl Luma {
         };
         let wire = match gesture {
             Gesture::Pan { .. } => None,
-            Gesture::Wire { from, detach, .. } => {
-                let target = canvas
+            Gesture::Wire {
+                from, detach, snap, ..
+            } => {
+                let under = canvas
                     .geometry
                     .borrow()
                     .inputs
                     .iter()
                     .map(|(key, centre)| (key.clone(), distance(*centre, at)))
-                    .filter(|(_, reach)| *reach <= PORT_GRAB)
+                    .filter(|(_, reach)| *reach <= PORT * canvas.zoom.max(1.))
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(key, _)| key);
-                let drafts = canvas.drafts.clone();
-                Some((from.clone(), detach.clone(), target, drafts))
+                let target = snap.clone().or(under);
+                Some((from.clone(), detach.clone(), target, canvas.drafts.clone()))
             }
         };
         self.with_track_editor(cx, |editor| editor.sheet.canvas.gesture = None);
         let Some((from, detach, target, drafts)) = wire else {
             return;
         };
-        let graph = self
-            .track_editor_ref()
-            .and_then(primary_clip)
-            .and_then(|clip| Some(clip.core.as_ref()?.graph.clone()));
-        let Some(graph) = graph else {
+        let Some(graph) = self.track_editor_ref().and_then(shown_graph) else {
             return;
         };
         match target {
@@ -862,7 +1341,7 @@ impl Luma {
         drafts: &[Draft],
         id: &str,
         input: &str,
-        detach: Option<(String, String)>,
+        detach: Option<Port>,
         cx: &mut Context<Self>,
     ) {
         let key = (id.to_owned(), input.to_owned());
@@ -928,10 +1407,13 @@ impl Luma {
     fn canvas_add(&mut self, kind: Kind, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.with_track_editor(cx, |editor| {
             let canvas = &mut editor.sheet.canvas;
-            let origin = canvas.geometry.borrow().canvas.origin;
-            let local = at - origin - canvas.pan;
+            let from = at - canvas.anchor();
+            let zoom = canvas.zoom;
             canvas.menu = None;
-            canvas.drafts.push(Draft { kind, at: local });
+            canvas.drafts.push(Draft {
+                kind,
+                at: point(f32::from(from.x) / zoom, f32::from(from.y) / zoom),
+            });
         });
     }
 
