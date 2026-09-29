@@ -172,6 +172,56 @@ globalThis.nav = {
 		}
 	},
 
+	// Widen the inspector for the clip graph canvas, once it is up.
+	widenGraph() {
+		const shot = until("the graph canvas", (s) =>
+			s.find({ role: "button", label: "Widen graph panel" }) && s.find({ role: "card", label: "Clip graph" }));
+		const narrow = shot.find({ role: "card", label: "Clip graph" }).bounds.width;
+		app.click(shot.find({ role: "button", label: "Widen graph panel" }));
+		until("the graph panel widened", (s) =>
+			s.find({ role: "card", label: "Clip graph" }).bounds.width > narrow * 1.5);
+		app.frames(4);
+	},
+
+	// Pan the clip graph canvas until what `find(snapshot)` returns is in
+	// view, under the canvas toolbar's band; `vertical: false` asks only
+	// for its width. A node out of view reads as an empty box on the edge it
+	// is past, so each step heads toward it.
+	inGraph(find, what, { vertical = true } = {}) {
+		for (let i = 0; i < 24; i++) {
+			const snap = app.snapshot();
+			const c = snap.find({ role: "card", label: "Graph canvas" }).bounds;
+			const target = find(snap);
+			if (!target) throw new Error(`no ${what} in the graph`);
+			const b = target.bounds;
+			const inX = b.width > 0 && b.x >= c.x + 4 && b.x + b.width <= c.x + c.width - 4;
+			const inY = !vertical
+				|| (b.height > 0 && b.y >= c.y + 44 && b.y + b.height <= c.y + c.height - 4);
+			if (inX && inY) return target;
+			const clamp = (v, r) => Math.max(-r, Math.min(r, v));
+			const dx = inX ? 0 : clamp(c.x + c.width / 2 - (b.x + b.width / 2), c.width / 3);
+			const dy = inY ? 0 : clamp(c.y + c.height / 2 - (b.y + b.height / 2), c.height / 3);
+			app.scroll({ x: c.x + c.width / 2, y: c.y + c.height - 8 }, { dx, dy, steps: 2 });
+			app.frames(1);
+		}
+		throw new Error(`could not bring ${what} into view`);
+	},
+
+	// The `role` node labelled `label` on the graph card `card`, in view.
+	// Cards can be taller than the canvas, so the card is brought in by its
+	// width and the node by its box.
+	inCard(card, role, label) {
+		until(`the ${card} card`, (s) => s.find({ role: "card", label: card }));
+		const on = (s) => {
+			const k = s.find({ role: "card", label: card })?.bounds;
+			return k && s.findAll({ role, label })
+				.find((n) => n.bounds.x >= k.x - 0.5 && n.bounds.x + n.bounds.width <= k.x + k.width + 0.5);
+		};
+		nav.inGraph((s) => s.find({ role: "card", label: card }), card, { vertical: false });
+		until(`${label} on ${card}`, (s) => on(s));
+		return nav.inGraph(on, `${label} on ${card}`);
+	},
+
 	// Dismiss the overlay that is up — what Escape means, minus the keyboard
 	// (a focused text field keeps Escape for itself; the action does not care
 	// where focus is).

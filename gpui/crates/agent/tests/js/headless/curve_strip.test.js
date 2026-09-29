@@ -17,19 +17,24 @@ function open() {
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "row", label: "Brightness" }));
+  nav.widenGraph();
 }
 
-// The source chip reading `now` in the first row named `row`.
-function inRow(row, role, label) {
-  const r = node("row", row).bounds;
+// The control of `role` and `label` in the row `row` of the graph card
+// `card`, in view.
+function inRow(card, row, role, label) {
+  const r = nav.inCard(card, "row", row).bounds;
   const found = app.snapshot().findAll({ role, label }).find((n) => n.bounds.y >= r.y && n.bounds.y < r.y + r.height);
   if (!found) throw new Error(`no ${role} ${label} in ${row}`);
   return found;
 }
 
+// The strip of Curve 1, in view.
+const strip = () => nav.inCard("Curve 1", "card", "Curve 1 strip");
+
 // Brightness over time: a time and a curve, the curve's shape in a strip.
 function promote() {
-  app.click(inRow("Brightness", "select", "Value"));
+  app.click(inRow("Color 1", "Brightness", "select", "Value"));
   app.click(node("button", "Over time"));
   until("the strip", (s) => s.find({ role: "card", label: "Curve 1 strip" }));
   settle();
@@ -47,7 +52,7 @@ const field = (label) => app.snapshot().findAll({ role: "input" }).find((n) => n
 test("a number strip edits a point", () => {
   open();
   promote();
-  node("card", "Curve 1 strip");
+  strip();
   // Select the end point and type its value; brightness reads in percent.
   app.click(node("slider", "Curve 1 point 2"));
   settle();
@@ -86,10 +91,10 @@ test("a time strip draws the clip's beats and follows the playhead", () => {
   // The track starts before the clip: no playhead on the strip.
   expect(playhead()).toBe(undefined);
   const clip = node("card", "Wash").bounds;
-  const strip = node("card", "Curve 1 strip").bounds;
+  const box = strip().bounds;
   const shareOf = () => {
     const p = playhead().bounds;
-    return (p.x + p.width / 2 - strip.x) / strip.width;
+    return (p.x + p.width / 2 - box.x) / box.width;
   };
   scrubTo(clip.x + clip.width * 0.25);
   until("the playhead", () => playhead());
@@ -113,13 +118,14 @@ test("a strip on a clock spans one event", () => {
   // With no clock, an event is the whole clip.
   expect(spanned()).toBe(graphClip().duration);
   // A clock every beat: one event spans one beat.
-  app.click(inRow("Clock", "select", "Once"));
+  app.click(inRow("Time 1", "Clock", "select", "Once"));
   app.click(node("button", "Clock"));
   until("the clock", () => nodes().clock1?.inputs?.every === 1);
   until("one beat", () => spanned() === 1);
   // Every two beats: the strip follows.
   const every = () => field("Clock 1 every");
   until("the every field", () => every());
+  nav.inCard("Clock 1", "row", "Every");
   app.click(every());
   app.key("secondary-a backspace");
   app.type(every(), "2");
@@ -137,12 +143,13 @@ test("a strip across space marks where each head falls", { fixture: { clips: [GR
   nav.expand();
   nav.stageOff();
   app.click(node("card", "Gradient"));
-  node("card", "Curve 1 strip");
+  nav.widenGraph();
+  strip();
   const marks = () => app.snapshot().findAll({ role: "text" }).filter((n) => /^Curve 1 head \d+$/.test(n.label));
   // Each mark's share of the strip's width, left to right.
   const shares = () => {
-    const strip = node("card", "Curve 1 strip").bounds;
-    return marks().map((m) => (m.bounds.x + m.bounds.width / 2 - strip.x) / strip.width).sort((a, b) => a - b);
+    const box = node("card", "Curve 1 strip").bounds;
+    return marks().map((m) => (m.bounds.x + m.bounds.width / 2 - box.x) / box.width).sort((a, b) => a - b);
   };
   until("head marks", () => marks().length >= 2);
   // A line over the whole axis runs from the lowest head at 0 to the highest at 1.
@@ -150,7 +157,8 @@ test("a strip across space marks where each head falls", { fixture: { clips: [GR
   assert(line.every((x) => x >= -0.01 && x <= 1.01), `marks off the strip: ${line}`);
   assert(line[0] < 0.02 && line.at(-1) > 0.98, `a line spans the strip: ${line}`);
   // In order, the heads sit evenly, each at the centre of its cell.
-  app.click(node("button", "Order"));
+  app.click(nav.inCard("Space 1", "button", "Order"));
+  strip();
   until("order stored", () => nodes().space1.settings.kind === "order");
   const n = line.length;
   until("even marks", () => {

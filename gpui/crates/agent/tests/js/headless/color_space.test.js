@@ -18,61 +18,20 @@ function open() {
   nav.stageOff();
   app.click(node("card", "Wash"));
   until("the graph", (s) => s.find({ role: "card", label: "Clip graph" }) && s.find({ role: "card", label: "Color 1" }));
+  nav.widenGraph();
 }
 
 const inside = (outer, inner) =>
   inner.x >= outer.x - 0.5 && inner.y >= outer.y - 0.5 &&
   inner.x + inner.width <= outer.x + outer.width + 0.5 && inner.y + inner.height <= outer.y + outer.height + 0.5;
-const area = (b) => b.width * b.height;
 
-// The innermost node card holding `bounds`, in snapshot `snap`.
-function cardOf(bounds, snap = app.snapshot()) {
-  return snap.findAll({ role: "card" })
-    .filter((c) => /^[A-Z][a-z]+ \d+$/.test(c.label) && inside(c.bounds, bounds))
-    .sort((a, b) => area(a.bounds) - area(b.bounds))[0];
-}
+// The `role` node labelled `label` on the graph card `card`, in view.
+const inCard = (card, role, label) => nav.inCard(card, role, label);
 
-// Scroll the sheet until `target` is inside it.
-function reveal(target) {
-  const p = node("card", "Clip graph").bounds;
-  const b = target.bounds;
-  if (b.y < p.y + 90 || b.y + b.height > p.y + p.height - 12) {
-    const dy = p.y + p.height / 2 - b.y;
-    app.scroll({ x: p.x + p.width / 2, y: p.y + p.height / 2 }, { dy, steps: 5 });
-    app.frames(3);
-  }
-}
-
-// The row `row` of the card `card` itself, not of a card nested in it.
-function rowOf(card, row) {
-  const find = () => {
-    const snap = app.snapshot();
-    return snap.findAll({ role: "row", label: row }).find((r) => cardOf(r.bounds, snap)?.label === card);
-  };
-  until(`${card} ${row}`, () => find());
-  reveal(find());
-  return find();
-}
-
-// The `role` node labelled `label` whose innermost card is `card`.
-function inCard(card, role, label) {
-  const find = () => {
-    const snap = app.snapshot();
-    return snap.findAll({ role, label }).find((n) => cardOf(n.bounds, snap)?.label === card);
-  };
-  until(`${card} ${label}`, () => find());
-  reveal(find());
-  return find();
-}
-
-// The control of `role` and `label` in `card`'s row `row`, above any card
-// nested in that row.
+// The control of `role` and `label` in `card`'s row `row`, in view.
 function inRow(card, row, role, label) {
-  const r = rowOf(card, row).bounds;
-  const snap = app.snapshot();
-  const found = snap.findAll({ role, label })
-    .filter((n) => inside(r, n.bounds) && cardOf(n.bounds, snap)?.label === card)
-    .sort((a, b) => a.bounds.y - b.bounds.y)[0];
+  const r = inCard(card, "row", row).bounds;
+  const found = app.snapshot().findAll({ role, label }).find((n) => inside(r, n.bounds));
   if (!found) throw new Error(`no ${role} ${label} in ${card} ${row}`);
   return found;
 }
@@ -98,7 +57,7 @@ test("a color over space reads a gradient along a space node", () => {
   expect(stops.at(-1).color).toEqual([1, 1, 1]);
   node("card", "Space 1");
   inRow("Color 1", "Color", "select", "Over space");
-  node("card", "Curve 2 strip");
+  inCard("Curve 2", "card", "Curve 2 strip");
 
   // Another space kind is stored on the node.
   app.click(inCard("Space 1", "button", "Radial"));
