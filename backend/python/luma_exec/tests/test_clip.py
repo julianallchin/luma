@@ -217,7 +217,7 @@ class ClipEditTests(unittest.TestCase):
             self.calls.append((method, copy.deepcopy(payload)))
             if method == "track.clip_check":
                 if self.refuse:
-                    return {"ok": False, "errors": [self.refuse]}
+                    return {"ok": False, "error": f"clip {payload['clip']['name']} ({payload['id']}): {self.refuse}"}
                 return {"ok": True}
             if method == "track.score_apply":
                 return payload["candidate"]
@@ -274,12 +274,14 @@ class ClipEditTests(unittest.TestCase):
         import numpy as np
         edit = self.track().edit()
         values = np.zeros((2, 3, 12), dtype=np.float32)
-        values[:, :, 0] = 1.0     # red
+        values[:, :, 0] = 0.5     # red, already darkened by the dimmer
         values[:, :, 3] = 0.5     # dimmer
         values[:, :, 6] = 0.25    # strobe
         values[:, :, 9] = 1.0     # aim v
         values[:, :, 11] = 0.75   # weight
-        self.render = {"values": values, "lightIds": ["a", "b"], "timesS": [0, 0.5, 1]}
+        self.render = {"values": values, "lightIds": ["a", "b"], "timesS": [0, 0.5, 1],
+                       "channels": ["r", "g", "b", "dimmer", "pan", "tilt", "strobe", "speed",
+                                    "aim_u", "aim_v", "aim_z", "aim_weight"]}
         output = edit.window(beats=(0, 2)).output
         self.assertEqual(output.values.shape, (2, 3, 3))
         self.assertTrue(np.allclose(output.values[..., 0], 0.5))
