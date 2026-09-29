@@ -673,28 +673,39 @@ plus the working order. Delete every mention of forms, `inputs=`,
 
 ### 7.1 Layout
 
-The inspector (`id("clip-inspector")`, card "Clip inputs" → rename the card
-to "Clip graph") is the graph editor. It is a tree, not a canvas: the output
-node is the top card; every wired input shows the node that feeds it as a
-nested card under the row (the `grouped()` 2 px left rule, `pl 10`). A node
-that feeds two inputs shows its card once, at its first place in the tree,
-and a link chip ("→ Clock 1") at the other places; clicking the chip scrolls
-to the card and flashes it (`motion::HOVER_FADE`).
+The inspector (`id("clip-inspector")`, card "Clip graph") is the graph
+editor. It is a node-and-wire canvas (decision 28, changed 2026-09-29): one
+card per node in columns, sources on the left and the output on the right,
+each wire drawn from a node's output port to the input port it feeds. The
+layout is automatic and deterministic (`edit::columns`); the stored graph has
+no positions. The view pans (drag the ground, or the wheel); "Fit" brings it
+back to rest, with the output at the top right. A button widens the
+inspector column for the canvas.
+
+Wires: drag from an output port onto an input port to link (a wire the input
+cannot take is refused with a message); drag a wire off an input port and
+drop it on nothing to unwire (the input goes back to its last value). "Add
+node" (button or right-click) places a new node on the canvas; it joins the
+graph when its output is wired, with what it needs to check (a coordinate
+into a value input comes through a new curve). A card's × deletes the node;
+each input it fed goes back to its last value, and a curve whose `x` it was
+goes too. A curve card widens its strip.
 
 Top to bottom:
 
 1. Name: `text_input`, full width, agent role `input` "Name". Empty shows the
    summary (7.6) as placeholder.
 2. Blend: the existing `blend_select`, filtered by the output kind.
-3. The output node card.
+3. The canvas, filling the rest.
 
 A node card: title row with the kind in sentence case plus its number
 ("Curve 2"), its settings as `float::segmented()` controls
 (`Line | Order | Radial | Angle`, `Wrap` as `float::switch`,
 `Direction | Point | Away`, `Fixture | Group`), and a `×` icon button on
-non-output cards (unwire: the parent input goes back to its last value, or
-empty; the subtree is deleted when nothing else references it). Then one
-`sheet_row` per input, label over control, `ROW_GAP` 14.
+non-output cards (delete the node, as above). Then one `sheet_row` per
+input, label over control, `ROW_GAP` 14, with the input's port on the card's
+left edge. A wired input shows no control; its wire says where its value
+comes from.
 
 Controls per input type: number → `ScrubNumber` with the unit (`beats`,
 `°`, `m`, `Hz`, `%` for share); vector uvz → three `ScrubNumber` (u, v, z),
@@ -1081,11 +1092,11 @@ JSON); `definition()` defaults build; `add_clip` without a name raises;
 D: `sheet/graph.rs` (new), `sheet.rs`, `browser.rs`, `picker.rs`,
 `document.rs`, `track_editor.rs` label, `fades.rs` on alpha; delete
 `sheet/form.rs`. Tests (`clip_graph.test.js`): selecting a Chase shows the
-name field, the Color card, a Curve card nested under Brightness and a Space
-card under it; "Over time" on Brightness of a Wash inserts Time and Curve
+name field and the Clock, Time, Curve, Space, Curve and Color cards left to
+right with a wire into each input; "Over time" on Brightness of a Wash inserts Time and Curve
 cards and the stored graph gains two nodes; switching the space kind segment
-stores the setting; dragging a curve point stores new points; "Link…" on a
-second time input shares one clock and shows a link chip; renaming stores
+stores the setting; dragging a curve point stores new points; a wire dragged
+from Clock 1 onto a second time's clock shares one clock; renaming stores
 `name` and the timeline header shows it; the fade handle writes an alpha
 curve; undo after a drag restores the graph in one step.
 
@@ -1158,7 +1169,7 @@ One line each; the alternative after "alt:".
 25. Python does no type checking; Rust is the one checker. alt: mirror the checks in Python.
 26. Shipped clip presets are copied graphs named as the effect; user-saved presets are out of scope tonight. alt: a user preset table now.
 27. Preset names are unique across kinds ("Wave" color, "Nod wave" aim, "Strobe follows a band"). alt: names scoped by kind as today.
-28. The inspector is a tree of nested node cards with link chips, not a node-and-wire canvas. alt: a canvas.
+28. The inspector is a node-and-wire canvas with automatic, deterministic layout and no stored positions (changed 2026-09-29; was a tree of nested cards with link chips). alt: the tree.
 29. Promotion inserts nodes with the defaults table in 7.2. alt: empty nodes.
 30. The timeline header shows `Name · summary` with the verb/detail colors. alt: name only.
 31. Timeline fade handles keep working by writing `alpha` as a value or a once-over-clip curve. alt: remove the handles.

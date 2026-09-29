@@ -218,9 +218,9 @@ pub(crate) fn references(graph: &ClipGraph, target: &str) -> Vec<(String, String
         .collect()
 }
 
-/// Every wire in the tree the inspector draws, depth first from the output,
-/// inputs in row order: (node, input, the node wired there).
-pub(crate) fn tree_wires(graph: &ClipGraph) -> Vec<(String, String, String)> {
+/// Every wire the output reaches, depth first from the output, inputs in row
+/// order: (node, input, the node wired there).
+pub(crate) fn wires_in_order(graph: &ClipGraph) -> Vec<(String, String, String)> {
     fn walk(
         graph: &ClipGraph,
         id: &str,
@@ -247,9 +247,10 @@ pub(crate) fn tree_wires(graph: &ClipGraph) -> Vec<(String, String, String)> {
     wires
 }
 
-/// Where the tree first wires `id`: the node and input it feeds there.
+/// Where `id` is first wired, in row order from the output: the node and
+/// input it feeds there.
 pub(crate) fn destination(graph: &ClipGraph, id: &str) -> Option<(String, String)> {
-    tree_wires(graph)
+    wires_in_order(graph)
         .into_iter()
         .find(|(_, _, to)| to == id)
         .map(|(from, name, _)| (from, name))
@@ -571,6 +572,152 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
         .collect()
 }
 
+/// Whether an input needs its wire: a curve's `x` has no value to go back
+/// to, so taking its source away takes the curve too.
+fn needs_wire(graph: &ClipGraph, id: &str, input: &str) -> bool {
+    spec(graph, id, input).is_some_and(|spec| spec.ty == Ty::Coordinate)
+}
+
+/// Delete node `id`. Each input it fed takes `restore`'s value (its last
+/// value, or empty); a curve whose `x` it was goes too. The output node
+/// stays.
+pub(crate) fn delete(
+    graph: &mut ClipGraph,
+    id: &str,
+    restore: impl Fn(&ClipGraph, &str, &str) -> Option<Input>,
+) {
+    if graph.nodes.get(id).is_none_or(|node| node.kind.is_output()) {
+        return;
+    }
+    let mut doomed = vec![id.to_owned()];
+    while let Some(at) = doomed.pop() {
+        for (to, input) in references(graph, &at) {
+            if needs_wire(graph, &to, &input) {
+                doomed.push(to);
+                continue;
+            }
+            let back = restore(graph, &to, &input);
+            if let Some(node) = graph.nodes.get_mut(&to) {
+                match back {
+                    Some(value) => node.inputs.insert(input, value),
+                    None => node.inputs.remove(&input),
+                };
+            }
+        }
+        graph.nodes.remove(&at);
+    }
+    prune(graph);
+}
+
+/// Whether a new node of `kind` can feed an input: directly, or through the
+/// curve a promotion puts between them.
+pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> bool {
+    let Some(spec) = spec(graph, id, input) else {
+        return false;
+    };
+    match spec.ty {
+        Ty::Number | Ty::Vector | Ty::Color => SOURCES.contains(&kind) || kind == Kind::Curve,
+        Ty::Coordinate => SOURCES.contains(&kind),
+        Ty::Heads => SHAPERS.contains(&kind),
+        Ty::Clock => kind == Kind::Clock,
+        Ty::Points | Ty::Gradient => false,
+    }
+}
+
+/// Wire a new node of `kind` into an input, with what it needs to check: a
+/// coordinate into a value input comes through a new curve, and a new curve
+/// reads a new time. Returns `None` when `kind` cannot feed the input, else
+/// the value the input held, for an unwire to give back.
+pub(crate) fn attach(
+    graph: &mut ClipGraph,
+    id: &str,
+    input: &str,
+    kind: Kind,
+) -> Option<Option<Input>> {
+    if !accepts(graph, id, input, kind) {
+        return None;
+    }
+    let ty = spec(graph, id, input)?.ty;
+    Some(match ty {
+        Ty::Number | Ty::Vector | Ty::Color => {
+            let source = if kind == Kind::Curve {
+                Kind::Time
+            } else {
+                kind
+            };
+            promote(graph, id, input, source)
+        }
+        Ty::Coordinate => {
+            recoordinate(graph, id, kind);
+            None
+        }
+        _ => {
+            insert(graph, id, input, kind);
+            None
+        }
+    })
+}
+
+/// The canvas's columns, right to left: the output alone, then each node in
+/// the column one past the farthest node it feeds, so every wire runs left
+/// to right. Within a column, nodes follow the rows they feed in the column
+/// nearest them, so wires cross as little as the order allows. The same
+/// graph always gives the same columns.
+pub(crate) fn columns(graph: &ClipGraph) -> Vec<Vec<String>> {
+    let Some(root) = output(graph) else {
+        return Vec::new();
+    };
+    let mut depth: std::collections::BTreeMap<String, usize> = [(root.clone(), 0)].into();
+    // A graph that checks has no cycle; the bound keeps one from spinning.
+    for _ in 0..=graph.nodes.len() {
+        let mut changed = false;
+        for (id, node) in &graph.nodes {
+            let Some(&at) = depth.get(id) else {
+                continue;
+            };
+            for (_, from) in node.wires() {
+                if graph.nodes.contains_key(from) && depth.get(from).is_none_or(|&d| d < at + 1) {
+                    depth.insert(from.to_owned(), at + 1);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let count = depth.values().max().map_or(0, |deepest| deepest + 1);
+    let mut columns: Vec<Vec<String>> = vec![Vec::new(); count];
+    columns[0].push(root);
+    for column in 1..count {
+        let mut keyed: Vec<((usize, usize, usize), String)> = graph
+            .ids_in_order()
+            .into_iter()
+            .filter(|id| depth.get(*id) == Some(&column))
+            .map(|id| {
+                let key = references(graph, id)
+                    .into_iter()
+                    .filter_map(|(to, input)| {
+                        let at = *depth.get(&to)?;
+                        let row = columns[at].iter().position(|placed| *placed == to)?;
+                        let kind = graph.nodes.get(&to)?.kind;
+                        let slot = definition(kind)
+                            .inputs
+                            .iter()
+                            .position(|(name, _)| *name == input)?;
+                        Some((column - at, row, slot))
+                    })
+                    .min()
+                    .unwrap_or((usize::MAX, 0, 0));
+                (key, id.to_owned())
+            })
+            .collect();
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        columns[column] = keyed.into_iter().map(|(_, id)| id).collect();
+    }
+    columns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +796,63 @@ mod tests {
         let above = wired(&graph, "color1", "brightness");
         let space = wired(&graph, &above, "x");
         assert!(!link_candidates(&graph, &space, "offset").contains(&above));
+    }
+
+    fn chase() -> ClipGraph {
+        let mut graph = wash();
+        promote(&mut graph, "color1", "brightness", Kind::Space);
+        graph
+    }
+
+    #[test]
+    fn columns_run_from_the_sources_to_the_output() {
+        let graph = chase();
+        let columns = columns(&graph);
+        assert_eq!(columns[0], ["color1"]);
+        let column = |id: &str| columns.iter().position(|c| c.iter().any(|n| n == id));
+        // Every wire runs from a column further left into one further right.
+        for (id, node) in &graph.nodes {
+            for (_, from) in node.wires() {
+                assert!(column(from) > column(id), "{from} feeds {id}");
+            }
+        }
+        assert_eq!(
+            columns.iter().map(Vec::len).sum::<usize>(),
+            graph.nodes.len()
+        );
+        assert_eq!(columns, super::columns(&graph.clone()));
+    }
+
+    #[test]
+    fn deleting_a_coordinate_takes_its_curve_and_gives_the_value_back() {
+        let mut graph = chase();
+        let curve = wired(&graph, "color1", "brightness");
+        let space = wired(&graph, &curve, "x");
+        delete(&mut graph, &space, |_, _, _| Some(Input::Number(0.5)));
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(
+            graph.nodes["color1"].inputs.get("brightness"),
+            Some(&Input::Number(0.5))
+        );
+        delete(&mut graph, "color1", |_, _, _| None);
+        assert!(graph.nodes.contains_key("color1"), "the output stays");
+    }
+
+    #[test]
+    fn attach_puts_a_curve_between_a_new_source_and_a_value() {
+        let mut graph = wash();
+        assert!(attach(&mut graph, "color1", "brightness", Kind::Clock).is_none());
+        assert!(attach(&mut graph, "color1", "brightness", Kind::Noise).is_some());
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        let curve = wired(&graph, "color1", "brightness");
+        let time = {
+            let mut graph = wash();
+            attach(&mut graph, "color1", "alpha", Kind::Curve);
+            let curve = wired(&graph, "color1", "alpha");
+            graph.nodes[&wired(&graph, &curve, "x")].kind
+        };
+        assert_eq!(time, Kind::Time);
+        assert_eq!(graph.nodes[&wired(&graph, &curve, "x")].kind, Kind::Noise);
     }
 
     #[test]

@@ -64,11 +64,8 @@ pub(crate) struct State {
     last: HashMap<(String, String), Input>,
     /// Why the last graph edit was refused, in the checker's words.
     error: Option<String>,
-    /// The card a link chip jumped to, and when, while it flashes.
-    flash: Option<(String, std::time::Instant)>,
-    /// Where each node card was last painted, for a link chip to scroll to.
-    cards: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
-    scroll: ScrollHandle,
+    /// The graph canvas's view, gesture and unwired nodes.
+    canvas: graph::canvas::State,
     /// The heads of the primary clip's selection, for the head marks of a
     /// strip across space.
     heads: Heads,
@@ -95,9 +92,7 @@ impl Default for State {
             flush_gen: 0,
             last: HashMap::new(),
             error: None,
-            flash: None,
-            cards: Rc::default(),
-            scroll: ScrollHandle::new(),
+            canvas: graph::canvas::State::default(),
             heads: Heads::default(),
         }
     }
@@ -110,19 +105,7 @@ impl State {
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
     pub(crate) fn dismiss_menu(&mut self) -> bool {
-        self.open.take().is_some()
-    }
-
-    /// Scroll `node`'s card into view and flash it.
-    fn reveal(&mut self, node: &str) {
-        self.flash = Some((node.to_owned(), std::time::Instant::now()));
-        let Some(card) = self.cards.borrow().get(node).copied() else {
-            return;
-        };
-        let view = self.scroll.bounds();
-        let offset = self.scroll.offset();
-        let y = offset.y - (card.origin.y - view.origin.y) + px(ROW_GAP);
-        self.scroll.set_offset(point(offset.x, y.min(px(0.))));
+        self.open.take().is_some() | self.canvas.menu.take().is_some()
     }
 }
 
@@ -202,11 +185,6 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
     tick_menus(&mut editor.sheet, window, cx);
     ensure_groups(editor, cx);
     ensure_heads(editor, cx);
-    if editor.sheet.flash.as_ref().is_some_and(|(_, since)| {
-        since.elapsed() < luma_ui::motion::span(&luma_ui::motion::HOVER_FADE)
-    }) {
-        window.request_animation_frame();
-    }
     let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
         editor.sheet.open = None;
         editor.sheet.built = None;
@@ -224,6 +202,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         editor.sheet.open = None;
         editor.sheet.last.clear();
         editor.sheet.error = None;
+        editor.sheet.canvas = graph::canvas::State::default();
         let built = build(editor, primary, window, cx);
         editor.sheet.built = Some(built);
     }
@@ -730,16 +709,21 @@ pub(super) fn blend_modes(output: &str) -> &'static [BlendMode] {
 // -- rendering ----------------------------------------------------------------
 
 /// The inspector: the selected clip's controls, or the preset browser. It
-/// is always open: a fixed-width column beside the stage, or, with `fill`
-/// (split view), the whole box it is given under the stage.
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool) -> AnyElement {
+/// is always open: a column beside the stage, as wide as the shell gives it
+/// (widened for the graph when `wide`), or, with `fill` (split view), the
+/// whole box it is given under the stage.
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool, wide: bool) -> AnyElement {
     let (label, body) = match state.sheet.built.as_ref() {
-        Some(built) => ("Clip graph", body(state, built, app)),
+        Some(built) => (
+            "Clip graph",
+            body(state, built, app, (!fill).then_some(wide)),
+        ),
         None => ("Presets", browser::body(state, app)),
     };
-    let content = div()
+    div()
         .id("clip-inspector")
         .size_full()
+        .min_h_0()
         .overflow_hidden()
         .bg(ladder::background())
         // Beside the stage its trailing edge is a rule; under it, the seam
@@ -748,20 +732,16 @@ pub(super) fn panel(state: &Editor, app: &Entity<Luma>, fill: bool) -> AnyElemen
             content.border_r_1().border_color(ladder::trim())
         })
         .child(body)
-        .into_any_element();
-    let panel = if fill {
-        div().size_full().min_h_0().child(content)
-    } else {
-        let width = px(luma_ui::sheet::WIDTH);
-        luma_ui::pane::pane(width, width, content)
-    };
-    panel.agent_node(Role::Card, label).into_any_element()
+        .agent_node(Role::Card, label)
+        .into_any_element()
 }
 
-/// The sheet's content: the name, then the controls for the selection.
-fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
+/// The sheet's content: the name, the selection and blend rows, then the
+/// graph canvas filling the rest.
+fn body(state: &Editor, built: &Built, app: &Entity<Luma>, wide: Option<bool>) -> AnyElement {
     let pad = px(luma_ui::sheet::PAD);
     let mut rows: Vec<AnyElement> = Vec::new();
+    let mut graph = None;
     if built.shape.is_some() {
         rows.push(named("Selection", selection_row(built, app)));
         rows.push(named("Blend", blend_select(state, built, app)));
@@ -775,8 +755,8 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .into_any_element(),
             );
         }
-        if let (Some(controls), Some(graph)) = (&built.controls, &built.graph) {
-            rows.extend(graph::tree(state, controls, graph, app));
+        if let (Some(controls), Some(shown)) = (&built.controls, &built.graph) {
+            graph = Some(graph::editor(state, controls, shown, app, wide));
         }
     }
     let header = div()
@@ -799,7 +779,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
         })
         .child(
             div()
-                .w_full()
+                .w(px(FIELD_W))
                 .key_context(text_input::DRAFT_CONTEXT)
                 .child(built.name.clone())
                 .agent_node(Role::Input, "Name"),
@@ -811,23 +791,28 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
         .flex_col()
         .child(header)
         .child(luma_ui::float::divider())
-        // The gutters live on a wrapper outside the scroller — `float::viewport`'s
-        // contract — so a graph long enough to scroll still has air at both ends.
         .child(
-            luma_ui::float::viewport().child(
-                div()
-                    .id("args-sheet-fields")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&state.sheet.scroll)
-                    .px(pad)
-                    .pb(pad)
-                    .flex()
-                    .flex_col()
-                    .gap(px(ROW_GAP))
-                    .children(rows),
-            ),
+            div()
+                .id("args-sheet-fields")
+                .flex_none()
+                .w(px(FIELD_W + 2. * luma_ui::sheet::PAD))
+                .px(pad)
+                .py(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(ROW_GAP))
+                .children(rows),
         )
+        .children(graph.map(|graph| {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .border_t_1()
+                .border_color(ladder::trim())
+                .child(graph)
+        }))
         .into_any_element()
 }
 
@@ -904,6 +889,7 @@ fn sheet_row(label: &str, accessories: Vec<AnyElement>, control: Div) -> AnyElem
         .gap(px(LABEL_GAP))
         .child(
             div()
+                .relative()
                 .w_full()
                 .h(px(CONTROL_HEIGHT))
                 .flex()

@@ -3199,16 +3199,17 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
 
 /// The inspector occupies the editing area, even with the rig hidden: the
 /// selected clip's controls, or the preset browser. `fill` is split view's
-/// placement — see [`sheet::panel`].
+/// placement and `wide` the widened column — see [`sheet::panel`].
 pub(crate) fn inspector(
     state: &mut Editor,
     app: &Entity<Luma>,
     fill: bool,
+    wide: bool,
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> AnyElement {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app, fill)
+    sheet::panel(state, app, fill, wide)
 }
 
 /// Render the screen: a toolbar strip over the canvas.
