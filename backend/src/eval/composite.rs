@@ -98,8 +98,12 @@ pub fn offset_frame<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::eval::{lighting::compile_clip, Arena, CompiledAnnotation, Scene, Scope};
+    use crate::eval::{
+        lighting::{compile_clip, test_clip},
+        Arena, CompiledAnnotation, Scene, Scope,
+    };
     use luma_patterns as p;
+    use serde_json::json;
     use std::sync::Arc;
 
     /// One Wash clip on one head over beats 0–4 (one beat per second).
@@ -110,16 +114,9 @@ mod tests {
         mode: p::BlendMode,
         z: i64,
     ) -> CompiledAnnotation {
-        let mut clip = p::presets()
-            .preset("color@1", "Wash")
-            .unwrap()
-            .clip(0.0, 4.0);
-        clip.inputs.insert("color".into(), p::Value::Color(color));
-        clip.inputs
-            .insert("brightness".into(), p::Value::Proportion(brightness));
-        clip.inputs
-            .insert("fade".into(), p::Value::Proportion(alpha));
-        compile(clip, mode, z)
+        let nodes = json!({"color1": {"kind": "color", "inputs": {
+            "color": color, "brightness": brightness, "alpha": alpha}}});
+        compile(test_clip(nodes, 0.0, 4.0), mode, z)
     }
 
     fn compile(clip: p::Clip, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
@@ -141,7 +138,6 @@ mod tests {
         let prepared = p::PreparedGraph::new(
             &p::standard_library(),
             &clip.graph,
-            &clip.inputs,
             p::Frame {
                 features: None,
                 cells: &cells,
@@ -153,7 +149,7 @@ mod tests {
         )
         .unwrap();
         let clock = p::BeatTimeline::new(vec![0.0, 1.0, 2.0, 3.0, 4.0], 0.0).unwrap();
-        let plan = compile_clip(&clip, clock, cells, prepared, "lighting").unwrap();
+        let plan = compile_clip(&clip, clock, cells, prepared).unwrap();
         CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
@@ -162,18 +158,12 @@ mod tests {
         }
     }
 
-    /// One `aim@1` Position clip on the head over beats 0–4, aimed at
-    /// `direction` at `alpha`.
+    /// One Position clip on the head over beats 0–4, aimed at `direction`
+    /// at `alpha`.
     fn aim(direction: [f64; 3], alpha: f64, z: i64) -> CompiledAnnotation {
-        let mut clip = p::presets()
-            .preset("aim@1", "Position")
-            .unwrap()
-            .clip(0.0, 4.0);
-        clip.inputs
-            .insert("direction".into(), p::Value::Vector(direction));
-        clip.inputs
-            .insert("fade".into(), p::Value::Proportion(alpha));
-        compile(clip, p::BlendMode::Replace, z)
+        let nodes = json!({"aim1": {"kind": "aim", "settings": {"base": "direction"},
+            "inputs": {"direction": direction, "alpha": alpha}}});
+        compile(test_clip(nodes, 0.0, 4.0), p::BlendMode::Replace, z)
     }
 
     /// The head's light (color × dimmer) at beat 1; no head is no light.
@@ -204,7 +194,6 @@ mod tests {
 
     #[test]
     fn aim_clips_blend_by_alpha_along_the_shortest_arc() {
-        const REST: [f64; 3] = [0.0, 0.766, -0.643];
         const RIGHT: [f64; 3] = [1.0, 0.0, 0.0];
         let blended = head(vec![aim(REST, 1.0, 0), aim(RIGHT, 0.25, 1)])
             .aim
@@ -253,17 +242,9 @@ mod tests {
             .collect()
     }
 
-    /// The `aim@1` preset `name` on the truss over beats 0–4, changed by
-    /// `edit`.
-    fn aim_on_truss(
-        name: &str,
-        mode: p::BlendMode,
-        z: i64,
-        edit: impl FnOnce(&mut std::collections::BTreeMap<String, p::Value>),
-    ) -> CompiledAnnotation {
-        let mut clip = p::presets().preset("aim@1", name).unwrap().clip(0.0, 4.0);
-        edit(&mut clip.inputs);
-        compile_on(clip, mode, z, truss())
+    /// An aim clip of `nodes` on the truss over beats 0–4.
+    fn on_truss(nodes: serde_json::Value, mode: p::BlendMode, z: i64) -> CompiledAnnotation {
+        compile_on(test_clip(nodes, 0.0, 4.0), mode, z, truss())
     }
 
     /// Each truss head's aim at `t` seconds, as a direction and a weight.
@@ -299,40 +280,57 @@ mod tests {
 
     /// A position to the right of and below the presets' rest.
     const PLACE: [f64; 3] = [0.6, 0.0, -0.8];
+    /// The venue's default aim, which the presets rest at.
+    const REST: [f64; 3] = [0.0, 0.766, -0.643];
 
     fn position(z: i64) -> CompiledAnnotation {
-        aim_on_truss("Position", p::BlendMode::Replace, z, |inputs| {
-            inputs.insert("direction".into(), p::Value::Vector(PLACE));
-        })
+        let nodes = json!({"aim1": {"kind": "aim", "settings": {"base": "direction"},
+            "inputs": {"direction": PLACE}}});
+        on_truss(nodes, p::BlendMode::Replace, z)
     }
 
-    fn at(inputs: &mut std::collections::BTreeMap<String, p::Value>, direction: [f64; 3]) {
-        inputs.insert("direction".into(), p::Value::Vector(direction));
-    }
-
-    /// A stage-right axis, mirrored left–right through the middle head.
-    fn mirrored(inputs: &mut std::collections::BTreeMap<String, p::Value>) {
-        inputs.insert(
-            "axis".into(),
-            p::Value::Mapping(p::MappingSpec {
-                source: p::MappingSource::U,
-                per_group: false,
-                reverse: false,
-                mirror: Some(p::MirrorPlane {
-                    normal: [1.0, 0.0, 0.0],
-                    offset: 0.0,
-                }),
-                span: p::Span::Selection,
-                plane: None,
-            }),
-        );
-        if let Some(p::Value::Space(space)) = inputs.get_mut("lean") {
-            space.axis.source = p::MappingSource::U;
-            space.axis.mirror = Some(p::MirrorPlane {
-                normal: [1., 0., 0.],
-                offset: 0.,
-            });
+    /// The heads of an aim: all of them, or mirrored left–right through the
+    /// middle head.
+    fn heads(nodes: &mut serde_json::Value, mirrored: bool) {
+        if mirrored {
+            nodes["mirror1"] = json!({"kind": "mirror", "inputs": {"normal": [1, 0, 0]}});
+            nodes["aim1"]["inputs"]["heads"] = json!({"node": "mirror1"});
         }
+    }
+
+    /// The Circle preset at `direction`: yaw and pitch go round every four
+    /// beats.
+    fn circle(direction: [f64; 3], alpha: f64, mirrored: bool) -> serde_json::Value {
+        let mut nodes = json!({
+            "clock1": {"kind": "clock", "inputs": {"every": 4}},
+            "time1": {"kind": "time", "inputs": {"clock": {"node": "clock1"}}},
+            "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {
+                "x": {"node": "time1"}, "low": -18, "high": 18, "shape": {"points": [
+                    [0, 1, "sine-in"], [0.25, 0.5, "sine-out"], [0.5, 0, "sine-in"],
+                    [0.75, 0.5, "sine-out"], [1, 1]]}}},
+            "curve2": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {
+                "x": {"node": "time1"}, "low": -18, "high": 18, "shape": {"points": [
+                    [0, 0.5, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0.5, "sine-out"],
+                    [0.75, 0, "sine-in"], [1, 0.5]]}}},
+            "aim1": {"kind": "aim", "settings": {"base": "direction"}, "inputs": {
+                "direction": direction, "alpha": alpha,
+                "yaw": {"node": "curve1"}, "pitch": {"node": "curve2"}}},
+        });
+        heads(&mut nodes, mirrored);
+        nodes
+    }
+
+    /// The Fan preset: yaw from -25° to 25° along the truss.
+    fn fan(mirrored: bool) -> serde_json::Value {
+        let mut nodes = json!({
+            "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+            "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {
+                "x": {"node": "space1"}, "low": -25, "high": 25}},
+            "aim1": {"kind": "aim", "settings": {"base": "direction"}, "inputs": {
+                "direction": REST, "yaw": {"node": "curve1"}}},
+        });
+        heads(&mut nodes, mirrored);
+        nodes
     }
 
     #[test]
@@ -340,19 +338,20 @@ mod tests {
         for t in [0.3, 1.1, 2.6] {
             // The circle's own direction is not used: it circles PLACE, with
             // and without a mirror.
-            for axis in [|_: &mut _| {}, mirrored] {
+            for mirrored in [false, true] {
                 let offset = truss_aims(
                     vec![
                         position(0),
-                        aim_on_truss("Circle", p::BlendMode::Offset, 1, axis),
+                        on_truss(circle(REST, 1.0, mirrored), p::BlendMode::Offset, 1),
                     ],
                     t,
                 );
                 let there = truss_aims(
-                    vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |i| {
-                        axis(i);
-                        at(i, PLACE);
-                    })],
+                    vec![on_truss(
+                        circle(PLACE, 1.0, mirrored),
+                        p::BlendMode::Replace,
+                        0,
+                    )],
                     t,
                 );
                 same_aims(&offset, &there);
@@ -361,12 +360,12 @@ mod tests {
             let replaced = truss_aims(
                 vec![
                     position(0),
-                    aim_on_truss("Circle", p::BlendMode::Replace, 1, |_| {}),
+                    on_truss(circle(REST, 1.0, false), p::BlendMode::Replace, 1),
                 ],
                 t,
             );
             let alone = truss_aims(
-                vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |_| {})],
+                vec![on_truss(circle(REST, 1.0, false), p::BlendMode::Replace, 0)],
                 t,
             );
             same_aims(&replaced, &alone);
@@ -379,45 +378,29 @@ mod tests {
         let over = truss_aims(
             vec![
                 position(0),
-                aim_on_truss("Circle", p::BlendMode::Offset, 1, |i| {
-                    i.insert("fade".into(), p::Value::Proportion(0.0));
-                }),
+                on_truss(circle(REST, 0.0, false), p::BlendMode::Offset, 1),
             ],
             1.1,
         );
         same_aims(&over, &under);
     }
 
+    /// A circle, then a fan: the fan turns each head off the circle as far
+    /// as it turns the head off the position alone.
     #[test]
     fn stacked_offsets_compose_bottom_to_top() {
-        let fan = || aim_on_truss("Fan", p::BlendMode::Offset, 1, mirrored);
-        let circle = |z| aim_on_truss("Circle", p::BlendMode::Offset, z, mirrored);
+        let fan = |z| on_truss(fan(true), p::BlendMode::Offset, z);
+        let circle = |z| on_truss(circle(REST, 1.0, true), p::BlendMode::Offset, z);
         let t = 1.1;
-        // A fan, then a circle: one clip at PLACE with that fan and circle.
-        let stacked = truss_aims(vec![position(0), fan(), circle(2)], t);
-        let fan_degrees = p::presets().preset("aim@1", "Fan").unwrap().inputs["lean"].clone();
-        let one = truss_aims(
-            vec![aim_on_truss("Circle", p::BlendMode::Replace, 0, |i| {
-                i.insert("lean".into(), fan_degrees);
-                mirrored(i);
-                at(i, PLACE);
-            })],
-            t,
-        );
-        same_aims(&stacked, &one);
-        // A circle, then a fan: the fan leans each head off the circle as
-        // far as it leans the head off the position alone.
         let circled = truss_aims(vec![position(0), circle(1)], t);
-        let fanned = truss_aims(vec![position(0), fan()], t);
-        let mut fan = fan();
-        fan.z_index = 2;
-        let both = truss_aims(vec![position(0), circle(1), fan], t);
+        let fanned = truss_aims(vec![position(0), fan(1)], t);
+        let both = truss_aims(vec![position(0), circle(1), fan(2)], t);
         let mut spread = 0.0_f64;
         for n in 0..both.len() {
-            let lean = degrees(fanned[n].0, PLACE);
-            spread = spread.max(lean);
+            let turn = degrees(fanned[n].0, PLACE);
+            spread = spread.max(turn);
             assert!(
-                (degrees(both[n].0, circled[n].0) - lean).abs() < 1e-3,
+                (degrees(both[n].0, circled[n].0) - turn).abs() < 1e-3,
                 "head {n}: {both:?} vs {circled:?}"
             );
         }

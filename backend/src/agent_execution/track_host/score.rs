@@ -136,6 +136,10 @@ impl TrackHost {
             self.apply_score(&plan.candidate).await?;
             return Ok(json!(plan.candidate));
         }
+        if method == "track.clip_check" {
+            let request: ClipCheck = decode(payload)?;
+            return Ok(clip_check(request));
+        }
         supervise(async {
             match method {
                 "track.score_check" => {
@@ -157,6 +161,34 @@ impl TrackHost {
     }
 }
 
+/// One clip to check on its own, before it joins a candidate. `clip` stays
+/// raw JSON so that a clip that does not even parse is reported like any
+/// other checker error instead of as a bad payload.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipCheck {
+    clip: Value,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// `{"ok": true}`, or `{"ok": false, "error": text}` with the checker's text
+/// (`clip <name> (<id>): <node>.<input>: expected ...`). It needs no venue:
+/// the checker never looks at geometry.
+fn clip_check(request: ClipCheck) -> Value {
+    let id = request.id.as_deref().unwrap_or("new");
+    let checked = serde_json::from_value::<luma_patterns::Clip>(request.clip)
+        .map_err(|error| format!("clip ({id}): {error}"))
+        .and_then(|clip| {
+            Score::validate_clip(&luma_patterns::standard_library(), id, &clip)
+                .map_err(|error| error.to_string())
+        });
+    match checked {
+        Ok(()) => json!({"ok": true}),
+        Err(error) => json!({"ok": false, "error": error}),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
@@ -169,4 +201,58 @@ struct Render {
     candidate: Score,
     start_time: f64,
     end_time: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(clip: Value) -> Value {
+        clip_check(ClipCheck {
+            clip,
+            id: Some("c1".into()),
+        })
+    }
+
+    fn clip(graph: Value) -> Value {
+        json!({
+            "name": "Pulse", "start": 0.0, "duration": 4.0, "seed": 1,
+            "selection": luma_patterns::Selection::all(),
+            "z_index": 0, "blend_mode": "replace", "graph": graph,
+        })
+    }
+
+    #[test]
+    fn a_good_clip_passes() {
+        let graph = json!({"version": 1, "nodes": {
+            "time1": {"kind": "time"},
+            "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                       "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}});
+        assert_eq!(check(clip(graph)), json!({"ok": true}));
+    }
+
+    /// The agent reads the checker's own text: which clip, which input,
+    /// what it expected and an example.
+    #[test]
+    fn a_wrong_wire_returns_the_checker_text() {
+        let graph = json!({"version": 1, "nodes": {
+            "time1": {"kind": "time"},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "time1"}}}}});
+        let result = check(clip(graph));
+        assert_eq!(result["ok"], false);
+        let error = result["error"].as_str().unwrap();
+        assert!(error.contains("Pulse"), "{error}");
+        assert!(error.contains("color1.brightness: expected"), "{error}");
+        assert!(error.contains("Example: "), "{error}");
+    }
+
+    #[test]
+    fn a_clip_that_does_not_parse_is_a_checker_error_too() {
+        let mut bad = clip(json!({"version": 1, "nodes": {}}));
+        bad["colour"] = json!(1);
+        let result = check(bad);
+        assert_eq!(result["ok"], false);
+        assert!(result["error"].as_str().unwrap().contains("colour"));
+    }
 }

@@ -30,8 +30,13 @@ impl Changed {
 
 /// One stored clip, in the column spellings the table uses. `seed` is decimal
 /// text because SQLite's integers are signed and a clip's seed is a full u64.
+///
+/// `graph_json` holds the clip's graph. The form columns `graph` and
+/// `inputs_json` are still in the table until a later migration drops them;
+/// nothing reads them, and a new row writes them empty.
 struct ClipRow {
-    graph: String,
+    name: String,
+    graph_json: String,
     start: f64,
     duration: f64,
     seed: String,
@@ -39,13 +44,13 @@ struct ClipRow {
     selection_json: String,
     z_index: i64,
     blend_mode: String,
-    inputs_json: String,
 }
 
 impl ClipRow {
     fn of(clip: &Clip) -> Result<Self, String> {
         Ok(Self {
-            graph: clip.graph.clone(),
+            name: clip.name.clone(),
+            graph_json: json(&clip.graph)?,
             start: clip.start,
             duration: clip.duration,
             seed: clip.seed.to_string(),
@@ -53,13 +58,13 @@ impl ClipRow {
             selection_json: json(&clip.selection)?,
             z_index: clip.z_index,
             blend_mode: clip.blend_mode.name().to_owned(),
-            inputs_json: json(&clip.inputs)?,
         })
     }
 
     fn into_clip(self) -> Result<Clip, String> {
         Ok(Clip {
-            graph: self.graph,
+            name: self.name,
+            graph: from_json(&self.graph_json)?,
             start: self.start,
             duration: self.duration,
             seed: parse_seed(&self.seed)?,
@@ -67,7 +72,6 @@ impl ClipRow {
             selection: from_json::<Selection>(&self.selection_json)?,
             z_index: self.z_index,
             blend_mode: from_json::<BlendMode>(&format!("\"{}\"", self.blend_mode))?,
-            inputs: from_json(&self.inputs_json)?,
         })
     }
 
@@ -80,14 +84,14 @@ impl ClipRow {
                 changes.push((name, Field::Text(new)));
             }
         };
-        text("graph", &self.graph, &stored.graph);
+        text("name", &self.name, &stored.name);
+        text("graph_json", &self.graph_json, &stored.graph_json);
         text(
             "selection_json",
             &self.selection_json,
             &stored.selection_json,
         );
         text("blend_mode", &self.blend_mode, &stored.blend_mode);
-        text("inputs_json", &self.inputs_json, &stored.inputs_json);
         text("seed", &self.seed, &stored.seed);
         if self.selection_seed != stored.selection_seed {
             changes.push((
@@ -135,8 +139,8 @@ pub async fn load_score(
 ) -> Result<Score, String> {
     let mut score = Score::default();
     let rows = sqlx::query(
-        "SELECT id, graph, start, duration, seed, selection_seed, selection_json,
-                z_index, blend_mode, inputs_json
+        "SELECT id, name, graph_json, start, duration, seed, selection_seed, selection_json,
+                z_index, blend_mode
          FROM clips WHERE score_id = ? ORDER BY id",
     )
     .bind(score_id)
@@ -216,7 +220,8 @@ fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
         row.try_get(name).map_err(|error| error.to_string())
     }
     Ok(ClipRow {
-        graph: get(row, "graph")?,
+        name: get(row, "name")?,
+        graph_json: get(row, "graph_json")?,
         start: get(row, "start")?,
         duration: get(row, "duration")?,
         seed: get(row, "seed")?,
@@ -224,7 +229,6 @@ fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
         selection_json: get(row, "selection_json")?,
         z_index: get(row, "z_index")?,
         blend_mode: get(row, "blend_mode")?,
-        inputs_json: get(row, "inputs_json")?,
     })
 }
 
@@ -235,15 +239,18 @@ async fn insert_clip(
     id: &str,
     row: &ClipRow,
 ) -> Result<(), String> {
+    // `graph` is the old form id column: NOT NULL with no default, and
+    // unread. It goes when the form columns are dropped.
     sqlx::query(
-        "INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_seed,
-                            selection_json, z_index, blend_mode, inputs_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
+                            selection_seed, selection_json, z_index, blend_mode)
+         VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(uid)
     .bind(score_id)
-    .bind(&row.graph)
+    .bind(&row.name)
+    .bind(&row.graph_json)
     .bind(row.start)
     .bind(row.duration)
     .bind(&row.seed)
@@ -251,7 +258,6 @@ async fn insert_clip(
     .bind(&row.selection_json)
     .bind(row.z_index)
     .bind(&row.blend_mode)
-    .bind(&row.inputs_json)
     .execute(&mut *connection)
     .await
     .map_err(|error| format!("failed to insert clip {id}: {error}"))?;
@@ -319,17 +325,24 @@ mod tests {
     }
 
     fn clip(seed: u64, start: f64) -> Clip {
-        Clip {
-            graph: "strobe.constant@1".into(),
-            start,
-            duration: 4.0,
-            seed,
-            selection_seed: None,
-            selection: Selection::all(),
-            z_index: 0,
-            blend_mode: BlendMode::Replace,
-            inputs: Default::default(),
-        }
+        clip_with(seed, start, "Strobe", 0.9)
+    }
+
+    /// A strobe clip whose graph holds one value, so a test can change the
+    /// graph without touching any other column.
+    fn clip_with(seed: u64, start: f64, name: &str, rate: f64) -> Clip {
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "start": start,
+            "duration": 4.0,
+            "seed": seed,
+            "selection": Selection::all(),
+            "z_index": 0,
+            "blend_mode": BlendMode::Replace,
+            "graph": {"version": 1, "nodes": {
+                "strobe1": {"kind": "strobe", "inputs": {"rate": rate}}}},
+        }))
+        .expect("a valid clip")
     }
 
     /// A u64 seed does not fit a SQLite integer, and `json_extract` rounds it
@@ -409,6 +422,73 @@ mod tests {
         );
         stored.z_index = 4;
         assert!(row.changes(&stored).is_empty());
+    }
+
+    /// The name and the graph live in their own columns and come back as
+    /// they went in, wires and settings included.
+    #[tokio::test]
+    async fn a_name_and_a_graph_round_trip() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let chase: Clip = serde_json::from_value(serde_json::json!({
+            "name": "Chase",
+            "start": 32.0, "duration": 8.0, "seed": 6_348_896_133_488_684_926_u64,
+            "selection": Selection::all(),
+            "z_index": 0, "blend_mode": "replace",
+            "graph": {"version": 1, "nodes": {
+                "clock1": {"kind": "clock", "inputs": {"every": 2}},
+                "time1": {"kind": "time", "inputs": {"clock": {"node": "clock1"}}},
+                "curve1": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "time1"},
+                                      "shape": {"points": [[0, 0], [1, 1]]},
+                                      "low": -0.2, "high": 1}},
+                "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                           "inputs": {"offset": {"node": "curve1"}, "width": 0.2}},
+                "curve2": {"kind": "curve", "settings": {"kind": "number"},
+                           "inputs": {"x": {"node": "space1"},
+                                      "shape": {"points": [[0, 1], [1, 1]]}}},
+                "color1": {"kind": "color",
+                           "inputs": {"color": [1, 1, 1], "brightness": {"node": "curve2"}}}}},
+        }))
+        .expect("the spec's Chase clip");
+        let mut score = Score::default();
+        score.clips.insert("chase".into(), chase);
+        save_score(&mut connection, "s", "alice", &score)
+            .await
+            .unwrap();
+        let (name, graph): (String, String) =
+            sqlx::query_as("SELECT name, graph_json FROM clips WHERE id = 's:chase'")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+        assert_eq!(name, "Chase");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&graph).unwrap(),
+            serde_json::to_value(&score.clips["chase"].graph).unwrap()
+        );
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+    }
+
+    /// `graph_json` is written when the graph changed, and only then: a
+    /// rename writes the name alone.
+    #[tokio::test]
+    async fn the_graph_column_moves_only_with_the_graph() {
+        let stored = ClipRow::of(&clip_with(1, 0.0, "Strobe", 0.9)).unwrap();
+        let names = |row: &ClipRow| {
+            row.changes(&stored)
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&ClipRow::of(&clip_with(1, 0.0, "Burst", 0.9)).unwrap()),
+            vec!["name"]
+        );
+        assert_eq!(
+            names(&ClipRow::of(&clip_with(1, 0.0, "Strobe", 0.5)).unwrap()),
+            vec!["graph_json"]
+        );
+        assert!(names(&ClipRow::of(&clip_with(1, 0.0, "Strobe", 0.9)).unwrap()).is_empty());
     }
 
     /// The score row is what "last worked on" reads, so it moves when — and

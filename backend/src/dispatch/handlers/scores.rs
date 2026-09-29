@@ -73,6 +73,22 @@ pub async fn preview_score_clip(
     .await?)
 }
 
+/// One definition record per clip-graph node kind: inputs with type, unit,
+/// range and axes, and settings with their options. The inspector, Python
+/// and the checker read the same records.
+pub async fn clip_graph_definitions(
+    _services: &AppServices,
+) -> Result<serde_json::Value, CommandError> {
+    serde_json::to_value(luma_patterns::clip_graph::definitions())
+        .map_err(|error| CommandError::Internal(error.to_string()))
+}
+
+/// The shipped clip presets, curves, gradients and bands.
+pub async fn clip_presets(_services: &AppServices) -> Result<serde_json::Value, CommandError> {
+    serde_json::to_value(luma_patterns::presets())
+        .map_err(|error| CommandError::Internal(error.to_string()))
+}
+
 /// Native preview programs cross the same authorized dispatch seam as image
 /// previews, without serializing an executable scene or installing it globally.
 pub async fn prepare_score_clip_preview(

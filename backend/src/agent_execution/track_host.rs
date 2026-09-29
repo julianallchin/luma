@@ -132,7 +132,7 @@ impl TrackHost {
         let times: Vec<f64> = render_times.iter().map(|time| f64::from(*time)).collect();
         let mut arena = Arena::default();
         let frames = scene.render(&render_times, Scope::Composite, &mut arena);
-        let values = rgb_light_tensor(&frames, &light_ids);
+        let values = lighting_tensor(&frames, &light_ids);
 
         let descriptor = {
             let store = self.workspace.store();
@@ -148,14 +148,21 @@ impl TrackHost {
         let tensor = TensorRef::new(
             descriptor.id.clone(),
             DType::F32,
-            vec![light_ids.len(), times.len(), 3],
+            vec![light_ids.len(), times.len(), LIGHTING_CHANNELS.len()],
             vec![
                 AxisSpec::labels("light", light_ids),
                 AxisSpec::coordinates("time", times, Some("s".into())),
-                AxisSpec::labels("channel", vec!["r".into(), "g".into(), "b".into()]),
+                AxisSpec::labels(
+                    "channel",
+                    LIGHTING_CHANNELS
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
+                ),
             ],
-            Provenance::new("track_candidate_compositor")
-                .with_note("production Scene composite; normalized RGB multiplied by dimmer"),
+            Provenance::new("track_candidate_compositor").with_note(
+                "production Scene composite; r, g, b are normalized RGB multiplied by dimmer",
+            ),
         );
 
         // ArtifactDescriptor uses its id as the manifest map key and therefore
@@ -194,7 +201,10 @@ impl HostCallHandler for TrackHost {
         self.runtime.block_on(async {
             if matches!(
                 method,
-                "track.score_check" | "track.score_apply" | "track.score_render"
+                "track.score_check"
+                    | "track.score_apply"
+                    | "track.score_render"
+                    | "track.clip_check"
             ) {
                 return self.score_call(method, payload, context).await;
             }
@@ -249,17 +259,45 @@ fn sample_times(start: f64, end: f64, bpm: Option<f64>) -> Vec<f64> {
         .collect()
 }
 
-/// Row-major `[light, time, rgb]`, using one concept of light: linear
-/// Rec. 2020 already darkened by dimmer. Missing primitives are black.
-fn rgb_light_tensor(frames: &[UniverseState], light_ids: &[String]) -> Vec<f32> {
-    let mut values = Vec::with_capacity(light_ids.len() * frames.len() * 3);
+/// The channels of a rendered score, in tensor order. `r`, `g`, `b` are
+/// linear Rec. 2020 already darkened by `dimmer`; `aim_u..aim_z` is the aim
+/// direction in stage UVZ and `aim_weight` how much of it applies.
+pub(crate) const LIGHTING_CHANNELS: [&str; 12] = [
+    "r",
+    "g",
+    "b",
+    "dimmer",
+    "pan",
+    "tilt",
+    "strobe",
+    "speed",
+    "aim_u",
+    "aim_v",
+    "aim_z",
+    "aim_weight",
+];
+
+/// Row-major `[light, time, channel]` over [`LIGHTING_CHANNELS`]. A missing
+/// primitive is all zero: black, no strobe, no aim.
+fn lighting_tensor(frames: &[UniverseState], light_ids: &[String]) -> Vec<f32> {
+    let mut values = Vec::with_capacity(light_ids.len() * frames.len() * LIGHTING_CHANNELS.len());
     for light_id in light_ids {
         for frame in frames {
-            if let Some(state) = frame.primitives.get(light_id) {
-                values.extend(state.color.map(|channel| channel * state.dimmer));
-            } else {
-                values.extend([0.0; 3]);
-            }
+            let Some(state) = frame.primitives.get(light_id) else {
+                values.extend([0.0; LIGHTING_CHANNELS.len()]);
+                continue;
+            };
+            let aim = state.aim.as_ref();
+            values.extend(state.color.map(|channel| channel * state.dimmer));
+            values.extend([
+                state.dimmer,
+                state.position[0],
+                state.position[1],
+                state.strobe,
+                state.speed,
+            ]);
+            values.extend(aim.map_or([0.0; 3], |aim| aim.direction));
+            values.push(aim.map_or(0.0, |aim| aim.weight));
         }
     }
     values
@@ -280,23 +318,41 @@ mod tests {
     }
 
     #[test]
-    fn tensor_is_light_major_rgb_times_dimmer() {
+    fn tensor_is_light_major_with_every_lighting_channel() {
         let mut first = UniverseState::default();
         first.primitives.insert(
             "a".into(),
             PrimitiveState {
                 dimmer: 0.5,
                 color: [1.0, 0.4, 0.2],
-                strobe: 0.0,
-                position: [0.0, 0.0],
+                strobe: 0.25,
+                position: [0.1, 0.9],
                 speed: 1.0,
-                aim: None,
+                aim: Some(crate::models::universe::HeadAim {
+                    direction: [0.0, 0.6, -0.8],
+                    weight: 0.75,
+                }),
             },
         );
         let second = UniverseState::default();
-        assert_eq!(
-            rgb_light_tensor(&[first, second], &["a".into(), "b".into()]),
-            vec![0.5, 0.2, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,]
-        );
+        let values = lighting_tensor(&[first, second], &["a".into(), "b".into()]);
+        let channels = LIGHTING_CHANNELS.len();
+        assert_eq!(channels, 12);
+        assert_eq!(values.len(), 2 * 2 * channels);
+        let at = |name: &str| {
+            values[LIGHTING_CHANNELS
+                .iter()
+                .position(|channel| *channel == name)
+                .unwrap()]
+        };
+        // Light is RGB darkened by the dimmer, as the RGB view has always read.
+        assert_eq!([at("r"), at("g"), at("b")], [0.5, 0.2, 0.1]);
+        assert_eq!(at("dimmer"), 0.5);
+        assert_eq!([at("pan"), at("tilt")], [0.1, 0.9]);
+        assert_eq!(at("strobe"), 0.25);
+        assert_eq!([at("aim_u"), at("aim_v"), at("aim_z")], [0.0, 0.6, -0.8]);
+        assert_eq!(at("aim_weight"), 0.75);
+        // A frame without the light, and a light no frame has, are all zero.
+        assert!(values[channels..].iter().all(|value| *value == 0.0));
     }
 }
