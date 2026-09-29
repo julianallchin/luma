@@ -320,12 +320,18 @@ fn build(
     subs.push(cx.subscribe(
         &name,
         |this: &mut Luma, field, event: &text_input::Event, cx| {
-            if matches!(
-                event,
-                text_input::Event::Submitted | text_input::Event::Blurred
-            ) {
-                let name = field.read(cx).text().trim().to_string();
-                this.rename_clips(name, cx);
+            match event {
+                text_input::Event::Submitted | text_input::Event::Blurred => {
+                    let name = field.read(cx).text().trim().to_string();
+                    this.rename_clips(name, cx);
+                }
+                // Escape puts the stored name back.
+                text_input::Event::Cancelled => this.with_track_editor(cx, |editor| {
+                    if let Some(built) = editor.sheet.built.as_mut() {
+                        built.synced_name = Default::default();
+                    }
+                }),
+                _ => {}
             }
         },
     ));
@@ -727,6 +733,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
         .child(
             div()
                 .w_full()
+                .key_context(text_input::DRAFT_CONTEXT)
                 .child(built.name.clone())
                 .agent_node(Role::Input, "Name"),
         );
