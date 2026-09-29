@@ -157,12 +157,17 @@ try {
 	// has a listing mode: `open` pins a thread and mints a score for a track new
 	// to the room, so resolving an id through it wrote a revision per lookup.
 	console.log("\n[find]");
+	// A lookup mints no score, clip or thread.
 	const revisions = () => {
 		if (!hasRealDb) return 0;
 		const library = new Database(join(scratch, "luma.db"), { readonly: true });
 		try {
 			return (
-				library.query<{ n: number }, []>("SELECT count(*) AS n FROM authored_revisions").get()
+				library
+					.query<{ n: number }, []>(
+						"SELECT (SELECT count(*) FROM scores) + (SELECT count(*) FROM clips) + (SELECT count(*) FROM agent_threads) AS n",
+					)
+					.get()
 					?.n ?? 0
 			);
 		} finally {
@@ -190,7 +195,7 @@ try {
 		const nothing = await server.callTool("find", { track: "\u0000no such track" });
 		check("find that matches nothing says so", textOf(nothing).startsWith("0 tracks:"), textOf(nothing).slice(0, 120));
 	}
-	check("find writes nothing", revisions() === before, `${before} -> ${revisions()} revisions`);
+	check("find writes nothing", revisions() === before, `${before} -> ${revisions()} rows`);
 
 	console.log("\n[open]");
 
@@ -204,11 +209,7 @@ try {
 		const openedText = textOf(opened);
 		check("open binds a track", !opened.isError && openedText.startsWith("opened "), openedText.slice(0, 200));
 		check("open returns the binding catalog", openedText.includes("luma."), openedText.slice(0, 400));
-		check(
-			"open ends with the skills listing",
-			openedText.trimEnd().endsWith("</available_skills>"),
-			openedText.slice(-200),
-		);
+		check("open points to the skill tool", openedText.includes("skill tool"), openedText.slice(-200));
 		console.log(`  ${openedText.split("\n").slice(0, 3).join(" | ")}`);
 
 		console.log("\n[python]");
@@ -305,24 +306,12 @@ try {
 		);
 		console.log(`  ${error.trim().split("\n").at(-1)}`);
 
-		// Authorship. An external client is not the operator: everything this
-		// session writes must be labelled as the client (and the model it says
-		// is driving), not as `user`.
+		// Authorship. An external client is not the operator: the thread this
+		// session writes is labelled as the client (and the model it says is
+		// driving), not as `user`. Row history lives on the server.
 		console.log("\n[authorship]");
 		const library = new Database(join(scratch, "luma.db"), { readonly: true });
 		try {
-			const revision = library
-				.query<{ actor: string; operation_kind: string }, []>(
-					`SELECT actor, operation_kind FROM authored_revisions
-					 WHERE operation_kind = 'score_edit'
-					 ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-				)
-				.get();
-			check(
-				"an MCP edit is attributed to the client and its model",
-				revision?.actor === `client:mcp_smoke/0:${SESSION_MODEL}`,
-				`actor=${revision?.actor ?? "no score_edit revision"}`,
-			);
 			const thread = library
 				.query<{ actor: string | null }, []>(
 					"SELECT actor FROM agent_threads ORDER BY updated_at DESC LIMIT 1",
@@ -381,8 +370,8 @@ try {
 	check("a traceback is an isError result", raised.isError === true && textOf(raised).includes("ZeroDivisionError"), textOf(raised).slice(0, 200));
 	const nameless = await server.callTool("open");
 	check(
-		"open with no track is an error, not a listing",
-		nameless.isError === true && textOf(nameless).includes("find"),
+		"open with no track and several venues asks for one",
+		nameless.isError === true && textOf(nameless).includes("venue_id"),
 		textOf(nameless).slice(0, 200),
 	);
 	const unknown = await server.callTool("nope");
