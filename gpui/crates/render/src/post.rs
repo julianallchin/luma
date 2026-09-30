@@ -113,6 +113,9 @@ struct LensInstance {
     position: [f32; 4],
     direction: [f32; 4],
     color: [f32; 4],
+    /// The cone's rolling-shutter strobe rows, [`crate::strobe::Rows::words`]
+    /// padded to two vectors.
+    strobe: [f32; 8],
 }
 
 #[repr(C)]
@@ -400,7 +403,11 @@ impl Pipelines {
         let lens_module = module(
             device,
             "post-lens",
-            include_str!("shaders/post_lens.wgsl").to_owned(),
+            concat!(
+                include_str!("shaders/strobe.wgsl"),
+                include_str!("shaders/post_lens.wgsl")
+            )
+            .to_owned(),
         );
         let lens = render_pipeline(
             "post-lens",
@@ -816,6 +823,10 @@ impl Post {
                         .to_array(),
                     direction: cone.direction.extend(cone.cos_beam).to_array(),
                     color: cone.color.extend(cone.intensity).to_array(),
+                    strobe: {
+                        let [phase, span, readout, duty, norm] = cone.strobe.words();
+                        [phase, span, readout, duty, norm, 0.0, 0.0, 0.0]
+                    },
                 })
                 .collect()
         } else {

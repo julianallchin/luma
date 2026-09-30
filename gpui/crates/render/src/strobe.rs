@@ -96,6 +96,12 @@ impl Rows {
         norm: 0.0,
     };
 
+    /// The five numbers the shaders take, in `strobe_row_ratio`'s order.
+    #[must_use]
+    pub fn words(&self) -> [f32; 5] {
+        [self.phase, self.span, self.readout, self.duty, self.norm]
+    }
+
     /// Row `y`'s exposure over the slice's [`Exposure::gain`], 0..=1.
     #[must_use]
     pub fn ratio(&self, y: f32) -> f32 {

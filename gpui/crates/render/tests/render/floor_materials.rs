@@ -76,7 +76,6 @@ fn frame_with(
 /// A wash light `height` metres over `at`, pointing straight down.
 fn wash(at: Vec3, height: f32) -> FixtureCone {
     FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position: at + Vec3::Z * height,
         range: 40.0,
         direction: -Vec3::Z,
@@ -89,6 +88,7 @@ fn wash(at: Vec3, height: f32) -> FixtureCone {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -615,7 +615,6 @@ fn a_grey_box_takes_the_floors_colour_from_below() {
         frame.draws.insert(
             at,
             Draw {
-                strobe: luma_render::strobe::Rows::STEADY,
                 mesh,
                 model: Mat4::from_translation(centre),
                 material: Material {
@@ -625,6 +624,7 @@ fn a_grey_box_takes_the_floors_colour_from_below() {
                 },
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: luma_render::strobe::Rows::STEADY,
             },
         );
         let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();

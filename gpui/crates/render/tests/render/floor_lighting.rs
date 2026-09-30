@@ -48,7 +48,6 @@ fn floor() -> Frame {
     )
     .unwrap();
     frame.fixture_cones.push(FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position: Vec3::new(0.0, 0.0, 5.0),
         range: 60.0,
         direction: Vec3::new(0.0, 1.0, -0.3).normalize(),
@@ -61,6 +60,7 @@ fn floor() -> Frame {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     });
     frame
 }

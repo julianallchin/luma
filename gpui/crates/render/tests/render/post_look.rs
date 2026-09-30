@@ -66,7 +66,6 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
     let position = Vec3::new(0.0, 0.0, 1.6);
     let to_eye = (frame.camera.eye - position).normalize();
     frame.fixture_cones = vec![FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position,
         range: 24.0,
         direction: Vec3::Z.lerp(to_eye, aim).normalize(),
@@ -79,6 +78,7 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens { radius: 0.05 },
+        strobe: luma_render::strobe::Rows::STEADY,
     }];
     frame
 }

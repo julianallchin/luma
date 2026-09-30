@@ -60,7 +60,6 @@ fn frame() -> Frame {
     let mut frame =
         build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
     frame.fixture_cones = vec![FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position: Vec3::new(4.0, 0.0, 7.0),
         range: 40.0,
         direction: Vec3::new(-1.0, 0.0, 0.25).normalize(),
@@ -73,6 +72,7 @@ fn frame() -> Frame {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     }];
     frame
 }

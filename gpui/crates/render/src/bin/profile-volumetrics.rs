@@ -1391,12 +1391,12 @@ fn multiply_geometry(frame: &mut luma_render::Frame, copies: usize) {
     }
     let opaque = frame.draws.len() - frame.transparent.len();
     let copy_of = |draw: &luma_render::frame::Draw| luma_render::frame::Draw {
-        strobe: draw.strobe,
         mesh: draw.mesh,
         model: draw.model,
         material: draw.material,
         textures: draw.textures,
         editor_object: draw.editor_object.clone(),
+        strobe: draw.strobe,
     };
     let originals: Vec<_> = frame.draws[..opaque].iter().map(copy_of).collect();
     let grid: Vec<_> = frame.draws[opaque..].iter().map(copy_of).collect();
@@ -1440,12 +1440,12 @@ fn frame_with_lights(
             .draws
             .iter()
             .map(|draw| luma_render::frame::Draw {
-                strobe: luma_render::strobe::Rows::STEADY,
                 mesh: draw.mesh,
                 model: draw.model,
                 material: draw.material,
                 textures: draw.textures,
                 editor_object: draw.editor_object.clone(),
+                strobe: draw.strobe,
             })
             .collect(),
         transparent: base.transparent.clone(),
@@ -1482,7 +1482,6 @@ fn frame_with_lights(
         let column = (index % 32) as f32;
         let row = (index / 32) as f32;
         frame.fixture_cones.push(FixtureCone {
-            strobe: luma_render::strobe::Rows::STEADY,
             position: Vec3::new((column - 15.5) * 0.18, (row - 7.5) * 0.18, 0.15),
             range: 8.0 * range_scale,
             direction: Vec3::Z,
@@ -1495,6 +1494,7 @@ fn frame_with_lights(
             gobo_rotation: 0.31,
             haze_gain: 1.0,
             lens: luma_render::luminaire::Lens::POINT,
+            strobe: luma_render::strobe::Rows::STEADY,
         });
     }
     frame

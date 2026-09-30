@@ -100,7 +100,6 @@ fn add_near_opaque_surface(frame: &mut Frame) {
         indices: [0, 1, 2, 0, 2, 3].into(),
     });
     frame.draws.push(Draw {
-        strobe: luma_render::strobe::Rows::STEADY,
         mesh,
         // `build_frame_with` converts the catalogue camera to world
         // (0,-120,30) looking toward +Y. This card is ten metres ahead and
@@ -114,12 +113,12 @@ fn add_near_opaque_surface(frame: &mut Frame) {
         },
         textures: MaterialTextures::default(),
         editor_object: None,
+        strobe: luma_render::strobe::Rows::STEADY,
     });
 }
 
 fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32) -> FixtureCone {
     FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         // A real scheduling volume near the visible surface. Its radiance and
         // haze gain make it physically irrelevant, so only an accidental use
         // of fixture work bounds can distinguish it from no fixture at all.
@@ -135,6 +134,7 @@ fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32)
         gobo_rotation: 0.0,
         haze_gain: 0.0,
         lens: luma_render::luminaire::Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -264,7 +264,6 @@ fn daylight_scattering_stops_at_opaque_geometry() {
         indices: [0, 1, 2, 0, 2, 3].into(),
     });
     frame.draws.push(Draw {
-        strobe: luma_render::strobe::Rows::STEADY,
         mesh,
         model: Mat4::from_translation(Vec3::new(0.0, -119.8, 0.0)),
         material: Material {
@@ -274,6 +273,7 @@ fn daylight_scattering_stops_at_opaque_geometry() {
         },
         textures: MaterialTextures::default(),
         editor_object: None,
+        strobe: luma_render::strobe::Rows::STEADY,
     });
     let front = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     capture("near-black-surface", &front);
@@ -392,7 +392,6 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
     frame.debug_view = DebugView::VolumetricAccumulation;
     let unlit = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     frame.fixture_cones.push(FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position: Vec3::new(0.0, 0.0, 30.0),
         range: 24.0,
         direction: -Vec3::Y,
@@ -405,6 +404,7 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     });
     let live = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     let reference = renderer
