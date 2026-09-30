@@ -18,6 +18,7 @@ mod environment_controls;
 mod fixture_kinematics_contract;
 mod floor_lighting;
 mod floor_materials;
+mod footage;
 mod gizmo_pivot;
 mod golden_descriptors;
 mod horizon_seam;

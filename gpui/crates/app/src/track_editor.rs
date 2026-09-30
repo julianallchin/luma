@@ -147,6 +147,8 @@ pub struct Editor {
     /// listing taken before it was.
     score_chosen: bool,
     waveform: Option<Rc<TrackWaveform>>,
+    /// The waveform's bass envelope, shared with the stage.
+    bass: Option<crate::visualizer::Bass>,
     gpu_waveform: Rc<RefCell<waveform::Resource>>,
     timeline_waveform: waveform::Strip,
     overview_waveform: waveform::Strip,
@@ -1035,6 +1037,12 @@ impl Editor {
         })
     }
 
+    /// The track's bass, for the stage's footage look to shake the camera
+    /// with. `None` until the waveform has loaded.
+    pub(crate) fn bass(&self) -> Option<crate::visualizer::Bass> {
+        self.bass.clone()
+    }
+
     /// The range on screen, from the canvas the last frame painted.
     fn visible(&self) -> (f64, f64) {
         self.view.visible(f32::from(self.canvas.get().size.width))
@@ -1863,6 +1871,7 @@ impl Luma {
             venue_id: venue_id.clone(),
             score: None,
             waveform: None,
+            bass: None,
             gpu_waveform: Rc::new(RefCell::new(waveform::Resource::default())),
             timeline_waveform: waveform::Strip::default(),
             overview_waveform: waveform::Strip::default(),
@@ -1938,6 +1947,7 @@ impl Luma {
                     match waveform {
                         Ok(waveform) => {
                             editor.transport.duration = waveform.duration_seconds as f32;
+                            editor.bass = crate::visualizer::Bass::of(&waveform);
                             editor.waveform = Some(Rc::new(waveform));
                         }
                         Err(error) => editor.error = Some(error.to_string()),

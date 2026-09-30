@@ -72,6 +72,7 @@ fn cards() -> Frame {
     // A black metal has zero reflected radiance; its only light comes from air.
     for (distance, offset) in [20.0, 1000.0, 10_000.0].into_iter().zip(OFFSETS) {
         frame.draws.push(Draw {
+            strobe: luma_render::strobe::Rows::STEADY,
             mesh,
             model: Mat4::from_translation(Vec3::new(offset * distance, distance, 10.0))
                 * Mat4::from_scale(Vec3::splat(distance * 0.1)),

@@ -2,7 +2,7 @@
 //! world-space draws and lights.
 //!
 //! Model-kind resolution, physical-dimension scaling, cone geometry, beam axes
-//! and strobe gating happen once here, against pre-resolved data.
+//! and strobe exposure happen once here, against pre-resolved data.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,6 +77,9 @@ pub struct Draw {
     pub textures: MaterialTextures,
     /// Stable authored identity. Several draws may share one object.
     pub editor_object: Option<EditorObject>,
+    /// How a rolling shutter bands a strobing emitter face down the rows;
+    /// the emissive already holds the frame's exposure.
+    pub strobe: crate::strobe::Rows,
 }
 
 /// Authored editor identity carried through frame expansion.
@@ -146,6 +149,10 @@ pub struct FixtureCone {
     pub haze_gain: f32,
     /// The disc the beam leaves through, centred on `position`.
     pub lens: Lens,
+    /// How a rolling shutter bands this cone's strobe down the rows;
+    /// `intensity` already holds the frame's exposure. See
+    /// [`crate::strobe::Rows`].
+    pub strobe: crate::strobe::Rows,
 }
 
 impl FixtureCone {
@@ -334,7 +341,9 @@ pub struct Frame {
     /// silhouettes plain bilinear would smear. `1.0` is native; the goldens
     /// pin it there.
     pub haze_resolution: f32,
-    /// The clock the golden was captured at; drives noise drift and strobe.
+    /// The free-running clock, in seconds: the air's drift and the strobe
+    /// flashes run on it, not on transport time, so both keep moving while
+    /// playback is paused. A golden pins it.
     pub time: f32,
     /// Diagnostic output. `Pbr` is the display path.
     pub debug_view: crate::scene_desc::DebugView,
@@ -347,6 +356,30 @@ pub struct Frame {
     /// slots and is shaded by `floor.wgsl`; without it the ground is one
     /// flat colour.
     pub floor: Option<crate::floor::Surface>,
+    /// The rest of this frame's shutter, when it is exposed over several
+    /// moments ([`crate::footage`]). Each is a whole frame at its own moment
+    /// and the picture is the mean of this one and them, in scene-linear
+    /// light. Empty for a frame that is one moment.
+    pub shutter: Vec<Frame>,
+}
+
+impl Frame {
+    /// One exposure from the frames of its shutter, in time order.
+    ///
+    /// # Panics
+    /// When `moments` is empty.
+    #[must_use]
+    pub fn exposure(moments: Vec<Frame>) -> Frame {
+        let mut moments = moments.into_iter();
+        let mut first = moments.next().expect("an exposure has a moment");
+        first.shutter = moments.collect();
+        first
+    }
+
+    /// Every moment of the exposure, this frame first.
+    pub fn moments(&self) -> impl Iterator<Item = &Frame> {
+        std::iter::once(self).chain(&self.shutter)
+    }
 }
 
 /// A look-at camera. The orbit parameterisation of spec §2.4 belongs in
@@ -472,6 +505,7 @@ pub(crate) fn piece_draws(
             // the venue to generate.
             let mesh = bank.insert(key.clone(), || lib.procedural(&key, || procedural.mesh()));
             vec![Draw {
+                strobe: crate::strobe::Rows::STEADY,
                 mesh,
                 model: root,
                 material: crate::materials::ALUMINIUM,
@@ -531,6 +565,7 @@ pub(crate) fn housing_draws(
             box_mesh(Vec3::from(dims))
         });
         return Ok(vec![Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: body,
             textures: MaterialTextures::default(),
             // The quarter turn puts the box's *depth* along the mount axis, so
@@ -679,6 +714,7 @@ fn glb_draw(
         emissive: prim.emissive_image.map(&mut image),
     };
     Draw {
+        strobe: crate::strobe::Rows::STEADY,
         mesh,
         model,
         material: prim.material,
@@ -700,28 +736,6 @@ fn intern<T>(
     store.push(build());
     keys.insert(key, i);
     i
-}
-
-/// Strobe duty gate. `PrimitiveState.strobe` is a 0..1 rate; the display clock
-/// turns it into on/off at 50% duty.
-///
-/// There are two rate constants — 20 Hz/unit for lensed fixtures, 10 Hz/unit
-/// for bar pixels. That is two answers for one concept (spec §3.2 flags it);
-/// they stay apart so the goldens reproduce.
-fn strobe_gate(state: PrimitiveState, time: f32, hz_per_unit: f32) -> f32 {
-    if state.strobe <= 0.0 {
-        return state.dimmer;
-    }
-    let hz = state.strobe * hz_per_unit;
-    if hz <= 0.0 {
-        return state.dimmer;
-    }
-    let period = 1.0 / hz;
-    if time.rem_euclid(period) > period * 0.5 {
-        0.0
-    } else {
-        state.dimmer
-    }
 }
 
 /// Pixel centres of a procedural bar/matrix, in fixture-local three space.
@@ -872,6 +886,38 @@ pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
 /// instead of the live one growing a second, drifting copy of it.
 pub type StateSource<'a> = &'a dyn Fn(&str, usize) -> Option<PrimitiveState>;
 
+/// When a frame sees the stage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Moment {
+    /// The instant, on the free-running clock: the heads' state, the air's
+    /// drift and the camera shake are this instant's. Becomes [`Frame::time`].
+    pub time: f64,
+    /// What the strobes are integrated over.
+    pub slice: crate::strobe::Slice,
+    /// The playing track's low-band envelope at `time`, 0..=1, for the bass
+    /// shake. Zero without a track.
+    pub bass: f32,
+}
+
+impl Moment {
+    /// A display frame that ends at `time`, [`crate::footage::FRAME_S`] after
+    /// the one before: its strobes are the light of that interval. What
+    /// [`build`] pins a golden to.
+    #[must_use]
+    pub fn at(time: f64) -> Self {
+        let length = crate::footage::FRAME_S;
+        Self {
+            time,
+            slice: crate::strobe::Slice {
+                open: time - length,
+                length,
+                readout: 0.0,
+            },
+            bass: 0.0,
+        }
+    }
+}
+
 /// Resolve a scene at one instant into draws and lights, reading head state
 /// from the scene's own pinned map.
 ///
@@ -907,6 +953,26 @@ pub fn build_with(
     time: f32,
     lib: &mut Library,
 ) -> anyhow::Result<Frame> {
+    build_at(scene, definitions, state, Moment::at(f64::from(time)), lib)
+}
+
+/// [`build_with`] at a [`Moment`]: one subframe of a shutter, or a frame
+/// whose display interval is not [`crate::footage::FRAME_S`].
+///
+/// # Errors
+/// Fails if a referenced mesh is missing from the asset library.
+pub fn build_at(
+    scene: &Scene,
+    definitions: &Definitions,
+    state: StateSource<'_>,
+    moment: Moment,
+    lib: &mut Library,
+) -> anyhow::Result<Frame> {
+    let time = moment.time as f32;
+    let exposed = |head_state: PrimitiveState| {
+        let exposure = crate::strobe::Exposure::of(head_state.strobe, moment.slice);
+        (head_state.dimmer * exposure.gain, exposure.rows)
+    };
     let r = three_to_world_basis();
     let mut bank = Bank::default();
     let mut draws = Vec::new();
@@ -973,6 +1039,7 @@ pub fn build_with(
     });
     if scene.render.show_floor {
         draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: floor,
             textures: floor_textures,
             model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
@@ -1038,7 +1105,7 @@ pub fn build_with(
             for (i, local) in pixels.iter().enumerate() {
                 let head = ((i as f32 / pixels_per_head) as usize).min(head_count - 1);
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
-                let intensity = strobe_gate(head_state, time, 10.0);
+                let (intensity, strobe) = exposed(head_state);
                 draws.push(Draw {
                     mesh: quad,
                     textures: MaterialTextures::default(),
@@ -1048,6 +1115,7 @@ pub fn build_with(
                         ..crate::materials::LED_FACE
                     },
                     editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
+                    strobe,
                 });
             }
 
@@ -1073,7 +1141,7 @@ pub fn build_with(
                     continue;
                 }
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
-                let intensity = strobe_gate(head_state, time, 10.0);
+                let (intensity, strobe) = exposed(head_state);
                 if intensity < 0.01 {
                     continue;
                 }
@@ -1092,6 +1160,7 @@ pub fn build_with(
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
                     lens,
+                    strobe,
                 });
             }
             continue;
@@ -1117,7 +1186,7 @@ pub fn build_with(
             );
         }
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
-        let intensity = strobe_gate(head_state, time, 20.0);
+        let (intensity, strobe) = exposed(head_state);
         // The body itself is `housing_draws`' — one implementation for the
         // room and the placement ghost.
         draws.extend(housing_draws(
@@ -1153,6 +1222,7 @@ pub fn build_with(
             gobo_rotation: head_state.gobo_rotation,
             haze_gain: 1.0,
             lens: lens_for(def, Some(kind)),
+            strobe,
         });
     }
 
@@ -1207,11 +1277,16 @@ pub fn build_with(
         bodies.add(&draws[placed..], bank.meshes());
     }
 
-    let camera = Camera {
-        eye: camera_eye,
-        target: world_from_three(Vec3::from(scene.camera.target)),
-        fov_y_deg: scene.render.fov,
-    };
+    // The shake turns only what this frame sees; the stored camera and the
+    // orbit pivot are the caller's and stay put.
+    let camera = crate::footage::turned(
+        Camera {
+            eye: camera_eye,
+            target: world_from_three(Vec3::from(scene.camera.target)),
+            fov_y_deg: scene.render.fov,
+        },
+        crate::footage::shake(&scene.render.look.footage, &moment),
+    );
 
     // The grid and the cables are transparent, so they trail every opaque
     // draw, in the paint order `Transparent` declares.
@@ -1223,6 +1298,7 @@ pub fn build_with(
     let mut floor_decal = |kind: Transparent| {
         transparent.push(kind);
         draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: floor,
             textures: MaterialTextures::default(),
             model: to_world
@@ -1245,6 +1321,7 @@ pub fn build_with(
         // frame would be a round trip with nothing at the far end.
         let mesh = bank.insert(cables.key.clone(), || cables);
         draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh,
             textures: MaterialTextures::default(),
             model: Mat4::IDENTITY,
@@ -1359,6 +1436,7 @@ pub fn build_with(
         camera,
         overlays,
         floor: floor_surface,
+        shutter: Vec::new(),
     })
 }
 

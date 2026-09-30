@@ -70,6 +70,7 @@ fn frame(eye: Vec3, target: Vec3) -> Frame {
     frame.draws.insert(
         at,
         Draw {
+            strobe: luma_render::strobe::Rows::STEADY,
             mesh,
             model: Mat4::from_translation(BOX_CENTRE) * Mat4::from_scale(Vec3::splat(BOX_SIZE)),
             material: Material {

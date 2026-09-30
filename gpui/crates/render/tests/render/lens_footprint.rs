@@ -28,6 +28,7 @@ const LENS: Lens = Lens { radius: 0.1 };
 fn narrow(position: Vec3, direction: Vec3, lens: Lens) -> FixtureCone {
     let half = HALF_FIELD_DEG.to_radians();
     FixtureCone {
+        strobe: luma_render::strobe::Rows::STEADY,
         position,
         range: 30.0,
         direction,

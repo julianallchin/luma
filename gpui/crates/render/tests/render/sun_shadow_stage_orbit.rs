@@ -83,6 +83,7 @@ fn frame(eye: Vec3, target: Vec3, azimuth: f32) -> Frame {
     let draws: Vec<_> = stage()
         .into_iter()
         .map(|(centre, size)| Draw {
+            strobe: luma_render::strobe::Rows::STEADY,
             mesh,
             model: Mat4::from_translation(centre) * Mat4::from_scale(size),
             material: Material {

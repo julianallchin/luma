@@ -51,6 +51,7 @@ fn lights(frame: &mut Frame, count: usize) {
     frame.geometry_shadows = false;
     frame.fixture_cones = (0..count)
         .map(|i| FixtureCone {
+            strobe: luma_render::strobe::Rows::STEADY,
             position: Vec3::new(
                 (i % 4) as f32 * 2.5 - 3.75,
                 (i / 4 % 4) as f32 * 2.5 - 3.75,

@@ -33,6 +33,7 @@ pub mod device;
 mod environment;
 pub mod face;
 pub mod floor;
+pub mod footage;
 mod fog_grid;
 mod fog_visibility_cache;
 pub mod frame;
@@ -56,6 +57,7 @@ mod shadow;
 mod shadow_hierarchy;
 mod share;
 mod sky_visibility;
+pub mod strobe;
 mod sun_shafts;
 pub mod truss;
 pub mod venue_tiles;
@@ -63,7 +65,10 @@ pub mod viewport;
 pub mod warmup;
 pub mod waveform;
 
-pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
+pub use frame::{
+    build as build_frame, build_at as build_frame_at, build_with as build_frame_with, Frame, Moment,
+    StateSource,
+};
 pub use gpu::{CpuSpans, FrameTimings, Gpu, Renderer, ShadowStats};
 pub use light_index::LightIndexStats;
 pub use metrics::MetricSummary;

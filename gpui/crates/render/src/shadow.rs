@@ -313,6 +313,7 @@ mod tests {
     fn a_lens_shadow_frustum_starts_at_the_lens_and_is_lens_wide_there() {
         let half = 3f32.to_radians();
         let light = FixtureCone {
+            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(1.0, 2.0, 6.0),
             range: 20.0,
             direction: Vec3::NEG_Z,
@@ -345,6 +346,7 @@ mod tests {
     #[test]
     fn a_point_source_shadow_frustum_is_unchanged() {
         let light = FixtureCone {
+            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(0.0, 0.0, 4.0),
             range: 12.0,
             direction: Vec3::NEG_Z,
@@ -400,6 +402,7 @@ mod tests {
         // actually change — a wall of equidistant cones could not show this.
         let cones: Vec<_> = (0..MAX_FIXTURE_SHADOWS * 2)
             .map(|i| FixtureCone {
+                strobe: crate::strobe::Rows::STEADY,
                 position: Vec3::new((i % 8) as f32 - 4.0, (i / 8) as f32 * 3.0, 0.0),
                 range: 5.0,
                 direction: Vec3::Z,
@@ -440,6 +443,7 @@ mod tests {
     #[test]
     fn a_cone_that_blinks_loses_its_shadow_slot_when_the_rig_is_over_the_cap() {
         let cone = |x: f32, intensity: f32| FixtureCone {
+            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(x, 0.0, 0.0),
             range: 5.0,
             direction: Vec3::Z,
@@ -496,6 +500,7 @@ mod tests {
 
     fn spot(position: Vec3, direction: Vec3) -> FixtureCone {
         FixtureCone {
+            strobe: crate::strobe::Rows::STEADY,
             position,
             range: 20.0,
             direction,
