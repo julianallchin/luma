@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 pub(super) struct DockMotion {
     popup: Transition,
     tooltip: Transition,
-    pub(super) switches: [Transition; 7],
+    pub(super) switches: [Transition; 8],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -566,7 +566,7 @@ impl Luma {
             // coalescing the scrubs need would buy nothing here.
             ViewToggle::Grid => self.write_view_setting("stage_grid", grid.to_string(), cx),
             ViewToggle::Gizmos => self.write_view_setting("stage_gizmos", gizmos.to_string(), cx),
-            ViewToggle::AutoExposure => self.save_look(cx),
+            ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
             ViewToggle::FixtureShadows | ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
         }

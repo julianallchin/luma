@@ -4,10 +4,10 @@
 
 struct Tonemap {
     // x: tone curve (`ToneCurve::shader_code`), y: glare gain (0 for none),
-    // z: unused, w: display headroom (1 in SDR).
+    // z: sensor noise (0 for none), w: display headroom (1 in SDR).
     params: vec4<f32>,
     // xy: the frame's extent in the glare texture's uv (the glare grid
-    // rounds the frame up to whole texels).
+    // rounds the frame up to whole texels), z: the frame's noise seed.
     glare: vec4<f32>,
     // xyz: toward the sun in camera space (x right, y up, z forward), w: how
     // much of its veil to draw here (0 while the frame holds the sun).
@@ -84,11 +84,61 @@ fn sun_veil(frag: vec2<f32>, size: vec2<f32>) -> vec3<f32> {
     return cfg.sun.w * vos(theta) * cfg.sun_veil.rgb * exposure.w;
 }
 
+// Sensor noise at `amount = 1`, in exposed scene-linear light at unit gain.
+// Shot noise is Poisson, so its deviation grows with the square root of the
+// light; read noise is the same everywhere, so it is what shows in the
+// shadows. Both are measured before the gain: more gain, more of both, and
+// the read noise most of all. At the default amount of 0.3 mid grey carries
+// about one percent of grain.
+const SHOT_NOISE: f32 = 0.024;
+const READ_NOISE: f32 = 0.003;
+// How much of the grain differs between the colour channels: a Bayer
+// sensor's is partly chroma.
+const CHROMA_NOISE: f32 = 0.35;
+
+fn noise_hash(x: u32) -> u32 {
+    var h = x * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    return (h >> 22u) ^ h;
+}
+
+// Two standard normal numbers from a pixel and a stream (Box-Muller).
+fn noise_normal(pixel: vec2<u32>, stream: u32) -> vec2<f32> {
+    let seed = u32(cfg.glare.z) * 4u + stream;
+    let a = noise_hash(pixel.x ^ noise_hash(pixel.y ^ noise_hash(seed)));
+    let b = noise_hash(a);
+    let u1 = (f32(a >> 8u) + 1.0) / 16777217.0;
+    let u2 = f32(b >> 8u) / 16777216.0;
+    let r = sqrt(-2.0 * log(u1));
+    let angle = 6.2831853 * u2;
+    return r * vec2<f32>(cos(angle), sin(angle));
+}
+
+// The exposed light `exposed` as a sensor at gain `gain` records it.
+fn sensor(exposed: vec3<f32>, gain: f32, pixel: vec2<u32>) -> vec3<f32> {
+    let amount = cfg.params.z;
+    if amount <= 0.0 {
+        return exposed;
+    }
+    let shot = SHOT_NOISE * amount * sqrt(max(exposed, vec3<f32>(0.0)) * gain);
+    let read = vec3<f32>(READ_NOISE * amount * gain);
+    let deviation = sqrt(shot * shot + read * read);
+    let n0 = noise_normal(pixel, 0u);
+    let n1 = noise_normal(pixel, 1u);
+    let chroma = vec3<f32>(n0.y, n1.x, n1.y);
+    let grain = mix(vec3<f32>(n0.x), chroma, CHROMA_NOISE);
+    return max(exposed + deviation * grain, vec3<f32>(0.0));
+}
+
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(scene_tex));
     let uv = frag.xy / size;
-    let scene = textureLoad(scene_tex, vec2<i32>(frag.xy), 0).rgb * exposure.w;
+    let scene = sensor(
+        textureLoad(scene_tex, vec2<i32>(frag.xy), 0).rgb * exposure.w,
+        exposure.w,
+        vec2<u32>(frag.xy),
+    );
     let headroom = select(1.0, max(cfg.params.w, 1.0), HDR_OUTPUT);
     var display = hdr_expand(tone_curve(scene, u32(cfg.params.x + 0.5)), headroom);
     if cfg.params.y > 0.0 {
