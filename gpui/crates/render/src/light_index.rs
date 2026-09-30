@@ -354,9 +354,11 @@ pub(crate) struct LightRest {
     /// [`FixtureCone::lens_distance`](crate::frame::FixtureCone::lens_distance).
     /// Zero for a point source. `LightCore::position` stays the lens centre.
     pub lens_distance: f32,
-    /// Tail padding to the WGSL stride (the struct aligns to 16 bytes). A
-    /// focus-dependent lens profile (beam waist) would take these words.
-    pub lens_reserved: [f32; 3],
+    /// How a rolling shutter bands this cone's strobe down the rows:
+    /// [`crate::strobe::Rows::words`]. Zeros for a cone every row sees alike.
+    pub strobe: [f32; 5],
+    /// Tail padding to the WGSL stride (the struct aligns to 16 bytes).
+    pub reserved: [f32; 2],
 }
 
 #[repr(C)]
@@ -1514,7 +1516,6 @@ mod tests {
 
     fn cone(position: Vec3, direction: Vec3, range: f32, cos_field: f32) -> FixtureCone {
         FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position,
             range,
             direction,
@@ -1527,6 +1528,7 @@ mod tests {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
+            strobe: crate::strobe::Rows::STEADY,
         }
     }
 

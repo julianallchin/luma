@@ -70,7 +70,6 @@ fn frame(
         frame.draws.insert(
             at,
             Draw {
-                strobe: luma_render::strobe::Rows::STEADY,
                 mesh,
                 model: Mat4::from_translation(Vec3::new(0.0, 0.0, cube_m * 0.5))
                     * Mat4::from_scale(Vec3::splat(cube_m)),
@@ -82,6 +81,7 @@ fn frame(
                 },
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: luma_render::strobe::Rows::STEADY,
             },
         );
     }
@@ -397,7 +397,6 @@ fn a_beam_stays_brighter_than_the_sky_behind_it() {
             luma_scene::Aabb::new(Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 15.0));
         let dark = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
         frame.fixture_cones.push(FixtureCone {
-            strobe: luma_render::strobe::Rows::STEADY,
             position: Vec3::new(-3.0, 0.0, 0.5),
             range: 40.0,
             direction: Vec3::new(0.2, -0.6, 1.0).normalize(),
@@ -410,6 +409,7 @@ fn a_beam_stays_brighter_than_the_sky_behind_it() {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: Lens::POINT,
+            strobe: luma_render::strobe::Rows::STEADY,
         });
         let lit = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
         capture(&format!("beam-{clouds:?}"), &lit, WIDTH, HEIGHT);
@@ -609,7 +609,6 @@ fn a_thin_post_against_the_far_ground_keeps_its_colour_in_sunlit_haze() {
                 frame.draws.insert(
                     at + i,
                     Draw {
-                        strobe: luma_render::strobe::Rows::STEADY,
                         mesh,
                         model: Mat4::from_translation(Vec3::new(0.0, -9.0 + 1.5 * i as f32, 4.5))
                             * Mat4::from_scale(Vec3::new(0.1, 0.1, 9.0)),
@@ -621,6 +620,7 @@ fn a_thin_post_against_the_far_ground_keeps_its_colour_in_sunlit_haze() {
                         },
                         textures: MaterialTextures::default(),
                         editor_object: None,
+                        strobe: luma_render::strobe::Rows::STEADY,
                     },
                 );
             }

@@ -313,7 +313,6 @@ mod tests {
     fn a_lens_shadow_frustum_starts_at_the_lens_and_is_lens_wide_there() {
         let half = 3f32.to_radians();
         let light = FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(1.0, 2.0, 6.0),
             range: 20.0,
             direction: Vec3::NEG_Z,
@@ -326,6 +325,7 @@ mod tests {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens { radius: 0.15 },
+            strobe: crate::strobe::Rows::STEADY,
         };
         let lens = light.lens_distance();
         let (near, far) = fixture_shadow_planes(&light);
@@ -346,7 +346,6 @@ mod tests {
     #[test]
     fn a_point_source_shadow_frustum_is_unchanged() {
         let light = FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(0.0, 0.0, 4.0),
             range: 12.0,
             direction: Vec3::NEG_Z,
@@ -359,6 +358,7 @@ mod tests {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
+            strobe: crate::strobe::Rows::STEADY,
         };
         let (near, far) = fixture_shadow_planes(&light);
         assert!(near > 0.0 && near < far, "near {near} far {far}");
@@ -402,7 +402,6 @@ mod tests {
         // actually change — a wall of equidistant cones could not show this.
         let cones: Vec<_> = (0..MAX_FIXTURE_SHADOWS * 2)
             .map(|i| FixtureCone {
-                strobe: crate::strobe::Rows::STEADY,
                 position: Vec3::new((i % 8) as f32 - 4.0, (i / 8) as f32 * 3.0, 0.0),
                 range: 5.0,
                 direction: Vec3::Z,
@@ -415,6 +414,7 @@ mod tests {
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
                 lens: crate::luminaire::Lens::POINT,
+                strobe: crate::strobe::Rows::STEADY,
             })
             .collect();
 
@@ -443,7 +443,6 @@ mod tests {
     #[test]
     fn a_cone_that_blinks_loses_its_shadow_slot_when_the_rig_is_over_the_cap() {
         let cone = |x: f32, intensity: f32| FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position: Vec3::new(x, 0.0, 0.0),
             range: 5.0,
             direction: Vec3::Z,
@@ -456,6 +455,7 @@ mod tests {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
+            strobe: crate::strobe::Rows::STEADY,
         };
         let eye = Vec3::new(0.0, -12.0, 0.0);
 
@@ -500,7 +500,6 @@ mod tests {
 
     fn spot(position: Vec3, direction: Vec3) -> FixtureCone {
         FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position,
             range: 20.0,
             direction,
@@ -513,6 +512,7 @@ mod tests {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
+            strobe: crate::strobe::Rows::STEADY,
         }
     }
 

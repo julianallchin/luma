@@ -85,12 +85,12 @@ fn frame(eye: Vec3, target: Vec3) -> Frame {
         (Vec3::new(0.0, 0.0, 0.95), Vec3::new(4.0, 0.05, 0.1)),
     ]
     .map(|(centre, size)| Draw {
-        strobe: luma_render::strobe::Rows::STEADY,
         mesh,
         model: Mat4::from_translation(centre) * Mat4::from_scale(size),
         material: material.clone(),
         textures: MaterialTextures::default(),
         editor_object: None,
+        strobe: luma_render::strobe::Rows::STEADY,
     });
     frame.draws.splice(at..at, draws);
     frame

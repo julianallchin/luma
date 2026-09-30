@@ -574,7 +574,7 @@ fn beam_scatter_hot(li: u32, ray: SceneRay) -> vec3<f32> {
     if RESID_SCALAR_HOT {
         let rest = light_rest[li];
         let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-        return tint * (stored.x * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
+        return tint * (stored.x * rest.intensity * light_row_ratio(li) * rest.haze_gain * haze.tuning.w * haze.depth.z);
     }
     return stored;
 }

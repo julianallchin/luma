@@ -174,3 +174,49 @@ fn sensor_noise_repeats_per_frame_and_grows_with_the_gain() {
         "two stops of gain show more grain"
     );
 }
+
+/// The mean of the R, G and B channels over the rows from `top` to `bottom`,
+/// as fractions of the height.
+fn rows_mean(pixels: &[u8], top: f32, bottom: f32) -> f64 {
+    let row = WIDTH as usize * 4;
+    let (a, b) = (
+        (top * HEIGHT as f32) as usize,
+        (bottom * HEIGHT as f32) as usize,
+    );
+    crate::common::mean_rgb(&pixels[a * row..b * row])
+}
+
+#[test]
+fn a_rolling_shutter_bands_a_flash_down_the_rows() {
+    let catalogue = catalogue();
+    let rolling = Footage {
+        readout_ms: 10.0,
+        ..global_shutter()
+    };
+    let scene = strobe_scene(&catalogue, rolling);
+    let mut renderer = Renderer::new().unwrap();
+    let mut picture = |end: f64, subframes: u32| {
+        let frame = exposure(&catalogue, &scene, end, subframes);
+        renderer.render(&frame, WIDTH, HEIGHT, 16).unwrap()
+    };
+    // Each row is open for the 8.3 ms before `end`, 10 ms later at the
+    // bottom than at the top. Ending at 0.099 s the rows above a tenth of the
+    // height close before the flash at 0.1 s; ending at 0.107 s those below
+    // 0.63 of it open after the flash is over.
+    let early = picture(0.099, 2);
+    assert!(rows_mean(&early, 0.0, 0.08) < 0.5, "the top rows missed it");
+    assert!(
+        rows_mean(&early, 0.7, 1.0) > 1.0,
+        "the bottom rows caught it"
+    );
+    let late = picture(0.107, 2);
+    assert!(
+        rows_mean(&late, 0.7, 1.0) < 0.5,
+        "the bottom rows missed it"
+    );
+    assert!(rows_mean(&late, 0.1, 0.5) > 1.0, "the top rows caught it");
+    // The rows are integrated exactly, whatever the subframe count.
+    let sixteen = picture(0.099, 16);
+    let (two, sixteen) = (rows_mean(&early, 0.0, 1.0), rows_mean(&sixteen, 0.0, 1.0));
+    assert!((two - sixteen).abs() < 0.02 * two, "{two} vs {sixteen}");
+}

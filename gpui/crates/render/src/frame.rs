@@ -505,12 +505,12 @@ pub(crate) fn piece_draws(
             // the venue to generate.
             let mesh = bank.insert(key.clone(), || lib.procedural(&key, || procedural.mesh()));
             vec![Draw {
-                strobe: crate::strobe::Rows::STEADY,
                 mesh,
                 model: root,
                 material: crate::materials::ALUMINIUM,
                 textures: MaterialTextures::default(),
                 editor_object,
+                strobe: crate::strobe::Rows::STEADY,
             }]
         }
         // Each part is the mesh case again, at the layout's transform. Every
@@ -565,7 +565,6 @@ pub(crate) fn housing_draws(
             box_mesh(Vec3::from(dims))
         });
         return Ok(vec![Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: body,
             textures: MaterialTextures::default(),
             // The quarter turn puts the box's *depth* along the mount axis, so
@@ -575,6 +574,7 @@ pub(crate) fn housing_draws(
             model: base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
             material: crate::materials::POWDER_COAT,
             editor_object,
+            strobe: crate::strobe::Rows::STEADY,
         }]);
     };
     let mesh_rel = format!("qlc/{}", kind.mesh());
@@ -714,12 +714,12 @@ fn glb_draw(
         emissive: prim.emissive_image.map(&mut image),
     };
     Draw {
-        strobe: crate::strobe::Rows::STEADY,
         mesh,
         model,
         material: prim.material,
         textures,
         editor_object,
+        strobe: crate::strobe::Rows::STEADY,
     }
 }
 
@@ -1039,7 +1039,6 @@ pub fn build_at(
     });
     if scene.render.show_floor {
         draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: floor,
             textures: floor_textures,
             model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
@@ -1054,6 +1053,7 @@ pub fn build_at(
                 ..crate::materials::GROUND
             }),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
     }
 
@@ -1298,7 +1298,6 @@ pub fn build_at(
     let mut floor_decal = |kind: Transparent| {
         transparent.push(kind);
         draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: floor,
             textures: MaterialTextures::default(),
             model: to_world
@@ -1306,6 +1305,7 @@ pub fn build_at(
                 * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             material: Material::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
     };
     if scene.render.show_grid {
@@ -1321,12 +1321,12 @@ pub fn build_at(
         // frame would be a round trip with nothing at the far end.
         let mesh = bank.insert(cables.key.clone(), || cables);
         draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh,
             textures: MaterialTextures::default(),
             model: Mat4::IDENTITY,
             material: Material::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
     }
 

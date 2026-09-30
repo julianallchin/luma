@@ -236,8 +236,11 @@ struct Instance {
     base_color: [f32; 4],
     emissive: [f32; 4],
     /// x: 1 for the ground, which casts no sun shadow; y: normal-map scale;
-    /// z: AO strength.
+    /// z: AO strength; w: the emitter's rolling-shutter strobe `norm`.
     flags: [f32; 4],
+    /// The emitter's rolling-shutter strobe rows: phase, span, readout, duty
+    /// ([`crate::strobe::Rows`]).
+    strobe: [f32; 4],
 }
 
 #[repr(C)]
@@ -2732,7 +2735,10 @@ impl Gpu {
             &queue,
             &format!("{bindings}{}", include_str!("shaders/sun_shafts.wgsl")),
         );
-        let fixture_light = include_str!("shaders/fixture_light.wgsl");
+        let fixture_light = concat!(
+            include_str!("shaders/fixture_light.wgsl"),
+            include_str!("shaders/strobe.wgsl")
+        );
         let visibility = include_str!("shaders/visibility.wgsl");
         let haze_visibility = visibility.replace("@group(3) @binding(11)", "@group(0) @binding(8)");
         // The light-index prelude is authored against group 1 (the haze
@@ -5765,7 +5771,8 @@ impl Renderer {
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
                     lens_distance: light.lens_distance(),
-                    lens_reserved: [0.0; 3],
+                    strobe: light.strobe.words(),
+                    reserved: [0.0; 2],
                 }
             })
             .collect();
@@ -10422,9 +10429,10 @@ mod tests {
         let scene = super::scene_wgsl();
         // The head of the haze module, in the order `Gpu::new` builds it.
         let transport = format!(
-            "{}{}{}{}{}",
+            "{}{}{}{}{}{}",
             crate::haze_field::prelude(),
             include_str!("shaders/fixture_light.wgsl"),
+            include_str!("shaders/strobe.wgsl"),
             include_str!("shaders/light_index.wgsl"),
             include_str!("shaders/visibility.wgsl")
                 .replace("@group(3) @binding(11)", "@group(0) @binding(8)"),
@@ -10435,6 +10443,7 @@ mod tests {
             (std::mem::size_of::<Globals>(), &scene, "Globals"),
             (std::mem::size_of::<LightCore>(), &scene, "FixtureLightCore"),
             (std::mem::size_of::<LightRest>(), &scene, "FixtureLightRest"),
+            (std::mem::size_of::<super::Instance>(), &scene, "Instance"),
             (
                 std::mem::size_of::<FixtureShadowMatrix>(),
                 &scene,
@@ -10854,7 +10863,6 @@ mod tests {
         let mut frame = fixture_surface_frame(1);
         frame.fixture_cones[0].position = Vec3::new(0.0, 0.0, 3.0);
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::new(0.09, 0.09, 0.09)),
@@ -10865,6 +10873,7 @@ mod tests {
             },
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
         frame.camera = Camera {
             eye: Vec3::new(3.8, -6.0, 3.2),
@@ -10948,13 +10957,13 @@ mod tests {
         frame.haze_steps = 8;
         frame.camera.eye = Vec3::new(0.0, -12.0, 6.0);
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
         let mut renderer = Renderer::new()?;
         let blocked = renderer.render(&frame, 160, 120, 1)?;
@@ -11010,13 +11019,13 @@ mod tests {
             source_camera_eye: frame.camera.eye.to_array(),
         });
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
 
         let mut renderer = Renderer::new()?;
@@ -11128,13 +11137,13 @@ mod tests {
             source_camera_eye: frame.camera.eye.to_array(),
         });
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
 
         let mut renderer = Renderer::new()?;
@@ -12220,13 +12229,13 @@ mod tests {
             ..frame.meshes[0].clone()
         });
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: body,
             model: Mat4::from_translation(Vec3::new(-2.0, 0.0, 1.0))
                 * Mat4::from_scale(Vec3::new(0.2, 0.2, 1.0)),
             material: frame.draws[0].material,
             textures: MaterialTextures::default(),
             editor_object: Some(crate::frame::EditorObject::Fixture("head".into())),
+            strobe: crate::strobe::Rows::STEADY,
         });
         let opaque = frame.draws.len();
         let before_hash = super::opaque_depth_hash(&frame, opaque);
@@ -12266,13 +12275,13 @@ mod tests {
         frame.fixture_shadows = true;
         frame.ambient = Vec3::ZERO;
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::splat(0.09)),
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
         for haze in [false, true] {
             frame.fixture_surface_lighting = !haze;
@@ -12386,13 +12395,13 @@ mod tests {
         frame.haze_steps = 8;
         frame.fixture_cones[0].wash = 1.0;
         frame.draws.push(Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::splat(0.07)),
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         });
         let mut compute = Renderer::new()?;
         let mut fragment = Renderer::new()?;
@@ -12639,12 +12648,12 @@ mod tests {
         );
         let mut frame = fixture_surface_frame(64);
         let receiver = || Draw {
-            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::IDENTITY,
             material: Material::default(),
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: crate::strobe::Rows::STEADY,
         };
         for (width, x, tilt) in [(0.002, 0.41, 0.4), (0.0006, -0.27, -0.2)] {
             let mut strip = receiver();
@@ -12803,7 +12812,6 @@ mod tests {
                 let column = (index % 32) as f32;
                 let row = (index / 32) as f32;
                 FixtureCone {
-                    strobe: crate::strobe::Rows::STEADY,
                     position: Vec3::new((column - 15.5) * 0.08, (row - 7.5) * 0.08, 3.0),
                     range: 5.0,
                     direction: Vec3::NEG_Z,
@@ -12816,6 +12824,7 @@ mod tests {
                     gobo_rotation: 0.0,
                     haze_gain: 1.0,
                     lens: crate::luminaire::Lens::POINT,
+                    strobe: crate::strobe::Rows::STEADY,
                 }
             })
             .collect();
@@ -12824,7 +12833,6 @@ mod tests {
             meshes: vec![mesh],
             images: Vec::new(),
             draws: vec![Draw {
-                strobe: crate::strobe::Rows::STEADY,
                 mesh: 0,
                 model: Mat4::IDENTITY,
                 material: Material {
@@ -12834,6 +12842,7 @@ mod tests {
                 },
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: crate::strobe::Rows::STEADY,
             }],
             transparent: Vec::new(),
             gizmo_pivot: None,
@@ -12904,7 +12913,8 @@ mod tests {
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
                     lens_distance: light.lens_distance(),
-                    lens_reserved: [0.0; 3],
+                    strobe: light.strobe.words(),
+                    reserved: [0.0; 2],
                 }
             })
             .collect();
@@ -13156,7 +13166,8 @@ mod tests {
             inverse_right_length: 1.0,
             field_tangent: 1.0,
             lens_distance: 0.0,
-            lens_reserved: [0.0; 3],
+            strobe: [0.0; 5],
+            reserved: [0.0; 2],
         };
         let interval = [5, 1 | 2 << 16, 3 | 4 << 16, MODE_READ | 7 << 8];
         let baseline = residual_resident_key(&cone, &rest, None, interval);
@@ -13192,7 +13203,8 @@ mod tests {
             inverse_right_length: 1.0,
             field_tangent: 1.0,
             lens_distance: 0.0,
-            lens_reserved: [0.0; 3],
+            strobe: [0.0; 5],
+            reserved: [0.0; 2],
         };
         let key = Some(residual_resident_key(
             &cone,
@@ -13253,7 +13265,8 @@ mod tests {
                 inverse_right_length: 1.0,
                 field_tangent: 1.0,
                 lens_distance: 0.0,
-                lens_reserved: [0.0; 3],
+                strobe: [0.0; 5],
+                reserved: [0.0; 2],
             })
             .collect();
         let key = |medium| {
@@ -13361,7 +13374,6 @@ mod tests {
         };
         let draws = occluder
             .then(|| Draw {
-                strobe: crate::strobe::Rows::STEADY,
                 mesh: 0,
                 model: Mat4::IDENTITY,
                 material: Material {
@@ -13371,6 +13383,7 @@ mod tests {
                 },
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: crate::strobe::Rows::STEADY,
             })
             .into_iter()
             .collect();
@@ -13766,7 +13779,13 @@ fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
                 0.0
             },
             draw.material.occlusion_strength,
-            0.0,
+            draw.strobe.norm,
+        ],
+        strobe: [
+            draw.strobe.phase,
+            draw.strobe.span,
+            draw.strobe.readout,
+            draw.strobe.duty,
         ],
     }
 }
@@ -14145,7 +14164,6 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         .clamp(0.01, 1.0)
         .min(cos_beam);
     crate::frame::FixtureCone {
-        strobe: crate::strobe::Rows::STEADY,
         position: finite_vec(light.position, Vec3::ZERO)
             .clamp(Vec3::splat(-10_000.0), Vec3::splat(10_000.0)),
         range: finite(light.range, 0.05).clamp(0.05, 100.0),
@@ -14163,6 +14181,7 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         lens: crate::luminaire::Lens {
             radius: finite(light.lens.radius, 0.0).clamp(0.0, crate::luminaire::Lens::MAX_RADIUS_M),
         },
+        strobe: light.strobe,
     }
 }
 
@@ -14359,12 +14378,13 @@ fn composite_wgsl() -> String {
 /// group 3, so its copy is rebound by this one documented replace.
 pub(crate) fn scene_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}",
         scene_bindings_wgsl(),
         crate::probes::prelude(),
         include_str!("shaders/probe_sample.wgsl"),
         include_str!("shaders/light_index.wgsl").replace("@group(1)", "@group(3)"),
         include_str!("shaders/fixture_light.wgsl"),
+        include_str!("shaders/strobe.wgsl"),
         include_str!("shaders/visibility.wgsl"),
         include_str!("shaders/scene.wgsl"),
         include_str!("shaders/floor.wgsl"),

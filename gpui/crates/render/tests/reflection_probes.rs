@@ -83,7 +83,6 @@ fn piece(id: String, geometry: Geometry, pos: [f32; 3], rot: [f32; 3]) -> Piece 
 /// A light at `from` aimed at `to`: a wash, 15 degrees to the half-peak edge.
 fn wash(from: Vec3, to: Vec3, color: Vec3) -> FixtureCone {
     FixtureCone {
-        strobe: luma_render::strobe::Rows::STEADY,
         position: from,
         range: 40.0,
         direction: (to - from).normalize(),
@@ -96,6 +95,7 @@ fn wash(from: Vec3, to: Vec3, color: Vec3) -> FixtureCone {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -140,12 +140,12 @@ fn add_boxes(frame: &mut Frame, boxes: &[(Vec3, Vec3, Material)]) {
         frame.draws.insert(
             at + i,
             Draw {
-                strobe: luma_render::strobe::Rows::STEADY,
                 mesh,
                 model: Mat4::from_translation(*centre) * Mat4::from_scale(*size),
                 material: *material,
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: luma_render::strobe::Rows::STEADY,
             },
         );
     }

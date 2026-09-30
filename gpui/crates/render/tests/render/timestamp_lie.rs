@@ -309,7 +309,6 @@ fn lit_frame(lights: usize) -> Frame {
         .map(|i| {
             let angle = i as f32 * 0.7;
             FixtureCone {
-                strobe: luma_render::strobe::Rows::STEADY,
                 position: Vec3::new((i % 8) as f32 - 4.0, 4.0, (i / 8) as f32 - 2.0),
                 range: 8.0,
                 direction: Vec3::new(angle.sin() * 0.3, -1.0, angle.cos() * 0.3).normalize(),
@@ -322,6 +321,7 @@ fn lit_frame(lights: usize) -> Frame {
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
                 lens: luma_render::luminaire::Lens::POINT,
+                strobe: luma_render::strobe::Rows::STEADY,
             }
         })
         .collect();

@@ -102,7 +102,6 @@ impl Lamp {
     #[must_use]
     pub fn cone(self) -> FixtureCone {
         FixtureCone {
-            strobe: crate::strobe::Rows::STEADY,
             position: self.position,
             range: self.range,
             direction: Vec3::NEG_Z,
@@ -117,6 +116,7 @@ impl Lamp {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: crate::luminaire::Lens::POINT,
+            strobe: crate::strobe::Rows::STEADY,
         }
     }
 }
