@@ -29,10 +29,10 @@
 //!    hexagonal star or an eye, with the lens's dust and scratches; its
 //!    spectrum is computed again only when the style, the diffraction amount
 //!    or the field of view changes.
-//! 4. **Tonemap** (`post_tonemap.wgsl`). Exposure, the tone curve, HDR
-//!    expansion, then the glare added over the tone-mapped picture: it
-//!    saturates at the display's white, so a white core stays white and the
-//!    halo spreads over its surroundings.
+//! 4. **Tonemap** (`post_tonemap.wgsl`). Exposure, the footage look's
+//!    sensor noise, the tone curve, HDR expansion, then the glare added over
+//!    the tone-mapped picture: it saturates at the display's white, so a
+//!    white core stays white and the halo spreads over its surroundings.
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -133,6 +133,17 @@ struct TonemapUniform {
     /// rgb: the sun's light times the veil's scale, in exposed light ·
     /// square degrees. w: focal length, output pixels.
     sun_veil: [f32; 4],
+}
+
+/// The sensor noise's seed for the frame at `time`: a new grain every frame,
+/// and the same grain for the same frame on every run. Below 2^24, so the
+/// uniform's `f32` holds it exactly.
+fn noise_seed(time: f32) -> f32 {
+    let mut x = time.to_bits();
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    (x & 0x00ff_ffff) as f32
 }
 
 /// Everything the chain needs from the frame.
@@ -1078,10 +1089,14 @@ impl Post {
                 params: [
                     look.tone.shader_code() as f32,
                     if glare_on { look.glare.strength } else { 0.0 },
-                    0.0,
+                    if look.footage.enabled {
+                        look.footage.sanitized().noise
+                    } else {
+                        0.0
+                    },
                     frame.headroom,
                 ],
-                glare: [uv_scale[0], uv_scale[1], 0.0, 0.0],
+                glare: [uv_scale[0], uv_scale[1], noise_seed(frame.time), 0.0],
                 sun: sun_glare.0,
                 sun_veil: sun_glare.1,
             }),

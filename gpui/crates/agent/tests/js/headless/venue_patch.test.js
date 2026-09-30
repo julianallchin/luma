@@ -478,3 +478,32 @@ test("view settings persist per device and per venue", () => {
   app.frames(4);
   expect(all()).toEqual(changed);
 });
+
+test("the footage look shows its dials only while on and keeps them", () => {
+  const scrub = (name) => app.snapshot().findAll({ role: "slider" }).find((n) => n.label.startsWith(`${name} = `));
+  const value = (name) => Number(scrub(name)?.label.split(" = ")[1]);
+  const on = () => app.snapshot().find({ role: "toggle", label: "Footage look" })?.focused;
+  const openView = () => {
+    nav.step("the view settings", "toggle", "Render settings");
+    until("the view panel", (s) => s.find({ role: "toggle", label: "Footage look" }) !== undefined);
+  };
+
+  nav.patch("Test Venue");
+  openView();
+  expect(on()).toBe(false);
+  expect(scrub("Shutter angle (°)")).toBe(undefined);
+  nav.step("footage on", "toggle", "Footage look");
+  until("its dials", () => scrub("Shutter angle (°)") !== undefined);
+  expect(value("Shutter angle (°)")).toBe(180);
+  for (const dial of ["Readout time (ms)", "Sensor noise", "Handheld shake", "Bass shake"]) {
+    assert(scrub(dial) !== undefined, `no ${dial} dial`);
+  }
+
+  app.key("escape");
+  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
+  nav.venuePage("Test Venue");
+  until("the loaded room", (s) => s.find({ role: "toggle", label: "Frame stats" }));
+  openView();
+  expect(on()).toBe(true);
+  expect(value("Shutter angle (°)")).toBe(180);
+});

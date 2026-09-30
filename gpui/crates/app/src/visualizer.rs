@@ -1221,6 +1221,8 @@ enum ViewToggle {
     AutoExposure,
     ReflectionProbes,
     ShowProbes,
+    /// The footage look, [`scene_desc::Footage`].
+    Footage,
 }
 #[derive(Clone, Copy)]
 enum ViewValue {
@@ -1238,6 +1240,13 @@ enum ViewValue {
     Glare,
     GlareThreshold,
     Star,
+    /// Footage dials, [`scene_desc::Footage`]: shutter angle, readout,
+    /// sensor noise, handheld sway and bass shake.
+    Shutter,
+    Readout,
+    Noise,
+    Handheld,
+    BassShake,
 }
 
 impl ViewValue {
@@ -1245,7 +1254,15 @@ impl ViewValue {
     fn is_look(self) -> bool {
         matches!(
             self,
-            Self::Exposure | Self::Glare | Self::GlareThreshold | Self::Star
+            Self::Exposure
+                | Self::Glare
+                | Self::GlareThreshold
+                | Self::Star
+                | Self::Shutter
+                | Self::Readout
+                | Self::Noise
+                | Self::Handheld
+                | Self::BassShake
         )
     }
 }
@@ -1275,6 +1292,9 @@ impl RenderControls {
             }
             ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
             ViewToggle::ShowProbes => self.probes.debug = !self.probes.debug,
+            ViewToggle::Footage => {
+                self.look.footage.enabled = !self.look.footage.enabled;
+            }
         }
     }
     fn set(&mut self, control: ViewValue, value: f32) {
@@ -1297,8 +1317,14 @@ impl RenderControls {
                         value.clamp(*GLARE_THRESHOLD.start(), *GLARE_THRESHOLD.end());
                 }
                 ViewValue::Star => look.glare.star = value.clamp(0.0, 1.0),
+                ViewValue::Shutter => look.footage.shutter_deg = value,
+                ViewValue::Readout => look.footage.readout_ms = value,
+                ViewValue::Noise => look.footage.noise = value,
+                ViewValue::Handheld => look.footage.handheld = value,
+                ViewValue::BassShake => look.footage.bass = value,
                 _ => unreachable!(),
             }
+            look.footage = look.footage.sanitized();
             return;
         }
         match control {
@@ -1313,7 +1339,12 @@ impl RenderControls {
             | ViewValue::Exposure
             | ViewValue::Glare
             | ViewValue::GlareThreshold
-            | ViewValue::Star => unreachable!(),
+            | ViewValue::Star
+            | ViewValue::Shutter
+            | ViewValue::Readout
+            | ViewValue::Noise
+            | ViewValue::Handheld
+            | ViewValue::BassShake => unreachable!(),
         }
         // The whole value, not just the appearance: `sanitized` is what keeps a
         // swept density inside [`scene_desc::VenueHaze::MAX_DENSITY`], which is
@@ -3973,6 +4004,11 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .gap(px(12.))
         .child(settings::section("Camera", camera_controls(state, app)))
         .child(luma_ui::float::divider())
+        .child(settings::section(
+            "Footage look",
+            footage_controls(state, app),
+        ))
+        .child(luma_ui::float::divider())
         .child(settings::section("Viewport", viewport))
 }
 
@@ -4068,6 +4104,73 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         ))
 }
 
+/// The footage look: what a video camera in the room would record —
+/// [`scene_desc::Footage`]. Its dials show only while it is on.
+fn footage_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+    let footage = state.render_controls.look.footage;
+    let dials = footage.enabled.then(|| {
+        let range = |range: std::ops::RangeInclusive<f32>| (*range.start(), *range.end());
+        let (shutter_min, shutter_max) = range(scene_desc::Footage::SHUTTER_DEG);
+        let (readout_min, readout_max) = range(scene_desc::Footage::READOUT_MS);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(view_value(
+                app,
+                "Shutter angle (°)",
+                footage.shutter_deg,
+                shutter_min,
+                shutter_max,
+                ViewValue::Shutter,
+            ))
+            .child(view_value(
+                app,
+                "Readout time (ms)",
+                footage.readout_ms,
+                readout_min,
+                readout_max,
+                ViewValue::Readout,
+            ))
+            .child(view_value(
+                app,
+                "Sensor noise",
+                footage.noise,
+                0.,
+                1.,
+                ViewValue::Noise,
+            ))
+            .child(view_value(
+                app,
+                "Handheld shake",
+                footage.handheld,
+                0.,
+                1.,
+                ViewValue::Handheld,
+            ))
+            .child(view_value(
+                app,
+                "Bass shake",
+                footage.bass,
+                0.,
+                1.,
+                ViewValue::BassShake,
+            ))
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(view_toggle(
+            state,
+            app,
+            "Footage look",
+            footage.enabled,
+            ViewToggle::Footage,
+        ))
+        .children(dials)
+}
+
 /// The pixels the stage is actually rendering, under the percent that asks for
 /// them.
 ///
@@ -4101,6 +4204,7 @@ fn view_toggle(
         ViewToggle::AutoExposure => 4,
         ViewToggle::ReflectionProbes => 5,
         ViewToggle::ShowProbes => 6,
+        ViewToggle::Footage => 7,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -4139,6 +4243,10 @@ fn view_value(
         // A tenth of a stop: finer than anyone can see, coarse enough that a
         // drag does not stop on 0.37.
         ViewValue::Exposure => (0.1, 1.0),
+        // Whole degrees and tenths of a millisecond: the units a camera
+        // menu uses.
+        ViewValue::Shutter => (1.0, 1.0),
+        ViewValue::Readout => (0.1, 1.0),
         _ => (0.01, 1.0),
     };
     let app = app.clone();
@@ -5746,7 +5854,36 @@ mod view_tests {
         let read = stored_look(older);
         assert_eq!(read.exposure.ev, 0.5);
         assert_eq!(read.glare.style, scene_desc::GlareStyle::default());
+        // And one stored before the footage look has it off.
+        assert!(!read.footage.enabled);
         assert_eq!(stored_look("{\"tone\":\"sepia\"}"), scene_desc::Look::STAGE);
+    }
+
+    /// The footage look is off by default, turns on with its dials, keeps them
+    /// in range and is saved with the rest of the look.
+    #[test]
+    fn footage_dials_shape_the_look() {
+        let mut controls = RenderControls::new(VenueEnvironment::default());
+        assert!(!controls.look.footage.enabled);
+        controls.toggle(ViewToggle::Footage);
+        assert!(controls.settings(50.0).look.footage.enabled);
+        controls.set(ViewValue::Shutter, 720.0);
+        assert_eq!(
+            controls.look.footage.shutter_deg,
+            *scene_desc::Footage::SHUTTER_DEG.end()
+        );
+        controls.set(ViewValue::Readout, -3.0);
+        assert_eq!(controls.look.footage.readout_ms, 0.0);
+        controls.set(ViewValue::Noise, 0.5);
+        controls.set(ViewValue::Handheld, 2.0);
+        controls.set(ViewValue::BassShake, 0.25);
+        let footage = controls.look.footage;
+        assert_eq!(
+            (footage.noise, footage.handheld, footage.bass),
+            (0.5, 1.0, 0.25)
+        );
+        let json = serde_json::to_string(&controls.look).unwrap();
+        assert_eq!(stored_look(&json).footage, footage);
     }
 }
 

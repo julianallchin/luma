@@ -134,3 +134,43 @@ fn a_shutter_of_equal_moments_is_that_moment() {
     assert!(alone > 1.0, "the flash lights the haze: {alone}");
     assert!((alone - twice).abs() < 0.02 * alone, "{alone} vs {twice}");
 }
+
+#[test]
+fn sensor_noise_repeats_per_frame_and_grows_with_the_gain() {
+    let catalogue = catalogue();
+    let mut renderer = Renderer::new().unwrap();
+    // The dark stage between two flashes: what shows is the read noise.
+    let mut picture = |noise: f32, ev: f32, end: f64| {
+        let mut scene = strobe_scene(
+            &catalogue,
+            Footage {
+                noise,
+                ..global_shutter()
+            },
+        );
+        scene.render.look.exposure.ev = ev;
+        let frame = exposure(&catalogue, &scene, end, 1);
+        renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap()
+    };
+    let grain = |a: &[u8], b: &[u8]| {
+        a.iter()
+            .zip(b)
+            .map(|(a, b)| f64::from(a.abs_diff(*b)))
+            .sum::<f64>()
+            / a.len() as f64
+    };
+    let clean = picture(0.0, 0.0, 0.05);
+    let noisy = picture(1.0, 0.0, 0.05);
+    assert_eq!(noisy, picture(1.0, 0.0, 0.05), "a frame's grain is its own");
+    assert!(grain(&clean, &noisy) > 0.0, "the sensor adds grain");
+    assert_ne!(
+        noisy,
+        picture(1.0, 0.0, 0.06),
+        "the next frame's grain differs"
+    );
+    let gained = grain(&picture(0.0, 2.0, 0.05), &picture(1.0, 2.0, 0.05));
+    assert!(
+        gained > grain(&clean, &noisy),
+        "two stops of gain show more grain"
+    );
+}
