@@ -55,6 +55,25 @@ test("the rig is lit by the playing track", () => {
   expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);
 });
 
+// The footage look draws each frame as several whole moments of a shutter;
+// the rig must still be lit by the score and still move with it.
+test("the footage look still draws the rig lit and moving with the track", () => {
+  openLitStage();
+  nav.step("the view settings", "toggle", "Render settings");
+  until("the footage switch", (s) => s.find({ role: "toggle", label: "Footage look" }) !== undefined);
+  nav.step("footage on", "toggle", "Footage look");
+  until("its dials", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("Shutter angle")));
+  app.key("escape");
+  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
+  app.frames(10, { waitMs: 60 });
+  const first = stageShot();
+  expect(chroma(first)).toBeGreaterThan(2);
+
+  nav.step("the Play button", "button", "Play");
+  app.frames(20, { waitMs: 55 });
+  expect(image.diff(first, stageShot())).toBeGreaterThan(0.01);
+});
+
 // A screen that edited clips without re-installing the scene would pass the
 // test above and still show the rig as the score was when the view opened.
 // `selection` is the arg to move: pointing it at a group the venue does not
