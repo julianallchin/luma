@@ -8,9 +8,11 @@
 //!
 //! The frames are the viewport's. The rig, the render settings, the score
 //! sample ([`Library::score_sampler`](crate::Library::score_sampler)), the
-//! motor lag and the live pass chain are the ones the stage draws with. Only
-//! the camera differs: it is the stage's camera when the export starts, and
-//! it stays there.
+//! motor lag, the footage look and the live pass chain are the ones the stage
+//! draws with. Only the camera differs: it is the stage's camera when the
+//! export starts, and it stays there. And with the footage look on, a frame's
+//! shutter holds [`SHUTTER_SUBFRAMES`] moments where the stage affords
+//! [`luma_render::LIVE_SUBFRAMES`].
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -23,13 +25,18 @@ use tokio::sync::watch;
 use luma_lib::models::universe::UniverseState;
 use luma_lib::recording::{Encode, Encoder};
 use luma_lib::stage_render;
-use luma_render::{assets, build_frame_with, coords, scene_desc, Recorder};
+use luma_render::{assets, build_frame_at, coords, scene_desc, Frame, Recorder};
 
 use super::motors::Motors;
-use super::Visualizer;
+use super::{Bass, Visualizer};
 
 /// Output frames per second.
 pub(crate) const FPS: u32 = 60;
+
+/// Moments in one frame's shutter with the footage look on. The export is not
+/// paced to a display, so it spends what the stage cannot: each is a whole
+/// render.
+const SHUTTER_SUBFRAMES: u32 = 8;
 
 /// Frames drawn and thrown away before score time 0, so the haze history has
 /// settled by the first frame kept. The temporal resolve keeps 82% of its
@@ -43,6 +50,8 @@ pub(crate) struct Shot {
     definitions: std::collections::BTreeMap<String, scene_desc::Definition>,
     /// The viewport's width over its height.
     pub(crate) aspect: f32,
+    /// The track's bass, for the footage look's shake.
+    bass: Option<Bass>,
 }
 
 impl Visualizer {
@@ -71,6 +80,7 @@ impl Visualizer {
             scene,
             definitions: stage.definitions.clone(),
             aspect: width / height,
+            bass: self.bass.clone(),
         })
     }
 
@@ -106,8 +116,9 @@ pub(crate) fn frame_count(duration: f32) -> u64 {
 /// One step of the export's clock.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Tick {
-    /// The renderer's and the motors' clock, in seconds. It runs through the
-    /// warm-up, so both see one continuous sequence.
+    /// The renderer's and the motors' clock, in seconds: the air drifts and
+    /// the strobes flash on it. It runs through the warm-up, so both see one
+    /// continuous sequence.
     clock: f64,
     /// Score time, in seconds. 0 through the warm-up.
     score: f32,
@@ -253,17 +264,42 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let universe = motors.step(tick.clock, tick.score, sample(tick.score));
-        let mut frame = build_frame_with(
-            &shot.scene,
-            &shot.definitions,
-            &|id, head| stage_render::primitive_state(universe.as_ref(), id, head),
-            tick.score,
-            &mut assets,
-        )
-        .map_err(|error| format!("Could not assemble the frame: {error}"))?;
-        // The air's clock, which the live stage runs on the wall clock.
-        frame.time = tick.clock as f32;
+        // The shutter closes on the tick. Track time runs with the clock once
+        // the score has started, and holds at 0 through the warm-up.
+        let transport = |at: f64| {
+            if tick.kept {
+                (f64::from(tick.score) - (tick.clock - at)).max(0.0) as f32
+            } else {
+                tick.score
+            }
+        };
+        let moments = luma_render::footage::moments(
+            &shot.scene.render.look.footage,
+            tick.clock,
+            1.0 / f64::from(FPS),
+            SHUTTER_SUBFRAMES,
+            |at| {
+                shot.bass
+                    .as_ref()
+                    .map_or(0.0, |bass| bass.at(transport(at)))
+            },
+        );
+        let mut frames = Vec::with_capacity(moments.len());
+        for moment in moments {
+            let at = transport(moment.time);
+            let universe = motors.step(moment.time, at, sample(at));
+            frames.push(
+                build_frame_at(
+                    &shot.scene,
+                    &shot.definitions,
+                    &|id, head| stage_render::primitive_state(universe.as_ref(), id, head),
+                    moment,
+                    &mut assets,
+                )
+                .map_err(|error| format!("Could not assemble the frame: {error}"))?,
+            );
+        }
+        let frame = Frame::exposure(frames);
         in_flight.push_back(tick.kept);
         if let Some(pixels) = recorder
             .push(&frame, width, height)

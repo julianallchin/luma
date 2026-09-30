@@ -1514,6 +1514,7 @@ mod tests {
 
     fn cone(position: Vec3, direction: Vec3, range: f32, cos_field: f32) -> FixtureCone {
         FixtureCone {
+            strobe: crate::strobe::Rows::STEADY,
             position,
             range,
             direction,

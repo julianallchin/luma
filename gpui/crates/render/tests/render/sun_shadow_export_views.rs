@@ -84,6 +84,7 @@ fn frame(export: &CameraExport, boxes: &[(Vec3, Vec3)]) -> Frame {
     let draws: Vec<_> = boxes
         .iter()
         .map(|&(centre, size)| Draw {
+            strobe: luma_render::strobe::Rows::STEADY,
             mesh,
             model: Mat4::from_translation(centre) * Mat4::from_scale(size),
             material: Material {

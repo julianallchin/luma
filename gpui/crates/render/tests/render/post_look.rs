@@ -66,6 +66,7 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
     let position = Vec3::new(0.0, 0.0, 1.6);
     let to_eye = (frame.camera.eye - position).normalize();
     frame.fixture_cones = vec![FixtureCone {
+        strobe: luma_render::strobe::Rows::STEADY,
         position,
         range: 24.0,
         direction: Vec3::Z.lerp(to_eye, aim).normalize(),
@@ -137,6 +138,7 @@ fn ring(pixels: &[u8], centre: (u32, u32), radius: f32) -> f32 {
 
 fn manual(glare: Glare) -> Look {
     Look {
+        footage: luma_render::scene_desc::Footage::OFF,
         tone: ToneCurve::Agx,
         exposure: Exposure {
             auto: false,
@@ -417,6 +419,7 @@ fn a_sun_off_the_frame_still_glares() {
         ..Glare::STAGE
     };
     let look = |glare| Look {
+        footage: luma_render::scene_desc::Footage::OFF,
         tone: ToneCurve::Agx,
         exposure: Exposure::STAGE,
         glare,

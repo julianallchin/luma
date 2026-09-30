@@ -25,7 +25,7 @@ use crate::viewport::DisplayRange;
 use crate::assets::Image;
 use crate::atmosphere::{AtmosphereCache, AtmospherePipelines};
 use crate::environment::{EnvironmentCache, EnvironmentPipelines};
-use crate::frame::{Draw, Frame};
+use crate::frame::{Draw, FixtureCone, Frame};
 use crate::haze_field::HazeField;
 use crate::light_index::{
     LightCore, LightIndex, LightIndexInput, LightIndexPipelines, LightIndexStats, LightRest,
@@ -2267,6 +2267,9 @@ pub struct Gpu {
     composite_pipelines: [wgpu::RenderPipeline; 3],
     /// The composite pass writing scene-linear light for the post chain.
     composite_linear_pipeline: wgpu::RenderPipeline,
+    /// [`Self::composite_linear_pipeline`] adding its output, times the blend
+    /// constant, to the target: one moment of a shutter's mean.
+    composite_moment_pipeline: wgpu::RenderPipeline,
     /// Exposure, lens glow, tone curve and glare (`post.rs`).
     post: crate::post::Pipelines,
     /// Indexed by [`overlay_pipeline_index`]: the three output formats
@@ -4097,9 +4100,9 @@ impl Gpu {
             })
         });
 
-        let composite_linear_pipeline =
+        let composite_linear = |label: &str, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("composite-linear"),
+                label: Some(label),
                 layout: Some(&composite_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &composite_module,
@@ -4110,7 +4113,11 @@ impl Gpu {
                 fragment: Some(wgpu::FragmentState {
                     module: &composite_module,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(crate::post::SCENE_FORMAT.into())],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: crate::post::SCENE_FORMAT,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[("LINEAR_OUTPUT", 1.0)],
                         ..Default::default()
@@ -4121,7 +4128,21 @@ impl Gpu {
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            });
+            })
+        };
+        let composite_linear_pipeline = composite_linear("composite-linear", None);
+        let weighted = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let composite_moment_pipeline = composite_linear(
+            "composite-moment",
+            Some(wgpu::BlendState {
+                color: weighted,
+                alpha: weighted,
+            }),
+        );
 
         let overlay_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay"),
@@ -4284,6 +4305,7 @@ impl Gpu {
             sky_visibility,
             post,
             composite_linear_pipeline,
+            composite_moment_pipeline,
             device,
             queue,
             adapter_profile,
@@ -5431,6 +5453,16 @@ impl Renderer {
         Ok(())
     }
 
+    /// Draw `frame` and start reading it back: every moment of its shutter
+    /// when it has one ([`Frame::shutter`]), else the frame alone.
+    ///
+    /// A shutter's moments are whole renders, each at its own time, added
+    /// into the post chain's scene-linear target at `1 / moments`; the post
+    /// chain runs once on their mean. Live and export go through here alike,
+    /// with only the counts differing. `subframes`, the jittered haze passes,
+    /// is shared out between the moments rather than spent on each, so a
+    /// shutter spreads the same haze work over time.
+    #[allow(clippy::too_many_arguments)]
     fn submit_readback(
         &mut self,
         frame: &Frame,
@@ -5442,10 +5474,80 @@ impl Renderer {
         temporal: bool,
         measure: bool,
     ) -> PendingFrame {
+        // Diagnostic views write the output directly, with no scene-linear
+        // target to add moments into, and are exact channel dumps anyway.
+        if frame.shutter.is_empty() || !uses_post(frame) {
+            return self
+                .submit_moment(
+                    frame,
+                    width,
+                    height,
+                    subframes,
+                    destination,
+                    slot,
+                    temporal,
+                    measure,
+                    None,
+                )
+                .expect("a lone moment presents");
+        }
+        let count = 1 + frame.shutter.len() as u32;
+        let passes = (subframes / count).max(1);
+        // The lens glow is drawn once, on the mean: every moment's lenses,
+        // each at its share of the exposure.
+        let lenses: Vec<FixtureCone> = frame
+            .moments()
+            .flat_map(|moment| &moment.fixture_cones)
+            .map(|cone| FixtureCone {
+                intensity: cone.intensity / count as f32,
+                ..*cone
+            })
+            .collect();
+        let mut presented = None;
+        for (index, moment) in frame.moments().enumerate() {
+            let last = index as u32 + 1 == count;
+            presented = self.submit_moment(
+                moment,
+                width,
+                height,
+                passes,
+                destination,
+                slot,
+                temporal,
+                measure && last,
+                Some(MomentPass {
+                    index: index as u32,
+                    count,
+                    seed: index as u32 * passes,
+                    lenses: &lenses,
+                }),
+            );
+        }
+        presented.expect("the last moment presents")
+    }
+
+    /// One moment's render. With `pass`, it adds into a shutter's mean and
+    /// only the last moment finishes the frame and returns it.
+    #[allow(clippy::too_many_arguments)]
+    fn submit_moment(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        destination: Destination,
+        slot: usize,
+        temporal: bool,
+        measure: bool,
+        moment_pass: Option<MomentPass<'_>>,
+    ) -> Option<PendingFrame> {
         assert!(
             slot < PRESENTATION_SLOTS,
             "presentation slot is bounded to the target count"
         );
+        let presents = moment_pass
+            .as_ref()
+            .is_none_or(|pass| pass.index + 1 == pass.count);
         self.haze_work_counts_valid = false;
         self.fog_blocks_valid = false;
         let started = Instant::now();
@@ -6402,7 +6504,10 @@ impl Renderer {
             self.live_noise_frame
         } else {
             0
-        };
+        }
+        // A shutter's moments walk on from one another, so their jitter
+        // averages instead of repeating.
+        .wrapping_add(moment_pass.as_ref().map_or(0, |pass| pass.seed));
         if temporal {
             self.haze_history_key = Some(history_key);
             self.last_live_time = Some(frame.time);
@@ -8449,31 +8554,40 @@ impl Renderer {
                 });
                 // Diagnostic views are exact channel dumps; the camera stays
                 // out of them.
-                let post = (frame.look.needs_post()
-                    && frame.debug_view == crate::scene_desc::DebugView::Pbr
-                    && !frame.cluster_debug)
+                let post = uses_post(frame)
                     .then(|| self.post.scene_target(&self.gpu.device, t_width, t_height));
                 {
-                    let (target, pipeline, timestamps) = match &post {
-                        Some(scene) => (
+                    let (target, pipeline, timestamps) = match (&post, &moment_pass) {
+                        (Some(scene), Some(_)) => (
+                            scene,
+                            &self.gpu.composite_moment_pipeline,
+                            pass_queries.render("composite", None),
+                        ),
+                        (Some(scene), None) => (
                             scene,
                             &self.gpu.composite_linear_pipeline,
                             pass_queries.render("composite", None),
                         ),
-                        None => (
+                        (None, _) => (
                             &output_view,
                             &self.gpu.composite_pipelines[channels.index()],
                             pass_queries.render("composite", last_timestamp.clone()),
                         ),
                     };
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    // The first moment of a shutter clears the mean; the
+                    // rest add to it.
+                    let load = match &moment_pass {
+                        Some(pass) if pass.index > 0 => wgpu::LoadOp::Load,
+                        _ => wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    };
+                    let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("composite"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: target,
                             resolve_target: None,
                             depth_slice: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                load,
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
@@ -8481,13 +8595,22 @@ impl Renderer {
                         timestamp_writes: timestamps,
                         ..Default::default()
                     });
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, &bind_group, &[]);
-                    pass.set_bind_group(1, &environment_bg, &[]);
-                    pass.set_bind_group(2, &sky_bg, &[]);
-                    pass.draw(0..3, 0..1);
+                    render.set_pipeline(pipeline);
+                    if let Some(pass) = &moment_pass {
+                        let weight = f64::from(pass.count).recip();
+                        render.set_blend_constant(wgpu::Color {
+                            r: weight,
+                            g: weight,
+                            b: weight,
+                            a: weight,
+                        });
+                    }
+                    render.set_bind_group(0, &bind_group, &[]);
+                    render.set_bind_group(1, &environment_bg, &[]);
+                    render.set_bind_group(2, &sky_bg, &[]);
+                    render.draw(0..3, 0..1);
                 }
-                if post.is_some() {
+                if post.is_some() && presents {
                     self.post.encode(
                         &self.gpu.post,
                         &self.gpu.device,
@@ -8496,7 +8619,9 @@ impl Renderer {
                         &crate::post::PostFrame {
                             look: frame.look,
                             quality: frame.quality,
-                            cones: &frame.fixture_cones,
+                            cones: moment_pass
+                                .as_ref()
+                                .map_or(&frame.fixture_cones, |pass| pass.lenses),
                             view_proj,
                             eye: frame.camera.eye,
                             fov_y_deg: frame.camera.fov_y_deg,
@@ -8532,7 +8657,7 @@ impl Renderer {
                 // into the final sRGB target after AgX makes authored colours
                 // independent of stage lighting and exposure. Cages load the
                 // full-resolution reverse-Z prepass depth; free gizmos use Always.
-                if !frame.overlays.is_empty() {
+                if presents && !frame.overlays.is_empty() {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("editor-overlays"),
                         timestamp_writes: pass_queries.render("editor-overlays", None),
@@ -8559,7 +8684,7 @@ impl Renderer {
                         pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
                     }
                 }
-                if let Finish::Copy(output, readback) = &finish {
+                if let (true, Finish::Copy(output, readback)) = (presents, &finish) {
                     encoder.copy_texture_to_buffer(
                         output.as_image_copy(),
                         wgpu::TexelCopyBufferInfo {
@@ -8611,6 +8736,9 @@ impl Renderer {
                 }
             }
             let submitted = Instant::now();
+            if !presents {
+                return None;
+            }
             let cpu_encode_submit = submitted - started;
             let cpu = CpuSpans {
                 prepare: cluster_started - started,
@@ -8682,7 +8810,7 @@ impl Renderer {
                         passes,
                     }
                 });
-            PendingFrame {
+            Some(PendingFrame {
                 completion,
                 width: t_width,
                 height: t_height,
@@ -8695,7 +8823,7 @@ impl Renderer {
                 queued: Duration::ZERO,
                 cpu,
                 signalled: None,
-            }
+            })
         }
     }
 
@@ -10726,6 +10854,7 @@ mod tests {
         let mut frame = fixture_surface_frame(1);
         frame.fixture_cones[0].position = Vec3::new(0.0, 0.0, 3.0);
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::new(0.09, 0.09, 0.09)),
@@ -10819,6 +10948,7 @@ mod tests {
         frame.haze_steps = 8;
         frame.camera.eye = Vec3::new(0.0, -12.0, 6.0);
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
@@ -10880,6 +11010,7 @@ mod tests {
             source_camera_eye: frame.camera.eye.to_array(),
         });
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
@@ -10997,6 +11128,7 @@ mod tests {
             source_camera_eye: frame.camera.eye.to_array(),
         });
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 * Mat4::from_scale(Vec3::splat(0.25)),
@@ -12088,6 +12220,7 @@ mod tests {
             ..frame.meshes[0].clone()
         });
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: body,
             model: Mat4::from_translation(Vec3::new(-2.0, 0.0, 1.0))
                 * Mat4::from_scale(Vec3::new(0.2, 0.2, 1.0)),
@@ -12133,6 +12266,7 @@ mod tests {
         frame.fixture_shadows = true;
         frame.ambient = Vec3::ZERO;
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::splat(0.09)),
@@ -12252,6 +12386,7 @@ mod tests {
         frame.haze_steps = 8;
         frame.fixture_cones[0].wash = 1.0;
         frame.draws.push(Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
                 * Mat4::from_scale(Vec3::splat(0.07)),
@@ -12504,6 +12639,7 @@ mod tests {
         );
         let mut frame = fixture_surface_frame(64);
         let receiver = || Draw {
+            strobe: crate::strobe::Rows::STEADY,
             mesh: 0,
             model: Mat4::IDENTITY,
             material: Material::default(),
@@ -12667,6 +12803,7 @@ mod tests {
                 let column = (index % 32) as f32;
                 let row = (index / 32) as f32;
                 FixtureCone {
+                    strobe: crate::strobe::Rows::STEADY,
                     position: Vec3::new((column - 15.5) * 0.08, (row - 7.5) * 0.08, 3.0),
                     range: 5.0,
                     direction: Vec3::NEG_Z,
@@ -12683,9 +12820,11 @@ mod tests {
             })
             .collect();
         Frame {
+            shutter: Vec::new(),
             meshes: vec![mesh],
             images: Vec::new(),
             draws: vec![Draw {
+                strobe: crate::strobe::Rows::STEADY,
                 mesh: 0,
                 model: Mat4::IDENTITY,
                 material: Material {
@@ -13222,6 +13361,7 @@ mod tests {
         };
         let draws = occluder
             .then(|| Draw {
+                strobe: crate::strobe::Rows::STEADY,
                 mesh: 0,
                 model: Mat4::IDENTITY,
                 material: Material {
@@ -13235,6 +13375,7 @@ mod tests {
             .into_iter()
             .collect();
         Frame {
+            shutter: Vec::new(),
             meshes: vec![mesh],
             images: Vec::new(),
             draws,
@@ -14004,6 +14145,7 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         .clamp(0.01, 1.0)
         .min(cos_beam);
     crate::frame::FixtureCone {
+        strobe: crate::strobe::Rows::STEADY,
         position: finite_vec(light.position, Vec3::ZERO)
             .clamp(Vec3::splat(-10_000.0), Vec3::splat(10_000.0)),
         range: finite(light.range, 0.05).clamp(0.05, 100.0),
@@ -14287,6 +14429,27 @@ pub(crate) struct CameraMatrices {
     pub view: Mat4,
     /// Finite reverse-Z: near maps to one, `far` to zero.
     pub proj: Mat4,
+}
+
+/// Whether `frame` is finished by the post chain, which reads a scene-linear
+/// target, rather than written to the output by the composite. Diagnostic
+/// views are exact channel dumps; the camera stays out of them.
+fn uses_post(frame: &Frame) -> bool {
+    frame.look.needs_post()
+        && frame.debug_view == crate::scene_desc::DebugView::Pbr
+        && !frame.cluster_debug
+}
+
+/// One moment of a shutter being added into its mean.
+struct MomentPass<'a> {
+    /// Its place in the shutter, and the shutter's moments.
+    index: u32,
+    count: u32,
+    /// Where its haze jitter starts.
+    seed: u32,
+    /// Every moment's cones at its share of the exposure: the lens glow the
+    /// post chain draws once over the mean.
+    lenses: &'a [FixtureCone],
 }
 
 /// The frame's camera matrices at `aspect`. One function, so a debug export

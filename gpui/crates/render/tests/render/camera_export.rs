@@ -61,6 +61,7 @@ fn frame(eye: Vec3, target: Vec3) -> Frame {
     frame.draws.insert(
         at,
         Draw {
+            strobe: luma_render::strobe::Rows::STEADY,
             mesh,
             model: Mat4::from_translation(Vec3::new(2.0, 1.0, 0.0))
                 * Mat4::from_scale(Vec3::new(0.4, 0.4, 9.0)),

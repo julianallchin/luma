@@ -66,8 +66,9 @@ use gpui::{
 use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
-    assets, build_frame_with, coords, frame::EditorObject, house, scene_desc,
-    scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, SubmitOutcome,
+    assets, build_frame_at, coords, frame::EditorObject, house, scene_desc,
+    scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, Moment,
+    SubmitOutcome,
 };
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, navigate, Aabb, Camera,
@@ -518,6 +519,8 @@ pub(crate) struct Visualizer {
     /// A preset the track editor's browser is playing in place of the score,
     /// while the pointer is over its tile.
     audition: Option<crate::track_editor::Audition>,
+    /// The playing track's bass, which shakes the footage look's camera.
+    bass: Option<Bass>,
     /// Where the preview draws each head while its motors turn toward the
     /// score's pan and tilt.
     motors: motors::Motors,
@@ -701,6 +704,78 @@ struct Stage {
     selection_card_held: bool,
     /// The camera export in flight, and its result.
     exports: camera_export::Exports,
+    /// The free-running clock the air and the strobes run on.
+    clock: StageClock,
+}
+
+/// The stage's free-running clock: seconds since the stage opened, whether
+/// or not the show is playing. The air drifts and the strobes flash on it.
+struct StageClock {
+    started: Instant,
+    /// The clock at the last submitted frame.
+    submitted: Option<f64>,
+}
+
+impl Default for StageClock {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            submitted: None,
+        }
+    }
+}
+
+impl StageClock {
+    /// The longest interval a frame integrates, in seconds. After a pause in
+    /// drawing, the next frame is not a long exposure of everything missed.
+    const LONGEST_S: f64 = 1.0 / 15.0;
+
+    /// The clock now, and the seconds since the last submitted frame.
+    fn now(&self) -> (f64, f64) {
+        let now = self.started.elapsed().as_secs_f64();
+        let interval = self
+            .submitted
+            .map_or(luma_render::footage::FRAME_S, |last| {
+                (now - last).clamp(1e-4, Self::LONGEST_S)
+            });
+        (now, interval)
+    }
+
+    fn submitted(&mut self, clock: f64) {
+        self.submitted = Some(clock);
+    }
+}
+
+/// A track's low-band envelope: what the footage look's bass shake follows.
+#[derive(Clone)]
+pub(crate) struct Bass {
+    low: std::sync::Arc<[f32]>,
+    seconds: f32,
+}
+
+impl Bass {
+    /// The full-resolution low band, or the preview's when the full one has
+    /// not been generated. `None` without either.
+    pub(crate) fn of(waveform: &luma_lib::models::waveforms::TrackWaveform) -> Option<Self> {
+        let bands = waveform
+            .bands
+            .as_ref()
+            .or(waveform.preview_bands.as_ref())?;
+        (!bands.low.is_empty() && waveform.duration_seconds > 0.0).then(|| Self {
+            low: bands.low.as_slice().into(),
+            seconds: waveform.duration_seconds as f32,
+        })
+    }
+
+    /// The envelope at track time `t`, 0..=1, linearly between buckets.
+    pub(crate) fn at(&self, t: f32) -> f32 {
+        let last = self.low.len() - 1;
+        let x = (t / self.seconds * self.low.len() as f32 - 0.5).clamp(0.0, last as f32);
+        let i = x.floor() as usize;
+        let next = self.low[(i + 1).min(last)];
+        let value = self.low[i] + (next - self.low[i]) * (x - i as f32);
+        value.clamp(0.0, 1.0)
+    }
 }
 
 /// Everything a live frame is a function of.
@@ -1340,6 +1415,7 @@ impl Visualizer {
             subject,
             lit: None,
             audition: None,
+            bass: None,
             motors: Default::default(),
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
@@ -1565,7 +1641,6 @@ impl Visualizer {
             assets: assets::Library::new(stage_render::meshes_root(None)),
             picks: PickTimeline::default(),
             pick_cache: PickCache::default(),
-            haze_started_at: Instant::now(),
             exported: None,
         });
         true
@@ -2812,7 +2887,6 @@ struct Gpu {
     picks: PickTimeline,
     /// The hit-test geometry and its per-asset BVHs, kept across frames.
     pick_cache: PickCache,
-    haze_started_at: Instant,
 }
 
 /// What the presentation seam did with one submitted frame.
@@ -2833,8 +2907,9 @@ struct Submission {
 struct LiveFrameInputs<'a> {
     scene: &'a scene_desc::Scene,
     definitions: &'a BTreeMap<String, scene_desc::Definition>,
-    state: Option<&'a UniverseState>,
-    time: f32,
+    /// The frame's moments in time order, each with the heads' state at it:
+    /// one, or the footage look's shutter.
+    moments: &'a [(Moment, Option<UniverseState>)],
     size: (u32, u32),
     camera: Camera,
     /// Measured in the prepaint that is submitting this frame, so they come
@@ -3234,25 +3309,28 @@ impl Gpu {
         let LiveFrameInputs {
             scene,
             definitions,
-            state,
-            time,
+            moments,
             size: (width, height),
             camera,
             spans,
             export,
         } = input;
         let built = std::time::Instant::now();
-        let mut frame = build_frame_with(
-            scene,
-            definitions,
-            &|id, head| stage_render::primitive_state(state, id, head),
-            time,
-            &mut self.assets,
-        )
-        .map_err(|error| format!("Could not assemble the frame: {error}"))?;
-        // Fixture state/strobe uses transport time above; air keeps moving
-        // while playback is paused. Offline captures retain their pinned time.
-        frame.time = self.haze_started_at.elapsed().as_secs_f32();
+        let frame = luma_render::Frame::exposure(
+            moments
+                .iter()
+                .map(|(moment, state)| {
+                    build_frame_at(
+                        scene,
+                        definitions,
+                        &|id, head| stage_render::primitive_state(state.as_ref(), id, head),
+                        *moment,
+                        &mut self.assets,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("Could not assemble the frame: {error}"))?,
+        );
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
@@ -3372,6 +3450,7 @@ struct StageSubject {
     /// The score that lights the rig, when one does.
     lit: Option<Lit>,
     audition: Option<crate::track_editor::Audition>,
+    bass: Option<Bass>,
 }
 
 /// The score a stage is lit by.
@@ -3434,15 +3513,18 @@ impl Luma {
                 || venue_id.clone(),
                 |browser| browser.venue_name().to_string(),
             );
-        let audition = match self.workspace.active_body() {
-            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.audition(),
-            _ => None,
+        let (audition, bass) = match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => {
+                (state.audition(), state.bass())
+            }
+            _ => (None, None),
         };
         Some(StageSubject {
             venue_id,
             venue_name: name,
             lit,
             audition,
+            bass,
         })
     }
 
@@ -3462,6 +3544,7 @@ impl Luma {
             venue_name,
             lit: subject,
             audition,
+            bass,
         }) = self.stage_subject()
         else {
             // Dropping the state is what un-mounts the viewport, and
@@ -3497,6 +3580,7 @@ impl Luma {
         }
         if let Some(state) = visualizer {
             state.audition = audition;
+            state.bass = bass;
             state.exporting = exporting;
         }
     }
@@ -4786,14 +4870,54 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 
     // The one live read. `render_time` and `sample_universe` are synchronous
     // because a frame's inputs must be this frame's — see `Library`.
+    let auditioning = graph_sample.is_some();
     let (time, universe, sample_ms) = graph_sample.unwrap_or_else(|| {
         let time = library.render_time();
         let sampled = std::time::Instant::now();
         let universe = library.sample_universe(time);
         (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
     });
-    // The drawn heads lag the score the way motors would; the output does not.
-    let universe = state.motors.follow(time, universe);
+    // The moments this frame is exposed over, on the stage's free-running
+    // clock: one, or the footage look's shutter. Each is the score at its own
+    // transport time, which runs with the clock while playing and stands
+    // still while paused. An audition is one sample and stays one.
+    let footage = state.render_controls.look.footage;
+    let (clock, interval) = state.stage.borrow().clock.now();
+    let rate = if !auditioning && library.transport().is_playing {
+        1.0
+    } else {
+        0.0
+    };
+    let transport = |at: f64| (f64::from(time) - (clock - at) * rate).max(0.0) as f32;
+    let bass = state.bass.clone();
+    let moments = luma_render::footage::moments(
+        &footage,
+        clock,
+        interval,
+        luma_render::LIVE_SUBFRAMES,
+        |at| bass.as_ref().map_or(0.0, |bass| bass.at(transport(at))),
+    );
+    let last = moments.len() - 1;
+    let mut sample_ms = sample_ms;
+    let moments: Vec<(Moment, Option<UniverseState>)> = moments
+        .into_iter()
+        .enumerate()
+        .map(|(index, moment)| {
+            let at = transport(moment.time);
+            let universe = if index == last || auditioning {
+                universe.clone()
+            } else {
+                let sampled = std::time::Instant::now();
+                let universe = library.sample_universe(at);
+                sample_ms += sampled.elapsed().as_secs_f32() * 1_000.0;
+                universe
+            };
+            // The drawn heads lag the score the way motors would; the output
+            // does not.
+            (moment, state.motors.step(moment.time, at, universe))
+        })
+        .collect();
+    let universe = moments[last].1.clone();
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
@@ -4956,7 +5080,19 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             && key_controls.haze.appearance.cloudiness > 0.0
                             && (key_controls.haze.appearance.wind_speed > 0.0
                                 || key_controls.haze.appearance.turbulence > 0.0);
-                        let rest = if interacting || moving_haze {
+                        // A strobe keeps flashing on a paused show, and the
+                        // footage look's grain and sway never hold still.
+                        let strobing = universe.as_ref().is_some_and(|universe| {
+                            universe
+                                .primitives
+                                .values()
+                                .any(|head| head.strobe > 0.0 && head.dimmer > 0.0)
+                        });
+                        let rest = if interacting
+                            || moving_haze
+                            || strobing
+                            || key_controls.look.footage.enabled
+                        {
                             stage.idle = None;
                             false
                         } else {
@@ -5009,11 +5145,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 build: build_affordances.clone(),
                             };
                             gpu.viewport.set_display_range(display);
+                            stage.clock.submitted(clock);
                             match gpu.frame(LiveFrameInputs {
                                 scene,
                                 definitions: &stage.definitions,
-                                state: universe.as_ref(),
-                                time,
+                                moments: &moments,
                                 size: (width, height),
                                 camera,
                                 spans,
@@ -6170,6 +6306,7 @@ mod orbit_selection_tests {
             subject: None,
             lit: None,
             audition: None,
+            bass: None,
             motors: Default::default(),
             gpu_enabled: false,
             status: Status::Loading,
@@ -6315,9 +6452,14 @@ mod orbit_selection_tests {
         );
         let mut cache = PickCache::default();
         let mut snapshot = |scene: &scene_desc::Scene, cache: &mut PickCache| {
-            let frame =
-                build_frame_with(scene, &Default::default(), &|_, _| None, 0.0, &mut library)
-                    .unwrap();
+            let frame = luma_render::build_frame_with(
+                scene,
+                &Default::default(),
+                &|_, _| None,
+                0.0,
+                &mut library,
+            )
+            .unwrap();
             PickSnapshot::from_frame(&frame, scene, camera, cache)
         };
         let first = snapshot(&scene, &mut cache);
@@ -6374,8 +6516,14 @@ mod orbit_selection_tests {
         let mut library = assets::Library::new(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
         );
-        let frame =
-            build_frame_with(&scene, &Default::default(), &|_, _| None, 0.0, &mut library).unwrap();
+        let frame = luma_render::build_frame_with(
+            &scene,
+            &Default::default(),
+            &|_, _| None,
+            0.0,
+            &mut library,
+        )
+        .unwrap();
         let object = EditorObject::StagePiece("deck".into());
         // The rendered object: every vertex the frame draws for the deck.
         let expected = Aabb::from_points(

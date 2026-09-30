@@ -46,6 +46,7 @@ fn scene(pieces: Vec<Piece>) -> Scene {
 
 fn light(gobo: u32) -> FixtureCone {
     FixtureCone {
+        strobe: luma_render::strobe::Rows::STEADY,
         position: Vec3::new(0.0, 0.0, 0.15),
         range: 8.0,
         direction: Vec3::Z,
@@ -193,6 +194,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
         let column = (index % descriptor.lattice.columns) as f32;
         let row = (index / descriptor.lattice.columns) as f32;
         frame.fixture_cones.push(FixtureCone {
+            strobe: luma_render::strobe::Rows::STEADY,
             position: Vec3::from_array(descriptor.light.origin)
                 + Vec3::new(
                     (column - descriptor.lattice.center_column) * descriptor.lattice.spacing[0],
