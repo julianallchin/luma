@@ -283,11 +283,11 @@ const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
 
 impl Pipelines {
     /// `output_formats` are the output targets the tonemap writes, in
-    /// `Channels::index` order; `hdr` marks the one presented as HDR.
+    /// `Channels::index` order, each with its `Channels::display_constants`.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        output_formats: &[(wgpu::TextureFormat, bool)],
+        output_formats: &[(wgpu::TextureFormat, &[(&str, f64)])],
     ) -> Self {
         let fragment = wgpu::ShaderStages::FRAGMENT;
         let compute = wgpu::ShaderStages::COMPUTE;
@@ -476,14 +476,14 @@ impl Pipelines {
         );
         let tonemap = output_formats
             .iter()
-            .map(|&(format, hdr)| {
+            .map(|&(format, constants)| {
                 render_pipeline(
                     "post-tonemap",
                     &tonemap_layout,
                     &tonemap_module,
                     format,
                     None,
-                    if hdr { &[("HDR_OUTPUT", 1.0)] } else { &[] },
+                    constants,
                 )
             })
             .collect();

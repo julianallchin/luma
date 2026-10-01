@@ -6,6 +6,11 @@
 // CPU-authored colours are linear values; the attachment's transfer function
 // restores their authored sRGB bytes without lighting or AgX changing them.
 
+// Set for a 10-bit target (`Channels::Rgb10`), which has no sRGB transfer of
+// its own: the colour is encoded here, and a translucent one blends in the
+// encoded values rather than in linear light.
+override TEN_BIT_OUTPUT: bool = false;
+
 // A prefix of the scene pass's `Globals`; only the view-projection is read.
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -38,5 +43,9 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return instances[in.instance].color;
+    let color = instances[in.instance].color;
+    if TEN_BIT_OUTPUT {
+        return vec4<f32>(srgb_encode(color.rgb), color.a);
+    }
+    return color;
 }

@@ -20,6 +20,10 @@ struct Tonemap {
 // is SDR white and highlights may go up to the headroom.
 override HDR_OUTPUT: bool = false;
 
+// Set for a 10-bit target (`Channels::Rgb10`): the same SDR picture, encoded
+// to sRGB here because the target does not, and dithered by one 10-bit step.
+override TEN_BIT_OUTPUT: bool = false;
+
 @group(0) @binding(0) var<uniform> cfg: Tonemap;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
 // The convolved glare (`post_glare.wgsl`), at the glare grid's resolution.
@@ -146,6 +150,10 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         // Light added over the picture, saturating at the display's white:
         // faint glare keeps its colour, a strong one burns to white.
         display += (vec3<f32>(headroom) - display) * (vec3<f32>(1.0) - exp(-glare));
+    }
+    if TEN_BIT_OUTPUT {
+        let dither = display_dither(display, frag.xy) * TEN_BIT_DITHER;
+        return vec4<f32>(srgb_encode(max(display + dither, vec3<f32>(0.0))), 1.0);
     }
     // Dithered in HDR as well, for the quantisers after it (`composite.wgsl`).
     return vec4<f32>(max(display + display_dither(display, frag.xy), vec3<f32>(0.0)), 1.0);

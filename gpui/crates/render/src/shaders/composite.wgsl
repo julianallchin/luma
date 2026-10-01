@@ -28,6 +28,10 @@ override HDR_OUTPUT: bool = false;
 // scene-linear light, before exposure and before any display transform.
 override LINEAR_OUTPUT: bool = false;
 
+// Set for a 10-bit target (`Channels::Rgb10`): the same SDR picture, encoded
+// to sRGB here because the target does not, and dithered by one 10-bit step.
+override TEN_BIT_OUTPUT: bool = false;
+
 @group(0) @binding(0) var<uniform> cfg: Composite;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
@@ -259,6 +263,10 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(scene * medium + haze, 1.0);
     }
     let display = display_transform(scene * medium + haze);
+    if TEN_BIT_OUTPUT {
+        let dither = sky_dither(display, frag.xy) * TEN_BIT_DITHER;
+        return vec4<f32>(srgb_encode(max(display + dither, vec3<f32>(0.0))), 1.0);
+    }
     // HDR dithers too. Its half-float target has no steps of its own, but
     // the compositor's 10-bit PQ swapchain and an 8-bit capture of the frame
     // do: without noise, a dim beam edge over the sky crosses them as a
