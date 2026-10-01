@@ -418,9 +418,10 @@ def time(every=None, duration=None, delay=None, phase=None) -> Coordinate:
     `delay` (beats, any sign): the head starts this much later. Before its
     start the clock is below 0 and curves hold their first value: a curve
     over space on delay makes a one-shot wipe.
-    `phase` (turns, any number): added, then wrapped to 0-1, whenever it is
-    set (0 too): a curve over space on phase makes a loop such as a chase or
-    a wave.
+    `phase` (degrees, any number; 360 is one event): phase / 360 is added,
+    then the clock wraps to 0-1, whenever it is set (0 too): a curve over
+    space on phase, such as `high=360`, makes a loop such as a chase or a
+    wave.
     Two time nodes with equal every and duration share one set of events.
     """
     return _make("time", every=every, duration=duration, delay=delay, phase=phase)

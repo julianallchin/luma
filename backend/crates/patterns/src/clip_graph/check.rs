@@ -1037,7 +1037,6 @@ fn range_phrase(def: &InputDef) -> String {
         Some(Unit::Degrees) => "degrees",
         Some(Unit::Metres) => "metres",
         Some(Unit::Hz) => "Hz",
-        Some(Unit::Turns) => "turns",
         Some(Unit::Heads) => "heads",
         Some(Unit::Uvz) => "a vector",
         Some(Unit::Rgb) => "a color channel",
@@ -1066,6 +1065,15 @@ fn example(kind: Kind, input: &str) -> String {
 fn bound_example(def: &InputDef, bound: &str) -> &'static str {
     let low = bound == "low";
     match def.unit {
+        // An angle with no range is a phase: it wraps at 360, so a sweep
+        // over half an event is the example. An aim angle swings about 0.
+        Some(Unit::Degrees) if def.range.is_none() => {
+            if low {
+                "0"
+            } else {
+                "180"
+            }
+        }
         Some(Unit::Degrees) => {
             if low {
                 "-30"
@@ -1092,13 +1100,6 @@ fn bound_example(def: &InputDef, bound: &str) -> &'static str {
                 "-1"
             } else {
                 "1"
-            }
-        }
-        Some(Unit::Turns) => {
-            if low {
-                "0"
-            } else {
-                "0.5"
             }
         }
         Some(Unit::Heads) => {

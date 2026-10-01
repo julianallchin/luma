@@ -62,8 +62,8 @@ Julian approved these from an audit: shaders and standard compositing.
    replaces "one whole event wins per head" (5.3).
 5. Blend modes `lighten` (the same as `max`) and `value` are gone.
 6. Black or transparent: the rule above.
-7. A phase always wraps when set, 0 too: `τ = fract(τ + phase)`, any real
-   phase.
+7. A phase always wraps when set, 0 too: `τ = fract(τ + phase / 360)`, any
+   real phase in degrees (360° is one event; turns until 2026-10-01).
 8. Audio reads 0–1 over the whole track, not over the clip: every clip on
    a track reads the same level at the same moment.
 9. The empty (best-fit) direction of a line, and the empty direction of a
@@ -137,7 +137,7 @@ Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 | Change | v3 |
 |---|---|
 | alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
-| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
+| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` degrees, any (T, H); 360° is one event. Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase / 360)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
 | shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
 | space | `space(heads, direction, centre, at, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0): `x = at + (a − at − shift) / scale`, `at` the origin (0–1, empty 0: the old `(a − shift) / scale`); with `wrap` it tiles, `x = fract(x)` (decisions 50, 52). The ruler `a` is measured on the selection before any fold. `centre` (selection point, T) is read by radial and angle. |
 | mirror | `mirror(heads, direction, at)`. `at` (selection number 0–1, T): the plane sits at `at` along the direction across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. A mirror moves heads, never a space's ruler. |
@@ -276,8 +276,9 @@ Values:
 | gradient | `{"stops": [{"t": 0, "color": [r,g,b]}, ...]}` | Blends in OKLab. |
 | choice | `"line"` | Only in `settings`. |
 
-Units: `share` (0–1), `beats`, `degrees`, `metres`, `hz`, `turns` (0–1),
-`uvz` (a vector), `rgb`.
+Units: `share` (0–1), `beats`, `degrees`, `metres`, `hz`, `uvz` (a
+vector), `rgb`. Aim angles and `time.phase` are degrees; a phase wraps at
+360.
 
 Wire types (one per node kind):
 
@@ -366,7 +367,7 @@ An event is cut at the clip end.
 | clock | clock | | | wire only | once over the clip |
 | delay | number | turns | any | yes | 0 |
 | length | number | turns | ≥ 0 | yes | 1 |
-| phase | number | turns | any | yes | 0 |
+| phase | number | degrees (360 = one event) | any | yes | 0 |
 
 With no clock, `p = (beat − start) / clip duration`, clamped 0–1. With a
 clock, `p` is the event's age over its duration, 0–1, one value per live
@@ -374,7 +375,7 @@ event (axis `E`). Each head's clock:
 
 ```
 τ = (p − delay) / length          (length 0: a jump at the delay)
-τ = fract(τ + phase)               (whenever a phase is set, 0 too)
+τ = fract(τ + phase / 360)         (whenever a phase is set, 0 too)
 ```
 
 Without phase, τ is below 0 before the head's clock starts and above 1
@@ -630,7 +631,7 @@ as "Curve 2"). Examples, verbatim:
 
 - `color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, "Ramp up")`
 - `curve2.low: expected degrees between -180 and 180 for aim1.yaw; got 400. Example: low=-30`
-- `curve3: expected one unit; it feeds aim1.yaw (degrees) and time2.delay (turns). Example: make two curves`
+- `curve3: expected one unit; it feeds aim1.yaw (degrees) and time2.delay (beats). Example: make two curves`
 - `curve1.gradient: expected a gradient because kind is color; got nothing. Example: gradient="Rainbow"`
 - `aim1.yaw: expected a number -180–180 (degrees) or a number curve; got a list of 2 items. Example: yaw=0. A list multiplies only on an input with range 0–1, such as brightness`
 - `time1.phase: expected wires of one clock; got clock2 through curve4 while x follows clock1. Example: use the same clock for both`
@@ -1038,10 +1039,10 @@ Defaults on promotion, so the effect is visible at once:
 | Destination unit | shape | low | high |
 |---|---|---|---|
 | share | Ramp up | 0 | the current value, or 1 when it is 0 |
-| degrees | Sine | −30 | 30 |
+| degrees (aim angles) | Sine | −30 | 30 |
+| degrees (`time.phase`) | Ramp up | 0 | 180 |
 | beats | Ramp down | current ÷ 2 | current |
 | metres | Ramp up | current − 1 | current + 1 |
-| turns | Ramp up | 0 | 0.5 |
 | hz | Ramp up | current ÷ 2 | current × 2 |
 | uvz | Ramp up | current | current turned 30° toward Z+ |
 | rgb (gradient) | Ramp up | stops: black → current color | |
@@ -1294,27 +1295,27 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Name | Python | Chain |
 |---|---|---|
 | Chase | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)` | time → curve → space.shift, length 0.2 → a pill that enters and leaves |
-| Wave | `k = clock(every=2); place = space(); lag = curve(place, "Ramp down", low=0.5, high=1); t = time(k, phase=lag); swell = curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]); color(brightness=swell)` | Chase with a wide soft pulse |
+| Wave | `k = clock(every=2); place = space(); lag = curve(place, "Ramp down", low=180, high=360); t = time(k, phase=lag); swell = curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]); color(brightness=swell)` | Chase with a wide soft pulse |
 | Bounce | `k = clock(every=4); t = time(k); move = curve(t, "Triangle", low=0, high=0.8); place = space(shift=move, length=0.2); pill = curve(place, "Soft"); color(brightness=pill)` | a there-and-back time curve on space.shift; a soft pill over the shifted space |
 | Comet | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); tail = curve(place, "Comet"); color(brightness=tail)` | Chase with a Comet shape: a sharp head and a tail |
 | Wipe | `t = time(every=4, delay=curve(space(), "Ramp up", low=0, high=3)); on = curve(t, "Step up"); color(brightness=on)` | space → curve → time.delay; each head turns on in turn over 3 beats and stays on |
 | Stepped chase | `t = time(every=4); place = space(shift=curve(t, "Steps 4", low=0, high=0.75), wrap=True); block = curve(place, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]); color(brightness=block)` | a Steps 4 curve on space.shift over a ring of cells: the block jumps a quarter at a time, each head in one block |
 | Many pills | `k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)` | Chase with four events alive at once |
-| Wrapping chase | `k = clock(every=2); ring = space(wrap=True); lag = curve(ring, "Ramp down"); t = time(k, phase=lag); pill = curve(t, [[0, 0], [0.8, 0], [0.8, 1], [1, 1]]); color(brightness=pill)` | a ring: the pill leaves one end and enters the other |
+| Wrapping chase | `k = clock(every=2); ring = space(wrap=True); lag = curve(ring, "Ramp down", high=360); t = time(k, phase=lag); pill = curve(t, [[0, 0], [0.8, 0], [0.8, 1], [1, 1]]); color(brightness=pill)` | a ring: the pill leaves one end and enters the other |
 | Colored pills | `k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.25, high=1); place = space(shift=move, length=0.25); age = time(k); hue = curve(age, "Ramp up", gradient="Rainbow"); pill = curve(place, "Soft"); color(color=hue, brightness=pill)` | each event has its own progress, so its own shift and its own color |
 | Speed-up chase | `t = time(); every = curve(t, "Ramp down", low=0.25, high=2); life = curve(t, "Ramp down", low=0.5, high=2); k = clock(every=every, duration=life); age = time(k); move = curve(age, "Ramp up", low=-0.4, high=1); size = curve(t, "Ramp down", low=0.1, high=0.4); place = space(shift=move, length=size); tail = curve(place, "Comet"); color(brightness=tail)` | one time() feeds every, duration and the length; the shift runs on each event |
-| Alternating sides | `k = clock(every=2); place = space(); lag = curve(place, [[0, 0.5], [0.5, 0.5], [0.5, 0], [1, 0]]); t = time(k, phase=lag); half = curve(t, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | the two halves are half a turn apart |
+| Alternating sides | `k = clock(every=2); place = space(); lag = curve(place, [[0, 0.5], [0.5, 0.5], [0.5, 0], [1, 0]], high=360); t = time(k, phase=lag); half = curve(t, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | the two halves are half a turn apart |
 | Diagonal slash | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.15, high=1); place = space(direction=(1, 0, 1), shift=move, length=0.15); line = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=line)` | Chase along a diagonal direction |
 | Slash | `t = time(every=2); diag = space(direction=(0.82, 0, -0.57), shift=curve(t, [[0, 1], [0.2, 0], [1, 0]])); cut = curve(diag, "Step up"); line = mirror(direction=(0.57, 0, 0.82), at=0.68); dist = space(heads=line, direction=(0.57, 0, 0.82), shift=0.68, scale=curve(t, "Ramp up", low=0.04, high=0.74)); bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]]); fade = curve(t, [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]]); color(brightness=cut * bloom * fade)` | not a shipped preset. cut × bloom × fade: the cut is x = front − place under a rising step, so a head lights once the front reaches it, the far corner too; the bloom space is shifted by 0.68 so it reads 0 on the mirror line (the ruler runs over the selection before the fold) |
 | Ripple | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.4, high=1); radius = space(shift=move, length=0.4, kind="radial"); ring = curve(radius, "Soft"); color(brightness=ring)` | Chase over radius: rings go out from the centre |
 | Wrapping ripple | `t = time(every=2); radius = space(shift=curve(t, "Ramp up", low=-0.4, high=1), kind="radial", wrap=True); ring = curve(radius, [[0, 0, [0.4, 0, 0.6, 1]], [0.2, 1, [0.4, 0, 0.6, 1]], [0.4, 0], [1, 0]]); color(brightness=ring)` | rings come in again at the centre; one ring per turn, its width 0.4 in the curve points (a wrapped scale tiles) |
 | Zoom out | `clip = time(); x = space(direction=(1, 0, 0), shift=curve(clip, [[0, 0, "ease-out"], [1, 1]]), scale=curve(clip, "Ramp up", low=0.5, high=0.125), wrap=True); color(brightness=curve(x, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))` | not a preset: a wrapped space tiles, so its scale 0.5 → 0.125 turns 2 soft pills into 8 with no head jump |
-| Spin | `k = clock(every=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.75, 0], [0.7625, 1], [1, 0]]); color(brightness=arm)` | angle wraps by default |
+| Spin | `k = clock(every=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down", high=360); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.75, 0], [0.7625, 1], [1, 0]]); color(brightness=arm)` | angle wraps by default |
 | Grow | `clip = time(); radius = space(shift=curve(clip, "Ramp up", high=1.1), kind="radial"); color(brightness=curve(radius, "Step down"))` | radius shifted by progress over the clip: heads turn on from the centre out, the farthest before the end |
-| Turning line | `k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)` | duration = 2 × every: two opposite arms alive |
-| Spiral | `k = clock(every=4); radius = space(kind="radial"); inner = curve(radius, "Ramp up"); outer = curve(radius, "Ramp up", low=1, high=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down", low=inner, high=outer); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=arm)` | phase by angle, moved by radius, bends the arm |
+| Turning line | `k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down", high=360); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)` | duration = 2 × every: two opposite arms alive |
+| Spiral | `k = clock(every=4); radius = space(kind="radial"); inner = curve(radius, "Ramp up", high=360); outer = curve(radius, "Ramp up", low=360, high=720); turn = space(kind="angle"); lag = curve(turn, "Ramp down", low=inner, high=outer); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=arm)` | phase by angle, moved by radius, bends the arm |
 | Mirror | `halves = mirror(); t = time(every=2); place = space(heads=halves, shift=curve(t, "Ramp up", low=0.4, high=1), scale=0.1); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))` | Chase over mirrored heads: a pill runs out from the middle to both ends; the folded heads read 0.5–1 of the ruler |
-| Kaleidoscope | `k = clock(every=4); sides = mirror(direction=(1, 0, 0)); quarters = mirror(sides, direction=(0, 0, 1)); turn = space(quarters, centre=(0.75, 0.5, 0.75), kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]); color(brightness=arm)` | two mirrors, four-fold; `centre` is the middle of the quarter the heads fold into, so each quarter turns around its own middle |
+| Kaleidoscope | `k = clock(every=4); sides = mirror(direction=(1, 0, 0)); quarters = mirror(sides, direction=(0, 0, 1)); turn = space(quarters, centre=(0.75, 0.5, 0.75), kind="angle"); lag = curve(turn, "Ramp down", high=360); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]); color(brightness=arm)` | two mirrors, four-fold; `centre` is the middle of the quarter the heads fold into, so each quarter turns around its own middle |
 
 ### Aim
 
@@ -1327,10 +1328,10 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Bloom | `t = time(); source = curve(t, "Ramp up", low=(0, 0, 40), high=(0, 0, 7)); aim(point=source, base="away")` | away base; the point comes down toward the rig |
 | Tunnel | `aim(point=(0, 25, 1.5), base="point")` | a far point downstage |
 | Sweep | `k = clock(every=8); t = time(k); swing = curve(t, "Sine", low=-45, high=45); aim(direction=D, yaw=swing)` | clock → time → curve → yaw |
-| Nod wave | `k = clock(every=4); place = space(); lag = curve(place, "Ramp up", high=0.6); t = time(k, phase=lag); nod = curve(t, "Sine", low=-25, high=25); aim(direction=D, pitch=nod)` | space → curve → time.phase |
+| Nod wave | `k = clock(every=4); place = space(); lag = curve(place, "Ramp up", high=216); t = time(k, phase=lag); nod = curve(t, "Sine", low=-25, high=25); aim(direction=D, pitch=nod)` | space → curve → time.phase |
 | Circle | `k = clock(every=4); t = time(k); across = curve(t, "Cosine", low=-18, high=18); up = curve(t, "Sine", low=-18, high=18); aim(direction=D, yaw=across, pitch=up)` | one time → two curves |
 | Figure-8 | `k = clock(every=4); t = time(k); across = curve(t, "Sine", low=-25, high=25); up = curve(t, "Double sine", low=-12.5, high=12.5); aim(direction=D, yaw=across, pitch=up)` | same, doubled pitch |
-| Pinwheel | `k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up"); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)` | Circle with phase by angle |
+| Pinwheel | `k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up", high=360); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)` | Circle with phase by angle |
 | Scissor | `k = clock(every=4); halves = mirror(); t = time(k); swing = curve(t, "Sine", low=-30, high=30); aim(heads=halves, direction=D, yaw=swing)` | mirrored heads yaw the other way |
 | Up/down flip | `k = clock(every=2); t = time(k); flip = curve(t, "Square", low=-30, high=30); aim(direction=D, pitch=flip)` | held pitch |
 | Ballyhoo | `drift = noise(speed=4, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = noise(speed=4, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)` | two noise nodes, two streams |

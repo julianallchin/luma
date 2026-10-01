@@ -440,7 +440,7 @@ mod tests {
                 "curve1": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "space1"},
                                       "shape": {"points": [[0, 1], [1, 0]]},
-                                      "low": 0.1667, "high": 1}},
+                                      "low": 60, "high": 360}},
                 "time1": {"kind": "time",
                           "inputs": {"every": 2, "phase": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},

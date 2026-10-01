@@ -21,7 +21,8 @@ pub enum Kernel {
     /// Progress 0–1 over the clip.
     ClipProgress,
     /// Each head's own clock: progress less its delay over the duration,
-    /// then, when a phase is set, plus the phase, wrapped.
+    /// then, when a phase is set, plus the phase (degrees, 360 an event),
+    /// wrapped.
     Shift,
     /// Each unit's position: the centroid of its heads.
     Group,
@@ -447,11 +448,12 @@ pub(crate) fn run(
                 // A delay in beats moves the head's clock by its share of
                 // the event. Below 0 before the head starts, so a curve
                 // holds its first value there; never clamped. A phase, any
-                // number and 0 too, wraps the clock: fract(τ + phase).
+                // number of degrees and 0 too, wraps the clock: 360° is one
+                // event, so τ = fract(τ + phase / 360).
                 let duration = duration.at(n, t, e).max(1e-9);
                 let local = progress.at(n, t, e) - delay.at(n, t, e) / duration;
                 if wraps {
-                    (local + phase.at(n, t, e)).rem_euclid(1.)
+                    (local + phase.at(n, t, e) / 360.).rem_euclid(1.)
                 } else {
                     local
                 }

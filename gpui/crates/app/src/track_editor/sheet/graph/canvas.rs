@@ -17,7 +17,8 @@
 //! the pointer, as does a pinch or a scroll with Ctrl or Cmd; a trackpad
 //! scroll pans, and so does dragging the ground with the left or middle
 //! button. The keyboard, once the canvas has focus: `+` and `-` zoom, `0` is
-//! actual size, Delete removes the selected node, Escape drops a wire drag.
+//! actual size, Delete removes the selected node or the picked wire (a
+//! left press on a lit wire picks it), Escape drops a wire drag.
 //!
 //! The pan, the wire drag and the pointer handling come from the graph editor
 //! this app had before clip graphs (`graph.rs`, removed in 6369a3b5): the
@@ -135,6 +136,9 @@ pub(in crate::track_editor) struct State {
     pub gesture: Option<Gesture>,
     /// The wire under the pointer, by the input it feeds.
     pub hover: Option<Port>,
+    /// The wire a press picked, by the input it feeds: Delete takes it out.
+    /// Never set together with `selected`.
+    pub wire: Option<Port>,
     pub drafts: Vec<Draft>,
     /// Curves whose strip is widened.
     pub wide: BTreeSet<String>,
@@ -171,6 +175,7 @@ impl Default for State {
             selected: None,
             gesture: None,
             hover: None,
+            wire: None,
             drafts: Vec::new(),
             wide: BTreeSet::new(),
             expanded: BTreeMap::new(),
@@ -940,6 +945,7 @@ fn wires(cx: &Ctx) -> AnyElement {
         _ => None,
     };
     let hover = state.hover.clone();
+    let picked = state.wire.clone();
     let zoom = state.zoom;
     let app = cx.app.clone();
     canvas(
@@ -960,7 +966,7 @@ fn wires(cx: &Ctx) -> AnyElement {
                     else {
                         continue;
                     };
-                    let lit = hover.as_ref() == Some(&link.to);
+                    let lit = hover.as_ref() == Some(&link.to) || picked.as_ref() == Some(&link.to);
                     let width = if lit { WIRE_WIDTH + 1.5 } else { WIRE_WIDTH };
                     let path = wire_path(start, end, width * zoom, zoom);
                     let paint: Background = match link.gradient {
@@ -1200,6 +1206,8 @@ impl Luma {
             let canvas = &mut editor.sheet.canvas;
             if clear {
                 canvas.selected = None;
+                // A left press on a lit wire picks it; anywhere else drops it.
+                canvas.wire = canvas.hover.clone();
             }
             canvas.gesture = Some(Gesture::Pan { last: at });
         });
@@ -1223,7 +1231,10 @@ impl Luma {
             .track_editor_ref()
             .is_some_and(|editor| editor.sheet.canvas.selected != node);
         if changed {
-            self.with_track_editor(cx, |editor| editor.sheet.canvas.selected = node);
+            self.with_track_editor(cx, |editor| {
+                editor.sheet.canvas.selected = node;
+                editor.sheet.canvas.wire = None;
+            });
         }
         if focus {
             self.canvas_focus(cx);
@@ -1343,19 +1354,42 @@ impl Luma {
             }),
             "fit" => self.with_track_editor(cx, |editor| editor.sheet.canvas.fit()),
             "delete" | "backspace" => {
-                let selected = self
+                let (selected, wire) = self
                     .track_editor_ref()
-                    .and_then(|editor| editor.sheet.canvas.selected.clone());
-                match selected {
-                    Some(id) => self.graph_delete_node(&id, cx),
-                    None => return false,
+                    .map(|editor| {
+                        let canvas = &editor.sheet.canvas;
+                        (canvas.selected.clone(), canvas.wire.clone())
+                    })
+                    .unwrap_or_default();
+                match (selected, wire) {
+                    (Some(id), _) => self.graph_delete_node(&id, cx),
+                    // The input goes back to its last value, as a wire
+                    // dragged off it and dropped on nothing does.
+                    (None, Some((id, input))) => {
+                        self.with_track_editor(cx, |editor| editor.sheet.canvas.wire = None);
+                        // An undo may have taken the wire out since the pick.
+                        let wired =
+                            self.track_editor_ref()
+                                .and_then(shown_graph)
+                                .is_some_and(|graph| {
+                                    super::links(&graph)
+                                        .iter()
+                                        .any(|(_, to)| *to == (id.clone(), input.clone()))
+                                });
+                        if wired {
+                            self.graph_pick(&id, &input, Pick::Value, cx);
+                        }
+                    }
+                    (None, None) => return false,
                 }
             }
             "escape" => {
                 let mut handled = false;
                 self.with_track_editor(cx, |editor| {
                     let canvas = &mut editor.sheet.canvas;
-                    handled = canvas.cancel() || canvas.selected.take().is_some();
+                    handled = canvas.cancel()
+                        || canvas.selected.take().is_some()
+                        || canvas.wire.take().is_some();
                 });
                 return handled;
             }
