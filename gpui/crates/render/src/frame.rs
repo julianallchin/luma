@@ -858,8 +858,8 @@ pub struct Moment {
     /// The instant, on the free-running clock: the heads' state, the air's
     /// drift and the camera shake are this instant's. Becomes [`Frame::time`].
     pub time: f64,
-    /// The frame's share of the free-running clock: a strobe flashes in this
-    /// frame when one of its flashes begins within it.
+    /// The frame's share of the free-running clock: a strobe shows the
+    /// fraction of it during which its gate is on.
     pub slice: crate::strobe::Slice,
     /// The playing track's low-band envelope at `time`, 0..=1, for the bass
     /// shake. Zero without a track.
@@ -868,8 +868,8 @@ pub struct Moment {
 
 impl Moment {
     /// A display frame that ends at `time`, [`crate::footage::FRAME_S`] after
-    /// the one before: its strobes flash when a flash begins in that
-    /// interval. What [`build`] pins a golden to.
+    /// the one before: its strobes show the share of that interval their
+    /// gate is on. What [`build`] pins a golden to.
     #[must_use]
     pub fn at(time: f64) -> Self {
         let length = crate::footage::FRAME_S;

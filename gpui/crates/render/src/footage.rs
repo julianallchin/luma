@@ -2,10 +2,10 @@
 //!
 //! Live and export share this. Each gives the clock at the end of a frame and
 //! how long since the last one; [`moment`] answers with the moment to build
-//! and render. A frame is one moment: its strobes flash when a flash begins
-//! in the interval (`strobe.rs`). With the footage look on, a hand on the
-//! camera and the bass shake it ([`shake`]); the sensor noise lives in the
-//! post chain.
+//! and render. A frame is one moment: its strobes show the share of the
+//! interval their gate is on (`strobe.rs`). With the footage look on, a hand
+//! on the camera and the bass shake it ([`shake`]); the sensor noise lives in
+//! the post chain.
 
 use glam::{Mat3, Vec3};
 
