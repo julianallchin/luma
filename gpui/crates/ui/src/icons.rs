@@ -17,6 +17,7 @@ pub enum IconName {
     ChevronRight,
     ChevronUp,
     Close,
+    Copy,
     Expand,
     Minimize,
     Minus,
@@ -51,6 +52,7 @@ impl IconNamed for IconName {
             Self::ChevronRight => "nucleo/chevron-right.svg".into(),
             Self::ChevronUp => "nucleo/chevron-up.svg".into(),
             Self::Close => "nucleo/xmark.svg".into(),
+            Self::Copy => "nucleo/copy.svg".into(),
             Self::Expand => "nucleo/expand.svg".into(),
             Self::Minimize => "nucleo/minimize.svg".into(),
             Self::Minus => "nucleo/minus.svg".into(),
@@ -78,6 +80,7 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "nucleo/copy.svg" => Some(include_bytes!("../assets/nucleo/copy.svg")),
             "nucleo/expand.svg" => Some(include_bytes!("../assets/nucleo/expand.svg")),
             "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),
             "nucleo/minus.svg" => Some(include_bytes!("../assets/nucleo/minus.svg")),
@@ -174,6 +177,7 @@ impl AssetSource for Assets {
                 "nucleo/chevron-left.svg",
                 "nucleo/chevron-right.svg",
                 "nucleo/chevron-up.svg",
+                "nucleo/copy.svg",
                 "nucleo/expand.svg",
                 "nucleo/media-play.svg",
                 "nucleo/microchip.svg",

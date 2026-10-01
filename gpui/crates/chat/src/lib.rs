@@ -60,13 +60,13 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    div, list, prelude::*, px, AnyElement, Context, Entity, FocusHandle, ListAlignment, ListState,
-    SharedString, Window,
+    div, list, prelude::*, px, AnyElement, App, Context, Entity, FocusHandle, ListAlignment,
+    ListState, SharedString, Window,
 };
 use gpui_component::Icon;
 use luma_lib::agent::{
     engine::catalog::{ModelChoice, Selection, Service},
-    AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt,
+    AgentService, ThreadScope, Transcript, TurnContext, TurnEvent, TurnOutcome, UserPrompt,
 };
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
 use luma_ui::arg::select::MenuVisibility;
@@ -218,14 +218,8 @@ impl Agent {
     /// task so its steering handle can be handed back with it — a turn a host
     /// could not redirect would force the composer to lock while one ran.
     #[must_use]
-    pub fn turn(&self, thread_id: &str, prompt: String, context: Option<ThreadScope>) -> Turn {
-        self.drive(self.service.turn(
-            thread_id,
-            UserPrompt {
-                text: prompt,
-                context: Some(luma_lib::agent::TurnContext { scope: context }),
-            },
-        ))
+    pub fn turn(&self, thread_id: &str, prompt: UserPrompt) -> Turn {
+        self.drive(self.service.turn(thread_id, prompt))
     }
 
     /// Continue the thread's unfinished turn. Only on the reader's request —
@@ -276,6 +270,10 @@ impl Agent {
         Turn { events: rx, steer }
     }
 }
+
+/// Reads the editor for one message, at the moment it is sent. The host's
+/// own state stays the host's: the chat only calls this.
+pub type ContextSource = Box<dyn Fn(&App) -> TurnContext>;
 
 /// What the panel asks its host for.
 ///
@@ -352,8 +350,9 @@ pub struct AgentChat {
     subject: Option<ThreadScope>,
     /// Initial resource metadata, retained when creating a chat with no editor open.
     scope: Option<ThreadScope>,
-    /// Editor context captured by the next turn; never changes conversation identity.
-    editor_context: Option<ThreadScope>,
+    /// Reads the editor when a message is sent; never changes conversation
+    /// identity. `None` sends [`Self::scope`] alone.
+    context_source: Option<ContextSource>,
     /// Which conversation, and whether its read has landed. Until it has, the
     /// composer is live but a send waits — the alternative is a send that
     /// silently starts a conversation in a thread nobody asked for.
@@ -453,6 +452,13 @@ pub struct AgentChat {
     /// is in so the tween can remeasure it. At most one — a fold is started by
     /// a click, and a click lands on one chip.
     fold: Option<(SharedString, std::time::Instant, usize)>,
+    /// The folding row, and where its top sat on screen when it was clicked.
+    /// Outlives [`Self::fold`] by one layout, the one that settles it.
+    fold_hold: Option<(usize, f32)>,
+    /// The folding tool card's height, as the chip last rendered it. Written
+    /// by the chip during the list's layout, and read later in the same
+    /// layout by the send room.
+    fold_px: Cell<f32>,
     focus: FocusHandle,
     theme: Theme,
 }
@@ -474,7 +480,7 @@ impl AgentChat {
             agent,
             subject: scope.clone(),
             scope: scope.clone(),
-            editor_context: scope.clone(),
+            context_source: None,
             conversation: Conversation::Idle,
             reads: 0,
             transcript: Transcript::default(),
@@ -510,6 +516,8 @@ impl AgentChat {
             expanded: HashSet::new(),
             cells: RefCell::default(),
             fold: None,
+            fold_hold: None,
+            fold_px: Cell::new(0.0),
             focus: cx.focus_handle(),
             theme: Theme::dark(),
         };
@@ -804,6 +812,9 @@ impl AgentChat {
         self.send_motion = send_motion::SendMotion::default();
         self.list.scroll_to_end();
         self.trailer_row = None;
+        // A fold names a row of the list being replaced.
+        self.fold = None;
+        self.fold_hold = None;
         // A fresh list is a fresh scroll handler: the old one watched a
         // `ListState` this panel no longer shows.
         self.watch_scrolling(cx);
@@ -887,6 +898,15 @@ impl AgentChat {
             })
     }
 
+    /// Whether the tool card folding now is in the exchange the send room sits
+    /// under — the one exchange whose height the room depends on.
+    fn fold_in_turn(&self) -> bool {
+        match (&self.fold, self.anchor_row()) {
+            (Some((_, _, row)), Some(anchor)) => *row > anchor,
+            _ => false,
+        }
+    }
+
     /// Read this frame's layout, consume reserved room, then advance the
     /// message toward its moving on-screen destination with the shared spring.
     fn step_send_motion(&mut self, reduced: bool) {
@@ -910,7 +930,10 @@ impl AgentChat {
                 // travel of its own, so counting it here too lifts the prompt
                 // above the viewport by the footer's height.
                 let visible = f32::from(viewport.size.height) - self.pin_footer;
-                let room = send_motion::room(visible, content_end - offset);
+                let fold = self.fold_in_turn().then(|| self.fold_px.get());
+                let room = self
+                    .send_motion
+                    .measure(visible, content_end - offset, fold);
                 if (room - self.send_motion.room).abs() > 0.5 {
                     self.send_motion.room = room;
                     self.list.remeasure_items(end..end + 1);
@@ -1218,14 +1241,21 @@ impl AgentChat {
         self.subject.is_some() || self.scope.is_some()
     }
 
-    /// Update the next turn's context without replacing the open thread,
-    /// its draft, or a running turn.
-    pub fn set_editor_context(&mut self, scope: Option<ThreadScope>, cx: &mut Context<Self>) {
-        if self.editor_context == scope {
-            return;
+    /// Set what reads the editor for each message sent. Read at send time
+    /// rather than pushed, because the playhead moves every frame.
+    pub fn set_context_source(&mut self, source: ContextSource) {
+        self.context_source = Some(source);
+    }
+
+    /// The editor as it stands now, for the message being sent.
+    fn editor_context(&self, cx: &App) -> TurnContext {
+        match &self.context_source {
+            Some(source) => source(cx),
+            None => TurnContext {
+                scope: self.scope.clone(),
+                editor: None,
+            },
         }
-        self.editor_context = scope;
-        cx.notify();
     }
 
     /// Show `subject`'s most recently updated chat, or unattach.
@@ -1276,15 +1306,51 @@ impl AgentChat {
     /// Remeasures exactly the row the chip is in, for the same reason a
     /// streamed delta does: the height that changed is one row's, and
     /// remeasuring the list is the frame budget.
+    ///
+    /// Nothing above the chip may move while it folds. The press that clicked
+    /// it already released the bottom pin (see the transcript's mouse-down);
+    /// the send room takes the card's change in the same layout (see
+    /// [`send_motion::SendMotion::room_with_fold`]); and the row's top is held
+    /// where the reader clicked it until the fold settles — see
+    /// [`Self::hold_fold`].
     pub fn toggle_tool(&mut self, call_id: SharedString, row: usize, cx: &mut Context<Self>) {
         if !self.expanded.remove(&call_id) {
             self.expanded.insert(call_id.clone());
         }
+        // Read before the remeasure: an unmeasured row reports no bounds.
+        self.fold_hold = self
+            .list
+            .bounds_for_item(row)
+            .map(|bounds| (row, f32::from(bounds.top())));
         // The fold is timed from the click, and only from a click: a chip that
         // scrolls back into view has no fold in flight and renders at rest.
         self.fold = Some((call_id, std::time::Instant::now(), row));
         self.list.remeasure_items(row..row + 1);
         cx.notify();
+    }
+
+    /// Keep the folding row's top where it was when the reader clicked.
+    ///
+    /// The list holds its scroll anchor through a remeasure, so a fold alone
+    /// moves nothing above the row. What can still move it is the list
+    /// clamping its scroll when a collapse shortens the content under the
+    /// view, and the pixel between the card's tweened and natural heights.
+    /// This scrolls the difference back after each layout, and stops on the
+    /// first layout after the fold has settled.
+    fn hold_fold(&mut self) {
+        let Some((row, top)) = self.fold_hold else {
+            return;
+        };
+        if self.fold.is_none() {
+            self.fold_hold = None;
+        }
+        if let Some(bounds) = self.list.bounds_for_item(row) {
+            // `scroll_by(+d)` moves the content up by `d`.
+            let drift = f32::from(bounds.top()) - top;
+            if drift.abs() > 0.1 {
+                self.list.scroll_by(px(drift));
+            }
+        }
     }
 
     /// The fold in flight this frame, and whether it still needs frames.
@@ -1434,9 +1500,14 @@ impl AgentChat {
         if prompt.is_empty() {
             return;
         }
+        let message = UserPrompt {
+            text: prompt.clone(),
+            context: Some(self.editor_context(cx)),
+        };
         if let Some(thread) = self.thread().filter(|_| self.is_streaming()) {
-            self.running.read(cx).steer(thread, prompt.clone());
+            self.running.read(cx).steer(thread, message);
             self.start_send_motion(prompt, cx);
+            self.settle_trailer();
             self.composer.clear(cx);
             cx.notify();
             return;
@@ -1447,15 +1518,9 @@ impl AgentChat {
             return;
         };
         let agent = self.agent.clone();
-        let context = self.editor_context.clone();
         let transcript = self.transcript.clone();
         let started = self.running.update(cx, |running, cx| {
-            running.start(
-                &thread,
-                transcript,
-                || agent.turn(&thread, prompt.clone(), context),
-                cx,
-            )
+            running.start(&thread, transcript, || agent.turn(&thread, message), cx)
         });
         let since = match started {
             Ok(since) => since,
@@ -1504,16 +1569,23 @@ impl AgentChat {
     /// the one height a row's content hash cannot see, which is why it gets its
     /// own remeasure rather than riding [`Self::reconcile_rows`].
     fn settle_trailer(&mut self) {
-        let next = self.trailer().and(self.rows.len().checked_sub(1));
+        let next = self.trailer().and(self.trailer_item());
         if next == self.trailer_row {
             return;
         }
+        let items = self.rows.len() + self.send_motion.pending.len();
         for row in self.trailer_row.into_iter().chain(next) {
-            if row < self.rows.len() {
+            if row < items {
                 self.list.remeasure_items(row..row + 1);
             }
         }
         self.trailer_row = next;
+    }
+
+    /// The list item the indicator trails: the last row, or the last prompt
+    /// still waiting for the turn to accept it.
+    fn trailer_item(&self) -> Option<usize> {
+        (self.rows.len() + self.send_motion.pending.len()).checked_sub(1)
     }
 
     /// Take one live subagent snapshot, replacing the child's previous one.
@@ -1736,6 +1808,7 @@ impl AgentChat {
         if (self.pinned && (streaming || self.spring_tick.is_some()))
             || self.send_motion.flight.is_some()
             || self.send_motion.anchor.is_some()
+            || self.fold_hold.is_some()
         {
             let chat = cx.entity();
             let reduced = luma_ui::motion::reduced_motion(cx);
@@ -1751,6 +1824,7 @@ impl AgentChat {
                     } else {
                         this.step_spring();
                     }
+                    this.hold_fold();
                     if old_room != this.send_motion.room
                         || had_flight
                         || this.spring_tick.is_some()
@@ -1770,11 +1844,12 @@ impl AgentChat {
         }
 
         let live = self.live;
-        // The indicator trails the *last* row whichever role it has: between
-        // the send and the model's first row that is still the user's prompt,
-        // and comet's "Sending" bridge is exactly that gap named.
+        // The indicator trails the *last* item whichever role it has: between
+        // the send and the model's first row that is still the user's prompt —
+        // the pending copy of it until the turn's first event lands — and
+        // comet's "Sending" bridge is exactly that gap named.
         let trailer = self.trailer();
-        let last_row = self.rows.len().checked_sub(1);
+        let last_item = self.trailer_item();
         let opening_trailer = self.rows.is_empty().then_some(trailer).flatten();
         let view = cx.entity_id();
         let rows = this.clone();
@@ -1824,18 +1899,49 @@ impl AgentChat {
                             .flight
                             .as_ref()
                             .is_some_and(|flight| flight.id == prompt.id);
+                        // Shown from the send's first frame, under the slot
+                        // the message is flying to: the reader sees at once
+                        // that the panel heard them.
+                        let trailer = (last_item == Some(ix))
+                            .then_some(trailer)
+                            .flatten()
+                            .map(|trailer| working::trailer(&trailer, &state.theme, view, cx));
+                        // The same centred reading column a row has (see
+                        // `transcript::row`), so the message does not move
+                        // sideways when the turn's own row replaces it.
                         return div()
+                            .w_full()
                             .pt(px(theme::GAP_BLOCK))
-                            .opacity(if flying { 0.0 } else { 1.0 })
-                            .child(transcript::user_bubble(
-                                &prompt.text,
-                                &prompt.id,
-                                &state.theme,
-                            ))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(theme::MAX_CONTENT_WIDTH))
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .opacity(if flying { 0.0 } else { 1.0 })
+                                            .child(transcript::user_bubble(
+                                                &prompt.text,
+                                                &prompt.id,
+                                                &state.theme,
+                                            )),
+                                    )
+                                    .children(trailer),
+                            )
                             .agent_node(NodeRole::Text, prompt.text.clone())
                             .into_any_element();
                     }
-                    return div().h(px(state.send_motion.room)).into_any_element();
+                    let room = if state.fold_in_turn() {
+                        state.send_motion.room_with_fold(state.fold_px.get())
+                    } else {
+                        state.send_motion.room
+                    };
+                    return div().h(px(room)).into_any_element();
                 };
                 let (Some(turn), Some(message)) = (
                     state.entries.get(key.turn),
@@ -1868,11 +1974,11 @@ impl AgentChat {
                             .flight
                             .as_ref()
                             .is_some_and(|flight| flight.id.as_ref() == message.id),
-                        trailer: (last_row == Some(ix)).then_some(trailer).flatten(),
-                        trailer_visible: state.send_motion.flight.is_none(),
+                        trailer: (last_item == Some(ix)).then_some(trailer).flatten(),
                         expanded: &state.expanded,
                         cells: &state.cells,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
+                        fold_px: &state.fold_px,
                         theme: &state.theme,
                     },
                     window,
