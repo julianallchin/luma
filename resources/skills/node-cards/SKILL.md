@@ -1,6 +1,6 @@
 ---
 name: node-cards
-description: The clip graph node reference. The grammar in ten lines, every one of the 13 nodes with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
+description: The clip graph node reference. The grammar in ten lines, every one of the 13 nodes (math included) with its inputs, units, ranges, empty values and settings, the wire types, the curve presets, and the checker's error format. Read this before you build a clip graph.
 ---
 
 # Clip graph nodes
@@ -13,12 +13,12 @@ functions. The Rust checker reads the same graph that the inspector shows.
 1. A clip has a name, a selection, a time range, a blend mode, a seed and one graph.
 2. A graph has nodes. Exactly one node is an output: `color`, `aim` or `strobe`.
 3. Every node has one output wire. A wire goes into an input of another node.
-4. An input holds a value (number, vector, color, points, gradient), a wire, a list (on 0–1 inputs), or nothing.
+4. An input holds a value (number, vector, color, points, gradient), a wire, or nothing.
 5. A choice (`kind`, `wrap`, `base`, `by`) is a setting on a node. It is never wired.
-6. Coordinate nodes give a raw coordinate per head: `clock`+`time`, `space`, `noise`, `audio`.
-7. `curve` is the only node that turns a coordinate into a value: number, vector or color.
+6. Coordinate nodes give a raw coordinate per head: `time`, `space`, `noise`, `audio`.
+7. `curve` is the only node that turns a coordinate into a value: number, vector or color. `math` combines values.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
-9. An empty input is the only default: no clock = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
+9. An empty input is the only default: no `every` = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
 10. Overlap is automatic. Per head, the event with the biggest effect shows; ties go to the newest.
 
 Promotion means: an input changes from a value to a wire. Every number,
@@ -28,20 +28,25 @@ A value is a function of the head's place and of time, as in a shader:
 `space()` gives the place, `time()` gives the time, and a curve turns them
 into a value. There are two ways to move:
 
-- **Shift time per head.** Put a curve over space into `time.delay`,
-  `time.length` or `time.phase`: each head runs the same shape on its own
-  clock (a wave, a wipe, a spin).
+- **Shift time per head.** Put a curve over space into `time.delay` or
+  `time.phase`: each head runs the same shape on its own clock (a wave, a
+  wipe, a spin).
 - **Shift the place over time.** Put a curve over time (or audio) into
-  `space.shift`: the shape slides along the heads with its own ease (a
-  chase, a bounce, a sweep, a meter).
+  `space.shift` or `space.scale`: the shape slides or grows along the heads
+  with its own ease (a chase, a bounce, a bloom, a meter).
 
-To make a region, put a curve with a jump over space.
+To make a region, put a curve with a jump over space. To combine two
+patterns, multiply them: `brightness=cut * bloom * fade`.
 
 A node's id is the variable you assign it to: `move = curve(t, "Ramp up")`
 is node `move`, and its card in the inspector reads "move". A node without
 a variable gets `<kind><n>` ("Curve 2"). `graph.source()` writes the ids
-back as variables, so a round trip keeps the names. An id is a Python name
-of at most 32 characters that is not a builder name or a keyword.
+back as variables, so a round trip keeps the names. It writes a curve or a
+math with a numbered id that one input reads in place:
+`space(shift=curve(t, 'Ramp up'))`, `color(brightness=cut * fade)`. An id is
+a Python name of at most 32 characters that is not a builder name (`time`,
+`space`, `noise`, `audio`, `curve`, `math`, `mirror`, `shuffle`, `group`,
+`split`, `color`, `aim`, `strobe`, `preset`, `max`, `min`) or a keyword.
 
 ## Values and units
 
@@ -52,7 +57,6 @@ of at most 32 characters that is not a builder name or a keyword.
 | color | `(r, g, b)` or `"#RRGGBB"` | Linear Rec. 2020, each 0–1. Hex is sRGB and is converted. |
 | points | `"Comet"`, `[[x, v], [x, v, ease], ...]` | A curve preset name or points. |
 | gradient | `"Fire"`, `[(t, color), ...]` | A gradient preset name or stops. Blends in OKLab. |
-| list | `[cut, bloom, 0.5]` | Only on a number input with range 0–1. The items multiply. |
 | choice | `kind="order"` | A setting. |
 
 Units: share (0–1), beats, degrees, metres, hz, turns, uvz (a vector), rgb.
@@ -68,23 +72,19 @@ ends included, and 0 outside.
 `sine-out`, `sine-in-out`, or a local cubic Bézier `[x1, y1, x2, y2]`. The
 last point has no ease.
 
-Lists: on an input with range 0–1 (`color.brightness`, `color.alpha`,
-`aim.alpha`, `strobe.rate`, `strobe.alpha`, `noise.contrast`), a list of two
-or more numbers and number curves is their product:
-`color(brightness=[cut, bloom, fade])`. The items must follow one clock. On
-any other input a list is an error. A 3-tuple on `color.color` or a vector
-input is a color or a vector, not a list.
+A 3-tuple on `color.color` or a vector input is a color or a vector. A list
+of curves is an error: to multiply, write `brightness=cut * fade`.
 
 ## Wires
 
 | Wire | From | Into |
 |---|---|---|
-| clock | `clock` | `time.clock`, `shuffle.clock` |
+| time | `time` | `shuffle.time` (and `curve.x`) |
 | heads | `mirror`, `shuffle`, `group`, `split` | any `heads` input |
 | coordinate | `time`, `space`, `noise`, `audio` | `curve.x` |
-| number | `curve` (number) | any number input |
-| vector | `curve` (vector) | any vector input |
-| color | `curve` (color) | `color.color` |
+| number | `curve` (number), `math` | any number input, a curve's `low`/`high` |
+| vector | `curve` (vector), `math` | any vector input, a curve's `low`/`high` |
+| color | `curve` (color), `math` | `color.color` |
 
 A number, vector or color input takes a value or a wire of its own type. A
 coordinate never goes straight into a number input:
@@ -92,7 +92,7 @@ coordinate never goes straight into a number input:
 
 The same Python variable wired twice is one node (a link). Two calls with
 the same arguments are two nodes. Ids are `<kind><n>` in creation order per
-kind: `clock1`, `curve3`. The UI and the errors use the same ids.
+kind: `time1`, `curve3`, `math1`. The UI and the errors use the same ids.
 
 ## Output nodes
 
@@ -103,11 +103,16 @@ Exactly one per graph. The blend mode is on the clip, not in the graph.
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | color | color | rgb | 0–1 | white `(1, 1, 1)` |
-| brightness | number or list | share | 0–1 | 1 |
-| alpha | number or list | share | 0–1 | 1 |
+| brightness | number | share | 0–1 | 1 |
+| alpha | number | share | 0–1 | 1 |
 
-Light per head = color × brightness × alpha. Blend modes: `replace`, `add`,
-`multiply`, `screen`, `max`, `min`, `lighten`, `value`, `subtract`.
+Light per head = color × brightness. `brightness` is the pattern across the
+lights: a chase, a pulse, a cut. `alpha` is the clip's opacity: the clip's
+light blends with the light below by the blend mode, then the result mixes
+with the light below by alpha. Alpha 0 shows the light below, in every
+blend mode. Use alpha for a fade of the whole clip (the timeline fade points
+edit it). Blend modes: `replace`, `add`, `multiply`, `screen`, `max`, `min`,
+`lighten`, `value`, `subtract`.
 
 **aim** `aim(heads=None, base="direction", direction=None, point=None, yaw=None, pitch=None, alpha=None)`
 
@@ -118,7 +123,7 @@ Light per head = color × brightness × alpha. Blend modes: `replace`, `add`,
 | point | vector | metres | any | `(0, 0, 0)` |
 | yaw | number | degrees | -180–180 | 0 |
 | pitch | number | degrees | -180–180 | 0 |
-| alpha | number or list | share | 0–1 | 1 |
+| alpha | number | share | 0–1 | 1 |
 
 Setting `base`: `direction` aims along the vector. `point` aims each head at
 the point. `away` aims each head from the point through the head (a fan that
@@ -131,68 +136,69 @@ pitch to the aim underneath.
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
-| rate | number or list | share | 0–1 | 0.5 |
-| alpha | number or list | share | 0–1 | 1 |
+| rate | number | share | 0–1 | 0.5 |
+| alpha | number | share | 0–1 | 1 |
 
-Shutter = rate × alpha. Blend modes: the same as color.
+Shutter = rate. `alpha` is the clip's opacity over the strobe below, as on
+color. Blend modes: the same as color.
 
 ## Coordinate nodes
 
-**clock** `clock(every, duration=None)` → clock wire
+**time** `time(every=None, duration=None, delay=None, phase=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
-| every | number | beats | above 0 | error: give it |
-| duration | number | beats | above 0 | the same as every |
-
-Events start at the clip start, one each `every` beats. Each event lives
-`duration` beats. A duration above every makes events overlap on purpose:
-tails, many pills, a color per pill, a turning line with two arms. The clip
-end cuts an event. For once over the clip, use no clock.
-
-**time** `time(clock=None, delay=0, length=1, phase=0)` → coordinate
-
-| Input | Type | Unit | Range | Empty |
-|---|---|---|---|---|
-| clock | clock | | | once over the clip |
-| delay | number | turns | any | 0 |
-| length | number | turns | 0 or more (0 is a jump) | 1 |
+| every | number | beats | above 0 | once over the clip, no events |
+| duration | number | beats | above 0 | every (the clip with no every) |
+| delay | number | beats | any | 0 |
 | phase | number | turns | any | 0 |
 
-`p` is the progress: with no clock, the clip progress 0–1; with a clock, the
-age of each live event over its duration, 0–1. Each head then gets its own
-clock: τ = (p − delay) / length. If phase is not 0, τ = (τ + phase) mod 1.
+With `every`, events start at the clip start, one each `every` beats. Each
+event lives `duration` beats. A duration above every makes events overlap on
+purpose: tails, many pills, a color per pill, a turning line with two arms.
+The clip end cuts an event. With no every and a duration, there is one event
+of that length from the clip start. Two time nodes whose every and duration
+are equal (the same numbers or the same wires) share one set of events.
 
-- **delay** does not wrap. Before the delay τ is below 0; after the head's
-  length τ is above 1. A curve holds its first value below 0 and its last
-  value above 1. Use delay for one-shots: a wipe, a cut, a dissolve, a bloom.
-- **length** is how long the head's clock takes to go from 0 to 1. A curve
-  over space on length gives each head its own speed.
-- **phase** wraps, so the clock loops. Use phase for loops: a chase, a wave.
+`p` is the progress: the age of the event (or of the clip) over its
+duration, 0–1. Each head then gets its own clock: τ = p − delay / duration.
+If phase is given, τ = (τ + phase) mod 1.
 
-Put a curve over space into delay, length or phase to make heads differ.
-`time(k, delay=curve(space(), "Ramp up"))` starts each head later along
-the axis. The `low` and `high` of that curve set the spread in turns.
+- **delay** is in beats and does not wrap. Before a head's start τ is below
+  0; a curve holds its first value there (a waiting head of a dissolve stays
+  on). After the end a curve holds its last value. Use delay for one-shots: a
+  wipe, a cut, a dissolve, a build.
+- **phase** is in turns and wraps, so the clock loops. Use phase for loops: a
+  chase, a wave, a spin.
 
-**space** `space(heads=None, direction=None, shift=0, length=1, kind="line", wrap=None)` → coordinate
+Put a curve over space into delay or phase to make heads differ.
+`time(every=4, delay=curve(space(), "Ramp up", high=2))` starts each head
+later along the axis, up to 2 beats. The `low` and `high` of that curve set
+the spread: beats for delay, turns for phase.
+
+**space** `space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
 | direction | vector | uvz | not zero | best fit |
 | shift | number | share | any | 0 |
-| length | number | share | 0 or more (0 is a jump) | 1 |
+| scale | number | share | 0 or more (0 is a jump) | 1 |
 
-The place of each head `a`, 0–1, then `x = (a − shift) / length`. With
-`wrap`, `a − shift` wraps to 0–1 first. `shift` slides the place (the
-shader's UV offset): a curve over time on shift moves the shape along the
-heads, with the ease of that time curve. `length` is how much of the axis
-reads as 0–1. There is no band: past 0 and 1 a curve holds its end values,
+The place of each head `a`, 0–1 within the selection (within each span after
+a `split`), then `x = (a − shift) / scale`. With `wrap`, `a − shift` wraps to
+0–1 first. `shift` slides the place (the shader's UV offset): a curve over
+time on shift moves the shape along the heads, with the ease of that time
+curve. `scale` is how much of the axis reads as 0–1; a curve over time on
+scale grows the shape (a bloom). There is no band: past 0 and 1 a curve holds its end values,
 so give a moving pill jumps at its ends, `[[0, 0], [0, 1], [1, 1], [1, 0]]`.
 
 Setting `kind`:
 - `line`: the position along `direction`, lowest head 0, highest 1. Empty
-  direction = the main axis of the heads.
+  direction = the main axis of the heads. After a `mirror` whose normal is
+  parallel to the direction, 0 is on the mirror's plane and the place grows
+  away from it, by distance over the span's full extent (so 0.5 at the edge
+  for a plane in the middle).
 - `order`: the rank of the head, `(rank + 0.5) / n`. After `shuffle` it is
   the shuffled rank.
 - `radial`: distance from the centre, 0 at the centre, 1 at the edge.
@@ -204,8 +210,8 @@ Setting `wrap`: `True` or `False`. Empty = `False`, except `angle` (`True`).
 A static region is a curve over space with a jump:
 `curve(space(), [[0, 1], [0.5, 1], [0.5, 0], [1, 0]])` lights the first half.
 A moving region is a curve over the space whose `shift` is a curve over
-time: `move = curve(time(k), "Ramp up", low=-0.2, high=1)` then
-`curve(space(shift=move, length=0.2), [[0, 0], [0, 1], [1, 1], [1, 0]])`
+time: `move = curve(time(every=2), "Ramp up", low=-0.2, high=1)` then
+`curve(space(shift=move, scale=0.2), [[0, 0], [0, 1], [1, 1], [1, 0]])`
 enters at one end and leaves at the other. To run the other way, use
 "Ramp down" on the move, or the reverse `direction`.
 
@@ -219,7 +225,7 @@ so a phase curve over it loops with no seam.
 | heads | heads | | | all clip heads |
 | speed | number | beats | above 0 | 4 |
 | scale | number | share | above 0 | one value for all heads |
-| contrast | number or list | share | 0–1 | 0 |
+| contrast | number | share | 0–1 | 0 |
 
 Smooth noise 0–1 over head position and time. `scale` is a share of the
 rig's largest extent: 0.5 gives slow clouds, 0.02 gives each head its own
@@ -253,27 +259,53 @@ comes from the arguments: a gradient makes a color curve; tuple low/high
 make a vector curve; all else is a number curve. A vector curve must get
 low and high. A curve that feeds two inputs must feed inputs of one unit. A
 vector curve that feeds a direction must not have opposite low and high.
+`low` and `high` can be wires from another curve or a math node.
+
+## math
+
+Python operators on values (curve and math results) make math nodes:
+
+| Python | op | Items |
+|---|---|---|
+| `a * b * c` | `*` | 2 or more |
+| `a + b` | `+` | 2 or more |
+| `a - b` | `-` | exactly 2 |
+| `max(a, b)` | `max` | 2 or more |
+| `min(a, b, 0.2)` | `min` | 2 or more |
+
+An item is a number or a value wire: `0.5 * fade`, `1 - fade`. A chain of
+one operator is one node: `cut * bloom * fade` is one math node with three
+items. A named step is its own node: `glow = cut * fade` is node `glow`.
+The output is a value of the widest item kind (color > vector > number; a
+number times a color is a color; color with vector is an error). A math
+result wires like a curve: into any number, vector or color input, or into a
+curve's `low` or `high`. A coordinate is not a value: `time() * 2` is an
+error; write `curve(time(), low=0, high=2)`. On plain numbers `max` and `min`
+are Python's own.
 
 ## Shapers
 
-**mirror** `mirror(heads=None, normal=None, offset=None)` → heads
+**mirror** `mirror(heads=None, normal=None, at=None)` → heads
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
 | normal | vector | uvz | not zero | best fit |
-| offset | number | metres | any | 0 |
+| at | number | share | 0–1 | 0.5 |
 
-Folds the heads across a plane through the middle of the rig. Order does not
-change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
+Folds the heads across a plane. `at` places the plane along the normal,
+across the positions of the selection before any fold: 0.5 is always the
+centre, also for stacked mirrors. Heads on the low side reflect. Order does
+not change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
 symmetry.
 
-**shuffle** `shuffle(heads=None, clock=None)` → heads
+**shuffle** `shuffle(heads=None, time=None)` → heads
 
-A random order of the heads, from the clip seed. With a clock, a new order
-per event. Positions do not change. Read it with `space(kind="order")`.
-`curve(space(shuffle(clock=k), kind="order"), [[0, 1], [0.3, 1], [0.3, 0], [1, 0]])`
-lights a random 30% of the heads per event.
+A random order of the heads, from the clip seed. `time` is a wire from a
+time node: with `every`, a new order per event; without, one order.
+Positions do not change. Read it with `space(kind="order")`.
+`curve(space(shuffle(time=time(every=1)), kind="order"), [[0, 1], [0.3, 1], [0.3, 0], [1, 0]])`
+lights a random 30% of the heads each beat.
 
 **group** `group(heads=None, size=None)` → heads
 
@@ -291,14 +323,16 @@ Setting `by`: `"fixture"` or `"group"`. Each fixture, or each venue group of
 the selection, becomes its own span. `space`, `shuffle` and `mirror` then
 work inside each span: one bar meter per bar, for example.
 
-`group.size`, `mirror.normal`, `mirror.offset`, `space.direction` and
+`group.size`, `mirror.normal`, `mirror.at`, `space.direction` and
 `audio.*_hz` can change over time, but not across heads.
 
 ## Two clocks
 
-The inputs of one node carry at most one clock, except the output node. So
-`color(color=<clock A>, brightness=<clock B>)` is right, but a curve whose
-`x` follows clock A and whose `low` follows clock B is an error.
+A clock is one set of events: a time node with `every`, or time nodes with
+equal every and duration. The inputs of one node carry at most one clock,
+except the output node. So `color(color=<clock A>, brightness=<clock B>)` is
+right, but a curve whose `x` follows clock A and whose `low` follows clock B
+is an error, and so is `a * b` with a and b on two clocks.
 
 ## Presets
 
@@ -328,9 +362,9 @@ Examples:
 - `color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, "Ramp up")`
 - `curve2.low: expected degrees between -180 and 180 for aim1.yaw; got 400. Example: low=-30`
 - `curve3: expected one unit; it feeds aim1.yaw (degrees) and time1.phase (turns). Example: make two curves`
-- `color1.brightness: expected list items a share between 0 and 1; got 2. Example: brightness=[curve1, 0.5]`
+- `math1.values: expected exactly two items for -; got 3. Example: values=[curve1, curve2]`
 - `curve1.gradient: expected a gradient because kind is color; got nothing. Example: gradient="Rainbow"`
-- `clock1.every: expected beats above 0; got 0. Example: every=1, or leave the clock out for once over the clip`
+- `time1.every: expected beats above 0; got 0. Example: every=1, or leave every out for once over the clip`
 - `graph: expected one output node; got color1 and strobe1. Example: one clip per output`
 - `clip: expected a name; got none. Example: name="Kick chase"`
 
