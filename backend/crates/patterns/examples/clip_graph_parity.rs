@@ -9,6 +9,10 @@
 //!
 //! `--check`: each line is a clip. The answer is `{"ok": null}` when the
 //! checker passes, else `{"error": text}` with the checker's text.
+//!
+//! `--coordinate`: each line is `{"graph": <graph>, "node": id, "cells":
+//! [...]}`. The answer is `{"ok": {cell id: value}}`: coordinate node `id`
+//! per head at the clip's start (a migration reads a space's raw place).
 use luma_patterns::*;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -38,8 +42,32 @@ fn check(raw: &serde_json::Value) -> Result<serde_json::Value> {
     Ok(serde_json::Value::Null)
 }
 
+fn coordinate(raw: &serde_json::Value) -> Result<serde_json::Value> {
+    let graph: ClipGraph = parse(&raw["graph"])?;
+    let cells: Vec<Cell> = parse(&raw["cells"])?;
+    let node: String = parse(&raw["node"])?;
+    let values = graph.coordinate_at_heads(
+        &node,
+        Frame {
+            cells: &cells,
+            features: None,
+            beat: 0.,
+            clip_start: 0.,
+            clip_duration: 16.,
+            seed: 0,
+        },
+    )?;
+    Ok(cells
+        .iter()
+        .zip(values)
+        .map(|(cell, value)| (cell.id.clone(), serde_json::json!(value)))
+        .collect::<serde_json::Map<_, _>>()
+        .into())
+}
+
 fn main() {
     let check_only = std::env::args().any(|arg| arg == "--check");
+    let coordinates = std::env::args().any(|arg| arg == "--coordinate");
     let library = standard_library();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -50,6 +78,8 @@ fn main() {
             .and_then(|raw: serde_json::Value| {
                 if check_only {
                     check(&raw)
+                } else if coordinates {
+                    coordinate(&raw)
                 } else {
                     evaluate(&library, &raw)
                 }
