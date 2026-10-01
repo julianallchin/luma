@@ -211,10 +211,11 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Written<V> {
 }
 
 /// Points over x 0–1, from x 0 to x 1, in order. Two points may share an x:
-/// a jump, where x itself reads the second (as a shader's `step`). Before
-/// the first point and after the last, the end values hold. A jump at x 0
-/// or x 1 sets the value outside: x 0 and x 1 themselves read the inner
-/// point, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 on [0, 1] closed.
+/// a jump, where x itself reads the larger of the two values, so a head
+/// exactly on an edge is lit (a cut's front, a pill's ends). Before the
+/// first point and after the last, the end values hold; a jump at x 0 or
+/// x 1 sets the value outside, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1
+/// on [0, 1] closed and `[[0, 1], [0, 0], [1, 0]]` is 1 up to 0 closed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve<V> {
     pub points: Vec<CurvePoint<V>>,
@@ -349,20 +350,14 @@ impl<V> Curve<V> {
         Ok(())
     }
 
-    /// The segment at `progress` and the share of its change done there.
+    /// The segment at `progress` and the share of its change done there; at
+    /// a jump, the segment after it.
     pub(crate) fn locate(&self, progress: f64) -> (usize, f64) {
         let last = self.points.len() - 1;
         if progress < self.points[0].x {
             return (0, 0.);
         }
         if progress >= self.points[last].x {
-            // A jump at the end: x itself still reads the inner point, so
-            // the shape covers [0, 1] closed and the outer point is what
-            // it reads after it.
-            let end = self.points[last].x;
-            if progress == end && last >= 2 && self.points[last - 1].x == end {
-                return (last - 1, 0.);
-            }
             return (last - 1, 1.);
         }
         let i = self
