@@ -1,6 +1,8 @@
 // The Slash clip graph under the renderer, kept for design review: the
 // whole canvas, then one capture per node card, and the fade card open.
-// Every node is a card; asserts only that each card shows.
+// Its line direction and its place on the line are value nodes, each wired
+// into the mirror and the bloom's space. Every node is a card; asserts only
+// that each card shows.
 
 const graph = {
   version: 3,
@@ -9,9 +11,11 @@ const graph = {
     curve1: { kind: "curve", inputs: { x: { node: "t" }, shape: { points: [[0, 1], [0.2, 0], [1, 0]] } } },
     diag: { kind: "space", inputs: { direction: [0.82, 0, -0.57], shift: { node: "curve1" } } },
     cut: { kind: "curve", inputs: { x: { node: "diag" }, shape: { points: [[0, 0], [0, 1], [1, 1]] } } },
-    line: { kind: "mirror", inputs: { direction: [0.57, 0, 0.82], at: 0.68 } },
+    d: { kind: "value", inputs: { value: [0.57, 0, 0.82] } },
+    at: { kind: "value", inputs: { value: 0.68 } },
+    line: { kind: "mirror", inputs: { direction: { node: "d" }, at: { node: "at" } } },
     curve2: { kind: "curve", inputs: { x: { node: "t" }, low: 0.04, high: 0.74 } },
-    dist: { kind: "space", inputs: { heads: { node: "line" }, direction: [0.57, 0, 0.82], shift: 0.68, scale: { node: "curve2" } } },
+    dist: { kind: "space", inputs: { heads: { node: "line" }, direction: { node: "d" }, shift: { node: "at" }, scale: { node: "curve2" } } },
     bloom: { kind: "curve", inputs: { x: { node: "dist" }, shape: { points: [[0, 1], [0.76, 1], [1, 0]] } } },
     fade: { kind: "curve", inputs: { x: { node: "t" }, shape: { points: [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]] } } },
     heat: {
@@ -32,7 +36,7 @@ fixture({
   window: [2400, 1800],
 });
 
-const CARDS = ["t", "Curve 1", "diag", "line", "Curve 2", "dist", "cut", "bloom", "fade", "heat", "mix", "Color 1"];
+const CARDS = ["t", "Curve 1", "diag", "d", "at", "line", "Curve 2", "dist", "cut", "bloom", "fade", "heat", "mix", "Color 1"];
 const file = (card) => `card_${card.toLowerCase().replace(" ", "_")}`;
 
 test("the Slash canvas and each node card, captured", () => {

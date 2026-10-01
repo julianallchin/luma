@@ -18,7 +18,7 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 const settle = () => app.frames(4);
 const stored = () => library.score().clips["graph-clip"];
 const nodes = () => stored().graph.nodes;
-const KINDS = ["time", "space", "noise", "audio", "curve", "math", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
+const KINDS = ["time", "space", "noise", "audio", "curve", "math", "value", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
 // A node's card title: a kind and a number for an id such as `curve2`
 // ("Curve 2"), and a given name (`pill`) as it is.
 const titleOf = (id) => {
@@ -320,6 +320,55 @@ test("the add menu offers math, which multiplies what the input held", { fixture
   node("card", "Math 1");
   wire("Math 1", "Color 1 brightness");
   for (const item of ["Item 1", "Item 2"]) rowOf("Math 1", item);
+});
+
+test("a value shows only its name until wired, then one field of the input's type", { fixture: { clips: [clipOf("Wash")] } }, () => {
+  open("Wash");
+  app.click(node("button", "Add node"));
+  app.click(node("button", "Value"));
+  const draft = node("card", "New value");
+  // Unwired, it has no type yet: no field.
+  const fields = (card) => app.snapshot().findAll({ role: "input" }).filter((n) => inside(card, n.bounds));
+  expect(fields(draft.bounds).length).toBe(0);
+  app.drag(shown("button", "New value output port"), shown("button", "Color 1 brightness port"), { steps: 8, restale: "match" });
+  until("value stored", () => nodes().value1?.kind === "value");
+  // It holds what the input held, and the input names it as any wire.
+  expect(nodes().color1.inputs.brightness.node).toBe("value1");
+  expect(nodes().value1.inputs.value).toBe(1);
+  expect(inRow("Color 1", "Brightness", "select", "← Value 1").label).toBe("← Value 1");
+  wire("Value 1", "Color 1 brightness");
+  // One number field, a share in percent, as the brightness has.
+  fieldOf("Value 1 value = 100");
+  expect(fields(node("card", "Value 1").bounds).length).toBe(1);
+  // A second share links; a color does not take a number.
+  app.drag(shown("button", "Value 1 output port"), shown("button", "Color 1 alpha port"), { steps: 8, restale: "match" });
+  until("alpha linked", () => nodes().color1.inputs.alpha?.node === "value1");
+  const before = JSON.stringify(stored().graph);
+  app.drag(shown("button", "Value 1 output port"), shown("button", "Color 1 color port"), { steps: 8, restale: "match" });
+  node("text", "Value 1 cannot feed Color 1 color");
+  expect(JSON.stringify(stored().graph)).toBe(before);
+});
+
+// Slash with its shared direction and place as values.
+const SLASH_VALUES = JSON.parse(JSON.stringify(SLASH));
+Object.assign(SLASH_VALUES.nodes, {
+  d: { kind: "value", inputs: { value: [0.57, 0, 0.82] } },
+  at: { kind: "value", inputs: { value: 0.68 } },
+});
+Object.assign(SLASH_VALUES.nodes.line.inputs, { direction: { node: "d" }, at: { node: "at" } });
+Object.assign(SLASH_VALUES.nodes.dist.inputs, { direction: { node: "d" }, shift: { node: "at" } });
+
+test("a value wired into two inputs is one card with one field, named by both", { fixture: { clips: [{ ...clipOf("Pulse"), graph: SLASH_VALUES }] } }, () => {
+  open("Pulse");
+  expect(inRow("line", "Direction", "select", "← d").label).toBe("← d");
+  expect(inRow("dist", "Direction", "select", "← d").label).toBe("← d");
+  expect(inRow("line", "At", "select", "← at").label).toBe("← at");
+  expect(inRow("dist", "Shift", "select", "← at").label).toBe("← at");
+  wire("d", "line direction");
+  wire("d", "dist direction");
+  // A direction: U, V and Z. A share: one number in percent.
+  for (const axis of ["u = 0.57", "v = 0", "z = 0.82"]) fieldOf(`d value: ${axis}`);
+  fieldOf("at value = 68");
 });
 
 // The Chase's space.
