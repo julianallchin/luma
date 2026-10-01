@@ -59,7 +59,7 @@ fn quiet_camera() -> Footage {
 }
 
 #[test]
-fn a_flash_shows_whole_in_its_onset_frame_at_any_frame_interval() {
+fn a_frame_shows_the_share_of_its_interval_the_gate_is_on() {
     let catalogue = catalogue();
     let scene = strobe_scene(&catalogue, Footage::OFF);
     let mut steady = scene.clone();
@@ -71,19 +71,28 @@ fn a_flash_shows_whole_in_its_onset_frame_at_any_frame_interval() {
         let frame = frame(&catalogue, scene, end, interval);
         crate::common::mean_rgb(&renderer.render(&frame, WIDTH, HEIGHT, 16).unwrap())
     };
-    let full = mean(&steady, 0.103, footage::FRAME_S);
-    // 10 Hz flashes begin at 0.1 s. Frames of 60, 75 and 30 per second that
-    // hold the onset all show the flash at the steady light's brightness...
-    for interval in [1.0 / 60.0, 1.0 / 75.0, 1.0 / 30.0] {
-        let lit = mean(&scene, 0.1 + interval * 0.4, interval);
+    let full = mean(&steady, 0.14, footage::FRAME_S);
+    // At 10 Hz the gate is on over [0.1, 0.15]. Frames of 30, 45, 60 and
+    // 144 per second inside it all show the steady light's brightness...
+    for interval in [1.0 / 30.0, 1.0 / 45.0, 1.0 / 60.0, 1.0 / 144.0] {
+        let lit = mean(&scene, 0.1 + interval + 0.005, interval);
         assert!(
             (lit - full).abs() < 0.01 * full,
             "{interval}: {lit} vs steady {full}"
         );
     }
-    // ...and the frame after the onset frame shows none of it.
-    let dark = mean(&scene, 0.103 + footage::FRAME_S, footage::FRAME_S);
-    assert!(full > dark + 1.0, "the flash lights the stage: {full} vs {dark}");
+    // ...a frame inside the off half shows none of it...
+    let dark = mean(&scene, 0.19, footage::FRAME_S);
+    assert!(
+        full > dark + 1.0,
+        "the flash lights the stage: {full} vs {dark}"
+    );
+    // ...and a frame across the edge at 0.15 shows part of it.
+    let part = mean(&scene, 0.15 + footage::FRAME_S / 2.0, footage::FRAME_S);
+    assert!(
+        dark + 0.5 < part && part < full - 0.5,
+        "half on: {dark} < {part} < {full}"
+    );
 }
 
 #[test]

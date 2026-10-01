@@ -708,21 +708,14 @@ struct Stage {
     clock: StageClock,
 }
 
-/// The stage's free-running clock: seconds since the stage opened, whether
-/// or not the show is playing. The air drifts and the strobes flash on it.
+/// The stage's free-running clock: [`luma_render::strobe::clock`], whether
+/// or not the show is playing. The air drifts and the strobes flash on it,
+/// and the DMX engine gates its strobes on the same clock, so the screen
+/// flashes in phase with the rig.
+#[derive(Default)]
 struct StageClock {
-    started: Instant,
     /// The clock at the last submitted frame.
     submitted: Option<f64>,
-}
-
-impl Default for StageClock {
-    fn default() -> Self {
-        Self {
-            started: Instant::now(),
-            submitted: None,
-        }
-    }
 }
 
 impl StageClock {
@@ -732,7 +725,7 @@ impl StageClock {
 
     /// The clock now, and the seconds since the last submitted frame.
     fn now(&self) -> (f64, f64) {
-        let now = self.started.elapsed().as_secs_f64();
+        let now = luma_render::strobe::clock();
         let interval = self
             .submitted
             .map_or(luma_render::footage::FRAME_S, |last| {
@@ -4952,8 +4945,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
     });
     // The frame is one moment on the stage's free-running clock: its strobes
-    // flash when a flash begins in the slice since the last frame. The score
-    // is sampled at the transport time, which stands still while paused.
+    // show the share of the slice since the last frame their gate is on. The
+    // score is sampled at the transport time, which stands still while paused.
     let (clock, interval) = state.stage.borrow().clock.now();
     let bass = state.bass.as_ref().map_or(0.0, |bass| bass.at(time));
     let moment = luma_render::footage::moment(clock, interval, bass);

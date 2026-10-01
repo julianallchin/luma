@@ -36,9 +36,6 @@ struct ArtNetInner {
     /// rather than forty-four times a second.
     unbound_warned: std::collections::HashSet<i64>,
     discovery_running: bool,
-    // Monotonic epoch used to derive frame_time_secs for time-varying effects
-    // (currently the square-wave strobe fallback for fixtures without a shutter).
-    start: Instant,
 }
 
 impl ArtNetManager {
@@ -60,7 +57,6 @@ impl ArtNetManager {
                 .collect(),
             unbound_warned: std::collections::HashSet::new(),
             discovery_running: false,
-            start: Instant::now(),
         }));
 
         Self::rebind(&inner);
@@ -185,7 +181,10 @@ impl ArtNetManager {
             return;
         }
 
-        let frame_time_secs = guard.start.elapsed().as_secs_f64();
+        // The strobe gate runs on the process's strobe clock, the one the
+        // live view draws strobes on, so the screen flashes in phase with
+        // the rig.
+        let frame_time_secs = luma_render::strobe::clock();
         let universe_buffers = engine::generate_dmx(
             state,
             &guard.patched_fixtures,
