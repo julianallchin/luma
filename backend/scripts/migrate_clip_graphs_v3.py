@@ -26,6 +26,9 @@ and version 2 graphs to version 3:
   opacity in version 3: alone a clip looks the same; over another clip a
   fade now shows the clip below (with --new, report `fades_over_clips`
   counts those clips).
+- A wrapped space now tiles (decision 50): one with a number scale other
+  than 0 and 1 takes scale 1 and each curve over it reads its points at
+  x × scale, so it plays the same.
 - A `line` space after a mirror whose normal is parallel to the space's
   direction now measures from the mirror plane over the unfolded span: its
   shift and scale are halved (exact when a head sits on the plane). With an
@@ -415,6 +418,72 @@ def halve_mirrored_lines(nodes, notes, best_fit):
             notes.add("mirrored line: wrapped")
 
 
+def scaled_points(points, scale):
+    """Curve points that read at x what `points` read at x / scale, for x
+    in 0..1: each x times `scale`; below 1 the last value is held to 1,
+    above 1 the curve is cut at 1 (its value there joins as the last
+    point). A cut inside an eased segment is refused: it would change the
+    ease."""
+    out = []
+    for i, point in enumerate(points):
+        x = point[0] * scale
+        if x <= 1 + 1e-9:
+            out.append([clean(min(x, 1.0)), *point[1:]])
+            continue
+        before = points[i - 1]
+        x0 = before[0] * scale
+        if x0 >= 1 - 1e-9:
+            break
+        ease = before[2] if len(before) > 2 else "linear"
+        if ease == "hold":
+            value = before[1]
+        elif ease == "linear":
+            u = (1 - x0) / (x - x0)
+            value = clean(before[1] + (point[1] - before[1]) * u)
+        else:
+            raise Refused(f"wrapped scale {scale}: the cut at x 1 is inside an eased segment")
+        out.append([1, value])
+        break
+    if out[-1][0] < 1:
+        out.append([1, out[-1][1]])
+    if len(out[-1]) > 2:
+        out[-1] = out[-1][:2]
+    # At most two points share an x: a jump at 1 cut from a longer run.
+    while len(out) > 2 and out[-3][0] == out[-1][0]:
+        del out[-2]
+    return out
+
+
+def wrapped_scales_into_curves(nodes, notes):
+    """A wrapped space now tiles: x = fract((a − shift) / scale), where
+    version 2 read ((a − shift) mod 1) / scale. A wrapped space with a
+    number scale other than 0 and 1 takes scale 1, and each curve over it
+    reads its points at x × scale: the same light (decision 50)."""
+    for space_id, node in nodes.items():
+        settings = node.get("settings", {})
+        kind = settings.get("kind", "line")
+        if node["kind"] != "space" or settings.get("wrap", "yes" if kind == "angle" else "no") != "yes":
+            continue
+        scale = node.get("inputs", {}).get("scale", 1)
+        if number(scale) and scale in (0, 1):
+            continue
+        if not number(scale):
+            raise Refused("a wrapped space with a wired scale")
+        for reader in nodes.values():
+            for name, value in reader.get("inputs", {}).items():
+                if space_id not in sources(value):
+                    continue
+                shape = reader.get("inputs", {}).get("shape")
+                if reader["kind"] != "curve" or name != "x" or not isinstance(shape, dict) \
+                        or "points" not in shape:
+                    raise Refused(f"a wrapped space with scale read by {reader['kind']}.{name}")
+                if reader.get("settings", {}).get("kind", "number") != "number":
+                    raise Refused("a color curve over a wrapped space with scale")
+                shape["points"] = scaled_points(shape["points"], scale)
+        del node["inputs"]["scale"]
+        notes.add("wrapped scale: into the curve points")
+
+
 def convert(graph, best_fit="keep"):
     """(version 3 graph, notes). Raises Refused."""
     if graph.get("version") == VERSION:
@@ -435,6 +504,7 @@ def convert(graph, best_fit="keep"):
     clocks_into_times(nodes, notes)
     lengths_to_scales(nodes)
     halve_mirrored_lines(nodes, notes, best_fit)
+    wrapped_scales_into_curves(nodes, notes)
     return {"version": VERSION, "nodes": nodes}, notes
 
 

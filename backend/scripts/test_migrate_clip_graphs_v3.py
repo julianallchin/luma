@@ -355,6 +355,40 @@ class Convert(unittest.TestCase):
                "inputs": {"direction": [0, 1, -1], "alpha": 0.5}}
         self.convert(graph(1, aim1=aim), dict(aim1=aim))
 
+    # ---- wrapped scales (decision 50) ----
+
+    def test_a_wrapped_scale_moves_into_the_curve_points(self):
+        pill = {"points": [[0, 0], [0, 1], [1, 1], [1, 0]]}
+        self.convert(
+            graph(2, space1={"kind": "space", "settings": {"kind": "line", "wrap": "yes"},
+                             "inputs": {"shift": 0.3, "length": 0.25}},
+                  curve1=curve("space1", pill), color1=color(brightness=w("curve1"))),
+            dict(space1={"kind": "space", "settings": {"kind": "line", "wrap": "yes"},
+                         "inputs": {"shift": 0.3}},
+                 curve1=curve("space1", {"points": [[0, 0], [0, 1], [0.25, 1], [0.25, 0],
+                                                    [1, 0]]}),
+                 color1=color(brightness=w("curve1"))),
+            {"wrapped scale: into the curve points"})
+
+    def test_a_wrapped_scale_above_1_cuts_the_curve_at_1(self):
+        # x reads 0..0.8 of the old curve: a point at 0.8 lands on 1, and a
+        # linear segment over 0.8 is cut at its value there.
+        for points, expected in (
+                ([[0, 0], [0.4, 1, "ease-in"], [0.8, 0], [1, 0.5]],
+                 [[0, 0], [0.5, 1, "ease-in"], [1, 0]]),
+                ([[0, 0], [0.4, 1], [1, 0]], [[0, 0], [0.5, 1], [1, 0.333333333333]])):
+            with self.subTest(points):
+                self.convert(
+                    graph(2, space1={"kind": "space", "settings": {"kind": "angle"},
+                                     "inputs": {"length": 1.25}},
+                          curve1=curve("space1", {"points": points}),
+                          color1=color(brightness=w("curve1"))),
+                    dict(space1={"kind": "space", "settings": {"kind": "angle"}, "inputs": {}},
+                         curve1=curve("space1", {"points": expected}),
+                         color1=color(brightness=w("curve1"))))
+        with self.assertRaisesRegex(m.Refused, "eased segment"):
+            m.scaled_points([[0, 0], [0.5, 1, "ease-in"], [1, 0]], 1.25)
+
     # ---- whole graphs ----
 
     def test_version_3_passes_and_a_document_converts_each_clip(self):
