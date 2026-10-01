@@ -31,10 +31,22 @@ struct Heads {
     units: Units,
     /// Per cell, the unit's (folded) position: (heads, time, 3).
     positions: Binding,
-    /// Per stacked mirror: whether each cell was folded, and the normal.
-    mirrors: Vec<(Binding, Binding)>,
+    /// Per cell, the unit's position before any mirror.
+    unfolded: Binding,
+    /// Per stacked mirror, in order.
+    mirrors: Vec<Mirror>,
     /// A shuffle's event index and its clock.
     shuffle: Option<(Binding, Option<String>)>,
+}
+
+/// One mirror of a heads wire: whether each cell was folded, the unit
+/// normal, the plane's place along it and the span's extent along it.
+#[derive(Clone)]
+struct Mirror {
+    folded: Binding,
+    normal: Binding,
+    plane: Binding,
+    range: Binding,
 }
 
 #[derive(Clone)]
@@ -46,6 +58,9 @@ struct Events {
 
 struct Lowering<'a> {
     graph: &'a ClipGraph,
+    /// The clip's length in beats: the duration of a time node with
+    /// neither `every` nor `duration`.
+    clip_duration: f64,
     cells: Vec<Cell>,
     fixtures: Arc<[String]>,
     nodes: BTreeMap<String, Node>,
@@ -98,6 +113,18 @@ impl Lowering<'_> {
         id
     }
 
+    fn kernel_named(&mut self, kernel: Kernel, inputs: Vec<(String, Binding)>) -> String {
+        let id = format!("k{}", self.nodes.len());
+        self.nodes.insert(
+            id.clone(),
+            Node {
+                definition: kernel.id().into(),
+                inputs: inputs.into_iter().collect(),
+            },
+        );
+        id
+    }
+
     fn library_node(&mut self, definition: &str, inputs: Vec<(&str, Binding)>) -> String {
         let id = format!("k{}", self.nodes.len());
         self.nodes.insert(
@@ -128,31 +155,10 @@ impl Lowering<'_> {
 
     // ---- inputs ----
 
-    /// A number input: its value, its curve, the product of a list, or
-    /// `empty`.
+    /// A number input: its value, its wire, or `empty`.
     fn number(&mut self, id: &str, input: &str, empty: f64) -> Result<Lowered> {
         match self.node(id).inputs.get(input).cloned() {
             None => Ok(constant(empty)),
-            Some(Input::List(items)) => {
-                let mut product: Option<Lowered> = None;
-                for item in &items {
-                    let item = self.item(id, input, item)?;
-                    product = Some(match product {
-                        None => item,
-                        Some(so_far) => {
-                            let times = self.kernel(
-                                Kernel::Product,
-                                vec![("a", so_far.parts[0].clone()), ("b", item.parts[0].clone())],
-                            );
-                            Lowered {
-                                parts: std::array::from_fn(|_| output(&times, "value")),
-                                clock: clock_of([&so_far.clock, &item.clock]),
-                            }
-                        }
-                    });
-                }
-                Ok(product.unwrap_or_else(|| constant(empty)))
-            }
             Some(item) => self.item(id, input, &item),
         }
     }
@@ -207,6 +213,7 @@ impl Lowering<'_> {
             Kind::Noise => self.noise(id)?,
             Kind::Audio => self.audio(id)?,
             Kind::Curve => self.curve(id)?,
+            Kind::Math => self.math(id)?,
             kind => {
                 return Err(Error(format!(
                     "{id}: a {} node gives no value",
@@ -220,16 +227,19 @@ impl Lowering<'_> {
 
     // ---- clocks ----
 
-    fn clock(&mut self, id: &str) -> Result<(Events, String)> {
-        if let Some(known) = self.clocks.get(id) {
-            return Ok((known.clone(), id.to_string()));
+    /// The events of time node `id`, which has `every`: one event table
+    /// per clock key, so time nodes with equal `every` and `duration`
+    /// share their events.
+    fn events(&mut self, id: &str) -> Result<(Events, String)> {
+        let key = self
+            .graph
+            .clock_key(id)
+            .ok_or_else(|| Error(format!("{id}: a time node without every has no events")))?;
+        if let Some(known) = self.clocks.get(&key) {
+            return Ok((known.clone(), key));
         }
         let every = self.number(id, "every", 1.)?;
-        let duration = if self.node(id).inputs.contains_key("duration") {
-            self.number(id, "duration", 1.)?
-        } else {
-            every.clone()
-        };
+        let duration = self.duration(id)?;
         let every_table = self.kernel(Kernel::ClockTable, vec![("period", every.parts[0].clone())]);
         let duration_table = self.kernel(
             Kernel::ClockTable,
@@ -247,48 +257,69 @@ impl Lowering<'_> {
             present: output(&events, "present"),
             index: output(&events, "index"),
         };
-        self.clocks.insert(id.to_string(), lowered.clone());
-        Ok((lowered, id.to_string()))
+        self.clocks.insert(key.clone(), lowered.clone());
+        Ok((lowered, key))
+    }
+
+    /// A time node's duration in beats: its own, else its `every`, else
+    /// the clip's length.
+    fn duration(&mut self, id: &str) -> Result<Lowered> {
+        let node = self.node(id);
+        if node.inputs.contains_key("duration") {
+            self.number(id, "duration", 1.)
+        } else if node.inputs.contains_key("every") {
+            self.number(id, "every", 1.)
+        } else {
+            Ok(constant(self.clip_duration))
+        }
     }
 
     // ---- coordinates ----
 
+    /// Each head's clock: the event's progress less the head's delay over
+    /// the duration, plus the phase, wrapped (spec section 0).
     fn time(&mut self, id: &str) -> Result<Lowered> {
-        let (progress, clock) = match self.wire(id, "clock") {
-            Some(source) => {
-                let (events, clock) = self.clock(&source)?;
-                (events.progress, Some(clock))
-            }
-            None => (
+        let node = self.node(id).clone();
+        let (progress, clock) = if node.inputs.contains_key("every") {
+            let (events, clock) = self.events(id)?;
+            (events.progress, Some(clock))
+        } else if node.inputs.contains_key("duration") {
+            // Once, `duration` beats long from the clip start; past its end
+            // the clock runs on above 1, so curves hold their last value.
+            let duration = self.number(id, "duration", 1.)?;
+            let table = self.kernel(
+                Kernel::ClockTable,
+                vec![("period", duration.parts[0].clone())],
+            );
+            let turns = self.kernel(Kernel::Clock, vec![("table", output(&table, "value"))]);
+            (output(&turns, "value"), None)
+        } else {
+            (
                 output(&self.kernel(Kernel::ClipProgress, vec![]), "value"),
                 None,
-            ),
+            )
         };
-        let node = self.node(id);
-        if !["delay", "length", "phase"]
-            .iter()
-            .any(|name| node.inputs.contains_key(*name))
-        {
+        if !node.inputs.contains_key("delay") && !node.inputs.contains_key("phase") {
             return Ok(Lowered {
                 parts: std::array::from_fn(|_| progress.clone()),
                 clock,
             });
         }
         let delay = self.number(id, "delay", 0.)?;
-        let length = self.number(id, "length", 1.)?;
+        let duration = self.duration(id)?;
         let phase = self.number(id, "phase", 0.)?;
         let shifted = self.kernel(
             Kernel::Shift,
             vec![
                 ("progress", progress),
                 ("delay", delay.parts[0].clone()),
-                ("length", length.parts[0].clone()),
+                ("duration", duration.parts[0].clone()),
                 ("phase", phase.parts[0].clone()),
             ],
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&shifted, "value")),
-            clock: clock_of([&clock, &delay.clock, &length.clock, &phase.clock]),
+            clock: clock_of([&clock, &delay.clock, &phase.clock]),
         })
     }
 
@@ -307,45 +338,54 @@ impl Lowering<'_> {
         let unit = self.index_field(&heads.units.unit)?;
         let span = self.index_field(&heads.units.span)?;
         let dir = direction.clone().unwrap_or_else(|| constant(0.));
-        let axis = self.kernel(
-            Kernel::Axis,
-            vec![
-                ("positions", heads.positions.clone()),
-                ("unit", unit),
-                ("span", span),
-                ("rank", rank),
-                ("dir_x", dir.parts[0].clone()),
-                ("dir_y", dir.parts[1].clone()),
-                ("dir_z", dir.parts[2].clone()),
-                ("kind", number(kind)),
-                (
-                    "has_direction",
-                    number(if direction.is_some() { 1. } else { 0. }),
-                ),
-                ("wrap", number(if wrap { 1. } else { 0. })),
-            ],
-        );
+        let mut ports = vec![
+            ("positions".to_string(), heads.positions.clone()),
+            ("unit".into(), unit),
+            ("span".into(), span),
+            ("rank".into(), rank),
+            ("dir_x".into(), dir.parts[0].clone()),
+            ("dir_y".into(), dir.parts[1].clone()),
+            ("dir_z".into(), dir.parts[2].clone()),
+            ("kind".into(), number(kind)),
+            (
+                "has_direction".into(),
+                number(if direction.is_some() { 1. } else { 0. }),
+            ),
+            ("wrap".into(), number(if wrap { 1. } else { 0. })),
+        ];
+        // The latest mirrors, at most AIM_MIRRORS: a line along one of
+        // their normals measures from its plane.
+        let latest = &heads.mirrors[heads.mirrors.len().saturating_sub(AIM_MIRRORS)..];
+        ports.push(("mirrors".into(), number(latest.len() as f64)));
+        for m in 0..AIM_MIRRORS {
+            let mirror = latest.get(m);
+            let pick = |b: Option<&Binding>| b.cloned().unwrap_or_else(|| number(0.));
+            ports.push((format!("mirror{m}_normal"), pick(mirror.map(|m| &m.normal))));
+            ports.push((format!("mirror{m}_plane"), pick(mirror.map(|m| &m.plane))));
+            ports.push((format!("mirror{m}_range"), pick(mirror.map(|m| &m.range))));
+        }
+        let axis = self.kernel_named(Kernel::Axis, ports);
         let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
-        if !node.inputs.contains_key("shift") && !node.inputs.contains_key("length") {
+        if !node.inputs.contains_key("shift") && !node.inputs.contains_key("scale") {
             return Ok(Lowered {
                 parts: std::array::from_fn(|_| output(&axis, "value")),
                 clock: shuffled,
             });
         }
         let shift = self.number(id, "shift", 0.)?;
-        let length = self.number(id, "length", 1.)?;
+        let scale = self.number(id, "scale", 1.)?;
         let slid = self.kernel(
             Kernel::Slide,
             vec![
                 ("a", output(&axis, "value")),
                 ("shift", shift.parts[0].clone()),
-                ("length", length.parts[0].clone()),
+                ("scale", scale.parts[0].clone()),
                 ("wrap", number(if wrap { 1. } else { 0. })),
             ],
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&slid, "value")),
-            clock: clock_of([&shuffled, &shift.clock, &length.clock]),
+            clock: clock_of([&shuffled, &shift.clock, &scale.clock]),
         })
     }
 
@@ -488,12 +528,70 @@ impl Lowering<'_> {
         })
     }
 
+    /// A math node: its values combined pairwise, left to right, per
+    /// component; a number broadcasts over a vector or a color.
+    fn math(&mut self, id: &str) -> Result<Lowered> {
+        let node = self.node(id).clone();
+        let op = match node.setting("op").unwrap_or("*") {
+            "+" => 1.,
+            "-" => 2.,
+            "max" => 3.,
+            "min" => 4.,
+            _ => 0.,
+        };
+        let Some(Input::List(items)) = node.inputs.get("values") else {
+            return Err(Error(format!("{id}.values: expected a list")));
+        };
+        let wide = self.graph.value_kind(id) != Some("number");
+        let mut so_far: Option<Lowered> = None;
+        for item in items {
+            let item = self.item(id, "values", item)?;
+            so_far = Some(match so_far {
+                None => item,
+                Some(left) => {
+                    let parts = if wide {
+                        let mut parts = Vec::with_capacity(3);
+                        for c in 0..3 {
+                            let k = self.kernel(
+                                Kernel::Math,
+                                vec![
+                                    ("a", left.parts[c].clone()),
+                                    ("b", item.parts[c].clone()),
+                                    ("op", number(op)),
+                                ],
+                            );
+                            parts.push(output(&k, "value"));
+                        }
+                        <[Binding; 3]>::try_from(parts).expect("three parts")
+                    } else {
+                        let k = self.kernel(
+                            Kernel::Math,
+                            vec![
+                                ("a", left.parts[0].clone()),
+                                ("b", item.parts[0].clone()),
+                                ("op", number(op)),
+                            ],
+                        );
+                        std::array::from_fn(|_| output(&k, "value"))
+                    };
+                    Lowered {
+                        parts,
+                        clock: clock_of([&left.clock, &item.clock]),
+                    }
+                }
+            });
+        }
+        so_far.ok_or_else(|| Error(format!("{id}.values: expected two or more items")))
+    }
+
     // ---- heads ----
 
     fn base_heads(&self) -> Result<Heads> {
+        let positions = self.field(self.cells.iter().flat_map(|c| c.uvz).collect(), 3)?;
         Ok(Heads {
             units: Units::base(&self.cells),
-            positions: self.field(self.cells.iter().flat_map(|c| c.uvz).collect(), 3)?,
+            unfolded: positions.clone(),
+            positions,
             mirrors: Vec::new(),
             shuffle: None,
         })
@@ -515,24 +613,28 @@ impl Lowering<'_> {
         match node.kind {
             Kind::Mirror => {
                 let normal = self.optional_triple(id, "normal")?;
-                let offset = self.number(id, "offset", 0.)?;
+                let at = self.number(id, "at", 0.5)?;
                 let plane = normal.clone().unwrap_or_else(|| constant(0.));
                 let fold = self.kernel(
                     Kernel::Fold,
                     vec![
                         ("positions", heads.positions.clone()),
+                        ("base", heads.unfolded.clone()),
                         ("span", self.index_field(&heads.units.span)?),
                         ("normal_x", plane.parts[0].clone()),
                         ("normal_y", plane.parts[1].clone()),
                         ("normal_z", plane.parts[2].clone()),
-                        ("offset", offset.parts[0].clone()),
+                        ("at", at.parts[0].clone()),
                         ("has_normal", number(if normal.is_some() { 1. } else { 0. })),
                     ],
                 );
                 heads.positions = output(&fold, "positions");
-                heads
-                    .mirrors
-                    .push((output(&fold, "folded"), output(&fold, "normal")));
+                heads.mirrors.push(Mirror {
+                    folded: output(&fold, "folded"),
+                    normal: output(&fold, "normal"),
+                    plane: output(&fold, "plane"),
+                    range: output(&fold, "range"),
+                });
             }
             Kind::Group => {
                 let size = match node.inputs.get("size") {
@@ -546,11 +648,21 @@ impl Lowering<'_> {
                 };
                 heads.units = heads.units.group(&self.cells, size);
                 let unit = self.index_field(&heads.units.unit)?;
+                let unit_field = unit.clone();
                 let group = self.kernel(
                     Kernel::Group,
                     vec![("positions", heads.positions.clone()), ("unit", unit)],
                 );
                 heads.positions = output(&group, "positions");
+                if heads.mirrors.is_empty() {
+                    heads.unfolded = heads.positions.clone();
+                } else {
+                    let base = self.kernel(
+                        Kernel::Group,
+                        vec![("positions", heads.unfolded.clone()), ("unit", unit_field)],
+                    );
+                    heads.unfolded = output(&base, "positions");
+                }
             }
             Kind::Split => {
                 let by = match node.setting("by") {
@@ -560,12 +672,12 @@ impl Lowering<'_> {
                 heads.units = heads.units.split(&self.cells, by);
             }
             Kind::Shuffle => {
-                heads.shuffle = Some(match self.wire(id, "clock") {
-                    Some(source) => {
-                        let (events, clock) = self.clock(&source)?;
+                heads.shuffle = Some(match self.wire(id, "time") {
+                    Some(source) if self.graph.clock_key(&source).is_some() => {
+                        let (events, clock) = self.events(&source)?;
                         (events.index, Some(clock))
                     }
-                    None => (number(0.), None),
+                    _ => (number(0.), None),
                 });
             }
             kind => {
@@ -672,6 +784,7 @@ impl<'a> Lowering<'a> {
             .into();
         Lowering {
             graph,
+            clip_duration: frame.clip_duration,
             cells,
             fixtures,
             nodes: BTreeMap::new(),
@@ -732,6 +845,9 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             rate: Rate::Frame,
         },
     )]);
+    // The clip's opacity, for color and strobe: the compositor mixes the
+    // clip with the light below by it.
+    let mut alpha_port: Option<Binding> = None;
     let terminal = match out.kind {
         Kind::Color => {
             let mut inputs = [
@@ -756,9 +872,9 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                     ("g", g),
                     ("b", b),
                     ("brightness", brightness.parts[0].clone()),
-                    ("alpha", alpha.parts[0].clone()),
                 ],
             );
+            alpha_port = Some(alpha.parts[0].clone());
             ("color", output(&out, "color"))
         }
         Kind::Strobe => {
@@ -775,13 +891,8 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 },
             )?;
             let [(_, rate), (_, alpha)] = inputs;
-            let out = lowering.kernel(
-                Kernel::StrobeOut,
-                vec![
-                    ("rate", rate.parts[0].clone()),
-                    ("alpha", alpha.parts[0].clone()),
-                ],
-            );
+            let out = lowering.kernel(Kernel::StrobeOut, vec![("rate", rate.parts[0].clone())]);
+            alpha_port = Some(alpha.parts[0].clone());
             ("strobe", output(&out, "strobe"))
         }
         Kind::Aim => {
@@ -839,7 +950,7 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 let (folded, plane) = heads
                     .mirrors
                     .get(m)
-                    .cloned()
+                    .map(|mirror| (mirror.folded.clone(), mirror.normal.clone()))
                     .unwrap_or_else(|| (number(0.), number(0.)));
                 ports.push((fold.as_str(), folded));
                 ports.push((normal.as_str(), plane));
@@ -865,7 +976,11 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
             )))
         }
     };
-    let terminal_id = lowering.library_node("output", vec![(terminal.0, terminal.1)]);
+    let mut ports = vec![(terminal.0, terminal.1)];
+    if let Some(alpha) = alpha_port {
+        ports.push(("alpha", alpha));
+    }
+    let terminal_id = lowering.library_node("output", ports);
     outputs.insert(
         super::OUTPUT.to_string(),
         output(&terminal_id, super::OUTPUT),

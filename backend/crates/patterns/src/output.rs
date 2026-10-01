@@ -24,6 +24,10 @@ pub struct FixtureOutput {
     /// tilt: a solver turns it into pan and tilt after compositing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim: Option<crate::Aim>,
+    /// The clip's opacity at this head, 0–1, for color and strobe: the
+    /// compositor mixes the clip's light with the light below by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
 }
 impl FixtureOutput {
     pub fn from_rgb(rgb: [f64; 3]) -> Self {
@@ -69,6 +73,7 @@ impl FixtureOutput {
             || self.aim.is_some_and(|aim| {
                 aim.direction.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&aim.weight)
             })
+            || self.alpha.is_some_and(|v| !(0.0..=1.0).contains(&v))
         {
             return Err(Error("invalid fixture output".into()));
         }
@@ -97,6 +102,13 @@ pub(crate) fn terminal_definition() -> crate::Definition {
             (
                 "speed".into(),
                 port("Movement speed", Value::Proportion(1.0)),
+            ),
+            (
+                "alpha".into(),
+                Input {
+                    description: "The clip's opacity over the light below".into(),
+                    ..port("Alpha", Value::Proportion(1.0))
+                },
             ),
             (
                 "aim".into(),

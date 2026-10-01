@@ -151,6 +151,48 @@ pub fn blend_light(
     (light.map(|v| v / dimmer), dimmer)
 }
 
+/// A clip's light over the light under it at the clip's opacity `alpha`:
+/// the clip's light blends with the light below by `mode`
+/// ([`blend_light`]), then the result mixes with the light below by alpha.
+/// Alpha 0 leaves the light below as it was, in every mode; alpha 1 is
+/// [`blend_light`].
+#[inline]
+pub fn blend_light_alpha(
+    base_color: [f32; 3],
+    base_dimmer: f32,
+    top_color: [f32; 3],
+    top_dimmer: f32,
+    mode: BlendMode,
+    alpha: f32,
+) -> ([f32; 3], f32) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        return (base_color, base_dimmer);
+    }
+    let (color, dimmer) = blend_light(base_color, base_dimmer, top_color, top_dimmer, mode);
+    if alpha >= 1.0 {
+        return (color, dimmer);
+    }
+    let base_dimmer = base_dimmer.clamp(0.0, 1.0);
+    let light: [f32; 3] = std::array::from_fn(|c| {
+        let below = base_color[c] * base_dimmer;
+        below + (color[c] * dimmer - below) * alpha
+    });
+    let dimmer = light.into_iter().fold(0.0_f32, f32::max);
+    if dimmer <= 1e-6 {
+        return (color, 0.0);
+    }
+    (light.map(|v| v / dimmer), dimmer)
+}
+
+/// One scalar channel (a strobe's shutter) over the one under it at the
+/// clip's opacity `alpha`, as [`blend_light_alpha`].
+#[inline]
+pub fn blend_value_alpha(base: f32, top: f32, mode: BlendMode, alpha: f32) -> f32 {
+    let alpha = alpha.clamp(0.0, 1.0);
+    base + (blend_value(base, top, mode) - base) * alpha
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +266,29 @@ mod tests {
             over((RED, 0.0), (BLUE, 0.5), BlendMode::Replace),
             [0.0, 0.0, 0.5]
         ));
+    }
+
+    #[test]
+    fn alpha_mixes_the_blend_with_the_light_below() {
+        let modes = BlendMode::LIGHT;
+        for mode in modes {
+            // Alpha 0 shows the light below exactly; alpha 1 is the blend.
+            let below = (RED, 0.6);
+            let top = (BLUE, 0.8);
+            let none = blend_light_alpha(below.0, below.1, top.0, top.1, mode, 0.0);
+            assert_eq!(none, below, "{mode:?}");
+            let full = blend_light_alpha(below.0, below.1, top.0, top.1, mode, 1.0);
+            assert_eq!(full, blend_light(below.0, below.1, top.0, top.1, mode));
+            // Half way the light is half way between the two.
+            let half = light(blend_light_alpha(below.0, below.1, top.0, top.1, mode, 0.5));
+            let (a, b) = (light(below), light(full));
+            assert!(
+                close(half, std::array::from_fn(|c| (a[c] + b[c]) / 2.0)),
+                "{mode:?}"
+            );
+        }
+        assert_eq!(blend_value_alpha(0.2, 0.9, BlendMode::Replace, 0.0), 0.2);
+        assert!((blend_value_alpha(0.2, 0.9, BlendMode::Replace, 0.5) - 0.55).abs() < 1e-6);
     }
 
     #[test]
