@@ -434,7 +434,9 @@ def space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=
     `shift` (share) slides the coordinate, as a shader's p - offset: a curve
     over time on shift moves the curve along the heads (a chase, a sweep with
     its own ease), audio on shift makes a meter. `scale` (share, 0 or more)
-    is how much of the axis reads as 0-1. With wrap, a - shift wraps first.
+    is how much of the axis reads as 0-1. With wrap, x tiles as a shader's
+    fract((a - shift) / scale): the shape repeats every `scale` (0.25 = four
+    copies); one pill per turn is a narrow curve with scale 1.
     A line space after a mirror with the same direction measures from the
     mirror's plane.
     """

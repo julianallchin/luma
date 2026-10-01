@@ -489,14 +489,17 @@ fn a_shift_slides_the_coordinate_and_a_scale_stretches_it() {
     for (a, x) in plain.iter().zip(&slid) {
         assert!((x - (a - 0.25) / 0.5).abs() < 1e-9, "{plain:?} {slid:?}");
     }
-    // On a ring the slid coordinate wraps before it is stretched.
+    // On a ring the space tiles, as a shader's fract(p / scale): it is
+    // stretched first, then repeats every `scale`.
     let ring = at(json!({"direction": [1, 0, 0]}), "yes");
-    let wrapped = at(
-        json!({"direction": [1, 0, 0], "shift": 0.9, "scale": 2}),
-        "yes",
-    );
-    for (a, x) in ring.iter().zip(&wrapped) {
-        assert!((x - (a - 0.9).rem_euclid(1.) / 2.).abs() < 1e-9);
+    for scale in [2., 0.25] {
+        let tiled = at(
+            json!({"direction": [1, 0, 0], "shift": 0.9, "scale": scale}),
+            "yes",
+        );
+        for (a, x) in ring.iter().zip(&tiled) {
+            assert!((x - ((a - 0.9) / scale).rem_euclid(1.)).abs() < 1e-9);
+        }
     }
 }
 
