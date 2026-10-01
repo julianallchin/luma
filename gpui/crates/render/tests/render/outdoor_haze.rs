@@ -113,7 +113,6 @@ fn add_near_opaque_surface(frame: &mut Frame) {
         },
         textures: MaterialTextures::default(),
         editor_object: None,
-        strobe: luma_render::strobe::Rows::STEADY,
     });
 }
 
@@ -134,7 +133,6 @@ fn noncontributing_cone(position: Vec3, range: f32, color: Vec3, intensity: f32)
         gobo_rotation: 0.0,
         haze_gain: 0.0,
         lens: luma_render::luminaire::Lens::POINT,
-        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -273,7 +271,6 @@ fn daylight_scattering_stops_at_opaque_geometry() {
         },
         textures: MaterialTextures::default(),
         editor_object: None,
-        strobe: luma_render::strobe::Rows::STEADY,
     });
     let front = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     capture("near-black-surface", &front);
@@ -404,7 +401,6 @@ fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens::POINT,
-        strobe: luma_render::strobe::Rows::STEADY,
     });
     let live = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
     let reference = renderer

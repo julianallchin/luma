@@ -467,11 +467,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     // three clamps roughness to 0.0525 before squaring.
     surface.roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
     surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
-    // A strobing emitter face lights only the rows a rolling shutter has open
-    // during its flash.
-    let row = in.clip.y * globals.viewport.w;
-    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb
-        * strobe_row_ratio(inst.strobe.x, inst.strobe.y, inst.strobe.z, inst.strobe.w, inst.flags.w, row);
+    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
     surface.n = n;
     surface.unevenness = 0.0;
     return shade(in, surface, dpdx(in.world), dpdy(in.world));
@@ -704,16 +700,8 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             // radiance; the beam gain is the absolute scale, and it is the
             // same one the haze march applies to the same cone.
             let beam_gain = surface_clusters.shadow.z;
-            let strobe = strobe_row_ratio(
-                rest.strobe_phase,
-                rest.strobe_span,
-                rest.strobe_readout,
-                rest.strobe_duty,
-                rest.strobe_norm,
-                in.clip.y * globals.viewport.w,
-            );
             let irradiance =
-                dot_nl * rest.color * rest.intensity * strobe * beam_gain * profile * visibility;
+                dot_nl * rest.color * rest.intensity * beam_gain * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
         }

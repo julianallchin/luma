@@ -1,22 +1,20 @@
-//! A strobe is a short flash once per period, and a frame sees the light the
-//! flashes deliver while it is exposed.
+//! A strobe is a train of flashes, and a frame shows a flash whole when one
+//! begins within it.
 //!
 //! The flashes run on the frame's free-running clock ([`crate::Frame::time`]),
 //! not on transport time, so a paused show keeps flashing the way a fixture on
 //! a DMX line does. Every fixture with the same rate flashes in phase.
 //!
-//! A frame, or one subframe of it, is exposed over a [`Slice`] of that clock.
-//! Its strobe intensity is the exact mean of the flash train over the slice,
-//! in closed form. Point sampling would miss a 5 ms flash at almost any frame
-//! rate, and it would make the brightness depend on the subframe count. The
-//! mean over a slice split in two is the mean of the two halves, so 2
-//! subframes and 16 give the same brightness.
-
-/// Seconds one flash lasts. LED strobes flash for a few milliseconds, xenon
-/// tubes for well under one; 5 ms is the LED end, and long enough that a
-/// flash still shows as a band, not a line, under a 10 ms rolling readout.
-/// The flash's peak is the dimmer value.
-pub const FLASH_S: f64 = 0.005;
+//! A frame is the [`Slice`] of that clock since the frame before it. It shows
+//! a strobing light at its full peak when a flash begins inside the slice,
+//! and dark otherwise. A flash is a few milliseconds, shorter than any frame,
+//! so a camera would record a fraction of the peak that depends on the frame
+//! interval, and split a flash that straddles two frames between both. A
+//! display has no business doing either: the same flash would brighten and
+//! dim with frame-time jitter. Consecutive slices tile the clock, so each
+//! flash lands in exactly one frame, at full brightness, at any frame rate.
+//! At a rate above the frame rate, every frame holds an onset and the light
+//! looks steady, as it does to an eye.
 
 /// Flashes per second per unit of `PrimitiveState::strobe`, for every fixture
 /// type.
@@ -37,240 +35,141 @@ pub fn hz(strobe: f32) -> f64 {
     }
 }
 
-/// When one (sub)frame is exposed, on the free-running clock.
-///
-/// Row 0 is exposed over `[open, open + length]`. With a rolling shutter, row
-/// `y` (0 at the top, 1 at the bottom) opens `y * readout` seconds later.
+/// The part of the free-running clock one frame covers: `[open, open +
+/// length)`. The next frame's slice opens where this one ends.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Slice {
-    /// Clock seconds at which row 0 opens.
+    /// Clock seconds at which the slice opens.
     pub open: f64,
-    /// Seconds each row stays open. Positive.
+    /// Seconds the slice lasts. Positive.
     pub length: f64,
-    /// Seconds from the first row opening to the last. Zero for a global
-    /// shutter.
-    pub readout: f64,
 }
 
-/// A strobe's exposure within a [`Slice`], one number per frame plus the
-/// shape of its variation down the rows.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Exposure {
-    /// The mean fraction of the peak over the slice, 0..=1. With a readout it
-    /// is the mean over the whole readout span, rescaled to one row's length:
-    /// an upper bound on every row's own mean, so a cone that lights some row
-    /// is never culled. [`Rows::ratio`] takes it down to each row's value.
-    pub gain: f32,
-    /// How each row's exposure relates to [`Self::gain`].
-    pub rows: Rows,
-}
-
-/// Row `y`'s exposure over [`Exposure::gain`], for a rolling shutter.
-///
-/// In periods of the flash train: row `y` sees `[phase + y * readout, … +
-/// span]`, a flash is the first `duty` of each period, and `norm` divides the
-/// light that window receives by the light behind [`Exposure::gain`].
-/// `norm == 0` means every row sees the same light (ratio 1). Mirrored in
-/// `shaders/fixture_light.wgsl` (`strobe_row_ratio`).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Rows {
-    /// Where row 0's window opens, as a fraction of a period.
-    pub phase: f32,
-    /// One row's window, in periods.
-    pub span: f32,
-    /// The whole readout, in periods.
-    pub readout: f32,
-    /// The lit fraction of a period.
-    pub duty: f32,
-    /// One over the periods' worth of light behind [`Exposure::gain`].
-    pub norm: f32,
-}
-
-impl Rows {
-    /// Every row sees the same light.
-    pub const STEADY: Self = Self {
-        phase: 0.0,
-        span: 0.0,
-        readout: 0.0,
-        duty: 0.0,
-        norm: 0.0,
-    };
-
-    /// The five numbers the shaders take, in `strobe_row_ratio`'s order.
-    #[must_use]
-    pub fn words(&self) -> [f32; 5] {
-        [self.phase, self.span, self.readout, self.duty, self.norm]
+/// A strobing light's share of its peak in `slice`: 1 when a flash begins
+/// within it, 0 when none does, and 1 for a steady light.
+#[must_use]
+pub fn gain(strobe: f32, slice: Slice) -> f32 {
+    let hz = hz(strobe);
+    if hz <= 0.0 {
+        return 1.0;
     }
-
-    /// Row `y`'s exposure over the slice's [`Exposure::gain`], 0..=1.
-    #[must_use]
-    pub fn ratio(&self, y: f32) -> f32 {
-        if self.norm <= 0.0 {
-            return 1.0;
-        }
-        let a = f64::from(self.phase) + f64::from(y.clamp(0.0, 1.0)) * f64::from(self.readout);
-        let b = a + f64::from(self.span);
-        let duty = f64::from(self.duty);
-        ((on_time(b, duty) - on_time(a, duty)) * f64::from(self.norm)).clamp(0.0, 1.0) as f32
+    // In periods, flashes begin on whole numbers. A slice holds an onset when
+    // the count of onsets before its close exceeds the count before its open.
+    // Each frame computes its open from its own end and length, so the two
+    // sides of one boundary can differ in the last bit; an onset within
+    // `SNAP` periods of a boundary is put on it, so both sides agree that it
+    // belongs to the later slice and it is neither dropped nor shown twice.
+    let before = |t: f64| (t * hz - SNAP).ceil();
+    let close = slice.open + slice.length.max(0.0);
+    if before(close) > before(slice.open) {
+        1.0
+    } else {
+        0.0
     }
 }
 
-/// On-time of a flash train from 0 to `x` periods, in periods: each period
-/// is lit for its first `duty`.
-fn on_time(x: f64, duty: f64) -> f64 {
-    let whole = x.floor();
-    whole * duty + (x - whole).min(duty)
-}
-
-impl Exposure {
-    /// The steady light: full peak on every row.
-    pub const STEADY: Self = Self {
-        gain: 1.0,
-        rows: Rows::STEADY,
-    };
-
-    /// A strobe at `strobe` exposed over `slice`.
-    #[must_use]
-    pub fn of(strobe: f32, slice: Slice) -> Self {
-        let hz = hz(strobe);
-        let length = slice.length.max(1e-6);
-        let duty = FLASH_S * hz;
-        if hz <= 0.0 || duty >= 1.0 {
-            return Self::STEADY;
-        }
-        let readout = slice.readout.max(0.0);
-        // Everything in periods from here: the train repeats every one, so
-        // the whole part of the open time only adds whole flashes and the
-        // fractional part keeps its precision on a clock hours old.
-        let start = slice.open * hz;
-        let phase = start - start.floor();
-        let span = length * hz;
-        let reach = (length + readout) * hz;
-        let light = on_time(phase + reach, duty) - on_time(phase, duty);
-        let gain = (light / span).min(1.0);
-        let rows = if readout > 0.0 && light > 0.0 {
-            Rows {
-                phase: phase as f32,
-                span: span as f32,
-                readout: (readout * hz) as f32,
-                duty: duty as f32,
-                norm: (1.0 / (gain * span)) as f32,
-            }
-        } else {
-            Rows::STEADY
-        };
-        Self {
-            gain: gain as f32,
-            rows,
-        }
-    }
-}
+/// How near a boundary, in periods, an onset counts as on it: far above the
+/// rounding of a clock hours old, far below a flash.
+const SNAP: f64 = 1e-6;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn slice(open: f64, length: f64) -> Slice {
-        Slice {
-            open,
-            length,
-            readout: 0.0,
-        }
+        Slice { open, length }
     }
 
     #[test]
-    fn a_steady_light_is_full_on_every_row() {
-        assert_eq!(Exposure::of(0.0, slice(3.0, 0.01)), Exposure::STEADY);
+    fn a_steady_light_is_full_on() {
+        assert_eq!(gain(0.0, slice(3.0, 0.01)), 1.0);
+        assert_eq!(gain(-1.0, slice(3.0, 0.01)), 1.0);
+        assert_eq!(gain(f32::NAN, slice(3.0, 0.01)), 1.0);
     }
 
     #[test]
-    fn a_frame_that_holds_one_whole_flash_gets_its_share_of_the_peak() {
-        // 10 Hz flashes at 0.1 s; the frame [0.095, 0.115] holds one.
-        let exposure = Exposure::of(0.5, slice(0.095, 0.02));
-        assert!((f64::from(exposure.gain) - FLASH_S / 0.02).abs() < 1e-6);
-        // And the frame after it holds none.
-        assert_eq!(Exposure::of(0.5, slice(0.115, 0.02)).gain, 0.0);
+    fn a_frame_holding_an_onset_shows_the_whole_peak() {
+        // 10 Hz: flashes begin at 0.1, 0.2, ...
+        assert_eq!(gain(0.5, slice(0.095, 0.02)), 1.0);
+        // An onset on the opening edge belongs to the slice.
+        assert_eq!(gain(0.5, slice(0.1, 0.01)), 1.0);
     }
 
     #[test]
-    fn the_mean_does_not_depend_on_how_the_frame_is_split() {
+    fn a_frame_without_an_onset_is_dark() {
+        assert_eq!(gain(0.5, slice(0.115, 0.02)), 0.0);
+        // An onset on the closing edge belongs to the next slice.
+        assert_eq!(gain(0.5, slice(0.09, 0.01)), 0.0);
+    }
+
+    #[test]
+    fn a_flash_across_a_frame_boundary_lands_once_in_its_onset_frame() {
+        // The flash begins at 0.1 and lasts past the boundary at 0.105: the
+        // frame it began in shows it, the next does not.
+        let frames = [slice(0.09, 0.015), slice(0.105, 0.015)];
+        assert_eq!(gain(0.5, frames[0]), 1.0);
+        assert_eq!(gain(0.5, frames[1]), 0.0);
+    }
+
+    #[test]
+    fn every_flash_lands_in_exactly_one_frame_at_any_frame_rate() {
         for strobe in [0.13_f32, 0.5, 0.77, 1.0] {
-            for open in [0.0, 0.0973, 1.37, 3600.001] {
-                let whole = f64::from(Exposure::of(strobe, slice(open, 1.0 / 60.0)).gain);
-                for parts in [2_u32, 16] {
-                    let length = 1.0 / 60.0 / f64::from(parts);
-                    let split = (0..parts)
-                        .map(|k| {
-                            f64::from(
-                                Exposure::of(strobe, slice(open + f64::from(k) * length, length))
-                                    .gain,
-                            )
-                        })
-                        .sum::<f64>()
-                        / f64::from(parts);
-                    assert!(
-                        (split - whole).abs() < 1e-4,
-                        "{strobe} at {open}: whole {whole}, {parts} parts {split}"
-                    );
+            let hz = hz(strobe);
+            for fps in [24.0, 50.0, 59.94, 60.0, 75.0, 120.0, 144.0] {
+                let length = 1.0 / fps;
+                let (start, frames) = (3600.0, 600_u32);
+                let lit = (0..frames)
+                    .map(|n| gain(strobe, slice(start + f64::from(n) * length, length)))
+                    .sum::<f32>();
+                let end = start + f64::from(frames) * length;
+                let onsets = ((end * hz).ceil() - (start * hz).ceil()) as f32;
+                if hz < fps {
+                    assert_eq!(lit, onsets, "{strobe} at {fps} fps");
+                } else {
+                    assert_eq!(lit, frames as f32, "{strobe} at {fps} fps");
                 }
             }
         }
     }
 
     #[test]
-    fn over_a_long_window_the_mean_is_the_duty_cycle() {
-        let exposure = Exposure::of(0.5, slice(12.345, 10.0));
-        assert!((f64::from(exposure.gain) - FLASH_S * 10.0).abs() < 1e-3);
+    fn jittered_frame_intervals_do_not_change_a_flash_brightness() {
+        // Irregular intervals between 10 and 20 ms: each flash still lands
+        // once, at gain 1, and nothing between flashes lights.
+        let strobe = 0.5;
+        let mut open = 12.0;
+        let mut lit = 0;
+        for n in 0..1000_u32 {
+            let length = 0.010 + 0.010 * f64::from((n * 7919) % 97) / 97.0;
+            let g = gain(strobe, slice(open, length));
+            assert!(g == 0.0 || g == 1.0, "{g}");
+            lit += g as u32;
+            open += length;
+        }
+        let onsets = ((open * hz(strobe)).ceil() - (12.0 * hz(strobe)).ceil()) as u32;
+        assert_eq!(lit, onsets);
     }
 
     #[test]
-    fn rolling_rows_bound_by_the_gain_and_band_the_flash() {
-        // 10 Hz, one flash at 0.1 s. Rows open 0 to 10 ms after 0.09 and stay
-        // open 8 ms, so the top rows close before the flash and the bottom
-        // rows hold all of it.
-        let exposure = Exposure::of(
-            0.5,
-            Slice {
-                open: 0.09,
-                length: 0.008,
-                readout: 0.01,
-            },
-        );
-        let lit = |y: f32| exposure.gain * exposure.rows.ratio(y);
-        assert_eq!(lit(0.0), 0.0);
-        let bottom = f64::from(lit(1.0));
-        assert!((bottom - FLASH_S / 0.008).abs() < 1e-4, "{bottom}");
-        for step in 0..=20 {
-            let ratio = exposure.rows.ratio(step as f32 / 20.0);
-            assert!((0.0..=1.0).contains(&ratio));
+    fn a_frame_rate_that_divides_the_flash_rate_lands_each_flash_once() {
+        // 10 Hz at 60 fps: every sixth frame boundary is an onset, and the
+        // slices' ends are computed, not exact.
+        for (strobe, fps) in [(0.5_f32, 60.0), (1.0, 60.0), (0.25, 50.0), (0.5, 30.0)] {
+            let hz = hz(strobe);
+            let length = 1.0 / fps;
+            let lit = (1..=600_u32)
+                .map(|n| {
+                    let end = f64::from(n) / fps;
+                    gain(strobe, slice(end - length, length))
+                })
+                .sum::<f32>();
+            let onsets = (600.0 / fps * hz).round() as f32;
+            assert_eq!(lit, onsets.min(600.0), "{strobe} at {fps} fps");
         }
     }
 
     #[test]
-    fn the_mean_over_the_rows_matches_a_global_shutter_of_the_same_span() {
-        // Each row's window is the global window shifted; averaged over the
-        // rows it is the mean over the readout span, whatever the phase.
-        let rolling = Slice {
-            open: 5.0123,
-            length: 1.0 / 120.0,
-            readout: 0.01,
-        };
-        let exposure = Exposure::of(0.9, rolling);
-        let rows = 4000;
-        let mean = (0..rows)
-            .map(|r| {
-                let y = (r as f32 + 0.5) / rows as f32;
-                f64::from(exposure.gain * exposure.rows.ratio(y))
-            })
-            .sum::<f64>()
-            / f64::from(rows);
-        let reference = (0..rows)
-            .map(|r| {
-                let y = (f64::from(r) + 0.5) / f64::from(rows);
-                f64::from(Exposure::of(0.9, slice(rolling.open + y * 0.01, rolling.length)).gain)
-            })
-            .sum::<f64>()
-            / f64::from(rows);
-        assert!((mean - reference).abs() < 1e-4, "{mean} vs {reference}");
+    fn several_onsets_in_one_frame_are_still_one_peak() {
+        assert_eq!(gain(1.0, slice(0.0, 0.5)), 1.0);
     }
 }

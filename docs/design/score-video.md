@@ -439,18 +439,21 @@ knowledge anywhere. The renderer's jitter budget is *divided* between the
 sub-renders (`DEFAULT_SUBFRAMES / K` each), so total haze samples are unchanged
 and only the fixed passes are paid four times.
 
-*Update, 2026-09-30:* `strobe_gate` is gone. A strobe is now a 5 ms flash per
-period whose light is integrated exactly over each frame's time slice
-(`luma_render::strobe`), on the free-running clock rather than transport time,
-with one rate mapping for every fixture. The renderer also averages a
-frame's shutter moments itself, in scene-linear light before the tone curve
-(`luma_render::footage`, the stage's footage look); the stage and the show
-export share it. `luma-record` now uses the same path
-(`stage_render::Sequence::exposure`): its K = 4 sub-renders and the
-after-the-tone-curve average are gone. With the footage look off, which is
-the venue scene's neutral look, a recorded frame is one moment whose strobes
-are the light of the whole frame interval, so it no longer blurs motion. The
-paragraphs below describe the old K = 4 shutter.
+*Update, 2026-09-30:* `strobe_gate` and every shutter are gone. A frame is
+one moment, live, in the show export and in `luma-record` alike
+(`luma_render::footage::moment`, `stage_render::Sequence::frame_at`). A strobe
+flashes on the free-running clock, not on transport time or the beat, at one
+rate mapping for every fixture (`luma_render::strobe`, 20 Hz per unit). Each
+frame covers the slice of that clock since the frame before, and shows a
+strobing light at full brightness when a flash begins in its slice and dark
+otherwise. The slices tile the clock, so every flash lands in exactly one
+frame at full brightness, whatever the frame interval and its jitter; at a
+rate above the frame rate every frame is lit. A brief attempt (the same day)
+to integrate a 5 ms flash over a camera shutter, with a rolling readout,
+made strobes 5 to 50 times darker and their brightness a function of the
+frame interval, and was removed. The stage's footage look keeps only sensor
+noise, handheld sway and bass shake. The paragraphs below describe the old
+K = 4 shutter.
 
 Averaging is in linear light, not on the sRGB bytes the renderer returns: a
 half-duty strobe averaged as bytes lands at code value 128 instead of 188, about
