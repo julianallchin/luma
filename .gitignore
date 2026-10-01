@@ -53,6 +53,8 @@ scripts/*
 !/docs/specs/
 # …and design docs — architecture decisions implementation is steered by
 !/docs/design/
+# …and research notes — evidence gathered before design decisions
+!/docs/research/
 # …and the agent friction log
 !/docs/AGENT_FRICTION.md
 

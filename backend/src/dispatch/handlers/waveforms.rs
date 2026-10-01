@@ -6,7 +6,9 @@ pub async fn get_track_waveform(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackWaveform, CommandError> {
-    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
+    services
+        .track_audio
+        .ensure(&track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(
@@ -21,7 +23,9 @@ pub async fn get_track_waveform_signal(
     services: &AppServices,
     track_id: String,
 ) -> Result<WaveformSignal, CommandError> {
-    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
+    services
+        .track_audio
+        .ensure(&track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(waveform_service::get_track_waveform_signal(

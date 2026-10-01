@@ -1396,7 +1396,6 @@ fn multiply_geometry(frame: &mut luma_render::Frame, copies: usize) {
         material: draw.material,
         textures: draw.textures,
         editor_object: draw.editor_object.clone(),
-        strobe: draw.strobe,
     };
     let originals: Vec<_> = frame.draws[..opaque].iter().map(copy_of).collect();
     let grid: Vec<_> = frame.draws[opaque..].iter().map(copy_of).collect();
@@ -1425,7 +1424,6 @@ fn frame_with_lights(
     range_scale: f32,
 ) -> luma_render::Frame {
     let mut frame = luma_render::Frame {
-        shutter: Vec::new(),
         meshes: base
             .meshes
             .iter()
@@ -1445,7 +1443,6 @@ fn frame_with_lights(
                 material: draw.material,
                 textures: draw.textures,
                 editor_object: draw.editor_object.clone(),
-                strobe: draw.strobe,
             })
             .collect(),
         transparent: base.transparent.clone(),
@@ -1494,7 +1491,6 @@ fn frame_with_lights(
             gobo_rotation: 0.31,
             haze_gain: 1.0,
             lens: luma_render::luminaire::Lens::POINT,
-            strobe: luma_render::strobe::Rows::STEADY,
         });
     }
     frame

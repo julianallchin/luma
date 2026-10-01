@@ -4,6 +4,8 @@ use std::fmt;
 /// type in the SDK; this is only the bytes.
 #[derive(Debug)]
 pub enum SyncError {
+    /// Audio availability or local media file failure.
+    Media(String),
     /// HTTP request to Supabase failed
     Network(String),
     /// Supabase API returned a non-success status
@@ -20,6 +22,7 @@ pub enum SyncError {
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SyncError::Media(msg) => write!(f, "{msg}"),
             SyncError::Network(msg) => write!(f, "network error: {msg}"),
             SyncError::Api { status, message } => write!(f, "API error {status}: {message}"),
             SyncError::Local(msg) => write!(f, "local DB error: {msg}"),

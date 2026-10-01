@@ -93,7 +93,6 @@ fn frame(export: &CameraExport, boxes: &[(Vec3, Vec3)]) -> Frame {
             },
             textures: MaterialTextures::default(),
             editor_object: None,
-            strobe: luma_render::strobe::Rows::STEADY,
         })
         .collect();
     frame.draws.splice(at..at, draws);

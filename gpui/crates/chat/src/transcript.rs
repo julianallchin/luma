@@ -801,7 +801,9 @@ pub fn row(
         .then_some(turn.time)
         .flatten()
         .map(|time| SharedString::from(time.format("%b %-d, %-I:%M %p").to_string()));
-    let lane = ctx.last_of_turn.then(|| {
+    // Only under a reply: a prompt sits close to the answer it asked for, and
+    // the gap that separates exchanges is this lane plus the turn gap.
+    let lane = (ctx.last_of_turn && matches!(message.role, Role::Assistant)).then(|| {
         div()
             .h(px(theme::TIMESTAMP_LANE))
             .flex_none()

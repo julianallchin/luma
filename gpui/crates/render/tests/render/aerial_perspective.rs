@@ -82,7 +82,6 @@ fn cards() -> Frame {
             },
             textures: MaterialTextures::default(),
             editor_object: None,
-            strobe: luma_render::strobe::Rows::STEADY,
         });
     }
     frame

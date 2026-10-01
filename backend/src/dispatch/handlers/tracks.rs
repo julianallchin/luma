@@ -178,7 +178,9 @@ pub async fn import_tracks(
 }
 
 pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
-    crate::sync::files::ensure_track_audio(&services.db.0, &track_id)
+    services
+        .track_audio
+        .ensure(&track_id)
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let epoch = services.analysis_tasks.current_epoch()?;

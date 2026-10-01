@@ -218,17 +218,7 @@ fn probe_fixture_light(
         if probe_grid.step.w < 0.5 {
             visibility = fixture_shadow_visibility(world, n, light_index);
         }
-        // A probe is seen from every row, so it takes a strobe's exposure
-        // at the middle one.
-        let strobe = strobe_row_ratio(
-            rest.strobe_phase,
-            rest.strobe_span,
-            rest.strobe_readout,
-            rest.strobe_duty,
-            rest.strobe_norm,
-            0.5,
-        );
-        let irradiance = dot_nl * rest.color * rest.intensity * strobe * beam_gain
+        let irradiance = dot_nl * rest.color * rest.intensity * beam_gain
             * angular * aperture * attenuation * visibility;
         out += irradiance * (diffuse_color * RECIPROCAL_PI + brdf_ggx(n, v, l, f0, roughness));
     }
