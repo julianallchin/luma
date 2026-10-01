@@ -241,13 +241,26 @@ class Convert(unittest.TestCase):
                             "inputs": {"heads": w("mirror1")}},
                     curve1=curve("space1"), color1=color(brightness=w("curve1")))
         self.convert(old, dict(old["nodes"], mirror1={"kind": "mirror",
-                                                      "inputs": {"normal": [0, 0, 1]}}))
+                                                      "inputs": {"direction": [0, 0, 1]}}))
         old["nodes"]["mirror1"]["inputs"]["offset"] = 0.5
         with self.assertRaisesRegex(m.Refused, "mirror offset"):
             m.convert(old)
 
-    def mirrored(self, normal, direction, space_inputs, extra=None):
-        mirror = {"kind": "mirror", "inputs": {"normal": normal} if normal else {}}
+    def test_a_mirror_offset_in_metres_becomes_at_on_the_rig(self):
+        # Heads at z 0..3 and 9: the extent along +Z is 9, so 1.8 m above
+        # the middle is 0.5 + 0.2.
+        old = graph(2, mirror1={"kind": "mirror", "inputs": {"normal": [0, 0, 1], "offset": 1.8}},
+                    space1={"kind": "space", "settings": {"kind": "order", "wrap": "no"},
+                            "inputs": {"heads": w("mirror1")}},
+                    curve1=curve("space1"), color1=color(brightness=w("curve1")))
+        cells = [dict(id=f"f{z}:0", group="all", world=[0, 0, z], uvz=[0, 0, z])
+                 for z in (0, 1, 2, 3, 9)]
+        new, notes = m.convert(old, cells=cells, coordinate=lambda n, i: {})
+        self.assertEqual(new["nodes"]["mirror1"]["inputs"], {"direction": [0, 0, 1], "at": 0.7})
+        self.assertIn("mirror: offset in metres → at", notes)
+
+    def mirrored(self, normal, direction, space_inputs, extra=None, key="normal"):
+        mirror = {"kind": "mirror", "inputs": {key: normal} if normal else {}}
         if not mirror["inputs"]:
             del mirror["inputs"]
         inputs = {"heads": w("mirror1"), **space_inputs}
@@ -259,17 +272,32 @@ class Convert(unittest.TestCase):
                     curve1=curve("space1", {"points": [[0, 0], [0, 1], [1, 1], [1, 0]]}),
                     color1=color(brightness=w("curve1")), **(extra or {}))
 
-    def test_a_line_after_a_parallel_mirror_halves_shift_and_scale(self):
+    # With no rig a line along a mirror's direction assumes a head on the
+    # plane: the folded heads read at..1 of the ruler before the fold
+    # (0.5..1 for a mirror in the middle), where version 2 read them 0..1.
+    # So shift' = 0.5 + shift / 2 and scale' = scale / 2.
+
+    def test_a_line_after_a_parallel_mirror_reads_from_its_plane(self):
         why = self.convert(graph(2, **self.mirrored([1, 0, 0], [-1, 0, 0],
                                                     {"shift": 0.5, "length": 0.25})),
-                           self.mirrored([1, 0, 0], [-1, 0, 0], {"shift": 0.25, "scale": 0.125}))
-        self.assertIn("mirrored line: halved (parallel)", why)
+                           self.mirrored([1, 0, 0], [-1, 0, 0], {"shift": 0.75, "scale": 0.125},
+                                         key="direction"))
+        self.assertIn("mirrored line: from the plane (parallel)", why)
 
     def test_a_mirrored_line_with_no_scale_gets_scale_one_half(self):
         self.convert(graph(2, **self.mirrored([0, 0, 1], [0, 0, 2], {})),
-                     self.mirrored([0, 0, 1], [0, 0, 2], {"scale": 0.5}))
+                     self.mirrored([0, 0, 1], [0, 0, 2], {"shift": 0.5, "scale": 0.5},
+                                   key="direction"))
 
-    def test_a_mirrored_line_halves_a_wired_shift_by_its_curve(self):
+    def test_a_mirror_off_the_middle_moves_the_plane_not_the_ruler(self):
+        old = self.mirrored([1, 0, 0], [1, 0, 0], {"shift": 0.5})
+        old["mirror1"]["inputs"]["at"] = 0.25
+        expected = self.mirrored([1, 0, 0], [1, 0, 0], {"shift": 0.625, "scale": 0.75},
+                                 key="direction")
+        expected["mirror1"]["inputs"]["at"] = 0.25
+        self.convert(graph(2, **old), expected)
+
+    def test_a_mirrored_line_moves_a_wired_shift_by_its_curve(self):
         """Version 1: a chase band over a mirror (8.7 gives shift and length)."""
         extra = {"clock1": {"kind": "clock", "inputs": {"every": 4, "duration": 2}},
                  "time1": {"kind": "time", "inputs": {"clock": w("clock1")}},
@@ -280,11 +308,11 @@ class Convert(unittest.TestCase):
         expected = self.mirrored(
             [1, 0, 0], [1, 0, 0], {"shift": w("curve2"), "scale": 0.25},
             {"time1": {"kind": "time", "inputs": {"every": 4, "duration": 2}},
-             "curve2": curve("time1", low=-0.25, high=0.5)})
+             "curve2": curve("time1", low=0.25, high=1)}, key="direction")
         expected["curve1"]["inputs"]["shape"] = {"points": [[0, 0], [0.5, 1], [1, 0]]}
         self.convert(old, expected)
 
-    def test_a_mirrored_line_halves_a_shared_shift_with_a_math_node(self):
+    def test_a_mirrored_line_moves_a_shared_shift_with_math_nodes(self):
         extra = {"time1": {"kind": "time"}, "curve2": curve("time1"),
                  "curve3": curve("time1", {"points": [[0, 0], [1, 1]]})}
         old = self.mirrored([1, 0, 0], [1, 0, 0], {"shift": w("curve2")}, extra)
@@ -293,18 +321,21 @@ class Convert(unittest.TestCase):
         old["color1"]["inputs"]["alpha"] = w("curve3")
         new, _ = m.convert(graph(2, **old))
         nodes = new["nodes"]
-        self.assertEqual(nodes["space1"]["inputs"]["shift"], w("math1"))
+        self.assertEqual(nodes["space1"]["inputs"]["shift"], w("math2"))
         self.assertEqual(nodes["math1"]["inputs"]["values"], [w("curve2"), 0.5])
+        self.assertEqual(nodes["math2"], {"kind": "math", "settings": {"op": "+"},
+                                          "inputs": {"values": [w("math1"), 0.5]}})
         self.assertEqual(nodes["curve2"], curve("time1"))
 
-    def test_a_line_across_the_mirror_normal_is_unchanged(self):
+    def test_a_line_across_the_mirror_direction_is_unchanged(self):
         self.convert(graph(2, **self.mirrored([0, 0, 1], [1, 0, 0], {"shift": 0.5})),
-                     self.mirrored([0, 0, 1], [1, 0, 0], {"shift": 0.5}))
+                     self.mirrored([0, 0, 1], [1, 0, 0], {"shift": 0.5}, key="direction"))
 
-    def test_a_best_fit_normal_halves_or_keeps_by_choice(self):
+    def test_a_best_fit_mirror_reads_from_its_plane_or_keeps_by_choice(self):
         old = graph(2, **self.mirrored(None, [1, 0, 0], {}))
-        why = self.convert(old, self.mirrored(None, [1, 0, 0], {"scale": 0.5}), best_fit="halve")
-        self.assertIn("mirrored line: halved (best fit)", why)
+        why = self.convert(old, self.mirrored(None, [1, 0, 0], {"shift": 0.5, "scale": 0.5}),
+                           best_fit="halve")
+        self.assertIn("mirrored line: from the plane (best fit)", why)
         self.convert(old, self.mirrored(None, [1, 0, 0], {}), best_fit="keep")
 
     # ---- lists ----
@@ -452,8 +483,8 @@ class Audit(unittest.TestCase):
            for u in (0, 1, 2, 3, 9)]
 
     def coordinate(self, nodes, node_id):
-        """d / max from the space's `at`, as version 3 reads radial."""
-        at = nodes[node_id].get("inputs", {}).get("at", [0.5, 0.5, 0.5])
+        """d / max from the space's `centre`, as version 3 reads radial."""
+        at = nodes[node_id].get("inputs", {}).get("centre", [0.5, 0.5, 0.5])
         centre = 0 + at[0] * 9
         far = max(abs(c["uvz"][0] - centre) for c in self.ROW)
         return {c["id"]: abs(c["uvz"][0] - centre) / far for c in self.ROW}
@@ -481,8 +512,8 @@ class Audit(unittest.TestCase):
                     curve1=curve("space1"), color1=color(brightness=w("curve1")))
         new, notes = m.convert(old, cells=self.ROW, coordinate=self.coordinate)
         inputs = new["nodes"]["space1"]["inputs"]
-        self.assertAlmostEqual(inputs["at"][0], 3 / 9)
-        self.assertEqual(inputs["at"][1:], [0.5, 0.5])
+        self.assertAlmostEqual(inputs["centre"][0], 3 / 9)
+        self.assertEqual(inputs["centre"][1:], [0.5, 0.5])
         # Distances from u 3: 3, 2, 1, 0, 6. The nearest is on the centre
         # (m 0), so shift and scale stay.
         self.assertEqual(inputs["scale"], 0.5)
@@ -493,13 +524,13 @@ class Audit(unittest.TestCase):
         centroid = sum(c["uvz"][0] for c in row) / len(row)
 
         def coordinate(nodes, node_id):
-            at = nodes[node_id]["inputs"]["at"]
+            at = nodes[node_id]["inputs"]["centre"]
             centre = at[0] * 9
             far = max(abs(c["uvz"][0] - centre) for c in row)
             return {c["id"]: abs(c["uvz"][0] - centre) / far for c in row}
         new, _ = m.convert(old, cells=row, coordinate=coordinate)
         inputs = new["nodes"]["space1"]["inputs"]
-        self.assertAlmostEqual(inputs["at"][0], centroid / 9)
+        self.assertAlmostEqual(inputs["centre"][0], centroid / 9)
         d = [abs(c["uvz"][0] - centroid) for c in row]
         nearest = min(d) / max(d)
         self.assertAlmostEqual(inputs["shift"], nearest)
@@ -509,7 +540,7 @@ class Audit(unittest.TestCase):
         old = graph(2, space1={"kind": "space", "settings": {"kind": "angle", "wrap": "yes"}},
                     curve1=curve("space1"), color1=color(brightness=w("curve1")))
         new, _ = m.convert(old, cells=self.ROW, coordinate=self.coordinate)
-        self.assertEqual(set(new["nodes"]["space1"]["inputs"]), {"at"})
+        self.assertEqual(set(new["nodes"]["space1"]["inputs"]), {"centre"})
 
     def test_a_tilted_best_fit_is_written_and_a_stage_axis_is_not(self):
         tilted = [dict(id=f"t{i}:0", group="all", world=[i * 0.8, 0, i * 0.6],

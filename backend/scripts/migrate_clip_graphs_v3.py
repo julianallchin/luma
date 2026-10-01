@@ -20,7 +20,10 @@ and version 2 graphs to version 3:
   by a curve over `time()` (`over_the_clip`); any other delay with no
   clock is refused. `time.length` other than 1 is refused.
 - `space.length` becomes `scale`.
-- `mirror.offset` other than 0 is refused.
+- `mirror.normal` becomes `mirror.direction`. `mirror.offset` (metres from
+  the middle) becomes `at` on the clip's own rig (`at` = 0.5 + offset /
+  extent along the direction, for a first mirror); with no rig, or after
+  another mirror, an offset other than 0 is refused.
 - A list input becomes one `*` math node (a list of numbers, their product).
 - Alpha stays alpha (a list becomes a math node like any other). Alpha is
   opacity in version 3: alone a clip looks the same; over another clip a
@@ -29,11 +32,15 @@ and version 2 graphs to version 3:
 - A wrapped space now tiles (decision 50): one with a number scale other
   than 0 and 1 takes scale 1 and each curve over it reads its points at
   x × scale, so it plays the same.
-- A `line` space after a mirror whose normal is parallel to the space's
-  direction now measures from the mirror plane over the unfolded span: its
-  shift and scale are halved (exact when a head sits on the plane). With an
-  empty normal or direction the space is kept as it is (`--best-fit-mirror
-  keep`): that plays exactly on both stand-in rigs, halving does not.
+- A space's ruler is now measured on the selection before any fold (the
+  geometry model, decision 52): a mirror moves the heads, never the ruler.
+  Version 2 read a line after a mirror from the nearest folded head (0) to
+  the farthest (1). On the clip's own rig a line space after a mirror
+  takes shift' = m + shift·(M − m) and scale' = scale·(M − m), with m..M
+  the folded heads' span on the new ruler, so each head keeps its place.
+  With no rig, a line along a mirror's direction assumes a head on the
+  plane: m = at, M − m = max(at, 1 − at). Another line after a mirror is
+  kept as it is.
 
 The 2026-09-30 audit (spec section 0, "Audit"):
 
@@ -41,13 +48,13 @@ The 2026-09-30 audit (spec section 0, "Audit"):
   with alpha × brightness, its closest standard form.
 - A phase of 0 is dropped: a phase now always wraps.
 - On the clip's own rig (`clip_cells`, from its score's venue): a radial or
-  angle space takes `at`, the place of its heads' centroid in their box
-  (version 2 measured from the centroid; version 3 from `at`, default the
+  angle space takes `centre`, the place of its heads' centroid in their box
+  (version 2 measured from the centroid; version 3 from `centre`, default the
   middle). A radial space's shift and scale take its nearest head's share
   m of the largest distance (version 2 read (d − min) / (max − min);
   version 3 reads d / max): shift' = m' + shift·(1 − m), scale' =
   scale·(1 − m), m' = m, or m·(n − ½)/n on a wrapped ring of n units.
-- On the clip's own rig, an empty direction (a line space) or normal (a
+- On the clip's own rig, an empty direction (a line space) or direction (a
   mirror) whose old best fit, the rig's principal axis, is not a stage axis
   takes that axis as written: the best fit is now the stage axis the heads
   spread along most.
@@ -204,9 +211,9 @@ def carried(nodes, value):
 def refuse_unmapped(nodes):
     for node_id, node in nodes.items():
         inputs = node.get("inputs", {})
-        if node["kind"] == "mirror" and "offset" in inputs:
-            if inputs["offset"] != 0:
-                raise Refused("a mirror offset other than 0")
+        if node["kind"] == "mirror" and "normal" in inputs:
+            inputs["direction"] = inputs.pop("normal")
+        if node["kind"] == "mirror" and inputs.get("offset") == 0:
             del inputs["offset"]
         if node["kind"] == "time" and "length" in inputs:
             if inputs["length"] != 1:
@@ -399,40 +406,71 @@ def parallel(a, b):
 
 
 def mirror_for(nodes, space):
-    """'parallel', 'best fit' or None: whether `space` measures from a
-    mirror plane in version 3."""
+    """(why, mirror node) for the latest mirror in `space`'s heads: why is
+    'parallel' (along the space's direction), 'best fit' (either empty),
+    'across' (another direction) or None with no mirror."""
     direction = space.get("inputs", {}).get("direction")
     heads = space.get("inputs", {}).get("heads")
     while heads:
         node = nodes[heads["node"]]
         if node["kind"] == "mirror":
-            normal = node.get("inputs", {}).get("normal")
-            if isinstance(normal, list) and isinstance(direction, list):
-                if parallel(normal, direction):
-                    return "parallel"
-            else:
-                return "best fit"
+            normal = node.get("inputs", {}).get("direction")
+            if not (isinstance(normal, list) and isinstance(direction, list)):
+                return "best fit", node
+            return ("parallel" if parallel(normal, direction) else "across"), node
         heads = node.get("inputs", {}).get("heads")
-    return None
+    return None, None
 
 
-def halve_mirrored_lines(nodes, notes, best_fit):
+def place_mirrored_lines(nodes, notes, best_fit):
+    """With no rig: a line space after a mirror along its direction. The
+    new ruler runs over the selection before the fold; version 2 ran from
+    the nearest folded head to the farthest. Assuming a head on the plane,
+    those are `at` and the far end, max(at, 1 − at) away."""
     for node in list(nodes.values()):
         if node["kind"] != "space" or node.get("settings", {}).get("kind", "line") != "line":
             continue
-        why = mirror_for(nodes, node)
-        if why == "best fit" and best_fit == "keep":
-            notes.add("mirrored line: kept (best fit)")
+        why, mirror = mirror_for(nodes, node)
+        if why is None:
             continue
-        if not why:
+        if why == "best fit" and best_fit == "keep" or why == "across":
+            notes.add(f"mirrored line: kept ({why})")
             continue
-        inputs = node.setdefault("inputs", {})
-        if "shift" in inputs:
-            inputs["shift"] = times(nodes, inputs["shift"], 0.5, notes)
-        inputs["scale"] = times(nodes, inputs.get("scale", 1), 0.5, notes)
-        notes.add(f"mirrored line: halved ({why})")
-        if node.get("settings", {}).get("wrap") == "yes":
-            notes.add("mirrored line: wrapped")
+        at = mirror.get("inputs", {}).get("at", 0.5)
+        if not number(at) or node.get("settings", {}).get("wrap") == "yes":
+            notes.add("mirrored line: kept (wired at or wrapped)")
+            continue
+        refit_line(nodes, node, at, max(at, 1 - at), notes)
+        notes.add(f"mirrored line: from the plane ({why})")
+
+
+def refit_line(nodes, node, m, span, notes):
+    """shift' = m + shift·span and scale' = scale·span: a head at m..m+span
+    on the new ruler reads where it read at 0..1 on the old."""
+    inputs = node.setdefault("inputs", {})
+    shift = inputs.get("shift", 0)
+    if number(shift):
+        shift = clean(m + span * shift)
+    else:
+        curve_node = nodes[shift["node"]]
+        ci = curve_node.get("inputs", {})
+        if readers(nodes, shift["node"]) == 1 and curve_node["kind"] == "curve" \
+                and all(number(ci.get(key, d)) for key, d in (("low", 0), ("high", 1))):
+            for key, d in (("low", 0), ("high", 1)):
+                ci[key] = clean(m + span * ci.get(key, d))
+        else:
+            # A shared or other wire: m + shift × span in math nodes.
+            shift = times(nodes, shift, clean(span), notes)
+            if abs(m) > 1e-12:
+                node_id = free_id(nodes, "math")
+                nodes[node_id] = {"kind": "math", "settings": {"op": "+"},
+                                  "inputs": {"values": [shift, clean(m)]}}
+                notes.add("math node added")
+                shift = {"node": node_id}
+    if shift != 0:
+        inputs["shift"] = shift
+    inputs["scale"] = times(nodes, inputs.get("scale", 1), clean(span), notes)
+    return True
 
 
 def scaled_points(points, scale):
@@ -521,7 +559,13 @@ def convert(graph, best_fit="keep", cells=None, coordinate=None):
     delays_to_beats(nodes, notes)
     clocks_into_times(nodes, notes)
     lengths_to_scales(nodes)
-    halve_mirrored_lines(nodes, notes, best_fit)
+    if cells is None:
+        if any(n["kind"] == "mirror" and "offset" in n.get("inputs", {})
+               for n in nodes.values()):
+            raise Refused("a mirror offset other than 0 (needs the clip's rig)")
+        place_mirrored_lines(nodes, notes, best_fit)
+    else:
+        offsets_to_at(nodes, cells, notes)
     wrapped_scales_into_curves(nodes, notes)
     zero_phases(nodes, notes)
     if cells is not None:
@@ -790,13 +834,15 @@ def fit_to_rig(nodes, cells, coordinate, notes):
     `coordinate(nodes, node_id)` gives a space's raw place per cell id."""
     if not cells:
         return
-    for node_id, node in list(nodes.items()):
+    # Mirrors first: a line after a mirror is fitted on the mirror's
+    # final direction.
+    order = sorted(nodes.items(), key=lambda item: item[1]["kind"] != "mirror")
+    for node_id, node in order:
         if node["kind"] not in ("space", "mirror"):
             continue
         inputs = node.get("inputs", {})
         kind = node.get("settings", {}).get("kind", "line")
-        if node["kind"] == "space" and kind == "line" \
-                and mirror_for(nodes, node) == "parallel":
+        if node["kind"] == "space" and kind == "line" and mirror_for(nodes, node)[0]:
             fit_mirrored_line(nodes, node_id, cells, coordinate, notes)
             continue
         try:
@@ -807,7 +853,7 @@ def fit_to_rig(nodes, cells, coordinate, notes):
         ids = [i for _, i in spans if i]
         spans = [s for s, i in spans if i]
         if node["kind"] == "mirror" or kind == "line":
-            key = "normal" if node["kind"] == "mirror" else "direction"
+            key = "direction"
             if key in inputs:
                 continue
             olds = [old_best_fit(s) for s in spans]
@@ -821,14 +867,14 @@ def fit_to_rig(nodes, cells, coordinate, notes):
             node["inputs"] = {**inputs, key: [clean(c) for c in pairs[0][0]]}
             notes.add(f"rig: old best fit written ({node['kind']})")
             continue
-        if kind not in ("radial", "angle") or "at" in inputs:
+        if kind not in ("radial", "angle") or "centre" in inputs:
             continue
         places = [box_place(s, centroid(s)) for s in spans]
         if not agree(places):
             notes.add(f"rig: {kind} centroid differs per span (approximate)")
         at = [clean(sum(p[a] for p in places) / len(places)) for a in range(3)]
         if any(abs(c - 0.5) > 1e-9 for c in at):
-            inputs = node["inputs"] = {**inputs, "at": at}
+            inputs = node["inputs"] = {**inputs, "centre": at}
             notes.add(f"rig: {kind} centre at the old centroid")
         if kind != "radial":
             continue
@@ -882,19 +928,18 @@ def heads_chain(nodes, heads):
 
 
 def fit_mirrored_line(nodes, node_id, cells, coordinate, notes):
-    """A line space after a parallel mirror, fitted to the clip's rig.
+    """A line space after a mirror, fitted to the clip's rig.
 
-    Version 2 read the folded heads from the nearest (`a` 0) to the
-    farthest (`a` 1). Version 3 reads `a = d / R` from the plane, so the
-    folded heads span `m..M` of it. halve_mirrored_lines assumed `m` 0 and
-    `M` 0.5; on the rig, `x = (a − shift) / scale` keeps every head's old
-    place with shift `m + s (M − m)` and scale `c (M − m)` (`s`, `c` the
-    version 2 values, twice the halved ones)."""
+    Version 2 read the folded heads from the nearest (0) to the farthest
+    (1). Now the ruler runs over the selection before the fold, so the
+    folded heads span m..M of it (`coordinate`, read with no shift and
+    scale). With x = (a − shift) / scale, shift m + s·(M − m) and scale
+    c·(M − m) keep every head's old place (s, c the version 2 values)."""
     node = nodes[node_id]
-    inputs = node["inputs"]
+    inputs = node.setdefault("inputs", {})
     if node.get("settings", {}).get("wrap") == "yes" or any(
             n["kind"] == "split" for n in heads_chain(nodes, inputs.get("heads"))):
-        notes.add("rig: mirrored line kept halved (wrapped or split)")
+        notes.add("rig: mirrored line kept (wrapped or split; approximate)")
         return
     probe = copy.deepcopy(nodes)
     probe[node_id]["inputs"] = {k: v for k, v in inputs.items() if k not in ("shift", "scale")}
@@ -910,24 +955,31 @@ def fit_mirrored_line(nodes, node_id, cells, coordinate, notes):
     values = [place[c["id"]] for c in cells if c["id"] in place]
     if not values:
         return
-    m, k = min(values), 2 * (max(values) - min(values))
-    if abs(m) <= 1e-9 and abs(k - 1) <= 1e-9:
+    m, span = min(values), max(values) - min(values)
+    if span <= 1e-12 or abs(m) <= 1e-9 and abs(span - 1) <= 1e-9:
         return
-    shift = inputs.get("shift", 0)
-    if number(shift):
-        shift = clean(m + k * shift)
-    else:
-        curve_node = nodes[shift["node"]]
-        ci = curve_node.get("inputs", {})
-        if readers(nodes, shift["node"]) != 1 or curve_node["kind"] != "curve" \
-                or not all(number(ci.get(key, d)) for key, d in (("low", 0), ("high", 1))):
-            notes.add("rig: mirrored line kept halved (shared or wired shift)")
-            return
-        for key, d in (("low", 0), ("high", 1)):
-            ci[key] = clean(m + k * ci.get(key, d))
-    inputs["shift"] = shift
-    inputs["scale"] = times(nodes, inputs.get("scale", 1), clean(k), notes)
-    notes.add("rig: mirrored line fitted to the folded span")
+    if refit_line(nodes, node, m, span, notes):
+        notes.add("rig: mirrored line fitted to the folded span")
+
+
+def offsets_to_at(nodes, cells, notes):
+    """A first mirror's offset (metres from the middle of the heads' extent
+    along its direction) becomes `at` (0–1 of that extent) on the rig."""
+    for node in nodes.values():
+        inputs = node.get("inputs", {})
+        if node["kind"] != "mirror" or "offset" not in inputs:
+            continue
+        direction = inputs.get("direction")
+        if heads_chain(nodes, inputs.get("heads")) or not isinstance(direction, list) \
+                or not number(inputs["offset"]) or not cells:
+            raise Refused("a mirror offset other than 0 after another node or with no rig")
+        normal = unit(direction)
+        along = [sum(a * b for a, b in zip(c["uvz"], normal)) for c in cells]
+        extent = max(along) - min(along)
+        if extent <= 1e-9:
+            raise Refused("a mirror offset on heads with no extent along it")
+        inputs["at"] = clean(0.5 + inputs.pop("offset") / extent)
+        notes.add("mirror: offset in metres → at")
 
 
 # ---- parity ----
