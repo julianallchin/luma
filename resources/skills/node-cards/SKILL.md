@@ -19,7 +19,11 @@ functions. The Rust checker reads the same graph that the inspector shows.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color. `math` combines values.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no `every` = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
-10. Overlap is automatic. Per head, the event with the biggest effect shows; ties go to the newest.
+10. Overlap is automatic. The live events of one `time(every=...)` make one layer: color and strobe keep the largest per channel, aim puts the newest on top. Between events the clip is not there (alpha 0).
+
+**Black or transparent.** Brightness 0 is black light: in `replace` it
+covers the light below with black. Alpha 0 is no clip: the light below
+shows. Gaps between events and outside the clip are alpha 0.
 
 Promotion means: an input changes from a value to a wire. Every number,
 vector and color input can take a wire.
@@ -62,16 +66,19 @@ a Python name of at most 32 characters that is not a builder name (`time`,
 Units: share (0–1), beats, degrees, metres, hz, turns, uvz (a vector), rgb.
 
 Points: `x` goes from 0 to 1 and increases. Two points can have the same `x`:
-that is a jump. At the jump's `x` the curve reads the larger of the two
-values: a light exactly on an edge is lit. A jump at x 0 or x 1 sets the
-value outside 0–1, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 from 0 to 1,
-both ends included, and 0 outside; `[[0, 1], [0, 0], [1, 0]]` is 1 up to
-0, 0 included.
-`[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]` is on up to 0.5 (included) and off after it.
+that is a jump. At the jump's `x` the curve reads the value after the jump,
+as a shader's `step`: each piece covers [a, b), at 0 and 1 too. So
+`[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 from 0 up to 1 (1 itself is 0),
+and `[[0, 1], [0, 0], [1, 0]]` is 1 below 0 only.
+`[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]` is on below 0.5 and off from 0.5.
+A front lights a head once it has reached it when x = front − place and
+the curve steps up at 0 (`"Step up"`).
 `v` is 0–1. A curve has 2–256 points. The ease says how the value moves to the next point: `linear`
 (no ease), `hold`, `ease-in`, `ease-out`, `ease-in-out`, `sine-in`,
-`sine-out`, `sine-in-out`, or a local cubic Bézier `[x1, y1, x2, y2]`. The
-last point has no ease.
+`sine-out`, `sine-in-out`, or a local cubic Bézier `[x1, y1, x2, y2]`
+(x1 and x2 in 0–1; y1 and y2 may go outside 0–1 to overshoot, as in CSS).
+Between points a value may leave 0–1; the outputs clamp. The last point has
+no ease.
 
 A 3-tuple on `color.color` or a vector input is a color or a vector. A list
 of curves is an error: to multiply, write `brightness=cut * fade`.
@@ -112,8 +119,8 @@ lights: a chase, a pulse, a cut. `alpha` is the clip's opacity: the clip's
 light blends with the light below by the blend mode, then the result mixes
 with the light below by alpha. Alpha 0 shows the light below, in every
 blend mode. Use alpha for a fade of the whole clip (the timeline fade points
-edit it). Blend modes: `replace`, `add`, `multiply`, `screen`, `max`, `min`,
-`lighten`, `value`, `subtract`.
+edit it). Blend modes: `replace` (the clip's light, as is), `add`,
+`multiply`, `screen`, `max`, `min`, `subtract`.
 
 **aim** `aim(heads=None, base="direction", direction=None, point=None, yaw=None, pitch=None, alpha=None)`
 
@@ -163,7 +170,7 @@ are equal (the same numbers or the same wires) share one set of events.
 
 `p` is the progress: the age of the event (or of the clip) over its
 duration, 0–1. Each head then gets its own clock: τ = p − delay / duration.
-If phase is given, τ = (τ + phase) mod 1.
+If phase is given (0 too, any number), τ = fract(τ + phase).
 
 - **delay** is in beats and does not wrap. Before a head's start τ is below
   0; a curve holds its first value there (a waiting head of a dissolve stays
@@ -177,12 +184,13 @@ Put a curve over space into delay or phase to make heads differ.
 later along the axis, up to 2 beats. The `low` and `high` of that curve set
 the spread: beats for delay, turns for phase.
 
-**space** `space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
+**space** `space(heads=None, direction=None, at=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
 | direction | vector | uvz | not zero | best fit |
+| at | vector | share | each 0–1 | the middle `(0.5, 0.5, 0.5)` |
 | shift | number | share | any | 0 |
 | scale | number | share | 0 or more (0 is a jump) | 1 |
 
@@ -197,15 +205,17 @@ so give a moving pill jumps at its ends, `[[0, 0], [0, 1], [1, 1], [1, 0]]`.
 
 Setting `kind`:
 - `line`: the position along `direction`, lowest head 0, highest 1. Empty
-  direction = the main axis of the heads. After a `mirror` whose normal is
+  direction = the stage axis (+U, +V or +Z) the heads spread along most. After a `mirror` whose normal is
   parallel to the direction, 0 is on the mirror's plane and the place grows
   away from it, by distance over the span's full extent (so 0.5 at the edge
   for a plane in the middle).
 - `order`: the rank of the head, `(rank + 0.5) / n`. After `shuffle` it is
   the shuffled rank.
-- `radial`: distance from the centre, 0 at the centre, 1 at the edge.
-  `direction` is the plane normal.
-- `angle`: turns 0–1 around the centre.
+- `radial`: distance from the centre over the largest distance: 0 at the
+  centre, 1 at the farthest head. The centre is `at`, each of u, v, z 0–1
+  within the selection's box; empty = its middle. `direction` is the plane
+  normal. A shift moves rings outward from the centre.
+- `angle`: turns 0–1 around the centre `at`.
 
 Setting `wrap`: `True` or `False`. Empty = `False`, except `angle` (`True`).
 
@@ -244,7 +254,8 @@ wander. Each noise node has its own stream.
 | high_hz | number | hz | above low_hz | 100 |
 
 The energy of the band in the full mix, scaled 0–1 by its lowest and highest
-value in the clip. `audio("Kick")` takes a band preset. Put a threshold or a
+value over the whole track: every clip reads the same level at the same
+moment. `audio("Kick")` takes a band preset. Put a threshold or a
 floor in the curve's shape and low/high. It needs track analysis.
 
 ## curve
