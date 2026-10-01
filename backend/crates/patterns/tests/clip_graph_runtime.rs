@@ -1499,3 +1499,32 @@ fn two_pills_on_a_ring_become_eight_and_fade_in_and_out_without_a_jump() {
         "a light jumps: {coarse:?} then {fine:?}"
     );
 }
+
+/// Zoom out: a wrapped space tiles, so a scale running 0.5 → 0.125 over the
+/// clip turns 2 copies of a soft pill into 8, while a shift that slows down
+/// drifts them. Every head moves smoothly: the pill is 0 at x 0 and x 1, so
+/// the seams of the tiling never show.
+fn zoom_out() -> ClipGraph {
+    graph(json!({
+        "clip": {"kind": "time"},
+        "zoom": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "low": 0.5, "high": 0.125}},
+        "drift": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "shape": {"points": [[0, 0, "ease-out"], [1, 1]]}}},
+        "x": {"kind": "space", "settings": {"kind": "line", "wrap": "yes"},
+              "inputs": {"direction": [1, 0, 0], "scale": {"node": "zoom"}, "shift": {"node": "drift"}}},
+        "pill": {"kind": "curve", "inputs": {"x": {"node": "x"}, "shape": {"points": [
+            [0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "pill"}}}}))
+}
+
+#[test]
+fn zoom_out_tiles_two_pills_into_eight_without_a_jump() {
+    let (coarse, counts) = pills_and_largest_step(&zoom_out(), 0.01);
+    let (fine, _) = pills_and_largest_step(&zoom_out(), 0.005);
+    println!("most pills in each beat: {counts:?}; largest change {coarse:?} then {fine:?}");
+    assert!(counts.windows(2).all(|w| w[1] >= w[0]), "{counts:?}");
+    assert!(counts[0] == 2 && *counts.last().unwrap() == 8, "{counts:?}");
+    assert!(
+        fine.0 < coarse.0 * 0.7,
+        "a light jumps: {coarse:?} then {fine:?}"
+    );
+}
