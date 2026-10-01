@@ -179,6 +179,18 @@ an eased segment is refused). Dry run on a copy, 2026-09-30: 103 clips have
 such a space (101 angle, 2 line; scales 0.15–1.124); all 103 play exactly
 as before, and all 103 fail without the rewrite.
 
+Products as one math node (`backend/scripts/migrate_clip_math.py`,
+2026-10-01): a number curve with low empty or 0 and a wired `high` is
+`high × curve(x)`, so each chain of them (Slash: curve4 → curve5.high →
+curve6.high) becomes one `*` math node with every factor, innermost first
+(`brightness = curve4 * curve5 * curve6`); the curves lose low and high and
+keep their ids. A link read elsewhere stays one factor; a `*` math node on
+the chain's high joins the product. A non-zero or wired low is left as it
+is. Dry run on a copy, 2026-10-01: 5,608 clips, 115 rewritten (79 products
+of 2, 36 of 3; 151 curves, one math node added each, no node removed),
+1 draft; presets unchanged; every clip plays bit for bit as before on both
+stand-in rigs (audio read as `time()`).
+
 ---
 
 ## 1. Grammar in 10 lines
