@@ -1684,6 +1684,24 @@ impl Editor {
         if y < TRACK_AREA_Y {
             return None;
         }
+        let offset = ((y - layout.start) / layout.lane).max(0.);
+        // Inside a swept selection, the clip fills its time span on the lane
+        // under the pointer.
+        if let Some((start, end)) = self.cursor.and_then(|cursor| {
+            let (start, end) = cursor.span()?;
+            let (top, bottom) = cursor.rows();
+            let row = offset.floor() as usize;
+            (time >= start && time <= end && (top..=bottom).contains(&row))
+                .then_some((start.max(0.), end.min(f64::from(self.transport.duration))))
+        }) {
+            return (end - start >= MIN_CLIP).then_some(InsertMenu {
+                start,
+                end,
+                row: offset.floor() as usize,
+                insert: false,
+                active: 0,
+            });
+        }
         let beats = self.beats.as_deref();
         let start = snap(beats, time, self.view.zoom, SNAP_CAPTURE).max(0.);
         let end = bars_after(beats, start, bars).min(f64::from(self.transport.duration));
@@ -1691,7 +1709,6 @@ impl Editor {
             return None;
         }
         let layers = z_ladder(&self.clips).len();
-        let offset = ((y - layout.start) / layout.lane).max(0.);
         let boundary = offset.round();
         let insert = (offset - boundary).abs() < INSERT_BOUNDARY
             && (1. ..=layers as f32).contains(&boundary);
