@@ -769,39 +769,38 @@ fn provider_label(service: Service) -> String {
 
 fn model_logo(selection: &Selection) -> gpui::Svg {
     let model = selection.model.as_deref().unwrap_or("").to_lowercase();
-    let (data, color): (&'static [u8], gpui::Hsla) = if model.contains("claude")
-        || matches!(selection.service, Service::Claude | Service::Anthropic)
-    {
-        (
-            include_bytes!("../assets/services/claude.svg"),
-            rgb(0xd97757).into(),
-        )
-    } else if model.contains("kimi") {
-        (
-            include_bytes!("../assets/services/kimi.svg"),
-            rgb(0x6485ff).into(),
-        )
-    } else if model.contains("grok") {
-        (
-            include_bytes!("../assets/services/grok.svg"),
-            ladder::foreground().into(),
-        )
-    } else if model.contains("gpt") || selection.service == Service::Codex {
-        (
-            include_bytes!("../assets/services/openai.svg"),
-            rgb(0x10a37f).into(),
-        )
-    } else if selection.service == Service::Vercel {
-        (
-            include_bytes!("../assets/services/vercel.svg"),
-            ladder::foreground().into(),
-        )
-    } else {
-        (
-            include_bytes!("../assets/services/openrouter.svg"),
-            rgb(0x8c7cf0).into(),
-        )
-    };
+    let (data, color): (&'static [u8], gpui::Hsla) =
+        if model.contains("claude") || selection.service == Service::Claude {
+            (
+                include_bytes!("../assets/services/claude.svg"),
+                rgb(0xd97757).into(),
+            )
+        } else if model.contains("kimi") {
+            (
+                include_bytes!("../assets/services/kimi.svg"),
+                rgb(0x6485ff).into(),
+            )
+        } else if model.contains("grok") {
+            (
+                include_bytes!("../assets/services/grok.svg"),
+                ladder::foreground().into(),
+            )
+        } else if model.contains("gpt") || selection.service == Service::Codex {
+            (
+                include_bytes!("../assets/services/openai.svg"),
+                rgb(0x10a37f).into(),
+            )
+        } else if selection.service == Service::Vercel {
+            (
+                include_bytes!("../assets/services/vercel.svg"),
+                ladder::foreground().into(),
+            )
+        } else {
+            (
+                include_bytes!("../assets/services/openrouter.svg"),
+                rgb(0x8c7cf0).into(),
+            )
+        };
     gpui::svg()
         .data(data)
         .size(px(14.))
