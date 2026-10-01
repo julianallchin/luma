@@ -41,8 +41,6 @@ BLEND_MODES = frozenset(
         "screen",
         "max",
         "min",
-        "lighten",
-        "value",
         "subtract",
         "offset",
     }

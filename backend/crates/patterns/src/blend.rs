@@ -9,8 +9,6 @@ pub enum BlendMode {
     Screen,
     Max,
     Min,
-    Lighten,
-    Value,
     Subtract,
     /// An aim clip's fan and motion turn the aim under it
     /// ([`crate::aim::offset_aim`]). Only aim takes it
@@ -23,29 +21,25 @@ impl BlendMode {
     /// hasher, and both hosts' blend selects all read it (or a form's share
     /// of it, [`crate::blend_modes`]) from here rather than keeping a
     /// spelling of their own.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 8] = [
         Self::Replace,
         Self::Add,
         Self::Multiply,
         Self::Screen,
         Self::Max,
         Self::Min,
-        Self::Lighten,
-        Self::Value,
         Self::Subtract,
         Self::Offset,
     ];
 
     /// The modes that blend light, in the order a picker lists them.
-    pub const LIGHT: [Self; 9] = [
+    pub const LIGHT: [Self; 7] = [
         Self::Replace,
         Self::Add,
         Self::Multiply,
         Self::Screen,
         Self::Max,
         Self::Min,
-        Self::Lighten,
-        Self::Value,
         Self::Subtract,
     ];
 
@@ -61,8 +55,6 @@ impl BlendMode {
             Self::Screen => "screen",
             Self::Max => "max",
             Self::Min => "min",
-            Self::Lighten => "lighten",
-            Self::Value => "value",
             Self::Subtract => "subtract",
             Self::Offset => "offset",
         }
@@ -78,8 +70,6 @@ impl BlendMode {
             Self::Screen => "Screen",
             Self::Max => "Max",
             Self::Min => "Min",
-            Self::Lighten => "Lighten",
-            Self::Value => "Value",
             Self::Subtract => "Subtract",
             Self::Offset => "Offset",
         }
@@ -106,9 +96,6 @@ pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
         BlendMode::Screen => 1.0 - (1.0 - base) * (1.0 - top),
         BlendMode::Max => base.max(top),
         BlendMode::Min => base.min(top),
-        BlendMode::Lighten => base.max(top),
-        // "Value": top's own brightness acts as its opacity over the base.
-        BlendMode::Value => top * top + base * (1.0 - top),
         BlendMode::Subtract => (base - top).max(0.0),
     }
 }
@@ -118,11 +105,11 @@ pub fn blend_value(base: f32, top: f32, mode: BlendMode) -> f32 {
 /// head is a zero dimmer, and the color of zero light never shows, so a black
 /// head under a layer is the same as no head.
 ///
-/// `Replace` sets the top dimmer and moves the color toward the top color by
-/// that dimmer, so black on replace paints black. Over no light it takes the
-/// top color. Every other mode is [`blend_value`] on each channel of the
-/// light: add and screen over black equal add and screen over nothing, and
-/// multiply or subtract over nothing stay nothing.
+/// `Replace` is the top light, as in every compositor: black on replace
+/// paints black. Opacity is alpha's job ([`blend_light_alpha`]). Every other
+/// mode is [`blend_value`] on each channel of the light: add and screen over
+/// black equal add and screen over nothing, and multiply or subtract over
+/// nothing stay nothing.
 #[inline]
 pub fn blend_light(
     base_color: [f32; 3],
@@ -134,12 +121,7 @@ pub fn blend_light(
     let base_dimmer = base_dimmer.clamp(0.0, 1.0);
     let top_dimmer = top_dimmer.clamp(0.0, 1.0);
     if mode == BlendMode::Replace {
-        if base_dimmer <= 0.0 {
-            return (top_color, top_dimmer);
-        }
-        let color =
-            std::array::from_fn(|c| base_color[c] + (top_color[c] - base_color[c]) * top_dimmer);
-        return (color, top_dimmer);
+        return (top_color, top_dimmer);
     }
     let light: [f32; 3] = std::array::from_fn(|c| {
         blend_value(base_color[c] * base_dimmer, top_color[c] * top_dimmer, mode).clamp(0.0, 1.0)
@@ -253,6 +235,15 @@ mod tests {
     }
 
     #[test]
+    fn replace_is_the_top_light() {
+        // A dim blue over a bright red is that dim blue: no red left in it.
+        assert!(close(
+            over((RED, 1.0), (BLUE, 0.25), BlendMode::Replace),
+            [0.0, 0.0, 0.25]
+        ));
+    }
+
+    #[test]
     fn replace_black_paints_black() {
         assert!(close(
             over((RED, 1.0), (BLUE, 0.0), BlendMode::Replace),
@@ -297,7 +288,6 @@ mod tests {
             BlendMode::Add,
             BlendMode::Screen,
             BlendMode::Max,
-            BlendMode::Lighten,
             BlendMode::Subtract,
         ] {
             assert!(
