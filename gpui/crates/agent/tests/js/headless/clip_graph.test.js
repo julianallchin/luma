@@ -1,11 +1,13 @@
 // The clip graph editor from the outside: a clip's graph is a canvas of node
 // cards, sources on the left and the output on the right, with a wire from
-// each node's output port into every input it feeds. The source chip
-// promotes a value; a wire dragged from an output port onto an input links
-// it; a wire dragged off an input unwires it; the add menu and a card's
-// delete button add and remove nodes; segments store settings; a strip
-// stores curve points; the name field names the clip on the timeline; the
-// fade handle writes alpha; undo takes a whole gesture back.
+// each node's output port into every input it feeds. A numbered curve or
+// math node that one input reads is a chip on that input's row, as the
+// Python source writes it inline. The source chip promotes a value; a wire
+// dragged from an output port onto an input links it; a wire dragged off an
+// input unwires it; the add menu and a card's delete button add and remove
+// nodes; segments store settings; a strip stores curve points; the name
+// field names the clip on the timeline; the fade handle writes alpha; undo
+// takes a whole gesture back.
 
 // One clip of a shipped preset over beats 2–6 (seconds 1–3), keyed `graph-clip`.
 const clipOf = (preset) => ({ pattern: "graph-clip", name: preset, start: 1, end: 3, preset });
@@ -15,7 +17,7 @@ const node = (role, label) => until(label, (s) => s.find({ role, label })).find(
 const settle = () => app.frames(4);
 const stored = () => library.score().clips["graph-clip"];
 const nodes = () => stored().graph.nodes;
-const KINDS = ["clock", "time", "space", "noise", "audio", "curve", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
+const KINDS = ["time", "space", "noise", "audio", "curve", "math", "mirror", "shuffle", "group", "split", "color", "aim", "strobe"];
 // A node's card title: a kind and a number for an id such as `curve2`
 // ("Curve 2"), and a given name (`pill`) as it is.
 const titleOf = (id) => {
@@ -104,25 +106,59 @@ function placements() {
   return places;
 }
 
-// A wire is a text node "Clock 1 → Time 1 clock", or "k → t clock".
+// A wire is a text node "t → Curve 1 x": from a card's output port to an
+// input port, a chip's among them.
 const wire = (from, to) => node("text", `${from} → ${to}`);
 
-test("a Chase shows its nodes left to right with a wire into each input", () => {
+// A number field's text, by the start of its label: "Space 1 shift = 0".
+const fieldOf = (prefix) => nav.inGraph((s) => s.findAll({ role: "input" }).find((n) => n.label.startsWith(prefix)), prefix);
+
+// A chip on a card's row, in view.
+const chip = (label) => shown("chip", label);
+// Open chip `label` in place.
+function expand(label) {
+  app.click(shown("button", `Expand ${label}`));
+  node("button", `Collapse ${label}`);
+  settle();
+}
+const noCard = (label) => app.snapshot().find({ role: "card", label }) === undefined;
+
+test("a Chase shows its time, space and color cards, with its curves as chips", () => {
   open("Chase");
   expect(stored().name).toBe("Chase");
-  // A pill over the space, whose shift moves with time.
-  const chain = ["k", "t", "move", "place", "pill", "Color 1"];
+  // A pill over the space, whose shift moves with time: the two curves are
+  // inline, each on the one input that reads it.
+  const chain = ["t", "place", "Color 1"];
   for (const label of chain) node("card", label);
-  wire("k", "t clock");
-  wire("t", "move x");
-  wire("move", "place shift");
-  wire("place", "pill x");
-  wire("pill", "Color 1 brightness");
+  for (const curve of ["Curve 1", "Curve 2"]) {
+    assert(noCard(curve), `${curve} is a card`);
+    chip(curve);
+  }
+  assert(inside(node("card", "place").bounds, chip("Curve 1").bounds), "Curve 1 sits on the place card");
+  assert(inside(node("card", "Color 1").bounds, chip("Curve 2").bounds), "Curve 2 sits on the Color 1 card");
+  // Each chip keeps its wire in: the source's wire goes to the chip's row.
+  wire("t", "Curve 1 x");
+  wire("place", "Curve 2 x");
   const places = placements();
   for (let i = 1; i < chain.length; i++) {
     assert(places[chain[i - 1]].x < places[chain[i]].x, `${chain[i - 1]} left of ${chain[i]}: ${JSON.stringify(places)}`);
   }
   expect(inRow("Color 1", "Brightness", "select", "Over space").label).toBe("Over space");
+  // The chip says what the curve does: what its x reads, its shape and its
+  // bounds.
+  const said = (start) => app.snapshot().findAll({ role: "text" }).some((n) => n.label.startsWith(start));
+  assert(said("t · ") && said("place · "), "each chip names what its x reads");
+});
+
+test("a time card shows every, duration, delay and phase", () => {
+  open("Chase");
+  for (const row of ["Every", "Duration", "Delay", "Phase"]) rowOf("t", row);
+  fieldOf("t every = 2");
+  fieldOf("t delay = 0");
+  fieldOf("t phase = 0");
+  // An empty duration lasts as long as every.
+  expect(inRow("t", "Duration", "select", "Same as every").label).toBe("Same as every");
+  expect(app.snapshot().find({ role: "card", label: "Clock 1" })).toBe(undefined);
 });
 
 test("the output sits in view at rest, and the view comes back to it", () => {
@@ -136,7 +172,7 @@ test("the output sits in view at rest, and the view comes back to it", () => {
   until("Color 1 in view again", () => inside(canvas(), color().bounds) && color().bounds.width > 200);
 });
 
-test("Over time on a Wash's brightness adds a time and a curve, wired", { fixture: { clips: [clipOf("Wash")] } }, () => {
+test("Over time on a Wash's brightness adds a time and a curve chip, wired", { fixture: { clips: [clipOf("Wash")] } }, () => {
   open("Wash");
   const before = Object.keys(nodes()).length;
   source("Color 1", "Brightness", "Value", "Over time");
@@ -144,52 +180,41 @@ test("Over time on a Wash's brightness adds a time and a curve, wired", { fixtur
   const curve = nodes().color1.inputs.brightness.node;
   expect(nodes()[curve].kind).toBe("curve");
   expect(nodes()[nodes()[curve].inputs.x.node].kind).toBe("time");
-  wire("Curve 1", "Color 1 brightness");
+  chip("Curve 1");
+  assert(noCard("Curve 1"), "the new curve is a chip");
   wire("Time 1", "Curve 1 x");
   const places = placements();
-  assert(places["Time 1"].x < places["Curve 1"].x && places["Curve 1"].x < places["Color 1"].x,
-    `new nodes sit left of what they feed: ${JSON.stringify(places)}`);
+  assert(places["Time 1"].x < places["Color 1"].x, `the time sits left of what it feeds: ${JSON.stringify(places)}`);
   expect(inRow("Color 1", "Brightness", "select", "Over time").label).toBe("Over time");
 });
 
-// The Pulse's one clock.
-const clockOf = () => Object.keys(nodes()).find((id) => nodes()[id].kind === "clock");
+const SPARKLE = { fixture: { clips: [clipOf("Sparkle")] } };
 
-// Put Over time on the Pulse's alpha: a second time, with no clock.
-function secondTime() {
-  source("Color 1", "Alpha", "Value", "Over time");
-  until("alpha over time", () => nodes().color1.inputs.alpha?.node);
-  return nodes()[nodes().color1.inputs.alpha.node].inputs.x.node;
-}
-
-test("a wire dragged from a clock onto a second time links it, and dragged off unwires it", { fixture: { clips: [clipOf("Pulse")] } }, () => {
-  open("Pulse");
-  const time = secondTime();
-  const clock = clockOf();
-  shown("button", `${titleOf(clock)} output port`);
-  app.drag(shown("button", `${titleOf(clock)} output port`), shown("button", `${titleOf(time)} clock port`), { steps: 8, restale: "match" });
-  until("one clock shared", () => nodes()[time].inputs?.clock?.node === clock);
-  expect(Object.values(nodes()).filter((n) => n.kind === "clock").length).toBe(1);
-  wire(titleOf(clock), `${titleOf(time)} clock`);
-  // Picked up off the input and let go over empty canvas: the time runs once
-  // over the clip again.
+test("a wire dragged from a time onto a shuffle links it, and dragged off unwires it", SPARKLE, () => {
+  open("Sparkle");
+  wire("k", "order time");
+  // Picked up off the input and let go over empty canvas: the shuffle
+  // keeps one order.
   const c = canvas();
-  const port = shown("button", `${titleOf(time)} clock port`);
+  const port = shown("button", "order time port");
   app.drag(port, { dx: 0, dy: c.y + c.height - 12 - (port.bounds.y + port.bounds.height / 2) }, { steps: 6 });
-  until("unwired", () => nodes()[time].inputs?.clock === undefined);
-  const first = Object.keys(nodes()).find((id) => id !== time && nodes()[id].kind === "time");
-  expect(nodes()[first].inputs.clock.node).toBe(clock);
+  until("unwired", () => nodes().order.inputs?.time === undefined);
+  // The time still runs the sparkle's fade, so it stays.
+  expect(nodes().k.kind).toBe("time");
+  app.click(node("button", "Fit graph"));
+  settle();
+  app.drag(shown("button", "k output port"), shown("button", "order time port"), { steps: 8, restale: "match" });
+  until("linked again", () => nodes().order.inputs?.time?.node === "k");
+  wire("k", "order time");
 });
 
-test("a wire the input cannot take is refused and says why", { fixture: { clips: [clipOf("Pulse")] } }, () => {
-  open("Pulse");
+test("a wire the input cannot take is refused and says why", () => {
+  open("Chase");
   const before = JSON.stringify(stored().graph);
-  // A clock feeds a time's clock, never a number.
-  const clock = titleOf(clockOf());
-  const time = titleOf(nodes()[nodes().color1.inputs.brightness.node].inputs.x.node);
-  shown("button", `${clock} output port`);
-  app.drag(shown("button", `${clock} output port`), shown("button", `${time} phase port`), { steps: 8, restale: "match" });
-  node("text", `${clock} cannot feed ${time} phase`);
+  // A time feeds a curve's x or a shuffle, never a number.
+  shown("button", "t output port");
+  app.drag(shown("button", "t output port"), shown("button", "place scale port"), { steps: 8, restale: "match" });
+  node("text", "t cannot feed place scale");
   expect(JSON.stringify(stored().graph)).toBe(before);
 });
 
@@ -206,6 +231,20 @@ test("a node from the add menu joins the graph when its output is wired", { fixt
   expect(nodes()[curve.inputs.x.node].kind).toBe("noise");
   until("the draft gone", (s) => s.find({ role: "card", label: "New noise" }) === undefined);
   expect(draft.label).toBe("New noise");
+});
+
+test("the add menu offers math, which multiplies what the input held", { fixture: { clips: [clipOf("Wash")] } }, () => {
+  open("Wash");
+  app.click(node("button", "Add node"));
+  expect(app.snapshot().find({ role: "button", label: "Clock" })).toBe(undefined);
+  app.click(node("button", "Math"));
+  node("card", "New math");
+  app.drag(shown("button", "New math output port"), shown("button", "Color 1 brightness port"), { steps: 8, restale: "match" });
+  until("math stored", () => nodes().math1?.kind === "math");
+  expect(nodes().color1.inputs.brightness.node).toBe("math1");
+  expect(nodes().math1.inputs.values).toEqual([1, 1]);
+  chip("Math 1");
+  node("text", "1 × 1");
 });
 
 // The Chase's space.
@@ -237,15 +276,19 @@ test("a space kind segment stores the setting", () => {
   expect(nodes()[space].settings.wrap).toBe("yes");
 });
 
-test("dragging a curve point stores new points, and undo takes the drag back", { fixture: { clips: [clipOf("Pulse")] } }, () => {
+test("dragging a curve point in an open chip stores new points, and undo takes the drag back", { fixture: { clips: [clipOf("Pulse")] } }, () => {
   open("Pulse");
   const before = JSON.stringify(stored().graph);
   const curve = nodes().color1.inputs.brightness.node;
   const title = titleOf(curve);
+  assert(noCard(title), `${title} is a chip`);
+  expect(app.snapshot().find({ role: "card", label: `${title} strip` })).toBe(undefined);
+  expand(title);
   const shape = () => nodes()[curve].inputs.shape.points;
   const points = JSON.stringify(shape());
   shown("card", `${title} strip`);
   const box = node("card", `${title} strip`).bounds;
+  assert(inside(node("card", "Color 1").bounds, box), "the strip opens on the Color 1 card");
   app.drag(shown("slider", `${title} point ${shape().length}`), { dx: 0, dy: -box.height / 2 }, { steps: 8 });
   until("points stored", () => JSON.stringify(shape()) !== points);
   const end = shape().at(-1);
@@ -255,14 +298,43 @@ test("dragging a curve point stores new points, and undo takes the drag back", {
   until("undone", () => JSON.stringify(stored().graph) === before);
 });
 
-test("a curve widens its strip", { fixture: { clips: [clipOf("Pulse")] } }, () => {
+test("a curve linked into two inputs is a card, which widens its strip", { fixture: { clips: [clipOf("Pulse")] } }, () => {
   open("Pulse");
-  const title = titleOf(nodes().color1.inputs.brightness.node);
-  const narrow = shown("card", `${title} strip`).bounds.width;
-  app.click(shown("button", `Widen ${title}`));
-  node("button", `Narrow ${title}`);
-  const wide = shown("card", `${title} strip`).bounds.width;
+  chip("Curve 1");
+  source("Color 1", "Alpha", "Value", "Link…");
+  const link = (s) => s.findAll({ role: "button" }).find((n) => /^Curve 1 · /.test(n.label));
+  app.click(link(until("the link", link)));
+  until("alpha linked", () => nodes().color1.inputs.alpha?.node === "curve1");
+  node("card", "Curve 1");
+  until("no chip", (s) => s.find({ role: "chip", label: "Curve 1" }) === undefined);
+  wire("Curve 1", "Color 1 brightness");
+  wire("Curve 1", "Color 1 alpha");
+  const narrow = shown("card", "Curve 1 strip").bounds.width;
+  app.click(shown("button", "Widen Curve 1"));
+  node("button", "Narrow Curve 1");
+  const wide = shown("card", "Curve 1 strip").bounds.width;
   assert(wide > narrow * 1.5, `the strip is ${wide} wide, was ${narrow}`);
+});
+
+test("a math chip's op segments store the op", SPARKLE, () => {
+  open("Sparkle");
+  const math = chip("Math 1").bounds;
+  assert(noCard("Math 1"), "the product is a chip");
+  // Its items are chips in it, as `a * b` writes them.
+  for (const item of ["Curve 1", "Curve 2"]) {
+    assert(inside(math, chip(item).bounds), `${item} sits in the Math 1 chip`);
+  }
+  node("text", "Curve 1 × Curve 2");
+  const segment = (label) => {
+    const box = chip("Math 1").bounds;
+    return app.snapshot().findAll({ role: "button", label }).find((n) => inside(box, n.bounds));
+  };
+  app.click(segment("Max"));
+  until("max stored", () => nodes().math1.settings.op === "max");
+  node("text", "max(Curve 1, Curve 2)");
+  app.click(segment("Add"));
+  until("+ stored", () => nodes().math1.settings.op === "+");
+  expect(nodes().math1.inputs.values).toEqual([{ node: "curve1" }, { node: "curve2" }]);
 });
 
 const cardWidth = (label) => node("card", label).bounds.width;
@@ -304,27 +376,28 @@ test("a middle-button drag pans, even over a card", () => {
 
 test("hovering a wire lights both its ports", () => {
   open("Chase");
-  const from = titleOf(nodes().color1.inputs.brightness.node);
-  const ends = () => [app.snapshot().find({ role: "button", label: `${from} output port` }).bounds.width,
-    app.snapshot().find({ role: "button", label: "Color 1 brightness port" }).bounds.width];
-  shown("button", `${from} output port`);
+  const ends = () => [app.snapshot().find({ role: "button", label: "place output port" }).bounds.width,
+    app.snapshot().find({ role: "button", label: "Curve 2 x port" }).bounds.width];
+  shown("button", "place output port");
   const [out, into] = ends();
-  const mid = node("text", `${from} → Color 1 brightness`).bounds;
+  const mid = node("text", "place → Curve 2 x").bounds;
   app.scroll({ x: mid.x + mid.width / 2, y: mid.y + mid.height / 2 }, { dy: 0 });
   until("both ends lit", () => ends()[0] > out && ends()[1] > into);
 });
 
-test("a wire dropped near a port that takes it snaps onto it", { fixture: { clips: [clipOf("Pulse")] } }, () => {
-  open("Pulse");
-  const time = secondTime();
-  const clock = clockOf();
-  shown("button", `${titleOf(clock)} output port`);
-  const from = shown("button", `${titleOf(clock)} output port`).bounds;
-  const to = shown("button", `${titleOf(time)} clock port`).bounds;
+test("a wire dropped near a port that takes it snaps onto it", SPARKLE, () => {
+  open("Sparkle");
+  source("order", "Time", "Time", "Once");
+  until("unwired", () => nodes().order.inputs?.time === undefined);
+  app.click(node("button", "Fit graph"));
+  settle();
+  const to = shown("button", "order time port").bounds;
+  const from = shown("button", "k output port").bounds;
+  expect(shown("button", "order time port").bounds).toEqual(to);
   const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
   // 18 px short of the port: outside its ring, inside its reach.
   app.drag(start, { dx: to.x + to.width / 2 - start.x - 18, dy: to.y + to.height / 2 - start.y }, { steps: 8 });
-  until("linked", () => nodes()[time].inputs?.clock?.node === clock);
+  until("linked", () => nodes().order.inputs?.time?.node === "k");
 });
 
 test("Delete removes the selected node", () => {
@@ -374,6 +447,20 @@ test("a direction shows each component to three decimals", () => {
     .every((end) => app.snapshot().find({ role: "input", label: `${titleOf(spaceOf())} direction: ${end}` })));
 });
 
+test("a mirror's plane shows at 50 % when empty", { fixture: { clips: [clipOf("Mirror")] } }, () => {
+  open("Mirror");
+  node("card", "halves");
+  rowOf("halves", "At");
+  fieldOf("halves at = 50");
+  expect(nodes().halves.inputs?.at).toBe(undefined);
+  const field = fieldOf("halves at = ");
+  app.click(field);
+  app.key("secondary-a backspace");
+  app.type(fieldOf("halves at = "), "25");
+  app.key("enter");
+  until("at stored", () => nodes().halves.inputs?.at === 0.25);
+});
+
 test("renaming stores the name and the timeline shows it", () => {
   open("Chase");
   const field = () => node("input", "Name");
@@ -385,7 +472,7 @@ test("renaming stores the name and the timeline shows it", () => {
   node("card", "Kick chase");
 });
 
-test("the fade handle writes an alpha curve", { fixture: { clips: [clipOf("Wash")], window: [1400, 900] } }, () => {
+test("the fade handle writes an alpha curve over the clip", { fixture: { clips: [clipOf("Wash")], window: [1400, 900] } }, () => {
   nav.venue("Test Venue");
   nav.track("Aurora");
   nav.expand();
@@ -397,7 +484,10 @@ test("the fade handle writes an alpha curve", { fixture: { clips: [clipOf("Wash"
   until("alpha wired", () => nodes().color1.inputs.alpha?.node);
   const curve = nodes()[nodes().color1.inputs.alpha.node];
   expect(curve.kind).toBe("curve");
-  expect(nodes()[curve.inputs.x.node].kind).toBe("time");
+  const time = nodes()[curve.inputs.x.node];
+  expect(time.kind).toBe("time");
+  // Once over the clip: no events.
+  expect(time.inputs?.every).toBe(undefined);
   const points = curve.inputs.shape.points;
   assert(Math.abs(points[0][1]) < 1e-9 && Math.abs(points[1][0] - 0.25) < 0.02, `fade: ${JSON.stringify(points)}`);
 });
@@ -413,25 +503,22 @@ test("a noise source shows its preview in the noise card", { fixture: { clips: [
   expect(app.snapshot().find({ label: "These settings give no noise to show" })).toBe(undefined);
 });
 
-test("a brightness multiplies by a list of values and wires", { fixture: { clips: [clipOf("Wash")] } }, () => {
+test("Math on a brightness multiplies it through a math node, and its items edit", { fixture: { clips: [clipOf("Wash")] } }, () => {
   open("Wash");
-  app.click(shown("button", "Multiply Color 1 brightness"));
-  until("a list of two", () => JSON.stringify(nodes().color1.inputs?.brightness) === "[1,1]");
-  // A new source dropped on a list joins it as one more item.
-  source("Color 1", "Brightness", "List", "Over time");
-  until("a wire in the list", () => nodes().color1.inputs.brightness.length === 3);
-  const curve = nodes().color1.inputs.brightness[2].node;
-  expect(curve).toBe("curve1");
-  wire("Curve 1", "Color 1 brightness");
+  expect(app.snapshot().find({ role: "button", label: "Multiply Color 1 brightness" })).toBe(undefined);
+  source("Color 1", "Brightness", "Value", "Math");
+  until("a product", () => nodes().color1.inputs?.brightness?.node === "math1");
+  expect(nodes().math1.inputs.values).toEqual([1, 1]);
+  expect(inRow("Color 1", "Brightness", "select", "Math").label).toBe("Math");
+  expand("Math 1");
+  app.click(shown("button", "Add to Math 1 values"));
+  until("three items", () => nodes().math1.inputs.values.length === 3);
   // Taking items out leaves one: a plain value again.
-  app.click(shown("button", "Remove Color 1 brightness item 3"));
-  until("the wire gone", () => nodes().color1.inputs.brightness.length === 2 && !nodes()[curve]);
-  app.click(shown("button", "Remove Color 1 brightness item 2"));
-  until("one value", () => nodes().color1.inputs.brightness === 1);
+  app.click(shown("button", "Remove Math 1 values item 3"));
+  until("two items", () => nodes().math1.inputs.values.length === 2);
+  app.click(shown("button", "Remove Math 1 values item 2"));
+  until("one value", () => nodes().color1.inputs.brightness === 1 && !nodes().math1);
 });
-
-// A number field's text, by the start of its label: "Space 1 shift = 0 %".
-const fieldOf = (prefix) => nav.inGraph((s) => s.findAll({ role: "input" }).find((n) => n.label.startsWith(prefix)), prefix);
 
 // The x of each head mark on a strip, left to right by head.
 const heads = (strip) => {
@@ -439,15 +526,16 @@ const heads = (strip) => {
   return marks.sort((a, b) => a.label.localeCompare(b.label, "en", { numeric: true })).map((n) => n.bounds.x);
 };
 
-test("a space shifts and stretches its heads, and a shift over time sweeps through", { fixture: { clips: [clipOf("Wash")] } }, () => {
+test("a space shifts and scales its heads, and a shift over time sweeps through", { fixture: { clips: [clipOf("Wash")] } }, () => {
   open("Wash");
   source("Color 1", "Brightness", "Value", "Over space");
   until("a space stored", () => nodes().space1);
-  // An unshifted space over its whole length: the shift and length rows
-  // show what empty stands for.
-  for (const row of ["Shift", "Length"]) rowOf("Space 1", row);
+  // An unshifted space at scale 1: the shift and scale rows show what
+  // empty stands for.
+  for (const row of ["Shift", "Scale"]) rowOf("Space 1", row);
   fieldOf("Space 1 shift = ");
-  fieldOf("Space 1 length = ");
+  fieldOf("Space 1 scale = ");
+  expand("Curve 1");
   shown("card", "Curve 1 strip");
   until("the heads marked", () => heads("Curve 1").length > 1);
   const before = heads("Curve 1");
@@ -462,13 +550,13 @@ test("a space shifts and stretches its heads, and a shift over time sweeps throu
   until("the heads moved", () => heads("Curve 1").some((x, i) => x < before[i] - 0.5));
   const after = heads("Curve 1");
   after.forEach((x, i) => assert(x <= before[i] + 0.5, `head ${i + 1} moved right: ${before[i]} → ${x}`));
-  // A moving shift starts with the band wholly before the axis and ends
+  // A moving shift starts with the shape wholly before the axis and ends
   // wholly past it.
   source("Space 1", "Shift", "Value", "Over time");
   until("shift wired", () => nodes().space1.inputs?.shift?.node);
   const sweep = nodes()[nodes().space1.inputs.shift.node];
-  const length = nodes().space1.inputs?.length ?? 1;
-  assert(sweep.inputs.low <= -length && sweep.inputs.high >= 1, `sweep: ${JSON.stringify(sweep.inputs)}`);
+  const scale = nodes().space1.inputs?.scale ?? 1;
+  assert(sweep.inputs.low <= -scale && sweep.inputs.high >= 1, `sweep: ${JSON.stringify(sweep.inputs)}`);
 });
 
 // Open the name of the card titled `title` for typing, type `name`, enter.
@@ -486,11 +574,12 @@ test("renaming a node moves every wire into it, refuses a bad name, and undoes i
   open("Wash");
   source("Color 1", "Brightness", "Value", "Over time");
   until("a curve stored", () => nodes().curve1);
-  app.click(shown("button", "Multiply Color 1 brightness"));
+  source("Color 1", "Brightness", "Over time", "Math");
+  until("a product", () => nodes().color1.inputs.brightness.node === "math1");
   source("Color 1", "Alpha", "Value", "Link…");
   app.click(node("button", "Curve 1 · Ramp up"));
   // Each edit committed, so the rename is an undo step of its own.
-  until("a list and a link stored", () => Array.isArray(nodes().color1.inputs.brightness) && nodes().color1.inputs.alpha?.node === "curve1");
+  until("a link stored", () => nodes().color1.inputs.alpha?.node === "curve1");
   const before = JSON.stringify(stored().graph);
   const uses = (id) => (JSON.stringify(stored().graph).match(new RegExp(`"node":"${id}"`, "g")) ?? []).length;
   const wires = uses("curve1");
@@ -501,7 +590,7 @@ test("renaming a node moves every wire into it, refuses a bad name, and undoes i
   expect(uses("cut")).toBe(wires);
   expect(uses("curve1")).toBe(0);
   expect(nodes().color1.inputs.alpha.node).toBe("cut");
-  assert(nodes().color1.inputs.brightness.some((item) => item?.node === "cut"), "the list item follows the name");
+  assert(nodes().math1.inputs.values.some((item) => item?.node === "cut"), "the product's item follows the name");
   node("card", "cut");
   wire("cut", "Color 1 alpha");
   const renamed = JSON.stringify(stored().graph);

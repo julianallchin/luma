@@ -1,11 +1,12 @@
 // One capture per node card of the Slash clip graph, kept under
 // clip_graph_nodes/ for design review. Asserts only that each card shows.
+// The curves one input reads show as chips on that input's card: Curve 4 on
+// Curve 5, Curve 6 and Curve 7 on Color 1.
 
 const graph = {
-  version: 2,
+  version: 3,
   nodes: {
-    clock1: { kind: "clock", inputs: { every: 2, duration: 2 } },
-    time1: { kind: "time", inputs: { clock: { node: "clock1" } } },
+    time1: { kind: "time", inputs: { every: 2, duration: 2 } },
     space1: {
       kind: "space", settings: { kind: "line", wrap: "no" },
       inputs: { direction: [-0.8192, 0, 0.5736] },
@@ -47,10 +48,7 @@ fixture({
   window: [2400, 1800],
 });
 
-const CARDS = [
-  "Clock 1", "Time 1", "Space 1", "Space 2",
-  "Curve 4", "Curve 5", "Curve 6", "Curve 7", "Color 1",
-];
+const CARDS = ["Time 1", "Space 1", "Space 2", "Curve 5", "Color 1"];
 
 test("each node card, captured", () => {
   nav.trackEditor("Test Venue", "Aurora");
