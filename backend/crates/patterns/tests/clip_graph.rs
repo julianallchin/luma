@@ -79,7 +79,7 @@ fn score_json_example_round_trips() {
             "nodes": {
                 "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
                 "curve1": {"kind": "curve", "settings": {"kind": "number"},
-                           "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 0]]}, "low": 0.1667, "high": 1}},
+                           "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 0]]}, "low": 60, "high": 360}},
                 "time1":  {"kind": "time",  "inputs": {"every": 2, "phase": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0, 1], [0.1667, 1], [0.1667, 0], [1, 0]]}}},
@@ -396,10 +396,10 @@ fn rule_4_math_takes_values_and_broadcasts() {
             "time1": {"kind": "time"},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "high": 30}},
             "math1": {"kind": "math", "inputs": {"values": [{"node": "curve1"}, 0.5]}},
-            "time2": {"kind": "time", "inputs": {"phase": {"node": "curve1"}}},
+            "time2": {"kind": "time", "inputs": {"delay": {"node": "curve1"}}},
             "curve2": {"kind": "curve", "inputs": {"x": {"node": "time2"}}},
             "aim1": {"kind": "aim", "inputs": {"yaw": {"node": "math1"}, "alpha": {"node": "curve2"}}}})),
-        "curve1: expected one unit; it feeds aim1.yaw (degrees) and time2.phase (turns). Example: make two curves"
+        "curve1: expected one unit; it feeds aim1.yaw (degrees) and time2.delay (beats). Example: make two curves"
     );
 }
 
@@ -410,7 +410,7 @@ fn rule_5_axes() {
     assert_eq!(
         error(json!({
             "time2": {"kind": "time", "inputs": {"every": 2}},
-            "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 0.5}},
+            "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 180}},
             "time1": {"kind": "time", "inputs": {"every": 1, "phase": {"node": "curve4"}}},
             "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})),
@@ -419,7 +419,7 @@ fn rule_5_axes() {
     // The same every and duration are one clock: a phase may follow it.
     graph(json!({
         "time2": {"kind": "time", "inputs": {"every": 2, "duration": 2}},
-        "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 0.5}},
+        "curve4": {"kind": "curve", "inputs": {"x": {"node": "time2"}, "high": 180}},
         "time1": {"kind": "time", "inputs": {"every": 2, "phase": {"node": "curve4"}}},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
@@ -583,6 +583,11 @@ fn definition_defaults_pass_the_checker() {
     assert_eq!(time["inputs"]["delay"]["unit"], "beats");
     assert_eq!(time["inputs"]["every"]["unit"], "beats");
     assert!(time["inputs"].get("clock").is_none());
+    // A phase is degrees, 360 one event, and any number: it wraps.
+    assert_eq!(time["inputs"]["phase"]["unit"], "degrees");
+    assert_eq!(time["inputs"]["phase"]["range"], json!(null));
+    let phase = clip_graph::definition(Kind::Time).input("phase").unwrap();
+    assert_eq!(phase.example, "90");
     let math = serde_json::to_value(clip_graph::definition(Kind::Math)).unwrap();
     assert_eq!(math["output"], "value");
     assert_eq!(math["settings"]["op"]["default"], "*");

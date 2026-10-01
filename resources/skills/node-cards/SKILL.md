@@ -63,7 +63,7 @@ a Python name of at most 32 characters that is not a builder name (`time`,
 | gradient | `"Fire"`, `[(t, color), ...]` | A gradient preset name or stops. Blends in OKLab. |
 | choice | `kind="order"` | A setting. |
 
-Units: share (0–1), beats, degrees, metres, hz, turns, uvz (a vector), rgb.
+Units: share (0–1), beats, degrees, metres, hz, uvz (a vector), rgb.
 
 Points: `x` goes from 0 to 1 and increases. Two points can have the same `x`:
 that is a jump. At the jump's `x` the curve reads the value after the jump,
@@ -159,7 +159,7 @@ color. Blend modes: the same as color.
 | every | number | beats | above 0 | once over the clip, no events |
 | duration | number | beats | above 0 | every (the clip with no every) |
 | delay | number | beats | any | 0 |
-| phase | number | turns | any | 0 |
+| phase | number | degrees | any | 0 |
 
 With `every`, events start at the clip start, one each `every` beats. Each
 event lives `duration` beats. A duration above every makes events overlap on
@@ -170,19 +170,21 @@ are equal (the same numbers or the same wires) share one set of events.
 
 `p` is the progress: the age of the event (or of the clip) over its
 duration, 0–1. Each head then gets its own clock: τ = p − delay / duration.
-If phase is given (0 too, any number), τ = fract(τ + phase).
+If phase is given (0 too, any number), τ = fract(τ + phase / 360).
 
 - **delay** is in beats and does not wrap. Before a head's start τ is below
   0; a curve holds its first value there (a waiting head of a dissolve stays
   on). After the end a curve holds its last value. Use delay for one-shots: a
   wipe, a cut, a dissolve, a build.
-- **phase** is in turns and wraps, so the clock loops. Use phase for loops: a
-  chase, a wave, a spin.
+- **phase** is in degrees and wraps: 360 is one whole event, 90 a quarter,
+  -90 the same as 270. The clock loops. Use phase for loops: a chase, a
+  wave, a spin.
 
 Put a curve over space into delay or phase to make heads differ.
 `time(every=4, delay=curve(space(), "Ramp up", high=2))` starts each head
 later along the axis, up to 2 beats. The `low` and `high` of that curve set
-the spread: beats for delay, turns for phase.
+the spread: beats for delay, degrees for phase (`high=360` spreads the
+heads over one whole event).
 
 **space** `space(heads=None, direction=None, centre=None, at=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
 
@@ -412,7 +414,7 @@ Examples:
 
 - `color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, "Ramp up")`
 - `curve2.low: expected degrees between -180 and 180 for aim1.yaw; got 400. Example: low=-30`
-- `curve3: expected one unit; it feeds aim1.yaw (degrees) and time1.phase (turns). Example: make two curves`
+- `curve3: expected one unit; it feeds aim1.yaw (degrees) and time1.delay (beats). Example: make two curves`
 - `math1.values: expected exactly two items for -; got 3. Example: values=[curve1, curve2]`
 - `curve1.gradient: expected a gradient because kind is color; got nothing. Example: gradient="Rainbow"`
 - `time1.every: expected beats above 0; got 0. Example: every=1, or leave every out for once over the clip`

@@ -59,7 +59,7 @@ graph to `edit.update_clip(clip, graph=...)`.
   keeps its preset name.
 - **One output per clip.** Color and strobe together are two clips.
 - **Events come from `time(every=...)`.** For once over the clip, give
-  `time()` no every. Every, duration and delay are beats; phase is turns.
+  `time()` no every. Every, duration and delay are beats; phase is degrees (360 is one event).
 - **Reuse a variable to share a node.** `t = time(every=2)` used twice is one
   time node. Two `noise(...)` calls are two streams.
 - **Two ways to move.** Slide the place: a curve over time or audio on

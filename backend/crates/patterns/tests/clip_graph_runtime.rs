@@ -436,13 +436,36 @@ fn a_phase_always_wraps() {
     // At beat 0.5, p = 0.25 and τ = 0.25 − 0.5 = −0.25.
     let unwrapped = play(&delayed(None), &line(), &[0.5]);
     assert_eq!(unwrapped[[0, 0, DIMMER]], 0.);
-    for phase in [0., 1., -2.] {
+    for phase in [0., 360., -720.] {
         let wrapped = play(&delayed(Some(phase)), &line(), &[0.5]);
         assert!(
             (wrapped[[0, 0, DIMMER]] - 0.75).abs() < 1e-9,
             "phase {phase}"
         );
     }
+}
+
+#[test]
+fn a_phase_is_degrees_and_360_is_one_event() {
+    // At beat 0.25 of an event every 2 beats, τ = 0.125 before the phase.
+    let phased = |phase: f64| {
+        graph(json!({
+            "time1": {"kind": "time", "inputs": {"every": 2, "phase": phase}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    };
+    let tau = |phase: f64| play(&phased(phase), &line(), &[0.25])[[0, 0, DIMMER]];
+    // A whole turn is no change; 450 is 90; -90 wraps round to 270.
+    assert!((tau(360.) - tau(0.)).abs() < 1e-9);
+    assert!((tau(450.) - tau(90.)).abs() < 1e-9);
+    assert!((tau(-90.) - tau(270.)).abs() < 1e-9);
+    // A quarter of 360 moves the clock a quarter of the event.
+    assert!((tau(90.) - (0.125 + 0.25)).abs() < 1e-9, "{}", tau(90.));
+    assert!(
+        (tau(-90.) - (1. + 0.125 - 0.25)).abs() < 1e-9,
+        "{}",
+        tau(-90.)
+    );
 }
 
 #[test]

@@ -37,7 +37,6 @@ pub(crate) fn suffix(unit: Option<Unit>) -> Option<&'static str> {
         Unit::Degrees => Some("°"),
         Unit::Metres => Some("m"),
         Unit::Hz => Some("Hz"),
-        Unit::Turns => Some("turns"),
         Unit::Heads => Some("heads"),
         Unit::Uvz | Unit::Rgb => None,
     }
@@ -80,8 +79,9 @@ pub(crate) struct Spec {
 
 fn range(unit: Option<Unit>, bounds: Option<[Option<f64>; 2]>) -> [f64; 2] {
     let wide = match unit {
+        // Degrees have no wide range: an aim angle has its own, and a phase
+        // takes any number and wraps.
         Some(Unit::Share) => [-4., 4.],
-        Some(Unit::Degrees) => [-180., 180.],
         Some(Unit::Beats) => [-1e4, 1e4],
         Some(Unit::Metres) => [-1e3, 1e3],
         Some(Unit::Heads) => [1., 1e4],
@@ -512,7 +512,6 @@ fn promoted(spec: Spec, current: Option<&Input>) -> Node {
             let v = now.unwrap_or(0.);
             bounds("Ramp up", v - 1., v + 1.)
         }
-        (_, Some(Unit::Turns)) => bounds("Ramp up", 0., 0.5),
         (_, Some(Unit::Hz)) => {
             let v = now.unwrap_or(100.);
             bounds("Ramp up", (v / 2.).max(20.), (v * 2.).min(20000.))
@@ -535,18 +534,24 @@ pub(crate) fn promote(graph: &mut ClipGraph, id: &str, input: &str, source: Kind
         .filter(|held| !matches!(held, Input::Wire(_) | Input::List(_)))
         .cloned();
     let current = shown(graph, id, input);
-    let curve = if graph.nodes[id].kind == Kind::Space && input == "shift" {
-        // A shift that moves slides the shape in from wholly before the axis
-        // to past its end: from minus its scale to 1.
-        let scale = match shown(graph, id, "scale") {
-            Some(Input::Number(scale)) => scale,
-            _ => 1.,
-        };
-        curve("number", "Ramp up")
-            .with_input("low", -scale)
-            .with_input("high", 1.)
-    } else {
-        promoted(spec, current.as_ref())
+    let curve = match (graph.nodes[id].kind, input) {
+        (Kind::Space, "shift") => {
+            // A shift that moves slides the shape in from wholly before the
+            // axis to past its end: from minus its scale to 1.
+            let scale = match shown(graph, id, "scale") {
+                Some(Input::Number(scale)) => scale,
+                _ => 1.,
+            };
+            curve("number", "Ramp up")
+                .with_input("low", -scale)
+                .with_input("high", 1.)
+        }
+        // A phase is in degrees as an aim angle is, but it wraps at 360: a
+        // phase that moves spreads the heads over half an event.
+        (Kind::Time, "phase") => curve("number", "Ramp up")
+            .with_input("low", 0.)
+            .with_input("high", 180.),
+        _ => promoted(spec, current.as_ref()),
     };
     let x = add(graph, Node::new(source));
     let curve = add(graph, curve.with_input("x", Input::wire(x)));
@@ -1123,6 +1128,36 @@ mod tests {
         // From wholly before the axis to wholly past it.
         assert!(number(&graph, &sweep, "low") <= -0.25);
         assert!(number(&graph, &sweep, "high") >= 1.);
+    }
+
+    #[test]
+    fn a_moving_phase_ramps_over_half_an_event_and_an_aim_angle_swings_about_zero() {
+        let bounds = |graph: &ClipGraph, curve: &str| {
+            ["low", "high"].map(|bound| match shown(graph, curve, bound) {
+                Some(Input::Number(v)) => v,
+                other => panic!("{curve}.{bound}: {other:?}"),
+            })
+        };
+        let mut graph = wash();
+        promote(&mut graph, "color1", "brightness", Kind::Time);
+        let time = wired(&graph, &wired(&graph, "color1", "brightness"), "x");
+        // A phase is degrees with no clamp: it wraps, so 450 and -90 are
+        // phases too.
+        let phase = spec(&graph, &time, "phase").unwrap();
+        assert_eq!(phase.unit, Some(Unit::Degrees));
+        assert!(phase.range[0] <= -90. && phase.range[1] >= 450.);
+        promote(&mut graph, &time, "phase", Kind::Space);
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        let sweep = wired(&graph, &time, "phase");
+        assert_eq!(bounds(&graph, &sweep), [0., 180.]);
+        assert_eq!(
+            graph.nodes[&sweep].inputs.get("shape"),
+            Some(&Input::Points(preset_curve("Ramp up")))
+        );
+        let mut aim = ClipGraph::new([("aim1".to_owned(), Node::new(Kind::Aim))]);
+        promote(&mut aim, "aim1", "yaw", Kind::Time);
+        let [low, high] = bounds(&aim, &wired(&aim, "aim1", "yaw"));
+        assert!(low < 0. && high > 0. && low == -high, "{low}..{high}");
     }
 
     #[test]

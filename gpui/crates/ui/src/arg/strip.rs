@@ -14,8 +14,7 @@
 //! The host says what x is. Over time, a clock gives the beats the strip
 //! spans and the playhead's phase: the strip draws a beat grid, bars
 //! stronger, and the playhead, and follows the playhead itself while the
-//! transport runs. Across space, the host gives each head's place on the
-//! axis and the strip draws one tick per head in the color it gets.
+//! transport runs.
 use crate::rpx;
 use std::rc::Rc;
 
@@ -63,20 +62,12 @@ pub struct Clock {
 
 /// Reads the clock of a strip over time.
 pub type ClockSource = Rc<dyn Fn(&App) -> Option<Clock>>;
-/// Reads the place of each head on a strip's axis, or `None` while x is not
-/// that axis. A place outside 0–1 is past an end of the curve.
-pub type HeadSource = Rc<dyn Fn(&App) -> Option<Rc<[f64]>>>;
-
-/// How strong a head past an end of the curve draws.
-const OUTSIDE_OPACITY: f32 = 0.35;
-
 /// What the x axis measures.
 #[derive(Clone, Default)]
 enum Axis {
     #[default]
     Plain,
     Time(ClockSource),
-    Space(HeadSource),
 }
 
 /// The most stops a gradient takes, and points a curve takes.
@@ -98,8 +89,6 @@ const MARKER_R: f32 = 4.;
 const REACH: f64 = 9.;
 /// A color stop's marker.
 const STOP: f32 = 12.;
-/// The row of head ticks under the drawing area.
-const TICK_H: f32 = 10.;
 /// The position field, in percent.
 const PERCENT_W: f32 = 58.;
 /// The number value field.
@@ -205,12 +194,6 @@ impl CurveStrip {
     /// x is time: a beat grid and a playhead from `clock`.
     pub fn over_time(mut self, clock: ClockSource) -> Self {
         self.axis = Axis::Time(clock);
-        self
-    }
-
-    /// x is an axis of the heads: one tick per head from `heads`.
-    pub fn across_space(mut self, heads: HeadSource) -> Self {
-        self.axis = Axis::Space(heads);
         self
     }
 
@@ -655,10 +638,6 @@ impl Render for CurveStrip {
         self.drawn_phase = clock
             .and_then(|clock| clock.phase)
             .map(|phase| phase as f32 * width);
-        let heads = match &self.axis {
-            Axis::Space(heads) => heads(cx),
-            _ => None,
-        };
         let handles = match (&value, segment) {
             (StripValue::Number(curve), Some(segment)) if curved(curve.ease(segment)) => {
                 let c = curve.controls(segment);
@@ -911,32 +890,6 @@ impl Render for CurveStrip {
                     cx.notify();
                 }),
             );
-        let ticks = heads.map(|heads| {
-            // Under a number, the ticks span its box, not its air.
-            let span = div().relative().size_full();
-            div()
-                .w_full()
-                .h(rpx(TICK_H))
-                .when(!color, |ticks| ticks.px(rpx(PAD_X)))
-                .child(span.children(heads.iter().enumerate().map(|(i, &x)| {
-                    // A head past either end reads the curve's end value: it
-                    // sits at that end, faint.
-                    let at = x.clamp(0., 1.);
-                    let c = value.head_color(at);
-                    div()
-                        .absolute()
-                        .left(gpui::relative(at as f32))
-                        .when(at != x, |tick| tick.opacity(OUTSIDE_OPACITY))
-                        .ml(rpx(-2.))
-                        .w(rpx(4.))
-                        .h_full()
-                        .rounded(rpx(1.))
-                        .border_1()
-                        .border_color(crate::glass::hairline(0.24))
-                        .bg(c.display())
-                        .agent_node(Role::Text, format!("{id} head {}", i + 1))
-                })))
-        });
         let strip = div()
             .w_full()
             .flex()
@@ -947,8 +900,7 @@ impl Render for CurveStrip {
             .border_1()
             .border_color(crate::glass::hairline(0.08))
             .bg(crate::glass::ink(0.03))
-            .child(area)
-            .children(ticks);
+            .child(area);
         div()
             .w_full()
             .flex()
@@ -1326,15 +1278,6 @@ impl StripValue {
         match self {
             Self::Number(_) => {}
             Self::Gradient(gradient) => gradient.set_color(i, color),
-        }
-    }
-
-    /// What a head at `x` gets: the color there, or white at the number's
-    /// level.
-    fn head_color(&self, x: f64) -> Light {
-        match self {
-            Self::Number(curve) => Light::opaque([curve.sample(x).clamp(0., 1.); 3]),
-            Self::Gradient(gradient) => gradient.color_at(x as f32),
         }
     }
 

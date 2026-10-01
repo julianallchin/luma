@@ -505,7 +505,7 @@ mod tests {
                 "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
                 "curve1": {"kind": "curve", "settings": {"kind": "number"},
                            "inputs": {"x": {"node": "space1"},
-                                      "shape": {"points": [[0, 1], [1, 0]]}, "low": 0.1667}},
+                                      "shape": {"points": [[0, 1], [1, 0]]}, "low": 60, "high": 360}},
                 "time1": {"kind": "time",
                           "inputs": {"every": 2, "phase": {"node": "curve1"}}},
                 "curve2": {"kind": "curve", "settings": {"kind": "number"},

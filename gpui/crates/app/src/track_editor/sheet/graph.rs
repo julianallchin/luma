@@ -455,9 +455,6 @@ fn field(
                 Some(Kind::Time) => {
                     strip = strip.over_time(Rc::new(move |cx| clock_of(&app, &curve, cx)));
                 }
-                Some(Kind::Space) => {
-                    strip = strip.across_space(Rc::new(move |cx| heads_of(&app, &curve, cx)));
-                }
                 _ => {}
             }
             let entity = cx.new(|_| strip);
@@ -614,7 +611,8 @@ fn clock_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<strip::Cloc
     let inside = (0. ..=length).contains(&elapsed) && age <= life;
     let x = (age / life).clamp(0., 1.) - delay / life;
     let x = match phase {
-        Some(phase) if phase != 0. => (x + phase).rem_euclid(1.),
+        // Degrees: 360 is one event.
+        Some(phase) if phase != 0. => (x + phase / 360.).rem_euclid(1.),
         _ => x.clamp(0., 1.),
     };
     Some(strip::Clock {
@@ -634,36 +632,6 @@ fn clip_beats(editor: &Editor, clip: &Clip) -> Option<(f64, f64, f64)> {
         .beat_at(f64::from(editor.transport.position))
         .ok()?;
     Some((start, length, now - start))
-}
-
-/// Where the clip's heads fall along a curve's space axis at the playhead,
-/// as playback computes it, after the space's shift and scale: one place
-/// per head, outside 0–1 where a head is past an end of the curve.
-fn heads_of(app: &WeakEntity<Luma>, curve: &str, cx: &App) -> Option<Rc<[f64]>> {
-    let app = app.upgrade()?;
-    let Some(Body::TrackEditor(editor)) = app.read(cx).workspace.active_body() else {
-        return None;
-    };
-    let clip = primary_clip(editor)?;
-    let core = clip.core.as_ref()?;
-    let (space, _) = coordinate(&core.graph, curve)?;
-    let cells = editor.sheet.heads.cells.clone()?;
-    let (start, length, elapsed) = clip_beats(editor, clip)?;
-    let places = core
-        .graph
-        .coordinate_at_heads(
-            &space,
-            p::Frame {
-                cells: &cells,
-                features: None,
-                beat: start + elapsed.clamp(0., length.next_down().max(0.)),
-                clip_start: start,
-                clip_duration: length,
-                seed: core.seed,
-            },
-        )
-        .ok()?;
-    Some(places.into_iter().flatten().collect())
 }
 
 /// A noise node's settings as the preview draws them: a value node's value,
