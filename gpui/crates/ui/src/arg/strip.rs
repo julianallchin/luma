@@ -30,8 +30,9 @@ use crate::{
 };
 use gpui::prelude::*;
 use gpui::{
-    canvas, div, fill, point, size, App, Background, Bounds, Context, Entity, EventEmitter,
-    MouseButton, PathBuilder, Pixels, Point, SharedString, Subscription, Window,
+    canvas, div, fill, point, size, App, Background, Bounds, ContentMask, Context, Entity,
+    EventEmitter, MouseButton, PathBuilder, PathStyle, Pixels, Point, SharedString, StrokeOptions,
+    Subscription, Window,
 };
 use luma_patterns::{Ease, Envelope};
 
@@ -81,11 +82,18 @@ enum Axis {
 /// The most stops a gradient takes, and points a curve takes.
 const MAX_STOPS: usize = 64;
 const MAX_POINTS: usize = 256;
-/// The box's air around the drawing area.
+/// The strip's air around a color's fill, and around a number's plot.
 const INSET: f32 = 9.;
-/// The drawing area's height: a number's box, a color's fill.
-const NUMBER_H: f32 = 120.;
+const NUMBER_INSET: f32 = 3.;
+/// The drawing area's height: a number's 0–1 box, a color's fill.
+const PLOT_H: f32 = 96.;
 const COLOR_H: f32 = 40.;
+/// The air around a number's 0–1 box, where Bézier handles and a curve
+/// that overshoots stay visible and draggable.
+const PAD_X: f32 = 10.;
+const PAD_Y: f32 = 20.;
+/// A handle's marker radius, kept inside the air.
+const MARKER_R: f32 = 4.;
 /// How near a press must land to take a point, in pixels.
 const REACH: f64 = 9.;
 /// A color stop's marker.
@@ -221,12 +229,13 @@ impl CurveStrip {
         cx.notify();
     }
 
-    /// `p` in the drawing area as `[x, y]`, 0–1 with y up, clamped.
+    /// `p` in the drawing area as `[x, y]`, 0–1 with y up. Outside the box
+    /// it reads past 0 or 1: the caller clamps.
     fn position(&self, p: Point<Pixels>) -> Option<[f64; 2]> {
         let b = self.bounds?;
         Some([
-            (f32::from(p.x - b.origin.x) / f32::from(b.size.width)).clamp(0., 1.) as f64,
-            (1. - f32::from(p.y - b.origin.y) / f32::from(b.size.height)).clamp(0., 1.) as f64,
+            (f32::from(p.x - b.origin.x) / f32::from(b.size.width)) as f64,
+            (1. - f32::from(p.y - b.origin.y) / f32::from(b.size.height)) as f64,
         ])
     }
 
@@ -253,7 +262,7 @@ impl CurveStrip {
             if curved(curve.ease(segment)) {
                 let c = curve.controls(segment);
                 for h in [1, 2] {
-                    if self.distance(c[h], p) <= REACH {
+                    if self.distance(shown(c[h]), p) <= REACH {
                         return Some(Drag::Handle(segment, h));
                     }
                 }
@@ -271,6 +280,13 @@ impl CurveStrip {
     fn move_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let (Some(drag), Some(p)) = (self.dragging, self.position(position)) else {
             return;
+        };
+        // A point stays in the box. A handle's x stays in its segment, and
+        // its y may leave the box, as far as the air around it shows.
+        let x = p[0].clamp(0., 1.);
+        let p = match drag {
+            Drag::Point(_) => [x, p[1].clamp(0., 1.)],
+            Drag::Handle(..) => shown([x, p[1]]),
         };
         let result = match (drag, &mut self.value) {
             (Drag::Point(i), StripValue::Number(curve)) => {
@@ -652,24 +668,16 @@ impl Render for CurveStrip {
         };
         let beats = clock.map(|clock| clock.beats);
         let painted = value.clone();
-        let area = div()
-            .relative()
-            .w_full()
-            .h(rpx(if color { COLOR_H } else { NUMBER_H }))
-            .flex_none()
-            .when(color, |area| {
-                area.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .flex()
-                        .rounded(rpx(crate::radius::CAP))
-                        .border_1()
-                        .border_color(crate::glass::hairline(0.10))
-                        .bg(gpui::black())
-                        .overflow_hidden()
-                        .children(value.fill()),
-                )
+        // The 0–1 box: a number's plot inside its air, a color's whole fill.
+        // Points, handles and the playhead are placed in it.
+        let plot = div()
+            .absolute()
+            .when(color, |plot| plot.size_full())
+            .when(!color, |plot| {
+                plot.top(rpx(PAD_Y))
+                    .bottom(rpx(PAD_Y))
+                    .left(rpx(PAD_X))
+                    .right(rpx(PAD_X))
             })
             .child(
                 canvas(
@@ -677,9 +685,8 @@ impl Render for CurveStrip {
                         this.update(cx, |this, _| this.bounds = Some(bounds));
                     },
                     move |bounds, _, window, _| {
-                        // A drag follows the pointer anywhere in the window,
-                        // clamped to the box, and ends on the first release
-                        // anywhere.
+                        // A drag follows the pointer anywhere in the window
+                        // and ends on the first release anywhere.
                         if dragging {
                             let moving = drag_view.clone();
                             window.on_mouse_event(move |e: &gpui::MouseMoveEvent, phase, _, cx| {
@@ -699,21 +706,43 @@ impl Render for CurveStrip {
                         if let Some(beats) = beats {
                             paint_grid(window, bounds, beats, color);
                         }
-                        if let StripValue::Number(curve) = &painted {
+                        let StripValue::Number(curve) = &painted else {
+                            return;
+                        };
+                        let scale = crate::rem_scale(window);
+                        // The box's edge, exactly at 0 and 1: drawn under the
+                        // curve, so a curve along an edge reads over it.
+                        window.paint_quad(gpui::outline(
+                            bounds,
+                            crate::glass::hairline(0.32),
+                            gpui::BorderStyle::Solid,
+                        ));
+                        // The curve and the handles may leave the box; the
+                        // air around it is as far as they draw.
+                        let air = Bounds {
+                            origin: point(
+                                bounds.origin.x - gpui::px(PAD_X * scale),
+                                bounds.origin.y - gpui::px(PAD_Y * scale),
+                            ),
+                            size: size(
+                                bounds.size.width + gpui::px(2. * PAD_X * scale),
+                                bounds.size.height + gpui::px(2. * PAD_Y * scale),
+                            ),
+                        };
+                        window.with_content_mask(Some(ContentMask { bounds: air }), |window| {
                             paint_envelope(
                                 window,
                                 bounds,
                                 curve,
-                                gpui::px(1.5 * crate::rem_scale(window)),
+                                gpui::px(1.5 * scale),
                                 ladder::foreground(),
                             );
                             if let Some(segment) =
                                 segment.filter(|segment| curved(curve.ease(*segment)))
                             {
-                                let at = |p| at(bounds, p);
+                                let at = |p| at(bounds, shown(p));
                                 let c = curve.controls(segment);
-                                let mut lines =
-                                    PathBuilder::stroke(gpui::px(crate::rem_scale(window)));
+                                let mut lines = PathBuilder::stroke(gpui::px(scale));
                                 lines.move_to(at(c[0]));
                                 lines.line_to(at(c[1]));
                                 lines.move_to(at(c[3]));
@@ -722,9 +751,10 @@ impl Render for CurveStrip {
                                     window.paint_path(path, ladder::primary().opacity(0.6));
                                 }
                             }
-                        }
+                        });
                     },
                 )
+                .absolute()
                 .size_full(),
             )
             .children((0..value.len()).map(|i| {
@@ -754,9 +784,9 @@ impl Render for CurveStrip {
                         .absolute()
                         .left(gpui::relative(p[0] as f32))
                         .top(gpui::relative((1. - p[1]) as f32))
-                        .ml(rpx(-4.))
-                        .mt(rpx(-4.))
-                        .size(rpx(8.))
+                        .ml(rpx(-MARKER_R))
+                        .mt(rpx(-MARKER_R))
+                        .size(rpx(2. * MARKER_R))
                         .rounded_full()
                         .border_1()
                         .border_color(if chosen {
@@ -780,13 +810,14 @@ impl Render for CurveStrip {
                     .agent_node(Role::Slider, format!("{id} point {}", i + 1))
             }))
             .children(handles.into_iter().map(|(segment, h, p)| {
+                let p = shown(p);
                 div()
                     .absolute()
                     .left(gpui::relative(p[0] as f32))
                     .top(gpui::relative((1. - p[1]) as f32))
-                    .ml(rpx(-4.))
-                    .mt(rpx(-4.))
-                    .size(rpx(8.))
+                    .ml(rpx(-MARKER_R))
+                    .mt(rpx(-MARKER_R))
+                    .size(rpx(2. * MARKER_R))
                     .rounded_full()
                     .border_1()
                     .border_color(crate::glass::hairline(0.24))
@@ -822,6 +853,27 @@ impl Render for CurveStrip {
                     .bg(ladder::accent())
                     .agent_node(Role::Text, format!("{id} playhead"))
             }))
+            .agent_node(Role::Card, format!("{id} strip"));
+        let area = div()
+            .relative()
+            .w_full()
+            .h(rpx(if color { COLOR_H } else { PLOT_H + 2. * PAD_Y }))
+            .flex_none()
+            .when(color, |area| {
+                area.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .flex()
+                        .rounded(rpx(crate::radius::CAP))
+                        .border_1()
+                        .border_color(crate::glass::hairline(0.10))
+                        .bg(gpui::black())
+                        .overflow_hidden()
+                        .children(value.fill()),
+                )
+            })
+            .child(plot)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
@@ -835,11 +887,11 @@ impl Render for CurveStrip {
                             this.select(i, cx);
                         }
                     } else if e.click_count == 2 {
-                        if let Some(i) = this.add(p[0], cx) {
+                        if let Some(i) = this.add(p[0].clamp(0., 1.), cx) {
                             this.dragging = Some(Drag::Point(i));
                         }
                     } else {
-                        let at = this.value.segment_at(p[0]);
+                        let at = this.value.segment_at(p[0].clamp(0., 1.));
                         this.select(at, cx);
                     }
                     cx.stop_propagation();
@@ -858,14 +910,15 @@ impl Render for CurveStrip {
                     cx.stop_propagation();
                     cx.notify();
                 }),
-            )
-            .agent_node(Role::Card, format!("{id} strip"));
+            );
         let ticks = heads.map(|heads| {
+            // Under a number, the ticks span its box, not its air.
+            let span = div().relative().size_full();
             div()
-                .relative()
                 .w_full()
                 .h(rpx(TICK_H))
-                .children(heads.iter().enumerate().map(|(i, &x)| {
+                .when(!color, |ticks| ticks.px(rpx(PAD_X)))
+                .child(span.children(heads.iter().enumerate().map(|(i, &x)| {
                     // A head past either end reads the curve's end value: it
                     // sits at that end, faint.
                     let at = x.clamp(0., 1.);
@@ -882,14 +935,14 @@ impl Render for CurveStrip {
                         .border_color(crate::glass::hairline(0.24))
                         .bg(c.display())
                         .agent_node(Role::Text, format!("{id} head {}", i + 1))
-                }))
+                })))
         });
         let strip = div()
             .w_full()
             .flex()
             .flex_col()
             .gap(rpx(4.))
-            .p(rpx(INSET))
+            .p(rpx(if color { INSET } else { NUMBER_INSET }))
             .rounded(rpx(crate::radius::ROW))
             .border_1()
             .border_color(crate::glass::hairline(0.08))
@@ -1040,6 +1093,18 @@ fn at(bounds: Bounds<Pixels>, p: [f64; 2]) -> Point<Pixels> {
     )
 }
 
+/// How far past 0 and 1 a handle's y may go and stay in the air around
+/// the box, its marker whole.
+fn reach() -> f64 {
+    f64::from((PAD_Y - MARKER_R - 1.) / PLOT_H)
+}
+
+/// Where a handle at `p` is drawn and taken: its y kept in the air around
+/// the box, so a handle past it stays in reach.
+fn shown(p: [f64; 2]) -> [f64; 2] {
+    [p[0], p[1].clamp(-reach(), 1. + reach())]
+}
+
 /// Whether `ease` is drawn with handles: every ease but a straight line and
 /// a hold.
 fn curved(ease: Ease) -> bool {
@@ -1056,10 +1121,20 @@ pub(crate) fn paint_envelope(
     color: impl Into<Background>,
 ) {
     let at = |p| at(bounds, p);
-    let mut path = PathBuilder::stroke(width);
+    // A fine tolerance keeps each Bézier a smooth curve at any zoom.
+    let mut path = PathBuilder::stroke(width).with_style(PathStyle::Stroke(
+        StrokeOptions::default()
+            .with_line_width(f32::from(width))
+            .with_tolerance(0.02),
+    ));
     path.move_to(at(value.point(0)));
     for i in 0..value.points.len() - 1 {
         let c = value.controls(i);
+        // A jump, two points at one x, is a vertical line whatever its ease.
+        if c[0][0] == c[3][0] {
+            path.line_to(at(c[3]));
+            continue;
+        }
         match value.ease(i) {
             Ease::Linear => path.line_to(at(c[3])),
             Ease::Hold => {

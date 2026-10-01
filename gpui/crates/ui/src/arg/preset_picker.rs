@@ -9,7 +9,7 @@
 
 use crate::rpx;
 use gpui::prelude::*;
-use gpui::{canvas, div, App, Div, ElementId, SharedString, Window};
+use gpui::{canvas, div, App, ContentMask, Div, ElementId, SharedString, Window};
 use gpui_component::tooltip::Tooltip;
 use luma_patterns::Envelope;
 
@@ -63,14 +63,20 @@ pub fn thumb(value: &Thumb, size: [f32; 2], bright: bool) -> Div {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        // Inset by the stroke, so a line along an edge stays whole.
-                        paint_envelope(
-                            window,
-                            bounds.inset(gpui::px(0.5 * crate::rem_scale(window))),
-                            &curve,
-                            gpui::px(1.25 * crate::rem_scale(window)),
-                            ladder::foreground_alpha(alpha),
-                        );
+                        let scale = crate::rem_scale(window);
+                        // A curve that overshoots its box draws to the frame
+                        // and no further.
+                        let frame = bounds.dilate(gpui::px(2. * scale));
+                        window.with_content_mask(Some(ContentMask { bounds: frame }), |window| {
+                            // Inset by the stroke, so a line along an edge stays whole.
+                            paint_envelope(
+                                window,
+                                bounds.inset(gpui::px(0.5 * scale)),
+                                &curve,
+                                gpui::px(1.25 * scale),
+                                ladder::foreground_alpha(alpha),
+                            );
+                        });
                     },
                 )
                 .size_full(),
