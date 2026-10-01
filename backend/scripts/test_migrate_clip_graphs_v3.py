@@ -405,6 +405,125 @@ class Convert(unittest.TestCase):
         self.assertEqual(out["clips"]["b"]["graph"], new)
 
 
+class Audit(unittest.TestCase):
+    """The 2026-09-30 audit steps (spec section 0)."""
+
+    def test_lighten_becomes_max_and_value_becomes_replace_with_alpha(self):
+        wash = graph(1, color1=color(brightness=0.5))
+        new, blend, _ = m.convert_clip(wash, "lighten")
+        self.assertEqual(blend, "max")
+        self.assertEqual(new["nodes"]["color1"]["inputs"], {"color": [1, 0.5, 0.25],
+                                                            "brightness": 0.5})
+        new, blend, notes = m.convert_clip(wash, "value")
+        self.assertEqual(blend, "replace")
+        self.assertEqual(new["nodes"]["color1"]["inputs"]["alpha"], 0.5)
+        self.assertIn("blend: value → replace", notes)
+        self.assertEqual(m.convert_clip(wash, "screen")[1], "screen")
+
+    def test_a_falling_jump_moves_a_hair_right_so_a_tie_reads_as_before(self):
+        region = {"points": [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]}
+        old = graph(2, space1={"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+                    curve1=curve("space1", region), color1=color(brightness=w("curve1")))
+        new, _, _ = m.convert_clip(old, "replace")
+        self.assertEqual(new["nodes"]["curve1"]["inputs"]["shape"]["points"],
+                         [[0, 1], [0.5 + m.TIE, 1], [0.5 + m.TIE, 0], [1, 0]])
+
+    def test_a_pill_end_at_1_grows_its_space_a_hair(self):
+        pill = {"points": [[0, 0], [0, 1], [0.5, 1], [0.5, 2 / 3], [1, 1], [1, 0]]}
+        old = graph(2, space1={"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                               "inputs": {"length": 0.25}},
+                    curve1=curve("space1", pill), color1=color(brightness=w("curve1")))
+        new, _, _ = m.convert_clip(old, "replace")
+        self.assertAlmostEqual(new["nodes"]["space1"]["inputs"]["scale"], 0.25 * (1 + m.TIE))
+        points = new["nodes"]["curve1"]["inputs"]["shape"]["points"]
+        # The rising jump at 0 stays; the falling one inside moved right.
+        self.assertEqual(points[:2], [[0, 0], [0, 1]])
+        self.assertEqual(points[-2:], [[1, 1], [1, 0]])
+
+    def test_a_phase_of_0_goes(self):
+        old = graph(2, time1={"kind": "time", "inputs": {"phase": 0}},
+                    curve1=curve("time1"), color1=color(brightness=w("curve1")))
+        new, _ = m.convert(old)
+        self.assertNotIn("phase", new["nodes"]["time1"].get("inputs", {}))
+
+    # A row of four heads along U from u 0 to 3, and one more at u 9: the
+    # box's middle is u 4.5, the centroid u 3.
+    ROW = [dict(id=f"f{u}:0", group="all", world=[u, 0, 0], uvz=[u, 0, 0])
+           for u in (0, 1, 2, 3, 9)]
+
+    def coordinate(self, nodes, node_id):
+        """d / max from the space's `at`, as version 3 reads radial."""
+        at = nodes[node_id].get("inputs", {}).get("at", [0.5, 0.5, 0.5])
+        centre = 0 + at[0] * 9
+        far = max(abs(c["uvz"][0] - centre) for c in self.ROW)
+        return {c["id"]: abs(c["uvz"][0] - centre) / far for c in self.ROW}
+
+    def test_a_mirrored_line_is_fitted_to_the_folded_span_on_the_rig(self):
+        old = graph(2, mirror1={"kind": "mirror", "inputs": {"normal": [1, 0, 0]}},
+                    space1={"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                            "inputs": {"heads": w("mirror1"), "direction": [1, 0, 0],
+                                       "shift": 0.2, "length": 0.5}},
+                    curve1=curve("space1"),
+                    color1=color(heads=w("mirror1"), brightness=w("curve1")))
+        # Version 3 reads the folded heads at 0.1 to 0.4 of the plane's
+        # span; version 2 read them 0 to 1.
+        a = {c["id"]: v for c, v in zip(self.ROW, (0.1, 0.3, 0.4, 0.2, 0.25))}
+        new, notes = m.convert(old, cells=self.ROW, coordinate=lambda n, i: a)
+        inputs = new["nodes"]["space1"]["inputs"]
+        self.assertIn("rig: mirrored line fitted to the folded span", notes)
+        for v in a.values():
+            before = ((v - 0.1) / 0.3 - 0.2) / 0.5
+            self.assertAlmostEqual((v - inputs["shift"]) / inputs["scale"], before)
+
+    def test_a_radial_space_takes_the_old_centroid_and_its_nearest_share(self):
+        old = graph(2, space1={"kind": "space", "settings": {"kind": "radial", "wrap": "no"},
+                               "inputs": {"length": 0.5}},
+                    curve1=curve("space1"), color1=color(brightness=w("curve1")))
+        new, notes = m.convert(old, cells=self.ROW, coordinate=self.coordinate)
+        inputs = new["nodes"]["space1"]["inputs"]
+        self.assertAlmostEqual(inputs["at"][0], 3 / 9)
+        self.assertEqual(inputs["at"][1:], [0.5, 0.5])
+        # Distances from u 3: 3, 2, 1, 0, 6. The nearest is on the centre
+        # (m 0), so shift and scale stay.
+        self.assertEqual(inputs["scale"], 0.5)
+        self.assertNotIn("shift", inputs)
+        # Without the head at u 3 the nearest is 1 of 6: m = 1/6, so the
+        # old (d − 1) / 5 is (d/6 − 1/6) / (5/6).
+        row = [c for c in self.ROW if c["uvz"][0] != 3]
+        centroid = sum(c["uvz"][0] for c in row) / len(row)
+
+        def coordinate(nodes, node_id):
+            at = nodes[node_id]["inputs"]["at"]
+            centre = at[0] * 9
+            far = max(abs(c["uvz"][0] - centre) for c in row)
+            return {c["id"]: abs(c["uvz"][0] - centre) / far for c in row}
+        new, _ = m.convert(old, cells=row, coordinate=coordinate)
+        inputs = new["nodes"]["space1"]["inputs"]
+        self.assertAlmostEqual(inputs["at"][0], centroid / 9)
+        d = [abs(c["uvz"][0] - centroid) for c in row]
+        nearest = min(d) / max(d)
+        self.assertAlmostEqual(inputs["shift"], nearest)
+        self.assertAlmostEqual(inputs["scale"], 0.5 * (1 - nearest))
+
+    def test_an_angle_space_takes_the_old_centroid(self):
+        old = graph(2, space1={"kind": "space", "settings": {"kind": "angle", "wrap": "yes"}},
+                    curve1=curve("space1"), color1=color(brightness=w("curve1")))
+        new, _ = m.convert(old, cells=self.ROW, coordinate=self.coordinate)
+        self.assertEqual(set(new["nodes"]["space1"]["inputs"]), {"at"})
+
+    def test_a_tilted_best_fit_is_written_and_a_stage_axis_is_not(self):
+        tilted = [dict(id=f"t{i}:0", group="all", world=[i * 0.8, 0, i * 0.6],
+                       uvz=[i * 0.8, 0, i * 0.6]) for i in range(5)]
+        old = graph(2, space1={"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+                    curve1=curve("space1"), color1=color(brightness=w("curve1")))
+        new, _ = m.convert(old, cells=tilted, coordinate=None)
+        direction = new["nodes"]["space1"]["inputs"]["direction"]
+        self.assertAlmostEqual(direction[0], 0.8)
+        self.assertAlmostEqual(direction[2], 0.6)
+        new, _ = m.convert(old, cells=self.ROW, coordinate=None)
+        self.assertNotIn("inputs", new["nodes"]["space1"])
+
+
 class Checked(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("LUMA_V3_PARITY"), "needs a version 3 clip_graph_parity")
     def test_every_converted_graph_passes_the_checker(self):
@@ -458,6 +577,6 @@ class Checked(unittest.TestCase):
 if __name__ == "__main__":
     suite = unittest.TestSuite()
     loader = unittest.TestLoader()
-    for case in (Convert, Checked):
+    for case in (Convert, Audit, Checked):
         suite.addTests(loader.loadTestsFromTestCase(case))
     sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
