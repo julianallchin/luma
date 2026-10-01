@@ -13,9 +13,10 @@
 //! emits a *full* [`UniverseState`], so the set mask comes from the plan's
 //! [`OutputBinding`]: only capabilities the plan actually binds get blended.
 
+use crate::eval::lighting::Layer;
 use crate::eval::{BlendMode, OutputBinding};
 use crate::models::universe::{HeadAim, PrimitiveState, UniverseState};
-use luma_patterns::{blend_aim, blend_light, blend_value, offset_aim, Turn};
+use luma_patterns::{blend_aim, blend_light_alpha, blend_value_alpha, offset_aim, Turn};
 
 /// A fresh, empty base frame: no head holds light yet.
 pub fn blank_frame() -> UniverseState {
@@ -39,10 +40,12 @@ pub(crate) fn nothing() -> PrimitiveState {
 /// Composite one annotation's evaluated frame (`top`) onto `base` in place.
 ///
 /// `bindings` is the plan's [`OutputBinding`] — the set mask. Only capabilities
-/// the plan drives are blended; the rest of `base` shows through.
+/// the plan drives are blended; the rest of `base` shows through. The
+/// layer's alpha is the clip's opacity per head: the blended light and
+/// strobe mix with what is under them by it, so alpha 0 is no clip.
 ///
-/// - color and dimmer: [`blend_light`], against no light where `base` has no head
-/// - strobe: scalar `blend_value`, against 0 where `base` has no head
+/// - color and dimmer: [`blend_light_alpha`], against no light where `base` has no head
+/// - strobe: [`blend_value_alpha`], against 0 where `base` has no head
 /// - position: winner-takes-all when the top drives it
 /// - speed: binary (threshold 0.5)
 /// - aim: a Replace clip blends toward its aim by alpha along the shortest
@@ -52,11 +55,12 @@ pub(crate) fn nothing() -> PrimitiveState {
 ///   [`offset_frame`].
 pub fn composite_frame(
     base: &mut UniverseState,
-    top: &UniverseState,
+    top: &Layer,
     bindings: &OutputBinding,
     mode: BlendMode,
 ) {
-    for (id, tp) in &top.primitives {
+    for (id, tp) in &top.frame.primitives {
+        let alpha = top.alpha.get(id).copied().unwrap_or(1.0);
         if !base.primitives.contains_key(id) {
             base.primitives.insert(id.clone(), nothing());
         }
@@ -65,10 +69,12 @@ pub fn composite_frame(
             .get_mut(id)
             .expect("the head was inserted above");
         if bindings.color || bindings.dimmer {
-            (bp.color, bp.dimmer) = blend_light(bp.color, bp.dimmer, tp.color, tp.dimmer, mode);
+            (bp.color, bp.dimmer) =
+                blend_light_alpha(bp.color, bp.dimmer, tp.color, tp.dimmer, mode, alpha);
         }
         if bindings.strobe {
-            bp.strobe = blend_value(bp.strobe, tp.strobe.clamp(0.0, 1.0), mode).clamp(0.0, 1.0);
+            bp.strobe = blend_value_alpha(bp.strobe, tp.strobe.clamp(0.0, 1.0), mode, alpha)
+                .clamp(0.0, 1.0);
         }
         if bindings.position {
             bp.position = tp.position;
@@ -302,8 +308,7 @@ mod tests {
     /// beats.
     fn circle(direction: [f64; 3], alpha: f64, mirrored: bool) -> serde_json::Value {
         let mut nodes = json!({
-            "clock1": {"kind": "clock", "inputs": {"every": 4}},
-            "time1": {"kind": "time", "inputs": {"clock": {"node": "clock1"}}},
+            "time1": {"kind": "time", "inputs": {"every": 4}},
             "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {
                 "x": {"node": "time1"}, "low": -18, "high": 18, "shape": {"points": [
                     [0, 1, "sine-in"], [0.25, 0.5, "sine-out"], [0.5, 0, "sine-in"],
@@ -475,6 +480,55 @@ mod tests {
                 light(vec![wash(RED, 1.0, 0.0, p::BlendMode::Replace, 0), top()]),
                 light(vec![top()]),
             );
+        }
+    }
+
+    #[test]
+    fn a_replace_clip_at_alpha_zero_shows_the_clip_below() {
+        let below = || wash(RED, 0.8, 1.0, p::BlendMode::Replace, 0);
+        close(
+            light(vec![
+                below(),
+                wash(BLUE, 1.0, 0.0, p::BlendMode::Replace, 1),
+            ]),
+            [0.8, 0.0, 0.0],
+        );
+        // Alone, a clip at alpha 0 is dark and at alpha 0.5 is half as bright.
+        close(
+            light(vec![wash(BLUE, 1.0, 0.0, p::BlendMode::Replace, 0)]),
+            [0.0; 3],
+        );
+        close(
+            light(vec![wash(BLUE, 0.8, 0.5, p::BlendMode::Replace, 0)]),
+            [0.0, 0.0, 0.4],
+        );
+    }
+
+    #[test]
+    fn two_overlapping_clips_crossfade_smoothly() {
+        // The top clip's alpha goes 0 → 1: the light moves in a straight
+        // line from the clip below to the clip on top, with no dip.
+        for mode in [p::BlendMode::Replace, p::BlendMode::Add] {
+            let mut last: Option<[f32; 3]> = None;
+            for step in 0..=20 {
+                let alpha = step as f64 / 20.0;
+                let got = light(vec![
+                    wash(RED, 1.0, 1.0, p::BlendMode::Replace, 0),
+                    wash(BLUE, 1.0, alpha, mode, 1),
+                ]);
+                let blended = match mode {
+                    p::BlendMode::Replace => [0.0, 0.0, 1.0],
+                    _ => [1.0, 0.0, 1.0],
+                };
+                let want = [0, 1, 2]
+                    .map(|c| ((1.0 - alpha) * [1.0, 0.0, 0.0][c] + alpha * blended[c]) as f32);
+                close(got, want);
+                if let Some(last) = last {
+                    let step: f32 = (0..3).map(|c| (got[c] - last[c]).abs()).sum();
+                    assert!(step <= 0.1 + 1e-5, "{mode:?} jumps by {step} at {alpha}");
+                }
+                last = Some(got);
+            }
         }
     }
 }

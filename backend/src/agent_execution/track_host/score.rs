@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn a_good_clip_passes() {
-        let graph = json!({"version": 2, "nodes": {
+        let graph = json!({"version": 3, "nodes": {
             "time1": {"kind": "time"},
             "curve1": {"kind": "curve", "settings": {"kind": "number"},
                        "inputs": {"x": {"node": "time1"}}},
@@ -236,7 +236,7 @@ mod tests {
     /// what it expected and an example.
     #[test]
     fn a_wrong_wire_returns_the_checker_text() {
-        let graph = json!({"version": 2, "nodes": {
+        let graph = json!({"version": 3, "nodes": {
             "time1": {"kind": "time"},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "time1"}}}}});
         let result = check(clip(graph));
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn a_clip_that_does_not_parse_is_a_checker_error_too() {
-        let mut bad = clip(json!({"version": 2, "nodes": {}}));
+        let mut bad = clip(json!({"version": 3, "nodes": {}}));
         bad["colour"] = json!(1);
         let result = check(bad);
         assert_eq!(result["ok"], false);
