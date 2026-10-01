@@ -87,6 +87,77 @@ test("a number strip edits a point", () => {
   assert(Math.abs(mid[1] - (a[1] + (b[1] - a[1]) * mid[0])) < 1e-6, `the new point is off the line: ${JSON.stringify(points())}`);
 });
 
+// The centre of a node's bounds.
+const centre = (n) => ({ x: n.bounds.x + n.bounds.width / 2, y: n.bounds.y + n.bounds.height / 2 });
+
+test("the strip's box is exactly the curve's 0–1 area", () => {
+  open();
+  promote();
+  const points = () => nodes().curve1.inputs.shape.points;
+  // Two ends at different values, so the box's top and bottom both show.
+  app.click(node("slider", "Curve 1 point 2"));
+  settle();
+  app.click(field("Curve 1 value"));
+  app.key("secondary-a backspace");
+  app.type(field("Curve 1 value"), "100");
+  app.key("enter");
+  app.click(node("slider", "Curve 1 point 1"));
+  settle();
+  app.click(field("Curve 1 value"));
+  app.key("secondary-a backspace");
+  app.type(field("Curve 1 value"), "0");
+  app.key("enter");
+  until("a ramp", () => points()[0][1] === 0 && points().at(-1)[1] === 1);
+  settle();
+  const box = strip().bounds;
+  // Each point sits where its x and value fall in the box: x 0 and 1 on its
+  // left and right edges, value 0 and 1 on its bottom and top.
+  points().forEach(([x, v], i) => {
+    const c = centre(node("slider", `Curve 1 point ${i + 1}`));
+    const want = { x: box.x + x * box.width, y: box.y + (1 - v) * box.height };
+    assert(Math.abs(c.x - want.x) <= 1 && Math.abs(c.y - want.y) <= 1, `point ${i + 1} at ${JSON.stringify(c)}, box ${JSON.stringify(box)}`);
+  });
+});
+
+test("a Bézier handle leaves the box, and a point does not", () => {
+  open();
+  promote();
+  const points = () => nodes().curve1.inputs.shape.points;
+  // A ramp from 0 to 1.
+  app.click(node("slider", "Curve 1 point 1"));
+  settle();
+  app.click(field("Curve 1 value"));
+  app.key("secondary-a backspace");
+  app.type(field("Curve 1 value"), "0");
+  app.key("enter");
+  until("a ramp", () => points()[0][1] === 0 && points().at(-1)[1] === 1);
+  app.click(node("button", "Curve 1 Curve"));
+  const handle = () => node("slider", "Curve 1 segment 1 handle 1");
+  handle();
+  settle();
+  const box = strip().bounds;
+  // Drag the first handle well above the box's top edge.
+  const from = centre(handle());
+  app.drag(from, { dx: 0, dy: box.y - from.y - box.height }, { steps: 8 });
+  until("handles stored", () => Array.isArray(points()[0][2]));
+  settle();
+  const [x1, y1] = points()[0][2];
+  // A Bézier's y may overshoot; its x stays in the segment.
+  assert(y1 > 1, `the handle's y stayed in the box: ${JSON.stringify(points())}`);
+  assert(x1 >= 0 && x1 <= 1, `x1 ${x1}`);
+  // The handle is drawn above the box, where it stays to grab again, and
+  // inside the card that holds the strip.
+  const moved = centre(handle());
+  assert(moved.y < box.y, `the handle is not above the box: ${moved.y} vs ${box.y}`);
+  const color = node("card", "Color 1").bounds;
+  assert(moved.y > color.y, `the handle left the card: ${moved.y} vs ${color.y}`);
+  // A point dragged as far up stops at the top edge: a value never passes 1.
+  const end = centre(node("slider", "Curve 1 point 1"));
+  app.drag(end, { dx: 0, dy: box.y - end.y - box.height }, { steps: 8 });
+  until("point stored", () => points()[0][1] !== 0);
+  expect(points()[0][1]).toBe(1);
+});
+
 test("a time strip draws the clip's beats and follows the playhead", () => {
   open();
   promote();
