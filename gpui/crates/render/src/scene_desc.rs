@@ -417,9 +417,8 @@ pub struct Look {
     pub exposure: Exposure,
     /// Bloom, star streaks and lens glow around hot sources.
     pub glare: Glare,
-    /// What a film camera adds: shutter, rolling readout, sensor noise and a
-    /// hand on the camera. Absent in a look stored before it existed, which
-    /// means off.
+    /// What a video camera adds: sensor noise and a hand on the camera.
+    /// Absent in a look stored before it existed, which means off.
     #[serde(default)]
     pub footage: Footage,
 }
@@ -449,7 +448,7 @@ impl Look {
 
     /// Whether this look needs the post chain rather than the single
     /// composite pass. Footage settings count only while footage is on: the
-    /// shutter's mean and the noise both live in the post chain.
+    /// noise lives in the post chain.
     #[must_use]
     pub fn needs_post(&self) -> bool {
         self.footage.enabled
@@ -526,21 +525,14 @@ impl Exposure {
 
 /// The footage look: the picture a video camera in the room would record.
 ///
-/// Off, a frame is one moment, and only its strobes are integrated over the
-/// frame (`strobe.rs`). On, every subframe is a whole moment of the shutter,
-/// the rows read out one after another, the sensor adds noise and the camera
-/// is held by hand. See `footage.rs`.
+/// On, the sensor adds noise and the camera is held by hand and shaken by the
+/// bass. See `footage.rs`. A look saved when the footage look also had a
+/// shutter angle and a rolling readout still loads; those keys are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Footage {
     /// Whether the camera records footage at all.
     pub enabled: bool,
-    /// How much of each frame interval the shutter is open, in degrees:
-    /// 180 is the film convention, 360 always open.
-    pub shutter_deg: f32,
-    /// Milliseconds from the top row opening to the bottom row, the rolling
-    /// shutter. Zero is a global shutter.
-    pub readout_ms: f32,
     /// Sensor noise, 0..=1. Scaled by the auto-exposure gain like a real
     /// sensor's ISO.
     pub noise: f32,
@@ -554,16 +546,10 @@ impl Footage {
     /// Footage off, with the settings it turns on with.
     pub const OFF: Self = Self {
         enabled: false,
-        shutter_deg: 180.0,
-        readout_ms: 10.0,
         noise: 0.3,
         handheld: 0.3,
         bass: 0.0,
     };
-    /// The shutter angle's range, in degrees.
-    pub const SHUTTER_DEG: std::ops::RangeInclusive<f32> = 1.0..=360.0;
-    /// The readout's range, in milliseconds.
-    pub const READOUT_MS: std::ops::RangeInclusive<f32> = 0.0..=40.0;
 
     /// Every value inside the range the renderer has an answer for.
     #[must_use]
@@ -577,8 +563,6 @@ impl Footage {
         };
         Self {
             enabled: self.enabled,
-            shutter_deg: clamp(self.shutter_deg, Self::SHUTTER_DEG, Self::OFF.shutter_deg),
-            readout_ms: clamp(self.readout_ms, Self::READOUT_MS, Self::OFF.readout_ms),
             noise: clamp(self.noise, 0.0..=1.0, 0.0),
             handheld: clamp(self.handheld, 0.0..=1.0, 0.0),
             bass: clamp(self.bass, 0.0..=1.0, 0.0),

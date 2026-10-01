@@ -38,7 +38,6 @@ fn light_grid(
 ) {
     let size = textureDimensions(fog_grid);
     if any(cell >= size) { return; }
-    shutter_row = (f32(cell.y) + 0.5) / f32(size.y);
     let pixel = (vec2<f32>(cell.xy) + 0.5) / vec2<f32>(size.xy)
         * vec2<f32>(haze.transport.w, haze.transport.z);
     let column = textureLoad(fog_columns, vec2<i32>(cell.xy), 0);
@@ -90,7 +89,7 @@ fn light_grid(
             if visibility <= 0.0 { continue; }
             let phase = henyey_greenstein(-dot(q, ray_dir) / max(dist, 1e-4), haze.transport.y);
             let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-            radiance += tint * (rest.intensity * light_row_ratio(li) * rest.haze_gain * haze.tuning.w
+            radiance += tint * (rest.intensity * rest.haze_gain * haze.tuning.w
                 * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) * angular * beam_range_falloff(dist, core.range) * phase * visibility
                 * exp(-light_optical_depth(li, world)) / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), haze.tuning.z));
         }

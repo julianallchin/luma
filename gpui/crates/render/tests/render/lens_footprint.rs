@@ -40,7 +40,6 @@ fn narrow(position: Vec3, direction: Vec3, lens: Lens) -> FixtureCone {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens,
-        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 

@@ -46,9 +46,9 @@ pub const TRANSCRIPT_FADE_BAND: f32 = 24.0;
 
 /// The reading column: 46rem. A wider pane gutters, it does not stretch prose.
 pub const MAX_CONTENT_WIDTH: f32 = 736.0;
-/// The column's minimum gutters, either side — comet's 48px. The turn rail
-/// lives inside the left one.
-pub const CONTENT_GUTTER: f32 = 48.0;
+/// The column's minimum gutters, either side — the header's own inset, so the
+/// prose's left edge lands under the title rather than drifting in from it.
+pub const CONTENT_GUTTER: f32 = SPACE_LG;
 // The spacing rhythm, in priority order — three gaps and nothing else, which
 // is what keeps a transcript from reading as a pile of differently-spaced
 // cards. A block's gap is decided by what it sits *next to*, never by what it
@@ -65,7 +65,7 @@ pub const GAP_BLOCK: f32 = 8.0;
 /// The lane under a settled turn that its timestamp lives in. **Reserved**,
 /// always — the stamp only appears on hover, and a lane that appeared with it
 /// would move every row below on every pointer cross.
-pub const TIMESTAMP_LANE: f32 = 32.0;
+pub const TIMESTAMP_LANE: f32 = 20.0;
 /// `ListState` overdraw: how far past the viewport rows are measured.
 pub const OVERDRAW_PX: f32 = 320.0;
 
@@ -108,7 +108,7 @@ pub const SCROLL_BUTTON_THRESHOLD_PX: f32 = 320.0;
 pub const JUMP_DIAMETER: f32 = 30.0;
 /// A tool chip's height. **Declared, never measured** — a fold whose height is
 /// measured makes every collapse a relayout.
-pub const CHIP_HEIGHT: f32 = 28.0;
+pub const CHIP_HEIGHT: f32 = 24.0;
 /// One line of an expanded chip's detail. Also declared: the card counts its
 /// own lines and multiplies, so opening a chip is a known height change rather
 /// than a measurement of a wrapped blob.

@@ -69,7 +69,6 @@ fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
                 lens: luma_render::luminaire::Lens::POINT,
-                strobe: luma_render::strobe::Rows::STEADY,
             }
         })
         .collect();

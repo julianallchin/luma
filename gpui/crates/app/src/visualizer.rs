@@ -726,8 +726,8 @@ impl Default for StageClock {
 }
 
 impl StageClock {
-    /// The longest interval a frame integrates, in seconds. After a pause in
-    /// drawing, the next frame is not a long exposure of everything missed.
+    /// The longest slice of the clock a frame covers, in seconds. After a
+    /// pause in drawing, the next frame does not answer for everything missed.
     const LONGEST_S: f64 = 1.0 / 15.0;
 
     /// The clock now, and the seconds since the last submitted frame.
@@ -1240,10 +1240,8 @@ enum ViewValue {
     Glare,
     GlareThreshold,
     Star,
-    /// Footage dials, [`scene_desc::Footage`]: shutter angle, readout,
-    /// sensor noise, handheld sway and bass shake.
-    Shutter,
-    Readout,
+    /// Footage dials, [`scene_desc::Footage`]: sensor noise, handheld sway
+    /// and bass shake.
     Noise,
     Handheld,
     BassShake,
@@ -1258,8 +1256,6 @@ impl ViewValue {
                 | Self::Glare
                 | Self::GlareThreshold
                 | Self::Star
-                | Self::Shutter
-                | Self::Readout
                 | Self::Noise
                 | Self::Handheld
                 | Self::BassShake
@@ -1317,8 +1313,6 @@ impl RenderControls {
                         value.clamp(*GLARE_THRESHOLD.start(), *GLARE_THRESHOLD.end());
                 }
                 ViewValue::Star => look.glare.star = value.clamp(0.0, 1.0),
-                ViewValue::Shutter => look.footage.shutter_deg = value,
-                ViewValue::Readout => look.footage.readout_ms = value,
                 ViewValue::Noise => look.footage.noise = value,
                 ViewValue::Handheld => look.footage.handheld = value,
                 ViewValue::BassShake => look.footage.bass = value,
@@ -1340,8 +1334,6 @@ impl RenderControls {
             | ViewValue::Glare
             | ViewValue::GlareThreshold
             | ViewValue::Star
-            | ViewValue::Shutter
-            | ViewValue::Readout
             | ViewValue::Noise
             | ViewValue::Handheld
             | ViewValue::BassShake => unreachable!(),
@@ -2938,9 +2930,10 @@ struct Submission {
 struct LiveFrameInputs<'a> {
     scene: &'a scene_desc::Scene,
     definitions: &'a BTreeMap<String, scene_desc::Definition>,
-    /// The frame's moments in time order, each with the heads' state at it:
-    /// one, or the footage look's shutter.
-    moments: &'a [(Moment, Option<UniverseState>)],
+    /// The frame's moment on the stage clock.
+    moment: Moment,
+    /// The heads' state at it.
+    state: Option<&'a UniverseState>,
     size: (u32, u32),
     camera: Camera,
     /// Measured in the prepaint that is submitting this frame, so they come
@@ -3340,28 +3333,22 @@ impl Gpu {
         let LiveFrameInputs {
             scene,
             definitions,
-            moments,
+            moment,
+            state,
             size: (width, height),
             camera,
             spans,
             export,
         } = input;
         let built = std::time::Instant::now();
-        let frame = luma_render::Frame::exposure(
-            moments
-                .iter()
-                .map(|(moment, state)| {
-                    build_frame_at(
-                        scene,
-                        definitions,
-                        &|id, head| stage_render::primitive_state(state.as_ref(), id, head),
-                        *moment,
-                        &mut self.assets,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| format!("Could not assemble the frame: {error}"))?,
-        );
+        let frame = build_frame_at(
+            scene,
+            definitions,
+            &|id, head| stage_render::primitive_state(state, id, head),
+            moment,
+            &mut self.assets,
+        )
+        .map_err(|error| format!("Could not assemble the frame: {error}"))?;
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
@@ -4112,29 +4099,10 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
 fn footage_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
     let footage = state.render_controls.look.footage;
     let dials = footage.enabled.then(|| {
-        let range = |range: std::ops::RangeInclusive<f32>| (*range.start(), *range.end());
-        let (shutter_min, shutter_max) = range(scene_desc::Footage::SHUTTER_DEG);
-        let (readout_min, readout_max) = range(scene_desc::Footage::READOUT_MS);
         div()
             .flex()
             .flex_col()
             .gap(px(8.))
-            .child(view_value(
-                app,
-                "Shutter angle (°)",
-                footage.shutter_deg,
-                shutter_min,
-                shutter_max,
-                ViewValue::Shutter,
-            ))
-            .child(view_value(
-                app,
-                "Readout time (ms)",
-                footage.readout_ms,
-                readout_min,
-                readout_max,
-                ViewValue::Readout,
-            ))
             .child(view_value(
                 app,
                 "Sensor noise",
@@ -4246,10 +4214,6 @@ fn view_value(
         // A tenth of a stop: finer than anyone can see, coarse enough that a
         // drag does not stop on 0.37.
         ViewValue::Exposure => (0.1, 1.0),
-        // Whole degrees and tenths of a millisecond: the units a camera
-        // menu uses.
-        ViewValue::Shutter => (1.0, 1.0),
-        ViewValue::Readout => (0.1, 1.0),
         _ => (0.01, 1.0),
     };
     let app = app.clone();
@@ -4981,54 +4945,20 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 
     // The one live read. `render_time` and `sample_universe` are synchronous
     // because a frame's inputs must be this frame's — see `Library`.
-    let auditioning = graph_sample.is_some();
     let (time, universe, sample_ms) = graph_sample.unwrap_or_else(|| {
         let time = library.render_time();
         let sampled = std::time::Instant::now();
         let universe = library.sample_universe(time);
         (time, universe, sampled.elapsed().as_secs_f32() * 1_000.0)
     });
-    // The moments this frame is exposed over, on the stage's free-running
-    // clock: one, or the footage look's shutter. Each is the score at its own
-    // transport time, which runs with the clock while playing and stands
-    // still while paused. An audition is one sample and stays one.
-    let footage = state.render_controls.look.footage;
+    // The frame is one moment on the stage's free-running clock: its strobes
+    // flash when a flash begins in the slice since the last frame. The score
+    // is sampled at the transport time, which stands still while paused.
     let (clock, interval) = state.stage.borrow().clock.now();
-    let rate = if !auditioning && library.transport().is_playing {
-        1.0
-    } else {
-        0.0
-    };
-    let transport = |at: f64| (f64::from(time) - (clock - at) * rate).max(0.0) as f32;
-    let bass = state.bass.clone();
-    let moments = luma_render::footage::moments(
-        &footage,
-        clock,
-        interval,
-        luma_render::LIVE_SUBFRAMES,
-        |at| bass.as_ref().map_or(0.0, |bass| bass.at(transport(at))),
-    );
-    let last = moments.len() - 1;
-    let mut sample_ms = sample_ms;
-    let moments: Vec<(Moment, Option<UniverseState>)> = moments
-        .into_iter()
-        .enumerate()
-        .map(|(index, moment)| {
-            let at = transport(moment.time);
-            let universe = if index == last || auditioning {
-                universe.clone()
-            } else {
-                let sampled = std::time::Instant::now();
-                let universe = library.sample_universe(at);
-                sample_ms += sampled.elapsed().as_secs_f32() * 1_000.0;
-                universe
-            };
-            // The drawn heads lag the score the way motors would; the output
-            // does not.
-            (moment, state.motors.step(moment.time, at, universe))
-        })
-        .collect();
-    let universe = moments[last].1.clone();
+    let bass = state.bass.as_ref().map_or(0.0, |bass| bass.at(time));
+    let moment = luma_render::footage::moment(clock, interval, bass);
+    // The drawn heads lag the score the way motors would; the output does not.
+    let universe = state.motors.step(clock, time, universe);
     state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
@@ -5260,7 +5190,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             match gpu.frame(LiveFrameInputs {
                                 scene,
                                 definitions: &stage.definitions,
-                                moments: &moments,
+                                moment,
+                                state: universe.as_ref(),
                                 size: (width, height),
                                 camera,
                                 spans,
@@ -5859,6 +5790,15 @@ mod view_tests {
         assert_eq!(read.glare.style, scene_desc::GlareStyle::default());
         // And one stored before the footage look has it off.
         assert!(!read.footage.enabled);
+        // One stored while the footage look had a shutter angle and a
+        // rolling readout keeps the rest of its dials.
+        let shuttered = r#"{"tone":"agxPunchy","exposure":{"auto":true,"ev":0.0,"minEv":-2.5,"maxEv":1.0},"glare":{"strength":1.0,"threshold":2.0,"star":0.3},"footage":{"enabled":true,"shutterDeg":180.0,"readoutMs":10.0,"noise":0.4,"handheld":0.2,"bass":0.1}}"#;
+        let read = stored_look(shuttered);
+        assert!(read.footage.enabled);
+        assert_eq!(
+            (read.footage.noise, read.footage.handheld, read.footage.bass),
+            (0.4, 0.2, 0.1)
+        );
         assert_eq!(stored_look("{\"tone\":\"sepia\"}"), scene_desc::Look::STAGE);
     }
 
@@ -5870,13 +5810,6 @@ mod view_tests {
         assert!(!controls.look.footage.enabled);
         controls.toggle(ViewToggle::Footage);
         assert!(controls.settings(50.0).look.footage.enabled);
-        controls.set(ViewValue::Shutter, 720.0);
-        assert_eq!(
-            controls.look.footage.shutter_deg,
-            *scene_desc::Footage::SHUTTER_DEG.end()
-        );
-        controls.set(ViewValue::Readout, -3.0);
-        assert_eq!(controls.look.footage.readout_ms, 0.0);
         controls.set(ViewValue::Noise, 0.5);
         controls.set(ViewValue::Handheld, 2.0);
         controls.set(ViewValue::BassShake, 0.25);

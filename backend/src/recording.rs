@@ -23,11 +23,9 @@ use std::time::{Duration, Instant};
 use sqlx::SqlitePool;
 
 use crate::eval::{Arena, Scope};
-use crate::models::universe::UniverseState;
 use crate::stage_render::{self, Continuity, Sequence, VenueGeometry};
 use crate::storage::StorageRoot;
 use luma_render::frame::Moment;
-use luma_render::scene_desc::Footage;
 use luma_render::{footage, DEFAULT_SUBFRAMES, LIVE_SUBFRAMES};
 use luma_scene::View;
 
@@ -61,8 +59,7 @@ pub enum Haze {
 }
 
 impl Haze {
-    /// Jitter samples per output frame. The renderer shares them out between
-    /// a frame's shutter moments.
+    /// Jitter samples per output frame.
     const fn subframes(self) -> u32 {
         match self {
             Self::Accumulate => DEFAULT_SUBFRAMES,
@@ -273,28 +270,19 @@ impl TimeAxis {
         self.frames as f32 / self.fps as f32
     }
 
-    /// Frame `n`'s time on the track. Its shutter closes here, as a show
-    /// export's frame closes on its tick.
-    fn time(&self, n: u64) -> f32 {
-        self.start + n as f32 / self.fps as f32
+    /// Frame `n`'s time on the track, which is the recording's clock: the
+    /// frame ends here, as a show export's frame ends on its tick. In `f64`,
+    /// so one frame's slice of the clock ends exactly where the next opens.
+    fn time(&self, n: u64) -> f64 {
+        f64::from(self.start) + n as f64 / f64::from(self.fps)
     }
 
-    /// The moments of the frame whose shutter closes at `time`: what live and
-    /// the show export draw, through [`footage::moments`]. The recording's
-    /// clock is the track's, so a strobe flashes in step with the music.
-    ///
-    /// With the footage look off, one moment whose strobes are the light of
-    /// the whole frame interval. With it on, [`footage::EXPORT_SUBFRAMES`]
-    /// whole moments across the open part of the interval. A recording has no
-    /// bass envelope, so the bass shake stays still.
-    fn moments(&self, time: f32, look: &Footage) -> Vec<Moment> {
-        footage::moments(
-            look,
-            f64::from(time),
-            1.0 / f64::from(self.fps),
-            footage::EXPORT_SUBFRAMES,
-            |_| 0.0,
-        )
+    /// The frame that ends at `time`: one moment, as live and the show export
+    /// draw it ([`footage::moment`]). Its strobes flash when a flash begins in
+    /// the frame interval before it. A recording has no bass envelope, so the
+    /// bass shake stays still.
+    fn moment(&self, time: f64) -> Moment {
+        footage::moment(time, 1.0 / f64::from(self.fps), 0.0)
     }
 
     /// The moments drawn and discarded before frame zero, in order, so that the
@@ -305,10 +293,10 @@ impl TimeAxis {
     /// continuous across the join. Clamped at zero: a recording that starts at
     /// the top of the track warms up on its own first moment, which converges
     /// the haze without inventing a `t` the score has no state for.
-    fn warmup(&self) -> impl Iterator<Item = f32> + use<> {
-        let (start, fps) = (self.start, self.fps);
+    fn warmup(&self) -> impl Iterator<Item = f64> + use<> {
+        let (start, fps) = (f64::from(self.start), f64::from(self.fps));
         let count = self.haze.warmup();
-        (0..count).map(move |i| (start - (count - i) as f32 / fps as f32).max(0.0))
+        (0..count).map(move |i| (start - (count - i) as f64 / fps).max(0.0))
     }
 }
 
@@ -706,7 +694,6 @@ impl Session {
         progress: &(dyn Fn(Progress) + Send),
     ) -> Result<Recorded, RecordError> {
         let (scene, definitions) = self.geometry.scene();
-        let look = scene.render.look.footage;
         let booth = self.geometry.booth();
         let sequence = Sequence::install(
             scene,
@@ -727,23 +714,20 @@ impl Session {
 
         let haze = self.axis.haze;
         let mut arena = Arena::default();
-        // The look is the venue scene's own. `VenueGeometry::scene` gives the
-        // neutral look, so the footage look is off and each frame is one
-        // moment, its strobes integrated over the whole frame interval.
-        // Each moment's light state, at its own track time. Before the top of
-        // the track the score holds its first state.
-        let exposure = |time: f32, arena: &mut Arena| {
-            let moments = self.axis.moments(time, &look);
-            let times: Vec<f32> = moments
-                .iter()
-                .map(|moment| moment.time.max(0.0) as f32)
-                .collect();
-            let states: Vec<UniverseState> = self.lighting.render(&times, Scope::Composite, arena);
-            let mut states = states.into_iter();
-            moments
+        // The light state at the frame's track time, drawn at its moment.
+        // Before the top of the track the score holds its first state.
+        let frame = |time: f64, arena: &mut Arena| -> Result<Vec<u8>, RecordError> {
+            let state = self
+                .lighting
+                .render(&[time.max(0.0) as f32], Scope::Composite, arena)
                 .into_iter()
-                .map(|moment| (states.next(), moment))
-                .collect::<Vec<_>>()
+                .next();
+            Ok(sequence.frame_at(
+                state,
+                self.axis.moment(time),
+                haze.subframes(),
+                haze.continuity(),
+            )?)
         };
         // Warm the haze history before the clock starts, so the discarded
         // frames do not land in the measured cost of the kept ones.
@@ -751,7 +735,7 @@ impl Session {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            sequence.exposure(exposure(t, &mut arena), haze.subframes(), haze.continuity())?;
+            frame(t, &mut arena)?;
         }
         let started = Instant::now();
         let (mut render, mut encode) = (Duration::ZERO, Duration::ZERO);
@@ -764,11 +748,7 @@ impl Session {
                 break;
             }
             let clock = Instant::now();
-            let pixels = sequence.exposure(
-                exposure(self.axis.time(n), &mut arena),
-                haze.subframes(),
-                haze.continuity(),
-            )?;
+            let pixels = frame(self.axis.time(n), &mut arena)?;
             render += clock.elapsed();
 
             let clock = Instant::now();
@@ -872,37 +852,18 @@ mod tests {
     }
 
     #[test]
-    fn with_the_look_off_a_frame_is_one_moment_lit_by_its_whole_interval() {
-        let axis = TimeAxis::new(None, 10.0, 30, Haze::Accumulate).unwrap();
+    fn a_frame_is_one_moment_whose_slice_meets_the_next() {
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30, Haze::Accumulate).unwrap();
         for n in [0u64, 1, 299] {
-            let moments = axis.moments(axis.time(n), &Footage::OFF);
-            assert_eq!(moments.len(), 1);
-            let moment = moments[0];
-            // The shutter closes on the frame's time, and the strobes see the
-            // whole interval since the frame before.
-            assert!((moment.time - f64::from(axis.time(n))).abs() < 1e-9);
-            assert!((moment.slice.open + moment.slice.length - moment.time).abs() < 1e-9);
-            assert!((moment.slice.length - 1.0 / 30.0).abs() < 1e-9);
+            let moment = axis.moment(axis.time(n));
+            // The frame ends on its time, and its strobes answer for the whole
+            // interval since the frame before.
+            assert_eq!(moment.time, axis.time(n));
+            assert!((moment.slice.open + moment.slice.length - moment.time).abs() < 1e-12);
+            assert!((moment.slice.length - 1.0 / 30.0).abs() < 1e-12);
+            let next = axis.moment(axis.time(n + 1)).slice;
+            assert!((next.open - moment.time).abs() < 1e-12);
         }
-    }
-
-    #[test]
-    fn with_the_look_on_a_frame_is_the_export_shutter() {
-        let axis = TimeAxis::new(None, 10.0, 30, Haze::Accumulate).unwrap();
-        let look = Footage {
-            enabled: true,
-            ..Footage::OFF
-        };
-        let end = f64::from(axis.time(30));
-        let moments = axis.moments(axis.time(30), &look);
-        assert_eq!(moments.len(), footage::EXPORT_SUBFRAMES as usize);
-        // A 180 degree shutter: the last half of the interval, in order.
-        assert!((moments[0].slice.open - (end - 0.5 / 30.0)).abs() < 1e-6);
-        for pair in moments.windows(2) {
-            assert!(pair[1].time > pair[0].time);
-        }
-        let last = moments.last().unwrap().slice;
-        assert!((last.open + last.length - end).abs() < 1e-6);
     }
 
     #[test]
@@ -915,7 +876,7 @@ mod tests {
             0
         );
         let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30, Haze::Temporal).unwrap();
-        let warm: Vec<f32> = axis.warmup().collect();
+        let warm: Vec<f64> = axis.warmup().collect();
         assert_eq!(warm.len(), WARMUP_FRAMES as usize);
         // Ascending, and the last one is one interval before frame zero, so
         // the history is continuous across the join.

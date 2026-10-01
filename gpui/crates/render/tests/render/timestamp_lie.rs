@@ -321,7 +321,6 @@ fn lit_frame(lights: usize) -> Frame {
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
                 lens: luma_render::luminaire::Lens::POINT,
-                strobe: luma_render::strobe::Rows::STEADY,
             }
         })
         .collect();

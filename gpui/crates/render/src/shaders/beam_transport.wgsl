@@ -78,16 +78,10 @@ struct LightRest {
     // Virtual apex to lens plane, metres; zero for a point source. The core's
     // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
     lens_distance: f32,
-    // How a rolling shutter bands this cone's strobe (`strobe.rs`, `Rows`):
-    // `strobe_row_ratio`'s arguments. Zeros for a cone every row sees alike.
-    strobe_phase: f32,
-    strobe_span: f32,
-    strobe_readout: f32,
-    strobe_duty: f32,
-    strobe_norm: f32,
-    // Tail padding to the 96-byte stride.
-    reserved0: f32,
-    reserved1: f32,
+    // Tail padding to the 80-byte stride; a beam-waist profile would take it.
+    lens_reserved0: f32,
+    lens_reserved1: f32,
+    lens_reserved2: f32,
 };
 
 struct Haze {
@@ -139,24 +133,6 @@ struct FixtureShadowMatrix {
     // xy: shadow projection near/far planes in metres.
     params: vec4<f32>,
 };
-
-// The image row this invocation integrates for, 0 at the top and 1 at the
-// bottom: a rolling shutter exposes each row at its own time. Set by
-// `scene_ray` and by the fog grid's cells.
-var<private> shutter_row: f32 = 0.5;
-
-// Light `li`'s strobe exposure on `shutter_row`, over the frame's.
-fn light_row_ratio(li: u32) -> f32 {
-    let rest = light_rest[li];
-    return strobe_row_ratio(
-        rest.strobe_phase,
-        rest.strobe_span,
-        rest.strobe_readout,
-        rest.strobe_duty,
-        rest.strobe_norm,
-        shutter_row,
-    );
-}
 
 @group(0) @binding(0) var<uniform> haze: Haze;
 @group(0) @binding(1) var<storage, read> light_core: array<LightCore>;
@@ -384,7 +360,6 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
     // neighbourhood; the upsample's depth weights do the rest.
     let size = vec2<f32>(haze.transport.w, haze.transport.z);
     let uv = frag / size;
-    shutter_row = uv.y;
     let depth_dims = vec2<f32>(textureDimensions(depth_texture));
     let span = max(vec2<i32>(depth_dims / size + 0.5), vec2<i32>(1)) - vec2<i32>(1);
     let corner = vec2<i32>(vec2<f32>(floor(frag)) * depth_dims / size);
@@ -543,7 +518,7 @@ fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
     let phase = henyey_greenstein(-(b + t) / dist, haze.transport.y);
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
     let spectrum = max(max(tint.r, tint.g), tint.b);
-    let energy = rest.intensity * light_row_ratio(li) * rest.haze_gain * spectrum;
+    let energy = rest.intensity * rest.haze_gain * spectrum;
     return energy * max(1e-6, (theta_b - theta_a) / h * angular
         * beam_range_falloff(dist, core.range) * phase * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t));
 }
@@ -661,7 +636,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         // the camera; blinding values are its problem and the white-hot
         // core is its correct answer.
         let sample_world = haze.camera_pos.xyz + ray_dir * t;
-        var radiance = rest.intensity * light_row_ratio(li) * angular * taper * gobo * beam_gain
+        var radiance = rest.intensity * angular * taper * gobo * beam_gain
             / max(lens_apex_distance2(q, rest.direction, rest.lens_distance), near_clamp);
         // Preserve the established shadow-off arithmetic exactly: even a
         // multiply by 1 can change half-float rounding and invalidate a
@@ -755,7 +730,7 @@ fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
         left_field = right_field;
     }
     if RESID_SCALAR_K { return vec3<f32>(sum); }
-    return tint * (sum * rest.intensity * light_row_ratio(li) * rest.haze_gain * haze.tuning.w * haze.depth.z);
+    return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // Every quadrature call the shadow traversal makes goes through here so the
