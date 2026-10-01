@@ -1000,13 +1000,12 @@ pub(super) fn links(graph: &ClipGraph) -> Vec<(String, (String, String))> {
 }
 
 /// Whether a row shows for this node: an aim shows the vector its base uses,
-/// a space in order has no direction, only radial and angle have a centre,
+/// only radial and angle spaces have a centre (every kind has a direction),
 /// a curve shows its bounds or its gradient by its kind.
 fn visible(node: &Node, input: &str) -> bool {
     match (node.kind, input) {
         (Kind::Aim, "direction") => node.setting("base") == Some("direction"),
         (Kind::Aim, "point") => node.setting("base") != Some("direction"),
-        (Kind::Space, "direction") => node.setting("kind") != Some("order"),
         (Kind::Space, "centre") => {
             matches!(node.setting("kind"), Some("radial" | "angle"))
         }

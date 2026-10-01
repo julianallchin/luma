@@ -400,8 +400,8 @@ from its line).
 | scale | number | share | ≥ 0 | yes | 1 |
 
 Settings: `kind` = `line` \| `order` \| `radial` \| `angle`; `wrap` = yes \| no.
-Default `wrap` is no, except `angle`, where it is yes. The UI hides
-`direction` for `order` and shows `centre` for `radial` and `angle` only.
+Default `wrap` is no, except `angle`, where it is yes. The UI shows
+`direction` for every kind and `centre` for `radial` and `angle` only.
 
 The raw axis coordinate `a` of a head, within its span. The ruler (its
 ends, its centre, its plane and its largest distance) is measured on the
@@ -415,8 +415,16 @@ it, never the ruler (decision 52):
   the axis is a ring of the span's `n` units: `a' = (a·(n − 1) + 0.5) / n`,
   so the ends sit one mean spacing apart and never on one place (for evenly
   spaced heads this is the `order` cell).
-- `order`: the head's rank in the span's order, cell-centred:
-  `(rank + 0.5) / n`. After `shuffle` the rank is the shuffled one.
+- `order`: the units sorted along `direction` by the projection of their
+  positions, as `line` (empty direction = the same best fit). Units at one
+  projection (within a millionth of the span's extent) share a slot, so
+  they light together. Cell-centred: `(slot + 0.5) / slots`, per span; all
+  at one point: 0.5. The slots come from the span before any fold; after a
+  mirror a folded unit takes the slot of the place it folded onto (the
+  nearest slot), so a mirror at the middle reads 0.5 to 1, as `line`.
+  Fixture ids and head numbers play no part. After `shuffle` the slot is a
+  random rank instead: every unit its own slot (`n` slots), new per event;
+  the direction is not read.
 - `radial`: distance from `centre` in the plane, over the largest distance
   (`d / max`); `centre` (u, v, z), each 0–1 within the span's box, empty =
   its middle; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
@@ -503,7 +511,7 @@ high may not be opposite.
 ### 2.5 Shapers → heads
 
 The heads wire carries, per unit: the member heads, a position (folded by
-mirrors), a span id, an order rank (per event after `shuffle`), and the list
+mirrors), a span id, a shuffled rank (per event, after `shuffle`), and the list
 of mirror directions that folded it.
 
 **mirror**
@@ -517,8 +525,8 @@ of mirror directions that folded it.
 The plane sits at `at` of the span's extent along the direction, measured
 before any fold (version 2: `normal`, and `offset` in metres from the
 middle). Heads on the low side take their reflected position, as a
-shader's reflect. Order is
-not changed. Aim yaw and pitch are mirrored for those heads. Mirrors stack:
+shader's reflect, so `order` reads them at the slot they fold onto; a
+shuffled rank is not changed. Aim yaw and pitch are mirrored for those heads. Mirrors stack:
 two mirrors give four-fold symmetry (Kaleidoscope).
 
 **shuffle**
@@ -531,7 +539,8 @@ two mirrors give four-fold symmetry (Kaleidoscope).
 A random order of the units within each span, from the clip seed and the
 event index (`epoch_seed(seed, index)` ranking, as `SourceOp::Random` today).
 With a clock, a new order per event; the output carries `E(k)`. Positions are
-not changed. `space(kind=order)` reads the shuffled rank.
+not changed. `space(kind=order)` reads the shuffled rank in place of its
+sort along the direction.
 
 **group**
 
@@ -730,7 +739,7 @@ fixed tables, batch evaluate). `forms::lower` is the template; the new
 
 Prepare time (cells known):
 
-1. Resolve every heads node to `Units` (members, position, span, order,
+1. Resolve every heads node to `Units` (members, position, span,
    mirror directions) in pipeline order. Constant geometry becomes constant
    `(H,1,1)` fields. A wired `direction` or `at` (time only)
    emits an `Axis` or `Fold` kernel instead of a constant field.
@@ -1470,7 +1479,7 @@ One line each; the alternative after "alt:".
 3. No auto-reverse of the shape when the offset moves backward; the author flips the shape. alt: keep auto-reverse.
 4. `width` is always a share of the axis; `width_relative` is gone. alt: keep relative width.
 5. Outside the stroke a number or vector curve gives `low`; a color curve gives black. alt: hold the shape's end value.
-6. The order coordinate is cell-centred `(rank + 0.5)/n`, so a shuffled stroke lights `round(w × n)` units exactly as Random did. alt: `rank/(n − 1)`.
+6. The order coordinate is cell-centred `(rank + 0.5)/n`, so a shuffled stroke lights `round(w × n)` units exactly as Random did. alt: `rank/(n − 1)`. (2026-10-01: unshuffled `order` sorts along the direction; units at one projection share a slot, `(slot + 0.5)/slots`.)
 7. `curve` has a `kind` setting number|vector|color; gradient only for color, low/high only for number and vector. alt: infer the kind from which inputs are present.
 8. `curve` low and high default to 0 and 1 in the destination's unit; vector and color curves must be given low/high or a gradient. alt: no defaults.
 9. A curve that feeds inputs of two different units is an error. alt: allow it.

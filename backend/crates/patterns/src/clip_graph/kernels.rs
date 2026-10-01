@@ -27,7 +27,7 @@ pub enum Kernel {
     Group,
     /// Positions folded across a mirror plane.
     Fold,
-    /// Each unit's rank in its span: selection order, or shuffled per event.
+    /// Each unit's rank in its span, shuffled per event.
     Rank,
     /// The raw axis coordinate of each head within its span.
     Axis,
@@ -141,11 +141,7 @@ impl Kernel {
                 &["has_normal"],
                 &["positions", "folded", "normal"],
             ),
-            Kernel::Rank => (
-                names(&["index", "unit", "span", "first", "order"]),
-                &["shuffle"],
-                &["value"],
-            ),
+            Kernel::Rank => (names(&["index", "unit", "span", "first"]), &[], &["value"]),
             Kernel::Axis => (
                 names(&[
                     "positions",
@@ -160,7 +156,7 @@ impl Kernel {
                     "centre_y",
                     "centre_z",
                 ]),
-                &["kind", "has_direction", "wrap"],
+                &["kind", "has_direction", "wrap", "shuffled"],
                 &["value"],
             ),
             Kernel::Slide => (names(&["a", "at", "shift", "scale"]), &["wrap"], &["value"]),
@@ -543,30 +539,25 @@ pub(crate) fn run(
             let unit = s("unit");
             let span = s("span");
             let first = s("first");
-            let order = s("order");
-            let shuffle = f("shuffle")? != 0.;
             let groups = spans(span, heads);
-            let ranking = |event: Option<i64>| {
+            // A random key per unit and event; ties (never in practice)
+            // fall back to cell order.
+            let ranking = |event: i64| {
                 let mut rank = vec![0.; heads];
                 for members in groups.values() {
-                    let mut units: Vec<(f64, f64, usize)> = unit_heads(unit, members)
+                    let mut units: Vec<(f64, usize)> = unit_heads(unit, members)
                         .into_iter()
                         .map(|n| {
-                            let key = event.map_or(0., |k| {
-                                let id = &batch.fixtures[first.at(n, 0, 0) as usize];
-                                crate::spatial::threshold(
-                                    id,
-                                    crate::spatial::epoch_seed(batch.frame.seed, k),
-                                )
-                            });
-                            (key, order.at(n, 0, 0), n)
+                            let id = &batch.fixtures[first.at(n, 0, 0) as usize];
+                            let seed = crate::spatial::epoch_seed(batch.frame.seed, event);
+                            (crate::spatial::threshold(id, seed), n)
                         })
                         .collect();
-                    units.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+                    units.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
                     let place: HashMap<i64, f64> = units
                         .iter()
                         .enumerate()
-                        .map(|(r, (_, _, n))| (unit.at(*n, 0, 0) as i64, r as f64))
+                        .map(|(r, (_, n))| (unit.at(*n, 0, 0) as i64, r as f64))
                         .collect();
                     for n in members {
                         rank[*n] = place[&(unit.at(*n, 0, 0) as i64)];
@@ -574,18 +565,13 @@ pub(crate) fn run(
                 }
                 rank
             };
-            if !shuffle {
-                let rank = ranking(None);
-                let values = Array3::from_shape_fn((heads, 1, 1), |(n, _, _)| rank[n]);
-                return single("value", signal(values, Channels::Value, &batch)?);
-            }
             let (_, times, width) = index.values().dim();
             let mut cache: HashMap<i64, Vec<f64>> = HashMap::new();
             let mut values = Array3::zeros((heads, times, width));
             for t in 0..times {
                 for e in 0..width {
                     let k = index.at(0, t, e) as i64;
-                    let rank = cache.entry(k).or_insert_with(|| ranking(Some(k)));
+                    let rank = cache.entry(k).or_insert_with(|| ranking(k));
                     for n in 0..heads {
                         values[[n, t, e]] = rank[n];
                     }
@@ -604,8 +590,10 @@ pub(crate) fn run(
             let kind = f("kind")? as u8;
             let given = f("has_direction")? != 0.;
             let wrap = f("wrap")? != 0.;
+            let shuffled = f("shuffled")? != 0.;
             let groups = spans(span, heads);
-            if kind == 1 {
+            if kind == 1 && shuffled {
+                // Shuffled, each unit is its own slot in a random order.
                 let (_, times, width) = rank.values().dim();
                 let mut values = Array3::zeros((heads, times, width));
                 for members in groups.values() {
@@ -659,7 +647,30 @@ pub(crate) fn run(
                             a
                         }
                     };
-                    let coordinate: Vec<f64> = if kind == 0 {
+                    let coordinate: Vec<f64> = if kind == 1 {
+                        // Order: the units sorted along the direction (as
+                        // line, empty = best fit). Heads at one projection
+                        // share a slot; `(slot + 0.5) / slots`. The slots
+                        // come from the selection before any fold; a
+                        // folded head takes the slot it folded onto.
+                        let Some(axis) = dir.or_else(|| heads::best_fit_axis(&ruler)) else {
+                            continue;
+                        };
+                        let slots = heads::order_slots(
+                            &ruler
+                                .iter()
+                                .map(|p| heads::dot(*p, axis))
+                                .collect::<Vec<_>>(),
+                        );
+                        let count = slots.len().max(1) as f64;
+                        points
+                            .iter()
+                            .map(|p| {
+                                let slot = heads::order_slot(&slots, heads::dot(*p, axis));
+                                (slot as f64 + 0.5) / count
+                            })
+                            .collect()
+                    } else if kind == 0 {
                         // Line: 0 at the selection's lowest head along the
                         // direction, 1 at its highest; all at one value
                         // read 0.5.
