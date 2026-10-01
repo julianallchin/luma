@@ -13,7 +13,10 @@ return a Graph.
 Values are plain: numbers, `(u, v, z)` tuples, `(r, g, b)` triples in linear
 Rec. 2020, or "#RRGGBB" (sRGB, converted). A shape is a curve preset name
 ("Comet"), a list of `[x, v]` / `[x, v, ease]` points, or `{"points": ...}`;
-two points at the same x are a jump. A gradient is a preset name ("Fire"), a
+two points at the same x are a jump, and x there reads the value after it
+(a shader's step): a pill [[0, 0], [0, 1], [1, 1], [1, 0]] covers [0, 1).
+A Bezier ease [x1, y1, x2, y2] keeps x1 and x2 in 0-1; y1 and y2 may
+overshoot, and outputs clamp. A gradient is a preset name ("Fire"), a
 list of `(t, color)` pairs, or `{"stops": ...}`. `None` is the empty input.
 
 Math is Python operators on values (curve results and math results):
@@ -57,7 +60,7 @@ VERSION = 3  # clip_graph::VERSION
 # Input order per kind: the builder signature order, used by source().
 _INPUTS = {
     "time": ("every", "duration", "delay", "phase"),
-    "space": ("heads", "direction", "shift", "scale"),
+    "space": ("heads", "direction", "at", "shift", "scale"),
     "noise": ("heads", "speed", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
@@ -409,8 +412,9 @@ def time(every=None, duration=None, delay=None, phase=None) -> Coordinate:
     `delay` (beats, any sign): the head starts this much later. Before its
     start the clock is below 0 and curves hold their first value: a curve
     over space on delay makes a one-shot wipe.
-    `phase` (turns): added, then wrapped to 0-1: a curve over space on phase
-    makes a loop such as a chase or a wave.
+    `phase` (turns, any number): added, then wrapped to 0-1, whenever it is
+    set (0 too): a curve over space on phase makes a loop such as a chase or
+    a wave.
     Two time nodes with equal every and duration share one set of events.
     """
     return _make("time", every=every, duration=duration, delay=delay, phase=phase)
@@ -424,11 +428,15 @@ def _wrap(wrap, kind):
     return "yes" if wrap else "no"
 
 
-def space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None) -> Coordinate:
+def space(heads=None, direction=None, at=None, shift=None, scale=None, kind="line",
+          wrap=None) -> Coordinate:
     """Place of each head: (a - shift) / scale, where a is 0-1 per head.
 
-    kind: "line" (along direction; empty = best fit), "order" (rank),
-    "radial" (distance from the centre), "angle" (turns around the centre).
+    kind: "line" (along direction; empty = best fit: the stage axis the
+    heads spread along most), "order" (rank), "radial" (distance from the
+    centre over the largest distance), "angle" (turns around the centre).
+    `at` (u, v, z), each 0-1 within the selection's box, is the centre of
+    radial and angle; empty = the middle (0.5, 0.5, 0.5).
     A region is a curve with jumps: the left half is
     curve(space(), [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]).
     `shift` (share) slides the coordinate, as a shader's p - offset: a curve
@@ -441,7 +449,7 @@ def space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=
     mirror's plane.
     """
     return _make("space", {"kind": kind, "wrap": _wrap(wrap, kind)},
-                 heads=heads, direction=direction, shift=shift, scale=scale)
+                 heads=heads, direction=direction, at=at, shift=shift, scale=scale)
 
 
 def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
@@ -450,7 +458,7 @@ def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
 
 
 def audio(low_hz=None, high_hz=None) -> Coordinate:
-    """Energy of a band of the full mix, 0-1 over the clip. `audio("Kick")` takes a band preset."""
+    """Energy of a band of the full mix, 0-1 over the whole track. `audio("Kick")` takes a band preset."""
     if isinstance(low_hz, str) and high_hz is None:
         low_hz, high_hz = _lookup("bands", low_hz, "band preset", 'audio("Kick")')[1]
     return _make("audio", low_hz=low_hz, high_hz=high_hz)
