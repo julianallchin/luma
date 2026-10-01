@@ -30,6 +30,9 @@ pub enum InputType {
     /// `curve.low` and `curve.high`: a number or a vector by the curve's
     /// kind, in the unit and range of the input the curve feeds.
     Bound,
+    /// `value.value`: a number or three numbers. Its type and unit are those
+    /// of the inputs the value node feeds. Value only.
+    Constant,
 }
 
 impl InputType {
@@ -42,7 +45,10 @@ impl InputType {
     }
     /// Whether the input takes a value only.
     pub fn is_value_only(self) -> bool {
-        matches!(self, InputType::Points | InputType::Gradient)
+        matches!(
+            self,
+            InputType::Points | InputType::Gradient | InputType::Constant
+        )
     }
 }
 
@@ -118,8 +124,8 @@ impl Geometry {
 pub enum Produces {
     Heads,
     Coordinate,
-    /// A number, vector or color: by a curve's `kind` setting, or the
-    /// widest of a math node's values.
+    /// A number, vector or color: by a curve's `kind` setting, the widest
+    /// of a math node's values, or what a value node's inputs ask of it.
     Value,
     /// An output node: no wire.
     Output,
@@ -424,6 +430,11 @@ fn build(kind: Kind) -> Definition {
                     default: "*",
                 },
             )],
+        ),
+        Kind::Value => (
+            Produces::Value,
+            vec![("value", wire(T::Constant, "0.5"))],
+            vec![],
         ),
         Kind::Curve => (
             Produces::Value,

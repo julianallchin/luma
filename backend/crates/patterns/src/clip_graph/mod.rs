@@ -1,6 +1,6 @@
 //! One small graph per clip (spec: `docs/specs/clip-graphs.md`).
 //!
-//! A clip graph has nodes of 13 kinds. Exactly one node is an output
+//! A clip graph has nodes of 14 kinds. Exactly one node is an output
 //! (`color`, `aim` or `strobe`). Every node has one output wire. An input
 //! holds a value, a wire (`{"node": id}`), or nothing; nothing is the only
 //! default. A choice is a setting and is never wired.
@@ -49,6 +49,7 @@ pub enum Kind {
     Audio,
     Curve,
     Math,
+    Value,
     Mirror,
     Shuffle,
     Group,
@@ -60,13 +61,14 @@ pub enum Kind {
 
 impl Kind {
     /// Every kind, in menu order.
-    pub const ALL: [Kind; 13] = [
+    pub const ALL: [Kind; 14] = [
         Kind::Time,
         Kind::Space,
         Kind::Noise,
         Kind::Audio,
         Kind::Curve,
         Kind::Math,
+        Kind::Value,
         Kind::Mirror,
         Kind::Shuffle,
         Kind::Group,
@@ -85,6 +87,7 @@ impl Kind {
             Kind::Audio => "audio",
             Kind::Curve => "curve",
             Kind::Math => "math",
+            Kind::Value => "value",
             Kind::Mirror => "mirror",
             Kind::Shuffle => "shuffle",
             Kind::Group => "group",
@@ -104,6 +107,7 @@ impl Kind {
             Kind::Audio => "Audio",
             Kind::Curve => "Curve",
             Kind::Math => "Math",
+            Kind::Value => "Value",
             Kind::Mirror => "Mirror",
             Kind::Shuffle => "Shuffle",
             Kind::Group => "Group",
@@ -450,9 +454,11 @@ impl ClipGraph {
             .collect())
     }
 
-    /// What a curve or math node gives: `"number"`, `"vector"` or
+    /// What a curve, math or value node gives: `"number"`, `"vector"` or
     /// `"color"`. A math node gives the widest kind of its values (color
-    /// over vector over number). `None` for any other node.
+    /// over vector over number). A value node gives what the inputs it
+    /// feeds ask of it ([`ClipGraph::asked`]), else what it holds. `None`
+    /// for any other node.
     pub fn value_kind(&self, id: &str) -> Option<&'static str> {
         fn kind(graph: &ClipGraph, id: &str, depth: usize) -> Option<&'static str> {
             let node = graph.nodes.get(id)?;
@@ -473,10 +479,60 @@ impl ClipGraph {
                         .max_by_key(|k| rank(k));
                     Some(widest.unwrap_or("number"))
                 }
+                Kind::Value => Some(graph.asked(id).first().map(|(_, _, kind)| *kind).unwrap_or(
+                    match node.inputs.get("value") {
+                        Some(Input::Vector(_)) => "vector",
+                        Some(Input::Color(_)) => "color",
+                        _ => "number",
+                    },
+                )),
                 _ => None,
             }
         }
         kind(self, id, 0)
+    }
+
+    /// What each input a value node feeds asks of it, in id order: (node,
+    /// input, kind). A number, vector or color input asks its own type; a
+    /// curve's low or high asks its curve's kind. A math node's values ask
+    /// nothing, since a number and a vector both go into a product.
+    pub fn asked(&self, value: &str) -> Vec<(&str, &str, &'static str)> {
+        let mut asked = Vec::new();
+        for id in self.ids_in_order() {
+            let node = &self.nodes[id];
+            for (input, source) in node.wires() {
+                if source != value {
+                    continue;
+                }
+                let Some(def) = definition(node.kind).input(input) else {
+                    continue;
+                };
+                let kind = match def.ty {
+                    InputType::Number => "number",
+                    InputType::Vector => "vector",
+                    InputType::Color => "color",
+                    InputType::Bound => match node.setting("kind") {
+                        Some("vector") => "vector",
+                        _ => "number",
+                    },
+                    _ => continue,
+                };
+                asked.push((id, input, kind));
+            }
+        }
+        asked
+    }
+
+    /// What `input` holds once a wire to a value node is followed: that
+    /// node's value. Any other input is itself.
+    pub fn resolve<'a>(&'a self, input: &'a Input) -> &'a Input {
+        match input {
+            Input::Wire(source) => match self.nodes.get(source) {
+                Some(node) if node.kind == Kind::Value => node.inputs.get("value").unwrap_or(input),
+                _ => input,
+            },
+            other => other,
+        }
     }
 
     /// The events a time node with `every` gives, as a key: two time
@@ -488,7 +544,7 @@ impl ClipGraph {
             return None;
         }
         let every = node.inputs.get("every")?;
-        let key = |input: &Input| match input {
+        let key = |input: &Input| match self.resolve(input) {
             Input::Number(value) => format!("{value:?}"),
             Input::Wire(source) => format!("@{source}"),
             other => format!("{other:?}"),

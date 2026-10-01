@@ -244,6 +244,10 @@ impl State {
 /// into it.
 fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
     let input = input.split('#').next().unwrap_or(input);
+    // A value node holds its value and takes no wire.
+    if graph.nodes.get(id)?.kind == Kind::Value {
+        return None;
+    }
     Some(match edit::spec(graph, id, input)?.ty {
         // A math node's items are numbers, or values that multiply as numbers do.
         Ty::Number | Ty::Values => Signal::Number,
@@ -256,12 +260,12 @@ fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
     })
 }
 
-/// What a node of `kind` gives. A curve or a math gives the value kind it
-/// has (`value`).
+/// What a node of `kind` gives. A curve, a math or a value gives the value
+/// kind it has (`value`).
 fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
         Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => Signal::Coordinate,
-        Kind::Curve | Kind::Math => match value {
+        Kind::Curve | Kind::Math | Kind::Value => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
             _ => Signal::Number,
@@ -296,13 +300,14 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
-const ADDABLE: [Kind; 10] = [
+const ADDABLE: [Kind; 11] = [
     Kind::Time,
     Kind::Space,
     Kind::Noise,
     Kind::Audio,
     Kind::Curve,
     Kind::Math,
+    Kind::Value,
     Kind::Mirror,
     Kind::Shuffle,
     Kind::Group,
@@ -631,7 +636,8 @@ pub(super) fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
 }
 
 /// A node added from the menu and not yet wired: its kind, a note on what to
-/// do with it, and its output port.
+/// do with it, and its output port. A value shows only its name: its field
+/// comes with the type of the first input it is wired into.
 fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
     let label = format!("New {}", draft.kind.label().to_lowercase());
     let app = cx.app.clone();
@@ -661,9 +667,11 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
                     vec![discard],
                     Some(port),
                 ))
-                .child(luma_ui::caption(
-                    "Drag its output onto an input".to_string(),
-                )),
+                .when(draft.kind != Kind::Value, |card| {
+                    card.child(luma_ui::caption(
+                        "Drag its output onto an input".to_string(),
+                    ))
+                }),
         )
         .agent_node(Role::Card, label)
         .into_any_element()

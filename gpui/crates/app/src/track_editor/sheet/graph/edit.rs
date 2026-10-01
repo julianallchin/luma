@@ -111,6 +111,21 @@ pub(crate) fn spec(graph: &ClipGraph, id: &str, input: &str) -> Option<Spec> {
         InputType::Time => Ty::Time,
         InputType::Coordinate => Ty::Coordinate,
         InputType::Values => Ty::Values,
+        // A value node's own value: the type its wires ask of it, in the
+        // unit and range of the input it lands in.
+        InputType::Constant => {
+            let mut spec = landing(graph, id).unwrap_or(Spec {
+                ty: Ty::Number,
+                unit: None,
+                range: [-1e6, 1e6],
+            });
+            spec.ty = match graph.value_kind(id) {
+                Some("vector") => Ty::Vector,
+                Some("color") => Ty::Color,
+                _ => Ty::Number,
+            };
+            return Some(spec);
+        }
         InputType::Bound => {
             let mut spec = landing(graph, id).unwrap_or(Spec {
                 ty: Ty::Number,
@@ -132,7 +147,7 @@ pub(crate) fn spec(graph: &ClipGraph, id: &str, input: &str) -> Option<Spec> {
     })
 }
 
-/// The spec of the input value node `id` (a curve or a math) lands in,
+/// The spec of the input value node `id` (a curve, a math or a value) lands in,
 /// through any math nodes between: a curve that is an item of a product
 /// into a brightness takes the brightness's unit.
 fn landing(graph: &ClipGraph, id: &str) -> Option<Spec> {
@@ -219,10 +234,18 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
 }
 
 /// An input's value as shown: its own, or what empty stands for. A math
-/// node's list shows its items one by one.
+/// node's list shows its items one by one. A value node's three numbers
+/// show as a color or a vector by what it feeds.
 pub(crate) fn shown(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
-    match graph.nodes.get(id)?.inputs.get(input) {
+    let node = graph.nodes.get(id)?;
+    match node.inputs.get(input) {
         Some(Input::Wire(_) | Input::List(_)) => None,
+        Some(Input::Vector(v) | Input::Color(v)) if node.kind == Kind::Value => {
+            Some(match graph.value_kind(id) {
+                Some("color") => Input::Color(*v),
+                _ => Input::Vector(*v),
+            })
+        }
         Some(value) => Some(value.clone()),
         None => empty(graph, id, input),
     }
@@ -785,6 +808,12 @@ pub(crate) fn link_candidates(graph: &ClipGraph, id: &str, input: &str) -> Vec<S
         .ids_in_order()
         .into_iter()
         .filter(|target| !held.contains(target) && !upstream(graph, target).contains(id))
+        // A value already wired keeps one unit.
+        .filter(|target| {
+            graph.nodes[*target].kind != Kind::Value
+                || spec.ty == Ty::Values
+                || landing(graph, target).is_none_or(|landed| landed.unit == spec.unit)
+        })
         .filter(|target| {
             let node = &graph.nodes[*target];
             let value = graph.value_kind(target);
@@ -822,9 +851,34 @@ pub(crate) fn delete(
     }
     let mut doomed = vec![id.to_owned()];
     while let Some(at) = doomed.pop() {
+        // A value node gives each input it fed its value back.
+        let value = graph
+            .nodes
+            .get(&at)
+            .filter(|node| node.kind == Kind::Value)
+            .and_then(|node| node.inputs.get("value").cloned());
         for (to, input) in references(graph, &at) {
             if needs_wire(graph, &to, &input) {
                 doomed.push(to);
+                continue;
+            }
+            if let Some(value) = &value {
+                let value = match (value, spec(graph, &to, &input).map(|spec| spec.ty)) {
+                    (Input::Vector(v), Some(Ty::Color)) => Input::Color(*v),
+                    (Input::Color(v), Some(Ty::Vector)) => Input::Vector(*v),
+                    (value, _) => value.clone(),
+                };
+                let node = graph.nodes.get_mut(&to).expect("a reference");
+                let held = node.inputs.get_mut(&input).expect("a reference");
+                let items = match held {
+                    Input::List(items) => items.as_mut_slice(),
+                    one => std::slice::from_mut(one),
+                };
+                for item in items {
+                    if item.source() == Some(at.as_str()) {
+                        *item = value.clone();
+                    }
+                }
                 continue;
             }
             if let Some(Input::List(items)) = graph
@@ -849,13 +903,15 @@ pub(crate) fn delete(
     prune(graph);
 }
 
-/// Whether a new node of `kind` can feed an input: directly, or through the
-/// curve a promotion puts between them.
+/// Whether a new node of `kind` can feed an input: directly (a value node
+/// takes any number, vector or color), or through the curve a promotion
+/// puts between them.
 pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> bool {
     let Some(spec) = spec(graph, id, input) else {
         return false;
     };
     match spec.ty {
+        Ty::Number | Ty::Vector | Ty::Color | Ty::Values if kind == Kind::Value => true,
         Ty::Number | Ty::Vector | Ty::Color if kind == Kind::Math => can_multiply(graph, id, input),
         Ty::Number | Ty::Vector | Ty::Color | Ty::Values => {
             SOURCES.contains(&kind) || kind == Kind::Curve
@@ -869,7 +925,8 @@ pub(crate) fn accepts(graph: &ClipGraph, id: &str, input: &str, kind: Kind) -> b
 
 /// Wire a new node of `kind` into an input, with what it needs to check: a
 /// coordinate into a value input comes through a new curve, a new curve
-/// reads a new time, and a new math multiplies what the input held by 1.
+/// reads a new time, a new math multiplies what the input held by 1, and a
+/// new value holds what the input held.
 /// Returns `None` when `kind` cannot feed the input, else the value the
 /// input held, for an unwire to give back.
 pub(crate) fn attach(
@@ -883,6 +940,22 @@ pub(crate) fn attach(
     }
     let ty = spec(graph, id, input)?.ty;
     Some(match ty {
+        Ty::Number | Ty::Vector | Ty::Color | Ty::Values if kind == Kind::Value => {
+            let held = graph
+                .nodes
+                .get(id)?
+                .inputs
+                .get(input)
+                .filter(|held| !matches!(held, Input::Wire(_) | Input::List(_)))
+                .cloned();
+            let value = match ty {
+                Ty::Values => Input::Number(1.),
+                _ => shown(graph, id, input).or_else(|| first_value(graph, id, input))?,
+            };
+            let value = add(graph, Node::new(Kind::Value).with_input("value", value));
+            link(graph, id, input, &value);
+            held
+        }
         Ty::Number | Ty::Vector | Ty::Color if kind == Kind::Math => {
             let held = graph
                 .nodes
@@ -1265,6 +1338,43 @@ mod tests {
         assert_eq!(
             graph.nodes[&time].inputs.get("every"),
             Some(&Input::Number(1.))
+        );
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+    }
+
+    #[test]
+    fn a_new_value_holds_what_the_input_held_and_gives_it_back_on_delete() {
+        let mut graph = wash();
+        set_input(&mut graph, "color1", "brightness", Some(Input::Number(0.4)));
+        attach(&mut graph, "color1", "brightness", Kind::Value);
+        let value = wired(&graph, "color1", "brightness");
+        assert_eq!(graph.nodes[&value].kind, Kind::Value);
+        assert_eq!(shown(&graph, &value, "value"), Some(Input::Number(0.4)));
+        assert_eq!(
+            spec(&graph, &value, "value").map(|s| (s.ty, s.unit)),
+            Some((Ty::Number, Some(Unit::Share)))
+        );
+        assert!(graph.check().is_ok(), "{:?}", graph.check());
+        // A share may share it; a beat count may not.
+        assert!(link_candidates(&graph, "color1", "alpha").contains(&value));
+        promote(&mut graph, "color1", "alpha", Kind::Time);
+        let time = wired(&graph, &wired(&graph, "color1", "alpha"), "x");
+        assert!(!link_candidates(&graph, &time, "delay").contains(&value));
+        link(&mut graph, "color1", "alpha", &value);
+        delete(&mut graph, &value, |_, _, _| None);
+        for input in ["brightness", "alpha"] {
+            assert_eq!(
+                graph.nodes["color1"].inputs.get(input),
+                Some(&Input::Number(0.4))
+            );
+        }
+        // Into a color, three numbers show as a color.
+        attach(&mut graph, "color1", "color", Kind::Value);
+        let value = wired(&graph, "color1", "color");
+        assert_eq!(spec(&graph, &value, "value").map(|s| s.ty), Some(Ty::Color));
+        assert_eq!(
+            shown(&graph, &value, "value"),
+            Some(Input::Color([1., 1., 1.]))
         );
         assert!(graph.check().is_ok(), "{:?}", graph.check());
     }

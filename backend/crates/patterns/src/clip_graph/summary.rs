@@ -18,17 +18,20 @@ impl ClipGraph {
             parts.push(node.setting("kind").unwrap_or("line").to_string());
         }
         for node in nodes(Kind::Time) {
-            parts.push(match node.inputs.get("every") {
-                None => continue,
-                Some(Input::Number(every)) => format!("every {every}"),
-                _ => "every varies".into(),
-            });
+            parts.push(
+                match node.inputs.get("every").map(|every| self.resolve(every)) {
+                    None => continue,
+                    Some(Input::Number(every)) => format!("every {every}"),
+                    _ => "every varies".into(),
+                },
+            );
         }
         if nodes(Kind::Noise).next().is_some() {
             parts.push("noise".into());
         }
         for node in nodes(Kind::Audio) {
-            let hz = |name: &str, empty: f64| match node.inputs.get(name) {
+            let hz = |name: &str, empty: f64| match node.inputs.get(name).map(|hz| self.resolve(hz))
+            {
                 Some(Input::Number(hz)) => Some(*hz),
                 None => Some(empty),
                 _ => None,
