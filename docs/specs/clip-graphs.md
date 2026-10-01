@@ -56,13 +56,17 @@ code keeps nodes, names, inline curves and `a * b * c` exactly.
 Migration (`backend/scripts/migrate_clip_graphs_v3.py`, on top of 8.7):
 version 1 or 2 → 3. A clock node becomes the `every`/`duration` of each time
 node that read it (shared clocks stay shared by equal inputs); a shuffle's
-clock becomes a time node with that `every`/`duration`; `time.delay` turns →
-beats (× the event duration, or × the clip's length with no clock);
-`space.length` → `scale`; a list → one `*` math node; an old color or strobe
-alpha folds into brightness or rate (`brightness × alpha`, as one math node,
-or a product of numbers) and alpha is left empty, so saved clips look the
-same; a `mirror.offset` other than 0 is refused (none in the 2026-09-30
-copy). A line space after a
+clock becomes a time node with that `every`/`duration`; `time.delay` turns
+with a clock → beats (× the event duration); a delay with no clock meant a
+share of the clip, so it must stretch with the clip: a straight-line delay
+over a plain space becomes that space shifted by a curve over `time()`
+(each curve over the old time reads its shape reversed when the delay
+rises), and any other delay with no clock is refused (none in the
+2026-09-30 copy); `space.length` → `scale`; a list → one `*` math node;
+alpha stays alpha, timeline fade handles included (one fade concept:
+alpha = opacity; alone a clip looks the same, over another clip its fade
+now shows the clip below, and the dry run counts those clips); a
+`mirror.offset` other than 0 is refused (none in the 2026-09-30 copy). A line space after a
 mirror along the same direction now measures from the plane: the converter
 halves its shift and scale (exact when a head sits on the plane, close
 otherwise; listed).

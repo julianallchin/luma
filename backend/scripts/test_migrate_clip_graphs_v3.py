@@ -46,7 +46,7 @@ def graph(version, **nodes):
 
 class Convert(unittest.TestCase):
     def convert(self, old, expected, notes=None, **kw):
-        new, why = m.convert(old, DURATION, **kw)
+        new, why = m.convert(old, **kw)
         self.assertEqual(new, graph(3, **expected))
         if notes is not None:
             self.assertLessEqual(notes, why)
@@ -111,10 +111,8 @@ class Convert(unittest.TestCase):
                          "inputs": {"heads": w("shuffle1")}},
                  curve1=curve("space1", {"points": [[0, 1], [0.25, 1], [0.3, 0], [1, 0]]}),
                  curve2=curve("time1", {"points": [[0, 1], [1, 0]]}),
-                 color1=color(brightness=w("math1")),
-                 math1={"kind": "math", "settings": {"op": "*"},
-                        "inputs": {"values": [w("curve1"), w("curve2")]}}),
-            {"shuffle: an existing time", "math node added"})
+                 color1=color(brightness=w("curve1"), alpha=w("curve2"))),
+            {"shuffle: an existing time"})
 
     def test_a_shuffle_gets_a_new_time_when_every_time_of_its_clock_has_a_phase(self):
         self.convert(
@@ -156,8 +154,50 @@ class Convert(unittest.TestCase):
     def test_a_delay_with_no_clock_duration_takes_every(self):
         self.convert(*self.delay({"every": 4}, 0.25, 1))
 
-    def test_a_delay_with_no_clock_takes_the_clip_duration(self):
-        self.convert(*self.delay(None, 0.25, 4))
+    # A delay with no clock was a share of the clip. It becomes the space
+    # shifted by a curve over time(), so the clip still stretches it.
+    ORDER = {"kind": "space", "settings": {"kind": "order", "wrap": "no"},
+             "inputs": {"heads": w("shuffle1")}}
+
+    def over_the_clip(self, delay_shape, step, expected_shift, expected_step):
+        old = graph(2, shuffle1={"kind": "shuffle"}, space1=self.ORDER,
+                    curve1=curve("space1", {"points": delay_shape}),
+                    time1={"kind": "time", "inputs": {"delay": w("curve1")}},
+                    curve2=curve("time1", {"points": step}),
+                    color1=color(brightness=w("curve2")))
+        expected = dict(shuffle1={"kind": "shuffle"},
+                        curve2=curve("space2", {"points": expected_step}),
+                        color1=color(brightness=w("curve2")),
+                        time2={"kind": "time"},
+                        curve3=curve("time2", low=expected_shift[0], high=expected_shift[1]),
+                        space2={**self.ORDER, "inputs": {"heads": w("shuffle1"),
+                                                         "shift": w("curve3"), "scale": 1}})
+        return self.convert(old, expected, {"delay over the clip: a space shifted by time()"})
+
+    def test_a_falling_delay_with_no_clock_becomes_a_shifted_space(self):
+        # Dissolve: delay 1 − rank; off when progress passes 1 − rank.
+        self.over_the_clip([[0, 1], [1, 0]], [[0, 1], [0, 0], [1, 0]], (1, 0),
+                           [[0, 1], [0, 0], [1, 0]])
+
+    def test_a_rising_delay_with_no_clock_reverses_each_curve_over_the_time(self):
+        # Build: delay = rank; on once progress passes it. The space reads
+        # 1 − τ, so the step and its eases are mirrored.
+        self.over_the_clip([[0, 0], [1, 1]], [[0, 0], [0, 1], [1, 1]], (-1, 0),
+                           [[0, 1], [1, 1], [1, 0]])
+        self.assertEqual(m.reversed_shape({"points": [[0, 0, "ease-in"], [0.25, 1, "hold"],
+                                                      [0.5, 0.5, [0.1, 0.2, 0.3, 0.4]], [1, 1]]}),
+                         {"points": [[0, 1, [0.7, 0.6, 0.9, 0.8]], [0.5, 0.5],
+                                     [0.5, 1], [0.75, 1, "ease-out"], [1, 0]]})
+
+    def test_a_delay_with_no_clock_that_is_not_a_straight_line_is_refused(self):
+        for delay, why in ((0.25, "one number"),
+                           (w("curve9"), "not a straight line")):
+            old = graph(2, time1={"kind": "time", "inputs": {"delay": delay}},
+                        space9={"kind": "space"},
+                        curve9=curve("space9", {"points": [[0, 0], [0.5, 1], [1, 0]]}),
+                        curve1=curve("time1"), color1=color(brightness=w("curve1")))
+            with self.assertRaisesRegex(m.Refused, why):
+                m.convert(old)
 
     def test_a_delay_curve_with_one_reader_scales_its_low_and_high(self):
         space = {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
@@ -177,12 +217,12 @@ class Convert(unittest.TestCase):
         self.convert(old, expected, {"math node added"})
 
     def test_a_time_length_other_than_1_is_refused_and_1_is_dropped(self):
-        old, expected = self.delay(None, 0, 0)
+        old, expected = self.delay({"every": 4}, 0, 0)
         old["nodes"]["time1"]["inputs"]["length"] = 1
         self.convert(old, expected)
         old["nodes"]["time1"]["inputs"]["length"] = 0.5
         with self.assertRaisesRegex(m.Refused, "time length"):
-            m.convert(old, DURATION)
+            m.convert(old)
 
     # ---- space and mirror ----
 
@@ -204,7 +244,7 @@ class Convert(unittest.TestCase):
                                                       "inputs": {"normal": [0, 0, 1]}}))
         old["nodes"]["mirror1"]["inputs"]["offset"] = 0.5
         with self.assertRaisesRegex(m.Refused, "mirror offset"):
-            m.convert(old, DURATION)
+            m.convert(old)
 
     def mirrored(self, normal, direction, space_inputs, extra=None):
         mirror = {"kind": "mirror", "inputs": {"normal": normal} if normal else {}}
@@ -251,7 +291,7 @@ class Convert(unittest.TestCase):
         old["color1"]["inputs"]["brightness"] = w("curve2")
         old["curve3"] = curve("space1")
         old["color1"]["inputs"]["alpha"] = w("curve3")
-        new, _ = m.convert(graph(2, **old), DURATION)
+        new, _ = m.convert(graph(2, **old))
         nodes = new["nodes"]
         self.assertEqual(nodes["space1"]["inputs"]["shift"], w("math1"))
         self.assertEqual(nodes["math1"]["inputs"]["values"], [w("curve2"), 0.5])
@@ -279,122 +319,54 @@ class Convert(unittest.TestCase):
             dict(time1={"kind": "time"}, curve1=curve("time1"),
                  space1={"kind": "space", "settings": {"kind": "order", "wrap": "no"}},
                  curve2=curve("space1"),
-                 strobe1={"kind": "strobe", "inputs": {"rate": w("math1")}},
+                 strobe1={"kind": "strobe", "inputs": {"rate": w("math1"), "alpha": 0.25}},
                  math1={"kind": "math", "settings": {"op": "*"},
-                        "inputs": {"values": [w("curve1"), 0.5, w("curve2"), 0.25]}}))
+                        "inputs": {"values": [w("curve1"), 0.5, w("curve2")]}}))
 
     # ---- alpha ----
 
-    def alpha(self, old, expected, notes=None, version=1):
-        base = dict(time1={"kind": "time"}, time2={"kind": "time"}, curve1=curve("time1"),
-                    curve2=curve("time2", {"points": [[0, 1], [1, 0]]}))
-        old = {**base, **old}
-        expected = {**base, **expected}
-        for nodes in (old, expected):  # drop the base nodes nothing reads
-            for k in ("curve1", "curve2", "time1", "time2"):
-                if not any(json.dumps(w(k)) in json.dumps(n.get("inputs", {}))
-                           for n in nodes.values()):
-                    del nodes[k]
-        return self.convert(graph(version, **old), expected, notes)
+    # Alpha is opacity in version 3 and stays alpha: alone a clip looks as
+    # it did, so these play the same in the parity check.
 
-    def test_alpha_number_times_brightness_number(self):
-        self.alpha({"color1": color(brightness=0.5, alpha=0.5)},
-                   {"color1": color(brightness=0.25)})
+    def test_alpha_stays_alpha(self):
+        self.convert(graph(1, color1=color(brightness=0.5, alpha=0.4)),
+                     dict(color1=color(brightness=0.5, alpha=0.4)))
+        fade = dict(time2={"kind": "time"}, curve2=curve("time2", {"points": [[0, 1], [1, 0]]}),
+                    color1=color(brightness=0.5, alpha=w("curve2")))
+        self.convert(graph(1, **fade), fade)
 
-    def test_alpha_number_with_empty_brightness_becomes_brightness(self):
-        self.alpha({"color1": color(alpha=0.4)}, {"color1": color(brightness=0.4)})
+    def test_alpha_1_stays(self):
+        self.convert(graph(1, color1=color(alpha=1)), dict(color1=color(alpha=1)))
 
-    def test_alpha_1_is_dropped(self):
-        self.alpha({"color1": color(brightness=w("curve1"), alpha=1)},
-                   {"color1": color(brightness=w("curve1"))})
+    def test_an_alpha_list_becomes_a_math_node_in_alpha(self):
+        self.convert(
+            graph(2, time1={"kind": "time"}, curve1=curve("time1"),
+                  color1=color(brightness=0.5, alpha=[w("curve1"), 0.5])),
+            dict(time1={"kind": "time"}, curve1=curve("time1"),
+                 color1=color(brightness=0.5, alpha=w("math1")),
+                 math1={"kind": "math", "settings": {"op": "*"},
+                        "inputs": {"values": [w("curve1"), 0.5]}}),
+            {"list: math node"})
 
-    def test_alpha_number_scales_a_bare_brightness_curve(self):
-        self.alpha({"color1": color(brightness=w("curve1"), alpha=0.5)},
-                   {"color1": color(brightness=w("curve1")),
-                    "curve1": curve("time1", high=0.5)},
-                   {"curve low/high scaled"})
-
-    def test_alpha_number_scales_a_brightness_curve_low_and_high(self):
-        self.alpha({"color1": color(brightness=w("curve1"), alpha=0.5),
-                    "curve1": curve("time1", low=0.2, high=0.8)},
-                   {"color1": color(brightness=w("curve1")),
-                    "curve1": curve("time1", low=0.1, high=0.4)})
-
-    def test_alpha_number_with_a_shared_brightness_curve_adds_a_math_node(self):
-        hue = curve("space1", kind="color", gradient={"stops": [
-            {"t": 0, "color": [1, 0, 0]}, {"t": 1, "color": [0, 0, 1]}]})
-        space = {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                 "inputs": {"direction": [1, 0, 0], "shift": w("curve1"), "length": 0.5}}
-        self.alpha({"color1": color(color=w("curve3"), brightness=w("curve1"), alpha=0.5),
-                    "space1": space, "curve3": hue},
-                   {"color1": color(color=w("curve3"), brightness=w("math1")),
-                    "space1": {**space, "inputs": {"direction": [1, 0, 0], "shift": w("curve1"),
-                                                   "scale": 0.5}},
-                    "curve3": hue,
-                    "math1": {"kind": "math", "settings": {"op": "*"},
-                              "inputs": {"values": [w("curve1"), 0.5]}}},
-                   {"math node added"}, version=2)
-
-    def test_alpha_wire_with_empty_brightness_becomes_brightness(self):
-        self.alpha({"color1": color(alpha=w("curve2"))},
-                   {"color1": color(brightness=w("curve2"))})
-
-    def test_alpha_wire_times_a_brightness_number_scales_the_alpha_curve(self):
-        self.alpha({"color1": color(brightness=0.5, alpha=w("curve2"))},
-                   {"color1": color(brightness=w("curve2")),
-                    "curve2": curve("time2", {"points": [[0, 1], [1, 0]]}, high=0.5)})
-
-    def test_alpha_wire_times_a_brightness_wire_is_one_math_node(self):
-        self.alpha({"color1": color(brightness=w("curve1"), alpha=w("curve2"))},
-                   {"color1": color(brightness=w("math1")),
-                    "math1": {"kind": "math", "settings": {"op": "*"},
-                              "inputs": {"values": [w("curve1"), w("curve2")]}}},
-                   {"math node added"})
-
-    def test_alpha_joins_a_brightness_list(self):
-        self.alpha({"color1": color(brightness=[w("curve1"), 0.5], alpha=w("curve2"))},
-                   {"color1": color(brightness=w("math1")),
-                    "math1": {"kind": "math", "settings": {"op": "*"},
-                              "inputs": {"values": [w("curve1"), 0.5, w("curve2")]}}},
-                   {"joined a math node"}, version=2)
-
-    def test_alpha_and_brightness_of_different_clocks_are_refused(self):
-        old = graph(1, clock1={"kind": "clock", "inputs": {"every": 1}},
-                    clock2={"kind": "clock", "inputs": {"every": 3}},
-                    time1={"kind": "time", "inputs": {"clock": w("clock1")}},
-                    time2={"kind": "time", "inputs": {"clock": w("clock2")}},
-                    curve1=curve("time1"), curve2=curve("time2"),
-                    color1=color(brightness=w("curve1"), alpha=w("curve2")))
-        with self.assertRaisesRegex(m.Refused, "different clocks"):
-            m.convert(old, DURATION)
-        # Two clocks with equal inputs are one clock in version 3.
-        old["nodes"]["clock2"]["inputs"]["every"] = 1
-        new, _ = m.convert(old, DURATION)
-        self.assertEqual(new["nodes"]["color1"]["inputs"]["brightness"], w("math1"))
-        CHECKED.append((self.id(), clip(new)))
-
-    def test_strobe_rate_takes_alpha_and_an_empty_rate_is_one_half(self):
-        self.alpha({"strobe1": {"kind": "strobe", "inputs": {"rate": 0.8, "alpha": 0.5}}},
-                   {"strobe1": {"kind": "strobe", "inputs": {"rate": 0.4}}})
-        self.alpha({"strobe1": {"kind": "strobe", "inputs": {"alpha": w("curve2")}}},
-                   {"strobe1": {"kind": "strobe", "inputs": {"rate": w("curve2")}},
-                    "curve2": curve("time2", {"points": [[0, 1], [1, 0]]}, high=0.5)})
-
-    def test_aim_alpha_is_unchanged(self):
+    def test_strobe_and_aim_alpha_stay(self):
+        strobe = {"kind": "strobe", "inputs": {"rate": 0.8, "alpha": 0.5}}
+        self.convert(graph(1, strobe1=strobe), dict(strobe1=strobe))
         aim = {"kind": "aim", "settings": {"base": "direction"},
-               "inputs": {"direction": [0, 1, -1], "alpha": w("curve2")}}
-        self.alpha({"aim1": aim}, {"aim1": aim})
+               "inputs": {"direction": [0, 1, -1], "alpha": 0.5}}
+        self.convert(graph(1, aim1=aim), dict(aim1=aim))
 
     # ---- whole graphs ----
 
-    def test_version_3_passes_and_a_document_uses_each_clip_duration(self):
+    def test_version_3_passes_and_a_document_converts_each_clip(self):
         new, _ = m.convert(graph(1, color1=color(alpha=0.5)))
         self.assertEqual(m.convert(new)[0], new)
-        timed = graph(2, time1={"kind": "time", "inputs": {"delay": 0.5}},
+        timed = graph(2, clock1={"kind": "clock", "inputs": {"every": 2}},
+                      time1={"kind": "time", "inputs": {"clock": w("clock1"), "delay": 0.5}},
                       curve1=curve("time1"), color1=color(brightness=w("curve1")))
         doc = {"clips": {"a": {**clip(timed), "duration": 6}, "b": clip(new)}}
         out = m.convert_document(doc)
-        self.assertEqual(out["clips"]["a"]["graph"]["nodes"]["time1"]["inputs"], {"delay": 3})
+        self.assertEqual(out["clips"]["a"]["graph"]["nodes"]["time1"]["inputs"],
+                         {"every": 2, "delay": 1})
         self.assertEqual(out["clips"]["a"]["duration"], 6)
         self.assertEqual(out["clips"]["b"]["graph"], new)
 
@@ -408,6 +380,33 @@ class Checked(unittest.TestCase):
         failures = [f"{name}: {line['error']}"
                     for (name, _), line in zip(CHECKED, lines) if "error" in line]
         self.assertEqual(failures, [])
+
+    @unittest.skipUnless(os.environ.get("LUMA_V3_PARITY"), "needs a version 3 clip_graph_parity")
+    def test_a_delay_over_the_clip_stretches_with_the_clip_and_plays_as_the_preset(self):
+        # Version 2 Build and Dissolve: a delay of rank (or 1 − rank) turns
+        # with no clock. Converted, each plays as the shipped preset and the
+        # same at the same share of a 16- and a 32-beat clip.
+        shipped = {c["name"]: c["graph"] for c in json.loads(
+            (pathlib.Path(__file__).resolve().parents[1]
+             / "crates/patterns/src/presets.json").read_text())["clips"]}
+        for name, delay, step in (("Build", [[0, 0], [1, 1]], [[0, 0], [0, 1], [1, 1]]),
+                                  ("Dissolve", [[0, 1], [1, 0]], [[0, 1], [0, 0], [1, 0]])):
+            old = graph(2, shuffle1={"kind": "shuffle"}, space1=Convert.ORDER,
+                        curve1=curve("space1", {"points": delay}),
+                        time1={"kind": "time", "inputs": {"delay": w("curve1")}},
+                        curve2=curve("time1", {"points": step}),
+                        color1=color(color=[1, 1, 1], brightness=w("curve2")))
+            new, _ = m.convert(old)
+            requests = [dict(clip={**clip(g), "duration": length}, cells=m.BARS,
+                             beats=[length * k / 64 for k in range(65)])
+                        for g in (new, shipped[name]) for length in (16, 32)]
+            played = m.v2.evaluate(os.environ["LUMA_V3_PARITY"], requests)
+            ours, ours_long, preset, preset_long = (m.lights(p["ok"]) for p in played)
+            with self.subTest(name):
+                self.assertEqual(ours, ours_long)
+                self.assertEqual(preset, preset_long)
+                self.assertEqual(ours, preset)
+                self.assertTrue(0 < sum(ours) < len(ours), "some heads lit, not all")
 
     @unittest.skipUnless(os.environ.get("LUMA_V3_PARITY") and os.environ.get("LUMA_V1_PARITY"),
                          "needs version 1 and version 3 clip_graph_parity binaries")
