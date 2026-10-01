@@ -380,6 +380,22 @@ fn count(value: &Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The picker's Codex window is the one a turn reports: 272,000 at 95%
+    /// is 258,400. A model with no window gets none.
+    #[test]
+    fn codex_windows_match_what_a_turn_reports() {
+        let windows = catalog_windows(&json!({"models": [
+            {"slug":"gpt-6-astra","context_window":272_000,"max_context_window":872_000,
+             "effective_context_window_percent":95},
+            {"slug":"plain","context_window":400_000},
+            {"slug":"unsized"}
+        ]}));
+        assert_eq!(windows.get("gpt-6-astra"), Some(&258_400));
+        assert_eq!(windows.get("plain"), Some(&400_000));
+        assert_eq!(windows.get("unsized"), None);
+    }
+
     #[tokio::test]
     async fn tools_images_usage_and_completion() {
         let temp = tempfile::tempdir().unwrap();
@@ -607,12 +623,72 @@ pub(super) async fn models(
                         .send(json!({"id":2,"method":"model/list","params":{"cursor":cursor}}))
                         .await?;
                 } else {
+                    // `model/list` carries no window. A list without windows
+                    // is still a list, so a failure here only costs the line.
+                    match windows(cwd).await {
+                        Ok(windows) => {
+                            for model in &mut models {
+                                model.context_window = model
+                                    .resolved_model
+                                    .as_deref()
+                                    .and_then(|id| windows.get(id))
+                                    .copied();
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("[agent] Codex model windows unavailable: {error}");
+                        }
+                    }
                     return Ok(models);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Each model's window from `codex debug models`, the same catalog
+/// `model/list` reads, run under the same config as the app server.
+async fn windows(cwd: &std::path::Path) -> Result<HashMap<String, u32>, AgentError> {
+    let mut cmd = command("codex", cwd);
+    cmd.args(["debug", "models"]).kill_on_drop(true);
+    for (key, value) in isolated_config().as_object().expect("config object") {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
+    if !output.status.success() {
+        return Err(protocol(format!(
+            "Codex debug models exited with {}",
+            output.status
+        )));
+    }
+    let catalog: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| protocol(format!("Codex debug models: {error}")))?;
+    Ok(catalog_windows(&catalog))
+}
+
+/// The window a Codex turn reports as `modelContextWindow`: the catalog's
+/// `context_window` scaled by its `effective_context_window_percent`
+/// (272,000 at 95% is the 258,400 a GPT-6-Astra turn reports), so the picker
+/// and the usage ring show one number.
+fn catalog_windows(catalog: &Value) -> HashMap<String, u32> {
+    catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let slug = model["slug"].as_str()?;
+            let window = model["context_window"].as_u64().filter(|w| *w > 0)?;
+            let window = match model["effective_context_window_percent"].as_u64() {
+                Some(percent) => window * percent / 100,
+                None => window,
+            };
+            Some((slug.to_string(), u32::try_from(window).ok()?))
+        })
+        .collect()
 }
 
 pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
