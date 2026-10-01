@@ -23,7 +23,9 @@ and version 2 graphs to version 3:
   saved clip looks the same with alpha as opacity. Alpha is left empty.
 - A `line` space after a mirror whose normal is parallel to the space's
   direction now measures from the mirror plane over the unfolded span: its
-  shift and scale are halved (exact when a head sits on the plane).
+  shift and scale are halved (exact when a head sits on the plane). With an
+  empty normal or direction the space is kept as it is (`--best-fit-mirror
+  keep`): that plays exactly on both stand-in rigs, halving does not.
 
 A number times a wire scales the wired curve's low and high when that curve
 has no other reader, or joins a `*` math node with no other reader; else it
@@ -330,7 +332,7 @@ def fold_alpha(nodes, notes):
             del node["inputs"]
 
 
-def convert(graph, clip_duration=None, best_fit="halve"):
+def convert(graph, clip_duration=None, best_fit="keep"):
     """(version 3 graph, notes). Raises Refused."""
     if graph.get("version") == VERSION:
         return graph, set()
@@ -354,7 +356,7 @@ def convert(graph, clip_duration=None, best_fit="halve"):
     return {"version": VERSION, "nodes": nodes}, notes
 
 
-def convert_document(value, best_fit="halve"):
+def convert_document(value, best_fit="keep"):
     """A score document (or any JSON) with every version 1 or 2 graph
     converted; a clip's duration comes from the clip holding the graph."""
     if isinstance(value, dict):
@@ -385,7 +387,7 @@ def lights(frames):
     alpha, aim direction and weight, as a flat list of numbers."""
     out = []
     for frame in frames:
-        heads = frame["lighting"]["value"]
+        heads = frame.get("lighting", {}).get("value", {})
         for head in sorted(heads):
             o = heads[head]
             alpha = o.get("alpha", 1.0)
@@ -422,7 +424,7 @@ def play(binary, clips, cells, chunk=200):
 
 # ---- the run ----
 
-def run(database, out, old_bin=None, new_bin=None, best_fit="halve"):
+def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
     out = pathlib.Path(out)
     out.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(f"file:{pathlib.Path(database).resolve()}?mode=ro", uri=True)
@@ -487,53 +489,89 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="halve"):
                 good.append((row, a, b))
         report["checker_errors"] = dict(errors)
         if old_bin:
-            report.update(parity(old_bin, new_bin, good, examples))
+            report.update(parity(old_bin, new_bin, good, examples, best_fit))
     report["examples"] = {k: v[:5] for k, v in examples.items()}
     (out / "report.json").write_text(json.dumps(report, indent=1) + "\n")
     write_markdown(out / "report.md", report)
     return report
 
 
-def parity(old_bin, new_bin, good, examples):
-    """Plays each clip before and after on every rig; a clip's class is its
-    worst over the rigs."""
-    worst = {row["id"]: (0.0, 0.0) for row, _, _ in good}
-    unplayed = {}
+def nudged(clip):
+    """`clip` (version 1) with every number band width a hair narrower and
+    its beats a hair later: a head that sat exactly on a band's end, or a
+    beat exactly on a moving band's end, no longer does."""
+    clip = copy.deepcopy(clip)
+    for node in clip["graph"]["nodes"].values():
+        inputs = node.get("inputs", {})
+        if node["kind"] == "space" and number(inputs.get("width")):
+            inputs["width"] *= 1 - 1e-9
+    return clip
+
+
+def worst_over_rigs(old_bin, new_bin, triples, unplayed, shift=0.0):
+    """{id: (largest, mean)} over every rig; records clips that do not play."""
+    worst = {row["id"]: (0.0, 0.0) for row, _, _ in triples}
     for rig, cells in RIGS.items():
-        olds = play(old_bin, [a for _, a, _ in good], cells)
-        news = play(new_bin, [b for _, _, b in good], cells)
-        for (row, _, _), x, y in zip(good, olds, news):
+        def requests(clips):
+            return [dict(clip=c, cells=cells, beats=[t + shift for t in v2.beats(c)])
+                    for c in clips]
+        olds, news = [], []
+        for i in range(0, len(triples), 200):
+            chunk = triples[i:i + 200]
+            olds += v2.evaluate(old_bin, requests([a for _, a, _ in chunk]))
+            news += v2.evaluate(new_bin, requests([b for _, _, b in chunk]))
+        for (row, _, _), x, y in zip(triples, olds, news):
             if "error" in x:
                 unplayed.setdefault(row["id"], "not played: " + x["error"][:60])
-                continue
-            if "error" in y:
+            elif "error" in y:
                 unplayed.setdefault(row["id"], "failed: new errors: " + y["error"][:60])
-                continue
-            big, mean = difference(x["ok"], y["ok"])
-            old_big, old_mean = worst[row["id"]]
-            worst[row["id"]] = (max(big, old_big), max(mean, old_mean))
+            else:
+                big, mean = difference(x["ok"], y["ok"])
+                old_big, old_mean = worst[row["id"]]
+                worst[row["id"]] = (max(big, old_big), max(mean, old_mean))
+    return worst
+
+
+def parity(old_bin, new_bin, good, examples, best_fit="keep"):
+    """Plays each clip before and after on every rig; a clip's class is its
+    worst over the rigs. A version 1 clip that differs but plays exactly
+    once nudged off band ends is "edge"."""
+    unplayed = {}
+    worst = worst_over_rigs(old_bin, new_bin, good, unplayed)
+    again = [(row, a, b) for row, a, b in good
+             if row["id"] not in unplayed and worst[row["id"]][0] > EXACT
+             and a["graph"].get("version") == 1]
+    retry = []
+    for row, a, _ in again:
+        a = nudged(a)
+        retry.append((row, a, {**a, "graph": convert(a["graph"], a["duration"], best_fit)[0]}))
+    edge = worst_over_rigs(old_bin, new_bin, retry, {}, shift=v2.NUDGE)
     classes, by_class = collections.Counter(), collections.defaultdict(list)
     for row, _, _ in good:
+        big, mean = worst[row["id"]]
         if row["id"] in unplayed:
             kind = unplayed[row["id"]]
-            label = row["id"]
+        elif big <= EXACT:
+            kind = "exact"
+        elif edge.get(row["id"], (math.inf,))[0] <= EXACT:
+            kind = "edge"
+        elif big <= CLOSE_MAX and mean <= CLOSE_MEAN:
+            kind = "close"
         else:
-            big, mean = worst[row["id"]]
-            kind = "exact" if big <= EXACT else \
-                "close" if big <= CLOSE_MAX and mean <= CLOSE_MEAN else "failed"
-            label = f"{row['id']} (max {big:.3g}, mean {mean:.3g})"
+            kind = "failed"
         classes[kind] += 1
-        by_class[kind].append((worst.get(row["id"], (0, 0))[0], label))
-    for kind, items in by_class.items():
-        if kind != "exact":
-            examples[f"parity {kind}"] = [label for _, label in sorted(items, reverse=True)]
-    return {"parity": dict(classes),
+        by_class[kind].append((big, f"{row['id']} {row['name']!r} (max {big:.3g}, mean {mean:.3g})"))
+    listed = {kind: [label for _, label in sorted(items, reverse=True)]
+              for kind, items in by_class.items() if kind != "exact"}
+    for kind, labels in listed.items():
+        examples[f"parity {kind}"] = labels
+    return {"parity": dict(classes), "parity_clips": listed,
             "parity_rule": f"exact: every light, strobe and aim number within {EXACT}; "
+                           "edge: differs, but exact once every band width is 1e-9 narrower "
+                           "and every beat 1.4e-4 later (a head exactly on a band end); "
                            f"close: largest difference ≤ {CLOSE_MAX} and mean ≤ {CLOSE_MEAN}; "
                            f"rigs: {', '.join(f'{k} ({len(v)} heads)' for k, v in RIGS.items())}; "
-                           "1/8 beat steps",
-            "failed_max": max((worst[r["id"]][0] for r, _, _ in good
-                               if r["id"] not in unplayed), default=0.0)}
+                           "1/8 beat steps"}
 
 
 def write_markdown(path, report):
@@ -559,12 +597,13 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--old", help="clip_graph_parity built from a version 1 checkout")
     parser.add_argument("--new", help="clip_graph_parity built from this checkout")
-    parser.add_argument("--best-fit-mirror", choices=["halve", "keep"], default="halve",
-                        help="a mirrored line space with an empty normal or direction")
+    parser.add_argument("--best-fit-mirror", choices=["halve", "keep"], default="keep",
+                        help="a line space after a mirror with an empty normal: keep plays "
+                             "exactly on both stand-in rigs (2026-09-30 dry run)")
     args = parser.parse_args()
     report = run(args.database, args.out, args.old, args.new, args.best_fit_mirror)
     print(json.dumps({k: v for k, v in report.items()
-                      if k not in ("examples", "mirrored_lines")}, indent=1))
+                      if k not in ("examples", "mirrored_lines", "parity_clips")}, indent=1))
 
 
 if __name__ == "__main__":
