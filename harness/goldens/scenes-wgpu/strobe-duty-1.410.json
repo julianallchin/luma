@@ -84,8 +84,6 @@
         },
         "footage": {
           "enabled": false,
-          "shutterDeg": 180.0,
-          "readoutMs": 10.0,
           "noise": 0.3,
           "handheld": 0.3,
           "bass": 0.0

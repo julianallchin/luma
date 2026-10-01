@@ -491,12 +491,16 @@ test("the footage look shows its dials only while on and keeps them", () => {
   nav.patch("Test Venue");
   openView();
   expect(on()).toBe(false);
-  expect(scrub("Shutter angle (°)")).toBe(undefined);
+  expect(scrub("Sensor noise")).toBe(undefined);
   nav.step("footage on", "toggle", "Footage look");
-  until("its dials", () => scrub("Shutter angle (°)") !== undefined);
-  expect(value("Shutter angle (°)")).toBe(180);
-  for (const dial of ["Readout time (ms)", "Sensor noise", "Handheld shake", "Bass shake"]) {
+  until("its dials", () => scrub("Sensor noise") !== undefined);
+  expect(value("Sensor noise")).toBe(0.3);
+  for (const dial of ["Handheld shake", "Bass shake"]) {
     assert(scrub(dial) !== undefined, `no ${dial} dial`);
+  }
+  // The shutter angle and the rolling readout are gone.
+  for (const dial of ["Shutter angle", "Readout time"]) {
+    expect(app.snapshot().findAll({ role: "slider" }).some((n) => n.label.startsWith(dial))).toBe(false);
   }
 
   app.key("escape");
@@ -505,5 +509,5 @@ test("the footage look shows its dials only while on and keeps them", () => {
   until("the loaded room", (s) => s.find({ role: "toggle", label: "Frame stats" }));
   openView();
   expect(on()).toBe(true);
-  expect(value("Shutter angle (°)")).toBe(180);
+  expect(value("Sensor noise")).toBe(0.3);
 });

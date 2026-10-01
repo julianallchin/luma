@@ -25,10 +25,6 @@ struct Lens {
     direction: vec4<f32>,
     // rgb: emitted colour, w: dimmer times cone gain.
     color: vec4<f32>,
-    // The cone's rolling-shutter strobe (`strobe.rs`, `Rows`): phase, span,
-    // readout, duty; then norm.
-    strobe: vec4<f32>,
-    strobe_norm: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cfg: LensFrame;
@@ -103,12 +99,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     out.position = vec4<f32>(centre.xy + ndc_offset * centre.w, 0.0, centre.w);
     out.disc = corner;
     let tint = mix(lens.color.rgb, vec3<f32>(1.0), WHITE_LEAK);
-    // A rolling shutter sees the lens flash only on the rows open during it.
-    let row = 0.5 - 0.5 * centre.y / centre.w;
-    let strobe = strobe_row_ratio(
-        lens.strobe.x, lens.strobe.y, lens.strobe.z, lens.strobe.w, lens.strobe_norm.x, row,
-    );
-    out.radiance = tint * lens.color.w * strobe * term * energy * cfg.viewport.w;
+    out.radiance = tint * lens.color.w * term * energy * cfg.viewport.w;
     out.view_depth = centre.w;
     return out;
 }

@@ -77,9 +77,6 @@ pub struct Draw {
     pub textures: MaterialTextures,
     /// Stable authored identity. Several draws may share one object.
     pub editor_object: Option<EditorObject>,
-    /// How a rolling shutter bands a strobing emitter face down the rows;
-    /// the emissive already holds the frame's exposure.
-    pub strobe: crate::strobe::Rows,
 }
 
 /// Authored editor identity carried through frame expansion.
@@ -149,10 +146,6 @@ pub struct FixtureCone {
     pub haze_gain: f32,
     /// The disc the beam leaves through, centred on `position`.
     pub lens: Lens,
-    /// How a rolling shutter bands this cone's strobe down the rows;
-    /// `intensity` already holds the frame's exposure. See
-    /// [`crate::strobe::Rows`].
-    pub strobe: crate::strobe::Rows,
 }
 
 impl FixtureCone {
@@ -356,30 +349,6 @@ pub struct Frame {
     /// slots and is shaded by `floor.wgsl`; without it the ground is one
     /// flat colour.
     pub floor: Option<crate::floor::Surface>,
-    /// The rest of this frame's shutter, when it is exposed over several
-    /// moments ([`crate::footage`]). Each is a whole frame at its own moment
-    /// and the picture is the mean of this one and them, in scene-linear
-    /// light. Empty for a frame that is one moment.
-    pub shutter: Vec<Frame>,
-}
-
-impl Frame {
-    /// One exposure from the frames of its shutter, in time order.
-    ///
-    /// # Panics
-    /// When `moments` is empty.
-    #[must_use]
-    pub fn exposure(moments: Vec<Frame>) -> Frame {
-        let mut moments = moments.into_iter();
-        let mut first = moments.next().expect("an exposure has a moment");
-        first.shutter = moments.collect();
-        first
-    }
-
-    /// Every moment of the exposure, this frame first.
-    pub fn moments(&self) -> impl Iterator<Item = &Frame> {
-        std::iter::once(self).chain(&self.shutter)
-    }
 }
 
 /// A look-at camera. The orbit parameterisation of spec §2.4 belongs in
@@ -510,7 +479,6 @@ pub(crate) fn piece_draws(
                 material: crate::materials::ALUMINIUM,
                 textures: MaterialTextures::default(),
                 editor_object,
-                strobe: crate::strobe::Rows::STEADY,
             }]
         }
         // Each part is the mesh case again, at the layout's transform. Every
@@ -574,7 +542,6 @@ pub(crate) fn housing_draws(
             model: base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
             material: crate::materials::POWDER_COAT,
             editor_object,
-            strobe: crate::strobe::Rows::STEADY,
         }]);
     };
     let mesh_rel = format!("qlc/{}", kind.mesh());
@@ -719,7 +686,6 @@ fn glb_draw(
         material: prim.material,
         textures,
         editor_object,
-        strobe: crate::strobe::Rows::STEADY,
     }
 }
 
@@ -892,7 +858,8 @@ pub struct Moment {
     /// The instant, on the free-running clock: the heads' state, the air's
     /// drift and the camera shake are this instant's. Becomes [`Frame::time`].
     pub time: f64,
-    /// What the strobes are integrated over.
+    /// The frame's share of the free-running clock: a strobe flashes in this
+    /// frame when one of its flashes begins within it.
     pub slice: crate::strobe::Slice,
     /// The playing track's low-band envelope at `time`, 0..=1, for the bass
     /// shake. Zero without a track.
@@ -901,8 +868,8 @@ pub struct Moment {
 
 impl Moment {
     /// A display frame that ends at `time`, [`crate::footage::FRAME_S`] after
-    /// the one before: its strobes are the light of that interval. What
-    /// [`build`] pins a golden to.
+    /// the one before: its strobes flash when a flash begins in that
+    /// interval. What [`build`] pins a golden to.
     #[must_use]
     pub fn at(time: f64) -> Self {
         let length = crate::footage::FRAME_S;
@@ -911,7 +878,6 @@ impl Moment {
             slice: crate::strobe::Slice {
                 open: time - length,
                 length,
-                readout: 0.0,
             },
             bass: 0.0,
         }
@@ -956,8 +922,8 @@ pub fn build_with(
     build_at(scene, definitions, state, Moment::at(f64::from(time)), lib)
 }
 
-/// [`build_with`] at a [`Moment`]: one subframe of a shutter, or a frame
-/// whose display interval is not [`crate::footage::FRAME_S`].
+/// [`build_with`] at a [`Moment`]: a frame whose display interval is not
+/// [`crate::footage::FRAME_S`], or whose camera the footage look shakes.
 ///
 /// # Errors
 /// Fails if a referenced mesh is missing from the asset library.
@@ -970,8 +936,7 @@ pub fn build_at(
 ) -> anyhow::Result<Frame> {
     let time = moment.time as f32;
     let exposed = |head_state: PrimitiveState| {
-        let exposure = crate::strobe::Exposure::of(head_state.strobe, moment.slice);
-        (head_state.dimmer * exposure.gain, exposure.rows)
+        head_state.dimmer * crate::strobe::gain(head_state.strobe, moment.slice)
     };
     let r = three_to_world_basis();
     let mut bank = Bank::default();
@@ -1053,7 +1018,6 @@ pub fn build_at(
                 ..crate::materials::GROUND
             }),
             editor_object: None,
-            strobe: crate::strobe::Rows::STEADY,
         });
     }
 
@@ -1105,7 +1069,7 @@ pub fn build_at(
             for (i, local) in pixels.iter().enumerate() {
                 let head = ((i as f32 / pixels_per_head) as usize).min(head_count - 1);
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
-                let (intensity, strobe) = exposed(head_state);
+                let intensity = exposed(head_state);
                 draws.push(Draw {
                     mesh: quad,
                     textures: MaterialTextures::default(),
@@ -1115,7 +1079,6 @@ pub fn build_at(
                         ..crate::materials::LED_FACE
                     },
                     editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
-                    strobe,
                 });
             }
 
@@ -1141,7 +1104,7 @@ pub fn build_at(
                     continue;
                 }
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
-                let (intensity, strobe) = exposed(head_state);
+                let intensity = exposed(head_state);
                 if intensity < 0.01 {
                     continue;
                 }
@@ -1160,7 +1123,6 @@ pub fn build_at(
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
                     lens,
-                    strobe,
                 });
             }
             continue;
@@ -1186,7 +1148,7 @@ pub fn build_at(
             );
         }
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
-        let (intensity, strobe) = exposed(head_state);
+        let intensity = exposed(head_state);
         // The body itself is `housing_draws`' — one implementation for the
         // room and the placement ghost.
         draws.extend(housing_draws(
@@ -1222,7 +1184,6 @@ pub fn build_at(
             gobo_rotation: head_state.gobo_rotation,
             haze_gain: 1.0,
             lens: lens_for(def, Some(kind)),
-            strobe,
         });
     }
 
@@ -1305,7 +1266,6 @@ pub fn build_at(
                 * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             material: Material::default(),
             editor_object: None,
-            strobe: crate::strobe::Rows::STEADY,
         });
     };
     if scene.render.show_grid {
@@ -1326,7 +1286,6 @@ pub fn build_at(
             model: Mat4::IDENTITY,
             material: Material::default(),
             editor_object: None,
-            strobe: crate::strobe::Rows::STEADY,
         });
     }
 
@@ -1436,7 +1395,6 @@ pub fn build_at(
         camera,
         overlays,
         floor: floor_surface,
-        shutter: Vec::new(),
     })
 }
 

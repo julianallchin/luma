@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 use glam::Vec3;
-use luma_render::frame::{Frame, Moment};
+use luma_render::frame::Moment;
 use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment, VenueHaze};
 use luma_render::{assets, build_frame_at, coords, footage, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::venue::ResolvedVenue;
@@ -551,12 +551,12 @@ impl Sequence {
         self.size
     }
 
-    /// One frame of one moment, tightly packed sRGB RGBA8: [`Self::exposure`]
-    /// of `state` at `time`, a display frame's strobes integrated over the
-    /// [`luma_render::footage::FRAME_S`] before it.
+    /// One frame, tightly packed sRGB RGBA8: [`Self::frame_at`] `state` at
+    /// `time`, a display frame [`luma_render::footage::FRAME_S`] after the one
+    /// before it.
     ///
     /// # Errors
-    /// As [`Self::exposure`].
+    /// As [`Self::frame_at`].
     pub fn frame(
         &self,
         state: Option<&UniverseState>,
@@ -564,20 +564,18 @@ impl Sequence {
         subframes: u32,
         continuity: Continuity,
     ) -> Result<Vec<u8>, String> {
-        self.exposure(
-            vec![(state.cloned(), Moment::at(f64::from(time)))],
+        self.frame_at(
+            state.cloned(),
+            Moment::at(f64::from(time)),
             subframes,
             continuity,
         )
     }
 
-    /// One frame exposed over `moments`, tightly packed sRGB RGBA8. Blocks
-    /// until it is back.
-    ///
-    /// Each moment is a light state and the [`Moment`] it is drawn at: a
-    /// shutter's worth from [`footage::moments`], as live and the show export
-    /// draw. The renderer adds them in linear light before the tone curve and
-    /// shares `subframes` out between them.
+    /// One frame of `state` drawn at `moment`, tightly packed sRGB RGBA8.
+    /// Blocks until it is back. The moment is what live and the show export
+    /// draw a frame at ([`footage::moment`]): its strobes flash when a flash
+    /// begins in its slice of the clock.
     ///
     /// `continuity` says whether this frame carries on from the last one drawn
     /// through *any* sequence on the render thread — the haze history is the
@@ -588,22 +586,21 @@ impl Sequence {
     /// # Errors
     /// Fails if the GPU device cannot be created, if a referenced mesh is
     /// missing, or if the frame cannot be read back.
-    pub fn exposure(
+    pub fn frame_at(
         &self,
-        moments: Vec<(Option<UniverseState>, Moment)>,
+        state: Option<UniverseState>,
+        moment: Moment,
         subframes: u32,
         continuity: Continuity,
     ) -> Result<Vec<u8>, String> {
-        if moments.is_empty() {
-            return Err("a frame needs at least one moment".into());
-        }
         let (reply, answer) = mpsc::sync_channel(1);
         jobs()
             .send(Job::Frame {
                 id: self.id,
                 // Owned rather than borrowed: the frame is built on the
                 // renderer's own thread, which outlives this call's stack.
-                moments,
+                state,
+                moment,
                 subframes,
                 continuity,
                 reply,
@@ -674,7 +671,8 @@ enum Job {
     Install(Box<Installed>),
     Frame {
         id: u64,
-        moments: Vec<(Option<UniverseState>, Moment)>,
+        state: Option<UniverseState>,
+        moment: Moment,
         subframes: u32,
         continuity: Continuity,
         reply: mpsc::SyncSender<Result<Vec<u8>, String>>,
@@ -710,7 +708,7 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
     let mut stage: Option<(Renderer, assets::Library, PathBuf)> = None;
     let mut installed: HashMap<u64, Installed> = HashMap::new();
     while let Ok(job) = rx.recv() {
-        let (id, moments, subframes, continuity, reply) = match job {
+        let (id, state, moment, subframes, continuity, reply) = match job {
             Job::Install(scene) => {
                 installed.insert(scene.id, *scene);
                 continue;
@@ -721,11 +719,12 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
             }
             Job::Frame {
                 id,
-                moments,
+                state,
+                moment,
                 subframes,
                 continuity,
                 reply,
-            } => (id, moments, subframes, continuity, reply),
+            } => (id, state, moment, subframes, continuity, reply),
         };
         let Some(scene) = installed.get(&id) else {
             // Only reachable if the handle outlived its own `Drop`, which it
@@ -755,7 +754,13 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
         }
         let (renderer, library, _) = stage.as_mut().expect("the stage was just installed");
         let _ = reply.send(one_frame(
-            renderer, library, scene, &moments, subframes, continuity,
+            renderer,
+            library,
+            scene,
+            state.as_ref(),
+            moment,
+            subframes,
+            continuity,
         ));
     }
 }
@@ -764,7 +769,8 @@ fn one_frame(
     renderer: &mut Renderer,
     library: &mut assets::Library,
     scene: &Installed,
-    moments: &[(Option<UniverseState>, Moment)],
+    state: Option<&UniverseState>,
+    moment: Moment,
     subframes: u32,
     continuity: Continuity,
 ) -> Result<Vec<u8>, String> {
@@ -774,27 +780,20 @@ fn one_frame(
         target: scene.camera.target,
         fov_y_deg: scene.camera.fov_y_deg,
     };
-    let frames = moments
-        .iter()
-        .map(|(state, moment)| {
-            let mut frame = build_frame_at(
-                &scene.scene,
-                &scene.definitions,
-                &|id, head| primitive_state(state.as_ref(), id, head),
-                *moment,
-                library,
-            )
-            .map_err(|error| format!("could not assemble the frame: {error}"))?;
-            // The fitted camera, turned by the footage look's shake at this
-            // moment as `build_frame_at` turns the scene's own.
-            frame.camera = footage::turned(
-                camera,
-                footage::shake(&scene.scene.render.look.footage, moment),
-            );
-            Ok(frame)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let frame = Frame::exposure(frames);
+    let mut frame = build_frame_at(
+        &scene.scene,
+        &scene.definitions,
+        &|id, head| primitive_state(state, id, head),
+        moment,
+        library,
+    )
+    .map_err(|error| format!("could not assemble the frame: {error}"))?;
+    // The fitted camera, turned by the footage look's shake at this moment
+    // as `build_frame_at` turns the scene's own.
+    frame.camera = footage::turned(
+        camera,
+        footage::shake(&scene.scene.render.look.footage, &moment),
+    );
     match continuity {
         Continuity::Next => renderer.render_next(&frame, width, height, subframes),
         Continuity::Cut => renderer.render(&frame, width, height, subframes),

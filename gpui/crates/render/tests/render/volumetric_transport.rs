@@ -58,7 +58,6 @@ fn light(gobo: u32) -> FixtureCone {
         gobo_rotation: 0.31,
         haze_gain: 1.0,
         lens: luma_render::luminaire::Lens::POINT,
-        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -211,7 +210,6 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
             gobo_rotation: descriptor.light.gobo_rotation,
             haze_gain: 1.0,
             lens: luma_render::luminaire::Lens::POINT,
-            strobe: luma_render::strobe::Rows::STEADY,
         });
     }
     frame

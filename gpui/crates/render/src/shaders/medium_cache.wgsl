@@ -7,8 +7,7 @@ struct CacheRest {
     color: vec3<f32>, intensity: f32,
     cos_field: f32, wash: f32, gobo: f32, rotation: f32,
     shadow: f32, haze_gain: f32, inverse_right_length: f32, field_tangent: f32,
-    lens_distance: f32, strobe_phase: f32, strobe_span: f32, strobe_readout: f32,
-    strobe_duty: f32, strobe_norm: f32, reserved0: f32, reserved1: f32,
+    lens_distance: f32, lens_reserved0: f32, lens_reserved1: f32, lens_reserved2: f32,
 };
 @group(0) @binding(0) var<uniform> cache: CacheUniform;
 @group(0) @binding(1) var<storage, read> cores: array<CacheCore>;

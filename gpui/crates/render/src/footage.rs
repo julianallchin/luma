@@ -1,16 +1,11 @@
-//! The footage look's clock and camera: which moments one frame's shutter
-//! holds, and where a hand on the camera points it at each.
+//! The footage look's camera, and the clock every frame is drawn on.
 //!
 //! Live and export share this. Each gives the clock at the end of a frame and
-//! how long since the last one; [`moments`] answers with the moments to build
-//! and render. The only difference between the two is how many subframes
-//! they can afford.
-//!
-//! With the footage look off a frame is one moment, but its strobes still
-//! integrate over the whole interval since the previous frame, so no flash
-//! falls between two frames. With it on, the shutter is open for its angle's
-//! share of the interval and each subframe is a moment of its own, drawn
-//! whole: heads, beams, strobes and camera move within the frame and blur.
+//! how long since the last one; [`moment`] answers with the moment to build
+//! and render. A frame is one moment: its strobes flash when a flash begins
+//! in the interval (`strobe.rs`). With the footage look on, a hand on the
+//! camera and the bass shake it ([`shake`]); the sensor noise lives in the
+//! post chain.
 
 use glam::{Mat3, Vec3};
 
@@ -21,62 +16,24 @@ use crate::strobe::Slice;
 /// The frame interval a caller without a display assumes: 60 frames a second.
 pub const FRAME_S: f64 = 1.0 / 60.0;
 
-/// Moments in one frame's shutter with the footage look on, for a render that
-/// is not paced to a display: the show export and `luma-record`. Each is a
-/// whole render.
-pub const EXPORT_SUBFRAMES: u32 = 8;
-
-/// The moments of one frame that ends at `end` on the free-running clock,
-/// `interval` seconds after the frame before it. `subframes` is how many the
-/// renderer can afford when the footage look is on. `bass` is the playing
-/// track's low-band envelope at a clock time.
-///
-/// In time order. The shutter closes at `end`, so the last moment is the
-/// newest: a frame shows the exposure that has just finished, as a camera
-/// does.
+/// The frame that ends at `end` on the free-running clock, `interval` seconds
+/// after the frame before it. `bass` is the playing track's low-band envelope
+/// at `end`.
 #[must_use]
-pub fn moments(
-    footage: &Footage,
-    end: f64,
-    interval: f64,
-    subframes: u32,
-    bass: impl Fn(f64) -> f32,
-) -> Vec<Moment> {
+pub fn moment(end: f64, interval: f64, bass: f32) -> Moment {
     let interval = if interval.is_finite() && interval > 0.0 {
         interval
     } else {
         FRAME_S
     };
-    if !footage.enabled {
-        return vec![Moment {
-            time: end,
-            slice: Slice {
-                open: end - interval,
-                length: interval,
-                readout: 0.0,
-            },
-            bass: bass(end),
-        }];
+    Moment {
+        time: end,
+        slice: Slice {
+            open: end - interval,
+            length: interval,
+        },
+        bass,
     }
-    let footage = footage.sanitized();
-    let open = interval * f64::from(footage.shutter_deg) / 360.0;
-    let count = subframes.max(1);
-    let length = open / f64::from(count);
-    (0..count)
-        .map(|k| {
-            let start = end - open + f64::from(k) * length;
-            let time = start + length / 2.0;
-            Moment {
-                time,
-                slice: Slice {
-                    open: start,
-                    length,
-                    readout: f64::from(footage.readout_ms) / 1000.0,
-                },
-                bass: bass(time),
-            }
-        })
-        .collect()
 }
 
 /// Handheld sway at `handheld = 1`, in degrees: a hand on a camera wanders
@@ -170,33 +127,14 @@ mod tests {
     }
 
     #[test]
-    fn off_is_one_moment_whose_strobes_cover_the_whole_interval() {
-        let moments = moments(&Footage::OFF, 10.0, 0.02, 16, |_| 0.0);
-        assert_eq!(moments.len(), 1);
-        assert_eq!(moments[0].time, 10.0);
-        assert!((moments[0].slice.open - 9.98).abs() < 1e-12);
-        assert!((moments[0].slice.length - 0.02).abs() < 1e-12);
-    }
-
-    #[test]
-    fn the_shutter_slices_tile_the_open_part_of_the_interval() {
-        let footage = on();
-        for count in [1, 2, 16] {
-            let moments = moments(&footage, 10.0, 0.02, count, |_| 0.0);
-            assert_eq!(moments.len(), count as usize);
-            // 180 degrees of a 20 ms frame, closing at the frame's end.
-            assert!((moments[0].slice.open - 9.99).abs() < 1e-12);
-            for pair in moments.windows(2) {
-                let (a, b) = (pair[0].slice, pair[1].slice);
-                assert!((a.open + a.length - b.open).abs() < 1e-12);
-                assert!(pair[0].time < pair[1].time);
-            }
-            let last = moments.last().unwrap().slice;
-            assert!((last.open + last.length - 10.0).abs() < 1e-12);
-            assert!(moments
-                .iter()
-                .all(|m| (m.slice.readout - 0.01).abs() < 1e-12));
-        }
+    fn a_frame_is_one_moment_whose_slice_is_the_whole_interval() {
+        let moment = moment(10.0, 0.02, 0.5);
+        assert_eq!(moment.time, 10.0);
+        assert_eq!(moment.bass, 0.5);
+        assert!((moment.slice.open - 9.98).abs() < 1e-12);
+        assert!((moment.slice.length - 0.02).abs() < 1e-12);
+        let fallback = super::moment(10.0, f64::NAN, 0.0);
+        assert_eq!(fallback.slice.length, FRAME_S);
     }
 
     #[test]
