@@ -102,19 +102,19 @@ class Convert(unittest.TestCase):
                   shuffle1={"kind": "shuffle", "inputs": {"clock": w("clock1")}},
                   space1={"kind": "space", "settings": {"kind": "order", "wrap": "no"},
                           "inputs": {"heads": w("shuffle1")}},
-                  curve1=curve("space1", {"points": [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]}),
+                  curve1=curve("space1", {"points": [[0, 1], [0.25, 1], [0.3, 0], [1, 0]]}),
                   curve2=curve("time1", {"points": [[0, 1], [1, 0]]}),
-                  color1=color(brightness=[w("curve1"), w("curve2")])),
+                  color1=color(brightness=w("curve1"), alpha=w("curve2"))),
             dict(time1={"kind": "time", "inputs": {"every": 1}},
                  shuffle1={"kind": "shuffle", "inputs": {"time": w("time1")}},
                  space1={"kind": "space", "settings": {"kind": "order", "wrap": "no"},
                          "inputs": {"heads": w("shuffle1")}},
-                 curve1=curve("space1", {"points": [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]}),
+                 curve1=curve("space1", {"points": [[0, 1], [0.25, 1], [0.3, 0], [1, 0]]}),
                  curve2=curve("time1", {"points": [[0, 1], [1, 0]]}),
                  color1=color(brightness=w("math1")),
                  math1={"kind": "math", "settings": {"op": "*"},
                         "inputs": {"values": [w("curve1"), w("curve2")]}}),
-            {"shuffle: an existing time", "list: math node"})
+            {"shuffle: an existing time", "math node added"})
 
     def test_a_shuffle_gets_a_new_time_when_every_time_of_its_clock_has_a_phase(self):
         self.convert(
@@ -139,9 +139,7 @@ class Convert(unittest.TestCase):
     # ---- delay and length ----
 
     def delay(self, clock_inputs, delay, expected_delay, extra=None, expected_extra=None):
-        nodes = dict(space1={"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                             "inputs": {"direction": [1, 0, 0]}},
-                     time1={"kind": "time", "inputs": {"delay": delay}},
+        nodes = dict(time1={"kind": "time", "inputs": {"delay": delay}},
                      curve1=curve("time1", {"points": [[0, 0], [0, 1], [1, 0]]}),
                      color1=color(brightness=w("curve1")), **(extra or {}))
         expected = dict(nodes, time1={"kind": "time", "inputs": {"delay": expected_delay}},
@@ -162,9 +160,10 @@ class Convert(unittest.TestCase):
         self.convert(*self.delay(None, 0.25, 4))
 
     def test_a_delay_curve_with_one_reader_scales_its_low_and_high(self):
-        delay_curve = curve("space1", low=0, high=0.5)
+        space = {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                 "inputs": {"direction": [1, 0, 0]}}
         old, expected = self.delay({"every": 4}, w("curve2"), w("curve2"),
-                                   {"curve2": delay_curve},
+                                   {"space1": space, "curve2": curve("space1", low=0, high=0.5)},
                                    {"curve2": curve("space1", low=0, high=2)})
         self.convert(old, expected, {"curve low/high scaled"})
 
@@ -286,7 +285,7 @@ class Convert(unittest.TestCase):
 
     # ---- alpha ----
 
-    def alpha(self, old, expected, notes=None):
+    def alpha(self, old, expected, notes=None, version=1):
         base = dict(time1={"kind": "time"}, time2={"kind": "time"}, curve1=curve("time1"),
                     curve2=curve("time2", {"points": [[0, 1], [1, 0]]}))
         old = {**base, **old}
@@ -296,7 +295,7 @@ class Convert(unittest.TestCase):
                 if not any(json.dumps(w(k)) in json.dumps(n.get("inputs", {}))
                            for n in nodes.values()):
                     del nodes[k]
-        return self.convert(graph(1, **old), expected, notes)
+        return self.convert(graph(version, **old), expected, notes)
 
     def test_alpha_number_times_brightness_number(self):
         self.alpha({"color1": color(brightness=0.5, alpha=0.5)},
@@ -322,16 +321,19 @@ class Convert(unittest.TestCase):
                     "curve1": curve("time1", low=0.1, high=0.4)})
 
     def test_alpha_number_with_a_shared_brightness_curve_adds_a_math_node(self):
-        self.alpha({"color1": color(color=[1, 1, 1], brightness=w("curve1"), alpha=0.5),
-                    "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                               "inputs": {"direction": [1, 0, 0], "offset": w("curve1"),
-                                          "width": 0.5}}},
-                   {"color1": color(color=[1, 1, 1], brightness=w("math1")),
-                    "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                               "inputs": {"direction": [1, 0, 0], "shift": w("curve1"),
-                                          "scale": 0.5}},
+        hue = curve("space1", kind="color", gradient={"stops": [
+            {"t": 0, "color": [1, 0, 0]}, {"t": 1, "color": [0, 0, 1]}]})
+        space = {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                 "inputs": {"direction": [1, 0, 0], "shift": w("curve1"), "length": 0.5}}
+        self.alpha({"color1": color(color=w("curve3"), brightness=w("curve1"), alpha=0.5),
+                    "space1": space, "curve3": hue},
+                   {"color1": color(color=w("curve3"), brightness=w("math1")),
+                    "space1": {**space, "inputs": {"direction": [1, 0, 0], "shift": w("curve1"),
+                                                   "scale": 0.5}},
+                    "curve3": hue,
                     "math1": {"kind": "math", "settings": {"op": "*"},
-                              "inputs": {"values": [w("curve1"), 0.5]}}})
+                              "inputs": {"values": [w("curve1"), 0.5]}}},
+                   {"math node added"}, version=2)
 
     def test_alpha_wire_with_empty_brightness_becomes_brightness(self):
         self.alpha({"color1": color(alpha=w("curve2"))},
@@ -354,7 +356,7 @@ class Convert(unittest.TestCase):
                    {"color1": color(brightness=w("math1")),
                     "math1": {"kind": "math", "settings": {"op": "*"},
                               "inputs": {"values": [w("curve1"), 0.5, w("curve2")]}}},
-                   {"joined a math node"})
+                   {"joined a math node"}, version=2)
 
     def test_alpha_and_brightness_of_different_clocks_are_refused(self):
         old = graph(1, clock1={"kind": "clock", "inputs": {"every": 1}},
