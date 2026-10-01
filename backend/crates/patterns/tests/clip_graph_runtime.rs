@@ -165,14 +165,35 @@ fn a_curve_with_a_jump_over_space_lights_a_region() {
         &[1.],
     );
     assert_eq!(lit(&far, 0), vec![10, 11]);
-    // A jump at x 0 or 1 sets the value outside; the ends themselves read
-    // the inside, so a pulse on [0, 1] lights both end heads.
+    // At a jump x itself reads the larger value, so a head exactly on an
+    // edge is lit: inside the curve, and at x 0 or 1, where the jump sets
+    // the value outside. A pulse on [0, 1] lights both end heads, and a cut
+    // lit below 0 lights the head at 0.
+    let edge = 5. / 11.;
+    let tie = play(
+        &over_line(json!([[0, 1], [edge, 1], [edge, 0], [1, 0]]), "no"),
+        &line(),
+        &[1.],
+    );
+    assert_eq!(lit(&tie, 0), (0..6).collect::<Vec<_>>());
+    let rising = play(
+        &over_line(json!([[0, 0], [edge, 0], [edge, 1], [1, 1]]), "no"),
+        &line(),
+        &[1.],
+    );
+    assert_eq!(lit(&rising, 0), (5..12).collect::<Vec<_>>());
     let closed = play(
         &over_line(json!([[0, 0], [0, 1], [1, 1], [1, 0]]), "no"),
         &line(),
         &[1.],
     );
     assert_eq!(lit(&closed, 0), (0..12).collect::<Vec<_>>());
+    let cut = play(
+        &over_line(json!([[0, 1], [0, 0], [1, 0]]), "no"),
+        &line(),
+        &[1.],
+    );
+    assert_eq!(lit(&cut, 0), vec![0]);
 }
 
 #[test]
@@ -749,7 +770,12 @@ fn slash_cuts_across_blooms_outward_and_fades() {
 /// Checks `light` against a hand-computed lit set: head `n` (of
 /// `fine_grid`) at sample `t` is lit when `margin(n, t)` is above 0 and dark
 /// when it is below 0. Heads within `edge` of the boundary are skipped.
-fn matches_by_hand(light: &Array3<f64>, times: &[f64], edge: f64, margin: impl Fn(usize, usize) -> f64) {
+fn matches_by_hand(
+    light: &Array3<f64>,
+    times: &[f64],
+    edge: f64,
+    margin: impl Fn(usize, usize) -> f64,
+) {
     let mut checked = 0;
     for t in 0..times.len() {
         for n in 0..light.dim().0 {
@@ -757,11 +783,19 @@ fn matches_by_hand(light: &Array3<f64>, times: &[f64], edge: f64, margin: impl F
             if m.abs() < edge {
                 continue;
             }
-            assert_eq!(dim(light, n, t) > 1e-6, m > 0., "head {n} at beat {}", times[t]);
+            assert_eq!(
+                dim(light, n, t) > 1e-6,
+                m > 0.,
+                "head {n} at beat {}",
+                times[t]
+            );
             checked += 1;
         }
     }
-    assert!(checked > light.dim().0 * times.len() / 2, "checked {checked}");
+    assert!(
+        checked > light.dim().0 * times.len() / 2,
+        "checked {checked}"
+    );
 }
 
 #[test]
@@ -827,14 +861,19 @@ fn the_slash_cut_sweeps_along_its_direction_and_the_bloom_widens_from_its_line()
         v.map(|c| c / l)
     };
     let along = |d: [f64; 3]| -> Vec<f64> {
-        cells.iter().map(|c| (0..3).map(|a| c.uvz[a] * d[a]).sum()).collect()
+        cells
+            .iter()
+            .map(|c| (0..3).map(|a| c.uvz[a] * d[a]).sum())
+            .collect()
     };
     // Cut alone: the coordinate along (−0.82, 0, 0.57), 0 at the lowest
     // head and 1 at the highest; lit below the shift, which runs 0 → 1 over
     // the first 0.2 of the event. The front starts at +U, low Z.
     let light = play(&slash_brightness("cut"), &cells, &times);
     let d = along(unit([-0.82, 0., 0.57]));
-    let (lo, hi) = d.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+    let (lo, hi) = d
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
     matches_by_hand(&light, &times, 1e-6, |n, t| {
         let shift = (times[t] / 2. / 0.2).min(1.);
         shift - (d[n] - lo) / (hi - lo)
@@ -843,13 +882,18 @@ fn the_slash_cut_sweeps_along_its_direction_and_the_bloom_widens_from_its_line()
     let first_on = |n: usize| (0..times.len()).find(|t| dim(&light, n, *t) > 1e-6);
     assert!(first_on(head("g90")) < first_on(head("g55")));
     assert!(first_on(head("g55")).unwrap() < first_on(head("g18")).unwrap());
-    // The far corner sits at exactly 1, where the shift ends: never cut on.
-    assert_eq!(first_on(head("g09")), None);
+    // The cut ends at 0.4 beats (sample 8) with its front at 1, exactly on
+    // the far corner g09: a tie at the edge is lit, so every head is.
+    assert_eq!(times[8], 0.4);
+    assert_eq!(lit(&light, 8), (0..cells.len()).collect::<Vec<_>>());
+    assert_eq!(first_on(head("g09")), Some(8));
     // Bloom alone: lit within scale × extent of the line at 0.68 along
     // (0.57, 0, 0.82); scale runs 0.04 → 0.74 over the event.
     let light = play(&slash_brightness("bloom"), &cells, &times);
     let b = along(unit([0.57, 0., 0.82]));
-    let (lo, hi) = b.iter().fold((f64::MAX, f64::MIN), |(a, c), v| (a.min(*v), c.max(*v)));
+    let (lo, hi) = b
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, c), v| (a.min(*v), c.max(*v)));
     let line = lo + 0.68 * (hi - lo);
     matches_by_hand(&light, &times, 1e-6, |n, t| {
         let scale = 0.04 + 0.7 * times[t] / 2.;
@@ -918,15 +962,23 @@ fn every_preset_plays_as_version_2_did() {
     // half a spacing off otherwise, and on the square rigs its best-fit
     // directions disagree. Wrapping ripple is now Ripple on a wrapped
     // space, as time has no length any more: version 2's length 0.7143 was
-    // 1 / 1.4 rounded. Everything else plays exactly (the fixture keeps 6
-    // decimals).
+    // 1 / 1.4 rounded. Alternating sides: at a jump x now reads the larger
+    // value, so the centre head (exactly on its phase jump) takes phase
+    // 0.5, and at the beat a side switches both sides read on.
     let changed: &[(&str, &str, f64)] = &[
         ("Mirror", "bars", 1.0),
         ("Mirror", "spread", 1.0),
         ("Wrapping ripple", "bars", 1e-3),
         ("Wrapping ripple", "spread", 1e-3),
         ("Wrapping ripple", "line13", 1e-3),
+        ("Alternating sides", "bars", 1.0),
+        ("Alternating sides", "spread", 1.0),
+        ("Alternating sides", "line13", 1.0),
     ];
+    // Presets with a head or a sample beat exactly on a brightness jump
+    // (the middle rank of an odd count, a step at the sample beat): ties
+    // are now lit, so these only gain light there and never lose it.
+    let ties = ["Random heads", "Random bars", "Sparkle", "Dissolve"];
     let mut report = Vec::new();
     for (name, rigs) in old["clips"].as_object().unwrap() {
         if name == "Slash" {
@@ -935,10 +987,16 @@ fn every_preset_plays_as_version_2_did() {
         let graph = preset(name);
         for (rig, frames) in rigs.as_object().unwrap() {
             let cells: Vec<Cell> = serde_json::from_value(old["rigs"][rig].clone()).unwrap();
-            let (most, mean) = difference(frames, &v3_values(&graph, &cells, &beats));
+            let new = v3_values(&graph, &cells, &beats);
+            let (most, mean) = difference(frames, &new);
             report.push(format!(
                 "{name} on {rig}: largest {most:.2e}, mean {mean:.2e}"
             ));
+            if ties.contains(&name.as_str()) {
+                let lost = darker(frames, &new);
+                assert!(lost <= 1e-6, "{name} on {rig} loses {lost}");
+                continue;
+            }
             let allowed = changed
                 .iter()
                 .find(|(changed, on, _)| changed == name && on == rig)
@@ -947,6 +1005,19 @@ fn every_preset_plays_as_version_2_did() {
         }
     }
     println!("{}", report.join("\n"));
+}
+
+/// The most any value of `new` is below the same value of `old`.
+fn darker(old: &Value, new: &[Vec<Vec<f64>>]) -> f64 {
+    let mut most = 0_f64;
+    for (t, frame) in new.iter().enumerate() {
+        for (n, head) in frame.iter().enumerate() {
+            for (c, value) in head.iter().enumerate() {
+                most = most.max(old[t][n][c].as_f64().unwrap() - value);
+            }
+        }
+    }
+    most
 }
 
 /// Slash was a cut, a bloom and a fade on three per-head clocks (delay and
@@ -1137,7 +1208,10 @@ fn disc(rings: usize) -> (Vec<Cell>, Vec<(usize, usize)>) {
         for k in 0..count {
             let angle = std::f64::consts::TAU * (k as f64 + 0.5) / count as f64;
             let r = i as f64;
-            cells.push(cell(format!("d{i:02}{k:03}"), [r * angle.cos(), 0., r * angle.sin()]));
+            cells.push(cell(
+                format!("d{i:02}{k:03}"),
+                [r * angle.cos(), 0., r * angle.sin()],
+            ));
             place.push((i, k));
         }
     }
@@ -1346,7 +1420,12 @@ fn pills_and_largest_step(graph: &ClipGraph, step: f64) -> ((f64, f64, usize), V
     let counts = (0..times.len())
         .collect::<Vec<_>>()
         .chunks(per_beat)
-        .map(|beat| beat.iter().map(|t| pieces(&lit(&light, *t), cells.len())).max().unwrap())
+        .map(|beat| {
+            beat.iter()
+                .map(|t| pieces(&lit(&light, *t), cells.len()))
+                .max()
+                .unwrap()
+        })
         .collect();
     (most, counts)
 }

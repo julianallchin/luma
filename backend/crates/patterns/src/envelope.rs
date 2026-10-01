@@ -50,7 +50,15 @@ impl Curve<f64> {
         [a, place(x1, y1), place(x2, y2), b]
     }
 
+    /// The value at `progress`. At a jump `progress` reads the larger of
+    /// the two values: ties at an edge count as lit.
     pub fn sample(&self, progress: f64) -> f64 {
+        let at = self.points.partition_point(|p| p.x < progress);
+        if let [a, b, ..] = &self.points[at..] {
+            if a.x == progress && b.x == progress {
+                return a.value.max(b.value);
+            }
+        }
         let (i, share) = self.locate(progress);
         let (a, b) = (self.points[i].value, self.points[i + 1].value);
         a + (b - a) * share

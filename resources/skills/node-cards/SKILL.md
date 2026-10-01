@@ -62,11 +62,12 @@ a Python name of at most 32 characters that is not a builder name (`time`,
 Units: share (0–1), beats, degrees, metres, hz, turns, uvz (a vector), rgb.
 
 Points: `x` goes from 0 to 1 and increases. Two points can have the same `x`:
-that is a jump. At the jump's `x` the curve reads the second point. A jump
-at x 0 or x 1 sets the value outside 0–1; x 0 and x 1 themselves read the
-inner point, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 from 0 to 1, both
-ends included, and 0 outside.
-`[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]` is on up to 0.5 and off after it.
+that is a jump. At the jump's `x` the curve reads the larger of the two
+values: a light exactly on an edge is lit. A jump at x 0 or x 1 sets the
+value outside 0–1, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 from 0 to 1,
+both ends included, and 0 outside; `[[0, 1], [0, 0], [1, 0]]` is 1 up to
+0, 0 included.
+`[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]` is on up to 0.5 (included) and off after it.
 `v` is 0–1. A curve has 2–256 points. The ease says how the value moves to the next point: `linear`
 (no ease), `hold`, `ease-in`, `ease-out`, `ease-in-out`, `sine-in`,
 `sine-out`, `sine-in-out`, or a local cubic Bézier `[x1, y1, x2, y2]`. The

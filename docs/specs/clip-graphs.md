@@ -39,7 +39,7 @@ Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 | mirror | `mirror(heads, normal, at)`. `at` share (0–1, T): the plane sits at `at` along the normal across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. |
 | math | `math`: setting `op` = `*` \| `+` \| `-` \| `max` \| `min` (default `*`); input `values`: a list of numbers and value wires (curves or math). `*`, `+`, `max`, `min` take 2 or more items, `-` exactly 2 (`a − b`). Tensors broadcast: a number times a color is a color. The output is a value of the widest input kind (color > vector > number; color with vector is an error). A math result wires like a curve, into any value input or a curve's low or high. Its inputs carry at most one clock. |
 | lists | Gone from outputs. `brightness=[a, b]` is `brightness=a * b` (one math node). |
-| curve | Unchanged (a node; low and high wireable). |
+| curve | A node; low and high wireable. At a jump (two points at one x), x itself reads the larger value: a head exactly on an edge is lit. Ties are decided the same way for every jump, over space or time, inside 0–1 or at its ends. So Slash's cut lights the far corner when its front stops on it; a step in time is on at the beat it switches on or off; the middle rank of an odd count sits on a 0.5 jump and is lit. A `hold` ease is not a jump. |
 
 Python: `time(every=None, duration=None, delay=None, phase=None)`,
 `space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)`,
@@ -116,7 +116,7 @@ Values:
 | number | `0.5` | Unit comes from the input. |
 | vector | `[u, v, z]` | Stage frame: U right, V downstage, Z up. Direction or metres. |
 | color | `[r, g, b]` | Linear Rec. 2020, each 0–1. |
-| points | `{"points": [[x, v, ease], ...]}` | The one curve format. `x` 0→1 in order, `v` 0–1, 2–256 points, last point has no ease. Two points may share an `x`: a jump, where `x` itself reads the second point (as a shader's `step`). Three may not. Outside 0–1 the end values hold; a jump at x 0 or x 1 sets that outside value, and x 0 and x 1 themselves read the inner point, so `[[0,0],[0,1],[1,1],[1,0]]` is 1 on [0, 1] closed. |
+| points | `{"points": [[x, v, ease], ...]}` | The one curve format. `x` 0→1 in order, `v` 0–1, 2–256 points, last point has no ease. Two points may share an `x`: a jump, where `x` itself reads the larger of the two values (ties at an edge count as lit). Three may not. Outside 0–1 the end values hold; a jump at x 0 or x 1 sets that outside value, so `[[0,0],[0,1],[1,1],[1,0]]` is 1 on [0, 1] closed and `[[0,1],[0,0],[1,0]]` is 1 up to 0 closed. |
 | list | `[{"node": "curve2"}, 0.5]` | Numbers and number curves, multiplied. Only on a number input with range 0–1 (`"list": true` in its definition). Two or more items, all of one clock. |
 | gradient | `{"stops": [{"t": 0, "color": [r,g,b]}, ...]}` | Blends in OKLab. |
 | choice | `"line"` | Only in `settings`. |
@@ -1336,7 +1336,7 @@ One line each; the alternative after "alt:".
 43. Clips follow shaders: space is a pure field and motion is each head's own clock, `time(delay, length, phase)` (changed 2026-09-30). Decisions 1–4 (strokes, offset, width) are gone with the band. alt: keep bands on space.
 44. `time.length` is how long each head's clock runs, in turns of the event (≥ 0, empty 1; 0 is a jump); delay and phase take any number. alt: a rate, or a clamped 0–1 delay.
 45. A list on a 0–1 input multiplies its items; it is stored as a list. alt: chain a curve's `high`.
-46. Two curve points may share an x (a jump); x itself reads the second point. alt: hold eases and 0.001 offsets.
+46. Two curve points may share an x (a jump); x itself reads the larger of the two values, so a head exactly on an edge or a moving front is lit (changed 2026-09-30; before, x read the second point and x 0 and x 1 the inner one, so Slash's cut never lit the far corner, which sits exactly where the front stops). A `hold` ease is not a jump: x of the next point reads that point. alt: hold eases and 0.001 offsets; read the side the front comes from.
 47. "VU meter" and "Bounce" are presets again (changed 2026-09-30): the VU meter shifts the space by the audio level under a step; Bounce shifts it by a there-and-back time curve. alt: leave them out.
 48. `space.shift` and `space.length` give `(a − shift) / length`, the shader's UV offset and scale; motion is either a per-head clock (`time`) or a shifted field (`space`), and nothing else (2026-09-30). Length divides so a moving width stays one curve. alt: a delay per head for every sweep, which needs inverted eases and curve chains.
 49. A node's id is its Python variable name (any ASCII Python name up to 32 characters, not a builder name or keyword); unnamed nodes are `<kind><n>`; the card shows the id as-is, or "Curve 2" for a numbered id; the UI renames by editing the card title and rewrites every wire (2026-09-30). alt: numbered ids only.
