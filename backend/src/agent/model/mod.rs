@@ -244,25 +244,17 @@ impl ReasoningLevel {
 /// Where a model's tokens come from. A provider is a *transport plus key*, not
 /// a catalogue: the same model can be reachable through more than one.
 ///
-/// The two gateways are what Luma is actually configured for — one key reaches
-/// every model. [`Provider::Anthropic`] is direct, first-party access: a
-/// supported alternative, but one nobody gets by default, because reaching it
-/// needs a second key for a subset of the same models.
+/// Luma reaches models only through the two gateways: one key reaches every
+/// model.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Provider {
     VercelAiGateway,
     OpenRouter,
-    Anthropic,
 }
 
-/// Providers in preference order: a gateway before a first-party API, so a
-/// model both can serve is billed through the key the user already has.
-const PROVIDER_PREFERENCE: [Provider; 3] = [
-    Provider::VercelAiGateway,
-    Provider::OpenRouter,
-    Provider::Anthropic,
-];
+/// Providers in preference order.
+const PROVIDER_PREFERENCE: [Provider; 2] = [Provider::VercelAiGateway, Provider::OpenRouter];
 
 impl Provider {
     /// The provider Luma uses when the settings table names none.
@@ -271,7 +263,6 @@ impl Provider {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Provider::Anthropic => "anthropic",
             Provider::OpenRouter => "openrouter",
             Provider::VercelAiGateway => "vercel-ai-gateway",
         }
@@ -291,7 +282,6 @@ impl Provider {
     #[must_use]
     pub fn key_env_var(self) -> &'static str {
         match self {
-            Provider::Anthropic => "LUMA_ANTHROPIC_API_KEY",
             Provider::OpenRouter => "LUMA_OPENROUTER_API_KEY",
             Provider::VercelAiGateway => "LUMA_AI_GATEWAY_API_KEY",
         }
@@ -301,7 +291,6 @@ impl Provider {
     #[must_use]
     pub fn key_setting(self) -> &'static str {
         match self {
-            Provider::Anthropic => "anthropic_api_key",
             Provider::OpenRouter => "openrouter_api_key",
             Provider::VercelAiGateway => "ai_gateway_api_key",
         }
@@ -319,7 +308,6 @@ pub struct ModelSpec {
     /// all store.
     pub key: &'static str,
     pub display: &'static str,
-    pub anthropic: Option<&'static str>,
     pub openrouter: Option<&'static str>,
     pub gateway: Option<&'static str>,
     pub default_reasoning: ReasoningLevel,
@@ -342,7 +330,6 @@ pub static MODELS: &[ModelSpec] = &[
     ModelSpec {
         key: "claude-opus-5",
         display: "Claude Opus 5",
-        anthropic: Some("claude-opus-5"),
         openrouter: Some("anthropic/claude-opus-5"),
         gateway: Some("anthropic/claude-opus-5"),
         default_reasoning: ReasoningLevel::High,
@@ -352,7 +339,6 @@ pub static MODELS: &[ModelSpec] = &[
     ModelSpec {
         key: "kimi-k3-fast",
         display: "Kimi K3 Fast",
-        anthropic: None,
         openrouter: Some("moonshotai/kimi-k3-fast"),
         gateway: Some("moonshotai/kimi-k3-fast"),
         default_reasoning: ReasoningLevel::Medium,
@@ -362,7 +348,6 @@ pub static MODELS: &[ModelSpec] = &[
     ModelSpec {
         key: "grok-4.5",
         display: "Grok 4.5",
-        anthropic: None,
         openrouter: Some("x-ai/grok-4.5"),
         gateway: Some("xai/grok-4.5"),
         default_reasoning: ReasoningLevel::Medium,
@@ -400,8 +385,8 @@ pub fn configured(
 /// The model, the effort and the live transport the settings table selects.
 ///
 /// The whole of "which provider, which key, which client" — a caller that only
-/// wants to run a turn should not have to know that a gateway and the
-/// first-party API share a transport, or which env var backs which service.
+/// wants to run a turn should not have to know which transport a gateway
+/// speaks, or which env var backs which service.
 ///
 /// # Errors
 ///
@@ -421,7 +406,6 @@ pub async fn configured_client(
     let key = api_key(provider, pool).await?;
     let client: std::sync::Arc<dyn ModelClient> = match provider {
         Provider::VercelAiGateway => std::sync::Arc::new(anthropic::AnthropicClient::gateway(key)),
-        Provider::Anthropic => std::sync::Arc::new(anthropic::AnthropicClient::new(key)),
         Provider::OpenRouter => std::sync::Arc::new(openrouter::OpenRouterClient::new(key)),
     };
     Ok((client, id, id.spec().default_reasoning))
@@ -468,7 +452,6 @@ pub fn register(provider: Provider, model: &remote::RemoteModel) -> Result<Model
     let spec: &'static ModelSpec = Box::leak(Box::new(ModelSpec {
         key,
         display: Box::leak(model.name.clone().into_boxed_str()),
-        anthropic: None,
         openrouter: (provider == Provider::OpenRouter).then_some(key),
         gateway: (provider == Provider::VercelAiGateway).then_some(key),
         default_reasoning: if model.reasoning {
@@ -536,10 +519,7 @@ impl ModelId {
         MODELS
             .iter()
             .find(|spec| {
-                spec.key == value
-                    || spec.anthropic == Some(value)
-                    || spec.openrouter == Some(value)
-                    || spec.gateway == Some(value)
+                spec.key == value || spec.openrouter == Some(value) || spec.gateway == Some(value)
             })
             .map(ModelId)
     }
@@ -576,7 +556,6 @@ impl ModelId {
     /// [`ModelError::Unroutable`] if that provider does not serve the model.
     pub fn wire_id(self, provider: Provider) -> Result<&'static str, ModelError> {
         match provider {
-            Provider::Anthropic => self.0.anthropic,
             Provider::OpenRouter => self.0.openrouter,
             Provider::VercelAiGateway => self.0.gateway,
         }
@@ -682,29 +661,34 @@ mod tests {
     fn routing_falls_back_to_a_provider_that_serves_the_model() {
         let kimi = ModelId::parse("kimi-k3-fast").expect("known model");
         assert_eq!(
-            kimi.route(Provider::Anthropic).expect("routable"),
-            (Provider::VercelAiGateway, "moonshotai/kimi-k3-fast")
+            kimi.route(Provider::OpenRouter).expect("routable"),
+            (Provider::OpenRouter, "moonshotai/kimi-k3-fast")
         );
-        let opus = ModelId::parse("claude-opus-5").expect("known model");
+        let listed_on_openrouter = ModelId(Box::leak(Box::new(ModelSpec {
+            key: "acme/only-openrouter",
+            display: "Only OpenRouter",
+            openrouter: Some("acme/only-openrouter"),
+            gateway: None,
+            default_reasoning: ReasoningLevel::Off,
+            context_window: remote::FALLBACK_CONTEXT_WINDOW,
+            long_cache_retention: false,
+        })));
         assert_eq!(
-            opus.route(Provider::Anthropic).expect("routable"),
-            (Provider::Anthropic, "claude-opus-5")
+            listed_on_openrouter
+                .route(Provider::VercelAiGateway)
+                .expect("routable"),
+            (Provider::OpenRouter, "acme/only-openrouter")
         );
     }
 
-    /// Nothing may reach the first-party Anthropic API without asking for it:
-    /// it is the one provider whose key a gateway user does not have.
+    /// The first-party Anthropic API was removed. A setting that still names
+    /// it is not a provider, so it falls back to the default gateway.
     #[test]
-    fn the_default_provider_is_a_gateway_for_every_model() {
-        assert_ne!(Provider::DEFAULT, Provider::Anthropic);
+    fn the_default_provider_routes_every_model() {
+        assert_eq!(Provider::parse("anthropic"), None);
         for spec in MODELS {
             let (provider, _) = ModelId(spec).route(Provider::DEFAULT).expect("routable");
-            assert_ne!(
-                provider,
-                Provider::Anthropic,
-                "'{}' falls through to the first-party API by default",
-                spec.key
-            );
+            assert_eq!(provider, Provider::DEFAULT, "'{}'", spec.key);
         }
     }
 
@@ -1031,17 +1015,6 @@ mod tests {
         let key = std::env::var(Provider::VercelAiGateway.key_env_var())
             .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
         let client = anthropic::AnthropicClient::gateway(key);
-        two_steps_share_a_prefix(&client, ModelId::parse(DEFAULT_MODEL).expect("known model"))
-            .await;
-    }
-
-    /// The first-party API, where the markers are native.
-    #[tokio::test]
-    #[ignore = "live: needs LUMA_ANTHROPIC_API_KEY and a network"]
-    async fn a_second_anthropic_step_reads_the_prefix_its_first_step_wrote() {
-        let key = std::env::var(Provider::Anthropic.key_env_var())
-            .expect("no Anthropic credential: set LUMA_ANTHROPIC_API_KEY to smoke-test");
-        let client = anthropic::AnthropicClient::new(key);
         two_steps_share_a_prefix(&client, ModelId::parse(DEFAULT_MODEL).expect("known model"))
             .await;
     }

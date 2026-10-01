@@ -355,6 +355,24 @@
       "returns": "bool"
     },
     {
+      "args": [],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "clip_graph_definitions",
+      "returns": "Value"
+    },
+    {
+      "args": [],
+      "domain": "scores",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/scores.rs"
+      },
+      "name": "clip_presets",
+      "returns": "Value"
+    },
+    {
       "args": [
         {
           "name": "scoreId",
@@ -3064,6 +3082,28 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "selection",
+          "rust": "Selection"
+        },
+        {
+          "name": "seed",
+          "rust": "u64"
+        }
+      ],
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs"
+      },
+      "name": "selection_cells",
+      "returns": "Vec<luma_patterns::Cell>"
+    },
+    {
+      "args": [
+        {
           "name": "email",
           "rust": "String"
         }
@@ -3513,7 +3553,7 @@
       "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 1,
+      "commandCount": 2,
       "domain": "composable_patterns",
       "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
     },
@@ -3583,7 +3623,7 @@
       "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 11,
       "domain": "scores",
       "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
@@ -3738,7 +3778,7 @@
   ],
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 150,
+    "commandCount": 153,
     "domainCount": 26,
     "eventCount": 13
   },

@@ -79,32 +79,6 @@ pub fn score(clips: Value) -> Value {
     json!({ "clips": clips })
 }
 
-/// One clip of the shipped preset `form`/`preset` over `start`..`start +
-/// duration` beats, with `seed`.
-#[must_use]
-pub fn preset_clip(form: &str, preset: &str, start: f64, duration: f64, seed: u64) -> Value {
-    let mut clip = luma_patterns::presets()
-        .preset(form, preset)
-        .expect("a shipped preset")
-        .clip(start, duration);
-    clip.seed = seed;
-    serde_json::to_value(clip).expect("a serializable clip")
-}
-
-/// A score with one clip of the shipped preset `form`/`preset` at beats 2–6.
-#[must_use]
-pub fn preset_score(form: &str, preset: &str) -> Value {
-    let mut document: luma_patterns::Score =
-        serde_json::from_value(score(json!({}))).expect("an empty score");
-    let preset = luma_patterns::presets()
-        .preset(form, preset)
-        .expect("a shipped preset");
-    document
-        .clips
-        .insert("form-clip".into(), preset.clip(2.0, 4.0));
-    serde_json::to_value(document).expect("a serializable score")
-}
-
 /// The score the fixture seeded, read back from its rows.
 ///
 /// A score is `scores` and `clips`; there is no document

@@ -8,8 +8,8 @@ fixture({
   clips: [{ pattern: "pat-glow", name: "Glow", start: 2, end: 5 }],
 });
 
-// A clip is labelled by its form; the fixture's clip plays Constant color.
-const CLIP = "Constant color";
+// A clip is labelled by its name; the fixture's clip is a Wash.
+const CLIP = "Wash";
 const node = (role, label) => app.snapshot().find({ role, label });
 
 test("edit focus keeps the controls usable and renders both picker previews", () => {
@@ -24,7 +24,7 @@ test("edit focus keeps the controls usable and renders both picker previews", ()
   // Taller stage, same inspector: it keeps usable height and stays above the timeline.
   app.drag(node("slider", "Stage height"), { dx: 0, dy: 160 });
   app.frames(5, { waitMs: 50 });
-  const inspector = node("card", "Clip inputs").bounds;
+  const inspector = node("card", "Clip graph").bounds;
   const timeline = node("card", "Waveform").bounds;
   expect(inspector.height).toBeGreaterThan(299);
   expect(inspector.y + inspector.height).toBeLessThan(timeline.y + 1);

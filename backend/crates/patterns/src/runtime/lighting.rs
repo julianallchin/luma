@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 
 /// Channels per head: RGB, dimmer, pan, tilt, strobe, speed, aim U, V, Z
-/// and aim weight.
+/// and alpha: the aim's weight for aim, the clip's opacity otherwise.
 const CHANNELS: usize = 12;
 
 /// Internal capability bundle at the output boundary. Numerical graph wires
@@ -14,7 +14,7 @@ pub struct LightingSignal {
     writes: [bool; 6],
 }
 impl LightingSignal {
-    pub(super) fn terminal(
+    pub(crate) fn terminal(
         inputs: &BTreeMap<String, EvaluatedValue>,
         fixtures: &[String],
     ) -> Result<Self> {
@@ -70,7 +70,7 @@ impl LightingSignal {
                 8..=10 if has_aim => aim(n, t).0[ch - 8],
                 11 if has_aim => aim(n, t).1,
                 8..=10 => crate::aim::DOWN[ch - 8],
-                _ => 0.0,
+                _ => get("alpha", n, t, 0, 1.0).clamp(0.0, 1.0),
             }
         });
         Ok(Self {
@@ -115,7 +115,7 @@ impl LightingSignal {
                 6 => v.strobe.unwrap_or(0.0),
                 7 => v.speed.unwrap_or(1.0),
                 8..=10 => v.aim.map_or(crate::aim::DOWN, |aim| aim.direction)[ch - 8],
-                _ => v.aim.map_or(0.0, |aim| aim.weight),
+                _ => v.aim.map_or(v.alpha.unwrap_or(1.0), |aim| aim.weight),
             }
         });
         Ok(Self {
@@ -146,6 +146,8 @@ impl LightingSignal {
                             direction: std::array::from_fn(|c| self.at(n, time, c + 8)),
                             weight: self.at(n, time, 11),
                         }),
+                        alpha: (!self.writes[5] && (self.writes[0] || self.writes[3]))
+                            .then(|| self.at(n, time, 11)),
                     },
                 )
             })

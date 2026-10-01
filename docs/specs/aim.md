@@ -1,5 +1,7 @@
 # Aim
 
+> The source and Aim interfaces below are superseded by [the September 28 source model](../design/2026-09-28-sources-implementation.md).
+
 Status: agreed with the user on 2026-09-24. Scope: pan and tilt of moving
 heads. This spec follows [clip-forms.md](./clip-forms.md): the same clip row,
 input sources, presets and rules apply unless this spec says otherwise.
@@ -154,12 +156,21 @@ timing and the movement. Let `n` be the plane's unit normal and
 
 ### Alpha and layers
 
-- Aim clips use `replace` only. The sheet does not offer other blend modes
-  for aim.
-- Layers are applied bottom to top per head. A clip's aim is blended with
-  the aim under it by alpha along the shortest arc:
+- Aim clips blend `replace` or `offset`. The sheet offers those two for aim,
+  and no other mode is valid for aim. Light forms never take `offset`.
+- Layers are applied bottom to top per head. A `replace` clip's aim is
+  blended with the aim under it by alpha along the shortest arc:
   `aim = slerp(under, this, alpha)`.
-- With no aim clip under it, `under` is the head's **home**: pan and tilt at
+- An `offset` clip does not use its base (base, direction, point). Its fan
+  and motion turn the aim under it, per head, per frame, with every angle
+  times alpha: the fan leans the aim, then the motion yaws and pitches it in
+  the aim's own frame, with the same mirror rules. Alpha 0 leaves the aim
+  under it. The weight follows the `replace` rule. Offset clips stack: a
+  `replace` Position, an `offset` Circle and an `offset` Fan give a fanned
+  circle around the position. The clip gives the compositor a turn per head
+  (the `turn` output of `core/aim_turn`), because only the compositor knows
+  the aim under it.
+- With no aim clip under it, `under` (for `offset`, the aim it turns) is the head's **home**: pan and tilt at
   the middle of their ranges, from the head's pose. This is fixed, so seeking
   gives the same frame as playing.
 - A move from one position to the next is a new clip with

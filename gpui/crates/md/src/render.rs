@@ -494,6 +494,7 @@ fn render_table(
             if let Some(flat) = cell_flat {
                 cell = cell.child(flat_text_element(
                     flat,
+                    top_ix,
                     table_cell_ix(ix, r, c),
                     opts,
                     theme,
@@ -669,6 +670,7 @@ fn flatten_cached(
 /// Veiled, clickable text for a flattened block (no sizing wrapper).
 fn flat_text_element(
     flat: &FlatText,
+    top_ix: usize,
     ix: usize,
     opts: &RenderOptions,
     theme: &Theme,
@@ -705,7 +707,9 @@ fn flat_text_element(
     // from the text's own layout handle. Pure paint — never in layout. The
     // selection half — wash, registry, listener re-registration — is
     // [`paint_text_selection`], the same path a plain text element takes.
-    let sel_key: std::sync::Arc<str> = format!("{}:{ix}", opts.row_key).into();
+    // `row_key` names a whole message part, and nested blocks number `ix`
+    // from their parent's, so `ix` alone repeats across top-level blocks.
+    let sel_key: std::sync::Arc<str> = format!("{}:{top_ix}:{ix}", opts.row_key).into();
     let code_ranges = flat.code_ranges.clone();
     let flat_text = flat.text.clone();
     let wash = inline_code_wash(theme);
@@ -826,7 +830,7 @@ fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)>
             }
         }
         let (ei, _) = best?;
-        let ix = match reg[ei].layout.index_for_position(position) {
+        let ix = match reg[ei].layout.closest_index_for_position(position) {
             Ok(ix) | Err(ix) => ix,
         };
         Some((ei, ix))
@@ -867,12 +871,17 @@ fn register_selection_listeners(
                 return;
             }
             if layout.bounds().contains(&e.position) {
-                let ix = match layout.index_for_position(e.position) {
+                let ix = match layout.closest_index_for_position(e.position) {
                     Ok(ix) | Err(ix) => ix,
                 };
                 match e.click_count {
                     2 => {
-                        let range = super::selection::word_range(&text, ix);
+                        // The word under the pointer, not the one after the
+                        // nearest boundary.
+                        let under = match layout.index_for_position(e.position) {
+                            Ok(ix) | Err(ix) => ix,
+                        };
+                        let range = super::selection::word_range(&text, under);
                         super::selection::begin_with_span(&key, &text, range);
                     }
                     n if n >= 3 => {
@@ -995,7 +1004,7 @@ fn text_element(
         FontWeight::NORMAL
     };
     let flat = flatten_cached(runs, weight, top_ix, ix, opts, theme);
-    let inner = flat_text_element(&flat, ix, opts, theme);
+    let inner = flat_text_element(&flat, top_ix, ix, opts, theme);
     div()
         .text_size(px(size))
         .line_height(px(line_height))

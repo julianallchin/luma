@@ -38,7 +38,7 @@ fn harness() -> Harness {
         SECONDS,
         // Pulse moves every frame, so the stage never settles into a still.
         vec![Clip {
-            preset: Some(("color.constant@1".into(), "Pulse".into())),
+            preset: Some("Pulse".into()),
             ..Clip::new("pulse", "Pulse", 0., f64::from(SECONDS))
         }],
     )

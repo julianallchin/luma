@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 
 /// One head's contribution, preserving the distinction between an unwritten
 /// capability and a capability explicitly written as zero. A pattern applies
-/// color; brightness is its peak channel, split out here as the dimmer the
-/// compositor and fixtures expect. Chromaticity stays normalized.
+/// color, linear Rec. 2020; brightness is its peak channel, split out here as
+/// the dimmer the compositor and fixtures expect. The color stays normalized
+/// to a peak of 1. A fixture or the display turns the pair into its own
+/// emitters with [`crate::color_space::Gamut::split`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureOutput {
@@ -22,6 +24,10 @@ pub struct FixtureOutput {
     /// tilt: a solver turns it into pan and tilt after compositing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim: Option<crate::Aim>,
+    /// The clip's opacity at this head, 0–1, for color and strobe: the
+    /// compositor mixes the clip's light with the light below by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
 }
 impl FixtureOutput {
     pub fn from_rgb(rgb: [f64; 3]) -> Self {
@@ -67,6 +73,7 @@ impl FixtureOutput {
             || self.aim.is_some_and(|aim| {
                 aim.direction.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&aim.weight)
             })
+            || self.alpha.is_some_and(|v| !(0.0..=1.0).contains(&v))
         {
             return Err(Error("invalid fixture output".into()));
         }
@@ -84,8 +91,6 @@ pub(crate) fn terminal_definition() -> crate::Definition {
         value_type: value.value_type(),
         rate: Rate::Frame,
         default: Some(value),
-        author: None,
-        promotable: Vec::new(),
     };
     Definition {
         name: "Apply".into(),
@@ -99,6 +104,13 @@ pub(crate) fn terminal_definition() -> crate::Definition {
                 port("Movement speed", Value::Proportion(1.0)),
             ),
             (
+                "alpha".into(),
+                Input {
+                    description: "The clip's opacity over the light below".into(),
+                    ..port("Alpha", Value::Proportion(1.0))
+                },
+            ),
+            (
                 "aim".into(),
                 Input {
                     description: "Where the head points in U, V, Z. The vector's length, \
@@ -109,7 +121,7 @@ pub(crate) fn terminal_definition() -> crate::Definition {
             ),
         ]),
         outputs: BTreeMap::from([(
-            "lighting".into(),
+            crate::clip_graph::OUTPUT.into(),
             Output {
                 value_type: ValueType::Lighting,
                 rate: Rate::Frame,

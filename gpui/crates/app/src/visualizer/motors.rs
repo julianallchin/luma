@@ -4,7 +4,6 @@
 //! toward the solver's pan and tilt at a motor's speed. See
 //! `docs/specs/aim.md`, "Preview motor lag".
 use std::collections::HashMap;
-use std::time::Instant;
 
 use luma_lib::models::universe::UniverseState;
 
@@ -18,39 +17,18 @@ const SEEK_AHEAD_S: f32 = 0.25;
 const SEEK_BACK_S: f32 = 0.05;
 
 /// Where each previewed head is drawn, and the clocks of the last frame.
+#[derive(Default)]
 pub(super) struct Motors {
     drawn: HashMap<String, [f32; 2]>,
     /// The clock and the track time of the last frame, in seconds.
     last: Option<(f64, f32)>,
-    /// What [`Self::follow`]'s clock counts from.
-    epoch: Instant,
-}
-
-impl Default for Motors {
-    fn default() -> Self {
-        Self {
-            drawn: HashMap::new(),
-            last: None,
-            epoch: Instant::now(),
-        }
-    }
 }
 
 impl Motors {
     /// Turn each head of `universe` from where it was drawn toward the pan
-    /// and tilt the score sends, on the wall clock.
-    pub(super) fn follow(
-        &mut self,
-        time: f32,
-        universe: Option<UniverseState>,
-    ) -> Option<UniverseState> {
-        let clock = self.epoch.elapsed().as_secs_f64();
-        self.step(clock, time, universe)
-    }
-
-    /// [`Self::follow`] on the caller's clock: `clock` is seconds on any
-    /// clock that does not run backwards. A seek places every head on its
-    /// target.
+    /// and tilt the score sends. `clock` is seconds on the stage's
+    /// free-running clock and `time` the track time. A seek places every head
+    /// on its target.
     pub(super) fn step(
         &mut self,
         clock: f64,
@@ -58,7 +36,9 @@ impl Motors {
         universe: Option<UniverseState>,
     ) -> Option<UniverseState> {
         let elapsed = self.last.map(|(at, then)| {
-            let wall = (clock - at) as f32;
+            // Never backwards: a turn of negative length is a range whose
+            // ends are swapped, and `clamp` panics on one.
+            let wall = (clock - at).max(0.0) as f32;
             let track = time - then;
             (wall, track < -SEEK_BACK_S || track > wall + SEEK_AHEAD_S)
         });
@@ -141,12 +121,20 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_that_steps_back_turns_nothing() {
+        let mut motors = Motors::default();
+        motors.step(1.0, 1.0, at([0.0, 0.0]));
+        let held = motors.step(0.99, 1.0, at([180.0, 0.0]));
+        assert_eq!(drawn(&held), [0.0, 0.0]);
+    }
+
+    #[test]
     fn a_seek_places_every_head_on_its_target() {
         let mut motors = Motors::default();
-        motors.follow(10.0, at([0.0, 0.0]));
-        let sought = motors.follow(40.0, at([200.0, -90.0]));
+        motors.step(0.0, 10.0, at([0.0, 0.0]));
+        let sought = motors.step(0.1, 40.0, at([200.0, -90.0]));
         assert_eq!(drawn(&sought), [200.0, -90.0]);
-        let back = motors.follow(5.0, at([0.0, 0.0]));
+        let back = motors.step(0.2, 5.0, at([0.0, 0.0]));
         assert_eq!(drawn(&back), [0.0, 0.0]);
     }
 }

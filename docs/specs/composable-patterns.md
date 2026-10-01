@@ -65,9 +65,11 @@ specific node. Time durations have beat units; spatial proportions and
 normalized positions have distinct types.
 
 Gradient is the color equivalent of Envelope: the same ordered stops may be
-sampled along clip progress or a mapped per-head coordinate. Colors use
-normalized sRGB channels, and Gradient interpolates perceptually in OKLab,
-matching the existing library and the native editor. Masks multiply color
+sampled along clip progress or a mapped per-head coordinate. Colors are
+linear Rec. 2020, 0–1 per channel, and Gradient interpolates perceptually in
+OKLab, matching the native editor. Fixtures and the visualizer map a color
+their emitters cannot make to the nearest one they can
+(`backend/crates/patterns/src/color_space.rs`). Masks multiply color
 before output separates chromaticity and dimmer. A dimmer-only output preserves
 underlying color. Noise is a deterministic function of spatial coordinates,
 musical time and the clip seed.
@@ -77,6 +79,27 @@ energy, drum-event time and harmony are fundamental sources; their response
 curves and complete effects are ordinary graphs. Selecting an unavailable stem
 or analysis is a preparation error. Audio source and drum choices remain typed
 inputs, with the same choices in Python, graph controls and clip controls.
+
+## Forms and sources
+
+A clip plays a shipped form; see [clip-forms.md](clip-forms.md). `color@1` is
+one color. Its `color` and `brightness` inputs are fixed or take a source:
+`time` (one curve over the clip), `hit` (one curve per hit of `every`), `noise`,
+`audio` (brightness only) or `space`. On a color, `time` and `hit` can read a
+gradient at positions from a curve: `{"gradient": {...}, "curve": {...}}`.
+
+A `space` source is an axis (a mapping: source, span, mirror, plane) and the
+values along it from 0 to 1: a gradient for a color, a curve for a number. It
+lowers to `mapped_position` and then `sample_gradient` or `envelope`. With
+`move` (path, travel, width, width_relative, boundary), a number space source
+is a chase: one stroke per hit of `every`, with the curve across the stroke.
+It lowers to the stroke graph (`core/event_life`, `coordinate_offset` and the
+envelope of the stroke), with one channel per live stroke. While a stroke
+moves, hit sources on the other inputs read each stroke's life.
+
+The old color form ids (`color.constant@1`, `color.time@1`, `color.space@1`,
+`color.chase@1`) are not forms. The stored rows were migrated to `color@1` on
+2026-09-28, and an old id is refused like any unknown form.
 
 ## Persistence
 
@@ -103,7 +126,7 @@ A score is rows. See [docs/design/sync.md](../design/sync.md).
 Discovery uses `luma.track.nodes(search)` and `definition(id)`. Editing uses
 `edit.graph()`, `graph.node(definition_id, **inputs)`, output references,
 exposed inputs and explicit graph outputs. `edit.graph(node="chase")` is the
-one-node shortcut. `edit.add_clip(graph, beats=(32, 48), inputs={"width": .4})`
+one-node shortcut. `edit.add_clip("color@1", beats=(32, 48), inputs=inputs)`
 places it; `edit.make_independent(clip)` detaches local dependencies. A
 subagent uses the same API on its draft.
 

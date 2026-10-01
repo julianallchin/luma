@@ -911,6 +911,14 @@ def build_namespace(
                 host_call=host_call, artifact_store=store,
             )
 
+    # Clip graphs: the builders under luma.clip, the shipped presets under
+    # luma.presets. The builders read the installed preset names.
+    from . import clip
+
+    clip.install_presets(items.get("presets"))
+    items["presets"] = clip.Presets()
+    items["clip"] = clip
+
     # How the track sounds: felt tempo, text views and the arrays behind them,
     # derived lazily from the same feature and audio snapshots.
     features, audio = items.get("features"), items.get("audio")

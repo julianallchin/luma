@@ -95,6 +95,7 @@ fn wash(from: Vec3, to: Vec3, color: Vec3) -> FixtureCone {
         gobo_rotation: 0.0,
         haze_gain: 1.0,
         lens: Lens::POINT,
+        strobe: luma_render::strobe::Rows::STEADY,
     }
 }
 
@@ -144,6 +145,7 @@ fn add_boxes(frame: &mut Frame, boxes: &[(Vec3, Vec3, Material)]) {
                 material: *material,
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: luma_render::strobe::Rows::STEADY,
             },
         );
     }

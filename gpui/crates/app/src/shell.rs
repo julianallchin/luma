@@ -1080,7 +1080,7 @@ fn workspace_body(
     }
     let split = app.split_view_active();
     let inspector = matches!(app.workspace.active_body(), Some(Body::TrackEditor(_)))
-        .then(|| inspector_region(app, split, cx));
+        .then(|| inspector_region(app, split, width, window, cx));
     if split {
         return split_view(app, inspector, width, window, cx);
     }
@@ -1151,9 +1151,17 @@ fn tab_region(app: &mut Luma, cx: &mut Context<Luma>) -> AnyElement {
     )
 }
 
-/// The score's inspector, in its cached region: a fixed-width column beside
-/// the stage, or, in split view, the whole box under it.
-fn inspector_region(app: &mut Luma, split: bool, cx: &mut Context<Luma>) -> AnyElement {
+/// The score's inspector, in its cached region: a column beside the stage,
+/// or, in split view, the whole box under it. The column is the sheet's
+/// width, or, widened for the graph, a share of the workspace; it slides
+/// between the two.
+fn inspector_region(
+    app: &mut Luma,
+    split: bool,
+    width: f32,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
     let region = Regions::get(
         &mut app.regions.inspector,
         "Inspector",
@@ -1165,17 +1173,33 @@ fn inspector_region(app: &mut Luma, split: bool, cx: &mut Context<Luma>) -> AnyE
     let style = if split {
         style.size_full()
     } else {
-        style.w(px(luma_ui::sheet::WIDTH)).h_full().flex_none()
+        let narrow = luma_ui::sheet::WIDTH;
+        let slot = if app.inspector_wide {
+            (width * INSPECTOR_WIDE_SHARE).max(narrow)
+        } else {
+            narrow
+        };
+        let toggled = (app.inspector_width.target() > narrow) != app.inspector_wide;
+        if toggled || !app.inspector_width.settled() {
+            app.inspector_width.retarget(slot, cx);
+        } else {
+            app.inspector_width.set(slot);
+        }
+        style.w(app.inspector_width.eval(window)).h_full().flex_none()
     };
     cached(region, style)
 }
 
+/// The share of the workspace the inspector takes, widened for the graph.
+const INSPECTOR_WIDE_SHARE: f32 = 0.6;
+
 fn inspector_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     let split = app.split_view_active();
+    let wide = app.inspector_wide;
     let entity = cx.entity();
     match app.workspace.active_body_mut() {
         Some(Body::TrackEditor(editor)) => {
-            track_editor::inspector(editor, &entity, split, window, cx)
+            track_editor::inspector(editor, &entity, split, wide, window, cx)
         }
         _ => div().into_any_element(),
     }

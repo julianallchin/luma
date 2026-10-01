@@ -266,7 +266,7 @@ impl Lit {
                 let times: Vec<f32> = (first..count.min(first + LIT_CHUNK))
                     .map(|i| start + i as f32 * LIT_STEP)
                     .collect();
-                let frames = super::scene::composite(layers, &times, scratch)?;
+                let frames = super::scene::composite(layers, &times, scratch, Some(rig))?;
                 for (t, frame) in times.iter().zip(&frames) {
                     for (id, was, runs) in &mut heads {
                         let now = frame.primitives.get(*id).is_some_and(lit);
@@ -421,7 +421,7 @@ impl Aiming {
             let mut sources: Vec<f32> = moves.iter().map(|m| m.2).collect();
             sources.sort_by(f32::total_cmp);
             sources.dedup();
-            let aims = super::scene::composite(layers, &sources, scratch)?;
+            let aims = super::scene::composite(layers, &sources, scratch, Some(&self.rig))?;
             for (k, id, source) in moves {
                 let at = sources
                     .binary_search_by(|t| t.total_cmp(&source))
@@ -448,7 +448,10 @@ impl Aiming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::{lighting::compile_clip, Scene, Scope};
+    use crate::eval::{
+        lighting::{compile_clip, test_clip},
+        Scene, Scope,
+    };
     use crate::models::fixtures::{Channel, Focus, Mode, ModeChannel, Physical};
     use luma_patterns as p;
     use luma_scene::venue::{NodeKind, NodePose, Params};
@@ -660,7 +663,6 @@ mod tests {
         let prepared = p::PreparedGraph::new(
             &p::standard_library(),
             &clip.graph,
-            &clip.inputs,
             p::Frame {
                 features: None,
                 cells: &cells,
@@ -672,7 +674,7 @@ mod tests {
         )
         .unwrap();
         let clock = p::BeatTimeline::new((0..=12).map(f64::from).collect(), 0.0).unwrap();
-        let plan = compile_clip(&clip, clock, cells, prepared, "lighting").unwrap();
+        let plan = compile_clip(&clip, clock, cells, prepared).unwrap();
         CompiledAnnotation {
             span: plan.span,
             plan: Arc::new(plan),
@@ -681,27 +683,17 @@ mod tests {
         }
     }
 
-    /// The shipped preset of `form` called `name`.
-    fn preset(form: &str, name: &str) -> &'static p::FormPreset {
-        p::presets()
-            .presets
-            .iter()
-            .find(|preset| preset.form == form && preset.name == name)
-            .expect("a shipped preset")
-    }
-
     fn wash(start: f64, duration: f64, brightness: f64) -> CompiledAnnotation {
-        let mut clip = preset("color.constant@1", "Wash").clip(start, duration);
-        clip.inputs
-            .insert("brightness".into(), p::Value::Proportion(brightness));
-        layer(clip, 0)
+        let nodes = serde_json::json!({
+            "color1": {"kind": "color", "inputs": {"brightness": brightness}}});
+        layer(test_clip(nodes, start, duration), 0)
     }
 
     fn aim(start: f64, duration: f64, direction: [f64; 3]) -> CompiledAnnotation {
-        let mut clip = preset("aim@1", "Position").clip(start, duration);
-        clip.inputs
-            .insert("direction".into(), p::Value::Vector(direction));
-        layer(clip, 1)
+        let nodes = serde_json::json!({
+            "aim1": {"kind": "aim", "settings": {"base": "direction"},
+                     "inputs": {"direction": direction}}});
+        layer(test_clip(nodes, start, duration), 1)
     }
 
     fn rig() -> Rig {
@@ -765,6 +757,43 @@ mod tests {
         let state = aim_at(&scene, 3.0);
         assert!(state.dimmer > 0.0);
         assert!(along(&state, FIRST), "{state:?}");
+    }
+
+    #[test]
+    fn an_offset_over_no_aim_starts_from_home() {
+        // A head on the floor: home is straight up, not the fallback down.
+        let mut rig = Rig::default();
+        rig.insert("fx:0".into(), head(&pose([PI, 0.0, 0.0]), &mover(540, 270)));
+        let home = rig.head("fx:0").unwrap().home();
+        let circle = |alpha: f64, mode, direction| {
+            let mut clip = p::presets().clip("Circle").unwrap().clip(0.0, 4.0);
+            let id = clip.graph.output().unwrap().0.to_owned();
+            let inputs = &mut clip.graph.nodes.get_mut(&id).unwrap().inputs;
+            inputs.insert("alpha".into(), p::clip_graph::Input::Number(alpha));
+            inputs.insert("direction".into(), p::clip_graph::Input::Vector(direction));
+            let mut layer = layer(clip, 0);
+            layer.blend_mode = mode;
+            layer
+        };
+        let offset = |alpha| {
+            let scene = Scene::new(vec![circle(alpha, p::BlendMode::Offset, FIRST)])
+                .with_rig(rig.clone())
+                .unwrap();
+            aim_at(&scene, 1.3).aim.expect("an aim")
+        };
+        let from_home = Scene::new(vec![circle(1.0, p::BlendMode::Replace, home)]);
+        let expected = aim_at(&from_home, 1.3).aim.unwrap();
+        let full = offset(1.0);
+        assert_eq!(full.weight, 1.0);
+        assert!(
+            degrees_between(
+                full.direction.map(f64::from),
+                expected.direction.map(f64::from)
+            ) < 1e-3,
+            "{full:?} != {expected:?}"
+        );
+        // Over no aim, alpha is the weight, as for a Replace clip.
+        assert_eq!(offset(0.5).weight, 0.5);
     }
 
     #[test]

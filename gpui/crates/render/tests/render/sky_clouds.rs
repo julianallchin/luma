@@ -81,6 +81,7 @@ fn frame(
                 },
                 textures: MaterialTextures::default(),
                 editor_object: None,
+                strobe: luma_render::strobe::Rows::STEADY,
             },
         );
     }
@@ -408,6 +409,7 @@ fn a_beam_stays_brighter_than_the_sky_behind_it() {
             gobo_rotation: 0.0,
             haze_gain: 1.0,
             lens: Lens::POINT,
+            strobe: luma_render::strobe::Rows::STEADY,
         });
         let lit = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
         capture(&format!("beam-{clouds:?}"), &lit, WIDTH, HEIGHT);
@@ -618,6 +620,7 @@ fn a_thin_post_against_the_far_ground_keeps_its_colour_in_sunlit_haze() {
                         },
                         textures: MaterialTextures::default(),
                         editor_object: None,
+                        strobe: luma_render::strobe::Rows::STEADY,
                     },
                 );
             }

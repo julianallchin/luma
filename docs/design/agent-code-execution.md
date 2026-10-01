@@ -1514,9 +1514,9 @@ candidate (`backend/python/luma_exec/score.py`):
 
 ```python
 edit = luma.track.edit()
-form = "color.chase@1"
+form = "color@1"
 inputs = {key: spec["default"] for key, spec in luma.track.definition(form)["inputs"].items()}
-inputs["width"] = 0.4
+inputs["brightness"] = {"type": "time", "value": {"events": {"every": {"type": "beats", "value": 1}}, "points": [[0, 1], [1, 0]]}}
 clip = edit.add_clip(form, bars=(49, 57), selection="front_wash", inputs=inputs)
 edit.update_clip(clip, bars=(49, 65))
 

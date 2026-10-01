@@ -43,13 +43,44 @@ pub fn eval(plan: &Plan, times: &[f32], scratch: &mut Arena) -> Vec<UniverseStat
         times.iter().map(|_| composite::blank_frame()).collect()
     })
 }
+/// One clip alone over no light: its light and strobe at its opacity.
 pub fn try_eval(
     plan: &Plan,
     times: &[f32],
     scratch: &mut Arena,
 ) -> Result<Vec<UniverseState>, String> {
+    Ok(try_layers(plan, times, scratch)?
+        .into_iter()
+        .map(lighting::Layer::over_nothing)
+        .collect())
+}
+
+/// One clip's frames at `times` with its opacity per head, for compositing.
+pub(crate) fn try_layers(
+    plan: &Plan,
+    times: &[f32],
+    scratch: &mut Arena,
+) -> Result<Vec<lighting::Layer>, String> {
     match &plan.program {
-        Some(program) => program.render(times, &plan.outputs, scratch),
-        None => Ok(times.iter().map(|_| composite::blank_frame()).collect()),
+        Some(program) => program.layers(times, &plan.outputs, scratch),
+        None => Ok(times
+            .iter()
+            .map(|_| lighting::Layer {
+                frame: composite::blank_frame(),
+                alpha: Default::default(),
+            })
+            .collect()),
+    }
+}
+
+/// Each head's aim turn at `times`, for a plan whose clip blends with Offset.
+pub(crate) fn try_turns(
+    plan: &Plan,
+    times: &[f32],
+    scratch: &mut Arena,
+) -> Result<Vec<BTreeMap<String, luma_patterns::Turn>>, String> {
+    match &plan.program {
+        Some(program) => program.turns(times, scratch),
+        None => Ok(times.iter().map(|_| BTreeMap::new()).collect()),
     }
 }

@@ -25,9 +25,9 @@ function openUnlit() {
 // is about — cluster occupancy, shadow passes, the score's per-clip work —
 // scales on these numbers, and four movers measure none of them.
 const RIG = 120;
-// Clips play Rainbow, labelled by its form: saturated light that changes
+// Clips play Rainbow, labelled by its name: saturated light that changes
 // every frame, so every fixture's colour is dirty on every frame.
-const CLIP = "Color over time";
+const CLIP = "Rainbow";
 const busy = (seconds, clips, window) => ({
   seconds,
   rig: RIG,
@@ -38,7 +38,7 @@ const busy = (seconds, clips, window) => ({
     start: 0,
     end: seconds,
     lane,
-    preset: ["color.time@1", "Rainbow"],
+    preset: "Rainbow",
   })),
 });
 

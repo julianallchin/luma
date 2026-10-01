@@ -37,8 +37,8 @@ const stage = () => app.snapshot().find({ role: "card", label: "Stage" });
 // centre opens fullscreen, and ⌘B then moves nothing.
 test.skip("bug: the Fullscreen button covers the Frame stats toggle", { timeoutMs: 300000 }, () => {
   nav.trackEditor("Test Venue", "Aurora");
-  // A clip is labelled by its form; the fixture's clip plays Constant color.
-  until("the clip", (s) => s.find({ role: "card", label: "Constant color" }) !== undefined, { timeoutMs: 15000 });
+  // A clip is labelled by its name; the fixture's clip is a Wash.
+  until("the clip", (s) => s.find({ role: "card", label: "Wash" }) !== undefined, { timeoutMs: 15000 });
   nav.expand();
   app.frames(10, { waitMs: 60 });
   nav.step("the frame-stats panel", "toggle", "Frame stats");

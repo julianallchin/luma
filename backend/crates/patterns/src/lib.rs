@@ -3,44 +3,34 @@
 pub mod aim;
 mod blend;
 mod catalog;
-mod clip_range;
+pub mod clip_graph;
 mod clock;
 mod color;
+pub mod color_space;
 mod curve;
 mod envelope;
 mod features;
-mod field_ops;
-mod forms;
 mod graph;
-mod inference;
 mod mapping;
-pub mod oklab;
 mod output;
 mod prepared;
 mod presets;
 mod runtime;
 mod score;
 mod selection;
-mod signals;
-mod sources;
 mod spatial;
 mod tensor;
 mod value;
-mod value_noise;
 
-pub use aim::{blend_aim, Aim};
-pub use blend::{blend_light, blend_value, BlendMode};
+pub use aim::{blend_aim, offset_aim, Aim, Turn};
+pub use blend::{blend_light, blend_light_alpha, blend_value, blend_value_alpha, BlendMode};
 pub use catalog::standard_library;
+pub use clip_graph::ClipGraph;
 pub use clock::*;
 pub use color::{ColorStop, Gradient};
 pub use curve::{Curve, CurvePoint, Ease};
 pub use envelope::Envelope;
 pub use features::*;
-pub use field_ops::FieldMath;
-pub use forms::{
-    axis_presets, input_order, is_form, palette_steps, path_presets, replace_only, shape_presets,
-    steps_path, FORMS, MAX_WIDTH,
-};
 pub use graph::*;
 pub use mapping::*;
 pub use output::*;
@@ -49,8 +39,6 @@ pub use presets::*;
 pub use runtime::{EvaluatedValue, LightingSignal};
 pub use score::*;
 pub use selection::*;
-pub use sources::*;
-pub use spatial::*;
 pub use tensor::{Channels, Signal, SignalType, Unit};
 pub use value::*;
 

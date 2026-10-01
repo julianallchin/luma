@@ -3,6 +3,7 @@
 //! bordered, uppercase button style.
 
 use crate::icons::IconName;
+use crate::rpx;
 use crate::{float, glass, ladder, radius, CONTROL_HEIGHT};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -39,7 +40,7 @@ impl From<bool> for Enabled {
 pub fn button(label: &str, enabled: Enabled) -> Div {
     float::chip_plate(enabled)
         .justify_center()
-        .px(px(float::PICKER_CHIP_PAD))
+        .px(rpx(float::PICKER_CHIP_PAD))
         .map(|el| match enabled {
             Enabled::Yes => el.tab_index(0),
             Enabled::No => el.opacity(ladder::DISABLED_OPACITY),
@@ -86,12 +87,12 @@ pub fn toggle_paint<E: Styled + InteractiveElement + FluentBuilder>(el: E, activ
 fn icon_plate(icon: IconName, active: bool, enabled: Enabled) -> Div {
     let plate = div()
         .flex_none()
-        .size(px(CONTROL_HEIGHT))
-        .rounded(px(radius::CONTROL))
+        .size(rpx(CONTROL_HEIGHT))
+        .rounded(rpx(radius::CONTROL))
         .flex()
         .items_center()
         .justify_center()
-        .child(Icon::new(icon).size(px(ICON)));
+        .child(Icon::new(icon).size(rpx(ICON)));
     match enabled {
         Enabled::Yes => toggle_paint(plate.cursor_pointer(), active),
         Enabled::No => plate

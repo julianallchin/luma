@@ -571,6 +571,19 @@ impl TextInput {
     }
 
     /// Draw the text at `size` instead of [`TEXT_SIZE`].
+    /// What the field shows while it is empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            cx.notify();
+        }
+    }
+
     pub fn set_text_size(&mut self, size: f32, cx: &mut Context<Self>) {
         if self.text_size == size {
             return;
@@ -1325,14 +1338,23 @@ impl TextInput {
     /// content height. Called from the element's measured-layout closure — the
     /// one place shaping happens, so mouse mapping and auto-grow can never read
     /// two different layouts.
-    fn layout_text(&mut self, width: Pixels, style: &TextStyle, window: &mut Window) -> f32 {
+    /// `scale` is the rem scale the input is laid out under (see
+    /// [`crate::rem_scale`]), read when layout was requested: the measure
+    /// runs later, outside any scaled subtree.
+    fn layout_text(
+        &mut self,
+        width: Pixels,
+        style: &TextStyle,
+        scale: f32,
+        window: &mut Window,
+    ) -> f32 {
         let (display, is_placeholder) = if self.content.is_empty() {
             (self.placeholder.clone(), true)
         } else {
             (SharedString::from(self.content.clone()), false)
         };
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        self.line_height = px(LINE_HEIGHT);
+        let font_size = style.font_size.to_pixels(px(crate::BASE_REM * scale));
+        self.line_height = px(LINE_HEIGHT * scale);
 
         let run_for = |len: usize, underline: bool| TextRun {
             len,
@@ -1375,9 +1397,12 @@ impl TextInput {
             _ => vec![run_for(display.len(), false)],
         };
 
+        // A one-line field never wraps: a wrapped line would push the start
+        // of the value onto a hidden first line and show only its tail.
+        let wrap = (self.mode != Mode::Search).then_some(width);
         let lines = window
             .text_system()
-            .shape_text(display, font_size, &runs, Some(width), None)
+            .shape_text(display, font_size, &runs, wrap, None)
             .map(|shaped| shaped.into_vec())
             .unwrap_or_default();
 
@@ -1405,7 +1430,7 @@ impl TextInput {
         self.showing_placeholder = is_placeholder;
         self.last_lines = lines;
         self.line_starts = line_starts;
-        self.measured_height = height.max(LINE_HEIGHT);
+        self.measured_height = height.max(LINE_HEIGHT * scale);
         self.max_line_width = if is_placeholder { 0.0 } else { widest };
         self.last_width = f32::from(width);
         self.layout_epoch += 1;
@@ -1634,8 +1659,8 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
             .w_full()
-            .text_size(px(self.text_size))
-            .line_height(px(LINE_HEIGHT))
+            .text_size(crate::rpx(self.text_size))
+            .line_height(crate::rpx(LINE_HEIGHT))
             .text_color(color)
             .child(TextElement {
                 input: cx.entity(),
@@ -1694,15 +1719,17 @@ impl gpui::Element for TextElement {
         let input = self.input.clone();
         let text_style = window.text_style();
         let max_content = self.max_content_height;
+        let scale = crate::rem_scale(window);
         let layout_id =
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let width = known.width.unwrap_or(match available.width {
                     gpui::AvailableSpace::Definite(width) => width,
                     _ => px(320.0),
                 });
-                let height =
-                    input.update(cx, |input, _| input.layout_text(width, &text_style, window));
-                size(width, px(height.min(max_content)))
+                let height = input.update(cx, |input, _| {
+                    input.layout_text(width, &text_style, scale, window)
+                });
+                size(width, px(height.min(max_content * scale)))
             });
         (layout_id, ())
     }

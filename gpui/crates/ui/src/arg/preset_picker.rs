@@ -7,14 +7,15 @@
 //! on the trigger and `on_pick` with the picked preset's index, or `None` for
 //! the Custom tile. Closing the popover on pick is the caller's move.
 
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{canvas, div, px, App, Div, ElementId, SharedString, Window};
+use gpui::{canvas, div, App, ContentMask, Div, ElementId, SharedString, Window};
 use gpui_component::tooltip::Tooltip;
 use luma_patterns::Envelope;
 
-use super::envelope::paint_envelope;
 use super::gradient::{gradient_fill, Gradient};
 use super::select::MenuVisibility;
+use super::strip::paint_envelope;
 use crate::node::{Instrument, Role};
 use crate::{float, glass, ladder, select, CONTROL_HEIGHT};
 
@@ -47,29 +48,35 @@ fn columns(count: usize) -> usize {
 /// in a faint chart frame, or a gradient's fill.
 pub fn thumb(value: &Thumb, size: [f32; 2], bright: bool) -> Div {
     let frame = div()
-        .w(px(size[0]))
-        .h(px(size[1]))
+        .w(rpx(size[0]))
+        .h(rpx(size[1]))
         .flex_none()
         .flex()
-        .rounded(px(3.))
+        .rounded(rpx(3.))
         .border_1()
         .border_color(glass::hairline(if bright { 0.22 } else { 0.12 }));
     match value {
         Thumb::Curve(curve) => {
             let curve = curve.clone();
             let alpha = if bright { 1. } else { 0.7 };
-            frame.bg(glass::ink(0.03)).p(px(2.)).child(
+            frame.bg(glass::ink(0.03)).p(rpx(2.)).child(
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        // Inset by the stroke, so a line along an edge stays whole.
-                        paint_envelope(
-                            window,
-                            bounds.inset(px(0.5)),
-                            &curve,
-                            px(1.25),
-                            ladder::foreground_alpha(alpha),
-                        );
+                        let scale = crate::rem_scale(window);
+                        // A curve that overshoots its box draws to the frame
+                        // and no further.
+                        let frame = bounds.dilate(gpui::px(2. * scale));
+                        window.with_content_mask(Some(ContentMask { bounds: frame }), |window| {
+                            // Inset by the stroke, so a line along an edge stays whole.
+                            paint_envelope(
+                                window,
+                                bounds.inset(gpui::px(0.5 * scale)),
+                                &curve,
+                                gpui::px(1.25 * scale),
+                                ladder::foreground_alpha(alpha),
+                            );
+                        });
                     },
                 )
                 .size_full(),
@@ -119,7 +126,7 @@ pub fn luma_preset_picker(
     // As wide as its row, like every value control in a sheet.
     let trigger = float::chip_plate(crate::Enabled::Yes)
         .flex_1()
-        .px(px(float::PICKER_CHIP_PAD))
+        .px(rpx(float::PICKER_CHIP_PAD))
         .child(thumb(value, CHIP_THUMB, true))
         .child(select::ghost_stack(
             div().relative().flex().flex_1(),
@@ -142,15 +149,15 @@ pub fn luma_preset_picker(
                 let chosen = current == pick;
                 let key = pick.map_or("custom".to_string(), |at| at.to_string());
                 div()
-                    .w(px(TILE_W))
+                    .w(rpx(TILE_W))
                     .flex_none()
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(3.))
-                    .px(px(4.))
-                    .py(px(5.))
-                    .rounded(px(crate::radius::ROW))
+                    .gap(rpx(3.))
+                    .px(rpx(4.))
+                    .py(rpx(5.))
+                    .rounded(rpx(crate::radius::ROW))
                     .cursor_pointer()
                     .when(chosen, |tile| {
                         tile.bg(glass::card_selected_bg())
@@ -164,7 +171,7 @@ pub fn luma_preset_picker(
                         div()
                             .w_full()
                             .text_center()
-                            .text_size(px(10.5))
+                            .text_size(rpx(10.5))
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
@@ -196,13 +203,13 @@ pub fn luma_preset_picker(
                     div()
                         .flex()
                         .flex_row()
-                        .gap(px(2.))
+                        .gap(rpx(2.))
                         .children(tiles.by_ref().take(per_row)),
                 );
             }
             let content = float::popover_card()
-                .p(px(4.))
-                .gap(px(2.))
+                .p(rpx(4.))
+                .gap(rpx(2.))
                 .children(rows)
                 .agent_node(Role::Card, "Presets")
                 .into_any_element();

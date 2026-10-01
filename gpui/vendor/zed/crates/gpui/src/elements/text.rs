@@ -827,7 +827,23 @@ impl TextLayout {
     }
 
     /// Get the byte index into the input of the pixel position.
-    pub fn index_for_position(&self, mut position: Point<Pixels>) -> Result<usize, usize> {
+    pub fn index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
+        self.index_for_position_inner(position, false)
+    }
+
+    /// Like [`Self::index_for_position`], but snaps to the nearest boundary
+    /// between characters instead of the start of the character under the
+    /// point. What text selection wants: releasing on the right half of a
+    /// character includes it.
+    pub fn closest_index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
+        self.index_for_position_inner(position, true)
+    }
+
+    fn index_for_position_inner(
+        &self,
+        position: Point<Pixels>,
+        closest: bool,
+    ) -> Result<usize, usize> {
         let element_state = self.0.borrow();
         let element_state = element_state
             .as_ref()
@@ -850,7 +866,12 @@ impl TextLayout {
                 line_start_ix += line.len() + 1;
             } else {
                 let position_within_line = position - line_origin;
-                match line.index_for_position(position_within_line, line_height) {
+                let found = if closest {
+                    line.closest_index_for_position(position_within_line, line_height)
+                } else {
+                    line.index_for_position(position_within_line, line_height)
+                };
+                match found {
                     Ok(index_within_line) => return Ok(line_start_ix + index_within_line),
                     Err(index_within_line) => return Err(line_start_ix + index_within_line),
                 }

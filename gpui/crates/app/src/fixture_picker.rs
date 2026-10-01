@@ -38,7 +38,6 @@ use gpui::{
     div, prelude::*, px, AnyElement, Context, Entity, FocusHandle, Focusable as _, FontWeight,
     KeyDownEvent, RenderImage, ScrollHandle, SharedString, Subscription, Window,
 };
-use luma_lib::models::node_graph::PatternArgDef;
 use luma_lib::models::selection::Selection;
 use luma_lib::services::groups::{or_expression, or_terms};
 use luma_lib::stage_render::{Continuity, Sequence};
@@ -76,9 +75,6 @@ pub(crate) struct FixturePicker {
     query: String,
     scroll: ScrollHandle,
     _search_subscription: Subscription,
-    /// The arg being edited, which is what [`Luma::arg_selection`] writes back
-    /// through. Held whole because the write path wants the def, not just its id.
-    def: PatternArgDef,
     venue_id: String,
     /// Every group in the venue, in venue order — the rows, and the only names
     /// a tick can produce.
@@ -169,11 +165,9 @@ impl Luma {
     /// Open the picker on one selection arg.
     ///
     /// `groups` and `selection` are read out by the caller because it already
-    /// holds the track editor — the strip knows which arg is being edited and
-    /// what it currently says; the dialog knows nothing about clips.
+    /// holds the track editor — the sheet knows what the selection currently says; the dialog knows nothing about clips.
     pub(crate) fn open_fixture_picker(
         &mut self,
-        def: PatternArgDef,
         venue_id: String,
         groups: Vec<SharedString>,
         selection: &Selection,
@@ -198,7 +192,6 @@ impl Luma {
             query: String::new(),
             scroll: ScrollHandle::new(),
             _search_subscription: subscription,
-            def,
             venue_id: venue_id.clone(),
             // Only names the venue actually has can be ticked; a term naming a
             // group that was renamed away is still shown in the raw expression
@@ -351,10 +344,8 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.as_open() else {
             return;
         };
-        let (def, expression) = (state.def.clone(), state.expression());
-        self.arg_selection(&def.id.clone(), &def, cx, |selection| {
-            selection.expression = expression;
-        });
+        let expression = state.expression();
+        self.selection_live(cx, |selection| selection.expression = expression.clone());
         self.close_overlay(cx);
     }
 

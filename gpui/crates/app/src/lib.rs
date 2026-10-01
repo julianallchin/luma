@@ -138,6 +138,10 @@ pub struct Luma {
     /// Where it rests when open is *derived* from the split below rather than
     /// stored, so the two can never disagree about how wide "open" is.
     pub(crate) workspace_width: luma_ui::pane::PaneWidth,
+    /// The score inspector is widened for the clip graph.
+    pub(crate) inspector_wide: bool,
+    /// The inspector column's width, sliding between narrow and wide.
+    pub(crate) inspector_width: luma_ui::pane::PaneWidth,
     /// How the room left of the panel divides between the thread and the panel.
     ///
     /// A proportion, not a width, so the sidebar opening or the window resizing
@@ -274,6 +278,8 @@ impl Luma {
             restoring_venue: false,
             session_refresh_error: None,
             workspace_width: luma_ui::pane::PaneWidth::new(0.0),
+            inspector_wide: false,
+            inspector_width: luma_ui::pane::PaneWidth::new(luma_ui::sheet::WIDTH),
             workspace_split: shell::workspace_split(),
             expanded: false,
             scale_factor: 1.0,

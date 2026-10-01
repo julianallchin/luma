@@ -1,6 +1,7 @@
 //! A compact value that scrubs relatively on drag and edits as text on click.
 //! Pointer edits preview live and commit on release, keeping one undo step per gesture.
 use crate::node::{Instrument, Role};
+use crate::rpx;
 use crate::text_input::{self, TextInput, DRAFT_CONTEXT};
 use crate::{arg::number::parse_draft, float, ladder};
 use gpui::prelude::*;
@@ -139,7 +140,7 @@ impl Render for Editor {
             // every binding in the surface around it.
             return float::field()
                 .key_context(DRAFT_CONTEXT)
-                .w(px(self.config.width))
+                .w(rpx(self.config.width))
                 .child(div().w_full().child(self.input.clone()))
                 .agent_node(Role::Input, format!("{} input", self.config.id))
                 .into_any_element();
@@ -148,7 +149,7 @@ impl Render for Editor {
         let reading = format!("{:.2} {}", self.value, self.config.unit);
         float::field()
             .id(self.config.id.clone())
-            .w(px(self.config.width))
+            .w(rpx(self.config.width))
             .cursor_ew_resize()
             .text_color(ladder::foreground())
             .font_family(crate::fonts::MONO)

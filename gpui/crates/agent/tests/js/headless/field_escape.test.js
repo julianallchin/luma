@@ -58,11 +58,11 @@ test("escape drops an expression draft and keeps the selection", () => {
   until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
   nav.expand();
   nav.stageOff();
-  until("the clip", (s) => s.find({ role: "card", label: "Constant color" }) !== undefined);
-  app.click(app.snapshot().find({ role: "card", label: "Constant color" }));
+  until("the clip", (s) => s.find({ role: "card", label: "Wash" }) !== undefined);
+  app.click(app.snapshot().find({ role: "card", label: "Wash" }));
   until("the sheet", () => field("expression") !== undefined);
 
   escapeDraft("expression", "nowhere");
-  assert(app.snapshot().find({ role: "card", label: "Clip inputs" }) !== undefined,
+  assert(app.snapshot().find({ role: "card", label: "Clip graph" }) !== undefined,
     "escape in the expression field also cleared the selection");
 });

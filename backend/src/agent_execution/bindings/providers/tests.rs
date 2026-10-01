@@ -364,10 +364,10 @@ impl Fixture {
         .unwrap();
         sqlx::query(
             "INSERT INTO clips
-                (id, uid, score_id, graph, start, duration, seed, selection_json,
-                 z_index, blend_mode, inputs_json)
-             VALUES (? || ':ann-1', ?, ?, 'strobe', 12.5, 7.5, '0',
-                     '{\"expression\":\"all\"}', 3, 'add', '{}')",
+                (id, uid, score_id, name, graph_json, graph, start, duration, seed,
+                 selection_json, z_index, blend_mode)
+             VALUES (? || ':ann-1', ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 12.5, 7.5, '0',
+                     '{\"expression\":\"all\"}', 3, 'add')",
         )
         .bind(SCORE_ID)
         .bind(OWNER)
@@ -590,12 +590,20 @@ async fn full_assembly_covers_every_schema_branch() {
     assert!(v.get("score").is_none());
     assert_eq!(at(&v, "track.editable"), true);
     let clip = &at(&v, "track.document")["clips"]["ann-1"];
-    assert_eq!(clip["graph"], "strobe");
+    assert_eq!(clip["name"], "Strobe");
+    assert_eq!(clip["graph"]["nodes"]["strobe1"]["kind"], "strobe");
     assert_eq!(clip["start"], 12.5);
     assert_eq!(clip["duration"], 7.5);
     assert_eq!(clip["z_index"], 3);
     assert_eq!(clip["blend_mode"], "add");
-    assert!(at(&v, "nodes").is_object());
+    // One definition per node kind, and the shipped presets.
+    assert_eq!(
+        at(&v, "nodes").as_array().map(Vec::len),
+        Some(luma_patterns::clip_graph::Kind::ALL.len())
+    );
+    assert!(at(&v, "presets")["clips"]
+        .as_array()
+        .is_some_and(|clips| !clips.is_empty()));
 
     // The worker synthesizes these; the host must not emit them (appendix A.4).
     assert!(v.get("meta").is_none());

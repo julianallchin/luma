@@ -36,8 +36,7 @@ That is three markers. The provider limit is four.
 
 Each transport places the markers for its own wire shape:
 
-- `anthropic.rs` serves the Anthropic API and the Vercel AI Gateway, which is
-  the default provider.
+- `anthropic.rs` serves the Vercel AI Gateway, which is the default provider.
 - `openrouter.rs` adds markers only when the wire id starts with
   `anthropic/`. Other OpenRouter models cache implicitly on a stable prefix,
   and they can reject the field.

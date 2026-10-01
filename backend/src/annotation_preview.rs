@@ -23,37 +23,56 @@ fn empty_preview(annotation_id: String) -> AnnotationPreview {
     }
 }
 
-/// Where each head of a form clip sits along the line its strip is sorted
-/// by: the clip's own `axis` when it has one, resolved the way the engine
-/// resolves it, else the selection's major axis. Heads the line cannot place
-/// keep their selection order.
-pub(crate) fn head_order(clip: &p::Clip, cells: &[p::Cell]) -> HashMap<String, f64> {
-    let major = p::MappingSpec {
-        span: Default::default(),
-        plane: None,
-        source: p::MappingSource::MajorAxis {
-            toward: [0., 0., 1.],
-        },
-        per_group: false,
-        reverse: false,
-        mirror: None,
-    };
-    let axis = match clip.inputs.get("axis") {
-        Some(p::Value::Mapping(spec)) => spec.resolve(cells, clip.seed).ok(),
-        _ => None,
-    };
-    match axis.or_else(|| major.resolve(cells, clip.seed).ok()) {
-        Some(mapping) => mapping
-            .coordinates
-            .into_iter()
-            .map(|coordinate| (coordinate.cell, coordinate.position))
-            .collect(),
-        None => cells
-            .iter()
-            .enumerate()
-            .map(|(index, cell)| (cell.id.clone(), index as f64))
-            .collect(),
+/// Where each head sits along the line a clip's strip is sorted by: the
+/// principal axis of the heads' stage positions, signed so its largest
+/// component is positive. Heads all at one point keep their selection order.
+pub(crate) fn head_order(cells: &[p::Cell]) -> HashMap<String, f64> {
+    let n = cells.len().max(1) as f64;
+    let mut center = [0.; 3];
+    for cell in cells {
+        for (sum, v) in center.iter_mut().zip(cell.uvz) {
+            *sum += v / n;
+        }
     }
+    let mut spread = [[0.; 3]; 3];
+    for cell in cells {
+        let d: [f64; 3] = std::array::from_fn(|i| cell.uvz[i] - center[i]);
+        for i in 0..3 {
+            for j in 0..3 {
+                spread[i][j] += d[i] * d[j];
+            }
+        }
+    }
+    // Power iteration from a start no principal axis is orthogonal to in
+    // practice; the spread matrix is symmetric and positive semi-definite.
+    let mut axis = [1., 0.7, 0.3];
+    for _ in 0..64 {
+        let next: [f64; 3] = std::array::from_fn(|i| (0..3).map(|j| spread[i][j] * axis[j]).sum());
+        let length = next.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length <= 1e-12 {
+            return cells
+                .iter()
+                .enumerate()
+                .map(|(index, cell)| (cell.id.clone(), index as f64))
+                .collect();
+        }
+        axis = next.map(|v| v / length);
+    }
+    let largest = axis
+        .iter()
+        .copied()
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        .unwrap_or(1.);
+    let sign = largest.signum();
+    cells
+        .iter()
+        .map(|cell| {
+            let along = (0..3)
+                .map(|i| (cell.uvz[i] - center[i]) * axis[i] * sign)
+                .sum();
+            (cell.id.clone(), along)
+        })
+        .collect()
 }
 
 /// Render a heatmap from a column-sampled grid of [`UniverseState`] frames
@@ -144,9 +163,9 @@ pub(crate) fn render_preview(
                     .map_or([0.0; 3], shown)
             };
 
-            let r = (rgb[0] * 255.0).clamp(0.0, 255.0) as u8;
-            let g = (rgb[1] * 255.0).clamp(0.0, 255.0) as u8;
-            let b = (rgb[2] * 255.0).clamp(0.0, 255.0) as u8;
+            // Light is linear Rec. 2020; the strip is an sRGB picture.
+            let [r, g, b] = luma_patterns::color_space::to_display_srgb(rgb.map(f64::from))
+                .map(|channel| (channel * 255.0).round().clamp(0.0, 255.0) as u8);
 
             let idx = ((row as u32 * width + col as u32) * 4) as usize;
             pixels[idx] = r;
@@ -372,13 +391,21 @@ mod tests {
     use crate::models::universe::PrimitiveState;
 
     fn frame(lit: impl Iterator<Item = usize>) -> UniverseState {
+        // sRGB green, as a head's normalized linear Rec. 2020 color.
+        let green =
+            luma_patterns::FixtureOutput::from_rgb(luma_patterns::color_space::from_srgb([
+                0.0, 1.0, 0.0,
+            ]))
+            .color
+            .unwrap()
+            .map(|v| v as f32);
         let mut primitives = HashMap::new();
         for head in 0..64 {
             primitives.insert(
                 format!("head-{head:02}"),
                 PrimitiveState {
                     dimmer: 0.0,
-                    color: [0.0, 1.0, 0.0],
+                    color: green,
                     strobe: 0.0,
                     position: [0.0; 2],
                     speed: 1.0,

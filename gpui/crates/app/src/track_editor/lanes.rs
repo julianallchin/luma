@@ -75,15 +75,15 @@ mod tests {
     fn clip(id: &str, start: f64, end: f64, z: i64) -> Clip {
         Clip {
             id: id.to_owned().into(),
-            pattern: "test".into(),
+            output: "color".into(),
             label: id.to_owned().into(),
+            summary: gpui::SharedString::default(),
             color: luma_ui::ladder::pattern("test"),
             start,
             end,
             row: 0,
             z,
             blend: BlendMode::Replace,
-            args: serde_json::json!({}),
             core: None,
         }
     }

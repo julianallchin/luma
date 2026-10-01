@@ -439,6 +439,19 @@ knowledge anywhere. The renderer's jitter budget is *divided* between the
 sub-renders (`DEFAULT_SUBFRAMES / K` each), so total haze samples are unchanged
 and only the fixed passes are paid four times.
 
+*Update, 2026-09-30:* `strobe_gate` is gone. A strobe is now a 5 ms flash per
+period whose light is integrated exactly over each frame's time slice
+(`luma_render::strobe`), on the free-running clock rather than transport time,
+with one rate mapping for every fixture. The renderer also averages a
+frame's shutter moments itself, in scene-linear light before the tone curve
+(`luma_render::footage`, the stage's footage look); the stage and the show
+export share it. `luma-record` now uses the same path
+(`stage_render::Sequence::exposure`): its K = 4 sub-renders and the
+after-the-tone-curve average are gone. With the footage look off, which is
+the venue scene's neutral look, a recorded frame is one moment whose strobes
+are the light of the whole frame interval, so it no longer blurs motion. The
+paragraphs below describe the old K = 4 shutter.
+
 Averaging is in linear light, not on the sRGB bytes the renderer returns: a
 half-duty strobe averaged as bytes lands at code value 128 instead of 188, about
 a stop and a half dark. `luma_render::coords` gained the `linear_to_srgb` that

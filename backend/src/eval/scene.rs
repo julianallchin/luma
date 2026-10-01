@@ -14,8 +14,8 @@
 //! loop / emitter), never here.
 
 use crate::eval::aim::{Aiming, Rig};
-use crate::eval::composite::{blank_frame, composite_frame};
-use crate::eval::{try_eval, Arena, BlendMode, Plan};
+use crate::eval::composite::{blank_frame, composite_frame, offset_frame};
+use crate::eval::{try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
 use std::sync::Arc;
 
@@ -113,7 +113,7 @@ impl Scene {
                 None => Ok(times.iter().map(|_| blank_frame()).collect()),
             },
             Scope::Composite => {
-                let mut frames = composite(&self.annotations, times, scratch)?;
+                let mut frames = composite(&self.annotations, times, scratch, self.rig())?;
                 if let Some(aiming) = &self.aiming {
                     aiming.apply(&self.annotations, times, &mut frames, scratch)?;
                 }
@@ -124,6 +124,8 @@ impl Scene {
 }
 
 /// The z-ordered composite of `annotations` at `times`, before any aiming.
+/// An Offset aim clip over no aim starts from the head's home in `rig`; a
+/// head the rig does not hold starts from straight down.
 ///
 /// Each annotation evaluates one batch of its active times. Samples outside
 /// its clip must neither contribute output nor cause an evaluation failure.
@@ -131,7 +133,12 @@ pub(crate) fn composite(
     annotations: &[CompiledAnnotation],
     times: &[f32],
     scratch: &mut Arena,
+    rig: Option<&Rig>,
 ) -> Result<Vec<UniverseState>, String> {
+    let home = |id: &str| {
+        rig.and_then(|rig| rig.head(id))
+            .map_or(luma_patterns::aim::DOWN, crate::eval::aim::Head::home)
+    };
     let mut frames: Vec<UniverseState> = times.iter().map(|_| blank_frame()).collect();
     for ann in annotations {
         let active = |t: &f32| *t >= ann.span.0 && *t < ann.span.1;
@@ -148,9 +155,17 @@ pub(crate) fn composite(
                 .collect::<Vec<_>>()
                 .into()
         };
-        let got = try_eval(ann.plan.as_ref(), &sample_times, scratch)?;
-        for ((k, _), frame) in times.iter().enumerate().filter(|(_, t)| active(t)).zip(got) {
-            composite_frame(&mut frames[k], &frame, &ann.plan.outputs, ann.blend_mode);
+        let slots = times.iter().enumerate().filter(|(_, t)| active(t));
+        if ann.blend_mode == BlendMode::Offset {
+            let turns = try_turns(ann.plan.as_ref(), &sample_times, scratch)?;
+            for ((k, _), turns) in slots.zip(turns) {
+                offset_frame(&mut frames[k], &turns, home);
+            }
+            continue;
+        }
+        let got = try_layers(ann.plan.as_ref(), &sample_times, scratch)?;
+        for ((k, _), layer) in slots.zip(got) {
+            composite_frame(&mut frames[k], &layer, &ann.plan.outputs, ann.blend_mode);
         }
     }
     Ok(frames)

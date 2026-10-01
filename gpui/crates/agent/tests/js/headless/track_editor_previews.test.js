@@ -12,13 +12,13 @@
 // headless text metrics.
 fixture({
   seconds: 8,
-  clips: [{ pattern: "pattern-pulse", name: "Pulse", start: 0.5, end: 4.5 }],
+  clips: [{ pattern: "pattern-pulse", name: "Pulse", start: 0.5, end: 4.5, preset: "Pulse" }],
   rig: 4,
   window: [1480, 1000],
 });
 
-// A clip is labelled by its form.
-const CLIP = "Constant color";
+// A clip is labelled by its name; the fixture's clip is a Pulse.
+const CLIP = "Pulse";
 
 test("a lit clip reports a preview surface under its header", () => {
   nav.trackEditor("Test Venue", "Aurora");

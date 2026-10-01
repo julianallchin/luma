@@ -47,7 +47,6 @@ wire id per provider. `ModelId::route` picks a provider that serves the model.
 | provider | transport |
 |---|---|
 | `VercelAiGateway` (default) | `model/anthropic.rs` against the gateway |
-| `Anthropic` | `model/anthropic.rs` |
 | `OpenRouter` | `model/openrouter.rs` |
 
 A thread also names an engine (`agent/engine/`): `Api` runs the loop against
@@ -56,8 +55,8 @@ accounts and give them Luma's tools.
 
 ### 2.2 Keys
 
-`model::api_key(provider)` reads `LUMA_ANTHROPIC_API_KEY`,
-`LUMA_OPENROUTER_API_KEY` or `LUMA_AI_GATEWAY_API_KEY` first, then the settings
+`model::api_key(provider)` reads `LUMA_OPENROUTER_API_KEY` or
+`LUMA_AI_GATEWAY_API_KEY` first, then the settings
 table. A missing key is `ModelError::NotConfigured`.
 
 ### 2.3 Tools

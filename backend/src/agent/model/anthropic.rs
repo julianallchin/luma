@@ -1,10 +1,7 @@
-//! The `anthropic-messages` transport, and the two services that speak it.
+//! The `anthropic-messages` transport, as the Vercel AI Gateway speaks it.
 //!
-//! The Vercel AI Gateway exposes the same `/v1/messages` wire protocol as the
-//! first-party API — same request body, same SSE frames — over a different
-//! host, a bearer token, and `creator/model` ids. That makes it a
-//! *configuration* of this transport, not a second one; the fields that differ
-//! all hang off [`super::Provider`].
+//! The gateway exposes Anthropic's `/v1/messages` wire protocol — same request
+//! body, same SSE frames — with a bearer token and `creator/model` ids.
 
 use futures_util::stream::BoxStream;
 use serde_json::{json, Map, Value};
@@ -22,8 +19,7 @@ pub struct AnthropicClient {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
-    /// Selects the id column to route through, the auth header, and the label
-    /// on any error — the three things the two services disagree about.
+    /// Selects the id column to route through and the label on any error.
     provider: Provider,
 }
 
@@ -37,18 +33,6 @@ impl AnthropicClient {
             api_key,
             base_url: "https://ai-gateway.vercel.sh".into(),
             provider: Provider::VercelAiGateway,
-        }
-    }
-
-    /// Direct first-party API access, for a user who has an Anthropic key and
-    /// has explicitly asked for it (`agent_provider = "anthropic"`).
-    #[must_use]
-    pub fn new(api_key: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            api_key,
-            base_url: "https://api.anthropic.com".into(),
-            provider: Provider::Anthropic,
         }
     }
 
@@ -72,13 +56,10 @@ impl ModelClient for AnthropicClient {
             .post(format!("{}/v1/messages", self.base_url))
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
-            .json(&body(wire_id, &request));
-        // The gateway rejects `x-api-key` cross-origin and authenticates the
-        // bearer form; the first-party API takes only `x-api-key`.
-        let http = match provider {
-            Provider::Anthropic => http.header("x-api-key", &self.api_key),
-            _ => http.bearer_auth(&self.api_key),
-        };
+            .json(&body(wire_id, &request))
+            // The gateway rejects `x-api-key` cross-origin and authenticates
+            // the bearer form.
+            .bearer_auth(&self.api_key);
         stream_sse(provider.as_str(), http, MessagesParser::new(provider))
     }
 }
@@ -411,7 +392,7 @@ mod tests {
     /// [`Usage`] rather than the later frame clearing the earlier one.
     #[test]
     fn a_cached_usage_accumulates_across_the_frames_that_carry_it() {
-        let mut parser = MessagesParser::new(Provider::Anthropic);
+        let mut parser = MessagesParser::new(Provider::VercelAiGateway);
         assert!(parse(
             &mut parser,
             r#"{"type":"message_start","message":{"usage":{
@@ -440,7 +421,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_arrives_as_start_args_end() {
-        let mut parser = MessagesParser::new(Provider::Anthropic);
+        let mut parser = MessagesParser::new(Provider::VercelAiGateway);
         assert!(parse(
             &mut parser,
             r#"{"type":"message_start","message":{"usage":{"input_tokens":7}}}"#

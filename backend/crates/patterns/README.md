@@ -23,6 +23,14 @@ It has no database, playback-device state or separate scalar execution engine.
   accept animation after starting with a constant value.
 - `band_energy` reads the energy of a frequency band of the track's full mix.
   The host prepares the mix once; a missing analysis is an error.
+- Every light color is linear Rec. 2020, 0–1 per channel, with no tag:
+  stored colors, gradient stops, color keyframes, presets, the compositor
+  and `FixtureOutput`. Brightness is the peak channel. `src/color_space.rs`
+  holds the conversions: OKLab for blending, sRGB hex for people, and
+  `Gamut` for emitters. A color that a fixture's emitters or the display
+  cannot make is mapped to the nearest one they can, in OKLab, by reducing
+  chroma at constant lightness and hue. A fixture's red, green and blue are
+  assumed to have sRGB primaries.
 - Gradients interpolate perceptually in OKLab and keep stop opacity through
   serialization and native editing; absent opacity means one.
 - Output is the only terminal. It accepts independent color, dimmer, pan/tilt,
@@ -52,7 +60,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```json
 {
   "operation": "evaluate",
-  "definition": "color.chase@1",
+  "definition": "color@1",
   "cells": [
     {"id":"head-a","group":"bar","world":[0,0,0],"uvz":[0,0,0]},
     {"id":"head-b","group":"bar","world":[0,0,1],"uvz":[0,0,1]}
@@ -61,7 +69,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
   "clip_duration": 8,
   "seed": 42,
   "inputs": {
-    "travel": {"type":"beats","value":2}
+    "every": {"type":"beats","value":2}
   }
 }
 ```
@@ -72,27 +80,27 @@ cargo +1.97.1 run --manifest-path backend/Cargo.toml -p luma-patterns --bin patt
 
 ## Clip forms
 
-A form is a shipped graph with a fixed interface: `color.constant@1`,
-`color.time@1`, `color.space@1`, `color.chase@1`, `color.sparkle@1`,
-`color.noise@1`, `strobe.constant@1` and `aim@1` (see
-`docs/specs/clip-forms.md` and `docs/specs/aim.md`).
-A form clip sets `graph` to the form id and holds a value for every input.
-A missing or unknown input is an error. A score holds form clips only.
+The shipped forms are `color@1`, `aim@1` and `strobe.constant@1`. Every
+clip holds all its form's inputs; missing or unknown inputs are errors.
+Color has color, brightness and clip fade. Aim has a position and numeric
+spatial/horizontal/vertical offsets. Presets are saved inputs.
 
-- An input takes a plain value or, where its `promotable` list allows, a
-  source: `time` and `hit` keyframe curves, `noise`, or `audio` (a band of
-  the full mix, scaled over the clip). Sources are tagged values, for example
-  `{"type":"time","value":{"points":[[0,2,"ease-out"],[1,0.5]]}}`. A `time`
-  or `hit` curve is the same `Curve` as an envelope, with numbers or colors.
-- `PreparedGraph::new` lowers each source into nodes of a copy of the form.
-  A `time` curve on a speed input (`every`, `travel`, `duration`, `speed`)
-  is summed over the clip like an odometer, from a table built from the
-  curve, so a sought frame equals a played frame.
-- `core/event_life`, `core/odometer`, `core/curve`, `core/random_share`,
-  `core/path_glides` and the `core/aim_*` steps are the primitives only the
-  forms use. A period or life of 0 beats lasts the whole clip.
-- `presets()` reads `src/presets.json`: named presets (a form and every
-  input value) and named curves for `time` and `hit` sources.
+Inputs use Time, Space, Random, Noise and Audio sources. Source numeric
+inputs recursively accept sources. Time and Random own events, inherit an
+enclosing clock, or follow another input with `events.same_as`. Space offset
+from Time produces overlapping strokes. Brightness keeps the strongest
+event; a following color belongs to that event. Clip fade runs once over
+the whole clip. Shared grain groups heads, fixtures or clumps.
+
+Forms lower into the shared tensor graph during `PreparedGraph` preparation.
+Period sources integrate into fixed clock tables; evaluation has no playback
+history. Event channels travel on separate wires from RGB/vector components.
+Kernels evaluate whole fixture × time × event tensors. Static work folds once;
+Random ranks groups once per event, rather than once per head. There is no
+separate form interpreter.
+
+See [the source model](../../../docs/design/2026-09-28-sources-implementation.md)
+for schema, migration and verification details.
 
 ## Host integration
 
@@ -110,12 +118,12 @@ accepts `request`:
 {
   "venueId": "venue UUID",
   "trackId": "track UUID",
-  "definition": "color.chase@1",
+  "definition": "color@1",
   "targets": [{"expression": "pixel_bars"}],
   "times": [0, 0.25, 0.5, 0.75, 1],
   "clipStart": 0,
   "seed": 42,
-  "inputs": {"travel": {"type": "beats", "value": 2}}
+  "inputs": {"color": {"type":"color","value":[1,1,1]}, "brightness": {"type":"proportion","value":1}, "fade": {"type":"proportion","value":1}}
 }
 ```
 

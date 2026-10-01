@@ -77,3 +77,21 @@ Turns each aim left/right and up/down by a number of degrees.
 |---|---|---|
 | `direction` | Signal (number, 3 channels) | per frame |
 
+## Aim turn
+
+`core/aim_turn` · Built-in kernel
+
+The fan's lean and the motion's left/right and up/down per head, with Alpha, for an Offset clip. The compositor turns the aim under the clip by it.
+
+| Input | Name | Type | Rate | Default | Description |
+|---|---|---|---|---|---|
+| `alpha` | Alpha | Signal (0–1, any channels) | per frame | `1` | The share of every angle that applies |
+| `axis` | Axis | Mapping | fixed | `source order` | How the heads are laid out |
+| `fan` | Fan | Signal (number, any channels) | per frame | `0` | Degrees |
+| `pitch` | Up/down | Signal (number, any channels) | per frame | `0` | Degrees toward the up of the aim |
+| `yaw` | Left/right | Signal (number, any channels) | per frame | `0` | Degrees toward the right of the aim |
+
+| Output | Type | Rate |
+|---|---|---|
+| `turn` | Signal (number, 9 channels) | per frame |
+

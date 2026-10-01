@@ -1,12 +1,8 @@
 //! The strip's value picker: a `<Selector>` trigger plus its open menu, wired.
 //!
-//! The blend-mode cell is this widget verbatim. The nine blend names are
-//! deliberately **not** written down here: the canonical list is
-//! `luma_lib::models::node_graph::BlendMode` (and the score DSL's
-//! `blend_mode_name` beside it), and this crate deliberately does not depend
-//! on Luma's core. The
-//! integration matches exhaustively on `BlendMode` to produce `options`, so a
-//! new mode is a compile error there instead of a silent omission here.
+//! The blend-mode cell is this widget verbatim. The blend names are not
+//! written down here: the caller builds `options` from
+//! `luma_patterns::blend_modes`, the modes a clip's form takes.
 //!
 //! Open state is the caller's, as it is for every menu in this crate: the
 //! strip already owns "which cell has its menu open", and a second, hidden
@@ -20,8 +16,9 @@
 //! always floats, so an opaque square slab opening a rounded translucent card
 //! was two components wearing one name. See `picker_chip`'s own note.
 
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, px, App, Div, ElementId, SharedString, Window};
+use gpui::{div, App, Div, ElementId, SharedString, Window};
 
 use crate::node::{Instrument, Role};
 use crate::{float, luma_select_item, CONTROL_HEIGHT};
@@ -120,14 +117,17 @@ pub fn luma_arg_select(
                 .iter()
                 .enumerate()
                 .fold(
-                    float::popover_card().min_w(px(144.)).gap(px(0.)).p(px(3.)),
+                    float::popover_card()
+                        .min_w(rpx(144.))
+                        .gap(rpx(0.))
+                        .p(rpx(3.)),
                     |menu, (index, option)| {
                         let on_pick = on_pick.clone();
                         menu.child(
                             luma_select_item(option, float::RowState::of(*option == value, false))
-                                .h(px(26.))
-                                .py(px(0.))
-                                .text_size(px(12.))
+                                .h(rpx(26.))
+                                .py(rpx(0.))
+                                .text_size(rpx(12.))
                                 .id(ElementId::Name(format!("{id}:{option}").into()))
                                 .on_click(move |_, window, cx| {
                                     if open {

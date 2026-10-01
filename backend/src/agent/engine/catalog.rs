@@ -10,18 +10,14 @@ pub enum Service {
     Claude,
     Codex,
     OpenRouter,
+    /// Also where a selection saved for the removed first-party Anthropic API
+    /// (`"anthropic"`) lands.
+    #[serde(alias = "anthropic")]
     Vercel,
-    Anthropic,
 }
 
 impl Service {
-    pub const ALL: [Self; 5] = [
-        Self::Claude,
-        Self::Codex,
-        Self::OpenRouter,
-        Self::Vercel,
-        Self::Anthropic,
-    ];
+    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenRouter, Self::Vercel];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -29,7 +25,6 @@ impl Service {
             Self::Codex => "Codex",
             Self::OpenRouter => "OpenRouter",
             Self::Vercel => "Vercel AI Gateway",
-            Self::Anthropic => "Anthropic API",
         }
     }
 
@@ -45,7 +40,6 @@ impl Service {
         match self {
             Self::OpenRouter => Some(Provider::OpenRouter),
             Self::Vercel => Some(Provider::VercelAiGateway),
-            Self::Anthropic => Some(Provider::Anthropic),
             _ => None,
         }
     }
@@ -66,7 +60,6 @@ impl Service {
             {
                 Provider::OpenRouter => Self::OpenRouter,
                 Provider::VercelAiGateway => Self::Vercel,
-                Provider::Anthropic => Self::Anthropic,
             },
         }
     }
@@ -262,8 +255,7 @@ pub async fn cached_gateway(
         .map(|models| api_choices(provider, models))
 }
 
-/// The table's models that `provider` routes: what a service that publishes
-/// no list of its own (the first-party API) offers.
+/// The table's models that `provider` routes.
 fn table_choices(provider: Provider) -> Vec<ModelChoice> {
     model::MODELS
         .iter()
@@ -345,13 +337,6 @@ mod tests {
     #[test]
     fn selections_never_silently_route_to_a_different_service() {
         assert!(Selection {
-            service: Service::Anthropic,
-            model: Some("kimi-k3-fast".into()),
-            effort: None
-        }
-        .validate()
-        .is_err());
-        assert!(Selection {
             service: Service::OpenRouter,
             model: Some("kimi-k3-fast".into()),
             effort: None
@@ -379,7 +364,6 @@ mod tests {
         };
         assert!(listed(Service::OpenRouter).validate().is_ok());
         assert!(listed(Service::Vercel).validate().is_ok());
-        assert!(listed(Service::Anthropic).validate().is_err());
         assert!(Selection {
             service: Service::OpenRouter,
             model: Some("free text".into()),
@@ -387,6 +371,24 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    /// The first-party Anthropic API is gone. A selection or thread saved
+    /// for it loads on the default gateway instead of failing.
+    #[test]
+    fn a_saved_anthropic_selection_loads_on_the_default_gateway() {
+        let settings = HashMap::from([(
+            "agent_selection".to_string(),
+            r#"{"service":"anthropic","model":"claude-opus-5","effort":null}"#.to_string(),
+        )]);
+        let selection = Selection::configured(&settings).expect("loads");
+        assert_eq!(selection.service, Service::Vercel);
+        assert_eq!(selection.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(Service::of(Engine::Api, Some("anthropic")), Service::Vercel);
+        assert_eq!(
+            serde_json::to_string(&Service::Vercel).unwrap(),
+            r#""vercel""#
+        );
     }
 
     /// A gateway's rows are its list and nothing else. The one row the model

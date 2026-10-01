@@ -5,8 +5,9 @@
 //! only landed on four screens out of five would be two design systems, which
 //! is the thing this crate exists to prevent.
 
+use crate::rpx;
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Hsla, SharedString};
+use gpui::{div, AnyElement, Hsla, SharedString};
 
 use crate::float;
 use crate::node::{Instrument, Role};
@@ -34,7 +35,7 @@ pub fn plate(message: impl Into<String>, color: impl Into<Hsla>) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(12.))
+        .text_size(rpx(12.))
         .text_color(color.into())
         .child(message.clone())
         .agent_node(Role::Text, message)

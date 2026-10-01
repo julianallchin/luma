@@ -58,14 +58,14 @@ def record(**overrides: Any) -> LumaRecord:
 def edit_with_one_clip():
     """A minimal, saved `Edit` (via `luma.track.edit()`) for wire-shape tests."""
     clip = {
-        "graph": "color.constant@1",
+        "name": "Wash",
+        "graph": {"version": 1, "nodes": {"color1": {"kind": "color", "inputs": {}}}},
         "start": 0.0,
         "duration": 4.0,
         "selection": {"expression": "all"},
         "seed": 1,
         "z_index": 0,
         "blend_mode": "replace",
-        "inputs": {},
     }
     track = GraphTrack(
         {

@@ -79,6 +79,7 @@ fn frame(eye: Vec3, target: Vec3) -> Frame {
             },
             textures: MaterialTextures::default(),
             editor_object: None,
+            strobe: luma_render::strobe::Rows::STEADY,
         },
     );
     frame
