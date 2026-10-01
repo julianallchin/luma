@@ -18,12 +18,10 @@ use std::sync::Arc;
 const DEFAULT_DIRECTION: [f64; 3] = [0., 0.766, -0.643];
 
 /// A lowered value wire: one binding per component (a number uses the
-/// first), whether a coordinate is inside its stroke, and the clock whose
-/// events it carries.
+/// first), and the clock whose events it carries.
 #[derive(Clone)]
 struct Lowered {
     parts: [Binding; 3],
-    inside: Binding,
     clock: Option<String>,
 }
 
@@ -68,14 +66,12 @@ fn output(node: &str, name: &str) -> Binding {
 fn constant(value: f64) -> Lowered {
     Lowered {
         parts: std::array::from_fn(|_| number(value)),
-        inside: number(1.),
         clock: None,
     }
 }
 fn constant3(value: [f64; 3]) -> Lowered {
     Lowered {
         parts: value.map(number),
-        inside: number(1.),
         clock: None,
     }
 }
@@ -132,16 +128,41 @@ impl Lowering<'_> {
 
     // ---- inputs ----
 
-    /// A number input: its value, its curve, or `empty`.
+    /// A number input: its value, its curve, the product of a list, or
+    /// `empty`.
     fn number(&mut self, id: &str, input: &str, empty: f64) -> Result<Lowered> {
-        match self.node(id).inputs.get(input) {
+        match self.node(id).inputs.get(input).cloned() {
             None => Ok(constant(empty)),
-            Some(Input::Number(value)) => Ok(constant(*value)),
-            Some(Input::Wire(source)) => {
-                let source = source.clone();
-                self.value(&source)
+            Some(Input::List(items)) => {
+                let mut product: Option<Lowered> = None;
+                for item in &items {
+                    let item = self.item(id, input, item)?;
+                    product = Some(match product {
+                        None => item,
+                        Some(so_far) => {
+                            let times = self.kernel(
+                                Kernel::Product,
+                                vec![("a", so_far.parts[0].clone()), ("b", item.parts[0].clone())],
+                            );
+                            Lowered {
+                                parts: std::array::from_fn(|_| output(&times, "value")),
+                                clock: clock_of([&so_far.clock, &item.clock]),
+                            }
+                        }
+                    });
+                }
+                Ok(product.unwrap_or_else(|| constant(empty)))
             }
-            Some(_) => Err(Error(format!("{id}.{input}: expected a number"))),
+            Some(item) => self.item(id, input, &item),
+        }
+    }
+
+    /// One number: a value or a curve.
+    fn item(&mut self, id: &str, input: &str, item: &Input) -> Result<Lowered> {
+        match item {
+            Input::Number(value) => Ok(constant(*value)),
+            Input::Wire(source) => self.value(source),
+            _ => Err(Error(format!("{id}.{input}: expected a number"))),
         }
     }
 
@@ -243,24 +264,31 @@ impl Lowering<'_> {
                 None,
             ),
         };
-        let progress = if self.node(id).inputs.contains_key("phase") {
-            let phase = self.number(id, "phase", 0.)?;
-            let shifted = self.kernel(
-                Kernel::Shift,
-                vec![("progress", progress), ("phase", phase.parts[0].clone())],
-            );
+        let node = self.node(id);
+        if !["delay", "length", "phase"]
+            .iter()
+            .any(|name| node.inputs.contains_key(*name))
+        {
             return Ok(Lowered {
-                parts: std::array::from_fn(|_| output(&shifted, "value")),
-                inside: number(1.),
-                clock: clock_of([&clock, &phase.clock]),
+                parts: std::array::from_fn(|_| progress.clone()),
+                clock,
             });
-        } else {
-            progress
-        };
+        }
+        let delay = self.number(id, "delay", 0.)?;
+        let length = self.number(id, "length", 1.)?;
+        let phase = self.number(id, "phase", 0.)?;
+        let shifted = self.kernel(
+            Kernel::Shift,
+            vec![
+                ("progress", progress),
+                ("delay", delay.parts[0].clone()),
+                ("length", length.parts[0].clone()),
+                ("phase", phase.parts[0].clone()),
+            ],
+        );
         Ok(Lowered {
-            parts: std::array::from_fn(|_| progress.clone()),
-            inside: number(1.),
-            clock,
+            parts: std::array::from_fn(|_| output(&shifted, "value")),
+            clock: clock_of([&clock, &delay.clock, &length.clock, &phase.clock]),
         })
     }
 
@@ -275,8 +303,6 @@ impl Lowering<'_> {
         };
         let wrap = node.setting("wrap") == Some("yes");
         let direction = self.optional_triple(id, "direction")?;
-        let offset = self.number(id, "offset", 0.)?;
-        let width = self.number(id, "width", 1.)?;
         let rank = self.rank(&heads)?;
         let unit = self.index_field(&heads.units.unit)?;
         let span = self.index_field(&heads.units.span)?;
@@ -299,20 +325,27 @@ impl Lowering<'_> {
                 ("wrap", number(if wrap { 1. } else { 0. })),
             ],
         );
-        let stroke = self.kernel(
-            Kernel::Stroke,
+        let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
+        if !node.inputs.contains_key("shift") && !node.inputs.contains_key("length") {
+            return Ok(Lowered {
+                parts: std::array::from_fn(|_| output(&axis, "value")),
+                clock: shuffled,
+            });
+        }
+        let shift = self.number(id, "shift", 0.)?;
+        let length = self.number(id, "length", 1.)?;
+        let slid = self.kernel(
+            Kernel::Slide,
             vec![
                 ("a", output(&axis, "value")),
-                ("offset", offset.parts[0].clone()),
-                ("width", width.parts[0].clone()),
+                ("shift", shift.parts[0].clone()),
+                ("length", length.parts[0].clone()),
                 ("wrap", number(if wrap { 1. } else { 0. })),
             ],
         );
-        let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
         Ok(Lowered {
-            parts: std::array::from_fn(|_| output(&stroke, "x")),
-            inside: output(&stroke, "inside"),
-            clock: clock_of([&shuffled, &offset.clock, &width.clock]),
+            parts: std::array::from_fn(|_| output(&slid, "value")),
+            clock: clock_of([&shuffled, &shift.clock, &length.clock]),
         })
     }
 
@@ -361,7 +394,6 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&noise, "value")),
-            inside: number(1.),
             clock: clock_of([&scale.clock, &contrast.clock]),
         })
     }
@@ -399,7 +431,6 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&normalized, "value")),
-            inside: number(1.),
             clock: None,
         })
     }
@@ -436,7 +467,6 @@ impl Lowering<'_> {
             Kernel::Curve,
             vec![
                 ("x", x.parts[0].clone()),
-                ("inside", x.inside.clone()),
                 ("low_x", low.parts[0].clone()),
                 ("low_y", low.parts[1].clone()),
                 ("low_z", low.parts[2].clone()),
@@ -454,7 +484,6 @@ impl Lowering<'_> {
                 output(&curve, "y"),
                 output(&curve, "z"),
             ],
-            inside: number(1.),
             clock: clock_of([&x.clock, &low.clock, &high.clock]),
         })
     }
@@ -655,13 +684,10 @@ impl<'a> Lowering<'a> {
 
 /// The output of [`lower_coordinate`] with the coordinate's value.
 pub(crate) const COORDINATE: &str = "x";
-/// The output of [`lower_coordinate`] that is 1 where a head is inside its
-/// stroke. Only a coordinate that can be outside (`space`) has it.
-pub(crate) const INSIDE: &str = "inside";
 
-/// Coordinate node `id` of a checked graph alone, per head and live event:
-/// its value as [`COORDINATE`], and [`INSIDE`] when it has a stroke. An
-/// editor reads it to mark where the heads fall on the coordinate.
+/// Coordinate node `id` of a checked graph alone, per head and live event,
+/// as [`COORDINATE`]. An editor reads it to mark where the heads fall on
+/// the coordinate.
 pub(crate) fn lower_coordinate(
     graph: &ClipGraph,
     id: &str,
@@ -676,10 +702,7 @@ pub(crate) fn lower_coordinate(
         value_type: ValueType::Signal(SignalType::ANY),
         rate: Rate::Frame,
     };
-    let mut outputs = BTreeMap::from([(COORDINATE.to_string(), value.parts[0].clone())]);
-    if matches!(value.inside, Binding::Connection { .. }) {
-        outputs.insert(INSIDE.to_string(), value.inside);
-    }
+    let outputs = BTreeMap::from([(COORDINATE.to_string(), value.parts[0].clone())]);
     let types = outputs
         .keys()
         .map(|name| (name.clone(), signal.clone()))

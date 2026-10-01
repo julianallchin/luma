@@ -1,8 +1,9 @@
 """Clip graphs as Python: one small graph per clip.
 
     k = clock(every=2)
-    pos = curve(time(k), "Ramp up", low=-0.2, high=1)
-    graph = color(brightness=curve(space(offset=pos, width=0.2), "On"))
+    move = curve(time(k), "Ramp up", low=-0.2, high=1)
+    place = space(shift=move, length=0.2)
+    graph = color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))
     edit.add_clip(graph, name="Chase", beats=(32, 48), selection="bars")
 
 Every builder is a bare function. It returns one node. A node goes into an
@@ -11,22 +12,30 @@ one node (a link). `color()`, `aim()` and `strobe()` make the output node and
 return a Graph.
 
 Values are plain: numbers, `(u, v, z)` tuples, `(r, g, b)` triples in linear
-Rec. 2020, or "#RRGGBB" (sRGB, converted). A shape is a curve preset name
-("Comet"), a list of `[x, v]` / `[x, v, ease]` points, or `{"points": ...}`.
+Rec. 2020, or "#RRGGBB" (sRGB, converted). On an input with range 0-1
+(brightness, alpha, strobe rate, noise contrast) a list of numbers and curves
+is their product: `brightness=[cut, bloom, 0.5]`. A shape is a curve preset
+name ("Comet"), a list of `[x, v]` / `[x, v, ease]` points, or `{"points": ...}`;
+two points at the same x are a jump.
 A gradient is a preset name ("Fire"), a list of `(t, color)` pairs, or
 `{"stops": ...}`. `None` is the empty input.
 
-Node ids are `<kind><n>`, numbered in creation order per kind. The same ids
-show in the UI and in checker errors. Python does no type checking: the Rust
-checker does, when you add or update a clip.
+A node's id is the variable it is assigned to (`move`, `place` above), so
+code, graph and the card in the UI say the same name; `source()` writes the
+ids back as variables. A node with no variable (or a name that cannot be an
+id: a builder name or a Python keyword) takes `<kind><n>`, numbered per
+kind. Rename a node by changing its variable in that code (a node loaded
+from a stored graph keeps its stored id). Python does no type checking: the
+Rust checker does, when you add or update a clip.
 """
 from __future__ import annotations
 
 import copy
-import heapq
 import itertools
+import keyword
 import math
 import re
+import sys
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -36,12 +45,13 @@ from .color import from_srgb
 BUILDERS = ("clock", "time", "space", "noise", "audio", "curve", "mirror",
             "shuffle", "group", "split", "color", "aim", "strobe", "preset")
 OUTPUTS = ("color", "aim", "strobe")
+VERSION = 2  # clip_graph::VERSION
 
 # Input order per kind: the builder signature order, used by source().
 _INPUTS = {
     "clock": ("every", "duration"),
-    "time": ("clock", "phase"),
-    "space": ("heads", "direction", "offset", "width"),
+    "time": ("clock", "delay", "length", "phase"),
+    "space": ("heads", "direction", "shift", "length"),
     "noise": ("heads", "speed", "scale", "contrast"),
     "audio": ("low_hz", "high_hz"),
     "curve": ("x", "shape", "low", "high", "gradient"),
@@ -53,8 +63,12 @@ _INPUTS = {
     "aim": ("heads", "direction", "point", "yaw", "pitch", "alpha"),
     "strobe": ("rate", "alpha"),
 }
+# Inputs with range 0-1: a list there multiplies its items.
+_LISTS = {("color", "brightness"), ("color", "alpha"), ("aim", "alpha"),
+          ("strobe", "rate"), ("strobe", "alpha"), ("noise", "contrast")}
 _SEQUENCE = itertools.count(1)
 _ID = re.compile(r"([a-z]+)([0-9]+)")
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,31}")  # clip_graph::check::is_name
 
 
 class ClipError(ValueError):
@@ -278,7 +292,12 @@ def _gradient(value, where):
 
 
 def _make(kind, settings=None, **inputs):
-    return _CLASSES[kind](kind, settings, {key: _input(value, f"{kind}.{key}") for key, value in inputs.items()})
+    def value(key, item):
+        where = f"{kind}.{key}"
+        if (kind, key) in _LISTS and isinstance(item, (list, tuple)):
+            return [_input(part, where) for part in item]
+        return _input(item, where)
+    return _CLASSES[kind](kind, settings, {key: value(key, item) for key, item in inputs.items()})
 
 
 # ---------------------------------------------------------------------------
@@ -294,12 +313,18 @@ def clock(every, duration=None) -> Clock:
     return _make("clock", every=every, duration=duration)
 
 
-def time(clock=None, phase=0) -> Coordinate:
-    """Progress 0-1: once over the clip, or over each event of `clock`.
+def time(clock=None, delay=0, length=1, phase=0) -> Coordinate:
+    """Each head's own clock: (p - delay) / length over the clip or each event of `clock`.
 
-    `phase` (turns) adds and wraps; a curve over space on phase makes a wave.
+    `delay` (turns, no wrap): before it the clock is below 0, and curves hold
+    their first value; a curve over space on delay makes a one-shot wipe.
+    `length` (turns, 0 or more): how long the head's clock takes to run 0 to
+    1; 0 is a jump at the delay.
+    `phase` (turns): added, then wrapped to 0-1; a curve over space on phase
+    makes a loop such as a chase or a wave.
     """
-    return _make("time", clock=clock, phase=None if phase == 0 else phase)
+    return _make("time", clock=clock, delay=None if delay == 0 else delay,
+                 length=None if length == 1 else length, phase=None if phase == 0 else phase)
 
 
 def _wrap(wrap, kind):
@@ -310,15 +335,21 @@ def _wrap(wrap, kind):
     return "yes" if wrap else "no"
 
 
-def space(heads=None, direction=None, offset=None, width=None, kind="line", wrap=None) -> Coordinate:
-    """Position of each head along an axis, as a stroke from `offset` to `offset + width`.
+def space(heads=None, direction=None, shift=0, length=1, kind="line", wrap=None) -> Coordinate:
+    """Place of each head: (a - shift) / length, where a is 0-1 per head.
 
     kind: "line" (along direction; empty = best fit), "order" (rank),
     "radial" (distance from the centre), "angle" (turns around the centre).
-    Heads outside the stroke read the curve's low (or black for a color curve).
+    A region is a curve with jumps: the left half is
+    curve(space(), [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]).
+    `shift` (share) slides the coordinate, as a shader's p - offset: a curve
+    over time on shift moves the curve along the heads (a chase, a sweep with
+    its own ease), audio on shift makes a meter. `length` (share, 0 or more)
+    is how much of the axis reads as 0-1. With wrap, a - shift wraps first.
     """
     return _make("space", {"kind": kind, "wrap": _wrap(wrap, kind)},
-                 heads=heads, direction=direction, offset=offset, width=width)
+                 heads=heads, direction=direction, shift=None if shift == 0 else shift,
+                 length=None if length == 1 else length)
 
 
 def noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate:
@@ -416,16 +447,45 @@ def _reachable(output):
             continue
         seen.add(id(node))
         order.append(node)
-        stack.extend(value for value in node.inputs.values() if isinstance(value, Node))
+        for value in node.inputs.values():
+            stack.extend(item for item in (value if isinstance(value, list) else [value])
+                         if isinstance(item, Node))
     return order
 
 
-def _assign_ids(nodes):
+def _usable(name):
+    return bool(_NAME.fullmatch(name)) and name not in BUILDERS and not keyword.iskeyword(name)
+
+
+def _variables(nodes):
+    """{id(node): variable name} for the nodes the calling code has bound to
+    a variable: the innermost frame outside this module first."""
+    wanted = {id(node) for node in nodes}
+    names = {}
+    frame = sys._getframe(1)
+    while frame is not None and frame.f_globals.get("__name__") == __name__:
+        frame = frame.f_back
+    while frame is not None and len(names) < len(wanted):
+        for name, value in list(frame.f_locals.items()):
+            if isinstance(value, Node) and id(value) in wanted and id(value) not in names \
+                    and _usable(name):
+                names[id(value)] = name
+        frame = frame.f_back
+    return names
+
+
+def _assign_ids(nodes, names=None):
+    """Ids: a stored id first, then the variable name, then `<kind><n>`."""
     ids, used = {}, set()
     for node in sorted(nodes, key=lambda node: node._seq):
         if node._id is not None and node._id not in used:
             ids[id(node)] = node._id
             used.add(node._id)
+    for node in sorted(nodes, key=lambda node: node._seq):
+        name = (names or {}).get(id(node))
+        if id(node) not in ids and name is not None and name not in used:
+            ids[id(node)] = name
+            used.add(name)
     for node in sorted(nodes, key=lambda node: node._seq):
         if id(node) in ids:
             continue
@@ -440,6 +500,8 @@ def _assign_ids(nodes):
 def _stored(value, ids):
     if isinstance(value, Node):
         return {"node": ids[id(value)]}
+    if isinstance(value, list):
+        return [_stored(item, ids) for item in value]
     return copy.deepcopy(value)
 
 
@@ -460,7 +522,7 @@ class Graph:
         object.__setattr__(self, "_output", output)
         nodes = _reachable(output) if output is not None else []
         object.__setattr__(self, "_nodes", nodes)
-        object.__setattr__(self, "_ids", _assign_ids(nodes))
+        object.__setattr__(self, "_ids", _assign_ids(nodes, _variables(nodes)))
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "blend", blend)
 
@@ -475,7 +537,7 @@ class Graph:
                 record["settings"] = dict(node.settings)
             record["inputs"] = {key: _stored(value, self._ids) for key, value in node.inputs.items()}
             nodes[self._ids[id(node)]] = record
-        return {"version": 1, "nodes": nodes}
+        return {"version": VERSION, "nodes": nodes}
 
     @property
     def nodes(self):
@@ -514,27 +576,44 @@ class Graph:
         if not stored:
             return cls(None, name=name, blend=blend)
 
+        def wire(value):
+            return isinstance(value, dict) and set(value) == {"node"}
+
+        def items(value):
+            return value if isinstance(value, list) else [value]
+
         def depends(record):
-            return [value["node"] for value in (record.get("inputs") or {}).values()
-                    if isinstance(value, dict) and set(value) == {"node"}]
+            return [item["node"] for value in (record.get("inputs") or {}).values()
+                    for item in items(value) if wire(item)]
 
         def key(node_id):
             match = _ID.fullmatch(node_id)
             return (int(match.group(2)), match.group(1)) if match else (0, node_id)
 
         waiting = {node_id: set(depends(record)) & set(stored) for node_id, record in stored.items()}
-        ready = [(key(node_id), node_id) for node_id, deps in waiting.items() if not deps]
-        heapq.heapify(ready)
+        ready = {node_id for node_id, deps in waiting.items() if not deps}
         built = {}
+
+        def first(node_id):
+            # The lowest id of its kind still to build: taking these first keeps
+            # source() numbering the nodes as they are stored.
+            kind = stored[node_id].get("kind")
+            return all(key(node_id) <= key(other) for other in stored
+                       if other not in built and stored[other].get("kind") == kind)
+
         while ready:
-            _, node_id = heapq.heappop(ready)
+            node_id = min(ready, key=lambda node_id: (not first(node_id), key(node_id)))
+            ready.discard(node_id)
             record = stored[node_id]
             inputs = {}
             for input_name, value in (record.get("inputs") or {}).items():
-                if isinstance(value, dict) and set(value) == {"node"}:
-                    if value["node"] not in built:
-                        raise ClipError(f"{node_id}.{input_name}: wire to unknown node {value['node']!r}")
+                for item in items(value):
+                    if wire(item) and item["node"] not in built:
+                        raise ClipError(f"{node_id}.{input_name}: wire to unknown node {item['node']!r}")
+                if wire(value):
                     value = built[value["node"]]
+                elif isinstance(value, list) and any(wire(item) for item in value):
+                    value = [built[item["node"]] if wire(item) else item for item in value]
                 inputs[input_name] = value
             kind = record.get("kind")
             built[node_id] = _CLASSES.get(kind, Node)(kind, record.get("settings"), inputs, id=node_id)
@@ -542,7 +621,7 @@ class Graph:
                 if node_id in deps:
                     deps.discard(node_id)
                     if not deps and other not in built:
-                        heapq.heappush(ready, (key(other), other))
+                        ready.add(other)
         if len(built) != len(stored):
             raise ClipError("graph: expected no cycle; got a loop of wires. Example: rebuild it with the builders")
         outputs = [node for node in built.values() if isinstance(node, _Output)]
@@ -633,6 +712,9 @@ def _arguments(node, ids):
         value = node.inputs[name]
         if isinstance(value, Node):
             text = ids[id(value)]
+        elif (node.kind, name) in _LISTS and isinstance(value, list):
+            text = "[" + ", ".join(ids[id(item)] if isinstance(item, Node) else _literal(item)
+                                   for item in value) + "]"
         elif name == "shape":
             text = _shape_literal(value)
         elif name == "gradient":

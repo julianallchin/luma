@@ -688,7 +688,7 @@ mod tests {
         let names = |query: &str| -> Vec<&str> {
             matching(query).iter().map(|p| p.name.as_str()).collect()
         };
-        assert_eq!(names("bounce"), ["Bounce"]);
+        assert_eq!(names("ballyhoo"), ["Ballyhoo"]);
         let chases = names("chase");
         assert!(chases.contains(&"Chase") && chases.contains(&"Stepped chase"));
         assert!(!chases.contains(&"Wash"));

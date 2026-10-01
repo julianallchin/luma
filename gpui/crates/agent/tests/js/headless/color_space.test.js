@@ -1,7 +1,7 @@
 // Color and brightness over space, from the outside: the source chip of the
 // color and of the brightness offers "Over space". A color then reads a
-// gradient along a space node, a brightness a curve along a space node whose
-// offset moves over time; the space kind and wrap are stored on the node.
+// gradient along a space node, a brightness a curve along a space node; the
+// space kind and wrap are stored on the node.
 
 const WASH = { pattern: "graph-clip", name: "Wash", start: 1, end: 3, preset: "Wash" };
 fixture({ seconds: 20, clips: [WASH], rig: 4, window: [1400, 1400] });
@@ -57,7 +57,7 @@ test("a color over space reads a gradient along a space node", () => {
   expect(stops.at(-1).color).toEqual([1, 1, 1]);
   node("card", "Space 1");
   inRow("Color 1", "Color", "select", "Over space");
-  inCard("Curve 2", "card", "Curve 2 strip");
+  inCard("Curve 1", "card", "Curve 1 strip");
 
   // Another space kind is stored on the node.
   app.click(inCard("Space 1", "button", "Radial"));
@@ -70,7 +70,7 @@ test("a color over space reads a gradient along a space node", () => {
   expect(Object.values(nodes()).filter((n) => n.kind === "space").length).toBe(0);
 });
 
-test("a brightness over space moves over time, and the wrap switch stores wrap", () => {
+test("a brightness over space reads a curve along a space node, and the wrap switch stores wrap", () => {
   open();
   source("Color 1", "Brightness", "Value", "Over space");
   until("the brightness wired", () => nodes().color1.inputs.brightness?.node);
@@ -79,14 +79,11 @@ test("a brightness over space moves over time, and the wrap switch stores wrap",
   assert(curve.inputs.shape?.points && !curve.inputs.gradient, `a brightness reads a curve: ${JSON.stringify(curve)}`);
   const space = nodes()[curve.inputs.x.node];
   expect(space.kind).toBe("space");
-  expect(space.inputs.width).toBe(0.2);
-  // The stroke moves: the offset is a curve over time.
-  const offset = nodes()[space.inputs.offset.node];
-  expect(offset.kind).toBe("curve");
-  expect(nodes()[offset.inputs.x.node].kind).toBe("time");
-  inRow("Space 1", "Offset", "select", "Over time");
+  // A space is only a place per head: it has no offset or width.
+  expect(space.inputs?.offset).toBe(undefined);
+  expect(space.inputs?.width).toBe(undefined);
 
-  // The stroke's ends wrap.
+  // The axis's ends meet.
   app.click(inCard("Space 1", "button", "Wrap off"));
   until("wrap stored", () => nodes().space1.settings?.wrap === "yes");
   inCard("Space 1", "button", "Wrap on");

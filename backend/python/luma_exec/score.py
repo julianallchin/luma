@@ -2,9 +2,9 @@
 
     edit = luma.track.edit()
     k = clock(every=2)
-    pos = curve(time(k), "Ramp up", low=-0.2, high=1)
-    clip = edit.add_clip(color(brightness=curve(space(offset=pos, width=0.2), "On")),
-                         name="Chase", beats=(32, 48), selection="bars")
+    move = curve(time(k), "Ramp up", low=-0.2, high=1)
+    pill = curve(space(shift=move, length=0.2), [[0, 0], [0, 1], [1, 1], [1, 0]])
+    clip = edit.add_clip(color(brightness=pill), name="Chase", beats=(32, 48), selection="bars")
     edit.window(beats=(32, 36)).output.heatmap()
     edit.apply()
 

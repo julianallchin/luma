@@ -105,7 +105,10 @@ impl State {
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
     pub(crate) fn dismiss_menu(&mut self) -> bool {
-        self.open.take().is_some() | self.canvas.menu.take().is_some() | self.canvas.cancel()
+        self.open.take().is_some()
+            | self.canvas.menu.take().is_some()
+            | self.canvas.card_menu.take().is_some()
+            | self.canvas.cancel()
     }
 }
 

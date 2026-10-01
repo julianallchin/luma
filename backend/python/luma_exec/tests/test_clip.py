@@ -15,19 +15,23 @@ from luma_exec.clip import (BUILDERS, ClipError, Graph, aim, audio, clock, color
                             mirror, noise, preset, shuffle, space, split, strobe, time)
 from luma_exec.score import GraphTrack  # noqa: E402
 
-# The section 4 example, verbatim: the contract for Chase.
+PILL = [[0, 0], [0, 1], [1, 1], [1, 0]]
+
+# The Chase preset: a pill slides along the heads; each node's id is the
+# variable it was assigned to.
 CHASE_JSON = {
-    "version": 1,
+    "version": 2,
     "nodes": {
-        "clock1": {"kind": "clock", "inputs": {"every": 2}},
-        "time1": {"kind": "time", "inputs": {"clock": {"node": "clock1"}}},
-        "curve1": {"kind": "curve", "settings": {"kind": "number"},
-                   "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0, 0], [1, 1]]}, "low": -0.2, "high": 1}},
-        "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
-                   "inputs": {"offset": {"node": "curve1"}, "width": 0.2}},
-        "curve2": {"kind": "curve", "settings": {"kind": "number"},
-                   "inputs": {"x": {"node": "space1"}, "shape": {"points": [[0, 1], [1, 1]]}}},
-        "color1": {"kind": "color", "inputs": {"color": [1, 1, 1], "brightness": {"node": "curve2"}}},
+        "k": {"kind": "clock", "inputs": {"every": 2}},
+        "t": {"kind": "time", "inputs": {"clock": {"node": "k"}}},
+        "move": {"kind": "curve", "settings": {"kind": "number"},
+                 "inputs": {"x": {"node": "t"}, "shape": {"points": [[0, 0], [1, 1]]},
+                            "low": -0.2, "high": 1}},
+        "place": {"kind": "space", "settings": {"kind": "line", "wrap": "no"},
+                  "inputs": {"shift": {"node": "move"}, "length": 0.2}},
+        "pill": {"kind": "curve", "settings": {"kind": "number"},
+                 "inputs": {"x": {"node": "place"}, "shape": {"points": PILL}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "pill"}}},
     },
 }
 
@@ -35,6 +39,7 @@ SINE = [[0, 0.5, "sine-out"], [0.25, 1, "sine-in"], [0.5, 0.5, "sine-out"], [0.7
 FIXTURE = {
     "curves": {
         "On": [[0, 1], [1, 1]], "Ramp up": [[0, 0], [1, 1]], "Ramp down": [[0, 1], [1, 0]],
+        "Step up": [[0, 0], [0, 1], [1, 1]], "Step down": [[0, 1], [0, 0], [1, 0]],
         "Triangle": [[0, 0], [0.5, 1], [1, 0]],
         "Soft": [[0, 0, [0.4, 0, 0.6, 1]], [0.5, 1, [0.4, 0, 0.6, 1]], [1, 0]],
         "Comet": [[0, 0], [0.95, 1], [1, 0]], "Spike": [[0, 0], [0.15, 1], [1, 0]],
@@ -55,7 +60,7 @@ PRESETS = {
     "gradients": [{"name": name, "gradient": {"stops": stops}} for name, stops in FIXTURE["gradients"].items()],
     "bands": [{"name": name, "low_hz": low, "high_hz": high} for name, (low, high) in FIXTURE["bands"].items()],
     "clips": [{"name": "Chase", "blend_mode": "replace", "graph": CHASE_JSON},
-              {"name": "Sweep", "blend_mode": "offset", "graph": {"version": 1, "nodes": {
+              {"name": "Sweep", "blend_mode": "offset", "graph": {"version": 2, "nodes": {
                   "time1": {"kind": "time"},
                   "curve1": {"kind": "curve", "settings": {"kind": "number"},
                              "inputs": {"x": {"node": "time1"}, "low": -45, "high": 45}},
@@ -84,63 +89,64 @@ D = (0, 0.766, -0.643)
 
 # Section 9, one entry per effect, as an agent would write it.
 CATALOG = {
-    "Wash": "color(color=(1,1,1))",
-    "Pulse": 'color(brightness=curve(time(clock(every=1)), "Drop"))',
-    "Breathe": 'color(brightness=curve(time(clock(every=4)), "Swell"))',
-    "Fade": 'color(alpha=curve(time(), "Fade in"))',
-    "Color fade": 'color(color=curve(time(), "Ramp up", gradient=[(0,"#b0400a"),(1,"#2449eb")]))',
-    "Rainbow": 'color(color=curve(time(clock(every=4)), "Ramp up", gradient="Rainbow"))',
-    "Gradient": 'color(color=curve(space(), "Ramp up", gradient="Sunset"))',
-    "Stepped palette": 'color(color=curve(time(clock(every=4)), "Steps 4", gradient="Rainbow"))',
-    "Two-color swap": 'color(color=curve(time(clock(every=2)), "Square", gradient=[(0,"#ff2a00"),(1,"#0040ff")]))',
-    "Follows a band": 'color(brightness=curve(audio(40, 100), "Ramp up"))',
-    "VU meter": 'color(brightness=curve(space(split(), direction=(0,0,1), offset=0, width=curve(audio(20,250), "Ramp up")), "On"))',
-    "Random heads": 'k=clock(every=1); color(brightness=curve(space(shuffle(clock=k), kind="order", offset=0, width=0.5), "On"))',
-    "Random bars": 'k=clock(every=1); color(brightness=curve(space(shuffle(group(), k), kind="order", offset=0, width=0.5), "On"))',
-    "Sparkle": 'k=clock(every=0.125, duration=0.5); color(brightness=curve(space(shuffle(clock=k), kind="order", offset=0, width=0.3), "On"), alpha=curve(time(k), "Spike"))',
-    "Build": 'color(brightness=curve(space(shuffle(), kind="order", offset=0, width=curve(time(), "Ramp up")), "On"))',
-    "Clouds": 'n=noise(speed=8, scale=0.5); color(color=curve(n, "Ramp up", gradient="Ocean"), brightness=curve(n, "Ramp up", low=0.2, high=1))',
-    "Sparkle rain": 'k=clock(every=0.25, duration=1); fall=curve(space(split(), direction=(0,0,-1), offset=curve(time(k), "Ramp up", low=-0.3, high=1), width=0.3), "Comet"); color(brightness=fall, alpha=curve(space(shuffle(group(), k), kind="order", offset=0, width=0.2), "On"))',
-    "Chase": 'k=clock(every=2); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-0.2, high=1), width=0.2), "On"))',
-    "Wave": 'k=clock(every=2); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-1, high=1), width=1), "Soft"))',
-    "Bounce": 'k=clock(every=4); color(brightness=curve(space(offset=curve(time(k), "Triangle", low=0, high=0.8), width=0.2), "Soft"))',
-    "Wipe": 'k=clock(every=4); color(brightness=curve(space(offset=0, width=curve(time(k), "Ramp up")), "On"))',
-    "Stepped chase": 'k=clock(every=4); color(brightness=curve(space(offset=curve(time(k), "Steps 4", low=0, high=0.75), width=0.25), "On"))',
-    "Many pills": 'k=clock(every=0.5, duration=2); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-0.2, high=1), width=0.2), "On"))',
-    "Wrapping chase": 'k=clock(every=2); color(brightness=curve(space(offset=curve(time(k), "Ramp up"), width=0.2, wrap=True), "On"))',
-    "Colored pills": 'k=clock(every=0.5, duration=2); s=space(offset=curve(time(k), "Ramp up", low=-0.25, high=1), width=0.25); color(color=curve(time(k), "Ramp up", gradient="Rainbow"), brightness=curve(s, "Soft"))',
-    "Speed-up chase": 't=time(); k=clock(every=curve(t, "Ramp down", low=0.25, high=2), duration=curve(t, "Ramp down", low=0.5, high=2)); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-0.4, high=1), width=curve(t, "Ramp down", low=0.1, high=0.4)), "Comet"))',
-    "Alternating sides": 'k=clock(every=2); color(brightness=curve(space(offset=curve(time(k), "Square", low=0, high=0.5), width=0.5), "On"))',
-    "Diagonal slash": 'k=clock(every=2); color(brightness=curve(space(direction=(1,0,1), offset=curve(time(k), "Ramp up", low=-0.15, high=1), width=0.15), "On"))',
-    "Ripple": 'k=clock(every=2); color(brightness=curve(space(kind="radial", offset=curve(time(k), "Ramp up", low=-0.4, high=1), width=0.4), "Soft"))',
-    "Wrapping ripple": 'k=clock(every=2); color(brightness=curve(space(kind="radial", offset=curve(time(k), "Ramp up", low=-0.4, high=1), width=0.4, wrap=True), "Soft"))',
-    "Spin": 'k=clock(every=2); color(brightness=curve(space(kind="angle", offset=curve(time(k), "Ramp up"), width=0.25), "Comet"))',
-    "Grow": 'color(brightness=curve(space(kind="radial", offset=0, width=curve(time(), "Ramp up")), "On"))',
-    "Turning line": 'k=clock(every=2, duration=4); color(brightness=curve(space(kind="angle", offset=curve(time(k), "Ramp up"), width=0.1), "On"))',
-    "Spiral": 'k=clock(every=4); t=time(k, phase=curve(space(kind="radial"), "Ramp up")); color(brightness=curve(space(kind="angle", offset=curve(t, "Ramp up"), width=0.3), "Soft"))',
-    "Mirror": 'm=mirror(); k=clock(every=2); color(brightness=curve(space(m, offset=curve(time(k), "Ramp up", low=-0.2, high=1), width=0.2), "On"))',
-    "Kaleidoscope": 'm=mirror(mirror(normal=(1,0,0)), normal=(0,0,1)); k=clock(every=4); color(brightness=curve(space(m, kind="angle", offset=curve(time(k), "Ramp up"), width=0.15), "Comet"))',
+    "Wash": "color(color=(1, 1, 1))",
+    "Pulse": 'beat = clock(every=1); t = time(beat); drop = curve(t, "Drop"); color(brightness=drop)',
+    "Breathe": 'k = clock(every=4); t = time(k); swell = curve(t, "Swell"); color(brightness=swell)',
+    "Fade": 't = time(); fade = curve(t, "Fade in"); color(alpha=fade)',
+    "Color fade": 't = time(); hue = curve(t, "Ramp up", gradient=[(0, "#b0400a"), (1, "#2449eb")]); color(color=hue)',
+    "Rainbow": 'k = clock(every=4); t = time(k); hue = curve(t, "Ramp up", gradient="Rainbow"); color(color=hue)',
+    "Gradient": 'place = space(); hue = curve(place, "Ramp up", gradient="Sunset"); color(color=hue)',
+    "Stepped palette": 'k = clock(every=4); t = time(k); hue = curve(t, "Steps 4", gradient="Rainbow"); color(color=hue)',
+    "Two-color swap": 'k = clock(every=2); t = time(k); hue = curve(t, "Square", gradient=[(0, "#ff2a00"), (1, "#0040ff")]); color(color=hue)',
+    "Follows a band": 'kick = audio(40, 100); level = curve(kick, "Ramp up"); color(brightness=level)',
+    "VU meter": 'bass = audio(20, 250); level = curve(bass, "Ramp up"); bars = split(); height = space(bars, direction=(0, 0, 1), shift=level); meter = curve(height, "Step down"); color(brightness=meter)',
+    "Random heads": 'k = clock(every=1); order = shuffle(clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)',
+    "Random bars": 'k = clock(every=1); bars = group(); order = shuffle(bars, clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)',
+    "Sparkle": 'k = clock(every=0.125, duration=0.5); order = shuffle(clock=k); rank = space(order, kind="order"); pick = curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]); t = time(k); spike = curve(t, "Spike"); color(brightness=[pick, spike])',
+    "Build": 'order = shuffle(); rank = space(order, kind="order"); start = curve(rank, "Ramp up"); t = time(delay=start); on = curve(t, "Step up"); color(brightness=on)',
+    "Dissolve": 'order = shuffle(); rank = space(order, kind="order"); stop = curve(rank, "Ramp down"); t = time(delay=stop); off = curve(t, "Step down"); color(brightness=off)',
+    "Clouds": 'cloud = noise(speed=8, scale=0.5); hue = curve(cloud, "Ramp up", gradient="Ocean"); level = curve(cloud, "Ramp up", low=0.2, high=1); color(color=hue, brightness=level)',
+    "Sparkle rain": 'k = clock(every=0.25, duration=1); bars = group(); order = shuffle(bars, clock=k); columns = split(); t = time(k); fall = curve(t, "Ramp up", low=-0.3, high=1); drop = space(columns, direction=(0, 0, -1), shift=fall, length=0.3); streak = curve(drop, "Comet"); rank = space(order, kind="order"); pick = curve(rank, [[0, 0], [0, 1], [0.2, 1], [0.2, 0], [1, 0]]); color(brightness=streak, alpha=pick)',
+    "Chase": 'k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)',
+    "Wave": 'k = clock(every=2); place = space(); lag = curve(place, "Ramp down", low=0.5, high=1); t = time(k, phase=lag); swell = curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]); color(brightness=swell)',
+    "Bounce": 'k = clock(every=4); t = time(k); move = curve(t, "Triangle", low=0, high=0.8); place = space(shift=move, length=0.2); pill = curve(place, "Soft"); color(brightness=pill)',
+    "Comet": 'k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); tail = curve(place, "Comet"); color(brightness=tail)',
+    "Wipe": 'k = clock(every=4); place = space(); start = curve(place, "Ramp up"); t = time(k, delay=start); on = curve(t, "Step up"); color(brightness=on)',
+    "Stepped chase": 'k = clock(every=4); t = time(k); move = curve(t, "Steps 4", low=0, high=0.75); place = space(shift=move, length=0.25); block = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=block)',
+    "Many pills": 'k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)',
+    "Wrapping chase": 'k = clock(every=2); ring = space(wrap=True); lag = curve(ring, "Ramp down"); t = time(k, phase=lag); pill = curve(t, [[0, 0], [0.8, 0], [0.8, 1], [1, 1]]); color(brightness=pill)',
+    "Colored pills": 'k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.25, high=1); place = space(shift=move, length=0.25); age = time(k); hue = curve(age, "Ramp up", gradient="Rainbow"); pill = curve(place, "Soft"); color(color=hue, brightness=pill)',
+    "Speed-up chase": 't = time(); every = curve(t, "Ramp down", low=0.25, high=2); life = curve(t, "Ramp down", low=0.5, high=2); k = clock(every=every, duration=life); age = time(k); move = curve(age, "Ramp up", low=-0.4, high=1); size = curve(t, "Ramp down", low=0.1, high=0.4); place = space(shift=move, length=size); tail = curve(place, "Comet"); color(brightness=tail)',
+    "Alternating sides": "k = clock(every=2); place = space(); lag = curve(place, [[0, 0.5], [0.5, 0.5], [0.5, 0], [1, 0]]); t = time(k, phase=lag); half = curve(t, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)",
+    "Diagonal slash": 'k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.15, high=1); place = space(direction=(1, 0, 1), shift=move, length=0.15); line = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=line)',
+    "Ripple": 'k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.4, high=1); radius = space(shift=move, length=0.4, kind="radial"); ring = curve(radius, "Soft"); color(brightness=ring)',
+    "Wrapping ripple": 'k = clock(every=2); radius = space(kind="radial", wrap=True); lag = curve(radius, "Ramp down", low=-0.4, high=0.6); t = time(k, length=0.7143, phase=lag); ring = curve(t, [[0, 0], [0.6, 0, [0.4, 0, 0.6, 1]], [0.8, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=ring)',
+    "Spin": 'k = clock(every=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.75, 0], [0.7625, 1], [1, 0]]); color(brightness=arm)',
+    "Grow": 'radius = space(kind="radial"); start = curve(radius, "Ramp up"); t = time(delay=start); on = curve(t, "Step up"); color(brightness=on)',
+    "Turning line": 'k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)',
+    "Spiral": 'k = clock(every=4); radius = space(kind="radial"); inner = curve(radius, "Ramp up"); outer = curve(radius, "Ramp up", low=1, high=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down", low=inner, high=outer); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=arm)',
+    "Mirror": 'k = clock(every=2); halves = mirror(); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(halves, shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)',
+    "Kaleidoscope": 'k = clock(every=4); sides = mirror(normal=(1, 0, 0)); quarters = mirror(sides, normal=(0, 0, 1)); turn = space(quarters, kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]); color(brightness=arm)',
+    "Slash": 'k=clock(every=2); cut=curve(time(k, delay=curve(space(direction=(-0.82,0,0.57)), "Ramp up", low=0, high=0.2)), "Step up"); d=space(direction=(0.57,0,0.82)); v=[[0,1],[0.68,0],[1,0.47]]; bloom=curve(time(k, delay=curve(d, v, low=0, high=0.9), length=curve(d, v, low=0.05, high=0.4)), "Ramp up"); fade=curve(time(k), [[0,1,"hold"],[0.2,1,"sine-out"],[1,0]]); color(brightness=[cut, bloom, fade])',
     "Position": "aim(direction=D)",
-    "Fan": 'aim(direction=D, yaw=curve(space(), "Ramp up", low=-25, high=25))',
-    "Converge": 'aim(base="point", point=(0, 3, 0))',
-    "Follow": 'aim(base="point", point=curve(time(), "Ramp up", low=(-3,3,0), high=(3,3,0)))',
-    "Bloom": 'aim(base="away", point=curve(time(), "Ramp up", low=(0,0,40), high=(0,0,7)))',
-    "Sweep": 'aim(direction=D, yaw=curve(time(clock(every=8)), "Sine", low=-45, high=45))',
-    "Nod wave": 'k=clock(every=4); aim(direction=D, pitch=curve(time(k, phase=curve(space(), "Ramp up", high=0.6)), "Sine", low=-25, high=25))',
-    "Circle": 't=time(clock(every=4)); aim(direction=D, yaw=curve(t, "Cosine", low=-18, high=18), pitch=curve(t, "Sine", low=-18, high=18))',
-    "Figure-8": 't=time(clock(every=4)); aim(direction=D, yaw=curve(t, "Sine", low=-25, high=25), pitch=curve(t, "Double sine", low=-12.5, high=12.5))',
-    "Pinwheel": 't=time(clock(every=4), phase=curve(space(kind="angle"), "Ramp up")); aim(direction=D, yaw=curve(t, "Cosine", low=-20, high=20), pitch=curve(t, "Sine", low=-20, high=20))',
-    "Scissor": 'm=mirror(); aim(heads=m, direction=D, yaw=curve(time(clock(every=4)), "Sine", low=-30, high=30))',
-    "Ballyhoo": 'aim(direction=D, yaw=curve(noise(speed=4, scale=0.02), "Ramp up", low=-40, high=40), pitch=curve(noise(speed=4, scale=0.02), "Ramp up", low=-40, high=40))',
-    "Tunnel": 'aim(base="point", point=(0, 25, 1.5))',
-    "Up/down flip": 'aim(direction=D, pitch=curve(time(clock(every=2)), "Square", low=-30, high=30))',
-    "Dissolve": 'color(brightness=curve(space(shuffle(), kind="order", offset=0, width=curve(time(), "Ramp down")), "On"))',
-    "Comet": 'k=clock(every=2); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-0.2, high=1), width=0.2), "Comet"))',
+    "Fan": 'place = space(); spread = curve(place, "Ramp up", low=-25, high=25); aim(direction=D, yaw=spread)',
+    "Converge": 'aim(point=(0, 3, 0), base="point")',
+    "Follow": 't = time(); target = curve(t, "Ramp up", low=(-3, 3, 0), high=(3, 3, 0)); aim(point=target, base="point")',
+    "Bloom": 't = time(); source = curve(t, "Ramp up", low=(0, 0, 40), high=(0, 0, 7)); aim(point=source, base="away")',
+    "Sweep": 'k = clock(every=8); t = time(k); swing = curve(t, "Sine", low=-45, high=45); aim(direction=D, yaw=swing)',
+    "Nod wave": 'k = clock(every=4); place = space(); lag = curve(place, "Ramp up", high=0.6); t = time(k, phase=lag); nod = curve(t, "Sine", low=-25, high=25); aim(direction=D, pitch=nod)',
+    "Circle": 'k = clock(every=4); t = time(k); across = curve(t, "Cosine", low=-18, high=18); up = curve(t, "Sine", low=-18, high=18); aim(direction=D, yaw=across, pitch=up)',
+    "Figure-8": 'k = clock(every=4); t = time(k); across = curve(t, "Sine", low=-25, high=25); up = curve(t, "Double sine", low=-12.5, high=12.5); aim(direction=D, yaw=across, pitch=up)',
+    "Pinwheel": 'k = clock(every=4); turn = space(kind="angle"); lag = curve(turn, "Ramp up"); t = time(k, phase=lag); across = curve(t, "Cosine", low=-20, high=20); up = curve(t, "Sine", low=-20, high=20); aim(direction=D, yaw=across, pitch=up)',
+    "Scissor": 'k = clock(every=4); halves = mirror(); t = time(k); swing = curve(t, "Sine", low=-30, high=30); aim(heads=halves, direction=D, yaw=swing)',
+    "Ballyhoo": 'drift = noise(speed=4, scale=0.02); across = curve(drift, "Ramp up", low=-40, high=40); wander = noise(speed=4, scale=0.02); up = curve(wander, "Ramp up", low=-40, high=40); aim(direction=D, yaw=across, pitch=up)',
+    "Tunnel": 'aim(point=(0, 25, 1.5), base="point")',
+    "Up/down flip": 'k = clock(every=2); t = time(k); flip = curve(t, "Square", low=-30, high=30); aim(direction=D, pitch=flip)',
     "Wobble strobe": 'strobe(rate=curve(time(clock(every=0.25)), "Square"))',
     "Strobe": "strobe(rate=0.9)",
-    "Ramp": 'strobe(rate=curve(time(), "Ramp up"))',
-    "Strobe follows a band": 'strobe(rate=curve(audio(40, 100), "Ramp up", low=0.3, high=1))',
-    "Kick chase": 'k=clock(every=1); color(brightness=curve(space(offset=curve(time(k), "Ramp up", low=-0.2, high=1), width=curve(audio("Kick"), "Ramp up", low=0.05, high=0.4)), "On"))',
+    "Ramp": 't = time(); rise = curve(t, "Ramp up"); strobe(rate=rise)',
+    "Strobe follows a band": 'kick = audio(40, 100); rate = curve(kick, "Ramp up", low=0.3, high=1); strobe(rate=rate)',
+    "Kick chase": 'k=clock(every=1); move=curve(time(k), "Ramp up", low=-0.2, high=1); pill=curve(space(shift=move, length=0.2), [[0,0],[0,1],[1,1],[1,0]]); color(brightness=[pill, curve(audio("Kick"), "Ramp up", low=0.2, high=1)])',
 }
 
 
@@ -158,12 +164,76 @@ class ClipBuilderTests(unittest.TestCase):
     def setUp(self):
         clip_module.install_presets(PRESETS)
 
-    def test_chase_builds_the_section_4_json(self):
+    def test_chase_builds_the_preset_json(self):
         k = clock(every=2)
-        pos = curve(time(k), "Ramp up", low=-0.2, high=1)
-        graph = color(color=(1, 1, 1), brightness=curve(space(offset=pos, width=0.2), "On"))
+        t = time(k)
+        move = curve(t, "Ramp up", low=-0.2, high=1)
+        place = space(shift=move, length=0.2)
+        pill = curve(place, PILL)
+        graph = color(brightness=pill)
         self.assertEqual(graph.json(), CHASE_JSON)
         self.assertEqual(json.loads(json.dumps(graph.json())), CHASE_JSON)
+
+    def test_variable_names_are_node_ids_and_round_trip(self):
+        k = clock(every=2)
+        bloom_far = curve(time(k), "Ramp up")
+        graph = color(brightness=[bloom_far, curve(time(k), "Spike")])
+        # Named nodes keep their variable; the rest are numbered per kind.
+        self.assertEqual(sorted(graph.nodes), ["bloom_far", "color1", "curve1", "k", "time1", "time2"])
+        self.assertIn("bloom_far = curve(x=time1, shape='Ramp up')", graph.source())
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        # Renaming is assigning to another variable.
+        cut = bloom_far
+        renamed = color(brightness=cut)
+        self.assertIn("bloom_far", renamed.nodes, "the first variable bound wins")
+        self.assertIn("cut", run("k = clock(every=2); cut = curve(time(k)); color(brightness=cut)").nodes)
+        # A name that cannot be an id falls back to kind<n>.
+        self.assertFalse(clip_module._usable("time"))
+        self.assertFalse(clip_module._usable("lambda"))
+        self.assertFalse(clip_module._usable("x" * 33))
+        self.assertTrue(clip_module._usable("_fade2"))
+
+    def test_space_writes_only_a_changed_shift_and_length(self):
+        self.assertEqual(dict(space(shift=0, length=1).inputs), {})
+        move = curve(time(), "Ramp up")
+        place = space(direction=(1, 0, 0), shift=move, length=0.25, wrap=True)
+        graph = color(brightness=curve(place, "Triangle"))
+        self.assertIn("place = space(direction=(1, 0, 0), shift=move, length=0.25, wrap=True)", graph.source())
+        self.assertEqual(run(graph.source()).json(), graph.json())
+
+    def test_a_list_on_a_0_1_input_is_stored_as_a_list(self):
+        k = clock(every=2)
+        cut, fade = curve(time(k), "Step up"), curve(time(k), "Ramp down")
+        graph = color(color=(1, 0.5, 0), brightness=[cut, fade, 0.5], alpha=(0.5, 0.5, 0.5))
+        output = graph.nodes["color1"].inputs
+        self.assertEqual(output["brightness"], [{"node": "cut"}, {"node": "fade"}, 0.5])
+        # A 3-tuple is a color on color, and a list on alpha.
+        self.assertEqual((output["color"], output["alpha"]), ([1, 0.5, 0], [0.5, 0.5, 0.5]))
+        self.assertIn("brightness=[cut, fade, 0.5]", graph.source())
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        self.assertEqual(Graph.from_json(graph.json()).json(), graph.json())
+        rate = strobe(rate=[curve(noise(), "Ramp up"), 0.8])
+        self.assertEqual(rate.nodes["strobe1"].inputs["rate"], [{"node": "curve1"}, 0.8])
+        with self.assertRaisesRegex(ClipError, "graph: expected every node"):
+            Graph.from_json({"version": 2, "nodes": {
+                "time1": {"kind": "time"}, "color1": {"kind": "color", "inputs": {"brightness": [0.5, 0.5]}}}})
+
+    def test_time_writes_only_changed_delay_length_and_phase(self):
+        self.assertEqual(dict(time().inputs), {})
+        self.assertEqual(dict(time(delay=0, length=1, phase=0).inputs), {})
+        d = curve(space(), "Ramp up")
+        t = time(clock(every=4), delay=d, length=0.5, phase=-0.25)
+        self.assertEqual((t.inputs["delay"], t.inputs["length"], t.inputs["phase"]), (d, 0.5, -0.25))
+        graph = color(brightness=curve(t, "Step up"))
+        self.assertIn("t = time(clock=clock1, delay=d, length=0.5, phase=-0.25)", graph.source())
+        self.assertEqual(run(graph.source()).json(), graph.json())
+        self.assertEqual(graph.json()["version"], 2)
+
+    def test_a_jump_shape_passes_through(self):
+        jump = [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]
+        graph = color(brightness=curve(space(), jump))
+        self.assertEqual(graph.nodes["curve1"].inputs["shape"], {"points": jump})
+        self.assertIn("'Step up'", color(brightness=curve(time(), [[0, 0], [0, 1], [1, 1]])).source())
 
     def test_reusing_a_variable_links_one_node(self):
         t = time(clock(every=4))
@@ -194,7 +264,7 @@ class ClipBuilderTests(unittest.TestCase):
                 self.assertEqual(run(loaded.source()).json(), graph.json())
 
     def test_loaded_ids_stay_when_new_nodes_wire_in(self):
-        chase = Graph.from_json({"version": 1, "nodes": {
+        chase = Graph.from_json({"version": 2, "nodes": {
             "time4": {"kind": "time", "inputs": {}},
             "curve7": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {"x": {"node": "time4"}}},
             "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve7"}}}}})
@@ -226,10 +296,10 @@ class ClipBuilderTests(unittest.TestCase):
     def test_definition_defaults_build(self):
         for kind, inputs in clip_module._INPUTS.items():
             with self.subTest(kind):
-                built = getattr(clip_module, kind)(**{name: None for name in inputs})
-                graph = built if isinstance(built, Graph) else color(brightness=built) if kind == "curve" else None
+                node = getattr(clip_module, kind)(**{name: None for name in inputs})
+                graph = node if isinstance(node, Graph) else color(brightness=node) if kind == "curve" else None
                 if graph is not None:
-                    self.assertEqual(graph.nodes[f"{kind}1"].kind, kind)
+                    self.assertIn(kind, [record.kind for record in graph.nodes.values()])
 
     def test_preset_inherits_its_name_and_is_a_copy(self):
         graph = preset("Chase")

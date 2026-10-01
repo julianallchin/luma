@@ -367,7 +367,7 @@ mod tests {
     use super::{p, same_document};
 
     /// A clip as the editor wrote it, from a session that blinked.
-    const CLIP: &str = r#"{"name": "Chase", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "graph": {"version": 1, "nodes": {"time1": {"kind": "time"}, "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0.0, 0.0, [0.4920748472213745, 0.0070618391036987305, 0.4920748472213745, 0.9999237060546875]], [1.0, 1.0]]}}}, "color1": {"kind": "color", "inputs": {"color": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707], "brightness": {"node": "curve1"}}}}}}"#;
+    const CLIP: &str = r#"{"name": "Chase", "start": 73.0, "duration": 0.99988652, "seed": 1029648076447695423, "selection": {"expression": "led_bars_vertical"}, "z_index": 1, "blend_mode": "replace", "graph": {"version": 2, "nodes": {"time1": {"kind": "time"}, "curve1": {"kind": "curve", "settings": {"kind": "number"}, "inputs": {"x": {"node": "time1"}, "shape": {"points": [[0.0, 0.0, [0.4920748472213745, 0.0070618391036987305, 0.4920748472213745, 0.9999237060546875]], [1.0, 1.0]]}}}, "color1": {"kind": "color", "inputs": {"color": [0.38823529411764707, 0.38823529411764707, 0.38823529411764707], "brightness": {"node": "curve1"}}}}}}"#;
 
     fn score(clip: serde_json::Value) -> p::Score {
         serde_json::from_value(serde_json::json!({

@@ -27,7 +27,8 @@ mode. Build, add, measure, apply.
 
 ## A complete example: a kick-driven chase over a wash
 
-A dim blue wash, with a white chase above it. The kick makes the pill wider.
+A dim blue wash, with a white chase above it. The kick makes the chase
+brighter.
 
 ```python
 edit = luma.track.edit()
@@ -37,9 +38,10 @@ edit.add_clip(color(color="#1030ff", brightness=0.3),
               name="Blue wash", seconds=(0.0, end), selection="all")
 
 k = clock(every=1, duration=2)
-pos = curve(time(k), "Ramp up", low=-0.4, high=1)
-width = curve(audio("Kick"), "Ramp up", low=0.1, high=0.4)
-chase = color(brightness=curve(space(offset=pos, width=width), "On"))
+move = curve(time(k), "Ramp up", low=-0.2, high=1)
+pill = curve(space(shift=move, length=0.2), [[0, 0], [0, 1], [1, 1], [1, 0]])
+kick = curve(audio("Kick"), "Ramp up", low=0.3, high=1)
+chase = color(brightness=[pill, kick])
 clip = edit.add_clip(chase, name="Kick chase", seconds=(0.0, end),
                      selection="led_bars_vertical", blend="screen")
 edit.check()
@@ -59,7 +61,18 @@ graph to `edit.update_clip(clip, graph=...)`.
 - **A clock needs `every`.** For once over the clip, give `time()` no clock.
 - **Reuse a variable to share a node.** `t = time(k)` used twice is one
   time node. Two `noise(...)` calls are two streams.
-- **A pill that enters and leaves** needs an offset from `-width` to 1.
+- **Two ways to move.** Slide the place: a curve over time or audio on
+  `space(shift=...)` moves a shape along the heads with its own ease
+  (chase, bounce, meter). Or give each head its own clock: a curve over
+  space on `time(...)`, on `phase` for a loop (wave, spin), on `delay` for a
+  one-shot (wipe, dissolve), on `length` for a speed per head.
+- **Variable names are node names.** `pill = curve(...)` is node `pill` on
+  its card and in errors. Name the nodes that matter.
+- **A region is a jump.** Two points at the same x make a step:
+  `[[0, 1], [0.5, 1], [0.5, 0], [1, 0]]`. "Step up" and "Step down" are
+  presets.
+- **A list multiplies.** On brightness, alpha, strobe rate and noise
+  contrast, `[a, b, 0.5]` is a × b × 0.5. On other inputs a list is an error.
 - **Settings are not wired.** `kind`, `wrap`, `base` and `by` are plain words.
 - **`edit.check()` takes no arguments.** So do `edit.diff()` and `edit.apply()`.
 - **`luma.track.document` is a property.** Do not call it.
