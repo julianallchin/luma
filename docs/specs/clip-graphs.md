@@ -27,19 +27,76 @@ graph, names included. An LD thinks in three things: color (which color),
 brightness (the pattern across lights: chase, pulse, cut), alpha (the whole
 clip's opacity over time; the timeline fade points edit it).
 
+### Black or transparent: one rule
+
+**Brightness 0 is black light. Alpha 0 is no clip.** A head at brightness
+0 (or rate 0) is lit black: in `replace` it covers the light below with
+black. A head at alpha 0 is not there: the light below shows, in every
+blend mode. Between a clock's events, and outside the clip, the clip is
+alpha 0, for color, strobe and aim alike. So a gap between pulses shows
+the clip below; a curve that dims to 0 inside an event paints black.
+
+### Audit (2026-09-30)
+
+Julian approved these from an audit: shaders and standard compositing.
+
+1. A curve jump reads the value after it, at every x, 0 and 1 too: each
+   piece covers [a, b), as a shader's `step` and a hold keyframe. A pill
+   `[[0, 0], [0, 1], [1, 1], [1, 0]]` covers [0, 1); two pills side by side
+   share no head. A front lights a head once it has reached it: Slash's cut
+   is `x = front − place` (a space along −direction shifted by 1 − front)
+   under a rising step, so the far corner is lit when the front stops on
+   it. A sweep that must light its last head runs its front past it (Grow
+   and VU meter: shift up to 1.1; Wipe: its delay ends at 3 of 4 beats;
+   Stepped chase: a quarter block on a ring of cells).
+2. `replace` is the top light. Opacity is alpha's job:
+   `out = mix(below, blend(below, clip), alpha)`.
+3. `radial` and `angle` measure around `at = (u, v, z)`, each 0–1 within
+   the span's box, empty = its middle (0.5, 0.5, 0.5). Radial is the
+   distance from `at` over the largest distance, `d / max` (not
+   `(d − min) / (max − min)`): `shift` moves rings outward from the centre.
+4. Overlapping events of a clock make one layer: color and strobe keep the
+   largest value per channel across live events (premultiplied by alpha:
+   lighten); aim lays the newest event over the older by its alpha. This
+   replaces "one whole event wins per head" (5.3).
+5. Blend modes `lighten` (the same as `max`) and `value` are gone.
+6. Black or transparent: the rule above.
+7. A phase always wraps when set, 0 too: `τ = fract(τ + phase)`, any real
+   phase.
+8. Audio reads 0–1 over the whole track, not over the clip: every clip on
+   a track reads the same level at the same moment.
+9. The empty (best-fit) direction of a line, and the empty normal of a
+   mirror, is the stage axis (+U, +V or +Z) the heads spread along most,
+   U before V before Z on ties: a symmetric rig never flips.
+10. A Bézier ease keeps x1 and x2 in 0–1; y1 and y2 may be any number (CSS
+    `cubic-bezier` allows it). Values may leave 0–1 between points; the
+    output nodes clamp.
+11. The curve editor draws a smaller plot with a sharp border at the 0–1
+    bounds and air around it, so handles and overshooting curves show
+    outside the border.
+
+Migration (`migrate_clip_graphs_v3.py --cells`, the clip's own rig from
+`clip_cells`): `lighten` → `max`; `value` → `replace` with alpha ×
+brightness; a phase of 0 goes; a radial or angle space takes `at` at its
+old centroid, and a radial one takes its nearest head's share m of the
+largest distance into shift and scale (`shift' = m + shift·(1 − m)`,
+`scale' = scale·(1 − m)`; on a wrapped ring of n units the first m is
+`m·(n − ½)/n`); an empty direction or normal whose old principal axis is
+not a stage axis is written out. Parity plays each clip on its own rig.
+
 Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 `shuffle`, `group`, `split`, `color`, `aim`, `strobe`. `clock` is gone.
 
 | Change | v3 |
 |---|---|
 | alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
-| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase, `τ = (τ + phase) mod 1`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
+| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
 | shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
 | space | `space(heads, direction, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0), same math: `x = (a − shift) / scale`; with `wrap` it tiles, `x = fract((a − shift) / scale)` (changed 2026-09-30, decision 50). A `line` space whose direction is parallel to the normal of a mirror in its heads (the latest such mirror) measures from that mirror's plane: `a = (p − plane) · direction / R`, `R` the span's extent along the direction before any fold; 0 is on the plane. |
 | mirror | `mirror(heads, normal, at)`. `at` share (0–1, T): the plane sits at `at` along the normal across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. |
 | math | `math`: setting `op` = `*` \| `+` \| `-` \| `max` \| `min` (default `*`); input `values`: a list of numbers and value wires (curves or math). `*`, `+`, `max`, `min` take 2 or more items, `-` exactly 2 (`a − b`). Tensors broadcast: a number times a color is a color. The output is a value of the widest input kind (color > vector > number; color with vector is an error). A math result wires like a curve, into any value input or a curve's low or high. Its inputs carry at most one clock. |
 | lists | Gone from outputs. `brightness=[a, b]` is `brightness=a * b` (one math node). |
-| curve | A node; low and high wireable. At a jump (two points at one x), x itself reads the larger value: a head exactly on an edge is lit. Ties are decided the same way for every jump, over space or time, inside 0–1 or at its ends. So Slash's cut lights the far corner when its front stops on it; a step in time is on at the beat it switches on or off; the middle rank of an odd count sits on a 0.5 jump and is lit. A `hold` ease is not a jump. |
+| curve | A node; low and high wireable. At a jump (two points at one x), x itself reads the value after it (audit 1): each piece covers [a, b), over space or time, inside 0–1 or at its ends. The middle rank of an odd count sits on a 0.5 jump and goes with the upper half. A `hold` ease is not a jump. |
 
 Python: `time(every=None, duration=None, delay=None, phase=None)`,
 `space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)`,
@@ -89,7 +146,7 @@ as before, and all 103 fail without the rewrite.
 7. `curve` is the only node that turns a coordinate into a value: number, vector or color.
 8. Shapers change the head set: `mirror`, `shuffle`, `group`, `split`. They stack.
 9. An empty input is the only default: no clock = once over the clip; no heads = all heads; no direction = best fit; no size = one fixture.
-10. Overlap is automatic. Per head, the event with the biggest effect shows; ties go to the newest.
+10. Overlap is automatic. A clock's live events make one layer: light keeps the largest per channel, aim lays the newest on top. No live event is transparent.
 
 Promotion means: an input changes from a value to a wire. Every input is a
 tensor over (heads, time, channels). A value has no heads or time axis and is
@@ -125,7 +182,7 @@ Values:
 | number | `0.5` | Unit comes from the input. |
 | vector | `[u, v, z]` | Stage frame: U right, V downstage, Z up. Direction or metres. |
 | color | `[r, g, b]` | Linear Rec. 2020, each 0–1. |
-| points | `{"points": [[x, v, ease], ...]}` | The one curve format. `x` 0→1 in order, `v` 0–1, 2–256 points, last point has no ease. Two points may share an `x`: a jump, where `x` itself reads the larger of the two values (ties at an edge count as lit). Three may not. Outside 0–1 the end values hold; a jump at x 0 or x 1 sets that outside value, so `[[0,0],[0,1],[1,1],[1,0]]` is 1 on [0, 1] closed and `[[0,1],[0,0],[1,0]]` is 1 up to 0 closed. |
+| points | `{"points": [[x, v, ease], ...]}` | The one curve format. `x` 0→1 in order, `v` 0–1, 2–256 points, last point has no ease. Two points may share an `x`: a jump, where `x` itself reads the value after it. Three may not. Outside 0–1 the end values hold, so `[[0,0],[0,1],[1,1],[1,0]]` is 1 on [0, 1) and `[[0,1],[0,0],[1,0]]` is 1 below 0. A Bézier ease `[x1, y1, x2, y2]` keeps x1, x2 in 0–1; y1, y2 may overshoot. |
 | list | `[{"node": "curve2"}, 0.5]` | Numbers and number curves, multiplied. Only on a number input with range 0–1 (`"list": true` in its definition). Two or more items, all of one clock. |
 | gradient | `{"stops": [{"t": 0, "color": [r,g,b]}, ...]}` | Blends in OKLab. |
 | choice | `"line"` | Only in `settings`. |
@@ -166,7 +223,7 @@ Exactly one per graph. The clip's blend mode stays on the clip row.
 
 Light per head = color × brightness × alpha; a list is the product of its
 items. Blend modes: the light set
-(`replace`, `add`, `multiply`, `screen`, `max`, `min`, `lighten`, `value`, `subtract`).
+(`replace`, `add`, `multiply`, `screen`, `max`, `min`, `subtract`). `replace` is the top light.
 
 **aim**
 
@@ -228,7 +285,7 @@ event (axis `E`). Each head's clock:
 
 ```
 τ = (p − delay) / length          (length 0: a jump at the delay)
-τ = (τ + phase) mod 1              (only when phase ≠ 0)
+τ = fract(τ + phase)               (whenever a phase is set, 0 too)
 ```
 
 Without phase, τ is below 0 before the head's clock starts and above 1
@@ -258,18 +315,19 @@ Default `wrap` is no, except `angle`, where it is yes. The UI hides
 The raw axis coordinate `a` of a head, within its span:
 
 - `line`: projection of the head position on `direction`, scaled so the
-  lowest head is 0 and the highest 1. Empty direction = the principal axis of
-  the span's positions, signed so its largest component is positive (U before
-  V before Z on ties). One head, or all at one point: 0.5. With `wrap` yes
+  lowest head is 0 and the highest 1. Empty direction = the stage axis (+U,
+  +V or +Z) the span's positions spread along most (U before V before Z on
+  ties). One head, or all at one point: 0.5. With `wrap` yes
   the axis is a ring of the span's `n` units: `a' = (a·(n − 1) + 0.5) / n`,
   so the ends sit one mean spacing apart and never on one place (for evenly
   spaced heads this is the `order` cell).
 - `order`: the head's rank in the span's order, cell-centred:
   `(rank + 0.5) / n`. After `shuffle` the rank is the shuffled one.
-- `radial`: distance from the span's centroid in the plane, over the largest
-  distance; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
+- `radial`: distance from `at` in the plane, over the largest distance
+  (`d / max`); `at` (u, v, z), each 0–1 within the span's box, empty = its
+  middle; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
   spread (`AxisPlane::Auto` today, with its sign snap).
-- `angle`: turns 0–1 around the centroid in that plane (`Mapping::circle` today).
+- `angle`: turns 0–1 around `at` in that plane.
 
 The output is each head's field, the shader's `(p − offset) / scale`:
 
@@ -320,8 +378,8 @@ its own wander; that replaces `independent`.
 | low_hz | number | hz | 20–20000 | yes (T) | 40 |
 | high_hz | number | hz | 20–20000, > low_hz | yes (T) | 100 |
 
-Output 0–1: the band's energy from the full mix (`band_energy`), scaled over
-the clip by its min and max (`clip_range`). Threshold, floor and gain live in
+Output 0–1: the band's energy from the full mix (`band_energy`), scaled by
+its min and max over the whole track (`FeatureSource::range`). Threshold, floor and gain live in
 the curve's shape and low/high.
 
 ### 2.4 curve → number, vector or color
@@ -611,21 +669,21 @@ instead of `(library, form id, inputs, frame)`.
 
 ### 5.3 Overlap
 
-A wire downstream of clock `k` carries one value per live event of `k`. At
-the output node, for each clock `k` and each head and time:
+A wire downstream of a clock carries one value per live event. At the
+output node each clock's live events become one layer (`Combine`, audit 4),
+for each head and time:
 
-1. Effect per event `e` of `k` = the product of the output's numeric factors
-   that carry `E(k)`, at `e`. Factors: color = peak channel of color,
-   brightness, alpha; strobe = rate, alpha; aim = alpha, `|yaw| + |pitch|`.
-   Factors without `E(k)` do not change the ranking and are skipped.
-2. Winner = the present event with the largest effect; ties → the largest
-   event index (newest). No present event → all inputs of `k` read 0 (light
-   off, alpha 0).
-3. Every input that carries `E(k)` is read at the winner. Inputs of another
-   clock use their own winner.
-
-`Pick` computes the winner index; `Gather` reads it. This replaces `Latest`
-and the winner logic inside `SourceOp::Color`.
+1. Color and strobe: each output part (r, g, b; rate) is the product of
+   its factors that carry the clock, premultiplied by alpha when alpha
+   carries it, and the layer keeps the largest per part across the live
+   events (lighten). Its alpha is the largest alpha. The output divides the
+   light by the alpha back.
+2. Aim: each input part (direction, point, yaw, pitch) is laid newest over
+   older by the event's alpha (standard "over"); the layer's alpha is the
+   events' alphas laid over each other.
+3. No live event: the clip is transparent there, alpha 0 (the rule in
+   section 0). Inputs of another clock make their own layer; the layers and
+   the inputs with no clock multiply.
 
 ### 5.4 Delete and reuse
 
@@ -1116,7 +1174,7 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Stepped palette | `k = clock(every=4); t = time(k); hue = curve(t, "Steps 4", gradient="Rainbow"); color(color=hue)` | clock → time → curve(color) |
 | Two-color swap | `k = clock(every=2); t = time(k); hue = curve(t, "Square", gradient=[(0, "#ff2a00"), (1, "#0040ff")]); color(color=hue)` | clock → time → curve(color) |
 | Follows a band | `kick = audio(40, 100); level = curve(kick, "Ramp up"); color(brightness=level)` | audio → curve → brightness |
-| VU meter | `bass = audio(20, 250); level = curve(bass, "Ramp up"); bars = split(); height = space(bars, direction=(0, 0, 1), shift=level); meter = curve(height, "Step down"); color(brightness=meter)` | audio → curve → space.shift up each bar; Step down lights the heads below the level |
+| VU meter | `bass = audio(20, 250); level = curve(bass, "Ramp up", high=1.1); bars = split(); height = space(bars, direction=(0, 0, 1), shift=level); meter = curve(height, "Step down"); color(brightness=meter)` | audio → curve → space.shift up each bar; Step down lights the heads below the level; the level runs to 1.1 so the top head lights |
 | Random heads | `k = clock(every=1); order = shuffle(clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | clock → shuffle → space(order) → curve with a jump |
 | Random bars | `k = clock(every=1); bars = group(); order = shuffle(bars, clock=k); rank = space(order, kind="order"); half = curve(rank, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | clock → shuffle(group) → space → curve |
 | Sparkle | `k = clock(every=0.125, duration=0.5); order = shuffle(clock=k); rank = space(order, kind="order"); pick = curve(rank, [[0, 1], [0.3, 1], [0.3, 0], [1, 0]]); t = time(k); spike = curve(t, "Spike"); color(brightness=[pick, spike])` | one clock; a random 30% × a spike over time |
@@ -1133,20 +1191,20 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Wave | `k = clock(every=2); place = space(); lag = curve(place, "Ramp down", low=0.5, high=1); t = time(k, phase=lag); swell = curve(t, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]); color(brightness=swell)` | Chase with a wide soft pulse |
 | Bounce | `k = clock(every=4); t = time(k); move = curve(t, "Triangle", low=0, high=0.8); place = space(shift=move, length=0.2); pill = curve(place, "Soft"); color(brightness=pill)` | a there-and-back time curve on space.shift; a soft pill over the shifted space |
 | Comet | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); tail = curve(place, "Comet"); color(brightness=tail)` | Chase with a Comet shape: a sharp head and a tail |
-| Wipe | `k = clock(every=4); place = space(); start = curve(place, "Ramp up"); t = time(k, delay=start); on = curve(t, "Step up"); color(brightness=on)` | space → curve → time.delay; each head turns on in turn and stays on |
-| Stepped chase | `k = clock(every=4); t = time(k); move = curve(t, "Steps 4", low=0, high=0.75); place = space(shift=move, length=0.25); block = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=block)` | a Steps 4 curve on space.shift: the block jumps a quarter at a time |
+| Wipe | `t = time(every=4, delay=curve(space(), "Ramp up", low=0, high=3)); on = curve(t, "Step up"); color(brightness=on)` | space → curve → time.delay; each head turns on in turn over 3 beats and stays on |
+| Stepped chase | `t = time(every=4); place = space(shift=curve(t, "Steps 4", low=0, high=0.75), wrap=True); block = curve(place, [[0, 1], [0.25, 1], [0.25, 0], [1, 0]]); color(brightness=block)` | a Steps 4 curve on space.shift over a ring of cells: the block jumps a quarter at a time, each head in one block |
 | Many pills | `k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)` | Chase with four events alive at once |
 | Wrapping chase | `k = clock(every=2); ring = space(wrap=True); lag = curve(ring, "Ramp down"); t = time(k, phase=lag); pill = curve(t, [[0, 0], [0.8, 0], [0.8, 1], [1, 1]]); color(brightness=pill)` | a ring: the pill leaves one end and enters the other |
 | Colored pills | `k = clock(every=0.5, duration=2); t = time(k); move = curve(t, "Ramp up", low=-0.25, high=1); place = space(shift=move, length=0.25); age = time(k); hue = curve(age, "Ramp up", gradient="Rainbow"); pill = curve(place, "Soft"); color(color=hue, brightness=pill)` | each event has its own progress, so its own shift and its own color |
 | Speed-up chase | `t = time(); every = curve(t, "Ramp down", low=0.25, high=2); life = curve(t, "Ramp down", low=0.5, high=2); k = clock(every=every, duration=life); age = time(k); move = curve(age, "Ramp up", low=-0.4, high=1); size = curve(t, "Ramp down", low=0.1, high=0.4); place = space(shift=move, length=size); tail = curve(place, "Comet"); color(brightness=tail)` | one time() feeds every, duration and the length; the shift runs on each event |
 | Alternating sides | `k = clock(every=2); place = space(); lag = curve(place, [[0, 0.5], [0.5, 0.5], [0.5, 0], [1, 0]]); t = time(k, phase=lag); half = curve(t, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | the two halves are half a turn apart |
 | Diagonal slash | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.15, high=1); place = space(direction=(1, 0, 1), shift=move, length=0.15); line = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=line)` | Chase along a diagonal direction |
-| Slash | `k=clock(every=2); cut=curve(time(k, delay=curve(space(direction=(-0.82,0,0.57)), "Ramp up", low=0, high=0.2)), "Step up"); d=space(direction=(0.57,0,0.82)); v=[[0,1],[0.68,0],[1,0.47]]; bloom=curve(time(k, delay=curve(d, v, low=0, high=0.9), length=curve(d, v, low=0.05, high=0.4)), "Ramp up"); fade=curve(time(k), [[0,1,"hold"],[0.2,1,"sine-out"],[1,0]]); color(brightness=[cut, bloom, fade])` | not a shipped preset. cut × bloom × fade: a fast cut across one axis, a bloom out from a line with a fade-in that grows with distance, then a fade for all |
+| Slash | `t = time(every=2); diag = space(direction=(0.82, 0, -0.57), shift=curve(t, [[0, 1], [0.2, 0], [1, 0]])); cut = curve(diag, "Step up"); line = mirror(normal=(0.57, 0, 0.82), at=0.68); dist = space(heads=line, direction=(0.57, 0, 0.82), scale=curve(t, "Ramp up", low=0.04, high=0.74)); bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]]); fade = curve(t, [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]]); color(brightness=cut * bloom * fade)` | not a shipped preset. cut × bloom × fade: the cut is x = front − place under a rising step, so a head lights once the front reaches it, the far corner too |
 | Ripple | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.4, high=1); radius = space(shift=move, length=0.4, kind="radial"); ring = curve(radius, "Soft"); color(brightness=ring)` | Chase over radius: rings go out from the centre |
 | Wrapping ripple | `t = time(every=2); radius = space(shift=curve(t, "Ramp up", low=-0.4, high=1), kind="radial", wrap=True); ring = curve(radius, [[0, 0, [0.4, 0, 0.6, 1]], [0.2, 1, [0.4, 0, 0.6, 1]], [0.4, 0], [1, 0]]); color(brightness=ring)` | rings come in again at the centre; one ring per turn, its width 0.4 in the curve points (a wrapped scale tiles) |
 | Zoom out | `clip = time(); x = space(direction=(1, 0, 0), shift=curve(clip, [[0, 0, "ease-out"], [1, 1]]), scale=curve(clip, "Ramp up", low=0.5, high=0.125), wrap=True); color(brightness=curve(x, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))` | not a preset: a wrapped space tiles, so its scale 0.5 → 0.125 turns 2 soft pills into 8 with no head jump |
 | Spin | `k = clock(every=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.75, 0], [0.7625, 1], [1, 0]]); color(brightness=arm)` | angle wraps by default |
-| Grow | `clip = time(); radius = space(shift=curve(clip, "Ramp up"), kind="radial"); color(brightness=curve(radius, "Step down"))` | radius shifted by progress over the clip: heads turn on from the centre out |
+| Grow | `clip = time(); radius = space(shift=curve(clip, "Ramp up", high=1.1), kind="radial"); color(brightness=curve(radius, "Step down"))` | radius shifted by progress over the clip: heads turn on from the centre out, the farthest before the end |
 | Turning line | `k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)` | duration = 2 × every: two opposite arms alive |
 | Spiral | `k = clock(every=4); radius = space(kind="radial"); inner = curve(radius, "Ramp up"); outer = curve(radius, "Ramp up", low=1, high=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down", low=inner, high=outer); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=arm)` | phase by angle, moved by radius, bends the arm |
 | Mirror | `k = clock(every=2); halves = mirror(); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(halves, shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)` | Chase over mirrored heads: pills from both ends meet |
@@ -1329,7 +1387,7 @@ One line each; the alternative after "alt:".
 17. `split` has a setting `by` = fixture|group. alt: fixture only.
 18. `group.size`, `mirror.offset`, `mirror.normal`, `space.direction` and `audio.*_hz` are promotable over time only (no heads axis). alt: values only.
 19. `clock.every` is required and must be above 0; `every` 0 is an error (use no clock). alt: `every` 0 = once.
-20. Empty `space.direction` for line = the span's principal axis, signed so its largest component is positive (U, V, Z on ties); for radial/angle = the least-spread direction with the old sign snap. alt: a `toward` hint input.
+20. Empty `space.direction` for line = the stage axis the span spreads along most (U, V, Z on ties; audit 9); for radial/angle = the least-spread direction with the old sign snap. alt: a `toward` hint input.
 21. Storage adds `name` and `graph_json` columns; `graph` and `inputs_json` stay unread until a follow-up migration drops them after the upload is verified. alt: drop them in the same build (sqlx would drop before the converter runs).
 22. `graph.version` lives in the JSON; node ids are `<kind><n>`. alt: a version column.
 23. The builder names are bound bare in the exec namespace and also under `luma.clip`; bare `time` shadows the stdlib module there. alt: `luma.clip.time` only.
@@ -1355,8 +1413,9 @@ One line each; the alternative after "alt:".
 43. Clips follow shaders: space is a pure field and motion is each head's own clock, `time(delay, length, phase)` (changed 2026-09-30). Decisions 1–4 (strokes, offset, width) are gone with the band. alt: keep bands on space.
 44. `time.length` is how long each head's clock runs, in turns of the event (≥ 0, empty 1; 0 is a jump); delay and phase take any number. alt: a rate, or a clamped 0–1 delay.
 45. A list on a 0–1 input multiplies its items; it is stored as a list. alt: chain a curve's `high`.
-46. Two curve points may share an x (a jump); x itself reads the larger of the two values, so a head exactly on an edge or a moving front is lit (changed 2026-09-30; before, x read the second point and x 0 and x 1 the inner one, so Slash's cut never lit the far corner, which sits exactly where the front stops). A `hold` ease is not a jump: x of the next point reads that point. alt: hold eases and 0.001 offsets; read the side the front comes from.
+46. Two curve points may share an x (a jump); x itself reads the value after it, [a, b), at every x, 0 and 1 too, as a shader's step (changed 2026-09-30 by the audit; before, the larger of the two values). A front lights a head once it has reached it; Slash's cut is x = front − place under a rising step. A `hold` ease is not a jump. alt: the larger value (both pills light a shared edge head).
 47. "VU meter" and "Bounce" are presets again (changed 2026-09-30): the VU meter shifts the space by the audio level under a step; Bounce shifts it by a there-and-back time curve. alt: leave them out.
 48. `space.shift` and `space.length` give `(a − shift) / length`, the shader's UV offset and scale; motion is either a per-head clock (`time`) or a shifted field (`space`), and nothing else (2026-09-30). Length divides so a moving width stays one curve. alt: a delay per head for every sweep, which needs inverted eases and curve chains.
 49. A node's id is its Python variable name (any ASCII Python name up to 32 characters, not a builder name or keyword); unnamed nodes are `<kind><n>`; the card shows the id as-is, or "Curve 2" for a numbered id; the UI renames by editing the card title and rewrites every wire (2026-09-30). alt: numbered ids only.
 50. A wrapped space tiles like a shader texture: `x = fract((a − shift) / scale)`, scale first, then repeat, so a curve over time on scale zooms (0.5 → 0.125: 2 copies → 8); the ring spacing applies to `a` first (changed 2026-09-30; before, `((a − shift) mod 1) / scale`, one copy). Migrated clips move the scale into their curve points. alt: keep one copy and zoom by curve points.
+51. Audit (2026-09-30, section 0): replace is the top light; lighten and value go; overlapping events combine per channel (aim: newest on top); gaps and outside the clip are alpha 0; a phase always wraps; audio is normalised over the whole track; best fit is a stage axis; Bézier handles may overshoot; radial and angle measure around `at`, radial as d / max. alt: keep each old rule.
