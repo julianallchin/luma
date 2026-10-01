@@ -306,45 +306,6 @@ pub(crate) fn prune(graph: &mut ClipGraph) {
     graph.nodes.retain(|id, _| keep.contains(id));
 }
 
-/// Whether `id` is the id a new node of its kind gets: its kind's name and a
-/// number (`curve3`, `math1`), not a name someone gave it.
-pub(crate) fn numbered(graph: &ClipGraph, id: &str) -> bool {
-    let Some(node) = graph.nodes.get(id) else {
-        return false;
-    };
-    id.strip_prefix(node.kind.name())
-        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
-}
-
-/// The value nodes the canvas shows inline, as a chip on the one input that
-/// reads them, by that input (node, input): a curve or a math with a
-/// numbered id that exactly one input reads, the way the Python source
-/// writes it inline as the argument it feeds. A chip sits on a card's row
-/// or among the items of a math chip; a value node a curve chip reads is a
-/// card.
-pub(crate) fn inline(graph: &ClipGraph) -> std::collections::BTreeMap<String, (String, String)> {
-    let mut inline = std::collections::BTreeMap::new();
-    // From the output, so a reader is placed before what it reads.
-    for (from, input, to) in wires_in_order(graph) {
-        let in_curve_chip = inline.contains_key(&from)
-            && graph
-                .nodes
-                .get(&from)
-                .is_some_and(|node| node.kind != Kind::Math);
-        if in_curve_chip || inline.contains_key(&to) {
-            continue;
-        }
-        let value = graph
-            .nodes
-            .get(&to)
-            .is_some_and(|node| matches!(node.kind, Kind::Curve | Kind::Math));
-        if value && numbered(graph, &to) && references(graph, &to).len() == 1 {
-            inline.insert(to, (from, input));
-        }
-    }
-    inline
-}
-
 /// A signature of the graph's shape: kinds, ids, settings and wires. Clips
 /// of one shape are edited together.
 pub(crate) fn shape(graph: &ClipGraph) -> String {
@@ -954,38 +915,24 @@ pub(crate) fn attach(
 
 /// The canvas's columns, right to left: the output alone, then each card
 /// in the column one past the farthest card it feeds, so every wire runs
-/// left to right. A node in `inline` is a chip on its reader's card, not a
-/// card: what feeds it feeds that card. Within a column, cards follow the
-/// rows they feed in the column nearest them, so wires cross as little as
-/// the order allows. The same graph always gives the same columns.
-pub(crate) fn columns(
-    graph: &ClipGraph,
-    inline: &std::collections::BTreeMap<String, (String, String)>,
-) -> Vec<Vec<String>> {
+/// left to right. Within a column, cards follow the rows they feed in the
+/// column nearest them, and a math node's items in their order, so wires
+/// cross as little as the order allows. The same graph always gives the
+/// same columns.
+pub(crate) fn columns(graph: &ClipGraph) -> Vec<Vec<String>> {
     let Some(root) = output(graph) else {
         return Vec::new();
-    };
-    // The card a node shows on, and the row there that it feeds.
-    let card = |id: &str, input: &str| -> (String, String) {
-        let (mut id, mut input) = (id.to_owned(), input.to_owned());
-        for _ in 0..=inline.len() {
-            match inline.get(&id) {
-                Some((host, row)) => (id, input) = (host.clone(), row.clone()),
-                None => break,
-            }
-        }
-        (id, input)
     };
     let mut depth: std::collections::BTreeMap<String, usize> = [(root.clone(), 0)].into();
     // A graph that checks has no cycle; the bound keeps one from spinning.
     for _ in 0..=graph.nodes.len() {
         let mut changed = false;
         for (id, node) in &graph.nodes {
-            let Some(&at) = depth.get(&card(id, "").0) else {
+            let Some(&at) = depth.get(id) else {
                 continue;
             };
             for (_, from) in node.wires() {
-                if inline.contains_key(from) || !graph.nodes.contains_key(from) {
+                if !graph.nodes.contains_key(from) {
                     continue;
                 }
                 if depth.get(from).is_none_or(|&d| d < at + 1) {
@@ -1002,7 +949,7 @@ pub(crate) fn columns(
     let mut columns: Vec<Vec<String>> = vec![Vec::new(); count];
     columns[0].push(root);
     for column in 1..count {
-        let mut keyed: Vec<((usize, usize, usize), String)> = graph
+        let mut keyed: Vec<((usize, usize, usize, usize), String)> = graph
             .ids_in_order()
             .into_iter()
             .filter(|id| depth.get(*id) == Some(&column))
@@ -1010,18 +957,24 @@ pub(crate) fn columns(
                 let key = references(graph, id)
                     .into_iter()
                     .filter_map(|(to, input)| {
-                        let (to, input) = card(&to, &input);
                         let at = *depth.get(&to)?;
                         let row = columns[at].iter().position(|placed| *placed == to)?;
-                        let kind = graph.nodes.get(&to)?.kind;
-                        let slot = definition(kind)
+                        let node = graph.nodes.get(&to)?;
+                        let slot = definition(node.kind)
                             .inputs
                             .iter()
                             .position(|(name, _)| *name == input)?;
-                        Some((column - at, row, slot))
+                        let item = match node.inputs.get(&input) {
+                            Some(Input::List(items)) => items
+                                .iter()
+                                .position(|item| item.source() == Some(id))
+                                .unwrap_or(0),
+                            _ => 0,
+                        };
+                        Some((column - at, row, slot, item))
                     })
                     .min()
-                    .unwrap_or((usize::MAX, 0, 0));
+                    .unwrap_or((usize::MAX, 0, 0, 0));
                 (key, id.to_owned())
             })
             .collect();
@@ -1169,29 +1122,41 @@ mod tests {
 
     #[test]
     fn columns_run_from_the_sources_to_the_output() {
-        let graph = chase();
-        let inline = inline(&graph);
-        let columns = columns(&graph, &inline);
+        let mut graph = chase();
+        multiply(&mut graph, "color1", "brightness");
+        promote(
+            &mut graph,
+            &wired(&graph, "color1", "brightness"),
+            "values",
+            Kind::Time,
+        );
+        let columns = columns(&graph);
         assert_eq!(columns[0], ["color1"]);
-        // A chip's column is its card's.
-        let column = |id: &str| {
-            let id = inline.get(id).map_or(id, |(host, _)| host.as_str());
-            columns.iter().position(|c| c.iter().any(|n| n == id))
-        };
-        // Every wire runs from a column further left into one further right,
-        // or into a chip on the card it feeds.
+        let column = |id: &str| columns.iter().position(|c| c.iter().any(|n| n == id));
+        // Every node is a card, and every wire runs from a column further
+        // left into one further right.
         for (id, node) in &graph.nodes {
             for (_, from) in node.wires() {
-                if !inline.contains_key(from) {
-                    assert!(column(from) > column(id), "{from} feeds {id}");
-                }
+                assert!(column(from) > column(id), "{from} feeds {id}");
             }
         }
         assert_eq!(
             columns.iter().map(Vec::len).sum::<usize>(),
-            graph.nodes.len() - inline.len()
+            graph.nodes.len()
         );
-        assert_eq!(columns, super::columns(&graph.clone(), &inline));
+        // A product's items stand in its order.
+        let product = wired(&graph, "color1", "brightness");
+        let Some(Input::List(items)) = graph.nodes[&product].inputs.get("values") else {
+            panic!("no items");
+        };
+        let wires: Vec<&str> = items.iter().filter_map(Input::source).collect();
+        let at = &columns[column(wires[0]).unwrap()];
+        let place = |id: &str| at.iter().position(|n| n == id);
+        assert!(
+            wires.windows(2).all(|pair| place(pair[0]) < place(pair[1])),
+            "{columns:?}"
+        );
+        assert_eq!(columns, super::columns(&graph.clone()));
     }
 
     #[test]
@@ -1275,42 +1240,6 @@ mod tests {
         );
         // A color holds no number, so a plain color has nothing to multiply.
         assert!(!can_multiply(&graph, "color1", "color"));
-    }
-
-    #[test]
-    fn a_numbered_value_node_one_input_reads_is_inline_and_a_shared_or_named_one_is_a_card() {
-        let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Time);
-        let curve = wired(&graph, "color1", "brightness");
-        assert_eq!(
-            inline(&graph).get(&curve),
-            Some(&("color1".to_owned(), "brightness".to_owned()))
-        );
-        // Shared by two inputs: a card.
-        link(&mut graph, "color1", "alpha", &curve);
-        assert!(!inline(&graph).contains_key(&curve));
-        set_input(&mut graph, "color1", "alpha", None);
-        // Named: a card.
-        rename(&mut graph, &curve, "cut").unwrap();
-        assert!(inline(&graph).is_empty());
-        // A curve chip holds no chip: a curve it reads is a card.
-        let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Time);
-        let outer = wired(&graph, "color1", "brightness");
-        promote(&mut graph, &outer, "high", Kind::Space);
-        let inner = wired(&graph, &outer, "high");
-        let chips = inline(&graph);
-        assert!(chips.contains_key(&outer) && !chips.contains_key(&inner));
-        // A product's items are chips in its chip, as `a * b` writes them.
-        let mut graph = wash();
-        promote(&mut graph, "color1", "brightness", Kind::Time);
-        let first = wired(&graph, "color1", "brightness");
-        multiply(&mut graph, "color1", "brightness");
-        let product = wired(&graph, "color1", "brightness");
-        promote(&mut graph, &product, "values", Kind::Space);
-        let chips = inline(&graph);
-        assert_eq!(chips.len(), 3, "{chips:?}");
-        assert_eq!(chips[&first], (product.clone(), "values".to_owned()));
     }
 
     #[test]

@@ -1049,6 +1049,67 @@ fn labelled(name: &'static str, field: impl IntoElement) -> gpui::Div {
         .child(field)
 }
 
+/// The air around a small plot's 0–1 box, where a handle or an overshoot
+/// still shows.
+const SMALL_PAD_X: f32 = 6.;
+const SMALL_PAD_Y: f32 = 8.;
+
+/// A small picture of `value`, `height` tall, as the strip draws it: a
+/// number's line in its bordered 0–1 box with air around it, a color's
+/// fill. It takes no gestures; the host decides what a press on it does.
+pub fn plot(value: &StripValue, height: f32) -> gpui::Div {
+    let frame = div()
+        .relative()
+        .w_full()
+        .h(rpx(height))
+        .flex_none()
+        .rounded(rpx(crate::radius::ROW))
+        .border_1()
+        .border_color(crate::glass::hairline(0.08))
+        .bg(crate::glass::ink(0.03));
+    let StripValue::Number(curve) = value else {
+        return frame.p(rpx(3.)).child(
+            div()
+                .size_full()
+                .flex()
+                .rounded(rpx(crate::radius::CAP))
+                .bg(gpui::black())
+                .overflow_hidden()
+                .children(value.fill()),
+        );
+    };
+    let curve = curve.clone();
+    frame.child(
+        canvas(
+            |_, _, _| {},
+            move |air, _, window, _| {
+                let scale = crate::rem_scale(window);
+                let (pad_x, pad_y) = (gpui::px(SMALL_PAD_X * scale), gpui::px(SMALL_PAD_Y * scale));
+                let bounds = Bounds {
+                    origin: point(air.origin.x + pad_x, air.origin.y + pad_y),
+                    size: size(air.size.width - pad_x * 2., air.size.height - pad_y * 2.),
+                };
+                window.paint_quad(gpui::outline(
+                    bounds,
+                    crate::glass::hairline(0.32),
+                    gpui::BorderStyle::Solid,
+                ));
+                window.with_content_mask(Some(ContentMask { bounds: air }), |window| {
+                    paint_envelope(
+                        window,
+                        bounds,
+                        &curve,
+                        gpui::px(1.5 * scale),
+                        ladder::foreground(),
+                    );
+                });
+            },
+        )
+        .absolute()
+        .size_full(),
+    )
+}
+
 /// A line per beat over `beats`, a stronger one per bar of four.
 pub(crate) fn paint_grid(
     window: &mut Window,
