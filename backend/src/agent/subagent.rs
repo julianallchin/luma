@@ -28,7 +28,10 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::tools::ToolContext;
-use super::{transcript, AgentChatPart, Role, Transcript, TurnEvent, TurnOutcome, UserPrompt};
+use super::{
+    transcript, AgentChatPart, Role, ThreadScope, Transcript, TurnContext, TurnEvent, TurnOutcome,
+    UserPrompt,
+};
 use crate::database::local::agent_threads as db;
 use crate::models::agent_threads::{AgentThread, CreateAgentThreadInput};
 use crate::services::drafts;
@@ -284,7 +287,18 @@ pub(super) async fn delegate(
     };
     ctx.progress.subagent(&snapshot);
 
-    let (result, transcript) = run_child(ctx, &child.id, delegation.task, &mut snapshot).await;
+    // The child's message names what it works on, as a person's would: the
+    // system prompt no longer does.
+    let prompt = UserPrompt {
+        text: delegation.task,
+        context: ThreadScope::try_from(&parent)
+            .ok()
+            .map(|scope| TurnContext {
+                scope: Some(scope),
+                editor: None,
+            }),
+    };
+    let (result, transcript) = run_child(ctx, &child.id, prompt, &mut snapshot).await;
     let text = final_assistant_text(&transcript);
 
     let outcome = match result {
@@ -323,10 +337,10 @@ pub(super) async fn delegate(
 async fn run_child(
     ctx: &ToolContext<'_>,
     child_thread_id: &str,
-    task: String,
+    prompt: UserPrompt,
     snapshot: &mut SubagentSnapshot,
 ) -> (Result<(), String>, Transcript) {
-    let mut stream = ctx.agent.turn(child_thread_id, UserPrompt::from(task));
+    let mut stream = ctx.agent.turn(child_thread_id, prompt);
     let mut transcript = Transcript::default();
     let mut result = Err("the subagent's turn ended without a verdict".to_string());
     while let Some(event) = stream.next().await {

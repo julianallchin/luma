@@ -840,6 +840,94 @@ async fn steering_mid_turn_lands_between_tool_steps() {
     assert!(!transcript.unfinished());
 }
 
+/// A prompt and a steer each with the editor as it stood when sent.
+fn prompt_at(text: &str, playhead: f64) -> UserPrompt {
+    UserPrompt {
+        text: text.into(),
+        context: Some(TurnContext {
+            scope: Some(ThreadScope::track("track-1", "venue-1", "score-1")),
+            editor: Some(EditorState::capture(playhead, None, [], None)),
+        }),
+    }
+}
+
+/// The editor travels with each message, the new turn's and the steer's: the
+/// model reads it as a block after the typed text, the rows keep it, and the
+/// system prompt never carries it.
+#[tokio::test]
+async fn each_message_carries_the_editor_as_it_was_sent() {
+    let fixture = fixture().await;
+    let scripted = Arc::new(ScriptedModel::new(tool_then_reply()));
+    let service = AgentService::new(fixture.services.clone())
+        .with_model(Arc::clone(&scripted) as Arc<dyn super::model::ModelClient>)
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
+
+    let mut stream = service.turn(&fixture.thread_id, prompt_at("make it dark", 12.5));
+    stream.steer(prompt_at("darker", 40.25));
+    let events = drain(&mut stream).await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(TurnEvent::TurnEnded {
+                outcome: TurnOutcome::Completed
+            })
+        ),
+        "{events:#?}"
+    );
+
+    let text = |block: &super::model::ContentBlock| match block {
+        super::model::ContentBlock::Text(text) => Some(text.clone()),
+        _ => None,
+    };
+    let requests = scripted.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(
+            request
+                .system
+                .iter()
+                .all(|part| !part.contains("editor-context") && !part.contains("track-1")),
+            "the system prompt is the same for every turn"
+        );
+    }
+    let first: Vec<_> = requests[0].messages[0]
+        .content
+        .iter()
+        .filter_map(text)
+        .collect();
+    assert_eq!(first[0], "make it dark");
+    assert!(first[1].starts_with("<editor-context>\nTrack: track-1"));
+    assert!(first[1].contains("Playhead: 12.50 s"), "{first:?}");
+    let last: Vec<_> = requests[1]
+        .messages
+        .last()
+        .expect("messages")
+        .content
+        .iter()
+        .filter_map(text)
+        .collect();
+    assert_eq!(last[0], "darker");
+    assert!(last[1].contains("Playhead: 40.25 s"), "{last:?}");
+
+    let transcript = rows_on_disk(&fixture).await;
+    let users: Vec<_> = transcript
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::User)
+        .collect();
+    assert_eq!(users.len(), 2);
+    let playheads: Vec<_> = users
+        .iter()
+        .map(|message| {
+            let context = super::context::of_message(message).expect("context part");
+            context.editor.expect("editor").playhead.seconds
+        })
+        .collect();
+    assert_eq!(playheads, [12.5, 40.25]);
+    // The chat shows what was typed, nothing more.
+    assert_eq!(users[1].text(), "darker");
+}
+
 #[tokio::test]
 async fn rehydration_replays_the_tool_result_to_the_model() {
     let fixture = fixture().await;
@@ -1220,7 +1308,10 @@ async fn one_conversation_follows_turn_context_without_changing_identity() {
             &thread.id,
             UserPrompt {
                 text: "Inspect the current context".into(),
-                context: Some(TurnContext { scope }),
+                context: Some(TurnContext {
+                    scope,
+                    editor: None,
+                }),
             },
         ))
         .await;
@@ -1799,6 +1890,9 @@ while steer is None or reply is None:
     line=read()
     if line['type']=='user': steer=line
     else: reply=line
+content=steer['message']['content']
+assert content[0]=={'type':'text','text':'darker'}, content
+assert content[1]['text'].startswith('<editor-context>') and 'Playhead: 40.25 s' in content[1]['text'], content
 send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_start','message':{'usage':{'input_tokens':10,'cache_read_input_tokens':9000}}}})
 send({'type':'stream_event','parent_tool_use_id':None,'event':{'type':'message_delta','usage':{'output_tokens':20}}})
 send({'type':'user','uuid':steer['uuid'],'isReplay':True,'parent_tool_use_id':None,'message':steer['message']})
@@ -1832,7 +1926,7 @@ async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() 
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
         if matches!(event, TurnEvent::ToolCallStarted { .. }) {
-            stream.steer("darker");
+            stream.steer(prompt_at("darker", 40.25));
         }
         events.push(event);
     }
@@ -1869,6 +1963,9 @@ async fn a_claude_turn_places_its_steer_where_the_cli_took_it_and_checkpoints() 
             AgentChatPart::ProviderMessage { .. }
         ]
     ));
+    // The steer's row keeps the editor it was sent with.
+    let steered = super::context::of_message(&transcript.messages[2]).expect("context part");
+    assert_eq!(steered.editor.expect("editor").playhead.seconds, 40.25);
     // One step per request, each with its own prompt: what the gauge reads.
     let prompts: Vec<_> = transcript.requests().map(|r| r.prompt_tokens()).collect();
     assert_eq!(prompts, vec![9010, 9510]);

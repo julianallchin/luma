@@ -21,6 +21,7 @@ use futures_util::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use super::context;
 use super::engine::{self, Engine};
 use super::model::{
     self, CacheRetention, ModelClient, ModelEvent, ModelId, ModelMessage, ModelRequest,
@@ -52,7 +53,7 @@ pub(super) async fn run(
     thread_id: String,
     prompt: Option<UserPrompt>,
     events: mpsc::UnboundedSender<TurnEvent>,
-    steer: mpsc::UnboundedReceiver<String>,
+    steer: mpsc::UnboundedReceiver<UserPrompt>,
 ) {
     let mut turn = Turn {
         service,
@@ -86,10 +87,10 @@ struct Turn {
     service: AgentService,
     thread_id: String,
     events: mpsc::UnboundedSender<TurnEvent>,
-    steer: mpsc::UnboundedReceiver<String>,
+    steer: mpsc::UnboundedReceiver<UserPrompt>,
     /// Steers a CLI engine was handed but never confirmed before its run
     /// ended: the next row answers them.
-    unsent: VecDeque<String>,
+    unsent: VecDeque<UserPrompt>,
     transcript: Transcript,
     /// Rows already in the database. A commit rewrites these and appends the
     /// rest.
@@ -194,10 +195,7 @@ impl Turn {
         // attributes its tools to the prompt that row answers.
         let mut resume_row = None;
         let mut turn_message_id = match &prompt {
-            Some(prompt) => {
-                self.append_user(&prompt.text, prompt.context.as_ref())
-                    .await?
-            }
+            Some(prompt) => self.append_user(prompt).await?,
             None => self.prepare_resume(&mut resume_row).await?,
         };
         detail.thread =
@@ -209,12 +207,9 @@ impl Turn {
             ThreadRoute::Track { .. }
         );
         let scope = python_scope(&detail.thread);
-        let system = format!(
-            "{}\n\nCurrent editor context for this turn:\n{}",
-            super::system_prompt(),
-            serde_json::to_string(&scope)
-                .map_err(|error| AgentError::Invalid(error.to_string()))?
-        );
+        // The same for every turn, so the provider's prompt cache holds. What
+        // the editor shows travels with each user message instead.
+        let system = super::system_prompt().to_string();
 
         let registry = self
             .service
@@ -341,7 +336,7 @@ impl Turn {
                 .pop_front()
                 .or_else(|| self.steer.try_recv().ok())
             {
-                Some(text) => turn_message_id = self.append_user(&text, None).await?,
+                Some(prompt) => turn_message_id = self.append_user(&prompt).await?,
                 None => return Ok(()),
             }
         }
@@ -422,7 +417,7 @@ impl Turn {
             .map_err(AgentError::Storage)
     }
 
-    /// Close the open row, record `text` as the user row `user_id`, and open
+    /// Close the open row, record `prompt` as the user row `user_id`, and open
     /// the row that answers it. Where this is called is where the model took
     /// the steer.
     async fn steer_into(
@@ -431,16 +426,17 @@ impl Turn {
         row: &mut String,
         turn_message_id: &mut String,
         user_id: String,
-        text: String,
+        prompt: UserPrompt,
     ) -> Result<(), AgentError> {
         self.commit(setup, row).await?;
         let next_id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::Steered {
             user_id: user_id.clone(),
-            text: text.clone(),
+            text: prompt.text.clone(),
             next_id: next_id.clone(),
         });
-        self.append(&AgentChatMessage::user(user_id.clone(), text))
+        self.attach_context(&user_id, &prompt);
+        self.append(&context::user_message(user_id.clone(), &prompt))
             .await?;
         self.durable.insert(user_id.clone());
         *row = next_id;
@@ -563,14 +559,14 @@ impl Turn {
 
             // The earliest point a steer can reach an API model: the step's
             // results are in, and the next request is not yet made.
-            while let Ok(text) = self.steer.try_recv() {
+            while let Ok(prompt) = self.steer.try_recv() {
                 let user_id = uuid::Uuid::new_v4().to_string();
                 self.steer_into(
                     setup,
                     &mut assistant_id,
                     &mut turn_message_id,
                     user_id,
-                    text,
+                    prompt,
                 )
                 .await?;
             }
@@ -637,29 +633,37 @@ impl Turn {
     /// Persist the user's message before any remote call is made: the prompt is
     /// durable before it can produce a response. Returns its id, which is the
     /// turn message every tool call in the rows that follow is attributed to.
-    async fn append_user(
-        &mut self,
-        text: &str,
-        context: Option<&super::TurnContext>,
-    ) -> Result<String, AgentError> {
+    async fn append_user(&mut self, prompt: &UserPrompt) -> Result<String, AgentError> {
         let id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::MessageStarted {
             id: id.clone(),
             role: Role::User,
         });
         self.emit(TurnEvent::TextDelta {
-            text: text.to_string(),
+            text: prompt.text.clone(),
         });
-        let mut message = AgentChatMessage::user(id.clone(), text);
-        if let Some(context) = context {
-            message
-                .parts
-                .push(super::AgentChatPart::Unknown(serde_json::json!({
-                    "type": super::context::PART_TYPE, "data": context,
-                })));
-        }
-        self.append(&message).await?;
+        self.attach_context(&id, prompt);
+        self.append(&context::user_message(id.clone(), prompt))
+            .await?;
         Ok(id)
+    }
+
+    /// Give the folded user row `id` the context part its stored row has. The
+    /// events only carry the text, and the model reads the context from this
+    /// fold.
+    fn attach_context(&mut self, id: &str, prompt: &UserPrompt) {
+        let Some(context) = &prompt.context else {
+            return;
+        };
+        if let Some(row) = self
+            .transcript
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.id == id)
+        {
+            row.parts.push(context::part(context));
+        }
     }
 
     /// Close one assistant row: record how it ended, commit it, then say
@@ -810,15 +814,15 @@ impl Turn {
     ) -> Result<Usage, AgentError> {
         let directory = setup.lease.directory().to_path_buf();
         let prompt = match (&setup.resume, resuming) {
-            (Some(_), true) => CONTINUE_PROMPT.to_string(),
+            (Some(_), true) => vec![CONTINUE_PROMPT.to_string()],
             (Some(_), false) => self
                 .transcript
                 .messages
                 .iter()
                 .find(|m| m.id == *turn_message_id)
-                .map(|m| serde_json::to_string(&m.parts).expect("serializable transcript"))
+                .map(context::message_blocks)
                 .unwrap_or_default(),
-            (None, _) => continuation(&self.transcript),
+            (None, _) => vec![continuation(&self.transcript)],
         };
         let mut session = engine::Session::start(engine::Request {
             engine,
@@ -846,7 +850,7 @@ impl Turn {
             FuturesUnordered::new();
         let mut active = std::collections::BTreeSet::<String>::new();
         // Steers handed to the engine and not yet taken, by the id they carry.
-        let mut sent = HashMap::<String, String>::new();
+        let mut sent = HashMap::<String, UserPrompt>::new();
         let mut steering = true;
         let result = loop {
             let event = {
@@ -873,8 +877,8 @@ impl Turn {
                         sent_write = writes.next(), if !writes.is_empty() => {
                             if let Err(error) = sent_write.expect("pending write") { break Err(error); }
                         }
-                        text = self.steer.recv(), if steering => {
-                            let Some(text) = text else {
+                        prompt = self.steer.recv(), if steering => {
+                            let Some(prompt) = prompt else {
                                 steering = false;
                                 continue;
                             };
@@ -882,11 +886,11 @@ impl Turn {
                             let tools_open = !active.is_empty();
                             let steerer = &steerer;
                             let write_id = id.clone();
-                            let write_text = text.clone();
+                            let blocks = context::prompt_blocks(prompt.text.clone(), prompt.context.as_ref());
                             writes.push(Box::pin(async move {
-                                steerer.steer(&write_id, &write_text, tools_open).await
+                                steerer.steer(&write_id, &blocks, tools_open).await
                             }));
-                            sent.insert(id, text);
+                            sent.insert(id, prompt);
                         }
                         event = &mut next => break event,
                     }
@@ -942,11 +946,11 @@ impl Turn {
                 engine::Event::Steered(ids) => {
                     let mut failed = None;
                     for id in ids {
-                        let Some(text) = sent.remove(&id) else {
+                        let Some(prompt) = sent.remove(&id) else {
                             continue;
                         };
                         if let Err(error) = self
-                            .steer_into(setup, assistant_id, turn_message_id, id, text)
+                            .steer_into(setup, assistant_id, turn_message_id, id, prompt)
                             .await
                         {
                             failed = Some(error);
@@ -1338,11 +1342,17 @@ fn continuation(transcript: &Transcript) -> String {
     text
 }
 
-/// One transcript part as `continuation()` replays it: unchanged, except a
+/// One transcript part as `continuation()` replays it: unchanged, except the
+/// editor context is the text block the model reads everywhere else, and a
 /// tool call's stored output has its figures replaced and its text fields
 /// clamped to `budget` characters.
 fn continuation_part(part: &transcript::AgentChatPart, budget: usize) -> Value {
     let mut value = part.to_value();
+    if value["type"] == context::PART_TYPE {
+        if let Ok(context) = serde_json::from_value(value["data"].clone()) {
+            return serde_json::json!({"type": "text", "text": context::render(&context)});
+        }
+    }
     if let transcript::AgentChatPart::Tool(tool) = part {
         if let Some(output) = value.get_mut("output") {
             let purpose = tool
