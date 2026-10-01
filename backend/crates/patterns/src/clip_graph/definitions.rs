@@ -167,7 +167,7 @@ impl Serialize for InputDef {
             map.serialize_field("unit", &self.unit)?;
         }
         map.serialize_field("default", &self.default)?;
-        if matches!(self.ty, InputType::Number) {
+        if matches!(self.ty, InputType::Number) || self.range.is_some() {
             map.serialize_field("range", &self.range)?;
         }
         if self.above_min {
@@ -313,6 +313,12 @@ fn build(kind: Kind) -> Definition {
                 (
                     "direction",
                     vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
+                ),
+                (
+                    "at",
+                    vector(Unit::Share, "(0.5, 0.5, 0.5)")
+                        .range(0., 1.)
+                        .time_only(),
                 ),
                 ("shift", number(Unit::Share, "0.25")),
                 ("scale", number(Unit::Share, "0.5").at_least(0.)),

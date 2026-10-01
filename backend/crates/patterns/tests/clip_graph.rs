@@ -489,7 +489,7 @@ fn rule_6_clip() {
     offset.blend_mode = BlendMode::Offset;
     assert_eq!(
         clip_graph::check_clip(&offset).unwrap_err().0,
-        r#"clip: expected a blend mode for color: replace, add, multiply, screen, max, min, lighten, value or subtract; got offset. Example: blend="replace""#
+        r#"clip: expected a blend mode for color: replace, add, multiply, screen, max, min or subtract; got offset. Example: blend="replace""#
     );
     let mut empty = clip(wash.clone());
     empty.duration = 0.;

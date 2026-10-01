@@ -21,7 +21,7 @@ pub enum Kernel {
     /// Progress 0–1 over the clip.
     ClipProgress,
     /// Each head's own clock: progress less its delay over the duration,
-    /// then plus a phase, wrapped.
+    /// then, when a phase is set, plus the phase, wrapped.
     Shift,
     /// Each unit's position: the centroid of its heads.
     Group,
@@ -36,14 +36,12 @@ pub enum Kernel {
     Slide,
     /// Coherent noise over normalized position and time.
     Noise4,
-    /// A value over its clip range, 0–1.
-    Normalize,
     /// A curve's shape between low and high, or through a gradient.
     Curve,
-    /// Per head and time, the live event with the biggest effect.
-    Pick,
-    /// A value at the picked event.
-    Gather,
+    /// The live events of one clock as one layer: the largest value per
+    /// channel (light), or each newer event over the older by its weight
+    /// (aim). No live event is transparent.
+    Combine,
     /// Two values combined by a math node's op: `*`, `+`, `-`, `max` or
     /// `min`.
     Math,
@@ -56,7 +54,7 @@ pub enum Kernel {
 pub(crate) const AIM_MIRRORS: usize = 4;
 
 impl Kernel {
-    pub const ALL: [Kernel; 19] = [
+    pub const ALL: [Kernel; 17] = [
         Kernel::ClockTable,
         Kernel::Clock,
         Kernel::Events,
@@ -68,10 +66,8 @@ impl Kernel {
         Kernel::Axis,
         Kernel::Slide,
         Kernel::Noise4,
-        Kernel::Normalize,
         Kernel::Curve,
-        Kernel::Pick,
-        Kernel::Gather,
+        Kernel::Combine,
         Kernel::Math,
         Kernel::ColorOut,
         Kernel::StrobeOut,
@@ -92,10 +88,8 @@ impl Kernel {
             Kernel::Axis => "kernel/axis",
             Kernel::Slide => "kernel/slide",
             Kernel::Noise4 => "kernel/noise4",
-            Kernel::Normalize => "kernel/normalize",
             Kernel::Curve => "kernel/curve",
-            Kernel::Pick => "kernel/pick",
-            Kernel::Gather => "kernel/gather",
+            Kernel::Combine => "kernel/combine",
             Kernel::Math => "kernel/math",
             Kernel::ColorOut => "kernel/color_out",
             Kernel::StrobeOut => "kernel/strobe_out",
@@ -130,7 +124,7 @@ impl Kernel {
             Kernel::ClipProgress => (vec![], &[], &["value"]),
             Kernel::Shift => (
                 names(&["progress", "delay", "duration", "phase"]),
-                &[],
+                &["has_phase"],
                 &["value"],
             ),
             Kernel::Group => (names(&["positions", "unit"]), &[], &["positions"]),
@@ -161,6 +155,9 @@ impl Kernel {
                     "dir_x",
                     "dir_y",
                     "dir_z",
+                    "at_x",
+                    "at_y",
+                    "at_z",
                 ]);
                 for m in 0..AIM_MIRRORS {
                     for part in ["normal", "plane", "range"] {
@@ -179,24 +176,19 @@ impl Kernel {
                 &["uniform", "salt_lo", "salt_hi"],
                 &["value"],
             ),
-            Kernel::Normalize => (names(&["value", "minimum", "maximum"]), &[], &["value"]),
             Kernel::Curve => (
                 names(&["x", "low_x", "low_y", "low_z", "high_x", "high_y", "high_z"]),
                 &["kind"],
                 &["x", "y", "z"],
             ),
-            Kernel::Pick => (
-                names(&[
-                    "present", "index", "peak_x", "peak_y", "peak_z", "scale_a", "scale_b",
-                    "turn_a", "turn_b",
-                ]),
-                &["turns"],
-                &["winner"],
+            Kernel::Combine => (
+                names(&["value", "weight", "present"]),
+                &["over"],
+                &["value", "alpha"],
             ),
-            Kernel::Gather => (names(&["value", "winner"]), &[], &["value"]),
             Kernel::Math => (names(&["a", "b"]), &["op"], &["value"]),
-            Kernel::ColorOut => (names(&["r", "g", "b", "brightness"]), &[], &["color"]),
-            Kernel::StrobeOut => (names(&["rate"]), &[], &["strobe"]),
+            Kernel::ColorOut => (names(&["r", "g", "b", "alpha"]), &[], &["color"]),
+            Kernel::StrobeOut => (names(&["rate", "alpha"]), &[], &["strobe"]),
             Kernel::AimOut => {
                 let mut ports = names(&[
                     "dir_x",
@@ -353,6 +345,16 @@ fn unit_heads(unit: &Signal, members: &[usize]) -> Vec<usize> {
     firsts
 }
 
+/// A premultiplied value over its alpha, clamped to 0–1; 0 where the
+/// layer is transparent.
+fn unpremultiply(value: f64, alpha: f64) -> f64 {
+    if alpha > 1e-12 {
+        (value / alpha).clamp(0., 1.)
+    } else {
+        0.
+    }
+}
+
 pub(crate) fn run(
     kernel: Kernel,
     inputs: &BTreeMap<String, EvaluatedValue>,
@@ -450,18 +452,19 @@ pub(crate) fn run(
             let delay = s("delay");
             let duration = s("duration");
             let phase = s("phase");
+            let wraps = f("has_phase")? != 0.;
             let dims = shape(&[progress, delay, duration, phase])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
                 // A delay in beats moves the head's clock by its share of
                 // the event. Below 0 before the head starts, so a curve
-                // holds its first value there; never clamped.
+                // holds its first value there; never clamped. A phase, any
+                // number and 0 too, wraps the clock: fract(τ + phase).
                 let duration = duration.at(n, t, e).max(1e-9);
                 let local = progress.at(n, t, e) - delay.at(n, t, e) / duration;
-                let ph = phase.at(n, t, e);
-                if ph == 0. {
-                    local
+                if wraps {
+                    (local + phase.at(n, t, e)).rem_euclid(1.)
                 } else {
-                    (local + ph).rem_euclid(1.)
+                    local
                 }
             });
             single("value", events(values, &batch)?)
@@ -515,7 +518,7 @@ pub(crate) fn run(
                     let unit = if given {
                         heads::unit_direction(std::array::from_fn(|a| normal[a].at(0, t, 0)))
                     } else {
-                        heads::principal_axis(&points)
+                        heads::best_fit_axis(&points)
                     };
                     let (place, range) = unit.map_or((0., 0.), |unit| {
                         heads::plane(&originals, unit, at.at(0, t, 0))
@@ -610,6 +613,7 @@ pub(crate) fn run(
             let span = s("span");
             let rank = s("rank");
             let direction = [s("dir_x"), s("dir_y"), s("dir_z")];
+            let at = [s("at_x"), s("at_y"), s("at_z")];
             let kind = f("kind")? as u8;
             let given = f("has_direction")? != 0.;
             let wrap = f("wrap")? != 0.;
@@ -632,7 +636,15 @@ pub(crate) fn run(
                 }
                 return single("value", events(values, &batch)?);
             }
-            let mut every = vec![positions, direction[0], direction[1], direction[2]];
+            let mut every = vec![
+                positions,
+                direction[0],
+                direction[1],
+                direction[2],
+                at[0],
+                at[1],
+                at[2],
+            ];
             every.extend(mirrors.iter().flatten().copied());
             let times = shape(&every)?.1;
             let mut values = Array3::from_elem((heads, times, 1), 0.5);
@@ -652,7 +664,7 @@ pub(crate) fn run(
                     let mut from_plane = None;
                     let raw: Vec<f64> = match kind {
                         0 => {
-                            let Some(axis) = dir.or_else(|| heads::principal_axis(&points)) else {
+                            let Some(axis) = dir.or_else(|| heads::best_fit_axis(&points)) else {
                                 continue;
                             };
                             let first = firsts.first().copied().unwrap_or(0);
@@ -664,8 +676,14 @@ pub(crate) fn run(
                             points.iter().map(|p| heads::dot(*p, axis)).collect()
                         }
                         _ => {
-                            let center = heads::centroid(&points);
-                            let [first, second] = heads::plane_basis(dir, &points, center);
+                            // Measured around the centre: `at` (0–1 per
+                            // axis) within the span's box.
+                            let center = heads::at_in_box(
+                                &points,
+                                std::array::from_fn(|a| at[a].at(0, t, 0)),
+                            );
+                            let [first, second] =
+                                heads::plane_basis(dir, &points, heads::centroid(&points));
                             let flat: Vec<(f64, f64)> = points
                                 .iter()
                                 .map(|p| {
@@ -684,11 +702,21 @@ pub(crate) fn run(
                             }
                         }
                     };
-                    // Line and radial run from the lowest head (0) to the
-                    // highest (1); all at one value read 0.5. Wrapped, the
+                    // Line runs from the lowest head (0) to the highest
+                    // (1); all at one value read 0.5. Radial is the
+                    // distance from the centre over the largest distance:
+                    // 0 at the centre, 1 at the farthest head. Wrapped, the
                     // axis is a ring of `count` places: the ends sit one
                     // mean spacing apart, as `order` cells do, and never on
                     // one place.
+                    let count = raw.len() as f64;
+                    let ring = |a: f64| {
+                        if wrap {
+                            (a * (count - 1.) + 0.5) / count
+                        } else {
+                            a
+                        }
+                    };
                     let coordinate: Vec<f64> = if let Some((plane, range)) = from_plane {
                         raw.iter()
                             .map(|v| {
@@ -699,18 +727,20 @@ pub(crate) fn run(
                                 }
                             })
                             .collect()
-                    } else if kind != 3 {
+                    } else if kind == 2 {
+                        let max = raw.iter().copied().fold(0., f64::max);
+                        raw.iter()
+                            .map(|v| if max <= 1e-12 { 0. } else { ring(v / max) })
+                            .collect()
+                    } else if kind == 0 {
                         let min = raw.iter().copied().fold(f64::INFINITY, f64::min);
                         let max = raw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                        let count = raw.len() as f64;
                         raw.iter()
                             .map(|v| {
                                 if max - min <= 1e-12 {
                                     0.5
-                                } else if wrap {
-                                    ((v - min) / (max - min) * (count - 1.) + 0.5) / count
                                 } else {
-                                    (v - min) / (max - min)
+                                    ring((v - min) / (max - min))
                                 }
                             })
                             .collect()
@@ -810,19 +840,6 @@ pub(crate) fn run(
             }
             single("value", events(values, &batch)?)
         }
-        Kernel::Normalize => {
-            let value = s("value");
-            let low = inputs["minimum"].fixed_scalar()?;
-            let high = inputs["maximum"].fixed_scalar()?;
-            let values = value.values().mapv(|v| {
-                if high - low > 1e-9 {
-                    ((v - low) / (high - low)).clamp(0., 1.)
-                } else {
-                    0.
-                }
-            });
-            single("value", events(values, &batch)?)
-        }
         Kernel::Curve => {
             let Value::Points(shape_points) = inputs["shape"].control(0) else {
                 unreachable!("a curve shape")
@@ -862,49 +879,40 @@ pub(crate) fn run(
                 ("z".into(), events(c, &batch)?),
             ]))
         }
-        Kernel::Pick => {
-            let names = [
-                "present", "index", "peak_x", "peak_y", "peak_z", "scale_a", "scale_b", "turn_a",
-                "turn_b",
-            ];
-            let all: Vec<&Signal> = names.iter().map(|k| s(k)).collect();
-            let turns = f("turns")? != 0.;
-            let dims = shape(&all)?;
-            let (present, index) = (all[0], all[1]);
-            let winner = Array3::from_shape_fn((dims.0, dims.1, 1), |(n, t, _)| {
-                let effect = |e: usize| {
-                    let peak = (2..5).map(|i| all[i].at(n, t, e)).fold(f64::MIN, f64::max);
-                    let turn = if turns {
-                        all[7].at(n, t, e).abs() + all[8].at(n, t, e).abs()
+        Kernel::Combine => {
+            let (value, weight, present) = (s("value"), s("weight"), s("present"));
+            let over = f("over")? != 0.;
+            let dims = shape(&[value, weight, present])?;
+            let mut values = Array3::zeros((dims.0, dims.1, 1));
+            let mut alphas = Array3::zeros((dims.0, dims.1, 1));
+            for n in 0..dims.0 {
+                for t in 0..dims.1 {
+                    // Events lie in birth order on the channel axis.
+                    let live = (0..dims.2).filter(|e| present.at(n, t, *e) > 0.);
+                    let (v, a) = if over {
+                        // Each newer event over the older by its weight:
+                        // premultiplied, then divided back.
+                        let (lit, alpha) = live.fold((0., 0.), |(lit, alpha), e| {
+                            let w = weight.at(n, t, e).clamp(0., 1.);
+                            (value.at(n, t, e) * w + lit * (1. - w), w + alpha * (1. - w))
+                        });
+                        (if alpha > 1e-12 { lit / alpha } else { 0. }, alpha)
                     } else {
-                        1.
+                        live.fold((0., 0.), |(lit, alpha): (f64, f64), e| {
+                            (
+                                lit.max(value.at(n, t, e)),
+                                alpha.max(weight.at(n, t, e).clamp(0., 1.)),
+                            )
+                        })
                     };
-                    peak * all[5].at(n, t, e) * all[6].at(n, t, e) * turn
-                };
-                (0..dims.2)
-                    .filter(|e| present.at(n, t, *e) > 0.)
-                    .max_by(|a, b| {
-                        effect(*a)
-                            .total_cmp(&effect(*b))
-                            .then(index.at(n, t, *a).total_cmp(&index.at(n, t, *b)))
-                    })
-                    .map_or(-1., |e| e as f64)
-            });
-            single("winner", signal(winner, Channels::Value, &batch)?)
-        }
-        Kernel::Gather => {
-            let value = s("value");
-            let winner = s("winner");
-            let (n, t, _) = shape(&[value, winner])?;
-            let values = Array3::from_shape_fn((n, t, 1), |(n, t, _)| {
-                let w = winner.at(n, t, 0);
-                if w < 0. {
-                    0.
-                } else {
-                    value.at(n, t, w as usize)
+                    values[[n, t, 0]] = v;
+                    alphas[[n, t, 0]] = a;
                 }
-            });
-            single("value", signal(values, Channels::Value, &batch)?)
+            }
+            Ok(BTreeMap::from([
+                ("value".into(), signal(values, Channels::Value, &batch)?),
+                ("alpha".into(), signal(alphas, Channels::Value, &batch)?),
+            ]))
         }
         Kernel::Math => {
             let (a, b) = (s("a"), s("b"));
@@ -922,19 +930,23 @@ pub(crate) fn run(
             });
             single("value", events(values, &batch)?)
         }
+        // The light arrives premultiplied by alpha (so the events of a
+        // clock combine as one layer); the output divides it back. Values
+        // clamp here and only here.
         Kernel::ColorOut => {
-            let parts = [s("r"), s("g"), s("b"), s("brightness")];
+            let parts = [s("r"), s("g"), s("b"), s("alpha")];
             let (n, t, _) = shape(&parts)?;
             let values = Array3::from_shape_fn((n, t, 3), |(n, t, ch)| {
-                parts[ch].at(n, t, 0).max(0.) * parts[3].at(n, t, 0).max(0.)
+                unpremultiply(parts[ch].at(n, t, 0), parts[3].at(n, t, 0))
             });
             single("color", signal(values, Channels::Rgb, &batch)?)
         }
         Kernel::StrobeOut => {
-            let rate = s("rate");
-            let (n, t, _) = shape(&[rate])?;
-            let values =
-                Array3::from_shape_fn((n, t, 1), |(n, t, _)| rate.at(n, t, 0).clamp(0., 1.));
+            let (rate, alpha) = (s("rate"), s("alpha"));
+            let (n, t, _) = shape(&[rate, alpha])?;
+            let values = Array3::from_shape_fn((n, t, 1), |(n, t, _)| {
+                unpremultiply(rate.at(n, t, 0), alpha.at(n, t, 0))
+            });
             single("strobe", signal(values, Channels::Value, &batch)?)
         }
         Kernel::AimOut => {

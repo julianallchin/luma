@@ -67,6 +67,9 @@ impl FeatureSource for Track {
     fn sample(&self, _: &FeatureRequest, beat: f64) -> Result<f64> {
         Ok(1. + (beat * 1.7).sin())
     }
+    fn range(&self, _: &FeatureRequest) -> Result<(f64, f64)> {
+        Ok((0., 2.))
+    }
 }
 
 fn graph(nodes: Value) -> ClipGraph {
@@ -175,17 +178,17 @@ fn a_curve_with_a_jump_over_space_lights_a_region() {
         &[1.],
     );
     assert_eq!(lit(&far, 0), vec![10, 11]);
-    // At a jump x itself reads the larger value, so a head exactly on an
-    // edge is lit: inside the curve, and at x 0 or 1, where the jump sets
-    // the value outside. A pulse on [0, 1] lights both end heads, and a cut
-    // lit below 0 lights the head at 0.
+    // At a jump x itself reads the value after it, as a shader's step:
+    // each piece covers [a, b), at x 0 and x 1 too. A head exactly on an
+    // edge takes the side it goes into: a pulse on [0, 1) lights every head
+    // but the one at 1, and a cut lit below 0 lights none.
     let edge = 5. / 11.;
     let tie = play(
         &over_line(json!([[0, 1], [edge, 1], [edge, 0], [1, 0]]), "no"),
         &line(),
         &[1.],
     );
-    assert_eq!(lit(&tie, 0), (0..6).collect::<Vec<_>>());
+    assert_eq!(lit(&tie, 0), (0..5).collect::<Vec<_>>());
     let rising = play(
         &over_line(json!([[0, 0], [edge, 0], [edge, 1], [1, 1]]), "no"),
         &line(),
@@ -197,13 +200,25 @@ fn a_curve_with_a_jump_over_space_lights_a_region() {
         &line(),
         &[1.],
     );
-    assert_eq!(lit(&closed, 0), (0..12).collect::<Vec<_>>());
+    assert_eq!(lit(&closed, 0), (0..11).collect::<Vec<_>>());
     let cut = play(
         &over_line(json!([[0, 1], [0, 0], [1, 0]]), "no"),
         &line(),
         &[1.],
     );
-    assert_eq!(lit(&cut, 0), vec![0]);
+    assert!(lit(&cut, 0).is_empty());
+    // Two pills side by side, [0, 0.5) and [0.5, 1), share no head.
+    let left = lit(&tie, 0);
+    let right = lit(
+        &play(
+            &over_line(json!([[0, 0], [edge, 0], [edge, 1], [1, 1], [1, 0]]), "no"),
+            &line(),
+            &[1.],
+        ),
+        0,
+    );
+    assert!(left.iter().all(|n| !right.contains(n)));
+    assert_eq!(left.len() + right.len(), 11);
 }
 
 #[test]
@@ -321,8 +336,13 @@ fn red_then_blue(clock: &str) -> Value {
                       "gradient": {"stops": [{"t": 0, "color": [1, 0, 0]}, {"t": 1, "color": [0, 0, 1]}]}}})
 }
 
+/// The light per channel (color × dimmer) and alpha of head `n` at `t`.
+fn rgb(light: &Array3<f64>, n: usize, t: usize) -> [f64; 3] {
+    std::array::from_fn(|c| light[[n, t, c]] * light[[n, t, DIMMER]])
+}
+
 #[test]
-fn overlapping_events_show_the_biggest_effect_and_ties_the_newest() {
+fn overlapping_events_combine_per_channel() {
     // At beat 1.5 event 0 is 0.75 old and event 1 is 0.25 old.
     let brighter = graph(json!({
         "time1": {"kind": "time", "inputs": {"every": 1, "duration": 2}},
@@ -330,14 +350,99 @@ fn overlapping_events_show_the_biggest_effect_and_ties_the_newest() {
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
     let light = play(&brighter, &line(), &[1.5]);
     assert!((light[[0, 0, DIMMER]] - 0.75).abs() < 1e-9);
-    let tie = graph(json!({
+    let both = graph(json!({
         "time1": {"kind": "time", "inputs": {"every": 1, "duration": 2}},
         "curve1": red_then_blue("time1"),
         "color1": {"kind": "color", "inputs": {"color": {"node": "curve1"}}}}));
-    let light = play(&tie, &line(), &[1.5]);
-    // Event 0, 0.75 old, is red; event 1, 0.25 old, is blue. Equal peaks:
-    // the newer one, blue, shows.
-    assert!(light[[0, 0, 2]] > 0.99 && light[[0, 0, 0]] < 0.01);
+    let light = play(&both, &line(), &[1.5]);
+    // Event 0, 0.75 old, is red; event 1, 0.25 old, is blue. Each channel
+    // takes its largest: red and blue together.
+    let [r, g, b] = rgb(&light, 0, 0);
+    assert!(r > 0.99 && b > 0.99 && g < 0.01, "{r} {g} {b}");
+    // Two dim events of one color: the brighter shows, never their sum.
+    let dim_pair = graph(json!({
+        "time1": {"kind": "time", "inputs": {"every": 1, "duration": 2}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": 0.3, "high": 0.3}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let light = play(&dim_pair, &line(), &[1.5]);
+    assert!((light[[0, 0, DIMMER]] - 0.3).abs() < 1e-9);
+}
+
+#[test]
+fn gaps_between_events_are_transparent() {
+    // Events of 0.5 beats every 2 beats: between them the clip is not
+    // there (alpha 0), for color, strobe and aim; inside them, alpha 1.
+    let short = || json!({"kind": "time", "inputs": {"every": 2, "duration": 0.5}});
+    let lit_curve =
+        json!({"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": 1, "high": 1}});
+    for output in [
+        json!({"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}),
+        json!({"kind": "strobe", "inputs": {"rate": {"node": "curve1"}}}),
+        json!({"kind": "aim", "inputs": {"yaw": {"node": "curve1"}}}),
+    ] {
+        let kind = output["kind"].clone();
+        let g = graph(json!({"time1": short(), "curve1": lit_curve.clone(), "out": output}));
+        let light = play(&g, &line(), &[0.25, 1.25]);
+        assert!(
+            (light[[0, 0, 11]] - 1.).abs() < 1e-9,
+            "{kind}: inside an event"
+        );
+        assert_eq!(light[[0, 1, 11]], 0., "{kind}: in the gap");
+    }
+    // Brightness 0 is black light, not a gap: alpha stays 1.
+    let black = graph(json!({
+        "time1": {"kind": "time", "inputs": {"every": 2}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": 0, "high": 0}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let light = play(&black, &line(), &[1.25]);
+    assert_eq!((light[[0, 0, DIMMER]], light[[0, 0, 11]]), (0., 1.));
+}
+
+#[test]
+fn overlapping_aim_events_lay_the_newest_on_top() {
+    // Yaw follows each event's age; two events live at once. The newest,
+    // at full alpha, covers the older; at half alpha it mixes half way.
+    let yaw = |alpha: Value| {
+        graph(json!({
+            "time1": {"kind": "time", "inputs": {"every": 1, "duration": 2}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": 0, "high": 40}},
+            "curve2": {"kind": "curve", "inputs": {"x": {"node": "time1"}, "low": alpha.clone(), "high": alpha}},
+            "aim1": {"kind": "aim", "inputs": {"yaw": {"node": "curve1"}, "alpha": {"node": "curve2"}}}}))
+    };
+    let (_, turn) = run(&yaw(json!(1)), &line(), &[1.5]);
+    let turn = turn.expect("an aim turn");
+    // Event 1 is 0.25 old: 10°. Event 0 (30°) is under it.
+    assert!((turn[[0, 0, 3]] - 10.).abs() < 1e-9, "{}", turn[[0, 0, 3]]);
+    let (_, turn) = run(&yaw(json!(0.5)), &line(), &[1.5]);
+    let turn = turn.unwrap();
+    // Half of 10° over half of 30°: (5 + 0.25 × 30) / 0.75.
+    assert!((turn[[0, 0, 3]] - (5. + 7.5) / 0.75).abs() < 1e-9);
+}
+
+#[test]
+fn a_phase_always_wraps() {
+    // A phase of 0 wraps as any other: a head delayed past its event's end
+    // comes round again. Without a phase, τ runs on past 1.
+    let delayed = |phase: Option<f64>| {
+        let mut t = json!({"kind": "time", "inputs": {"every": 2, "delay": 1}});
+        if let Some(phase) = phase {
+            t["inputs"]["phase"] = json!(phase);
+        }
+        graph(json!({
+            "time1": t,
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "time1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}))
+    };
+    // At beat 0.5, p = 0.25 and τ = 0.25 − 0.5 = −0.25.
+    let unwrapped = play(&delayed(None), &line(), &[0.5]);
+    assert_eq!(unwrapped[[0, 0, DIMMER]], 0.);
+    for phase in [0., 1., -2.] {
+        let wrapped = play(&delayed(Some(phase)), &line(), &[0.5]);
+        assert!(
+            (wrapped[[0, 0, DIMMER]] - 0.75).abs() < 1e-9,
+            "phase {phase}"
+        );
+    }
 }
 
 #[test]
@@ -442,7 +547,86 @@ fn radial_runs_from_the_nearest_head_to_the_farthest() {
         .into_iter()
         .map(Option::unwrap)
         .collect();
-    assert_eq!(at, vec![1., 0.5, 0., 0., 0.5, 1.]);
+    // Distance from the middle of the selection over the largest: 1/3,
+    // 2/3, 1. The nearest heads are not at 0: no head sits at the centre.
+    let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    let third = 1. / 3.;
+    assert!(
+        close(&at, &[1., 2. * third, third, third, 2. * third, 1.]),
+        "{at:?}"
+    );
+    // A centre off the middle: at the left end (u 0 of the box).
+    let mut left = radial.clone();
+    left.nodes.get_mut("space1").unwrap().inputs.insert(
+        "at".into(),
+        luma_patterns::clip_graph::Input::Vector([0., 0.5, 0.5]),
+    );
+    let at: Vec<f64> = left
+        .coordinate_at_heads("space1", frame(&cells, 1.))
+        .unwrap()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert!(
+        close(&at, &[0., 1. / 6., 2. / 6., 4. / 6., 5. / 6., 1.]),
+        "{at:?}"
+    );
+    // Angle is measured around the centre too: the heads right of the
+    // left-end centre all read one angle.
+    let mut angle = left.clone();
+    angle
+        .nodes
+        .get_mut("space1")
+        .unwrap()
+        .settings
+        .insert("kind".into(), "angle".into());
+    let turns: Vec<f64> = angle
+        .coordinate_at_heads("space1", frame(&cells, 1.))
+        .unwrap()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect();
+    assert!(
+        turns[1..].iter().all(|t| (t - turns[1]).abs() < 1e-9),
+        "{turns:?}"
+    );
+}
+
+#[test]
+fn best_fit_snaps_to_a_stage_axis() {
+    // A line tilted 30° off +U reads along +U; a square, which spreads the
+    // same along U and Z, reads along +U too, never a diagonal.
+    let tilted: Vec<Cell> = (0..5)
+        .map(|i| {
+            let r = i as f64;
+            cell(format!("t{i}"), [r * 0.866, 0., r * 0.5])
+        })
+        .collect();
+    let place = graph(json!({
+        "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let read = |cells: &[Cell]| -> Vec<f64> {
+        place
+            .coordinate_at_heads("space1", frame(cells, 1.))
+            .unwrap()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect()
+    };
+    let along_u = |cells: &[Cell]| -> Vec<f64> {
+        let (lo, hi) = cells.iter().fold((f64::MAX, f64::MIN), |(a, b), c| {
+            (a.min(c.uvz[0]), b.max(c.uvz[0]))
+        });
+        cells.iter().map(|c| (c.uvz[0] - lo) / (hi - lo)).collect()
+    };
+    for cells in [tilted, grid()] {
+        let (got, want) = (read(&cells), along_u(&cells));
+        assert!(
+            got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-9),
+            "{got:?} vs {want:?}"
+        );
+    }
 }
 
 #[test]
@@ -731,16 +915,18 @@ fn fine_grid() -> Vec<Cell> {
 }
 
 /// Slash, every 2 beats (spec section 0): a cut whose front sweeps across
-/// the slash direction over the first 0.2 of the event, a bloom that grows
+/// the slash direction over the first 0.2 of the event (x = front − place,
+/// read against −direction, under a rising step: a head is lit once the
+/// front has reached it, the far corner too), a bloom that grows
 /// out from a line at 68 % of the rig (a mirror there, and a space along
 /// its normal that measures from it, scaled from 4 % to 74 %), a fade for
 /// all, and a white-to-red color; cut × bloom × fade is one math node.
 fn slash() -> ClipGraph {
     graph(json!({
         "t": {"kind": "time", "inputs": {"every": 2}},
-        "curve1": {"kind": "curve", "inputs": {"x": {"node": "t"}, "shape": {"points": [[0, 0], [0.2, 1], [1, 1]]}}},
-        "diag": {"kind": "space", "inputs": {"direction": [-0.82, 0, 0.57], "shift": {"node": "curve1"}}},
-        "cut": {"kind": "curve", "inputs": {"x": {"node": "diag"}, "shape": {"points": [[0, 1], [0, 0], [1, 0]]}}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "t"}, "shape": {"points": [[0, 1], [0.2, 0], [1, 0]]}}},
+        "diag": {"kind": "space", "inputs": {"direction": [0.82, 0, -0.57], "shift": {"node": "curve1"}}},
+        "cut": {"kind": "curve", "inputs": {"x": {"node": "diag"}, "shape": {"points": [[0, 0], [0, 1], [1, 1]]}}},
         "line": {"kind": "mirror", "inputs": {"normal": [0.57, 0, 0.82], "at": 0.68}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "t"}, "low": 0.04, "high": 0.74}},
         "dist": {"kind": "space", "inputs": {"heads": {"node": "line"}, "direction": [0.57, 0, 0.82], "scale": {"node": "curve2"}}},
@@ -880,7 +1066,7 @@ fn the_slash_cut_sweeps_along_its_direction_and_the_bloom_widens_from_its_line()
             .collect()
     };
     // Cut alone: the coordinate along (−0.82, 0, 0.57), 0 at the lowest
-    // head and 1 at the highest; lit below the shift, which runs 0 → 1 over
+    // head and 1 at the highest; lit up to the front, which runs 0 → 1 over
     // the first 0.2 of the event. The front starts at +U, low Z.
     let light = play(&slash_brightness("cut"), &cells, &times);
     let d = along(unit([-0.82, 0., 0.57]));
@@ -896,7 +1082,8 @@ fn the_slash_cut_sweeps_along_its_direction_and_the_bloom_widens_from_its_line()
     assert!(first_on(head("g90")) < first_on(head("g55")));
     assert!(first_on(head("g55")).unwrap() < first_on(head("g18")).unwrap());
     // The cut ends at 0.4 beats (sample 8) with its front at 1, exactly on
-    // the far corner g09: a tie at the edge is lit, so every head is.
+    // the far corner g09: x = front − place is 0 there and the rising step
+    // reads its value after the jump, so every head is lit.
     assert_eq!(times[8], 0.4);
     assert_eq!(lit(&light, 8), (0..cells.len()).collect::<Vec<_>>());
     assert_eq!(first_on(head("g09")), Some(8));
@@ -966,67 +1153,77 @@ fn difference(old: &Value, new: &[Vec<Vec<f64>>]) -> (f64, f64) {
 }
 
 #[test]
-fn every_preset_plays_as_version_2_did() {
+fn every_preset_plays_as_version_2_did_on_a_line() {
+    // On a straight line along U the approved changes since version 2 do
+    // not move a head: its best fit is +U either way, and its middle head
+    // sits on the centre, so radial reads as before. The other rigs differ
+    // by those changes (best fit on a stage axis, radial from the middle of
+    // the box over the largest distance); their own tests cover them.
     let old = v2_frames();
     let beats: Vec<f64> = serde_json::from_value(old["beats"].clone()).unwrap();
-    // Presets whose meaning changed, with the largest difference allowed
-    // on a rig: Mirror's space now measures from the mirror plane (its
-    // shift and scale halved): exact when a head sits on the plane (line13),
-    // half a spacing off otherwise, and on the square rigs its best-fit
-    // directions disagree. Wrapping ripple is now Ripple on a wrapped
-    // space, as time has no length any more: version 2's length 0.7143 was
-    // 1 / 1.4 rounded. Alternating sides: at a jump x now reads the larger
-    // value, so the centre head (exactly on its phase jump) takes phase
-    // 0.5, and at the beat a side switches both sides read on.
-    let changed: &[(&str, &str, f64)] = &[
-        ("Mirror", "bars", 1.0),
-        ("Mirror", "spread", 1.0),
-        ("Wrapping ripple", "bars", 1e-3),
-        ("Wrapping ripple", "spread", 1e-3),
-        ("Wrapping ripple", "line13", 1e-3),
-        ("Alternating sides", "bars", 1.0),
-        ("Alternating sides", "spread", 1.0),
-        ("Alternating sides", "line13", 1.0),
+    // Rewritten so a front lights the last head (a jump reads the value
+    // after it): Stepped chase, Wipe and Grow. Kaleidoscope's angle is now
+    // around the middle of its folded heads, not their centroid.
+    // Alternating sides: the middle head, exactly on the phase jump, now
+    // goes with the right side.
+    let skip = [
+        "Slash",
+        "Stepped chase",
+        "Wipe",
+        "Grow",
+        "Kaleidoscope",
+        "Alternating sides",
     ];
-    // Presets with a head or a sample beat exactly on a brightness jump
-    // (the middle rank of an odd count, a step at the sample beat): ties
-    // are now lit, so these only gain light there and never lose it.
-    let ties = ["Random heads", "Random bars", "Sparkle", "Dissolve"];
-    let mut report = Vec::new();
+    // A head or a sample beat exactly on a brightness jump (a pill's far
+    // end, the middle rank of an odd count, a step at the sample beat): it
+    // reads the value after the jump, so these only lose light there.
+    let ties = [
+        "Random heads",
+        "Random bars",
+        "Sparkle",
+        "Dissolve",
+        "Build",
+        "Chase",
+        "Diagonal slash",
+        "Many pills",
+        "Mirror",
+    ];
+    let mut wrong = Vec::new();
     for (name, rigs) in old["clips"].as_object().unwrap() {
-        if name == "Slash" {
+        if skip.contains(&name.as_str()) {
             continue;
         }
-        let graph = preset(name);
-        for (rig, frames) in rigs.as_object().unwrap() {
-            let cells: Vec<Cell> = serde_json::from_value(old["rigs"][rig].clone()).unwrap();
-            let new = v3_values(&graph, &cells, &beats);
-            let (most, mean) = difference(frames, &new);
-            report.push(format!(
-                "{name} on {rig}: largest {most:.2e}, mean {mean:.2e}"
-            ));
-            if ties.contains(&name.as_str()) {
-                let lost = darker(frames, &new);
-                assert!(lost <= 1e-6, "{name} on {rig} loses {lost}");
-                continue;
+        let frames = &rigs["line13"];
+        let cells: Vec<Cell> = serde_json::from_value(old["rigs"]["line13"].clone()).unwrap();
+        let new = v3_values(&preset(name), &cells, &beats);
+        let (most, mean) = difference(frames, &new);
+        if ties.contains(&name.as_str()) {
+            let gained = brighter(frames, &new);
+            if gained > 1e-6 {
+                wrong.push(format!("{name} gains {gained}"));
             }
-            let allowed = changed
-                .iter()
-                .find(|(changed, on, _)| changed == name && on == rig)
-                .map_or(1e-6, |(_, _, allowed)| *allowed);
-            assert!(most <= allowed, "{name} on {rig}: {most} (mean {mean})");
+        } else if most
+            > if name == "Wrapping ripple" {
+                1e-3
+            } else {
+                1e-6
+            }
+        {
+            // Version 2's Wrapping ripple ran each head's clock for 0.7143
+            // turns, 1 / 1.4 rounded; now it is Ripple on a wrapped space.
+            wrong.push(format!("{name}: {most} (mean {mean})"));
         }
     }
-    println!("{}", report.join("\n"));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The most any value of `new` is below the same value of `old`.
-fn darker(old: &Value, new: &[Vec<Vec<f64>>]) -> f64 {
+/// The most any value of `new` is above the same value of `old`.
+fn brighter(old: &Value, new: &[Vec<Vec<f64>>]) -> f64 {
     let mut most = 0_f64;
     for (t, frame) in new.iter().enumerate() {
         for (n, head) in frame.iter().enumerate() {
             for (c, value) in head.iter().enumerate() {
-                most = most.max(old[t][n][c].as_f64().unwrap() - value);
+                most = most.max(value - old[t][n][c].as_f64().unwrap());
             }
         }
     }
@@ -1527,4 +1724,154 @@ fn zoom_out_tiles_two_pills_into_eight_without_a_jump() {
         fine.0 < coarse.0 * 0.7,
         "a light jumps: {coarse:?} then {fine:?}"
     );
+}
+
+// ---- 2026-09-30 audit: shader rules ----
+
+#[test]
+fn a_front_lights_the_last_head_before_it_ends() {
+    // A jump reads the value after it, so a front lights a head once it
+    // has reached it. Wipe and Grow reach the last head before their end;
+    // a meter at its loudest lights every head.
+    let times: Vec<f64> = (0..40).map(|i| 4. + i as f64 * 0.1).collect();
+    let wipe = play(&preset("Wipe"), &line(), &times);
+    assert_eq!(lit(&wipe, 0), vec![0], "the first head at the start");
+    assert_eq!(lit(&wipe, times.len() - 1).len(), line().len());
+    let fractions: Vec<f64> = (0..64).map(|i| i as f64 / 64. * 16.).collect();
+    let grow = play(&preset("Grow"), &grid(), &fractions);
+    assert!(lit(&grow, 0).is_empty(), "nothing at the start");
+    assert_eq!(lit(&grow, 63).len(), grid().len(), "all before the end");
+}
+
+#[test]
+fn stepped_chase_lights_each_head_in_exactly_one_block() {
+    // Four blocks on a ring of cells, a quarter each: over one event every
+    // head is lit in exactly one of the four steps, for any head count.
+    for cells in [line(), line20(), bars()] {
+        let times = [0.5, 1.5, 2.5, 3.5];
+        let light = play(&preset("Stepped chase"), &cells, &times);
+        for n in 0..cells.len() {
+            let steps = (0..4).filter(|t| light[[n, *t, DIMMER]] > 1e-6).count();
+            assert_eq!(steps, 1, "head {n} of {}", cells.len());
+        }
+    }
+}
+
+#[test]
+fn alternating_sides_switch_cleanly() {
+    // Half way through each event one side goes off as the other comes
+    // on: never both, never neither, and the middle head of an odd count
+    // goes with one side.
+    let cells = line();
+    let times: Vec<f64> = (0..32).map(|i| i as f64 / 16.).collect();
+    let light = play(&preset("Alternating sides"), &cells, &times);
+    for t in 0..times.len() {
+        let on = lit(&light, t);
+        assert!(!on.is_empty() && on.len() < cells.len(), "at {}", times[t]);
+        let left = on.iter().all(|n| *n < 6);
+        let right = on.iter().all(|n| *n >= 6);
+        assert!(left || right, "one side at {}: {on:?}", times[t]);
+    }
+    let odd = line13();
+    let light = play(&preset("Alternating sides"), &odd, &[0.25, 1.25]);
+    let (a, b) = (lit(&light, 0), lit(&light, 1));
+    assert_eq!(a.len() + b.len(), odd.len());
+    assert!(a.iter().all(|n| !b.contains(n)));
+}
+
+/// Thirteen heads along U, the middle one on the centre.
+fn line13() -> Vec<Cell> {
+    (0..13)
+        .map(|i| cell(format!("m{i:02}"), [i as f64, 0., 3.]))
+        .collect()
+}
+
+#[test]
+fn a_pill_of_width_w_lights_heads_in_w_and_shares_none_at_its_ends() {
+    // Chase's pill is [shift, shift + 0.2): with heads every 1/19, four
+    // heads (0.2 × 19 = 3.8, so 3 or 4) light at any moment.
+    let cells = line20();
+    let times: Vec<f64> = (0..40).map(|i| 1. + i as f64 * 0.01).collect();
+    let light = play(&preset("Chase"), &cells, &times);
+    for t in 0..times.len() {
+        let on = lit(&light, t);
+        assert!(
+            (3..=4).contains(&on.len()),
+            "{} lit at {}",
+            on.len(),
+            times[t]
+        );
+    }
+    // Random heads lights half: on an odd count the middle rank sits on
+    // the jump and reads the value after it, so the smaller half.
+    let light = play(&preset("Random heads"), &line13(), &[0.5]);
+    assert_eq!(lit(&light, 0).len(), 6);
+}
+
+#[test]
+fn audio_reads_one_level_over_the_whole_track() {
+    // The band is normalised over the track, not over the clip: clips at
+    // different places and of different lengths read the same level at
+    // the same beat.
+    let graph = graph(json!({
+        "a": {"kind": "audio", "inputs": {"low_hz": 40, "high_hz": 100}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "a"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    let level = |start: f64, duration: f64, beats: &[f64]| {
+        let prepared = PreparedGraph::new(
+            &standard_library(),
+            &graph,
+            Frame {
+                features: None,
+                cells: &line(),
+                beat: start,
+                clip_start: start,
+                clip_duration: duration,
+                seed: 7,
+            },
+        )
+        .unwrap()
+        .with_features(Arc::new(Track))
+        .unwrap();
+        let out = prepared.evaluate_batch(beats).unwrap();
+        let light = out[OUTPUT].lighting().unwrap().values().clone();
+        beats
+            .iter()
+            .enumerate()
+            .map(|(t, _)| light[[0, t, DIMMER]])
+            .collect::<Vec<_>>()
+    };
+    let beats = [5., 6.5, 7.25];
+    let short = level(4., 4., &beats);
+    let long = level(0., 32., &beats);
+    assert_eq!(short, long);
+    // Track's band is 1 + sin(1.7 beat) over 0–2.
+    for (b, v) in beats.iter().zip(&short) {
+        assert!((v - (1. + (b * 1.7).sin()) / 2.).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn a_bezier_handle_may_overshoot_and_outputs_clamp() {
+    // CSS cubic-bezier lets y run outside 0–1: the curve passes above its
+    // end value between the points, and the light clamps at 1.
+    let graph = graph(json!({
+        "space1": {"kind": "space", "settings": {"kind": "line", "wrap": "no"}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"},
+            "shape": {"points": [[0, 0, [0.3, 1.8, 0.6, 1.4]], [1, 1]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}));
+    luma_patterns::clip_graph::check(&graph).expect("an overshooting handle passes");
+    let at = graph
+        .coordinate_at_heads("space1", frame(&line(), 1.))
+        .unwrap();
+    assert!(at.iter().all(Option::is_some));
+    let shape = match &graph.nodes["curve1"].inputs["shape"] {
+        luma_patterns::clip_graph::Input::Points(points) => points.clone(),
+        _ => unreachable!(),
+    };
+    assert!(shape.sample(0.5) > 1.2, "the shape passes above 1");
+    // The middle head (x 5/11) is clamped to 1 at the output, where a
+    // straight line would give it 0.45.
+    let light = play(&graph, &line(), &[1.]);
+    assert_eq!(light[[5, 0, DIMMER]], 1.);
 }

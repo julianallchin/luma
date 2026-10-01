@@ -332,6 +332,14 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                         example(node.kind, name)
                     ));
                 }
+                if value.iter().any(|v| !def.in_range(*v)) {
+                    return fail(format!(
+                        "{id}.{name}: expected {} for each of u, v and z; got {}. Example: {}",
+                        range_phrase(def),
+                        vector(*value),
+                        example(node.kind, name)
+                    ));
+                }
                 if def.nonzero && is_zero(*value) {
                     return fail(format!(
                         "{id}.{name}: expected a direction that is not zero; got {}. Example: {}",
@@ -665,6 +673,17 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
             for bound in ["low", "high"] {
                 match node.inputs.get(bound) {
                     Some(Input::Vector(value)) => {
+                        if let Some(dest) = dests
+                            .iter()
+                            .find(|dest| value.iter().any(|v| !dest.def.in_range(*v)))
+                        {
+                            return fail(format!(
+                                "{id}.{bound}: expected {} for each of u, v and z for {}; got {}. Example: {bound}=(0.5, 0.5, 0.5)",
+                                range_phrase(dest.def),
+                                dest.name(),
+                                vector(*value)
+                            ));
+                        }
                         if let Some(dest) = direction.filter(|_| is_zero(*value)) {
                             return fail(format!(
                                 "{id}.{bound}: expected a vector that is not zero for {}; got {}. Example: {example}",
