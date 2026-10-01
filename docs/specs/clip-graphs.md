@@ -51,10 +51,11 @@ Julian approved these from an audit: shaders and standard compositing.
    Stepped chase: a quarter block on a ring of cells).
 2. `replace` is the top light. Opacity is alpha's job:
    `out = mix(below, blend(below, clip), alpha)`.
-3. `radial` and `angle` measure around `at = (u, v, z)`, each 0–1 within
-   the span's box, empty = its middle (0.5, 0.5, 0.5). Radial is the
-   distance from `at` over the largest distance, `d / max` (not
+3. `radial` and `angle` measure around `centre = (u, v, z)`, each 0–1
+   within the span's box, empty = its middle (0.5, 0.5, 0.5). Radial is the
+   distance from `centre` over the largest distance, `d / max` (not
    `(d − min) / (max − min)`): `shift` moves rings outward from the centre.
+   (Named `at` until the geometry model below.)
 4. Overlapping events of a clock make one layer: color and strobe keep the
    largest value per channel across live events (premultiplied by alpha:
    lighten); aim lays the newest event over the older by its alpha. This
@@ -65,7 +66,7 @@ Julian approved these from an audit: shaders and standard compositing.
    phase.
 8. Audio reads 0–1 over the whole track, not over the clip: every clip on
    a track reads the same level at the same moment.
-9. The empty (best-fit) direction of a line, and the empty normal of a
+9. The empty (best-fit) direction of a line, and the empty direction of a
    mirror, is the stage axis (+U, +V or +Z) the heads spread along most,
    U before V before Z on ties: a symmetric rig never flips.
 10. A Bézier ease keeps x1 and x2 in 0–1; y1 and y2 may be any number (CSS
@@ -77,12 +78,58 @@ Julian approved these from an audit: shaders and standard compositing.
 
 Migration (`migrate_clip_graphs_v3.py --cells`, the clip's own rig from
 `clip_cells`): `lighten` → `max`; `value` → `replace` with alpha ×
-brightness; a phase of 0 goes; a radial or angle space takes `at` at its
-old centroid, and a radial one takes its nearest head's share m of the
+brightness; a phase of 0 goes; a radial or angle space takes `centre` at
+its old centroid, and a radial one takes its nearest head's share m of the
 largest distance into shift and scale (`shift' = m + shift·(1 − m)`,
 `scale' = scale·(1 − m)`; on a wrapped ring of n units the first m is
-`m·(n − ½)/n`); an empty direction or normal whose old principal axis is
-not a stage axis is written out. Parity plays each clip on its own rig.
+`m·(n − ½)/n`); an empty direction whose old principal axis is not a
+stage axis is written out. Parity plays each clip on its own rig.
+
+### Geometry model (2026-09-30, decision 52)
+
+Julian approved one model for every geometric input, after CSS and
+shaders. Three shared kinds (`clip_graph::Geometry`); the checker validates
+a geometric input through its kind, and a test holds every node to them:
+
+| Kind | Type | Meaning | Inputs |
+|---|---|---|---|
+| direction | vector (u, v, z), no unit | a way on the stage; never zero; empty = best fit | `space.direction`, `mirror.direction`, `aim.direction` |
+| selection number | number 0–1 | one place along the node's ruler or direction, over the selection before any fold | `space.at`, `mirror.at` |
+| selection point | vector (u, v, z), each 0–1 | a point of the selection's box before any fold; (0.5, 0.5, 0.5) is the middle | `space.centre` |
+
+`aim.point` is the one exception: metres in the room.
+
+- `space(heads, direction, centre, at, shift, scale, kind, wrap)`. The
+  ruler `a` runs 0–1 across the selection by kind (line, order, radial,
+  angle). Then `x = at + (a − at − shift) / scale`; with wrap,
+  `x = fract(x)`. As CSS: `at` is transform-origin (one number on the
+  ruler, empty = 0, so `x = (a − shift) / scale` as before), `shift` the
+  translate, `scale` the scale, wrap background-repeat. `centre` is read
+  by radial and angle only (CSS `radial-gradient(at x y)`).
+- `mirror(heads, direction, at)`: `normal` is now `direction`. `at` is one
+  number 0–1 along the direction within the selection before any fold. A
+  shader's reflect: heads on the low side reflect.
+- One rule: a space's ruler is always measured on the selection before
+  any fold. A mirror moves the heads along it, never the ruler. A line
+  after a mirror in the middle reads its folded heads 0.5 to 1; radial and
+  angle after mirrors measure around the selection's centre, not each
+  folded part. The old "a line along a mirror measures from its plane"
+  rule and its kernel ports are gone.
+- Kaleidoscope keeps its look (a turn around each folded quarter) with
+  `centre = (0.75, 0.5, 0.75)`, the middle of the quarter the heads fold
+  into. Slash's bloom keeps its look with `shift = 0.68` on its distance
+  space: 0 on the mirror line at 0.68. Mirror's sweep moves from
+  `shift` −0.1…0.5 to 0.4…1.
+
+Migration: `mirror.normal` → `direction`; a first mirror's `offset`
+(metres from the middle) → `at = 0.5 + offset / extent` on the clip's rig
+(none in the 2026-09-30 copy); a radial or angle `at` point → `centre`. A
+line space after a mirror is fitted on the clip's rig: version 2 read the
+folded heads from the nearest (0) to the farthest (1); the new ruler puts
+them at m..M, so `shift' = m + shift·(M − m)` and `scale' = scale·(M − m)`
+(a shared wired shift takes `*` and `+` math nodes). With no rig, a line
+along a mirror assumes a head on the plane: `m = at`, `M − m = max(at,
+1 − at)`.
 
 Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 `shuffle`, `group`, `split`, `color`, `aim`, `strobe`. `clock` is gone.
@@ -92,15 +139,15 @@ Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
 | alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
 | time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase (0 too), `τ = fract(τ + phase)`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). A delay in beats is fixed timing (Slash's 0.4-beat cut); timing "over the whole clip" comes from `time()` so it stretches when the clip is resized: Build, Dissolve and Grow shift a space by a curve over `time()` and step it (`rank = space(heads=shuffle(), kind='order', shift=curve(clip, 'Ramp up'))`, then `curve(rank, 'Step down')`), never a 16-beat delay. |
 | shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
-| space | `space(heads, direction, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0), same math: `x = (a − shift) / scale`; with `wrap` it tiles, `x = fract((a − shift) / scale)` (changed 2026-09-30, decision 50). A `line` space whose direction is parallel to the normal of a mirror in its heads (the latest such mirror) measures from that mirror's plane: `a = (p − plane) · direction / R`, `R` the span's extent along the direction before any fold; 0 is on the plane. |
-| mirror | `mirror(heads, normal, at)`. `at` share (0–1, T): the plane sits at `at` along the normal across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. |
+| space | `space(heads, direction, centre, at, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0): `x = at + (a − at − shift) / scale`, `at` the origin (0–1, empty 0: the old `(a − shift) / scale`); with `wrap` it tiles, `x = fract(x)` (decisions 50, 52). The ruler `a` is measured on the selection before any fold. `centre` (selection point, T) is read by radial and angle. |
+| mirror | `mirror(heads, direction, at)`. `at` (selection number 0–1, T): the plane sits at `at` along the direction across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. A mirror moves heads, never a space's ruler. |
 | math | `math`: setting `op` = `*` \| `+` \| `-` \| `max` \| `min` (default `*`); input `values`: a list of numbers and value wires (curves or math). `*`, `+`, `max`, `min` take 2 or more items, `-` exactly 2 (`a − b`). Tensors broadcast: a number times a color is a color. The output is a value of the widest input kind (color > vector > number; color with vector is an error). A math result wires like a curve, into any value input or a curve's low or high. Its inputs carry at most one clock. |
 | lists | Gone from outputs. `brightness=[a, b]` is `brightness=a * b` (one math node). |
 | curve | A node; low and high wireable. At a jump (two points at one x), x itself reads the value after it (audit 1): each piece covers [a, b), over space or time, inside 0–1 or at its ends. The middle rank of an odd count sits on a 0.5 jump and goes with the upper half. A `hold` ease is not a jump. |
 
 Python: `time(every=None, duration=None, delay=None, phase=None)`,
-`space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)`,
-`mirror(heads=None, normal=None, at=None)`, `shuffle(heads=None, time=None)`.
+`space(heads=None, direction=None, centre=None, at=None, shift=None, scale=None, kind="line", wrap=None)`,
+`mirror(heads=None, direction=None, at=None)`, `shuffle(heads=None, time=None)`.
 Math is plain operators on value nodes: `a * b * c` is one math node with
 three items (a chain of one operator flattens), `a - b`, `0.5 * a`,
 `max(a, b)`, `min(a, b, c)`. A named math result (`glow = a * b`) is its own
@@ -123,10 +170,9 @@ rises), and any other delay with no clock is refused (none in the
 alpha stays alpha, timeline fade handles included (one fade concept:
 alpha = opacity; alone a clip looks the same, over another clip its fade
 now shows the clip below, and the dry run counts those clips); a
-`mirror.offset` other than 0 is refused (none in the 2026-09-30 copy). A line space after a
-mirror along the same direction now measures from the plane: the converter
-halves its shift and scale (exact when a head sits on the plane, close
-otherwise; listed). A wrapped space now tiles (decision 50): one with a
+`mirror.offset` becomes `at` on the clip's rig (none other than 0 in the
+2026-09-30 copy). A line space after a mirror is fitted to the new ruler
+(geometry model above). A wrapped space now tiles (decision 50): one with a
 number scale other than 0 and 1 takes scale 1 and each curve over it reads
 its points at x × scale (cut at x 1 when the scale is above 1; a cut inside
 an eased segment is refused). Dry run on a copy, 2026-09-30: 103 clips have
@@ -304,15 +350,20 @@ from its line).
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
 | heads | heads | | | wire only | all clip heads |
-| direction | vector | uvz | not zero | yes (T) | best fit |
+| direction | vector (direction) | uvz | not zero | yes (T) | best fit |
+| centre | vector (selection point) | share | 0–1 each | yes (T) | (0.5, 0.5, 0.5) |
+| at | number (selection number) | share | 0–1 | yes | 0 |
 | shift | number | share | any | yes | 0 |
-| length | number | share | ≥ 0 | yes | 1 |
+| scale | number | share | ≥ 0 | yes | 1 |
 
 Settings: `kind` = `line` \| `order` \| `radial` \| `angle`; `wrap` = yes \| no.
 Default `wrap` is no, except `angle`, where it is yes. The UI hides
-`direction` for `order`.
+`direction` for `order` and shows `centre` for `radial` and `angle` only.
 
-The raw axis coordinate `a` of a head, within its span:
+The raw axis coordinate `a` of a head, within its span. The ruler (its
+ends, its centre, its plane and its largest distance) is measured on the
+span's positions before any fold; a mirror moves each head's position along
+it, never the ruler (decision 52):
 
 - `line`: projection of the head position on `direction`, scaled so the
   lowest head is 0 and the highest 1. Empty direction = the stage axis (+U,
@@ -323,16 +374,17 @@ The raw axis coordinate `a` of a head, within its span:
   spaced heads this is the `order` cell).
 - `order`: the head's rank in the span's order, cell-centred:
   `(rank + 0.5) / n`. After `shuffle` the rank is the shuffled one.
-- `radial`: distance from `at` in the plane, over the largest distance
-  (`d / max`); `at` (u, v, z), each 0–1 within the span's box, empty = its
-  middle; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
+- `radial`: distance from `centre` in the plane, over the largest distance
+  (`d / max`); `centre` (u, v, z), each 0–1 within the span's box, empty =
+  its middle; with `wrap` yes, a ring as for `line`. `direction` is the plane normal; empty = the direction of least
   spread (`AxisPlane::Auto` today, with its sign snap).
-- `angle`: turns 0–1 around `at` in that plane.
+- `angle`: turns 0–1 around `centre` in that plane.
 
-The output is each head's field, the shader's `(p − offset) / scale`:
+The output is each head's field, as a CSS transform with origin `at`
+(empty 0, so the shader's `(p − offset) / scale`):
 
 ```
-x = (a − shift) / length          (wrap yes: fract((a − shift) / length))
+x = at + (a − at − shift) / scale          (wrap yes: fract(x))
 ```
 
 Wrapped, the space tiles like a shader's texture coordinate: it is scaled
@@ -409,18 +461,20 @@ high may not be opposite.
 
 The heads wire carries, per unit: the member heads, a position (folded by
 mirrors), a span id, an order rank (per event after `shuffle`), and the list
-of mirror normals that folded it.
+of mirror directions that folded it.
 
 **mirror**
 
 | Input | Type | Unit | Range | Promotable | Empty |
 |---|---|---|---|---|---|
 | heads | heads | | | wire only | all clip heads |
-| normal | vector | uvz | not zero | yes (T) | best fit: the span's principal axis |
-| offset | number | metres | any | yes (T) | 0 |
+| direction | vector (direction) | uvz | not zero | yes (T) | best fit: the stage axis the span spreads along most |
+| at | number (selection number) | share | 0–1 | yes (T) | 0.5 |
 
-The plane goes through the middle of the span's extent along the normal, moved
-by `offset`. Heads on the low side take their reflected position. Order is
+The plane sits at `at` of the span's extent along the direction, measured
+before any fold (version 2: `normal`, and `offset` in metres from the
+middle). Heads on the low side take their reflected position, as a
+shader's reflect. Order is
 not changed. Aim yaw and pitch are mirrored for those heads. Mirrors stack:
 two mirrors give four-fold symmetry (Kaleidoscope).
 
@@ -503,7 +557,7 @@ all run it. Python does not check on its own.
    (interval: `[min(low, high), max(low, high)]`, with wire bounds from their
    own curves).
 5. Axes: an input that refuses an axis gets none of it (`group.size`,
-   `mirror.offset`, `audio.*_hz`, `space.direction`, `mirror.normal` refuse
+   `mirror.offset`, `audio.*_hz`, `space.direction`, `mirror.direction` refuse
    `H`). The inputs of one node together carry at most one clock `E(k)`,
    except the output node, where each input may carry its own clock. The
    items of one list carry at most one clock, also on the output node.
@@ -634,8 +688,8 @@ fixed tables, batch evaluate). `forms::lower` is the template; the new
 Prepare time (cells known):
 
 1. Resolve every heads node to `Units` (members, position, span, order,
-   mirror normals) in pipeline order. Constant geometry becomes constant
-   `(H,1,1)` fields. A wired `direction`, `normal` or `offset` (time only)
+   mirror directions) in pipeline order. Constant geometry becomes constant
+   `(H,1,1)` fields. A wired `direction` or `at` (time only)
    emits an `Axis` or `Fold` kernel instead of a constant field.
 2. Each clock: `ClockTable(every)`, `ClockTable(duration)`, `Events`
    (`once`/`hold` flags removed; a clock is always finite). Outputs
@@ -722,11 +776,11 @@ mirror, shuffle, group, split, color, aim, strobe, preset`.
 ```python
 clock(every, duration=None) -> Clock
 time(clock=None, delay=0, length=1, phase=0) -> Coordinate
-space(heads=None, direction=None, shift=0, length=1, kind="line", wrap=None) -> Coordinate
+space(heads=None, direction=None, centre=None, at=None, shift=0, scale=1, kind="line", wrap=None) -> Coordinate
 noise(heads=None, speed=None, scale=None, contrast=None) -> Coordinate
 audio(low_hz=None, high_hz=None) -> Coordinate
 curve(x, shape=None, low=None, high=None, gradient=None) -> Value
-mirror(heads=None, normal=None, offset=None) -> Heads
+mirror(heads=None, direction=None, at=None) -> Heads
 shuffle(heads=None, clock=None) -> Heads
 group(heads=None, size=None) -> Heads
 split(heads=None, by="fixture") -> Heads
@@ -1199,7 +1253,7 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Speed-up chase | `t = time(); every = curve(t, "Ramp down", low=0.25, high=2); life = curve(t, "Ramp down", low=0.5, high=2); k = clock(every=every, duration=life); age = time(k); move = curve(age, "Ramp up", low=-0.4, high=1); size = curve(t, "Ramp down", low=0.1, high=0.4); place = space(shift=move, length=size); tail = curve(place, "Comet"); color(brightness=tail)` | one time() feeds every, duration and the length; the shift runs on each event |
 | Alternating sides | `k = clock(every=2); place = space(); lag = curve(place, [[0, 0.5], [0.5, 0.5], [0.5, 0], [1, 0]]); t = time(k, phase=lag); half = curve(t, [[0, 1], [0.5, 1], [0.5, 0], [1, 0]]); color(brightness=half)` | the two halves are half a turn apart |
 | Diagonal slash | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.15, high=1); place = space(direction=(1, 0, 1), shift=move, length=0.15); line = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=line)` | Chase along a diagonal direction |
-| Slash | `t = time(every=2); diag = space(direction=(0.82, 0, -0.57), shift=curve(t, [[0, 1], [0.2, 0], [1, 0]])); cut = curve(diag, "Step up"); line = mirror(normal=(0.57, 0, 0.82), at=0.68); dist = space(heads=line, direction=(0.57, 0, 0.82), scale=curve(t, "Ramp up", low=0.04, high=0.74)); bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]]); fade = curve(t, [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]]); color(brightness=cut * bloom * fade)` | not a shipped preset. cut × bloom × fade: the cut is x = front − place under a rising step, so a head lights once the front reaches it, the far corner too |
+| Slash | `t = time(every=2); diag = space(direction=(0.82, 0, -0.57), shift=curve(t, [[0, 1], [0.2, 0], [1, 0]])); cut = curve(diag, "Step up"); line = mirror(direction=(0.57, 0, 0.82), at=0.68); dist = space(heads=line, direction=(0.57, 0, 0.82), shift=0.68, scale=curve(t, "Ramp up", low=0.04, high=0.74)); bloom = curve(dist, [[0, 1], [0.76, 1], [1, 0]]); fade = curve(t, [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]]); color(brightness=cut * bloom * fade)` | not a shipped preset. cut × bloom × fade: the cut is x = front − place under a rising step, so a head lights once the front reaches it, the far corner too; the bloom space is shifted by 0.68 so it reads 0 on the mirror line (the ruler runs over the selection before the fold) |
 | Ripple | `k = clock(every=2); t = time(k); move = curve(t, "Ramp up", low=-0.4, high=1); radius = space(shift=move, length=0.4, kind="radial"); ring = curve(radius, "Soft"); color(brightness=ring)` | Chase over radius: rings go out from the centre |
 | Wrapping ripple | `t = time(every=2); radius = space(shift=curve(t, "Ramp up", low=-0.4, high=1), kind="radial", wrap=True); ring = curve(radius, [[0, 0, [0.4, 0, 0.6, 1]], [0.2, 1, [0.4, 0, 0.6, 1]], [0.4, 0], [1, 0]]); color(brightness=ring)` | rings come in again at the centre; one ring per turn, its width 0.4 in the curve points (a wrapped scale tiles) |
 | Zoom out | `clip = time(); x = space(direction=(1, 0, 0), shift=curve(clip, [[0, 0, "ease-out"], [1, 1]]), scale=curve(clip, "Ramp up", low=0.5, high=0.125), wrap=True); color(brightness=curve(x, [[0, 0, [0.4, 0, 0.6, 1]], [0.25, 1, [0.4, 0, 0.6, 1]], [0.5, 0], [1, 0]]))` | not a preset: a wrapped space tiles, so its scale 0.5 → 0.125 turns 2 soft pills into 8 with no head jump |
@@ -1207,8 +1261,8 @@ Sunset, B/W. Bands: Kick 40–100, Bass 20–250, Mids 250–4000, Highs
 | Grow | `clip = time(); radius = space(shift=curve(clip, "Ramp up", high=1.1), kind="radial"); color(brightness=curve(radius, "Step down"))` | radius shifted by progress over the clip: heads turn on from the centre out, the farthest before the end |
 | Turning line | `k = clock(every=2, duration=4); turn = space(kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.9, 0], [0.9, 1], [1, 1]]); color(brightness=arm)` | duration = 2 × every: two opposite arms alive |
 | Spiral | `k = clock(every=4); radius = space(kind="radial"); inner = curve(radius, "Ramp up"); outer = curve(radius, "Ramp up", low=1, high=2); turn = space(kind="angle"); lag = curve(turn, "Ramp down", low=inner, high=outer); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.7, 0, [0.4, 0, 0.6, 1]], [0.85, 1, [0.4, 0, 0.6, 1]], [1, 0]]); color(brightness=arm)` | phase by angle, moved by radius, bends the arm |
-| Mirror | `k = clock(every=2); halves = mirror(); t = time(k); move = curve(t, "Ramp up", low=-0.2, high=1); place = space(halves, shift=move, length=0.2); pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]); color(brightness=pill)` | Chase over mirrored heads: pills from both ends meet |
-| Kaleidoscope | `k = clock(every=4); sides = mirror(normal=(1, 0, 0)); quarters = mirror(sides, normal=(0, 0, 1)); turn = space(quarters, kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]); color(brightness=arm)` | two mirrors, four-fold |
+| Mirror | `halves = mirror(); t = time(every=2); place = space(heads=halves, shift=curve(t, "Ramp up", low=0.4, high=1), scale=0.1); color(brightness=curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]]))` | Chase over mirrored heads: a pill runs out from the middle to both ends; the folded heads read 0.5–1 of the ruler |
+| Kaleidoscope | `k = clock(every=4); sides = mirror(direction=(1, 0, 0)); quarters = mirror(sides, direction=(0, 0, 1)); turn = space(quarters, centre=(0.75, 0.5, 0.75), kind="angle"); lag = curve(turn, "Ramp down"); t = time(k, phase=lag); arm = curve(t, [[0, 0], [0.85, 0], [0.8575, 1], [1, 0]]); color(brightness=arm)` | two mirrors, four-fold; `centre` is the middle of the quarter the heads fold into, so each quarter turns around its own middle |
 
 ### Aim
 
@@ -1380,12 +1434,12 @@ One line each; the alternative after "alt:".
 10. Two different clocks may meet only at an output node; anywhere else it is an error. alt: nested event axes.
 11. Overlap effect per clock: color = peak(color) × brightness × alpha; strobe = rate × alpha; aim = alpha × (|yaw| + |pitch|); ties newest. alt: brightness only, as today.
 12. Aim `base` gains `away` (aim from the point through the head) so Bloom is one animated point. alt: only direction|point and approximate Bloom with pitch over radial.
-13. The heads wire carries mirror normals; `aim.heads` uses them to mirror yaw and pitch for folded heads. alt: mirror only folds positions and aim has no heads input.
+13. The heads wire carries mirror directions; `aim.heads` uses them to mirror yaw and pitch for folded heads. alt: mirror only folds positions and aim has no heads input.
 14. Noise is one 4-D field over normalized (u, v, z) and time; no scale = uniform; salt = clip seed ⊕ FNV(node id). alt: keep the three old modes and `key`.
 15. Noise `scale` is a share of the span's largest extent, not metres. alt: metres.
 16. `shuffle` permutes order only, within each span, new per event; no clock = once per clip. alt: also shuffle positions.
 17. `split` has a setting `by` = fixture|group. alt: fixture only.
-18. `group.size`, `mirror.offset`, `mirror.normal`, `space.direction` and `audio.*_hz` are promotable over time only (no heads axis). alt: values only.
+18. `group.size`, `mirror.at`, `mirror.direction`, `space.direction`, `space.centre` and `audio.*_hz` are promotable over time only (no heads axis). alt: values only.
 19. `clock.every` is required and must be above 0; `every` 0 is an error (use no clock). alt: `every` 0 = once.
 20. Empty `space.direction` for line = the stage axis the span spreads along most (U, V, Z on ties; audit 9); for radial/angle = the least-spread direction with the old sign snap. alt: a `toward` hint input.
 21. Storage adds `name` and `graph_json` columns; `graph` and `inputs_json` stay unread until a follow-up migration drops them after the upload is verified. alt: drop them in the same build (sqlx would drop before the converter runs).
@@ -1419,3 +1473,4 @@ One line each; the alternative after "alt:".
 49. A node's id is its Python variable name (any ASCII Python name up to 32 characters, not a builder name or keyword); unnamed nodes are `<kind><n>`; the card shows the id as-is, or "Curve 2" for a numbered id; the UI renames by editing the card title and rewrites every wire (2026-09-30). alt: numbered ids only.
 50. A wrapped space tiles like a shader texture: `x = fract((a − shift) / scale)`, scale first, then repeat, so a curve over time on scale zooms (0.5 → 0.125: 2 copies → 8); the ring spacing applies to `a` first (changed 2026-09-30; before, `((a − shift) mod 1) / scale`, one copy). Migrated clips move the scale into their curve points. alt: keep one copy and zoom by curve points.
 51. Audit (2026-09-30, section 0): replace is the top light; lighten and value go; overlapping events combine per channel (aim: newest on top); gaps and outside the clip are alpha 0; a phase always wraps; audio is normalised over the whole track; best fit is a stage axis; Bézier handles may overshoot; radial and angle measure around `at`, radial as d / max. alt: keep each old rule.
+52. Geometry model (2026-09-30, section 0): three shared kinds, direction (u, v, z), selection number 0–1 and selection point (u, v, z) each 0–1, checked through their kind (`aim.point` in metres is the exception); `space(heads, direction, centre, at, shift, scale)` gives `x = at + (a − at − shift) / scale` as a CSS transform with origin `at`; `mirror.normal` is `mirror.direction`; a space's ruler is always measured on the selection before any fold, and a mirror moves heads, never the ruler. alt: a line after a mirror measures from its plane (the rule it replaces); `at` as a point.
