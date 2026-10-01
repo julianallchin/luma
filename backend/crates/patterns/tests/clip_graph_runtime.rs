@@ -1405,20 +1405,24 @@ fn two_to_eight_pills() -> ClipGraph {
         "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve4"}}}}))
 }
 
-/// The first form of 2 → 8 pills: ramps over the whole clip and a shift
-/// that wraps around the ring once over each pill's life.
-fn wrapped_pills() -> ClipGraph {
+/// 2 → 8 pills on a ring: the same held ramps, but each pill's shift wraps
+/// once around the ring over its life, and each pill fades in over the
+/// first tenth of its life and out over the last, so births and deaths on
+/// the ring never pop.
+fn wrapping_pills() -> ClipGraph {
     graph(json!({
         "clip": {"kind": "time"},
-        "curve1": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "low": 1, "high": 0.5}},
-        "curve2": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "low": 2, "high": 4}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "shape": {"points": [[0, 0], [0.75, 1], [1, 1]]}, "low": 1, "high": 0.5}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "shape": {"points": [[0, 0], [0.75, 1], [1, 1]]}, "low": 2, "high": 4}},
         "k": {"kind": "time", "inputs": {"every": {"node": "curve1"}, "duration": {"node": "curve2"}}},
         "curve3": {"kind": "curve", "inputs": {"x": {"node": "k"}}},
         "x": {"kind": "space", "settings": {"kind": "line", "wrap": "yes"},
               "inputs": {"direction": [1, 0, 0], "shift": {"node": "curve3"}}},
-        "curve4": {"kind": "curve", "inputs": {"x": {"node": "x"}, "shape": {"points": [
+        "pill": {"kind": "curve", "inputs": {"x": {"node": "x"}, "shape": {"points": [
             [0, 0, [0.4, 0, 0.6, 1]], [0.025, 1, [0.4, 0, 0.6, 1]], [0.05, 0], [1, 0]]}}},
-        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve4"}}}}))
+        "life": {"kind": "curve", "inputs": {"x": {"node": "k"}, "shape": {"points": [[0, 0], [0.1, 1], [0.9, 1], [1, 0]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "math1"}}},
+        "math1": {"kind": "math", "inputs": {"values": [{"node": "pill"}, {"node": "life"}]}}}))
 }
 
 /// Two hundred heads on a line along U: a fine ring to count pills on.
@@ -1480,28 +1484,13 @@ fn two_pills_become_eight_smoothly() {
     );
 }
 
-/// The same pills, each fading in over the first tenth of its life and
-/// out over the last: births and deaths at the seam no longer pop.
 #[test]
-fn two_pills_become_more_without_a_jump_when_each_fades_in_and_out() {
-    let mut graph = wrapped_pills();
-    let extra = json!({
-        "life": {"kind": "curve", "inputs": {"x": {"node": "k"}, "shape": {"points": [[0, 0], [0.1, 1], [0.9, 1], [1, 0]]}}},
-        "math1": {"kind": "math", "inputs": {"values": [{"node": "curve4"}, {"node": "life"}]}}});
-    for (id, node) in extra.as_object().unwrap() {
-        graph
-            .nodes
-            .insert(id.clone(), serde_json::from_value(node.clone()).unwrap());
-    }
-    graph.nodes.get_mut("color1").unwrap().inputs.insert(
-        "brightness".into(),
-        luma_patterns::clip_graph::Input::wire("math1"),
-    );
-    let (coarse, counts) = pills_and_largest_step(&graph, 0.01);
-    let (fine, _) = pills_and_largest_step(&graph, 0.005);
-    println!("pills per beat: {counts:?}; largest change {coarse:?} then {fine:?}");
-    assert!(counts.windows(2).all(|w| w[1] + 1 >= w[0]), "{counts:?}");
-    assert!(*counts.last().unwrap() > counts[1] + 2, "{counts:?}");
+fn two_pills_on_a_ring_become_eight_and_fade_in_and_out_without_a_jump() {
+    let (coarse, counts) = pills_and_largest_step(&wrapping_pills(), 0.01);
+    let (fine, _) = pills_and_largest_step(&wrapping_pills(), 0.005);
+    println!("most pills in each beat: {counts:?}; largest change {coarse:?} then {fine:?}");
+    assert!(counts.windows(2).all(|w| w[1] >= w[0]), "{counts:?}");
+    assert!(counts[0] == 2 && *counts.last().unwrap() == 8, "{counts:?}");
     assert!(
         fine.0 < coarse.0 * 0.7,
         "a light jumps: {coarse:?} then {fine:?}"
