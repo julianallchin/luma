@@ -1,8 +1,9 @@
 // The clip graph editor from the outside: a clip's graph is a canvas of node
 // cards, sources on the left and the output on the right, with a wire from
-// each node's output port into every input it feeds. A numbered curve or
-// math node that one input reads is a chip on that input's row, as the
-// Python source writes it inline. The source chip promotes a value; a wire
+// each node's output port into every input it feeds. Every node is a card:
+// a curve closes to a picture of its shape and one line, a math node to its
+// op and one row per item. A wired input names the node that feeds it,
+// "Brightness ← mix". The source chip promotes a value; a wire
 // dragged from an output port onto an input links it; a wire dragged off an
 // input unwires it; the add menu and a card's delete button add and remove
 // nodes; segments store settings; a strip stores curve points; the name
@@ -107,47 +108,119 @@ function placements() {
 }
 
 // A wire is a text node "t → Curve 1 x": from a card's output port to an
-// input port, a chip's among them.
+// input port, a math item's among them ("cut → mix values 1").
 const wire = (from, to) => node("text", `${from} → ${to}`);
 
 // A number field's text, by the start of its label: "Space 1 shift = 0".
 const fieldOf = (prefix) => nav.inGraph((s) => s.findAll({ role: "input" }).find((n) => n.label.startsWith(prefix)), prefix);
 
-// A chip on a card's row, in view.
-const chip = (label) => shown("chip", label);
-// Open chip `label` in place.
+// Open the curve card `label` in place.
 function expand(label) {
   app.click(shown("button", `Expand ${label}`));
   node("button", `Collapse ${label}`);
   settle();
 }
-const noCard = (label) => app.snapshot().find({ role: "card", label }) === undefined;
 
-test("a Chase shows its time, space and color cards, with its curves as chips", () => {
+test("every node of a Chase is a card, and a wired input names its source", () => {
   open("Chase");
   expect(stored().name).toBe("Chase");
-  // A pill over the space, whose shift moves with time: the two curves are
-  // inline, each on the one input that reads it.
-  const chain = ["t", "place", "Color 1"];
+  // A pill over the space, whose shift moves with time: a curve one input
+  // reads is a card all the same, wired into that input.
+  const chain = ["t", "Curve 1", "place", "Curve 2", "Color 1"];
   for (const label of chain) node("card", label);
-  for (const curve of ["Curve 1", "Curve 2"]) {
-    assert(noCard(curve), `${curve} is a card`);
-    chip(curve);
-  }
-  assert(inside(node("card", "place").bounds, chip("Curve 1").bounds), "Curve 1 sits on the place card");
-  assert(inside(node("card", "Color 1").bounds, chip("Curve 2").bounds), "Curve 2 sits on the Color 1 card");
-  // Each chip keeps its wire in: the source's wire goes to the chip's row.
+  expect(app.snapshot().find({ role: "chip", label: "Curve 1" })).toBe(undefined);
   wire("t", "Curve 1 x");
+  wire("Curve 1", "place shift");
   wire("place", "Curve 2 x");
+  wire("Curve 2", "Color 1 brightness");
   const places = placements();
   for (let i = 1; i < chain.length; i++) {
     assert(places[chain[i - 1]].x < places[chain[i]].x, `${chain[i - 1]} left of ${chain[i]}: ${JSON.stringify(places)}`);
   }
-  expect(inRow("Color 1", "Brightness", "select", "Over space").label).toBe("Over space");
-  // The chip says what the curve does: what its x reads, its shape and its
-  // bounds.
+  // A wired input reads the name of the node that feeds it.
+  expect(inRow("Color 1", "Brightness", "select", "← Curve 2").label).toBe("← Curve 2");
+  expect(inRow("place", "Shift", "select", "← Curve 1").label).toBe("← Curve 1");
+  // A closed curve card says what its x reads and its bounds.
   const said = (start) => app.snapshot().findAll({ role: "text" }).some((n) => n.label.startsWith(start));
-  assert(said("t · ") && said("place · "), "each chip names what its x reads");
+  assert(said("t · ") && said("place · "), "each curve card names what its x reads");
+});
+
+// Slash as Julian's library has it: two sources, three curves, one product
+// named mix, and a white-to-red color. The clip takes its preset's name.
+const SLASH = {
+  version: 3,
+  nodes: {
+    t: { kind: "time", inputs: { every: 2 } },
+    curve1: { kind: "curve", inputs: { x: { node: "t" }, shape: { points: [[0, 1], [0.2, 0], [1, 0]] } } },
+    diag: { kind: "space", inputs: { direction: [0.82, 0, -0.57], shift: { node: "curve1" } } },
+    cut: { kind: "curve", inputs: { x: { node: "diag" }, shape: { points: [[0, 0], [0, 1], [1, 1]] } } },
+    line: { kind: "mirror", inputs: { direction: [0.57, 0, 0.82], at: 0.68 } },
+    curve2: { kind: "curve", inputs: { x: { node: "t" }, low: 0.04, high: 0.74 } },
+    dist: { kind: "space", inputs: { heads: { node: "line" }, direction: [0.57, 0, 0.82], shift: 0.68, scale: { node: "curve2" } } },
+    bloom: { kind: "curve", inputs: { x: { node: "dist" }, shape: { points: [[0, 1], [0.76, 1], [1, 0]] } } },
+    fade: { kind: "curve", inputs: { x: { node: "t" }, shape: { points: [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]] } } },
+    heat: {
+      kind: "curve", settings: { kind: "color" },
+      inputs: { x: { node: "t" }, gradient: { stops: [
+        { t: 0, color: [1, 1, 1] }, { t: 0.2, color: [1, 1, 1] }, { t: 0.5, color: [1, 0, 0.01] }, { t: 1, color: [1, 0, 0.01] },
+      ] } },
+    },
+    mix: { kind: "math", inputs: { values: [{ node: "cut" }, { node: "bloom" }, { node: "fade" }] } },
+    color1: { kind: "color", inputs: { color: { node: "heat" }, brightness: { node: "mix" } } },
+  },
+};
+const SLASH_CLIP = { fixture: { clips: [{ ...clipOf("Pulse"), graph: SLASH }] } };
+
+test("Slash reads left to right: sources, curves, mix, color; mix is its own card", SLASH_CLIP, () => {
+  open("Pulse");
+  for (const card of ["t", "diag", "cut", "bloom", "fade", "mix", "Color 1"]) node("card", card);
+  expect(app.snapshot().find({ role: "chip", label: "mix" })).toBe(undefined);
+  // The product is wired into the brightness, which names it.
+  wire("mix", "Color 1 brightness");
+  expect(inRow("Color 1", "Brightness", "select", "← mix").label).toBe("← mix");
+  expect(inRow("Color 1", "Color", "select", "← heat").label).toBe("← heat");
+  // One row per factor, each with its own port and its source's name.
+  ["cut", "bloom", "fade"].forEach((from, i) => {
+    wire(from, `mix values ${i + 1}`);
+    const row = rowOf("mix", `Item ${i + 1}`).bounds;
+    assert(app.snapshot().findAll({ role: "text", label: `← ${from}` }).some((n) => inside(row, n.bounds)), `mix item ${i + 1} names ${from}`);
+  });
+  // Its op is one button with the sign.
+  const op = shown("select", "×");
+  assert(inside(node("card", "mix").bounds, op.bounds), "the op sits on the mix card");
+  const places = placements();
+  const left = (a, b) => assert(places[a].x < places[b].x, `${a} left of ${b}: ${JSON.stringify(places)}`);
+  left("t", "diag");
+  for (const curve of ["cut", "bloom", "fade"]) {
+    left("diag", curve);
+    left(curve, "mix");
+  }
+  left("mix", "Color 1");
+  // The factors stand top to bottom in the product's order.
+  assert(places.cut.y < places.bloom.y && places.bloom.y < places.fade.y, `cut, bloom, fade: ${JSON.stringify(places)}`);
+});
+
+test("a curve card opens to its strip and closes to its picture", SLASH_CLIP, () => {
+  open("Pulse");
+  const card = () => node("card", "fade").bounds;
+  // Its shape is set, so it starts closed: a picture and one line.
+  shown("button", "Expand fade");
+  expect(app.snapshot().find({ role: "card", label: "fade strip" })).toBe(undefined);
+  node("text", "t · 0→1");
+  const closed = card().height;
+  expand("fade");
+  assert(inside(card(), shown("card", "fade strip").bounds), "the strip opens on the fade card");
+  assert(card().height > closed, "the open card is taller");
+  // Its empty bounds wait behind the "+".
+  const lowRow = () => app.snapshot().findAll({ role: "row", label: "Low" }).find((r) => inside(card(), r.bounds));
+  expect(lowRow()).toBe(undefined);
+  app.click(shown("button", "More fade inputs"));
+  until("low shows", () => lowRow());
+  fieldOf("fade low = 0");
+  app.click(shown("button", "Collapse fade"));
+  until("closed", (s) => !s.find({ role: "card", label: "fade strip" }));
+  shown("button", "Expand fade");
+  assert(Math.abs(card().height - closed) < 1, "closed to the same height");
 });
 
 test("a time card shows every, duration, delay and phase", () => {
@@ -180,12 +253,13 @@ test("Over time on a Wash's brightness adds a time and a curve chip, wired", { f
   const curve = nodes().color1.inputs.brightness.node;
   expect(nodes()[curve].kind).toBe("curve");
   expect(nodes()[nodes()[curve].inputs.x.node].kind).toBe("time");
-  chip("Curve 1");
-  assert(noCard("Curve 1"), "the new curve is a chip");
+  node("card", "Curve 1");
   wire("Time 1", "Curve 1 x");
+  wire("Curve 1", "Color 1 brightness");
   const places = placements();
-  assert(places["Time 1"].x < places["Color 1"].x, `the time sits left of what it feeds: ${JSON.stringify(places)}`);
-  expect(inRow("Color 1", "Brightness", "select", "Over time").label).toBe("Over time");
+  assert(places["Time 1"].x < places["Curve 1"].x && places["Curve 1"].x < places["Color 1"].x,
+    `each node sits left of what it feeds: ${JSON.stringify(places)}`);
+  expect(inRow("Color 1", "Brightness", "select", "← Curve 1").label).toBe("← Curve 1");
 });
 
 const SPARKLE = { fixture: { clips: [clipOf("Sparkle")] } };
@@ -243,8 +317,9 @@ test("the add menu offers math, which multiplies what the input held", { fixture
   until("math stored", () => nodes().math1?.kind === "math");
   expect(nodes().color1.inputs.brightness.node).toBe("math1");
   expect(nodes().math1.inputs.values).toEqual([1, 1]);
-  chip("Math 1");
-  node("text", "1 × 1");
+  node("card", "Math 1");
+  wire("Math 1", "Color 1 brightness");
+  for (const item of ["Item 1", "Item 2"]) rowOf("Math 1", item);
 });
 
 // The Chase's space.
@@ -283,19 +358,19 @@ test("a space kind segment stores the setting, and only radial and angle show a 
   rowOf(title, "Centre");
 });
 
-test("dragging a curve point in an open chip stores new points, and undo takes the drag back", { fixture: { clips: [clipOf("Pulse")] } }, () => {
+test("dragging a curve point in an open card stores new points, and undo takes the drag back", { fixture: { clips: [clipOf("Pulse")] } }, () => {
   open("Pulse");
   const before = JSON.stringify(stored().graph);
   const curve = nodes().color1.inputs.brightness.node;
   const title = titleOf(curve);
-  assert(noCard(title), `${title} is a chip`);
+  node("card", title);
   expect(app.snapshot().find({ role: "card", label: `${title} strip` })).toBe(undefined);
   expand(title);
   const shape = () => nodes()[curve].inputs.shape.points;
   const points = JSON.stringify(shape());
   shown("card", `${title} strip`);
   const box = node("card", `${title} strip`).bounds;
-  assert(inside(node("card", "Color 1").bounds, box), "the strip opens on the Color 1 card");
+  assert(inside(node("card", title).bounds, box), `the strip opens on the ${title} card`);
   app.drag(shown("slider", `${title} point ${shape().length}`), { dx: 0, dy: -box.height / 2 }, { steps: 8 });
   until("points stored", () => JSON.stringify(shape()) !== points);
   const end = shape().at(-1);
@@ -305,17 +380,17 @@ test("dragging a curve point in an open chip stores new points, and undo takes t
   until("undone", () => JSON.stringify(stored().graph) === before);
 });
 
-test("a curve linked into two inputs is a card, which widens its strip", { fixture: { clips: [clipOf("Pulse")] } }, () => {
+test("a curve linked into two inputs feeds both, and widens its strip", { fixture: { clips: [clipOf("Pulse")] } }, () => {
   open("Pulse");
-  chip("Curve 1");
+  node("card", "Curve 1");
   source("Color 1", "Alpha", "Value", "Link…");
   const link = (s) => s.findAll({ role: "button" }).find((n) => /^Curve 1 · /.test(n.label));
   app.click(link(until("the link", link)));
   until("alpha linked", () => nodes().color1.inputs.alpha?.node === "curve1");
-  node("card", "Curve 1");
-  until("no chip", (s) => s.find({ role: "chip", label: "Curve 1" }) === undefined);
   wire("Curve 1", "Color 1 brightness");
   wire("Curve 1", "Color 1 alpha");
+  expect(inRow("Color 1", "Alpha", "select", "← Curve 1").label).toBe("← Curve 1");
+  expand("Curve 1");
   const narrow = shown("card", "Curve 1 strip").bounds.width;
   app.click(shown("button", "Widen Curve 1"));
   node("button", "Narrow Curve 1");
@@ -323,24 +398,25 @@ test("a curve linked into two inputs is a card, which widens its strip", { fixtu
   assert(wide > narrow * 1.5, `the strip is ${wide} wide, was ${narrow}`);
 });
 
-test("a math chip's op segments store the op", SPARKLE, () => {
+test("a math card's op button picks the op", SPARKLE, () => {
   open("Sparkle");
-  const math = chip("Math 1").bounds;
-  assert(noCard("Math 1"), "the product is a chip");
-  // Its items are chips in it, as `a * b` writes them.
-  for (const item of ["Curve 1", "Curve 2"]) {
-    assert(inside(math, chip(item).bounds), `${item} sits in the Math 1 chip`);
-  }
-  node("text", "Curve 1 × Curve 2");
-  const segment = (label) => {
-    const box = chip("Math 1").bounds;
-    return app.snapshot().findAll({ role: "button", label }).find((n) => inside(box, n.bounds));
+  node("card", "Math 1");
+  // Each item is a row wired from its curve's card.
+  wire("Curve 1", "Math 1 values 1");
+  wire("Curve 2", "Math 1 values 2");
+  const pick = (now, op) => {
+    const box = shown("card", "Math 1").bounds;
+    app.click(app.snapshot().findAll({ role: "select", label: now }).find((n) => inside(box, n.bounds)));
+    app.click(node("button", op));
   };
-  app.click(segment("Max"));
+  pick("×", "max");
   until("max stored", () => nodes().math1.settings.op === "max");
-  node("text", "max(Curve 1, Curve 2)");
-  app.click(segment("Add"));
+  pick("max", "+");
   until("+ stored", () => nodes().math1.settings.op === "+");
+  // Two items: a subtraction is offered, and takes away the "+".
+  pick("+", "−");
+  until("- stored", () => nodes().math1.settings.op === "-");
+  until("no add", (s) => !s.find({ role: "button", label: "Add to Math 1 values" }));
   expect(nodes().math1.inputs.values).toEqual([{ node: "curve1" }, { node: "curve2" }]);
 });
 
@@ -394,7 +470,7 @@ test("hovering a wire lights both its ports", () => {
 
 test("a wire dropped near a port that takes it snaps onto it", SPARKLE, () => {
   open("Sparkle");
-  source("order", "Time", "Time", "Once");
+  source("order", "Time", "← k", "Once");
   until("unwired", () => nodes().order.inputs?.time === undefined);
   app.click(node("button", "Fit graph"));
   settle();
@@ -516,8 +592,7 @@ test("Math on a brightness multiplies it through a math node, and its items edit
   source("Color 1", "Brightness", "Value", "Math");
   until("a product", () => nodes().color1.inputs?.brightness?.node === "math1");
   expect(nodes().math1.inputs.values).toEqual([1, 1]);
-  expect(inRow("Color 1", "Brightness", "select", "Math").label).toBe("Math");
-  expand("Math 1");
+  expect(inRow("Color 1", "Brightness", "select", "← Math 1").label).toBe("← Math 1");
   app.click(shown("button", "Add to Math 1 values"));
   until("three items", () => nodes().math1.inputs.values.length === 3);
   // Taking items out leaves one: a plain value again.
@@ -581,7 +656,7 @@ test("renaming a node moves every wire into it, refuses a bad name, and undoes i
   open("Wash");
   source("Color 1", "Brightness", "Value", "Over time");
   until("a curve stored", () => nodes().curve1);
-  source("Color 1", "Brightness", "Over time", "Math");
+  source("Color 1", "Brightness", "← Curve 1", "Math");
   until("a product", () => nodes().color1.inputs.brightness.node === "math1");
   source("Color 1", "Alpha", "Value", "Link…");
   app.click(node("button", "Curve 1 · Ramp up"));

@@ -138,8 +138,11 @@ pub(in crate::track_editor) struct State {
     pub drafts: Vec<Draft>,
     /// Curves whose strip is widened.
     pub wide: BTreeSet<String>,
-    /// Chips opened in place ([`super::inline_chip`]).
-    pub expanded: BTreeSet<String>,
+    /// Curve cards opened (true) or closed (false) by hand
+    /// ([`super::curve_open`]).
+    pub expanded: BTreeMap<String, bool>,
+    /// Open curve cards that show their empty bounds too.
+    pub defaults: BTreeSet<String>,
     /// The add menu, at this window point.
     pub menu: Option<Point<Pixels>>,
     /// A card's menu: its node, at this window point.
@@ -170,7 +173,8 @@ impl Default for State {
             hover: None,
             drafts: Vec::new(),
             wide: BTreeSet::new(),
-            expanded: BTreeSet::new(),
+            expanded: BTreeMap::new(),
+            defaults: BTreeSet::new(),
             menu: None,
             card_menu: None,
             rename: None,
@@ -239,6 +243,7 @@ impl State {
 /// What an input takes, as a signal: the colour of its port and of the wire
 /// into it.
 fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
+    let input = input.split('#').next().unwrap_or(input);
     Some(match edit::spec(graph, id, input)?.ty {
         // A math node's items are numbers, or values that multiply as numbers do.
         Ty::Number | Ty::Values => Signal::Number,
@@ -306,6 +311,11 @@ const ADDABLE: [Kind; 10] = [
 
 /// Whether a wire from `from` may drop on an input.
 fn fits(graph: &ClipGraph, drafts: &[Draft], from: &Source, id: &str, input: &str) -> bool {
+    // A math node's item shows where a wire lands; a new one drops on the
+    // list's own port.
+    if input.contains('#') {
+        return false;
+    }
     match from {
         Source::Node(from) => edit::link_candidates(graph, id, input)
             .iter()
@@ -352,17 +362,26 @@ fn ring(signal: Signal, filled: bool, tone: Tone, record: impl Fn(Point<Pixels>)
         .child(canvas(move |bounds, _, _| record(bounds.center()), |_, _, _, _| {}).size_full())
 }
 
-/// An input's port, on the card's left edge. A press on a wired one picks
-/// its wire up.
+/// An input's port, on the card's left edge, or a math node's item's
+/// (`values#1`). A press on a wired one picks its wire up; an item's wire
+/// comes out with its row's remove button.
 pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> {
     let signal = input_signal(cx.graph, id, input)?;
     let canvas = &cx.state.sheet.canvas;
     let key: Port = (id.to_owned(), input.to_owned());
-    let held = cx.graph.nodes[id].inputs.get(input);
-    let wired = held.is_some_and(|held| held.sources().next().is_some());
-    // A single wire can be picked up; a list's wires come out one by one
-    // from the card.
-    let source = held.and_then(Input::source).map(str::to_owned);
+    let inputs = &cx.graph.nodes[id].inputs;
+    let held = match input.split_once('#') {
+        Some((list, index)) => match inputs.get(list) {
+            Some(Input::List(items)) => index.parse::<usize>().ok().and_then(|i| items.get(i)),
+            _ => None,
+        },
+        None => inputs.get(input),
+    };
+    let wired = held.and_then(Input::source).is_some();
+    let source = held
+        .filter(|_| !input.contains('#'))
+        .and_then(Input::source)
+        .map(str::to_owned);
     let detached = canvas
         .dragging()
         .is_some_and(|(_, detach)| detach == Some(&key));
@@ -375,11 +394,7 @@ pub(super) fn input_port(cx: &Ctx, id: &str, input: &str) -> Option<AnyElement> 
     };
     let geometry = canvas.geometry.clone();
     let app = cx.app.clone();
-    let label = format!(
-        "{} {} port",
-        edit::label(id),
-        input_label(input).to_lowercase()
-    );
+    let label = format!("{} {} port", edit::label(id), port_name(input));
     let recorded = key.clone();
     Some(
         ring(signal, wired && !detached, tone, move |at| {
@@ -514,43 +529,14 @@ pub(super) fn port_slot(port: AnyElement) -> Div {
         .child(port)
 }
 
-/// One node's card: title, settings, one row per input, and a noise node's
+/// One node's card: title, its body ([`super::body`]), and a noise node's
 /// preview.
 fn node_card(cx: &Ctx, id: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
     let canvas = &cx.state.sheet.canvas;
     let label = edit::label(id);
-    let wide = canvas.wide.contains(id);
-    let mut buttons = Vec::new();
-    if node.kind == Kind::Curve {
-        let app = cx.app.clone();
-        let at = id.to_owned();
-        let name = if wide { "Narrow" } else { "Widen" };
-        buttons.push(
-            icon_button(
-                if wide {
-                    IconName::Minimize
-                } else {
-                    IconName::Expand
-                },
-                Enabled::Yes,
-            )
-            .id(SharedString::from(format!("widen-{id}")))
-            .on_click(move |_, _, cx| {
-                let at = at.clone();
-                app.update(cx, |this, cx| {
-                    this.with_track_editor(cx, |editor| {
-                        let wide = &mut editor.sheet.canvas.wide;
-                        if !wide.remove(&at) {
-                            wide.insert(at);
-                        }
-                    })
-                });
-            })
-            .agent_node(Role::Button, format!("{name} {label}"))
-            .into_any_element(),
-        );
-    }
+    let wide = canvas.wide.contains(id) && super::curve_open(cx, id);
+    let mut buttons = super::title_buttons(cx, id);
     let port = (!node.kind.is_output()).then(|| {
         let app = cx.app.clone();
         let at = id.to_owned();
@@ -566,12 +552,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
         );
         output_port(cx, Source::Node(id.to_owned()), label.clone())
     });
-    let rows: Vec<AnyElement> = definition(node.kind)
-        .inputs
-        .iter()
-        .filter(|(input, _)| visible(node, input))
-        .map(|(input, _)| row(cx, id, input))
-        .collect();
+    let rows = super::body(cx, id);
     let selected = canvas.selected.as_deref() == Some(id);
     let (select, grab, menu) = (cx.app.clone(), cx.app.clone(), cx.app.clone());
     let (at, grabbed, menu_at) = (id.to_owned(), id.to_owned(), id.to_owned());
@@ -611,7 +592,6 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
             },
         ))
         .children(refused)
-        .children(settings(cx, id, node))
         .children(rows)
         .children(cx.controls.noise.get(id).cloned())
         .agent_node(Role::Card, label)
@@ -695,7 +675,7 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 /// the panel is widened, or `None` where it already fills its box.
 pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
     let state = &cx.state.sheet.canvas;
-    let columns = edit::columns(cx.graph, &cx.inline);
+    let columns = edit::columns(cx.graph);
     let geometry = state.geometry.clone();
     // Right to left in `columns`, so the sources come first on screen.
     let content = columns.iter().rev().fold(
@@ -927,21 +907,18 @@ fn wires(cx: &Ctx) -> AnyElement {
     let painted = state.geometry.clone();
     let detach = state.dragging().and_then(|(_, detach)| detach.cloned());
     let graph = cx.graph;
-    let links: Vec<Link> = graph
-        .nodes
-        .iter()
-        .flat_map(|(id, node)| {
-            node.wires().map(move |(input, from)| {
-                let signal = input_signal(graph, id, input).unwrap_or(Signal::Number);
-                Link {
-                    from: Source::Node(from.to_owned()),
-                    to: (id.clone(), input.to_owned()),
-                    color: ladder::signal(signal),
-                    gradient: (signal == Signal::Color)
-                        .then(|| gradient_ends(graph, from))
-                        .flatten(),
-                }
-            })
+    let links: Vec<Link> = super::links(graph)
+        .into_iter()
+        .map(|(from, (id, input))| {
+            let signal = input_signal(graph, &id, &input).unwrap_or(Signal::Number);
+            Link {
+                gradient: (signal == Signal::Color)
+                    .then(|| gradient_ends(graph, &from))
+                    .flatten(),
+                from: Source::Node(from),
+                to: (id, input),
+                color: ladder::signal(signal),
+            }
         })
         .filter(|link| detach.as_ref() != Some(&link.to))
         .collect();
@@ -1001,7 +978,7 @@ fn wires(cx: &Ctx) -> AnyElement {
                             "{} → {} {}",
                             edit::label(from),
                             edit::label(&link.to.0),
-                            input_label(&link.to.1).to_lowercase()
+                            port_name(&link.to.1)
                         ),
                         Bounds::centered_at(
                             point((start.x + end.x) / 2., (start.y + end.y) / 2.),
@@ -1299,14 +1276,8 @@ impl Luma {
                         let graph = shown_graph(editor)?;
                         let geometry = canvas.geometry.borrow();
                         let zoom = canvas.zoom;
-                        graph
-                            .nodes
-                            .iter()
-                            .flat_map(|(id, node)| {
-                                node.wires().map(move |(input, from)| {
-                                    (from.to_owned(), (id.clone(), input.to_owned()))
-                                })
-                            })
+                        super::links(&graph)
+                            .into_iter()
                             .filter_map(|(from, to)| {
                                 let start = geometry.output(&Source::Node(from))?;
                                 let end = geometry.input(&to)?;
@@ -1406,6 +1377,7 @@ impl Luma {
                     .borrow()
                     .inputs
                     .iter()
+                    .filter(|(key, _)| !key.1.contains('#'))
                     .map(|(key, centre)| (key.clone(), distance(*centre, at)))
                     .filter(|(_, reach)| *reach <= PORT * canvas.zoom.max(1.))
                     .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1630,8 +1602,11 @@ impl Luma {
             if canvas.wide.remove(&from) {
                 canvas.wide.insert(to.clone());
             }
-            if canvas.expanded.remove(&from) {
-                canvas.expanded.insert(to.clone());
+            if let Some(open) = canvas.expanded.remove(&from) {
+                canvas.expanded.insert(to.clone(), open);
+            }
+            if canvas.defaults.remove(&from) {
+                canvas.defaults.insert(to.clone());
             }
             canvas.hover = None;
         });

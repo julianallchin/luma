@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use luma_patterns as p;
 use luma_ui::arg::noise;
-use luma_ui::arg::preset_picker::{self, Thumb};
 use luma_ui::arg::strip::{self, CurveStrip, StripChanged, StripValue};
 use luma_ui::icons::IconName;
 use luma_ui::{icon_button, rpx, Enabled};
@@ -65,11 +64,8 @@ const VECTOR_GAP: f32 = 8.;
 /// third of the row.
 const VECTOR_DECIMALS: usize = 3;
 const VECTOR_FIELD_W: f32 = (canvas::NODE_FIELD_W - 2. * VECTOR_GAP) / 3.;
-/// A chip's picture of its curve.
-const CHIP_THUMB: [f32; 2] = [32., 16.];
-/// How far a chip's plate reaches past its rows on each side, so its rows
-/// and their ports stay where a card's own rows are.
-const CHIP_BLEED: f32 = 6.;
+/// A closed curve card's picture of its shape.
+const PLOT_H: f32 = 56.;
 
 /// The widgets for one graph shape.
 pub(super) struct Controls {
@@ -169,22 +165,12 @@ fn describe(graph: &ClipGraph, id: &str) -> String {
 
 // -- summaries ------------------------------------------------------------------
 
-/// A math op's sign in a summary and on its segment.
+/// A math op's sign in a summary and on its button.
 fn op_symbol(op: &str) -> &str {
     match op {
         "*" => "×",
         "-" => "−",
         other => other,
-    }
-}
-
-/// A math op in words, for its segment's agent label.
-fn op_name(op: &str) -> String {
-    match op {
-        "*" => "Multiply".into(),
-        "+" => "Add".into(),
-        "-" => "Subtract".into(),
-        other => sentence_case(other),
     }
 }
 
@@ -223,19 +209,15 @@ fn math_summary(graph: &ClipGraph, id: &str) -> String {
     }
 }
 
-/// One line on what a curve does: what its x reads, its shape and its
-/// bounds, "time · Ramp up 0→1"; a color curve names its gradient.
+/// One line on what a curve does, under its picture: the node its x reads
+/// and its bounds, "t · 0→1"; a color curve names its gradient.
 fn curve_summary(graph: &ClipGraph, id: &str) -> String {
     let Some(node) = graph.nodes.get(id) else {
         return String::new();
     };
     let mut parts = Vec::new();
-    if let Some((x, kind)) = coordinate(graph, id) {
-        parts.push(if edit::numbered(graph, &x) {
-            kind.name().to_owned()
-        } else {
-            x
-        });
+    if let Some((x, _)) = coordinate(graph, id) {
+        parts.push(edit::label(&x));
     }
     if node.setting("kind") == Some("color") {
         let name = match node.inputs.get("gradient") {
@@ -251,33 +233,15 @@ fn curve_summary(graph: &ClipGraph, id: &str) -> String {
         parts.push(name);
         return parts.join(" · ");
     }
-    let shape = match node.inputs.get("shape") {
-        Some(Input::Points(points)) => presets::curve_name(points).unwrap_or("custom".into()),
-        _ => "Ramp up".into(),
-    };
     let bound = |name: &str| match node.inputs.get(name) {
         Some(item @ (Input::Number(_) | Input::Wire(_))) => Some(item_text(item)),
         Some(_) => None,
         None => edit::empty(graph, id, name).as_ref().map(item_text),
     };
-    parts.push(match (bound("low"), bound("high")) {
-        (Some(low), Some(high)) => format!("{shape} {low}→{high}"),
-        _ => shape,
-    });
+    if let (Some(low), Some(high)) = (bound("low"), bound("high")) {
+        parts.push(format!("{low}→{high}"));
+    }
     parts.join(" · ")
-}
-
-/// A curve's shape or gradient as a small picture, for its chip.
-fn curve_thumb(node: &Node) -> Option<AnyElement> {
-    let thumb = match (node.inputs.get("shape"), node.inputs.get("gradient")) {
-        (_, Some(Input::Gradient(gradient))) if node.setting("kind") == Some("color") => {
-            Thumb::Gradient(ui_gradient(gradient))
-        }
-        (Some(Input::Points(points)), _) => Thumb::Curve(points.clone()),
-        (None, _) => Thumb::Curve(edit::preset_curve("Ramp up")),
-        _ => return None,
-    };
-    Some(preset_picker::thumb(&thumb, CHIP_THUMB, true).into_any_element())
 }
 
 // -- build and sync ------------------------------------------------------------
@@ -814,9 +778,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                 options.push((Kind::Math.label().into(), Pick::Multiply));
             }
             match (&wired, held) {
-                (Some((_, Kind::Math)), _) => Kind::Math.label().into(),
-                (Some((to, _)), _) => coordinate(graph, to)
-                    .map_or("Wired".into(), |(_, kind)| edit::source_label(kind).into()),
+                (Some((to, _)), _) => from_name(to),
                 (None, None) if !showable => edit::empty_note(&graph.nodes[id], input).into(),
                 _ => "Value".into(),
             }
@@ -827,7 +789,7 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                     .iter()
                     .map(|kind| (edit::source_label(*kind).into(), Pick::Coordinate(*kind))),
             );
-            wired.map_or("None".into(), |(_, kind)| edit::source_label(kind).into())
+            wired.map_or("None".into(), |(to, _)| from_name(&to))
         }
         Ty::Heads => {
             options.push(("All".into(), Pick::Empty));
@@ -836,12 +798,12 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
                     .iter()
                     .map(|kind| (kind.label().into(), Pick::Insert(*kind))),
             );
-            wired.map_or("All".into(), |(_, kind)| kind.label().into())
+            wired.map_or("All".into(), |(to, _)| from_name(&to))
         }
         Ty::Time => {
             options.push(("Once".into(), Pick::Empty));
             options.push((Kind::Time.label().into(), Pick::Insert(Kind::Time)));
-            if wired.is_some() { "Time" } else { "Once" }.into()
+            wired.map_or("Once".into(), |(to, _)| from_name(&to))
         }
         Ty::Points | Ty::Gradient | Ty::Values => return None,
     };
@@ -849,6 +811,12 @@ fn chip(graph: &ClipGraph, id: &str, input: &str) -> Option<Chip> {
         options.push(("Link…".into(), Pick::Links));
     }
     Some(Chip { reading, options })
+}
+
+/// What a wired input's source chip reads: the name of the node that feeds
+/// it, "← mix".
+fn from_name(to: &str) -> String {
+    format!("← {}", edit::label(to))
 }
 
 /// A curve's low or high: it has no empty to go back to when the curve is a
@@ -952,9 +920,6 @@ pub(super) struct Ctx<'a> {
     controls: &'a Controls,
     graph: &'a ClipGraph,
     app: &'a Entity<Luma>,
-    /// The value nodes shown as chips, by the input that reads them
-    /// ([`edit::inline`]).
-    inline: BTreeMap<String, (String, String)>,
 }
 
 /// An input's row label: "Low hz" reads "Low".
@@ -965,6 +930,44 @@ fn input_label(input: &str) -> String {
         other => other,
     };
     sentence_case(&words.replace('_', " "))
+}
+
+/// How a port names its input in words, lower case: "brightness", and a
+/// math node's item by its place, "values 2".
+fn port_name(input: &str) -> String {
+    match input.split_once('#') {
+        Some((list, index)) => {
+            let place = index.parse::<usize>().map_or(0, |index| index + 1);
+            format!("{} {place}", input_label(list).to_lowercase())
+        }
+        None => input_label(input).to_lowercase(),
+    }
+}
+
+/// Every wire in the graph: the node it comes from and the port it lands
+/// on. A math node's items each land on their own row's port
+/// ([`item_key`]).
+pub(super) fn links(graph: &ClipGraph) -> Vec<(String, (String, String))> {
+    let mut links = Vec::new();
+    for (id, node) in &graph.nodes {
+        for (input, held) in &node.inputs {
+            match held {
+                Input::List(items) => {
+                    for (index, item) in items.iter().enumerate() {
+                        if let Some(from) = item.source() {
+                            links.push((from.to_owned(), (id.clone(), item_key(input, index))));
+                        }
+                    }
+                }
+                one => {
+                    if let Some(from) = one.source() {
+                        links.push((from.to_owned(), (id.clone(), input.clone())));
+                    }
+                }
+            }
+        }
+    }
+    links
 }
 
 /// Whether a row shows for this node: an aim shows the vector its base uses,
@@ -999,24 +1002,22 @@ pub(super) fn editor(
         controls,
         graph,
         app,
-        inline: edit::inline(graph),
     };
     canvas::view(&cx, wide)
 }
 
-/// A node's settings as segmented controls (a math node's op by its sign),
-/// and a space's wrap as a switch.
+/// A node's settings as segmented controls, and a space's wrap as a
+/// switch. A curve's kind follows what it feeds, and a math node's op is
+/// its title's button ([`title_buttons`]).
 fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     let defs = &definition(node.kind).settings;
-    // A curve's kind follows what it feeds; it is not a choice.
     let shown: Vec<_> = defs
         .iter()
-        .filter(|(name, _)| node.kind != Kind::Curve && *name != "wrap")
+        .filter(|(name, _)| !matches!(node.kind, Kind::Curve | Kind::Math) && *name != "wrap")
         .collect();
     if shown.is_empty() {
         return None;
     }
-    let math = node.kind == Kind::Math;
     let mut column = div().w_full().flex().flex_col().gap(rpx(8.));
     for (name, setting) in shown {
         let current = node.setting(name).unwrap_or(setting.default);
@@ -1025,13 +1026,8 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
             let app = cx.app.clone();
             let (at, name, value) = (id.to_owned(), (*name).to_owned(), (*option).to_owned());
             let key = format!("{id}-{name}-{option}");
-            let (text, agent) = if math {
-                (op_symbol(option).to_owned(), op_name(option))
-            } else {
-                ((*option).to_owned(), sentence_case(option))
-            };
             track = track.child(
-                luma_ui::float::segment(text, *option == current, key.clone())
+                luma_ui::float::segment((*option).to_owned(), *option == current, key.clone())
                     .id(SharedString::from(key))
                     .on_click(move |_, _, cx| {
                         let (at, name, value) = (at.clone(), name.clone(), value.clone());
@@ -1041,7 +1037,7 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
                             })
                         });
                     })
-                    .agent_node(Role::Button, agent),
+                    .agent_node(Role::Button, sentence_case(option)),
             );
         }
         column = column.child(track);
@@ -1077,10 +1073,341 @@ fn settings(cx: &Ctx, id: &str, node: &Node) -> Option<AnyElement> {
     Some(column.into_any_element())
 }
 
+/// A card's body under its title: its settings, then one row per input; a
+/// curve's and a math node's are their own ([`curve_rows`], [`math_rows`]).
+pub(super) fn body(cx: &Ctx, id: &str) -> Vec<AnyElement> {
+    let node = &cx.graph.nodes[id];
+    match node.kind {
+        Kind::Curve => curve_rows(cx, id),
+        Kind::Math => math_rows(cx, id),
+        _ => settings(cx, id, node)
+            .into_iter()
+            .chain(
+                definition(node.kind)
+                    .inputs
+                    .iter()
+                    .filter(|(input, _)| visible(node, input))
+                    .map(|(input, _)| row(cx, id, input)),
+            )
+            .collect(),
+    }
+}
+
+/// The buttons on a card's title before its delete: a math node's op, and
+/// on an open curve its widen and close.
+pub(super) fn title_buttons(cx: &Ctx, id: &str) -> Vec<AnyElement> {
+    let node = &cx.graph.nodes[id];
+    let label = edit::label(id);
+    match node.kind {
+        Kind::Math => vec![op_button(cx, id, node)],
+        Kind::Curve if curve_open(cx, id) => {
+            let wide = cx.state.sheet.canvas.wide.contains(id);
+            let app = cx.app.clone();
+            let at = id.to_owned();
+            let widen = icon_button(
+                if wide {
+                    IconName::Minimize
+                } else {
+                    IconName::Expand
+                },
+                Enabled::Yes,
+            )
+            .id(SharedString::from(format!("widen-{id}")))
+            .on_click(move |_, _, cx| {
+                let at = at.clone();
+                app.update(cx, |this, cx| {
+                    this.with_track_editor(cx, |editor| {
+                        let wide = &mut editor.sheet.canvas.wide;
+                        if !wide.remove(&at) {
+                            wide.insert(at);
+                        }
+                    })
+                });
+            })
+            .agent_node(
+                Role::Button,
+                format!("{} {label}", if wide { "Narrow" } else { "Widen" }),
+            )
+            .into_any_element();
+            let close = icon_button(IconName::ChevronUp, Enabled::Yes)
+                .id(SharedString::from(format!("collapse-{id}")))
+                .on_click(toggle_curve(cx.app, id, true))
+                .agent_node(Role::Button, format!("Collapse {label}"))
+                .into_any_element();
+            vec![widen, close]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether curve `id`'s card is open to its full editor: as it was last
+/// left, else closed once anything past its x is set: its shape, gradient
+/// or a bound.
+pub(super) fn curve_open(cx: &Ctx, id: &str) -> bool {
+    let node = &cx.graph.nodes[id];
+    cx.state
+        .sheet
+        .canvas
+        .expanded
+        .get(id)
+        .copied()
+        .unwrap_or_else(|| node.inputs.keys().all(|input| input == "x"))
+}
+
+/// A press that opens curve `id`'s card when `open` is false, and closes
+/// it when true.
+fn toggle_curve(
+    app: &Entity<Luma>,
+    id: &str,
+    open: bool,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let app = app.clone();
+    let at = id.to_owned();
+    move |_, _, cx| {
+        let at = at.clone();
+        app.update(cx, |this, cx| {
+            this.with_track_editor(cx, |editor| {
+                editor.sheet.canvas.expanded.insert(at, !open);
+            })
+        });
+    }
+}
+
+/// A curve's shape or gradient as its strip edits it.
+fn curve_value(graph: &ClipGraph, id: &str) -> StripValue {
+    let color = graph.nodes[id].setting("kind") == Some("color");
+    match (
+        edit::shown(graph, id, "gradient"),
+        edit::shown(graph, id, "shape"),
+    ) {
+        (Some(Input::Gradient(gradient)), _) if color => {
+            StripValue::Gradient(ui_gradient(&gradient))
+        }
+        (_, Some(Input::Points(points))) => StripValue::Number(points),
+        _ => StripValue::Number(edit::preset_curve("Ramp up")),
+    }
+}
+
+/// A curve card's rows. Closed: a picture of its shape, which opens it, a
+/// line with what its x reads and its bounds, and a row for each other
+/// wired input, so every wire into it lands. Open: every row, the strip
+/// among them; a bound left empty waits behind a "+".
+fn curve_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
+    let node = &cx.graph.nodes[id];
+    let label = edit::label(id);
+    let inputs: Vec<&str> = definition(node.kind)
+        .inputs
+        .iter()
+        .map(|(input, _)| *input)
+        .filter(|input| visible(node, input))
+        .collect();
+    if curve_open(cx, id) {
+        let all = cx.state.sheet.canvas.defaults.contains(id);
+        let unset =
+            |input: &str| matches!(input, "low" | "high") && !node.inputs.contains_key(input);
+        let mut rows: Vec<AnyElement> = inputs
+            .iter()
+            .filter(|input| all || !unset(input))
+            .map(|input| row(cx, id, input))
+            .collect();
+        if !all && inputs.iter().any(|input| unset(input)) {
+            let app = cx.app.clone();
+            let at = id.to_owned();
+            rows.push(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .child(
+                        icon_button(IconName::Plus, Enabled::Yes)
+                            .id(SharedString::from(format!("defaults-{id}")))
+                            .on_click(move |_, _, cx| {
+                                let at = at.clone();
+                                app.update(cx, |this, cx| {
+                                    this.with_track_editor(cx, |editor| {
+                                        editor.sheet.canvas.defaults.insert(at);
+                                    })
+                                });
+                            })
+                            .agent_node(Role::Button, format!("More {label} inputs")),
+                    )
+                    .into_any_element(),
+            );
+        }
+        return rows;
+    }
+    let picture = div()
+        .id(SharedString::from(format!("plot-{id}")))
+        .w_full()
+        .cursor_pointer()
+        .child(strip::plot(&curve_value(cx.graph, id), PLOT_H))
+        .on_click(toggle_curve(cx.app, id, false))
+        .agent_node(Role::Button, format!("Expand {label}"))
+        .into_any_element();
+    let summary = curve_summary(cx.graph, id);
+    let line = div()
+        .relative()
+        .w_full()
+        .h(rpx(CONTROL_HEIGHT))
+        .flex()
+        .flex_row()
+        .items_center()
+        .children(canvas::input_port(cx, id, "x").map(canvas::port_slot))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(ladder::muted_foreground())
+                .child(summary.clone())
+                .agent_node(Role::Text, summary),
+        )
+        .into_any_element();
+    let wired = inputs
+        .into_iter()
+        .filter(|input| *input != "x")
+        .filter(|input| node.inputs.get(*input).and_then(Input::source).is_some())
+        .map(|input| row(cx, id, input));
+    [picture, line].into_iter().chain(wired).collect()
+}
+
+/// A math node's op as one button with its sign, which picks another. A
+/// subtraction takes exactly two items, so it is offered only then.
+fn op_button(cx: &Ctx, id: &str, node: &Node) -> AnyElement {
+    let count = match node.inputs.get("values") {
+        Some(Input::List(items)) => items.len(),
+        _ => 0,
+    };
+    let current = node.setting("op").unwrap_or("*");
+    let ops: Vec<&'static str> = definition(Kind::Math)
+        .setting("op")
+        .map_or(&[][..], |setting| setting.options)
+        .iter()
+        .copied()
+        .filter(|op| *op != "-" || count == 2 || current == "-")
+        .collect();
+    let names: Vec<&str> = ops.iter().map(|op| op_symbol(op)).collect();
+    let key = menu_key(id, "op");
+    let (toggle, choose) = (cx.app.clone(), cx.app.clone());
+    let at = id.to_owned();
+    luma_arg_select(
+        format!("{id}.op"),
+        op_symbol(current),
+        &names,
+        menu_visibility(cx.state, Menu::Source(key)),
+        move |_, cx| {
+            toggle.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| {
+                    editor.sheet.open = match editor.sheet.open {
+                        Some(Menu::Source(k)) if k == key => None,
+                        _ => Some(Menu::Source(key)),
+                    };
+                });
+            });
+        },
+        move |index, _, cx| {
+            let Some(op) = ops.get(index).copied() else {
+                return;
+            };
+            let at = at.clone();
+            choose.update(cx, |this, cx| {
+                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                this.graph_live(cx, move |graph| edit::set_setting(graph, &at, "op", op));
+            });
+        },
+    )
+    .into_any_element()
+}
+
+/// A math node's rows: one per item, the name of the node wired there or a
+/// number, each with its own port and a button that takes it out; then a
+/// "+" that adds one, whose port takes a new wire as one more item. A
+/// subtraction has exactly two items and no "+".
+fn math_rows(cx: &Ctx, id: &str) -> Vec<AnyElement> {
+    let node = &cx.graph.nodes[id];
+    let input = "values";
+    let items: &[Input] = match node.inputs.get(input) {
+        Some(Input::List(items)) => items,
+        _ => &[],
+    };
+    let mut rows: Vec<AnyElement> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let key = item_key(input, index);
+            let control = match item.source() {
+                Some(from) => {
+                    let name = from_name(from);
+                    div()
+                        .h(rpx(CONTROL_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .truncate()
+                        .text_color(ladder::foreground())
+                        .child(name.clone())
+                        .agent_node(Role::Text, name)
+                        .into_any_element()
+                }
+                None => cx
+                    .controls
+                    .fields
+                    .get(&(id.to_owned(), key.clone()))
+                    .map_or_else(div, field_element)
+                    .into_any_element(),
+            };
+            let app = cx.app.clone();
+            let at = id.to_owned();
+            let remove = icon_button(IconName::Minus, Enabled::Yes)
+                .id(SharedString::from(format!(
+                    "remove-item-{id}-{input}-{index}"
+                )))
+                .on_click(move |_, _, cx| {
+                    let at = at.clone();
+                    app.update(cx, |this, cx| {
+                        this.graph_live(cx, move |graph| {
+                            edit::remove_item(graph, &at, input, index)
+                        })
+                    });
+                })
+                .agent_node(
+                    Role::Button,
+                    format!("Remove {} item {}", field_name(id, input), index + 1),
+                );
+            div()
+                .relative()
+                .w_full()
+                .min_h(rpx(CONTROL_HEIGHT))
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap(rpx(VECTOR_GAP))
+                .children(canvas::input_port(cx, id, &key).map(canvas::port_slot))
+                .child(div().flex_1().min_w_0().child(control))
+                .child(remove)
+                .agent_node(Role::Row, format!("Item {}", index + 1))
+                .into_any_element()
+        })
+        .collect();
+    if node.setting("op") != Some("-") {
+        rows.push(
+            div()
+                .relative()
+                .w_full()
+                .h(rpx(CONTROL_HEIGHT))
+                .flex()
+                .flex_row()
+                .items_center()
+                .children(canvas::input_port(cx, id, input).map(canvas::port_slot))
+                .child(add_item_button(id, input, cx))
+                .into_any_element(),
+        );
+    }
+    rows
+}
+
 /// One input's row: its port on the card's edge, its label and source chip,
 /// then its control while it holds a value. A wired input shows no control:
-/// its wire says where the value comes from, or the value node shows inline
-/// as a chip under the label.
+/// its chip names the node that feeds it, and its wire comes from there.
 fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
     let node = &cx.graph.nodes[id];
     let label = input_label(input);
@@ -1090,15 +1417,8 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
         accessories.push(canvas::port_slot(port).into_any_element());
     }
     accessories.extend(chip(cx.graph, id, input).map(|chip| source_chip(cx, id, input, chip)));
-    if spec.is_some_and(|spec| spec.ty == Ty::Values) {
-        accessories.push(add_item_button(id, input, cx));
-    }
     let control = match node.inputs.get(input) {
-        Some(Input::Wire(to)) if cx.inline.contains_key(to) => {
-            Some(div().w_full().child(inline_chip(cx, to)))
-        }
-        Some(Input::Wire(_)) => None,
-        Some(Input::List(items)) => Some(list_items(cx, id, input, items)),
+        Some(Input::Wire(_) | Input::List(_)) => None,
         _ => Some(
             match cx.controls.fields.get(&(id.to_owned(), input.to_owned())) {
                 Some(field) => field_element(field),
@@ -1122,120 +1442,6 @@ fn row(cx: &Ctx, id: &str, input: &str) -> AnyElement {
     }
 }
 
-/// A value node shown inline, on the row of the one input that reads it: a
-/// line with its port, a picture of its curve and what it does in a few
-/// words, and a button that opens it in place. Closed, it keeps the rows of
-/// its wired inputs, so every wire into it still lands; open, it shows its
-/// name and all its rows, the curve's strip among them. A math node shows
-/// its op all the time, and closed, the chips among its items.
-fn inline_chip(cx: &Ctx, id: &str) -> AnyElement {
-    let node = &cx.graph.nodes[id];
-    let label = edit::label(id);
-    let open = cx.state.sheet.canvas.expanded.contains(id);
-    let (port, summary, thumb) = match node.kind {
-        Kind::Math => ("values", math_summary(cx.graph, id), None),
-        _ => ("x", curve_summary(cx.graph, id), curve_thumb(node)),
-    };
-    let app = cx.app.clone();
-    let at = id.to_owned();
-    let toggle = icon_button(
-        if open {
-            IconName::ChevronUp
-        } else {
-            IconName::ChevronDown
-        },
-        Enabled::Yes,
-    )
-    .id(SharedString::from(format!("chip-toggle-{id}")))
-    .on_click(move |_, _, cx| {
-        let at = at.clone();
-        app.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
-                let expanded = &mut editor.sheet.canvas.expanded;
-                if !expanded.remove(&at) {
-                    expanded.insert(at);
-                }
-            })
-        });
-    })
-    .agent_node(
-        Role::Button,
-        format!("{} {label}", if open { "Collapse" } else { "Expand" }),
-    );
-    // Closed, the line carries the port its rows would; open, its row does.
-    let line = div()
-        .relative()
-        .w_full()
-        .h(rpx(CONTROL_HEIGHT))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(rpx(6.))
-        .when(!open, |line| {
-            line.children(canvas::input_port(cx, id, port).map(|port| canvas::port_slot(port)))
-        })
-        .children(thumb)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(ladder::muted_foreground())
-                .child(summary.clone())
-                .agent_node(Role::Text, summary),
-        )
-        .child(toggle);
-    // No set width: the plate bleeds past the row on both sides.
-    let mut chip = div()
-        .mx(rpx(-CHIP_BLEED))
-        .px(rpx(CHIP_BLEED))
-        .py(rpx(4.))
-        .flex()
-        .flex_col()
-        .gap(rpx(10.))
-        .rounded(rpx(luma_ui::radius::CARD - 4.))
-        .bg(luma_ui::glass::ink(0.04))
-        .child(line);
-    if open {
-        chip = chip.child(
-            div()
-                .w_full()
-                .h(rpx(CONTROL_HEIGHT))
-                .flex()
-                .items_center()
-                .child(canvas::name(cx, id, &label)),
-        );
-    }
-    chip = chip.children(
-        (node.kind == Kind::Math)
-            .then(|| settings(cx, id, node))
-            .flatten(),
-    );
-    let rows = definition(node.kind)
-        .inputs
-        .iter()
-        .map(|(input, _)| *input)
-        .filter(|input| visible(node, input))
-        .filter(|input| {
-            let wired = node.inputs.get(*input).and_then(Input::source).is_some();
-            open || (*input != port && wired)
-        })
-        .map(|input| row(cx, id, input));
-    let items: Vec<AnyElement> = match node.inputs.get("values") {
-        Some(Input::List(items)) if !open => items
-            .iter()
-            .filter_map(Input::source)
-            .filter(|item| cx.inline.contains_key(*item))
-            .map(|item| inline_chip(cx, item))
-            .collect(),
-        _ => Vec::new(),
-    };
-    chip.children(rows)
-        .children(items)
-        .agent_node(Role::Chip, label)
-        .into_any_element()
-}
-
 /// The button that adds an item, a 1, to a math node's values.
 fn add_item_button(id: &str, input: &str, cx: &Ctx) -> AnyElement {
     let app = cx.app.clone();
@@ -1250,48 +1456,6 @@ fn add_item_button(id: &str, input: &str, cx: &Ctx) -> AnyElement {
         })
         .agent_node(Role::Button, format!("Add to {}", field_name(id, input)))
         .into_any_element()
-}
-
-/// A math node's items: each a value field, a chip, or the name of the node
-/// wired there, with a button that takes it out.
-fn list_items(cx: &Ctx, id: &str, input: &str, items: &[Input]) -> Div {
-    let rows = items.iter().enumerate().map(|(index, item)| {
-        let control = match item.source() {
-            Some(from) if cx.inline.contains_key(from) => div().child(inline_chip(cx, from)),
-            Some(from) => div().child(luma_ui::caption(describe(cx.graph, from))),
-            None => cx
-                .controls
-                .fields
-                .get(&(id.to_owned(), item_key(input, index)))
-                .map_or_else(div, field_element),
-        };
-        let app = cx.app.clone();
-        let (at, name) = (id.to_owned(), input.to_owned());
-        let remove = icon_button(IconName::Minus, Enabled::Yes)
-            .id(SharedString::from(format!(
-                "remove-item-{id}-{input}-{index}"
-            )))
-            .on_click(move |_, _, cx| {
-                let (at, name) = (at.clone(), name.clone());
-                app.update(cx, |this, cx| {
-                    this.graph_live(cx, move |graph| edit::remove_item(graph, &at, &name, index))
-                });
-            })
-            .agent_node(
-                Role::Button,
-                format!("Remove {} item {}", field_name(id, input), index + 1),
-            );
-        div()
-            .w_full()
-            .min_h(rpx(CONTROL_HEIGHT))
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap(rpx(VECTOR_GAP))
-            .child(div().flex_1().min_w_0().child(control))
-            .child(remove)
-    });
-    div().w_full().flex().flex_col().gap(rpx(6.)).children(rows)
 }
 
 /// A row that is only its header line: a wired input, or one whose empty

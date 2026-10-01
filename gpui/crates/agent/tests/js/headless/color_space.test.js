@@ -56,17 +56,17 @@ test("a color over space reads a gradient along a space node", () => {
   const stops = curve.inputs.gradient.stops;
   expect(stops.at(-1).color).toEqual([1, 1, 1]);
   node("card", "Space 1");
-  inRow("Color 1", "Color", "select", "Over space");
-  // The gradient's curve is a chip on the color's row; open, its strip.
-  app.click(inCard("Color 1", "button", "Expand Curve 1"));
-  inCard("Color 1", "card", "Curve 1 strip");
+  inRow("Color 1", "Color", "select", "← Curve 1");
+  // The gradient's curve is a card of its own; open, its strip.
+  app.click(inCard("Curve 1", "button", "Expand Curve 1"));
+  inCard("Curve 1", "card", "Curve 1 strip");
 
   // Another space kind is stored on the node.
   app.click(inCard("Space 1", "button", "Radial"));
   until("radial", () => nodes().space1.settings?.kind === "radial");
 
   // Value again gives back the white.
-  source("Color 1", "Color", "Over space", "Value");
+  source("Color 1", "Color", "← Curve 1", "Value");
   until("unwired", () => !nodes().color1.inputs.color?.node);
   expect(nodes().color1.inputs.color).toEqual([1, 1, 1]);
   expect(Object.values(nodes()).filter((n) => n.kind === "space").length).toBe(0);
