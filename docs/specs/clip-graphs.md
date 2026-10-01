@@ -13,6 +13,62 @@ that varies is a wire.
 
 ---
 
+## 0. Graph version 3 (2026-09-30)
+
+Julian's foundation decisions. This section wins over the sections below
+where they differ; the sections below still hold for everything it does
+not name.
+
+Principles: each light = f(its field, time), on tensors [lights × time ×
+events] that broadcast. Every number means what it says: positions are 0–1
+along a space's direction within the clip's selection (per span after a
+split), times are beats, an agent never needs the rig's size. Code ===
+graph, names included. An LD thinks in three things: color (which color),
+brightness (the pattern across lights: chase, pulse, cut), alpha (the whole
+clip's opacity over time; the timeline fade points edit it).
+
+Kinds (13): `time`, `space`, `noise`, `audio`, `curve`, `math`, `mirror`,
+`shuffle`, `group`, `split`, `color`, `aim`, `strobe`. `clock` is gone.
+
+| Change | v3 |
+|---|---|
+| alpha | Opacity. `color`: light = color × brightness; then the clip's light blends with the light below by its blend mode, and the result mixes with the light below by alpha: `out = below + (blend(below, clip) − below) × alpha`. `strobe` the same on the shutter (shutter = rate). `aim` unchanged (alpha is the aim's weight). Alpha 0 shows the clip below, in every blend mode. The overlap ranking (5.3) still multiplies all factors, alpha included. The lighting tensor's channel 11 is the clip's alpha for color and strobe (the aim weight for aim); `FixtureOutput.alpha`. |
+| time | `time(every, duration, delay, phase)`. `every` beats > 0 (T, H): events start every `every` beats from the clip start; empty = once over the clip, no events. `duration` beats > 0 (T, H): each event's life; empty = `every`, or the clip's length when there is no `every` (with no `every` and a `duration`, one event of that length from the clip start). `delay` beats, any sign (T, H). `phase` turns, any (T, H). Per light: `p` = the event's age over its duration, 0–1 (clamped); `τ = p − delay / duration`; with a phase, `τ = (τ + phase) mod 1`. τ is not clamped: before a light's start τ < 0 and a curve holds its first value there (a waiting light of a dissolve stays on); after its end a curve holds its last value. Two time nodes with `every` whose `every` and `duration` inputs are equal (same numbers or the same wires) share one set of events (one clock). |
+| shuffle | `shuffle(heads, time)`: `time` is a wire from a time node; with `every`, a new order per event; without, one order. |
+| space | `space(heads, direction, shift, scale, kind, wrap)`; `scale` is the old `length` (share ≥ 0), same math: `x = (a − shift) / scale`, wrapped first when `wrap`. A `line` space whose direction is parallel to the normal of a mirror in its heads (the latest such mirror) measures from that mirror's plane: `a = (p − plane) · direction / R`, `R` the span's extent along the direction before any fold; 0 is on the plane. |
+| mirror | `mirror(heads, normal, at)`. `at` share (0–1, T): the plane sits at `at` along the normal across the span's positions before any fold (the original selection), so 0.5 is always the centre, also for stacked mirrors. Empty 0.5. Heads on the low side reflect; aim yaw and pitch mirror. |
+| math | `math`: setting `op` = `*` \| `+` \| `-` \| `max` \| `min` (default `*`); input `values`: a list of numbers and value wires (curves or math). `*`, `+`, `max`, `min` take 2 or more items, `-` exactly 2 (`a − b`). Tensors broadcast: a number times a color is a color. The output is a value of the widest input kind (color > vector > number; color with vector is an error). A math result wires like a curve, into any value input or a curve's low or high. Its inputs carry at most one clock. |
+| lists | Gone from outputs. `brightness=[a, b]` is `brightness=a * b` (one math node). |
+| curve | Unchanged (a node; low and high wireable). |
+
+Python: `time(every=None, duration=None, delay=None, phase=None)`,
+`space(heads=None, direction=None, shift=None, scale=None, kind="line", wrap=None)`,
+`mirror(heads=None, normal=None, at=None)`, `shuffle(heads=None, time=None)`.
+Math is plain operators on value nodes: `a * b * c` is one math node with
+three items (a chain of one operator flattens), `a - b`, `0.5 * a`,
+`max(a, b)`, `min(a, b, c)`. A named math result (`glow = a * b`) is its own
+node and links like any node. `source()` writes a curve or math node inline
+as the argument it feeds (`shift=curve(t, "Ramp up")`, `brightness=cut *
+bloom * fade`) when exactly one input reads it and its id is a numbered id
+(`curve3`, `math1`); a named or shared one gets its own line. Code → graph →
+code keeps nodes, names, inline curves and `a * b * c` exactly.
+
+Migration (`backend/scripts/migrate_clip_graphs_v3.py`, on top of 8.7):
+version 1 or 2 → 3. A clock node becomes the `every`/`duration` of each time
+node that read it (shared clocks stay shared by equal inputs); a shuffle's
+clock becomes a time node with that `every`/`duration`; `time.delay` turns →
+beats (× the event duration, or × the clip's length with no clock);
+`space.length` → `scale`; a list → one `*` math node; an old color or strobe
+alpha folds into brightness or rate (`brightness × alpha`, as one math node,
+or a product of numbers) and alpha is left empty, so saved clips look the
+same; a `mirror.offset` other than 0 is refused (none in the 2026-09-30
+copy). A line space after a
+mirror along the same direction now measures from the plane: the converter
+halves its shift and scale (exact when a head sits on the plane, close
+otherwise; listed).
+
+---
+
 ## 1. Grammar in 10 lines
 
 1. A clip has a name, a selection, a time range, a blend mode, a seed and one graph.
