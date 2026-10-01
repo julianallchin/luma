@@ -191,6 +191,20 @@ of 2, 36 of 3; 151 curves, one math node added each, no node removed),
 1 draft; presets unchanged; every clip plays bit for bit as before on both
 stand-in rigs (audio read as `time()`).
 
+A sweeping front as a front (`backend/scripts/migrate_clip_front.py`,
+2026-10-01): migrated Slash and Backslash faked a hard front with a pill
+over a 2-wide window sliding in from off the rig (shift −2 → −0.97, scale
+2.000000002). Its back edge never enters the rig, so a head is lit when
+`a < shift + scale`. It becomes the v3 Slash cut: the space along the
+reversed direction with scale and at empty, the shift curve's low 1 and high
+−0.03 (front 0 → 1.03 over the same time), and a step up, so a head is lit
+once the front reaches it (`a ≤ front`; a jump reads the value after). Only
+when every held or turning front value is off the rig (or within 1e-8 above
+0); other wide windows stay. Dry run on a copy, 2026-10-01: 36 clips
+rewritten (all Slash or Backslash), 72 wide windows left (15 whose back
+edge enters the rig, 57 whose front holds at 0.5), no draft or preset;
+every clip plays bit for bit as before on both stand-in rigs.
+
 ### Value node (2026-10-01)
 
 Julian's decision: everything is a tensor, and a `value` node is a named
