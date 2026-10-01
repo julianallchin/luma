@@ -335,31 +335,27 @@ pub enum Signal {
     Number,
     Vector,
     Color,
-    /// A clock's events.
-    Clock,
     Heads,
     Coordinate,
 }
 
 impl Signal {
-    pub const ALL: [Signal; 6] = [
+    pub const ALL: [Signal; 5] = [
         Signal::Number,
         Signal::Vector,
         Signal::Color,
-        Signal::Clock,
         Signal::Heads,
         Signal::Coordinate,
     ];
 }
 
-/// A signal's hue: one lightness and chroma for all six, so none shouts
+/// A signal's hue: one lightness and chroma for all five, so none shouts
 /// over the others, and hues far enough apart to tell at a wire's width.
 pub fn signal(kind: Signal) -> Hsla {
     let hue = match kind {
         Signal::Number => 75.,
         Signal::Vector => 190.,
         Signal::Color => 335.,
-        Signal::Clock => 140.,
         Signal::Heads => 290.,
         Signal::Coordinate => 245.,
     };
