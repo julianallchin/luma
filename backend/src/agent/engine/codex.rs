@@ -573,7 +573,7 @@ pub(super) async fn models(
                     .pointer("/result/data")
                     .and_then(Value::as_array)
                     .ok_or_else(|| protocol("Codex did not return its model catalog"))?;
-                for model in page {
+                for model in page.iter().filter(|model| model["hidden"] != true) {
                     models.push(super::catalog::ModelChoice {
                         id: Some(text(model, "model")?),
                         label: text(model, "displayName")?,
