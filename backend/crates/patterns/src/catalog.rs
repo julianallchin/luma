@@ -3,14 +3,13 @@ use crate::*;
 pub(crate) fn primitive(p: Primitive) -> Definition {
     match p {
         Primitive::Kernel(kernel) => kernel.definition(),
-        Primitive::ClipRange => crate::clip_range::definition(),
         Primitive::Output => crate::output::terminal_definition(),
         Primitive::BandEnergy => crate::features::definition(),
     }
 }
 
-/// The kernels a clip graph lowers onto, plus band energy, the clip range
-/// and the output terminal.
+/// The kernels a clip graph lowers onto, plus band energy and the output
+/// terminal.
 pub fn standard_library() -> Library {
     static LIBRARY: std::sync::OnceLock<Library> = std::sync::OnceLock::new();
     LIBRARY
@@ -18,7 +17,6 @@ pub fn standard_library() -> Library {
             let mut library = Library::default();
             for (id, op) in [
                 ("band_energy", Primitive::BandEnergy),
-                ("clip_range", Primitive::ClipRange),
                 ("output", Primitive::Output),
             ] {
                 library.definitions.insert(id.into(), primitive(op));

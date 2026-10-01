@@ -16,16 +16,8 @@ pub(crate) fn run(
             )));
         }
     }
-    let signal = |key: &str| inputs[key].numeric();
-    let fixed = |key: &str| inputs[key].fixed_scalar();
     match op {
         Primitive::Kernel(kernel) => crate::clip_graph::kernels::run(kernel, inputs, batch),
-        Primitive::ClipRange => {
-            crate::clip_range::sample_count(fixed("samples")?)?;
-            let value = signal("value");
-            let (minimum, maximum) = crate::clip_range::bounds(value);
-            crate::clip_range::result(value.unit(), minimum, maximum)
-        }
         Primitive::Output => Ok(BTreeMap::from([(
             crate::clip_graph::OUTPUT.into(),
             EvaluatedValue::output(LightingSignal::terminal(inputs, batch.fixtures)?),
@@ -40,11 +32,23 @@ pub(crate) fn run(
                 .frame
                 .features
                 .ok_or_else(|| Error("this graph requires analyzed track data".into()))?;
+            // The band's level over the whole track, 0–1: a clip reads the
+            // same level as any other clip at the same moment.
+            let (low, high) = source.range(&request)?;
+            if !(low.is_finite() && high.is_finite() && low <= high) {
+                return Err(Error(
+                    "track source returned the wrong feature range".into(),
+                ));
+            }
             let values = batch
                 .times
                 .iter()
                 .map(|beat| match source.sample(&request, *beat)? {
-                    value if value.is_finite() && value >= 0.0 => Ok(value),
+                    value if value.is_finite() && value >= 0.0 => Ok(if high - low > 1e-12 {
+                        ((value - low) / (high - low)).clamp(0., 1.)
+                    } else {
+                        0.
+                    }),
                     _ => Err(Error(
                         "track source returned the wrong feature type or range".into(),
                     )),

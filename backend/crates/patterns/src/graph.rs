@@ -77,7 +77,6 @@ pub enum Primitive {
     #[serde(skip)]
     Kernel(crate::clip_graph::Kernel),
     Output,
-    ClipRange,
     BandEnergy,
 }
 impl Primitive {
