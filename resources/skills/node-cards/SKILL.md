@@ -184,20 +184,25 @@ Put a curve over space into delay or phase to make heads differ.
 later along the axis, up to 2 beats. The `low` and `high` of that curve set
 the spread: beats for delay, turns for phase.
 
-**space** `space(heads=None, direction=None, at=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
+**space** `space(heads=None, direction=None, centre=None, at=None, shift=None, scale=None, kind="line", wrap=None)` → coordinate
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
-| direction | vector | uvz | not zero | best fit |
-| at | vector | share | each 0–1 | the middle `(0.5, 0.5, 0.5)` |
+| direction | direction (u, v, z) | uvz | not zero | best fit |
+| centre | selection point (u, v, z) | share | each 0–1 | the middle `(0.5, 0.5, 0.5)` |
+| at | selection number | share | 0–1 | 0 |
 | shift | number | share | any | 0 |
 | scale | number | share | 0 or more (0 is a jump) | 1 |
 
-The place of each head `a`, 0–1 within the selection (within each span after
-a `split`), then `x = (a − shift) / scale`. With `wrap`, x tiles as a
-shader's `fract`: `x = fract((a − shift) / scale)`, so the shape repeats
-every `scale` (scale 0.25 = four copies across the heads). `shift` slides the place (the shader's UV offset): a curve over
+The place of each head `a` on a 0–1 ruler over the selection (within each
+span after a `split`), then `x = at + (a − at − shift) / scale`. This is a
+CSS transform: `at` is the transform origin, the place that stays put as
+`scale` changes (empty 0, so `x = (a − shift) / scale`); `shift` is the
+translate. With `wrap`, x tiles as a shader's `fract` (CSS
+background-repeat): `x = fract(x)`, so the shape repeats every `scale`
+(scale 0.25 = four copies across the heads). To grow a shape from the
+middle, set `at=0.5` and put a curve over time on `scale`. `shift` slides the place (the shader's UV offset): a curve over
 time on shift moves the shape along the heads, with the ease of that time
 curve. `scale` is how much of the axis reads as 0–1; a curve over time on
 scale grows the shape (a bloom). There is no band: past 0 and 1 a curve holds its end values,
@@ -205,17 +210,20 @@ so give a moving pill jumps at its ends, `[[0, 0], [0, 1], [1, 1], [1, 0]]`.
 
 Setting `kind`:
 - `line`: the position along `direction`, lowest head 0, highest 1. Empty
-  direction = the stage axis (+U, +V or +Z) the heads spread along most. After a `mirror` whose normal is
-  parallel to the direction, 0 is on the mirror's plane and the place grows
-  away from it, by distance over the span's full extent (so 0.5 at the edge
-  for a plane in the middle).
+  direction = the stage axis (+U, +V or +Z) the heads spread along most.
 - `order`: the rank of the head, `(rank + 0.5) / n`. After `shuffle` it is
   the shuffled rank.
-- `radial`: distance from the centre over the largest distance: 0 at the
-  centre, 1 at the farthest head. The centre is `at`, each of u, v, z 0–1
-  within the selection's box; empty = its middle. `direction` is the plane
-  normal. A shift moves rings outward from the centre.
-- `angle`: turns 0–1 around the centre `at`.
+- `radial`: distance from `centre` over the largest distance: 0 at the
+  centre, 1 at the farthest head. `centre` is a point, each of u, v, z 0–1
+  within the selection's box (as CSS `radial-gradient(at x y)`); empty = its
+  middle. `direction` is the plane's axis. A shift moves rings outward from
+  the centre. `centre=(0.2, 0.5, 0.5)` starts the rings near the left.
+- `angle`: turns 0–1 around `centre`.
+
+The ruler is always measured on the selection before any fold. A `mirror`
+moves the heads along it, never the ruler: after a mirror in the middle the
+folded heads read 0.5 to 1 of a line along the mirror's direction, so a pill
+that runs out from the middle shifts from 0.4 to 1.
 
 Setting `wrap`: `True` or `False`. Empty = `False`, except `angle` (`True`).
 
@@ -301,17 +309,18 @@ are Python's own.
 
 ## Shapers
 
-**mirror** `mirror(heads=None, normal=None, at=None)` → heads
+**mirror** `mirror(heads=None, direction=None, at=None)` → heads
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
 | heads | heads | | | all clip heads |
-| normal | vector | uvz | not zero | best fit |
-| at | number | share | 0–1 | 0.5 |
+| direction | direction (u, v, z) | uvz | not zero | best fit |
+| at | selection number | share | 0–1 | 0.5 |
 
-Folds the heads across a plane. `at` places the plane along the normal,
-across the positions of the selection before any fold: 0.5 is always the
-centre, also for stacked mirrors. Heads on the low side reflect. Order does
+Folds the heads across a plane, as a shader's reflect. `at` places the plane
+along the direction, across the positions of the selection before any fold:
+0.5 is always the centre, also for stacked mirrors. Heads on the low side
+reflect. A mirror moves heads, never a space's ruler. Order does
 not change. Aim yaw and pitch mirror for folded heads. Two mirrors give four-fold
 symmetry.
 
@@ -339,8 +348,8 @@ Setting `by`: `"fixture"` or `"group"`. Each fixture, or each venue group of
 the selection, becomes its own span. `space`, `shuffle` and `mirror` then
 work inside each span: one bar meter per bar, for example.
 
-`group.size`, `mirror.normal`, `mirror.at`, `space.direction` and
-`audio.*_hz` can change over time, but not across heads.
+`group.size`, `mirror.direction`, `mirror.at`, `space.direction`,
+`space.centre` and `audio.*_hz` can change over time, but not across heads.
 
 ## Two clocks
 
