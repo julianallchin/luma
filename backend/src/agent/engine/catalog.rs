@@ -451,11 +451,12 @@ mod tests {
             assert!(models.iter().any(|model| !model.effort_levels.is_empty()));
             for model in &models {
                 eprintln!(
-                    "{}: {} {:?} {:?}",
+                    "{}: {} {:?} {:?} {:?}",
                     service.label(),
                     model.label,
                     model.resolved_model,
-                    model.effort_levels
+                    model.effort_levels,
+                    model.context_window
                 );
             }
         }
