@@ -164,7 +164,8 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
         (Kind::Aim, "point") => Input::Vector([0., 0., 0.]),
         (Kind::Aim, "yaw" | "pitch") => Input::Number(0.),
         (Kind::Strobe, "rate") => Input::Number(0.5),
-        (Kind::Time, "delay" | "phase") | (Kind::Space, "shift") => Input::Number(0.),
+        (Kind::Time, "delay" | "phase") | (Kind::Space, "at" | "shift") => Input::Number(0.),
+        (Kind::Space, "centre") => Input::Vector([0.5; 3]),
         (Kind::Space, "scale") => Input::Number(1.),
         (Kind::Mirror, "at") => Input::Number(0.5),
         (Kind::Noise, "speed") => Input::Number(4.),
@@ -181,7 +182,7 @@ pub(crate) fn empty(graph: &ClipGraph, id: &str, input: &str) -> Option<Input> {
 /// What an empty input with no value to show means, in a word or two.
 pub(crate) fn empty_note(node: &Node, input: &str) -> &'static str {
     match (node.kind, input) {
-        (_, "direction" | "normal") => "Best fit",
+        (_, "direction") => "Best fit",
         (Kind::Noise, "scale") => "Uniform",
         (Kind::Group, "size") => "One fixture",
         (Kind::Time, "every") => "Once",
@@ -208,6 +209,7 @@ pub(crate) fn first_value(graph: &ClipGraph, id: &str, input: &str) -> Option<In
             _ => 1.,
         }),
         Ty::Vector if spec.unit == Some(Unit::Metres) => Input::Vector([0., 0., 0.]),
+        Ty::Vector if spec.unit == Some(Unit::Share) => Input::Vector([0.5; 3]),
         Ty::Vector => Input::Vector([1., 0., 0.]),
         Ty::Color => Input::Color([1., 1., 1.]),
         Ty::Points => Input::Points(preset_curve("Ramp up")),
