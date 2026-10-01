@@ -1,8 +1,10 @@
 //! Lowering: a checked clip graph becomes a graph of kernel nodes over the
 //! frame's cells (spec 5.1). Values become constants; the heads pipeline
 //! becomes constant unit, span and position fields; every clock becomes
-//! one event table; and the output node picks, per clock, the live event
-//! with the biggest effect (spec 5.3).
+//! one event table; and the output node combines each clock's live events
+//! into one layer (spec 5.3): light keeps the largest per channel, aim lays
+//! the newest over the older by its alpha, and no live event is
+//! transparent.
 use super::heads::{SplitBy, Units};
 use super::kernels::{Kernel, AIM_MIRRORS};
 use super::{ClipGraph, Input, Kind, Node as ClipNode};
@@ -90,6 +92,14 @@ fn constant3(value: [f64; 3]) -> Lowered {
         clock: None,
     }
 }
+/// Component `c` of a vector or color wire, as a number wire.
+fn component(lowered: &Lowered, c: usize) -> Lowered {
+    Lowered {
+        parts: std::array::from_fn(|_| lowered.parts[c].clone()),
+        clock: lowered.clock.clone(),
+    }
+}
+
 /// The one clock of several wires; the checker allows at most one outside
 /// an output node.
 fn clock_of<'a>(clocks: impl IntoIterator<Item = &'a Option<String>>) -> Option<String> {
@@ -308,6 +318,7 @@ impl Lowering<'_> {
         let delay = self.number(id, "delay", 0.)?;
         let duration = self.duration(id)?;
         let phase = self.number(id, "phase", 0.)?;
+        let has_phase = node.inputs.contains_key("phase");
         let shifted = self.kernel(
             Kernel::Shift,
             vec![
@@ -315,6 +326,7 @@ impl Lowering<'_> {
                 ("delay", delay.parts[0].clone()),
                 ("duration", duration.parts[0].clone()),
                 ("phase", phase.parts[0].clone()),
+                ("has_phase", number(if has_phase { 1. } else { 0. })),
             ],
         );
         Ok(Lowered {
@@ -334,6 +346,7 @@ impl Lowering<'_> {
         };
         let wrap = node.setting("wrap") == Some("yes");
         let direction = self.optional_triple(id, "direction")?;
+        let at = self.triple(id, "at", [0.5; 3])?;
         let rank = self.rank(&heads)?;
         let unit = self.index_field(&heads.units.unit)?;
         let span = self.index_field(&heads.units.span)?;
@@ -346,6 +359,9 @@ impl Lowering<'_> {
             ("dir_x".into(), dir.parts[0].clone()),
             ("dir_y".into(), dir.parts[1].clone()),
             ("dir_z".into(), dir.parts[2].clone()),
+            ("at_x".into(), at.parts[0].clone()),
+            ("at_y".into(), at.parts[1].clone()),
+            ("at_z".into(), at.parts[2].clone()),
             ("kind".into(), number(kind)),
             (
                 "has_direction".into(),
@@ -450,27 +466,13 @@ impl Lowering<'_> {
         };
         let low = hz(self, "low_hz", 40.)?;
         let high = hz(self, "high_hz", 100.)?;
+        // The band's level, 0–1 over the whole track.
         let energy = self.library_node(
             "band_energy",
             vec![("low_hz", number(low)), ("high_hz", number(high))],
         );
-        let range = self.library_node(
-            "clip_range",
-            vec![
-                ("value", output(&energy, "value")),
-                ("samples", number(1024.)),
-            ],
-        );
-        let normalized = self.kernel(
-            Kernel::Normalize,
-            vec![
-                ("value", output(&energy, "value")),
-                ("minimum", output(&range, "minimum")),
-                ("maximum", output(&range, "maximum")),
-            ],
-        );
         Ok(Lowered {
-            parts: std::array::from_fn(|_| output(&normalized, "value")),
+            parts: std::array::from_fn(|_| output(&energy, "value")),
             clock: None,
         })
     }
@@ -693,84 +695,118 @@ impl Lowering<'_> {
 
     // ---- output ----
 
-    /// Per clock, the winning event per head and time (spec 5.3): `factors`
-    /// name each input's part in the effect.
-    fn resolve(&mut self, inputs: &mut [(&str, Lowered)], role: Role) -> Result<()> {
-        let mut clocks: Vec<String> = inputs.iter().filter_map(|(_, l)| l.clock.clone()).collect();
+    /// `a × b`, per part.
+    fn times(&mut self, a: &Binding, b: &Binding) -> Binding {
+        let k = self.kernel(
+            Kernel::Math,
+            vec![("a", a.clone()), ("b", b.clone()), ("op", number(0.))],
+        );
+        output(&k, "value")
+    }
+
+    /// The product of `factors`, or 1.
+    fn product(&mut self, factors: &[Binding]) -> Binding {
+        let mut out: Option<Binding> = None;
+        for factor in factors {
+            out = Some(match out {
+                None => factor.clone(),
+                Some(so_far) => self.times(&so_far, factor),
+            });
+        }
+        out.unwrap_or_else(|| number(1.))
+    }
+
+    /// The live events of every clock the output's inputs carry, combined
+    /// into one layer (spec 5.3). A light output (`over` false) multiplies
+    /// each part's factors per event, premultiplied by alpha, and keeps the
+    /// largest per part across the live events; an aim (`over` true) lays
+    /// each newer event over the older by its alpha. Where a clock has no
+    /// live event the clip is transparent: alpha 0.
+    ///
+    /// `parts[p]` are the factors of output part `p`; `alpha` is the
+    /// output's alpha. Returns the parts, premultiplied for light, and the
+    /// alpha.
+    fn layer(
+        &mut self,
+        parts: Vec<Vec<Lowered>>,
+        alpha: Lowered,
+        over: bool,
+    ) -> Result<(Vec<Binding>, Binding)> {
+        let mut clocks: Vec<String> = parts
+            .iter()
+            .flatten()
+            .chain([&alpha])
+            .filter_map(|l| l.clock.clone())
+            .collect();
         clocks.sort();
         clocks.dedup();
+        let carries = |l: &Lowered, clock: &str| l.clock.as_deref() == Some(clock);
+        // Factors that carry no clock, per part; light is premultiplied.
+        let mut out: Vec<Vec<Binding>> = parts
+            .iter()
+            .map(|factors| {
+                let mut kept: Vec<Binding> = factors
+                    .iter()
+                    .filter(|l| l.clock.is_none())
+                    .map(|l| l.parts[0].clone())
+                    .collect();
+                if !over && alpha.clock.is_none() {
+                    kept.push(alpha.parts[0].clone());
+                }
+                kept
+            })
+            .collect();
+        let mut alphas: Vec<Binding> = if alpha.clock.is_none() {
+            vec![alpha.parts[0].clone()]
+        } else {
+            vec![]
+        };
         for clock in clocks {
             let events = self.clocks[&clock].clone();
-            let carries = |name: &str, inputs: &[(&str, Lowered)]| {
-                inputs
-                    .iter()
-                    .find(|(n, l)| *n == name && l.clock.as_deref() == Some(clock.as_str()))
-                    .map(|(_, l)| l.clone())
+            let alpha_carried = carries(&alpha, &clock);
+            let weight = if alpha_carried {
+                alpha.parts[0].clone()
+            } else {
+                number(1.)
             };
-            let one = || number(1.);
-            let peak = role
-                .peak
-                .and_then(|name| carries(name, inputs))
-                .map_or_else(|| [one(), one(), one()], |l| l.parts);
-            let scale: Vec<Binding> = role
-                .scale
-                .iter()
-                .map(|name| carries(name, inputs).map_or_else(one, |l| l.parts[0].clone()))
-                .collect();
-            let turn: Vec<Option<Lowered>> =
-                role.turn.iter().map(|name| carries(name, inputs)).collect();
-            let turns = turn.iter().any(Option::is_some);
-            let turn: Vec<Binding> = turn
-                .into_iter()
-                .map(|l| l.map_or_else(|| number(0.), |l| l.parts[0].clone()))
-                .collect();
-            let [px, py, pz] = peak;
-            let pick = self.kernel(
-                Kernel::Pick,
-                vec![
-                    ("present", events.present.clone()),
-                    ("index", events.index.clone()),
-                    ("peak_x", px),
-                    ("peak_y", py),
-                    ("peak_z", pz),
-                    ("scale_a", scale.first().cloned().unwrap_or_else(one)),
-                    ("scale_b", scale.get(1).cloned().unwrap_or_else(one)),
-                    (
-                        "turn_a",
-                        turn.first().cloned().unwrap_or_else(|| number(0.)),
-                    ),
-                    ("turn_b", turn.get(1).cloned().unwrap_or_else(|| number(0.))),
-                    ("turns", number(if turns { 1. } else { 0. })),
-                ],
-            );
-            let winner = output(&pick, "winner");
-            for (_, lowered) in inputs.iter_mut() {
-                if lowered.clock.as_deref() != Some(clock.as_str()) {
+            let over_flag = number(if over { 1. } else { 0. });
+            let present = events.present.clone();
+            let combine = |this: &mut Self, value: Binding| {
+                this.kernel(
+                    Kernel::Combine,
+                    vec![
+                        ("value", value),
+                        ("weight", weight.clone()),
+                        ("present", present.clone()),
+                        ("over", over_flag.clone()),
+                    ],
+                )
+            };
+            let presence = combine(self, number(1.));
+            alphas.push(output(&presence, "alpha"));
+            for (p, factors) in parts.iter().enumerate() {
+                let mut own: Vec<Binding> = factors
+                    .iter()
+                    .filter(|l| carries(l, &clock))
+                    .map(|l| l.parts[0].clone())
+                    .collect();
+                // Light is premultiplied, so a clock that carries alpha
+                // scales every part.
+                if !over && alpha_carried {
+                    own.push(alpha.parts[0].clone());
+                }
+                if own.is_empty() {
                     continue;
                 }
-                let parts = lowered.parts.clone().map(|part| {
-                    let gather = self.kernel(
-                        Kernel::Gather,
-                        vec![("value", part), ("winner", winner.clone())],
-                    );
-                    output(&gather, "value")
-                });
-                lowered.parts = parts;
-                lowered.clock = None;
+                let value = self.product(&own);
+                let combined = combine(self, value);
+                out[p].push(output(&combined, "value"));
             }
         }
-        Ok(())
+        let parts = out.iter().map(|factors| self.product(factors)).collect();
+        let alpha = self.product(&alphas);
+        Ok((parts, alpha))
     }
-}
-
-/// Which output inputs make an event's effect.
-struct Role {
-    /// Its peak channel counts.
-    peak: Option<&'static str>,
-    /// Multiplied.
-    scale: &'static [&'static str],
-    /// |a| + |b|.
-    turn: &'static [&'static str],
 }
 
 impl<'a> Lowering<'a> {
@@ -850,49 +886,34 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
     let mut alpha_port: Option<Binding> = None;
     let terminal = match out.kind {
         Kind::Color => {
-            let mut inputs = [
-                ("color", lowering.triple(&id, "color", [1.; 3])?),
-                ("brightness", lowering.number(&id, "brightness", 1.)?),
-                ("alpha", lowering.number(&id, "alpha", 1.)?),
-            ];
-            lowering.resolve(
-                &mut inputs,
-                Role {
-                    peak: Some("color"),
-                    scale: &["brightness", "alpha"],
-                    turn: &[],
-                },
-            )?;
-            let [(_, color), (_, brightness), (_, alpha)] = inputs;
-            let [r, g, b] = color.parts;
+            let color = lowering.triple(&id, "color", [1.; 3])?;
+            let brightness = lowering.number(&id, "brightness", 1.)?;
+            let alpha = lowering.number(&id, "alpha", 1.)?;
+            let parts = (0..3)
+                .map(|c| vec![component(&color, c), brightness.clone()])
+                .collect();
+            let (parts, alpha) = lowering.layer(parts, alpha, false)?;
             let out = lowering.kernel(
                 Kernel::ColorOut,
                 vec![
-                    ("r", r),
-                    ("g", g),
-                    ("b", b),
-                    ("brightness", brightness.parts[0].clone()),
+                    ("r", parts[0].clone()),
+                    ("g", parts[1].clone()),
+                    ("b", parts[2].clone()),
+                    ("alpha", alpha.clone()),
                 ],
             );
-            alpha_port = Some(alpha.parts[0].clone());
+            alpha_port = Some(alpha);
             ("color", output(&out, "color"))
         }
         Kind::Strobe => {
-            let mut inputs = [
-                ("rate", lowering.number(&id, "rate", 0.5)?),
-                ("alpha", lowering.number(&id, "alpha", 1.)?),
-            ];
-            lowering.resolve(
-                &mut inputs,
-                Role {
-                    peak: None,
-                    scale: &["rate", "alpha"],
-                    turn: &[],
-                },
-            )?;
-            let [(_, rate), (_, alpha)] = inputs;
-            let out = lowering.kernel(Kernel::StrobeOut, vec![("rate", rate.parts[0].clone())]);
-            alpha_port = Some(alpha.parts[0].clone());
+            let rate = lowering.number(&id, "rate", 0.5)?;
+            let alpha = lowering.number(&id, "alpha", 1.)?;
+            let (parts, alpha) = lowering.layer(vec![vec![rate]], alpha, false)?;
+            let out = lowering.kernel(
+                Kernel::StrobeOut,
+                vec![("rate", parts[0].clone()), ("alpha", alpha.clone())],
+            );
+            alpha_port = Some(alpha);
             ("strobe", output(&out, "strobe"))
         }
         Kind::Aim => {
@@ -908,37 +929,30 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 Some("away") => 2.,
                 _ => 0.,
             };
-            let mut inputs = [
-                (
-                    "direction",
-                    lowering.triple(&id, "direction", DEFAULT_DIRECTION)?,
-                ),
-                ("point", lowering.triple(&id, "point", [0.; 3])?),
-                ("yaw", lowering.number(&id, "yaw", 0.)?),
-                ("pitch", lowering.number(&id, "pitch", 0.)?),
-                ("alpha", lowering.number(&id, "alpha", 1.)?),
-            ];
-            lowering.resolve(
-                &mut inputs,
-                Role {
-                    peak: None,
-                    scale: &["alpha"],
-                    turn: &["yaw", "pitch"],
-                },
-            )?;
-            let [(_, direction), (_, point), (_, yaw), (_, pitch), (_, alpha)] = inputs;
+            let direction = lowering.triple(&id, "direction", DEFAULT_DIRECTION)?;
+            let point = lowering.triple(&id, "point", [0.; 3])?;
+            let yaw = lowering.number(&id, "yaw", 0.)?;
+            let pitch = lowering.number(&id, "pitch", 0.)?;
+            let alpha = lowering.number(&id, "alpha", 1.)?;
+            let mut parts: Vec<Vec<Lowered>> = (0..3)
+                .map(|c| vec![component(&direction, c)])
+                .chain((0..3).map(|c| vec![component(&point, c)]))
+                .collect();
+            parts.push(vec![yaw]);
+            parts.push(vec![pitch]);
+            let (parts, alpha) = lowering.layer(parts, alpha, true)?;
             let positions =
                 lowering.field(lowering.cells.iter().flat_map(|c| c.uvz).collect(), 3)?;
             let mut ports = vec![
-                ("dir_x", direction.parts[0].clone()),
-                ("dir_y", direction.parts[1].clone()),
-                ("dir_z", direction.parts[2].clone()),
-                ("point_x", point.parts[0].clone()),
-                ("point_y", point.parts[1].clone()),
-                ("point_z", point.parts[2].clone()),
-                ("yaw", yaw.parts[0].clone()),
-                ("pitch", pitch.parts[0].clone()),
-                ("alpha", alpha.parts[0].clone()),
+                ("dir_x", parts[0].clone()),
+                ("dir_y", parts[1].clone()),
+                ("dir_z", parts[2].clone()),
+                ("point_x", parts[3].clone()),
+                ("point_y", parts[4].clone()),
+                ("point_z", parts[5].clone()),
+                ("yaw", parts[6].clone()),
+                ("pitch", parts[7].clone()),
+                ("alpha", alpha),
                 ("positions", positions),
                 ("base", number(base)),
                 ("mirrors", number(heads.mirrors.len() as f64)),

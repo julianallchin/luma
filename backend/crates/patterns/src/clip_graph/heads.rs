@@ -193,29 +193,37 @@ fn spread(points: &[[f64; 3]], center: [f64; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
     ([m[0][0], m[1][1], m[2][2]], v)
 }
 
-/// The direction of most spread, signed so its largest component is
-/// positive (U before V before Z on ties). `None` for one point or points
-/// at one spot.
-pub(crate) fn principal_axis(points: &[[f64; 3]]) -> Option<[f64; 3]> {
-    let (values, vectors) = spread(points, centroid(points));
-    let most = (0..3).max_by(|a, b| values[*a].total_cmp(&values[*b]))?;
-    if values[most] <= 1e-12 {
+/// The best-fit direction: the stage axis (+U, +V or +Z) the points spread
+/// along most, U before V before Z on ties. A stage axis, never a tilted
+/// one, so a symmetric rig never flips between two. `None` for one point or
+/// points at one spot.
+pub(crate) fn best_fit_axis(points: &[[f64; 3]]) -> Option<[f64; 3]> {
+    let center = centroid(points);
+    let spread: [f64; 3] =
+        std::array::from_fn(|a| points.iter().map(|p| (p[a] - center[a]).powi(2)).sum());
+    let most = spread.iter().copied().fold(0., f64::max);
+    if most <= 1e-12 {
         return None;
     }
-    let axis = unit_direction(std::array::from_fn(|a| vectors[a][most]))?;
-    let dominant = (0..3)
-        .max_by(|a, b| {
-            axis[*a]
-                .abs()
-                .partial_cmp(&(axis[*b].abs()))
-                .unwrap()
-                .then_with(|| b.cmp(a))
-        })
-        .unwrap();
-    Some(if axis[dominant] < 0. {
-        axis.map(|c| -c)
-    } else {
-        axis
+    let axis = (0..3).find(|a| spread[*a] >= most * (1. - 1e-9))?;
+    Some(std::array::from_fn(|a| if a == axis { 1. } else { 0. }))
+}
+
+/// The point at `at` (0–1 per axis) within the box of `points`: (0.5, 0.5,
+/// 0.5) is the middle of the box, whatever the points' centroid.
+pub(crate) fn at_in_box(points: &[[f64; 3]], at: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|a| {
+        let (low, high) = points
+            .iter()
+            .map(|p| p[a])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                (lo.min(v), hi.max(v))
+            });
+        if low.is_finite() {
+            low + at[a] * (high - low)
+        } else {
+            0.
+        }
     })
 }
 
