@@ -397,6 +397,40 @@ const CURATED: &[(&str, &str, &[&str])] = &[
 
 const FULL_EFFORT: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
+/// Prompt tokens each Claude model accepts. The CLI's model list does not
+/// say; it reports a window only in a turn's `modelUsage`. Each value is
+/// from the model's page under platform.claude.com/docs/en/models/, read
+/// 2026-10-01, and the windows Claude Code 2.1.286 reported in turns agree
+/// (Fable 5.1, Opus 5.5, Sonnet 5: 1M; Haiku 4.5: 200K).
+const WINDOWS: &[(&str, u32)] = &[
+    ("claude-fable-5-1", 1_000_000),
+    ("claude-fable-5", 1_000_000),
+    ("claude-opus-5-5", 1_000_000),
+    ("claude-opus-5", 1_000_000),
+    ("claude-opus-4-8", 1_000_000),
+    ("claude-opus-4-7", 1_000_000),
+    ("claude-opus-4-6", 1_000_000),
+    ("claude-sonnet-5-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000),
+    ("claude-sonnet-4-6", 1_000_000),
+    ("claude-haiku-4-5", 200_000),
+];
+
+/// `id`'s window, also under a dated id (`claude-haiku-4-5-20251001`) or the
+/// CLI's `[1m]` spelling. `None` for a model the table does not know: no
+/// number is better than a guessed one.
+fn window(id: &str) -> Option<u32> {
+    let id = id.strip_suffix("[1m]").unwrap_or(id);
+    let undated = match id.rsplit_once('-') {
+        Some((head, date)) if date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => id,
+    };
+    WINDOWS
+        .iter()
+        .find(|(known, _)| *known == undated)
+        .map(|(_, window)| *window)
+}
+
 /// CLI aliases that are not model ids. A saved selection must name a model.
 const ALIASES: &[&str] = &["default", "opus", "sonnet", "haiku", "fable"];
 
@@ -437,7 +471,7 @@ fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
         label: label.into(),
         resolved_model: Some(id.into()),
         effort_levels: efforts,
-        context_window: None,
+        context_window: window(id),
         price: None,
     };
     let mut models: Vec<_> = CURATED
@@ -495,9 +529,9 @@ fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
                 Some(label) => format!("Default · {label}"),
                 None => "Default".into(),
             },
+            context_window: default.as_deref().and_then(window),
             resolved_model: default,
             effort_levels: FULL_EFFORT.iter().map(|e| e.to_string()).collect(),
-            context_window: None,
             price: None,
         },
     );
@@ -618,6 +652,36 @@ mod tests {
         assert_eq!(models[0].id, None);
         assert_eq!(models[8].effort_levels, ["low", "high"]);
         assert_eq!(catalog(&[])[0].label, "Default");
+    }
+
+    /// Every row names its window: curated rows, rows only the CLI lists,
+    /// dated ids, and the Default row through the model it resolves to.
+    #[test]
+    fn every_claude_row_shows_its_window() {
+        let live = [
+            json!({"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"}),
+            json!({"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet 5.5"}),
+            json!({"value":"haiku","resolvedModel":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}),
+            json!({"value":"claude-opus-4-6","resolvedModel":"claude-opus-4-6","displayName":"Opus 4.6"}),
+        ];
+        let models = catalog(&live);
+        for model in &models {
+            assert!(model.context_window.is_some(), "{} has no window", model.label);
+        }
+        let window_of = |label: &str| {
+            models
+                .iter()
+                .find(|m| m.label == label)
+                .and_then(|m| m.context_window)
+        };
+        assert_eq!(window_of("Default · Opus 5.5"), Some(1_000_000));
+        assert_eq!(window_of("Opus 5.5"), Some(1_000_000));
+        assert_eq!(window_of("Sonnet 5.5"), Some(1_000_000));
+        assert_eq!(window_of("Haiku 4.5"), Some(200_000));
+        assert_eq!(window("claude-haiku-4-5-20251001"), Some(200_000));
+        assert_eq!(window("claude-opus-5-5[1m]"), Some(1_000_000));
+        assert_eq!(window("claude-unknown-9"), None);
+        assert_eq!(catalog(&[])[0].context_window, None);
     }
 
     #[tokio::test]
