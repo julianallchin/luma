@@ -1930,8 +1930,7 @@ impl AgentChat {
                     )
                     // The reading column's minimum gutters. The 736 cap lives
                     // on each row (`transcript::row`) because a `list` hands
-                    // its items the full width; the gutters live here because
-                    // the turn rail lives inside the left one.
+                    // its items the full width.
                     .px(px(theme::CONTENT_GUTTER))
                     // Painted first, so each frame's selection registry holds
                     // exactly that frame's visible text in paint order. Not
@@ -1974,7 +1973,6 @@ impl AgentChat {
                             el.child(pin_watch)
                                 .child(transcript_list)
                                 .children(fade_band(footer))
-                                .child(self.rail(&theme).bottom(px(footer)))
                                 .children(adrift.then(|| jump_to_bottom(&this, footer, &theme)))
                         },
                     )
@@ -2038,55 +2036,6 @@ impl AgentChat {
             })
             .children(flight)
             .into_any_element()
-    }
-
-    /// The turn rail: comet's minimap of the conversation, one tick per user
-    /// prompt, living in the reading column's left gutter. Clicking a tick
-    /// scrolls its turn into view.
-    fn rail(&self, _theme: &Theme) -> gpui::Div {
-        let mut ticks = div()
-            .absolute()
-            .left(px(theme::SPACE_MD))
-            .top_0()
-            .bottom_0()
-            .w(px(theme::SPACE_LG))
-            .flex()
-            .flex_col()
-            .justify_center()
-            .gap(px(6.));
-        // One tick per prompt, and the tick scrolls to that prompt's *row* —
-        // the rail indexes the list, not the transcript, and with block rows
-        // the two no longer coincide.
-        let prompts: Vec<usize> = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, key)| matches!(key.kind, transcript::RowKind::Prompt))
-            .map(|(row, _)| row)
-            .collect();
-        let last_user = prompts.last().copied();
-        for ix in prompts {
-            let list = self.list.clone();
-            let active = Some(ix) == last_user;
-            ticks = ticks.child(
-                div()
-                    .id(SharedString::from(format!("rail-{ix}")))
-                    .w(px(14.))
-                    .h(px(10.))
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .on_click(move |_, _, _| {
-                        list.scroll_to_reveal_item(ix);
-                    })
-                    .child(div().w(px(14.)).h(px(2.)).rounded_full().bg(if active {
-                        theme::ink(0.55)
-                    } else {
-                        theme::ink(0.18)
-                    })),
-            );
-        }
-        ticks
     }
 
     /// The thread's surface and its header — everything both the attached and
