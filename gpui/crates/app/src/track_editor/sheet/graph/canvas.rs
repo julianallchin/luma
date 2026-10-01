@@ -138,6 +138,8 @@ pub(in crate::track_editor) struct State {
     pub drafts: Vec<Draft>,
     /// Curves whose strip is widened.
     pub wide: BTreeSet<String>,
+    /// Chips opened in place ([`super::inline_chip`]).
+    pub expanded: BTreeSet<String>,
     /// The add menu, at this window point.
     pub menu: Option<Point<Pixels>>,
     /// A card's menu: its node, at this window point.
@@ -168,6 +170,7 @@ impl Default for State {
             hover: None,
             drafts: Vec::new(),
             wide: BTreeSet::new(),
+            expanded: BTreeSet::new(),
             menu: None,
             card_menu: None,
             rename: None,
@@ -237,22 +240,23 @@ impl State {
 /// into it.
 fn input_signal(graph: &ClipGraph, id: &str, input: &str) -> Option<Signal> {
     Some(match edit::spec(graph, id, input)?.ty {
-        Ty::Number => Signal::Number,
+        // A math node's items are numbers, or values that multiply as numbers do.
+        Ty::Number | Ty::Values => Signal::Number,
         Ty::Vector => Signal::Vector,
         Ty::Color => Signal::Color,
-        Ty::Clock => Signal::Clock,
         Ty::Heads => Signal::Heads,
-        Ty::Coordinate => Signal::Coordinate,
+        // A shuffle's time is a time node's wire, the one it gives a curve.
+        Ty::Coordinate | Ty::Time => Signal::Coordinate,
         Ty::Points | Ty::Gradient => return None,
     })
 }
 
-/// What a node of `kind` gives. A curve gives what its kind setting says.
-fn output_signal(kind: Kind, curve: Option<&str>) -> Signal {
+/// What a node of `kind` gives. A curve or a math gives the value kind it
+/// has (`value`).
+fn output_signal(kind: Kind, value: Option<&str>) -> Signal {
     match kind {
-        Kind::Clock => Signal::Clock,
         Kind::Time | Kind::Space | Kind::Noise | Kind::Audio => Signal::Coordinate,
-        Kind::Curve => match curve {
+        Kind::Curve | Kind::Math => match value {
             Some("vector") => Signal::Vector,
             Some("color") => Signal::Color,
             _ => Signal::Number,
@@ -264,7 +268,7 @@ fn output_signal(kind: Kind, curve: Option<&str>) -> Signal {
 fn source_signal(graph: &ClipGraph, drafts: &[Draft], from: &Source) -> Signal {
     match from {
         Source::Node(id) => graph.nodes.get(id).map_or(Signal::Number, |node| {
-            output_signal(node.kind, node.setting("kind"))
+            output_signal(node.kind, graph.value_kind(id))
         }),
         Source::Draft(index) => output_signal(
             drafts.get(*index).map_or(Kind::Curve, |draft| draft.kind),
@@ -288,12 +292,12 @@ fn gradient_ends(graph: &ClipGraph, id: &str) -> Option<(Hsla, Hsla)> {
 /// The kinds the add menu offers: every kind but the outputs, since a graph
 /// has exactly one.
 const ADDABLE: [Kind; 10] = [
-    Kind::Clock,
     Kind::Time,
     Kind::Space,
     Kind::Noise,
     Kind::Audio,
     Kind::Curve,
+    Kind::Math,
     Kind::Mirror,
     Kind::Shuffle,
     Kind::Group,
@@ -617,7 +621,7 @@ fn node_card(cx: &Ctx, id: &str) -> AnyElement {
 /// A card's name: its title, which a double-click opens for typing, or the
 /// field while it is being typed. Presses in the field stay there, so the
 /// card does not take the keyboard from it.
-fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
+pub(super) fn name(cx: &Ctx, id: &str, label: &str) -> AnyElement {
     let rename = cx.state.sheet.canvas.rename.as_ref();
     if let Some(rename) = rename.filter(|rename| rename.id == id) {
         return luma_ui::float::field()
@@ -691,7 +695,7 @@ fn draft_card(cx: &Ctx, index: usize, draft: &Draft) -> AnyElement {
 /// the panel is widened, or `None` where it already fills its box.
 pub(super) fn view(cx: &Ctx, wide: Option<bool>) -> AnyElement {
     let state = &cx.state.sheet.canvas;
-    let columns = edit::columns(cx.graph);
+    let columns = edit::columns(cx.graph, &cx.inline);
     let geometry = state.geometry.clone();
     // Right to left in `columns`, so the sources come first on screen.
     let content = columns.iter().rev().fold(
@@ -1625,6 +1629,9 @@ impl Luma {
             }
             if canvas.wide.remove(&from) {
                 canvas.wide.insert(to.clone());
+            }
+            if canvas.expanded.remove(&from) {
+                canvas.expanded.insert(to.clone());
             }
             canvas.hover = None;
         });
