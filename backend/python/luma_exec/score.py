@@ -1,17 +1,17 @@
 """Clips over the same typed score document GPUI edits.
 
     edit = luma.track.edit()
-    k = clock(every=2)
-    move = curve(time(k), "Ramp up", low=-0.2, high=1)
-    pill = curve(space(shift=move, length=0.2), [[0, 0], [0, 1], [1, 1], [1, 0]])
+    t = time(every=2)
+    place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
+    pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
     clip = edit.add_clip(color(brightness=pill), name="Chase", beats=(32, 48), selection="bars")
     edit.window(beats=(32, 36)).output.heatmap()
     edit.apply()
 
 A clip has a name, a time range, a selection, a blend mode, a seed and one
-graph. Build the graph with the bare builders (clock, time, space, noise,
-audio, curve, mirror, shuffle, group, split, then color, aim or strobe), or
-start from preset("Chase"). add_clip and update_clip run the Rust checker on
+graph. Build the graph with the bare builders (time, space, noise, audio,
+curve, mirror, shuffle, group, split, then color, aim or strobe) and math on
+curves (cut * fade, max(a, b)), or start from preset("Chase"). add_clip and update_clip run the Rust checker on
 that clip at once and raise ClipError with its text.
 
 A color is light in linear Rec. 2020, three channels 0..1. "#RRGGBB" is sRGB
