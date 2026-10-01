@@ -28,7 +28,8 @@ pub enum Ease {
     Hold,
     /// CSS `cubic-bezier(x1, y1, x2, y2)`, local to the segment: x is a share
     /// of the segment's length, y a share of the change to the next value.
-    /// Every number is in 0..1, so the curve stays between its two values.
+    /// x1 and x2 are in 0..1, so x only grows; y1 and y2 may be any number,
+    /// so the curve may overshoot its two values (outputs clamp).
     Bezier([f64; 4]),
 }
 
@@ -78,9 +79,12 @@ impl Ease {
 
     fn is_valid(self) -> bool {
         match self {
-            Self::Bezier(handles) => handles
-                .iter()
-                .all(|v| v.is_finite() && (0. ..=1.).contains(v)),
+            Self::Bezier([x1, y1, x2, y2]) => {
+                (0. ..=1.).contains(&x1)
+                    && (0. ..=1.).contains(&x2)
+                    && y1.is_finite()
+                    && y2.is_finite()
+            }
             _ => true,
         }
     }
@@ -211,11 +215,10 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Written<V> {
 }
 
 /// Points over x 0–1, from x 0 to x 1, in order. Two points may share an x:
-/// a jump, where x itself reads the larger of the two values, so a head
-/// exactly on an edge is lit (a cut's front, a pill's ends). Before the
-/// first point and after the last, the end values hold; a jump at x 0 or
-/// x 1 sets the value outside, so `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1
-/// on [0, 1] closed and `[[0, 1], [0, 0], [1, 0]]` is 1 up to 0 closed.
+/// a jump, where x itself reads the value after it, as a shader's `step`
+/// and a hold keyframe: each piece covers [a, b). The same at x 0 and x 1.
+/// Before the first point and after the last, the end values hold, so
+/// `[[0, 0], [0, 1], [1, 1], [1, 0]]` is 1 on [0, 1) and 0 elsewhere.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve<V> {
     pub points: Vec<CurvePoint<V>>,
@@ -333,7 +336,7 @@ impl<V> Curve<V> {
             }
             if !point.ease.is_valid() {
                 return Err(Error(format!(
-                    "points[{i}]: a Bézier ease [x1, y1, x2, y2] needs each number in 0..1, such as [0.42, 0, 0.58, 1]"
+                    "points[{i}]: a Bézier ease [x1, y1, x2, y2] needs x1 and x2 in 0..1 (y1 and y2 may overshoot), such as [0.34, 1.56, 0.64, 1]"
                 )));
             }
         }

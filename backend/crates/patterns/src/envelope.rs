@@ -50,15 +50,10 @@ impl Curve<f64> {
         [a, place(x1, y1), place(x2, y2), b]
     }
 
-    /// The value at `progress`. At a jump `progress` reads the larger of
-    /// the two values: ties at an edge count as lit.
+    /// The value at `progress`. At a jump `progress` reads the value after
+    /// it, as a shader's `step`. Between points a Bézier ease may overshoot
+    /// the two values.
     pub fn sample(&self, progress: f64) -> f64 {
-        let at = self.points.partition_point(|p| p.x < progress);
-        if let [a, b, ..] = &self.points[at..] {
-            if a.x == progress && b.x == progress {
-                return a.value.max(b.value);
-            }
-        }
         let (i, share) = self.locate(progress);
         let (a, b) = (self.points[i].value, self.points[i + 1].value);
         a + (b - a) * share
@@ -176,18 +171,20 @@ impl Curve<f64> {
     }
 }
 
-/// `p` as a share of the box from `a` to `b`, kept in 0..1. A flat box has
-/// no share of height, so `fallback` keeps its height.
+/// `p` as a share of the box from `a` to `b`: x kept in 0..1, so the
+/// segment's x only grows; y any share, so a handle may overshoot (CSS
+/// `cubic-bezier` allows it). A flat box has no share of height, so
+/// `fallback` keeps its height.
 fn local(a: [f64; 2], b: [f64; 2], p: [f64; 2], fallback: [f64; 2]) -> [f64; 2] {
     let share = |from: f64, to: f64, v: f64, fallback: f64| {
         if (to - from).abs() > 1e-12 {
-            ((v - from) / (to - from)).clamp(0., 1.)
+            (v - from) / (to - from)
         } else {
             fallback
         }
     };
     [
-        share(a[0], b[0], p[0], fallback[0]),
+        share(a[0], b[0], p[0], fallback[0]).clamp(0., 1.),
         share(a[1], b[1], p[1], fallback[1]),
     ]
 }
