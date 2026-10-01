@@ -15,7 +15,8 @@ use crate::shell::{Body, Overlay};
 use crate::visualizer::show_export::{self, Export, Job};
 use crate::Luma;
 
-/// The frame an export fits the viewport's shape into.
+/// The export's frame. Always 16:9, whatever shape the stage pane has: the
+/// camera keeps its vertical field of view and the frame shows more width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Resolution {
     Hd,
@@ -58,9 +59,6 @@ pub(crate) struct ExportDialog {
     audio: PathBuf,
     resolution: Resolution,
     output: PathBuf,
-    /// The viewport's width over its height, when the dialog opened. Start
-    /// reads it again.
-    aspect: f32,
     phase: Phase,
 }
 
@@ -72,7 +70,7 @@ impl ExportDialog {
     }
 
     fn size(&self) -> (u32, u32) {
-        show_export::fit(self.resolution.frame(), self.aspect)
+        self.resolution.frame()
     }
 }
 
@@ -116,11 +114,6 @@ impl Luma {
         let Some((track_name, duration, audio)) = editor.export_source() else {
             return;
         };
-        let aspect = self
-            .visualizer
-            .as_ref()
-            .and_then(|stage| stage.shot())
-            .map_or(16.0 / 9.0, |shot| shot.aspect);
         self.overlay
             .open(Overlay::ShowExport(Box::new(ExportDialog {
                 output: default_output(&track_name),
@@ -128,7 +121,6 @@ impl Luma {
                 duration,
                 audio,
                 resolution: Resolution::Uhd,
-                aspect,
                 phase: Phase::Setup { error: None },
             })));
         cx.notify();
@@ -215,7 +207,6 @@ impl Luma {
                 return;
             }
         }
-        dialog.aspect = shot.aspect;
         let job = Job {
             size: dialog.size(),
             shot,

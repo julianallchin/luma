@@ -23,7 +23,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 use luma_lib::models::universe::UniverseState;
-use luma_lib::recording::{Encode, Encoder};
+use luma_lib::recording::{Encode, Encoder, Pixels};
 use luma_lib::stage_render;
 use luma_render::{assets, build_frame_at, coords, scene_desc, Recorder};
 
@@ -43,8 +43,6 @@ const WARMUP: u64 = 24;
 pub(crate) struct Shot {
     scene: scene_desc::Scene,
     definitions: std::collections::BTreeMap<String, scene_desc::Definition>,
-    /// The viewport's width over its height.
-    pub(crate) aspect: f32,
     /// The track's bass, for the footage look's shake.
     bass: Option<Bass>,
 }
@@ -74,7 +72,6 @@ impl Visualizer {
         Some(Shot {
             scene,
             definitions: stage.definitions.clone(),
-            aspect: width / height,
             bass: self.bass.clone(),
         })
     }
@@ -84,19 +81,6 @@ impl Visualizer {
     pub(crate) fn is_lit(&self) -> bool {
         self.lit.is_some()
     }
-}
-
-/// The largest frame of `aspect` that fits in `frame`, with even sides, as
-/// yuv420p needs.
-pub(crate) fn fit(frame: (u32, u32), aspect: f32) -> (u32, u32) {
-    let (width, height) = (frame.0 as f32, frame.1 as f32);
-    let (width, height) = if aspect >= width / height {
-        (width, width / aspect)
-    } else {
-        (height * aspect, height)
-    };
-    let even = |side: f32| ((side / 2.0).round() as u32 * 2).max(2);
-    (even(width), even(height))
 }
 
 /// Output frames that cover `duration` seconds: the last one starts before
@@ -232,6 +216,8 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
     let mut encoder = Encoder::start(&Encode {
         size: (width, height),
         fps: FPS,
+        // What `Recorder` reads back.
+        pixels: Pixels::Rgb10A2,
         audio: audio.as_deref().map(|path| (path, 0.0, seconds)),
         output: &output,
     })
@@ -260,7 +246,7 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
             return Err("Cancelled".into());
         }
         // The frame ends on the tick, a frame interval after the one before.
-        let bass = shot.bass.as_ref().map_or(0.0, |bass| bass.at(tick.score));
+        let bass = shot.bass.as_ref().map_or(0.0, |bass| bass.bass_at(tick.score));
         let moment = luma_render::footage::moment(tick.clock, 1.0 / f64::from(FPS), bass);
         let universe = motors.step(tick.clock, tick.score, sample(tick.score));
         let frame = build_frame_at(
@@ -319,16 +305,5 @@ mod tests {
         for pair in all.windows(2) {
             assert!((pair[1].clock - pair[0].clock - 1.0 / 60.0).abs() < 1e-9);
         }
-    }
-
-    #[test]
-    fn the_frame_keeps_the_viewport_shape_inside_the_preset() {
-        let (width, height) = fit((3840, 2160), 3.2);
-        assert!(width <= 3840 && height <= 2160);
-        assert!(((width as f32 / height as f32) - 3.2).abs() < 0.01);
-        assert_eq!((width % 2, height % 2), (0, 0));
-        let (width, height) = fit((1920, 1080), 0.5);
-        assert_eq!(height, 1080);
-        assert!(width < 1920);
     }
 }

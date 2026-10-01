@@ -141,3 +141,17 @@ fn display_dither(display: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
     let step = 2.2749 * pow(max(display, vec3<f32>(1e-4)), vec3<f32>(0.58333)) / 255.0;
     return (a - b) * step;
 }
+
+/// What scales [`display_dither`] to one code value of a 10-bit target
+/// (`Channels::Rgb10`) instead of one 8-bit one. One 8-bit step is four
+/// 10-bit steps: in the darks that much noise is what a video encoder smears
+/// into blocks.
+const TEN_BIT_DITHER: f32 = 255.0 / 1023.0;
+
+/// The sRGB transfer function, which an `*UnormSrgb` target applies on store.
+/// A 10-bit target has no sRGB variant, so its shaders encode themselves.
+fn srgb_encode(linear: vec3<f32>) -> vec3<f32> {
+    let c = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
+    let curve = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(curve, c * 12.92, c <= vec3<f32>(0.0031308));
+}

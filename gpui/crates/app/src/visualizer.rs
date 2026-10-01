@@ -739,37 +739,8 @@ impl StageClock {
     }
 }
 
-/// A track's low-band envelope: what the footage look's bass shake follows.
-#[derive(Clone)]
-pub(crate) struct Bass {
-    low: std::sync::Arc<[f32]>,
-    seconds: f32,
-}
-
-impl Bass {
-    /// The full-resolution low band, or the preview's when the full one has
-    /// not been generated. `None` without either.
-    pub(crate) fn of(waveform: &luma_lib::models::waveforms::TrackWaveform) -> Option<Self> {
-        let bands = waveform
-            .bands
-            .as_ref()
-            .or(waveform.preview_bands.as_ref())?;
-        (!bands.low.is_empty() && waveform.duration_seconds > 0.0).then(|| Self {
-            low: bands.low.as_slice().into(),
-            seconds: waveform.duration_seconds as f32,
-        })
-    }
-
-    /// The envelope at track time `t`, 0..=1, linearly between buckets.
-    pub(crate) fn at(&self, t: f32) -> f32 {
-        let last = self.low.len() - 1;
-        let x = (t / self.seconds * self.low.len() as f32 - 0.5).clamp(0.0, last as f32);
-        let i = x.floor() as usize;
-        let next = self.low[(i + 1).min(last)];
-        let value = self.low[i] + (next - self.low[i]) * (x - i as f32);
-        value.clamp(0.0, 1.0)
-    }
-}
+/// A track's audio, which the footage look's bass shake listens to.
+pub(crate) type Bass = luma_lib::host_audio::TrackAudio;
 
 /// Everything a live frame is a function of.
 ///
@@ -3529,7 +3500,7 @@ impl Luma {
             );
         let (audition, bass) = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => {
-                (state.audition(), state.bass())
+                (state.audition(), self.library.track_audio(state.track_id()))
             }
             _ => (None, None),
         };
@@ -4948,7 +4919,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     // show the share of the slice since the last frame their gate is on. The
     // score is sampled at the transport time, which stands still while paused.
     let (clock, interval) = state.stage.borrow().clock.now();
-    let bass = state.bass.as_ref().map_or(0.0, |bass| bass.at(time));
+    // Paused, nothing is coming out of the subs, so nothing shakes — the
+    // envelope under a parked playhead is not a sound being played.
+    let bass = match &state.bass {
+        Some(bass) if library.transport().is_playing => bass.bass_at(time),
+        _ => 0.0,
+    };
     let moment = luma_render::footage::moment(clock, interval, bass);
     // The drawn heads lag the score the way motors would; the output does not.
     let universe = state.motors.step(clock, time, universe);

@@ -894,6 +894,11 @@ pub(crate) enum Channels {
     Rgba,
     /// What `gpui::RenderImage` wants.
     Bgra,
+    /// The [`Self::Rgba`] picture at ten bits a channel, for a video encoder:
+    /// 8-bit darks band, and their dither is noise it smears into blocks.
+    /// `Rgb10a2Unorm`, so four bytes a pixel like the others. It has no sRGB
+    /// variant, so the shaders that write it encode sRGB themselves.
+    Rgb10,
     /// Linear light for an HDR compositor: 1.0 is SDR white and highlights
     /// go above it. Only ever a shared target, never read back as an image.
     Hdr,
@@ -929,7 +934,7 @@ impl Destination {
     }
 
     /// The format a staged target is allocated in: a readback is always
-    /// 8-bit, so an HDR frame that could not be shared falls back to SDR.
+    /// SDR, so an HDR frame that could not be shared falls back to it.
     fn staged_channels(self) -> Channels {
         match self.channels() {
             Channels::Hdr => Channels::Bgra,
@@ -1186,13 +1191,23 @@ pub struct ShadowStats {
 }
 
 impl Channels {
-    const ALL: [Self; 3] = [Self::Rgba, Self::Bgra, Self::Hdr];
+    const ALL: [Self; 4] = [Self::Rgba, Self::Bgra, Self::Hdr, Self::Rgb10];
 
     pub(crate) fn format(self) -> wgpu::TextureFormat {
         match self {
             Self::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
             Self::Bgra => wgpu::TextureFormat::Bgra8UnormSrgb,
             Self::Hdr => wgpu::TextureFormat::Rgba16Float,
+            Self::Rgb10 => wgpu::TextureFormat::Rgb10a2Unorm,
+        }
+    }
+
+    /// The overrides the composite and tonemap passes take for this target.
+    pub(crate) fn display_constants(self) -> &'static [(&'static str, f64)] {
+        match self {
+            Self::Hdr => &[("HDR_OUTPUT", 1.0)],
+            Self::Rgb10 => &[("TEN_BIT_OUTPUT", 1.0)],
+            Self::Rgba | Self::Bgra => &[],
         }
     }
 
@@ -1210,6 +1225,7 @@ impl Channels {
             Self::Rgba => 0,
             Self::Bgra => 1,
             Self::Hdr => 2,
+            Self::Rgb10 => 3,
         }
     }
 }
@@ -2264,14 +2280,14 @@ pub struct Gpu {
     temporal_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`Channels::index`]: the same pass, targeting each output
     /// format. The [`Channels::Hdr`] one keeps highlights above SDR white.
-    composite_pipelines: [wgpu::RenderPipeline; 3],
+    composite_pipelines: [wgpu::RenderPipeline; 4],
     /// The composite pass writing scene-linear light for the post chain.
     composite_linear_pipeline: wgpu::RenderPipeline,
     /// Exposure, lens glow, tone curve and glare (`post.rs`).
     post: crate::post::Pipelines,
-    /// Indexed by [`overlay_pipeline_index`]: the three output formats
+    /// Indexed by [`overlay_pipeline_index`]: the four output formats
     /// crossed with two topologies and two depth behaviours.
-    overlay_pipelines: [wgpu::RenderPipeline; 12],
+    overlay_pipelines: [wgpu::RenderPipeline; 16],
     hard_shadow_sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
     /// A 1x1 depth array bound where a pass has no real shadow map to offer.
@@ -4081,11 +4097,7 @@ impl Gpu {
                     entry_point: Some("fs_main"),
                     targets: &[Some(channels.format().into())],
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: if channels == Channels::Hdr {
-                            &[("HDR_OUTPUT", 1.0)]
-                        } else {
-                            &[]
-                        },
+                        constants: channels.display_constants(),
                         ..Default::default()
                     },
                 }),
@@ -4130,7 +4142,15 @@ impl Gpu {
                 storage_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
             ],
         });
-        let overlay_module = shader(&device, "overlay", include_str!("shaders/overlay.wgsl"));
+        let overlay_module = shader(
+            &device,
+            "overlay",
+            &format!(
+                "{}{}",
+                include_str!("shaders/tone.wgsl"),
+                include_str!("shaders/overlay.wgsl")
+            ),
+        );
         let overlay_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("overlay"),
@@ -4168,7 +4188,14 @@ impl Gpu {
                         blend: free.then_some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: if channels == Channels::Rgb10 {
+                            &[("TEN_BIT_OUTPUT", 1.0)]
+                        } else {
+                            &[]
+                        },
+                        ..Default::default()
+                    },
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: if lines {
@@ -4278,7 +4305,7 @@ impl Gpu {
         let post = crate::post::Pipelines::new(
             &device,
             &queue,
-            &Channels::ALL.map(|channels| (channels.format(), channels == Channels::Hdr)),
+            &Channels::ALL.map(|channels| (channels.format(), channels.display_constants())),
         );
         Ok(Self {
             sky_visibility,
@@ -10601,6 +10628,56 @@ mod tests {
     }
 
     #[test]
+    fn a_ten_bit_frame_is_the_eight_bit_picture_with_finer_steps() -> anyhow::Result<()> {
+        const AUTHORED: [u8; 3] = [0x33, 0x99, 0xe6];
+        // Red in the low ten bits, then green, blue and two bits of alpha.
+        let unpack = |pixel: &[u8]| {
+            let word = u32::from_le_bytes(pixel.try_into().unwrap());
+            [
+                word & 1023,
+                (word >> 10) & 1023,
+                (word >> 20) & 1023,
+                word >> 30,
+            ]
+        };
+        let mut renderer = Renderer::new()?;
+        // The composite pass writes the neutral look; the post chain the stage one.
+        for look in [
+            crate::scene_desc::Look::NEUTRAL,
+            crate::scene_desc::Look::STAGE,
+        ] {
+            let mut frame = overlay_test_frame(true, OverlayDepth::Tested, -1.0, Vec3::splat(0.02));
+            frame.look = look;
+            let mut rgba = Vec::new();
+            renderer.render_into(&frame, 96, 96, 1, Channels::Rgba, &mut rgba)?;
+            let mut rgb10 = Vec::new();
+            renderer.render_into(&frame, 96, 96, 1, Channels::Rgb10, &mut rgb10)?;
+            assert_eq!(rgb10.len(), rgba.len());
+
+            let mut off_grid = 0;
+            let mut worst = 0.0_f32;
+            for (ten, eight) in rgb10.chunks_exact(4).zip(rgba.chunks_exact(4)) {
+                let [r, g, b, a] = unpack(ten);
+                assert_eq!(a, 3, "opaque");
+                for (code, byte) in [r, g, b].into_iter().zip(eight) {
+                    let as_eight = code as f32 * 255.0 / 1023.0;
+                    worst = worst.max((as_eight - f32::from(*byte)).abs());
+                    off_grid += usize::from((as_eight - as_eight.round()).abs() > 0.1);
+                }
+            }
+            let offset = center_offset(96, 96);
+            let [r, g, b, _] = unpack(&rgb10[offset..offset + 4]);
+            let center = [r, g, b].map(|code| (code as f32 * 255.0 / 1023.0).round() as u8);
+            assert_eq!(center, AUTHORED, "the overlay's colour, sRGB-encoded");
+            // Each frame within its own dither of the other: one 8-bit code
+            // for the 8-bit frame, a quarter of one for the 10-bit frame.
+            assert!(worst <= 2.0, "the 10-bit frame strays {worst} 8-bit codes");
+            assert!(off_grid > 0, "every 10-bit value sits on the 8-bit grid");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn post_agx_overlays_load_reverse_z_depth_while_free_gizmos_ignore_it() -> anyhow::Result<()> {
         const AUTHORED: [u8; 3] = [0x33, 0x99, 0xe6];
         let mut renderer = Renderer::new()?;
@@ -13296,7 +13373,7 @@ mod tests {
         match channels {
             Channels::Rgba => [pixels[offset], pixels[offset + 1], pixels[offset + 2]],
             Channels::Bgra => [pixels[offset + 2], pixels[offset + 1], pixels[offset]],
-            Channels::Hdr => unreachable!("an HDR frame is never read back as bytes"),
+            Channels::Hdr | Channels::Rgb10 => unreachable!("read back only as RGBA8 or BGRA8"),
         }
     }
 }

@@ -2652,6 +2652,13 @@ impl Library {
         self.services.host_audio().snapshot()
     }
 
+    /// The decoded audio of `track_id`, when it is the track the player has
+    /// loaded — shared with the player, not copied.
+    pub fn track_audio(&self, track_id: &str) -> Option<luma_lib::host_audio::TrackAudio> {
+        let (loaded, audio) = self.services.host_audio().audio()?;
+        (loaded == track_id).then_some(audio)
+    }
+
     // -- the patch -----------------------------------------------------------
 
     /// Everything the patch page reads about a venue, in one pass.

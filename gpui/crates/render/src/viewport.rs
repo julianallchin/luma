@@ -425,7 +425,9 @@ const _: () = assert!(RECORDER_DEPTH <= PRESENTATION_SLOTS);
 /// Live-quality frames for a file, as fast as the GPU draws them.
 ///
 /// The same pass chain, [`LIVE_SUBFRAMES`] budget and temporal history as the
-/// viewport, read back as sRGB RGBA8 in the order they were pushed. Nothing is
+/// viewport, read back in the order they were pushed as sRGB at ten bits a
+/// channel: little-endian 32-bit words with red in the low ten bits, then
+/// green, blue and two bits of alpha (ffmpeg's `x2bgr10le`). Nothing is
 /// paced to a display. Up to [`RECORDER_DEPTH`] frames are in flight, each in
 /// its own presentation slot, so copying one frame out never stalls the draw
 /// of the next.
@@ -474,7 +476,7 @@ impl Recorder {
             width.max(1),
             height.max(1),
             LIVE_SUBFRAMES,
-            Channels::Rgba,
+            Channels::Rgb10,
             slot,
         );
         self.in_flight.push_back(pending);

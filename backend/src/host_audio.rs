@@ -150,6 +150,52 @@ impl HostAudioState {
         guard.refresh_progress();
         guard.snapshot()
     }
+
+    /// The loaded track's audio, shared with the player rather than copied,
+    /// and the track it belongs to.
+    pub fn audio(&self) -> Option<(String, TrackAudio)> {
+        let guard = self.inner.lock().expect("host audio state poisoned");
+        let segment = guard.segment.as_ref()?;
+        Some((
+            guard.track_id.clone()?,
+            TrackAudio {
+                samples: segment.samples.clone(),
+                start: guard.segment_start_abs,
+            },
+        ))
+    }
+}
+
+/// A track's decoded audio: stereo interleaved at [`SAMPLE_RATE`], starting
+/// at `start` seconds of track time.
+#[derive(Clone)]
+pub struct TrackAudio {
+    samples: Arc<Vec<f32>>,
+    start: f32,
+}
+
+impl TrackAudio {
+    /// How loud the bass is at track time `t`: the peak, in full scale, of
+    /// the last 50 ms through a 100 Hz low-pass (two poles, 12 dB/oct).
+    pub fn bass_at(&self, t: f32) -> f32 {
+        let rate = SAMPLE_RATE as f32;
+        let frames = self.samples.len() / 2;
+        let end = (((t - self.start) * rate).max(0.0) as usize).min(frames);
+        let window = end.saturating_sub((0.05 * rate) as usize);
+        // The filter starts from silence, and that jump rings like a click.
+        // It runs 30 ms first so the ringing has settled before peaks count.
+        let start = window.saturating_sub((0.03 * rate) as usize);
+        let k = 1.0 - (-std::f32::consts::TAU * 100.0 / rate).exp();
+        let (mut one, mut two, mut peak) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for (i, frame) in self.samples[start * 2..end * 2].chunks_exact(2).enumerate() {
+            one += k * ((frame[0] + frame[1]) * 0.5 - one);
+            two += k * (one - two);
+            if start + i >= window {
+                peak = peak.max(two.abs());
+            }
+        }
+        peak.min(1.0)
+    }
 }
 
 /// Snapshot of playback state for the host
@@ -202,6 +248,27 @@ struct LoadedSegment {
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    #[test]
+    fn bass_hears_a_sub_and_not_a_lead() {
+        let tone = |hz: f32| TrackAudio {
+            samples: Arc::new(
+                (0..SAMPLE_RATE)
+                    .flat_map(|i| {
+                        let s = (std::f32::consts::TAU * hz * i as f32 / SAMPLE_RATE as f32).sin();
+                        [s, s]
+                    })
+                    .collect(),
+            ),
+            start: 10.0,
+        };
+        let sub = tone(50.0).bass_at(10.5);
+        let lead = tone(2_000.0).bass_at(10.5);
+        assert!(sub > 0.7, "a full-scale 50 Hz sine reads {sub}");
+        assert!(lead < 0.01, "a full-scale 2 kHz sine reads {lead}");
+        // Before the audio starts, there is nothing to hear.
+        assert_eq!(tone(50.0).bass_at(9.0), 0.0);
+    }
 
     fn host() -> HostAudioState {
         let host = HostAudioState::default();

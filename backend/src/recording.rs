@@ -304,10 +304,34 @@ impl TimeAxis {
 // the encoder
 // ---------------------------------------------------------------------------
 
+/// How the frames handed to [`Encoder::write`] are laid out. Both are sRGB,
+/// four bytes a pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pixels {
+    /// Eight bits a channel, red first.
+    Rgba8,
+    /// Ten bits a channel in a little-endian 32-bit word: red in the low ten
+    /// bits, then green, blue and two bits of alpha. What wgpu's
+    /// `Rgb10a2Unorm` reads back as.
+    Rgb10A2,
+}
+
+impl Pixels {
+    /// ffmpeg's name for the layout. `x2bgr10le` names the word's fields
+    /// from the most significant bit down, so red is the low ten bits.
+    fn ffmpeg_name(self) -> &'static str {
+        match self {
+            Self::Rgba8 => "rgba",
+            Self::Rgb10A2 => "x2bgr10le",
+        }
+    }
+}
+
 /// Everything the ffmpeg argv is a function of.
 pub struct Encode<'a> {
     pub size: (u32, u32),
     pub fps: u32,
+    pub pixels: Pixels,
     /// The track file, where in it the video starts, and how long it runs.
     /// `None` writes a silent file.
     pub audio: Option<(&'a Path, f32, f32)>,
@@ -338,19 +362,21 @@ impl Codec {
                 ];
             }
             // Main10 with spatial and temporal AQ: a show is mostly dark haze
-            // gradients, which 8-bit bands and plain CQ starves of bits.
+            // gradients, which 8-bit bands and plain CQ starves of bits. The
+            // slowest preset and a low CQ keep the darks from breaking into
+            // blocks; NVENC is still faster than the renderer at p7.
             // `hvc1` so Apple players open the file too.
             Self::Nvenc => &[
                 "-c:v",
                 "hevc_nvenc",
                 "-preset",
-                "p5",
+                "p7",
                 "-tune",
                 "hq",
                 "-rc",
                 "vbr",
                 "-cq",
-                "16",
+                "12",
                 "-b:v",
                 "0",
                 "-spatial-aq",
@@ -364,7 +390,19 @@ impl Codec {
                 "-tag:v",
                 "hvc1",
             ],
-            Self::X264 => &["-c:v", "libx264", "-preset", "fast", "-crf", "16"],
+            // Still 8-bit 4:2:0, which every player decodes. `aq-mode=3`
+            // biases the adaptive quantiser toward dark blocks, where the
+            // default starves them; `slow` and a lower CRF pay for the rest.
+            Self::X264 => &[
+                "-c:v",
+                "libx264",
+                "-preset",
+                "slow",
+                "-crf",
+                "14",
+                "-x264-params",
+                "aq-mode=3",
+            ],
         };
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
@@ -433,7 +471,7 @@ fn ffmpeg_argv(encode: &Encode, codec: Codec) -> Vec<String> {
         "-f".into(),
         "rawvideo".into(),
         "-pix_fmt".into(),
-        "rgba".into(),
+        encode.pixels.ffmpeg_name().into(),
         "-s".into(),
         format!("{width}x{height}"),
         "-r".into(),
@@ -494,7 +532,7 @@ fn ffmpeg_argv(encode: &Encode, codec: Codec) -> Vec<String> {
 /// caller back here rather than buffering the film in memory.
 const ENCODE_QUEUE: usize = 2;
 
-/// A running ffmpeg writing raw RGBA frames to an mp4.
+/// A running ffmpeg writing raw frames to an mp4.
 ///
 /// Frames cross to ffmpeg on a thread of their own, so the caller renders the
 /// next frame while the last one is in the pipe. Dropped before
@@ -708,6 +746,7 @@ impl Session {
         let mut encoder = Encoder::start(&Encode {
             size: (width, height),
             fps: self.axis.fps,
+            pixels: Pixels::Rgba8,
             audio: Some((&self.audio, self.axis.start, self.axis.seconds())),
             output: &self.output,
         })?;
@@ -917,6 +956,7 @@ mod tests {
             &Encode {
                 size: (1280, 720),
                 fps: 30,
+                pixels: Pixels::Rgba8,
                 audio: Some((Path::new("/tracks/a.mp3"), 0.0, 10.0)),
                 output: Path::new("/out/a.mp4"),
             },
@@ -942,6 +982,7 @@ mod tests {
             &Encode {
                 size: (640, 360),
                 fps: 25,
+                pixels: Pixels::Rgba8,
                 audio: Some((Path::new("/tracks/a.mp3"), 30.0, 12.5)),
                 output: Path::new("/out/a.mp4"),
             },
@@ -962,6 +1003,7 @@ mod tests {
             &Encode {
                 size: (640, 360),
                 fps: 60,
+                pixels: Pixels::Rgb10A2,
                 audio: None,
                 output: Path::new("/out/a.mp4"),
             },
@@ -970,6 +1012,93 @@ mod tests {
         assert_eq!(argv.iter().filter(|arg| *arg == "-i").count(), 1);
         assert!(!argv.iter().any(|arg| arg == "-map" || arg == "aac"));
         assert!(argv.contains(&"hevc_nvenc".to_string()));
+        let line = argv.join(" ");
+        assert!(line.contains("-f rawvideo -pix_fmt x2bgr10le -s 640x360"));
+        assert!(line.contains("-profile:v main10"));
+        assert!(line.contains("format=p010le"));
+    }
+
+    /// Encode a flat frame of one 10-bit colour with `codec`, decode the
+    /// file, and hand back the colour it decodes to, in 10-bit codes.
+    fn round_trip(ffmpeg: &Path, codec: Codec, colour: [u32; 3]) -> [f32; 3] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("flat.mp4");
+        // NVENC's smallest frame is larger than 64x64.
+        let (width, height) = (256, 256);
+        let encode = Encode {
+            size: (width, height),
+            fps: 30,
+            pixels: Pixels::Rgb10A2,
+            audio: None,
+            output: &output,
+        };
+        let word = colour[0] | colour[1] << 10 | colour[2] << 20 | 3 << 30;
+        let frame = word.to_le_bytes().repeat((width * height) as usize);
+        let mut child = Command::new(ffmpeg)
+            .args(ffmpeg_argv(&encode, codec))
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for _ in 0..4 {
+            stdin.write_all(&frame).unwrap();
+        }
+        drop(stdin);
+        let encoded = child.wait_with_output().unwrap();
+        assert!(
+            encoded.status.success(),
+            "{codec:?}: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        let decoded = Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&output)
+            .args([
+                "-vf",
+                "scale=in_color_matrix=bt709:in_range=tv,format=rgb48le",
+                "-frames:v",
+                "1",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            decoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decoded.stderr)
+        );
+        let centre = ((height / 2 * width + width / 2) * 6) as usize;
+        std::array::from_fn(|channel| {
+            let at = centre + channel * 2;
+            let value = u16::from_le_bytes([decoded.stdout[at], decoded.stdout[at + 1]]);
+            f32::from(value) / 65535.0 * 1023.0
+        })
+    }
+
+    #[test]
+    fn ten_bit_frames_decode_to_their_own_colour() {
+        // Dark, a different value per channel, and off the 8-bit grid (a
+        // multiple of four would survive an 8-bit path unchanged).
+        const COLOUR: [u32; 3] = [201, 90, 42];
+        let (ffmpeg, codec) = pick_encoder();
+        // x264 is 8-bit: the colour survives, its two low bits do not.
+        let mut codecs = vec![(Codec::X264, 2.0 * 1023.0 / 255.0)];
+        if codec == Codec::Nvenc {
+            // Main10 keeps steps finer than one 8-bit code.
+            codecs.push((Codec::Nvenc, 1.5));
+        }
+        for (codec, tolerance) in codecs {
+            let decoded = round_trip(&ffmpeg, codec, COLOUR);
+            for (got, want) in decoded.into_iter().zip(COLOUR) {
+                assert!(
+                    (got - want as f32).abs() <= tolerance,
+                    "{codec:?} decoded {decoded:?}, wanted {COLOUR:?}"
+                );
+            }
+        }
     }
 
     #[test]
