@@ -5,6 +5,7 @@
 //! Cloud and Supabase PostgREST; [`service`] owns the connection lifecycle.
 //! [`media`], [`files`] and [`progress`] move bytes on their own clock.
 
+pub(crate) mod audio;
 pub mod connector;
 pub mod error;
 pub mod files;

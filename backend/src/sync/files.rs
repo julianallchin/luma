@@ -568,24 +568,3 @@ pub async fn download_pending_album_art(
 
     Ok(())
 }
-
-/// Is this track's audio on this device? A check, not a fetch: an on-demand
-/// download would belong behind this call, and there is not one yet.
-pub async fn ensure_track_audio(pool: &SqlitePool, track_id: &str) -> Result<(), SyncError> {
-    use crate::database::local::track_access::{Read, VisibleTrackAccess};
-
-    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id)
-        .await
-        .map_err(SyncError::Local)?;
-    let file_path: String = sqlx::query_scalar("SELECT file_path FROM tracks WHERE id = ?")
-        .bind(track_id)
-        .fetch_one(access.connection())
-        .await?;
-    access.finish().await.map_err(SyncError::Local)?;
-    if !file_path.ends_with(".stub") && std::path::Path::new(&file_path).is_file() {
-        return Ok(());
-    }
-    Err(SyncError::Local(
-        "This track's audio is not on this device".into(),
-    ))
-}

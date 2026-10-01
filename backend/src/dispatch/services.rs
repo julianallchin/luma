@@ -204,6 +204,7 @@ pub struct AppServices {
     /// Physical output is installed only by the desktop host.
     pub(crate) artnet: Option<Arc<ArtNetManager>>,
     pub(crate) host_audio: HostAudioState,
+    pub(crate) track_audio: crate::sync::audio::TrackAudio,
     pub(crate) storage: StorageRoot,
     pub(crate) fixtures_root: PathBuf,
     /// In-memory index of the bundled fixture definitions. Held as an `Arc`
@@ -266,7 +267,10 @@ impl AppServices {
         // A host with no window or broadcaster must never probe or open the
         // machine's audio device. It still advances transport from wall time.
         host_audio.set_audio_output_enabled(false);
+        let track_audio =
+            crate::sync::audio::TrackAudio::new(db.0.clone(), state_db.0.clone(), storage.clone());
         Self {
+            track_audio,
             db,
             state_db,
             workspaces,
