@@ -139,38 +139,31 @@ impl Kernel {
                     "at",
                 ]),
                 &["has_normal"],
-                &["positions", "folded", "normal", "plane", "range"],
+                &["positions", "folded", "normal"],
             ),
             Kernel::Rank => (
                 names(&["index", "unit", "span", "first", "order"]),
                 &["shuffle"],
                 &["value"],
             ),
-            Kernel::Axis => {
-                let mut ports = names(&[
+            Kernel::Axis => (
+                names(&[
                     "positions",
+                    "base",
                     "unit",
                     "span",
                     "rank",
                     "dir_x",
                     "dir_y",
                     "dir_z",
-                    "at_x",
-                    "at_y",
-                    "at_z",
-                ]);
-                for m in 0..AIM_MIRRORS {
-                    for part in ["normal", "plane", "range"] {
-                        ports.push(format!("mirror{m}_{part}"));
-                    }
-                }
-                (
-                    ports,
-                    &["kind", "has_direction", "wrap", "mirrors"],
-                    &["value"],
-                )
-            }
-            Kernel::Slide => (names(&["a", "shift", "scale"]), &["wrap"], &["value"]),
+                    "centre_x",
+                    "centre_y",
+                    "centre_z",
+                ]),
+                &["kind", "has_direction", "wrap"],
+                &["value"],
+            ),
+            Kernel::Slide => (names(&["a", "at", "shift", "scale"]), &["wrap"], &["value"]),
             Kernel::Noise4 => (
                 names(&["positions", "span", "turns", "scale", "contrast"]),
                 &["uniform", "salt_lo", "salt_hi"],
@@ -503,8 +496,6 @@ pub(crate) fn run(
             let mut moved = Array3::zeros((heads, times, 3));
             let mut folded = Array3::zeros((heads, times, 1));
             let mut normals = Array3::zeros((heads, times, 3));
-            let mut planes = Array3::zeros((heads, times, 1));
-            let mut ranges = Array3::zeros((heads, times, 1));
             for t in 0..times {
                 for members in spans(span, heads).values() {
                     let points: Vec<[f64; 3]> = members
@@ -520,9 +511,8 @@ pub(crate) fn run(
                     } else {
                         heads::best_fit_axis(&points)
                     };
-                    let (place, range) = unit.map_or((0., 0.), |unit| {
-                        heads::plane(&originals, unit, at.at(0, t, 0))
-                    });
+                    let place =
+                        unit.map_or(0., |unit| heads::plane(&originals, unit, at.at(0, t, 0)));
                     let result = match unit {
                         Some(unit) => heads::fold(&points, unit, place),
                         None => points.iter().map(|p| (*p, false)).collect(),
@@ -533,14 +523,10 @@ pub(crate) fn run(
                             normals[[*n, t, a]] = unit.map_or(0., |unit| unit[a]);
                         }
                         folded[[*n, t, 0]] = if low { 1. } else { 0. };
-                        planes[[*n, t, 0]] = place;
-                        ranges[[*n, t, 0]] = range;
                     }
                 }
             }
             Ok(BTreeMap::from([
-                ("plane".into(), signal(planes, Channels::Value, &batch)?),
-                ("range".into(), signal(ranges, Channels::Value, &batch)?),
                 (
                     "positions".into(),
                     signal(moved, crate::tensor::VECTOR, &batch)?,
@@ -609,17 +595,15 @@ pub(crate) fn run(
         }
         Kernel::Axis => {
             let positions = s("positions");
+            let base = s("base");
             let unit = s("unit");
             let span = s("span");
             let rank = s("rank");
             let direction = [s("dir_x"), s("dir_y"), s("dir_z")];
-            let at = [s("at_x"), s("at_y"), s("at_z")];
+            let centre = [s("centre_x"), s("centre_y"), s("centre_z")];
             let kind = f("kind")? as u8;
             let given = f("has_direction")? != 0.;
             let wrap = f("wrap")? != 0.;
-            let mirrors: Vec<[&Signal; 3]> = (0..f("mirrors")? as usize)
-                .map(|m| ["normal", "plane", "range"].map(|part| s(&format!("mirror{m}_{part}"))))
-                .collect();
             let groups = spans(span, heads);
             if kind == 1 {
                 let (_, times, width) = rank.values().dim();
@@ -636,16 +620,16 @@ pub(crate) fn run(
                 }
                 return single("value", events(values, &batch)?);
             }
-            let mut every = vec![
+            let every = [
                 positions,
+                base,
                 direction[0],
                 direction[1],
                 direction[2],
-                at[0],
-                at[1],
-                at[2],
+                centre[0],
+                centre[1],
+                centre[2],
             ];
-            every.extend(mirrors.iter().flatten().copied());
             let times = shape(&every)?.1;
             let mut values = Array3::from_elem((heads, times, 1), 0.5);
             for t in 0..times {
@@ -656,60 +640,18 @@ pub(crate) fn run(
                     .flatten();
                 for members in groups.values() {
                     let firsts = unit_heads(unit, members);
+                    // The ruler is measured on the selection before any
+                    // fold (`base`): its ends, centre, plane and largest
+                    // distance. A mirror moves the heads (`positions`)
+                    // along it, never the ruler.
                     let points: Vec<[f64; 3]> =
                         firsts.iter().map(|n| vector_at(positions, *n, t)).collect();
-                    // A line along the normal of a mirror in the heads
-                    // measures from that mirror's plane, over the span's
-                    // extent before the fold: 0 is on the plane.
-                    let mut from_plane = None;
-                    let raw: Vec<f64> = match kind {
-                        0 => {
-                            let Some(axis) = dir.or_else(|| heads::best_fit_axis(&points)) else {
-                                continue;
-                            };
-                            let first = firsts.first().copied().unwrap_or(0);
-                            from_plane = mirrors.iter().rev().find_map(|[normal, plane, range]| {
-                                let normal = vector_at(normal, first, t);
-                                (heads::dot(normal, axis) > 1. - 1e-9)
-                                    .then(|| (plane.at(first, t, 0), range.at(first, t, 0)))
-                            });
-                            points.iter().map(|p| heads::dot(*p, axis)).collect()
-                        }
-                        _ => {
-                            // Measured around the centre: `at` (0–1 per
-                            // axis) within the span's box.
-                            let center = heads::at_in_box(
-                                &points,
-                                std::array::from_fn(|a| at[a].at(0, t, 0)),
-                            );
-                            let [first, second] =
-                                heads::plane_basis(dir, &points, heads::centroid(&points));
-                            let flat: Vec<(f64, f64)> = points
-                                .iter()
-                                .map(|p| {
-                                    let d: [f64; 3] = std::array::from_fn(|a| p[a] - center[a]);
-                                    (heads::dot(d, first), heads::dot(d, second))
-                                })
-                                .collect();
-                            if kind == 2 {
-                                flat.iter().map(|(x, y)| x.hypot(*y)).collect()
-                            } else {
-                                flat.iter()
-                                    .map(|(x, y)| {
-                                        (y.atan2(*x) / std::f64::consts::TAU).rem_euclid(1.)
-                                    })
-                                    .collect()
-                            }
-                        }
-                    };
-                    // Line runs from the lowest head (0) to the highest
-                    // (1); all at one value read 0.5. Radial is the
-                    // distance from the centre over the largest distance:
-                    // 0 at the centre, 1 at the farthest head. Wrapped, the
-                    // axis is a ring of `count` places: the ends sit one
-                    // mean spacing apart, as `order` cells do, and never on
-                    // one place.
-                    let count = raw.len() as f64;
+                    let ruler: Vec<[f64; 3]> =
+                        firsts.iter().map(|n| vector_at(base, *n, t)).collect();
+                    let count = points.len() as f64;
+                    // Wrapped, the ruler is a ring of `count` places: the
+                    // ends sit one mean spacing apart, as `order` cells
+                    // do, and never on one place.
                     let ring = |a: f64| {
                         if wrap {
                             (a * (count - 1.) + 0.5) / count
@@ -717,35 +659,72 @@ pub(crate) fn run(
                             a
                         }
                     };
-                    let coordinate: Vec<f64> = if let Some((plane, range)) = from_plane {
-                        raw.iter()
-                            .map(|v| {
-                                if range > 1e-12 {
-                                    (v - plane) / range
-                                } else {
-                                    0.
-                                }
-                            })
-                            .collect()
-                    } else if kind == 2 {
-                        let max = raw.iter().copied().fold(0., f64::max);
-                        raw.iter()
-                            .map(|v| if max <= 1e-12 { 0. } else { ring(v / max) })
-                            .collect()
-                    } else if kind == 0 {
-                        let min = raw.iter().copied().fold(f64::INFINITY, f64::min);
-                        let max = raw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                        raw.iter()
-                            .map(|v| {
+                    let coordinate: Vec<f64> = if kind == 0 {
+                        // Line: 0 at the selection's lowest head along the
+                        // direction, 1 at its highest; all at one value
+                        // read 0.5.
+                        let Some(axis) = dir.or_else(|| heads::best_fit_axis(&ruler)) else {
+                            continue;
+                        };
+                        let (min, max) = ruler
+                            .iter()
+                            .map(|p| heads::dot(*p, axis))
+                            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                                (lo.min(v), hi.max(v))
+                            });
+                        points
+                            .iter()
+                            .map(|p| {
                                 if max - min <= 1e-12 {
                                     0.5
                                 } else {
-                                    ring((v - min) / (max - min))
+                                    ring((heads::dot(*p, axis) - min) / (max - min))
                                 }
                             })
                             .collect()
                     } else {
-                        raw
+                        // Radial and angle are measured around `centre`
+                        // (0–1 per axis of the selection's box). Radial is
+                        // the distance over the selection's largest: 0 at
+                        // the centre, 1 at the farthest head.
+                        let center = heads::at_in_box(
+                            &ruler,
+                            std::array::from_fn(|a| centre[a].at(0, t, 0)),
+                        );
+                        let [first, second] =
+                            heads::plane_basis(dir, &ruler, heads::centroid(&ruler));
+                        let flat = |p: &[f64; 3]| {
+                            let d: [f64; 3] = std::array::from_fn(|a| p[a] - center[a]);
+                            (heads::dot(d, first), heads::dot(d, second))
+                        };
+                        if kind == 2 {
+                            let max = ruler
+                                .iter()
+                                .map(|p| {
+                                    let (x, y) = flat(p);
+                                    x.hypot(y)
+                                })
+                                .fold(0., f64::max);
+                            points
+                                .iter()
+                                .map(|p| {
+                                    let (x, y) = flat(p);
+                                    if max <= 1e-12 {
+                                        0.
+                                    } else {
+                                        ring(x.hypot(y) / max)
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            points
+                                .iter()
+                                .map(|p| {
+                                    let (x, y) = flat(p);
+                                    (y.atan2(x) / std::f64::consts::TAU).rem_euclid(1.)
+                                })
+                                .collect()
+                        }
                     };
                     let place: HashMap<i64, f64> = firsts
                         .iter()
@@ -760,21 +739,25 @@ pub(crate) fn run(
             single("value", signal(values, Channels::Value, &batch)?)
         }
         Kernel::Slide => {
-            let (a, shift, scale) = (s("a"), s("shift"), s("scale"));
+            let (a, at, shift, scale) = (s("a"), s("at"), s("shift"), s("scale"));
             let wrap = f("wrap")? != 0.;
-            let dims = shape(&[a, shift, scale])?;
+            let dims = shape(&[a, at, shift, scale])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
-                let d = a.at(n, t, e) - shift.at(n, t, e);
+                // As CSS: `at` is the transform origin, `shift` the
+                // translate, `scale` the scale: x = at + (a − at − shift)
+                // / scale. Wrapped, the space tiles as a shader's
+                // fract(x): scale first, then repeat, so a copy every
+                // `scale`. A scale of 0 is a jump at at + shift, wrapped
+                // or not.
+                let at = at.at(n, t, e);
+                let d = a.at(n, t, e) - at - shift.at(n, t, e);
                 let scale = scale.at(n, t, e);
-                // Wrapped, the space tiles as a shader's fract(p / scale):
-                // scale first, then repeat, so a copy every `scale`. A
-                // scale of 0 is a jump at the shift, wrapped or not.
                 if scale <= 1e-9 {
-                    (if wrap { d.rem_euclid(1.) } else { d }) / 1e-9
+                    at + (if wrap { d.rem_euclid(1.) } else { d }) / 1e-9
                 } else if wrap {
-                    (d / scale).rem_euclid(1.)
+                    (at + d / scale).rem_euclid(1.)
                 } else {
-                    d / scale
+                    at + d / scale
                 }
             });
             single("value", events(values, &batch)?)

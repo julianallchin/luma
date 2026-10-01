@@ -290,9 +290,8 @@ pub(crate) fn plane_basis(
 }
 
 /// Where a mirror's plane sits along unit `normal` for one span: `at`
-/// (0–1) across the span's positions before any fold, `originals`. Returns
-/// the plane's place along the normal and the span's extent along it.
-pub(crate) fn plane(originals: &[[f64; 3]], normal: [f64; 3], at: f64) -> (f64, f64) {
+/// (0–1) across the span's positions before any fold, `originals`.
+pub(crate) fn plane(originals: &[[f64; 3]], normal: [f64; 3], at: f64) -> f64 {
     let (min, max) = originals
         .iter()
         .map(|p| dot(*p, normal))
@@ -300,9 +299,9 @@ pub(crate) fn plane(originals: &[[f64; 3]], normal: [f64; 3], at: f64) -> (f64, 
             (lo.min(v), hi.max(v))
         });
     if !min.is_finite() {
-        return (0., 0.);
+        return 0.;
     }
-    (min + at * (max - min), max - min)
+    min + at * (max - min)
 }
 
 /// Folds `points` (one span) across the plane with unit `normal` at

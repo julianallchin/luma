@@ -25,7 +25,7 @@ pub use noise::sample_noise;
 /// The output of a prepared clip graph that carries its lighting.
 pub const OUTPUT: &str = "lighting";
 pub use definitions::{
-    definition, definitions, Definition, InputDef, InputType, Produces, SettingDef, Unit,
+    definition, definitions, Definition, Geometry, InputDef, InputType, Produces, SettingDef, Unit,
 };
 
 use crate::{Curve, Error, Gradient, Result};

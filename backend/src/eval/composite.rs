@@ -299,7 +299,7 @@ mod tests {
     /// middle head.
     fn heads(nodes: &mut serde_json::Value, mirrored: bool) {
         if mirrored {
-            nodes["mirror1"] = json!({"kind": "mirror", "inputs": {"normal": [1, 0, 0]}});
+            nodes["mirror1"] = json!({"kind": "mirror", "inputs": {"direction": [1, 0, 0]}});
             nodes["aim1"]["inputs"]["heads"] = json!({"node": "mirror1"});
         }
     }

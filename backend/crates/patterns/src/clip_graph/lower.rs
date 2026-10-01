@@ -41,14 +41,12 @@ struct Heads {
     shuffle: Option<(Binding, Option<String>)>,
 }
 
-/// One mirror of a heads wire: whether each cell was folded, the unit
-/// normal, the plane's place along it and the span's extent along it.
+/// One mirror of a heads wire: whether each cell was folded and the unit
+/// direction it folded along.
 #[derive(Clone)]
 struct Mirror {
     folded: Binding,
-    normal: Binding,
-    plane: Binding,
-    range: Binding,
+    direction: Binding,
 }
 
 #[derive(Clone)]
@@ -346,22 +344,23 @@ impl Lowering<'_> {
         };
         let wrap = node.setting("wrap") == Some("yes");
         let direction = self.optional_triple(id, "direction")?;
-        let at = self.triple(id, "at", [0.5; 3])?;
+        let centre = self.triple(id, "centre", [0.5; 3])?;
         let rank = self.rank(&heads)?;
         let unit = self.index_field(&heads.units.unit)?;
         let span = self.index_field(&heads.units.span)?;
         let dir = direction.clone().unwrap_or_else(|| constant(0.));
-        let mut ports = vec![
+        let ports = vec![
             ("positions".to_string(), heads.positions.clone()),
+            ("base".into(), heads.unfolded.clone()),
             ("unit".into(), unit),
             ("span".into(), span),
             ("rank".into(), rank),
             ("dir_x".into(), dir.parts[0].clone()),
             ("dir_y".into(), dir.parts[1].clone()),
             ("dir_z".into(), dir.parts[2].clone()),
-            ("at_x".into(), at.parts[0].clone()),
-            ("at_y".into(), at.parts[1].clone()),
-            ("at_z".into(), at.parts[2].clone()),
+            ("centre_x".into(), centre.parts[0].clone()),
+            ("centre_y".into(), centre.parts[1].clone()),
+            ("centre_z".into(), centre.parts[2].clone()),
             ("kind".into(), number(kind)),
             (
                 "has_direction".into(),
@@ -369,31 +368,25 @@ impl Lowering<'_> {
             ),
             ("wrap".into(), number(if wrap { 1. } else { 0. })),
         ];
-        // The latest mirrors, at most AIM_MIRRORS: a line along one of
-        // their normals measures from its plane.
-        let latest = &heads.mirrors[heads.mirrors.len().saturating_sub(AIM_MIRRORS)..];
-        ports.push(("mirrors".into(), number(latest.len() as f64)));
-        for m in 0..AIM_MIRRORS {
-            let mirror = latest.get(m);
-            let pick = |b: Option<&Binding>| b.cloned().unwrap_or_else(|| number(0.));
-            ports.push((format!("mirror{m}_normal"), pick(mirror.map(|m| &m.normal))));
-            ports.push((format!("mirror{m}_plane"), pick(mirror.map(|m| &m.plane))));
-            ports.push((format!("mirror{m}_range"), pick(mirror.map(|m| &m.range))));
-        }
         let axis = self.kernel_named(Kernel::Axis, ports);
         let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
-        if !node.inputs.contains_key("shift") && !node.inputs.contains_key("scale") {
+        if !["at", "shift", "scale"]
+            .iter()
+            .any(|k| node.inputs.contains_key(*k))
+        {
             return Ok(Lowered {
                 parts: std::array::from_fn(|_| output(&axis, "value")),
                 clock: shuffled,
             });
         }
+        let at = self.number(id, "at", 0.)?;
         let shift = self.number(id, "shift", 0.)?;
         let scale = self.number(id, "scale", 1.)?;
         let slid = self.kernel(
             Kernel::Slide,
             vec![
                 ("a", output(&axis, "value")),
+                ("at", at.parts[0].clone()),
                 ("shift", shift.parts[0].clone()),
                 ("scale", scale.parts[0].clone()),
                 ("wrap", number(if wrap { 1. } else { 0. })),
@@ -401,7 +394,7 @@ impl Lowering<'_> {
         );
         Ok(Lowered {
             parts: std::array::from_fn(|_| output(&slid, "value")),
-            clock: clock_of([&shuffled, &shift.clock, &scale.clock]),
+            clock: clock_of([&shuffled, &at.clock, &shift.clock, &scale.clock]),
         })
     }
 
@@ -614,9 +607,9 @@ impl Lowering<'_> {
         let node = self.node(id).clone();
         match node.kind {
             Kind::Mirror => {
-                let normal = self.optional_triple(id, "normal")?;
+                let direction = self.optional_triple(id, "direction")?;
                 let at = self.number(id, "at", 0.5)?;
-                let plane = normal.clone().unwrap_or_else(|| constant(0.));
+                let plane = direction.clone().unwrap_or_else(|| constant(0.));
                 let fold = self.kernel(
                     Kernel::Fold,
                     vec![
@@ -627,15 +620,16 @@ impl Lowering<'_> {
                         ("normal_y", plane.parts[1].clone()),
                         ("normal_z", plane.parts[2].clone()),
                         ("at", at.parts[0].clone()),
-                        ("has_normal", number(if normal.is_some() { 1. } else { 0. })),
+                        (
+                            "has_normal",
+                            number(if direction.is_some() { 1. } else { 0. }),
+                        ),
                     ],
                 );
                 heads.positions = output(&fold, "positions");
                 heads.mirrors.push(Mirror {
                     folded: output(&fold, "folded"),
-                    normal: output(&fold, "normal"),
-                    plane: output(&fold, "plane"),
-                    range: output(&fold, "range"),
+                    direction: output(&fold, "normal"),
                 });
             }
             Kind::Group => {
@@ -964,7 +958,7 @@ pub(crate) fn lower(graph: &ClipGraph, frame: Frame<'_>) -> Result<Definition> {
                 let (folded, plane) = heads
                     .mirrors
                     .get(m)
-                    .map(|mirror| (mirror.folded.clone(), mirror.normal.clone()))
+                    .map(|mirror| (mirror.folded.clone(), mirror.direction.clone()))
                     .unwrap_or_else(|| (number(0.), number(0.)));
                 ports.push((fold.as_str(), folded));
                 ports.push((normal.as_str(), plane));

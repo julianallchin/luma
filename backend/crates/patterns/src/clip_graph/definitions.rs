@@ -77,6 +77,41 @@ impl Unit {
     }
 }
 
+/// The three kinds of geometric input every node shares. A node never
+/// makes up its own, and the checker validates a geometric input through
+/// its kind. `aim.point` alone is in metres: the one place a clip names a
+/// spot in the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Geometry {
+    /// A direction on the stage, `(u, v, z)` with no unit: only its way
+    /// counts, never its length. Never zero.
+    Direction,
+    /// A selection number: one place along the node's own direction or
+    /// ruler, 0–1 of the selection before any fold (per span after a
+    /// split).
+    Number,
+    /// A selection point: `(u, v, z)`, each 0–1 of the selection's box
+    /// before any fold (per span after a split); (0.5, 0.5, 0.5) is the
+    /// middle.
+    Point,
+}
+
+impl Geometry {
+    /// Why `value` is not a valid vector of this kind, or `None`.
+    pub fn refuse(self, value: [f64; 3]) -> Option<&'static str> {
+        match self {
+            Geometry::Direction if value.iter().all(|c| *c == 0.) => {
+                Some("a direction that is not zero")
+            }
+            Geometry::Point if value.iter().any(|c| !(0. ..=1.).contains(c)) => {
+                Some("a point in the selection with each of u, v and z 0–1")
+            }
+            _ => None,
+        }
+    }
+}
+
 /// What a node's output wire carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,8 +136,9 @@ pub struct InputDef {
     pub range: Option<[Option<f64>; 2]>,
     /// The lower bound is excluded: the value must be above it.
     pub above_min: bool,
-    /// A vector that must not be zero (a direction or a normal).
-    pub nonzero: bool,
+    /// A direction, selection number or selection point; `None` for any
+    /// other input.
+    pub geometry: Option<Geometry>,
     /// The input refuses a wire that varies over heads; it takes a value
     /// or a wire over time only.
     pub time_only: bool,
@@ -118,7 +154,7 @@ impl InputDef {
             default: None,
             range: None,
             above_min: false,
-            nonzero: false,
+            geometry: None,
             time_only: false,
             example,
         }
@@ -136,9 +172,30 @@ impl InputDef {
         self.range = Some([Some(min), None]);
         self
     }
-    fn nonzero(mut self) -> Self {
-        self.nonzero = true;
-        self
+    /// A direction: `(u, v, z)`, never zero.
+    fn direction(example: &'static str) -> Self {
+        InputDef {
+            geometry: Some(Geometry::Direction),
+            ..InputDef::new(InputType::Vector, Some(Unit::Uvz), example)
+        }
+    }
+    /// A selection number: one place along the node's ruler, 0–1.
+    fn selection_number(example: &'static str) -> Self {
+        InputDef {
+            geometry: Some(Geometry::Number),
+            ..InputDef::new(InputType::Number, Some(Unit::Share), example).range(0., 1.)
+        }
+    }
+    /// A selection point, `(u, v, z)` each 0–1.
+    fn selection_point(example: &'static str) -> Self {
+        InputDef {
+            geometry: Some(Geometry::Point),
+            ..InputDef::new(InputType::Vector, Some(Unit::Share), example).range(0., 1.)
+        }
+    }
+    /// Whether the input is a direction.
+    pub fn is_direction(&self) -> bool {
+        self.geometry == Some(Geometry::Direction)
     }
     fn time_only(mut self) -> Self {
         self.time_only = true;
@@ -173,8 +230,8 @@ impl Serialize for InputDef {
         if self.above_min {
             map.serialize_field("above_min", &true)?;
         }
-        if self.nonzero {
-            map.serialize_field("nonzero", &true)?;
+        if let Some(geometry) = self.geometry {
+            map.serialize_field("geometry", &geometry)?;
         }
         if self.time_only {
             map.serialize_field("axes", &["T"])?;
@@ -274,10 +331,7 @@ fn build(kind: Kind) -> Definition {
             Produces::Output,
             vec![
                 heads(),
-                (
-                    "direction",
-                    vector(Unit::Uvz, "(0, 0.766, -0.643)").nonzero(),
-                ),
+                ("direction", InputDef::direction("(0, 0.766, -0.643)")),
                 ("point", vector(Unit::Metres, "(0, 3, 0)")),
                 ("yaw", number(Unit::Degrees, "0").range(-180., 180.)),
                 ("pitch", number(Unit::Degrees, "0").range(-180., 180.)),
@@ -310,16 +364,12 @@ fn build(kind: Kind) -> Definition {
             Produces::Coordinate,
             vec![
                 heads(),
+                ("direction", InputDef::direction("(1, 0, 0)").time_only()),
                 (
-                    "direction",
-                    vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
+                    "centre",
+                    InputDef::selection_point("(0.3, 0.5, 0.5)").time_only(),
                 ),
-                (
-                    "at",
-                    vector(Unit::Share, "(0.5, 0.5, 0.5)")
-                        .range(0., 1.)
-                        .time_only(),
-                ),
+                ("at", InputDef::selection_number("0.5")),
                 ("shift", number(Unit::Share, "0.25")),
                 ("scale", number(Unit::Share, "0.5").at_least(0.)),
             ],
@@ -396,11 +446,8 @@ fn build(kind: Kind) -> Definition {
             Produces::Heads,
             vec![
                 heads(),
-                (
-                    "normal",
-                    vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
-                ),
-                ("at", share("0.5").time_only()),
+                ("direction", InputDef::direction("(1, 0, 0)").time_only()),
+                ("at", InputDef::selection_number("0.5").time_only()),
             ],
             vec![],
         ),
@@ -434,5 +481,61 @@ fn build(kind: Kind) -> Definition {
         output,
         inputs,
         settings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every geometric input uses one of the shared kinds: a vector is a
+    /// direction or a selection point (aim.point alone is metres), every
+    /// `direction` is a direction, every `at` a selection number and every
+    /// `centre` a selection point.
+    #[test]
+    fn every_geometric_input_uses_a_shared_kind() {
+        for definition in definitions() {
+            for (name, def) in &definition.inputs {
+                let label = format!("{}.{name}", definition.kind.name());
+                if (definition.kind, *name) == (Kind::Aim, "point") {
+                    assert_eq!(def.unit, Some(Unit::Metres), "{label}");
+                    assert_eq!(def.geometry, None, "{label}");
+                    continue;
+                }
+                if def.ty == InputType::Vector {
+                    assert!(
+                        def.geometry.is_some(),
+                        "{label} is a vector of no shared kind"
+                    );
+                }
+                let expected = match *name {
+                    "direction" => Some(Geometry::Direction),
+                    "at" => Some(Geometry::Number),
+                    "centre" => Some(Geometry::Point),
+                    "normal" | "center" | "offset" | "origin" => {
+                        panic!("{label}: use direction, at or centre")
+                    }
+                    _ => None,
+                };
+                assert_eq!(def.geometry, expected, "{label}");
+                match def.geometry {
+                    Some(Geometry::Direction) => {
+                        assert_eq!(def.ty, InputType::Vector, "{label}");
+                        assert_eq!(def.unit, Some(Unit::Uvz), "{label}");
+                    }
+                    Some(kind) => {
+                        let ty = if kind == Geometry::Number {
+                            InputType::Number
+                        } else {
+                            InputType::Vector
+                        };
+                        assert_eq!(def.ty, ty, "{label}");
+                        assert_eq!(def.unit, Some(Unit::Share), "{label}");
+                        assert_eq!(def.range, Some([Some(0.), Some(1.)]), "{label}");
+                    }
+                    None => {}
+                }
+            }
+        }
     }
 }
