@@ -442,8 +442,11 @@ def space(heads=None, direction=None, centre=None, at=None, shift=None, scale=No
     The ruler is always measured on the selection before any fold: a mirror
     moves the heads along it, never the ruler. kind: "line" (along
     direction; empty = best fit: the stage axis the heads spread along
-    most), "order" (rank), "radial" (distance from `centre` over the largest
-    distance), "angle" (turns around `centre`). `centre` (u, v, z), each 0-1
+    most), "order" (the heads sorted along `direction`, same empty default
+    as line; heads at one place along it share a slot and light together;
+    each reads (slot + 0.5) / slots; after shuffle, a random slot per head
+    instead and the direction is not read), "radial" (distance from
+    `centre` over the largest distance), "angle" (turns around `centre`). `centre` (u, v, z), each 0-1
     of the selection's box, is read by radial and angle only; empty = the
     middle (0.5, 0.5, 0.5).
     As CSS: `at` (0-1 along the ruler, empty = 0) is the transform origin,

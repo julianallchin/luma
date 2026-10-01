@@ -350,7 +350,10 @@ impl Lowering<'_> {
         let wrap = node.setting("wrap") == Some("yes");
         let direction = self.optional_triple(id, "direction")?;
         let centre = self.triple(id, "centre", [0.5; 3])?;
-        let rank = self.rank(&heads)?;
+        let rank = match &heads.shuffle {
+            Some(_) => self.rank(&heads)?,
+            None => number(0.),
+        };
         let unit = self.index_field(&heads.units.unit)?;
         let span = self.index_field(&heads.units.span)?;
         let dir = direction.clone().unwrap_or_else(|| constant(0.));
@@ -372,6 +375,10 @@ impl Lowering<'_> {
                 number(if direction.is_some() { 1. } else { 0. }),
             ),
             ("wrap".into(), number(if wrap { 1. } else { 0. })),
+            (
+                "shuffled".into(),
+                number(if heads.shuffle.is_some() { 1. } else { 0. }),
+            ),
         ];
         let axis = self.kernel_named(Kernel::Axis, ports);
         let shuffled = heads.shuffle.as_ref().and_then(|(_, clock)| clock.clone());
@@ -403,11 +410,11 @@ impl Lowering<'_> {
         })
     }
 
-    /// Each unit's rank in its span: selection order, or the shuffle's.
+    /// Each unit's rank in its span, shuffled once or per event.
     fn rank(&mut self, heads: &Heads) -> Result<Binding> {
-        let (index, shuffle) = match &heads.shuffle {
-            Some((index, _)) => (index.clone(), 1.),
-            None => (number(0.), 0.),
+        let index = match &heads.shuffle {
+            Some((index, _)) => index.clone(),
+            None => number(0.),
         };
         let rank = self.kernel(
             Kernel::Rank,
@@ -416,8 +423,6 @@ impl Lowering<'_> {
                 ("unit", self.index_field(&heads.units.unit)?),
                 ("span", self.index_field(&heads.units.span)?),
                 ("first", self.index_field(&heads.units.first)?),
-                ("order", self.field(heads.units.order.clone(), 1)?),
-                ("shuffle", number(shuffle)),
             ],
         );
         Ok(output(&rank, "value"))

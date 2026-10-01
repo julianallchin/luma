@@ -2038,3 +2038,137 @@ fn a_bezier_handle_may_overshoot_and_outputs_clamp() {
     let light = play(&graph, &line(), &[1.]);
     assert_eq!(light[[5, 0, DIMMER]], 1.);
 }
+
+/// An order space over `heads` (a node of `extra`, or none) with
+/// `inputs`, read at each head of `cells`.
+fn order(extra: Value, heads: Option<&str>, inputs: Value, cells: &[Cell]) -> Vec<f64> {
+    let mut nodes = extra;
+    let mut inputs = inputs;
+    if let Some(heads) = heads {
+        inputs["heads"] = json!({"node": heads});
+    }
+    nodes["space1"] = json!({"kind": "space", "settings": {"kind": "order"}, "inputs": inputs});
+    nodes["curve1"] = json!({"kind": "curve", "inputs": {"x": {"node": "space1"}}});
+    nodes["color1"] = json!({"kind": "color", "inputs": {"brightness": {"node": "curve1"}}});
+    coordinates(nodes, cells)
+}
+
+fn close(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9)
+}
+
+#[test]
+fn order_sorts_a_grid_along_the_direction() {
+    // grid() is g{i}{j} at (at[i], 0, at[j]), in cell order i then j.
+    let cells = grid();
+    let by = |f: &dyn Fn(usize, usize) -> f64| -> Vec<f64> {
+        (0..4)
+            .flat_map(|i| (0..4).map(move |j| (i, j)))
+            .map(|(i, j)| f(i, j))
+            .collect()
+    };
+    // Along U: each column is one slot of four.
+    let u = order(json!({}), None, json!({"direction": [1, 0, 0]}), &cells);
+    assert!(close(&u, &by(&|i, _| (i as f64 + 0.5) / 4.)), "{u:?}");
+    // Along −Z: rows, top first.
+    let z = order(json!({}), None, json!({"direction": [0, 0, -1]}), &cells);
+    assert!(close(&z, &by(&|_, j| (3. - j as f64 + 0.5) / 4.)), "{z:?}");
+    // Diagonal: seven slots, one per i + j.
+    let d = order(json!({}), None, json!({"direction": [1, 0, 1]}), &cells);
+    assert!(close(&d, &by(&|i, j| ((i + j) as f64 + 0.5) / 7.)), "{d:?}");
+    // Empty direction: as line, the stage axis of most spread, U first.
+    let auto = order(json!({}), None, json!({}), &cells);
+    assert!(close(&auto, &u), "{auto:?}");
+}
+
+#[test]
+fn order_gives_heads_at_one_projection_one_slot() {
+    // Ids run against the direction, so id order plays no part; two pairs
+    // stand at one place (one a hair apart).
+    let cells = vec![
+        cell("a".into(), [3., 0., 0.]),
+        cell("b".into(), [2., 0., 0.]),
+        cell("c".into(), [2., 0., 1.]),
+        cell("d".into(), [1., 0., 0.]),
+        cell("e".into(), [1. + 1e-9, 0., 2.]),
+        cell("f".into(), [0., 0., 0.]),
+    ];
+    let a = order(json!({}), None, json!({"direction": [1, 0, 0]}), &cells);
+    assert!(
+        close(&a, &[0.875, 0.625, 0.625, 0.375, 0.375, 0.125]),
+        "{a:?}"
+    );
+    // All at one spot: 0.5.
+    let one: Vec<Cell> = (0..3)
+        .map(|n| cell(format!("s{n}"), [1., 0., 1.]))
+        .collect();
+    let a = order(json!({}), None, json!({"direction": [1, 0, 0]}), &one);
+    assert!(close(&a, &[0.5; 3]), "{a:?}");
+}
+
+#[test]
+fn order_runs_per_span_after_a_split_and_per_unit_after_a_group() {
+    // bars() is bar{b}:{h} at (b − 1.5, 0, h), cell order bar then head.
+    let cells = bars();
+    let split = order(
+        json!({"split1": {"kind": "split", "settings": {"by": "fixture"}}}),
+        Some("split1"),
+        json!({"direction": [0, 0, 1]}),
+        &cells,
+    );
+    let want: Vec<f64> = (0..4)
+        .flat_map(|_| (0..3).map(|h| (h as f64 + 0.5) / 3.))
+        .collect();
+    assert!(close(&split, &want), "{split:?}");
+    // Each bar one unit, sorted along −U: the right bar first.
+    let grouped = order(
+        json!({"group1": {"kind": "group"}}),
+        Some("group1"),
+        json!({"direction": [-1, 0, 0]}),
+        &cells,
+    );
+    let want: Vec<f64> = (0..4)
+        .flat_map(|b| (0..3).map(move |_| (3. - b as f64 + 0.5) / 4.))
+        .collect();
+    assert!(close(&grouped, &want), "{grouped:?}");
+}
+
+#[test]
+fn order_after_a_mirror_takes_the_slot_each_head_folds_onto() {
+    // Five slots from the selection before the fold; a folded head takes
+    // its image's slot, as a line reads 0.5 to 1.
+    let mirror = json!({"mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}}});
+    let a = order(
+        mirror,
+        Some("mirror1"),
+        json!({"direction": [1, 0, 0]}),
+        &row_of_five(),
+    );
+    assert!(close(&a, &[0.9, 0.7, 0.5, 0.7, 0.9]), "{a:?}");
+}
+
+#[test]
+fn a_shuffled_order_ignores_the_direction_and_gives_every_unit_a_slot() {
+    // Shuffled, each unit keeps its own slot even where heads share a
+    // projection, and the direction changes nothing.
+    let cells = grid();
+    let shuffle = json!({"shuffle1": {"kind": "shuffle"}});
+    let u = order(
+        shuffle.clone(),
+        Some("shuffle1"),
+        json!({"direction": [1, 0, 0]}),
+        &cells,
+    );
+    let z = order(
+        shuffle,
+        Some("shuffle1"),
+        json!({"direction": [0, 0, 1]}),
+        &cells,
+    );
+    assert_eq!(u, z);
+    let mut sorted = u.clone();
+    sorted.sort_by(f64::total_cmp);
+    let want: Vec<f64> = (0..16).map(|r| (r as f64 + 0.5) / 16.).collect();
+    assert!(close(&sorted, &want), "{sorted:?}");
+    assert!(!close(&u, &want), "not in cell order");
+}

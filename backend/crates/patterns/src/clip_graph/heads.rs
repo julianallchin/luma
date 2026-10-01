@@ -16,9 +16,6 @@ pub(crate) struct Units {
     /// Per cell: the index of its unit's first cell, whose id keys the
     /// unit's random draws.
     pub first: Vec<usize>,
-    /// Per cell: its unit's place in the selection order (fixture, then
-    /// head number).
-    pub order: Vec<f64>,
 }
 
 /// What `split` makes a span of.
@@ -28,8 +25,9 @@ pub(crate) enum SplitBy {
     Group,
 }
 
-/// The selection order of every cell: by fixture, then head number.
-fn selection_order(cells: &[Cell]) -> Vec<f64> {
+/// Each cell's place by fixture, then head number: how `group` takes
+/// consecutive heads. Never a rank: `order` sorts along a direction.
+fn head_order(cells: &[Cell]) -> Vec<f64> {
     let mut sorted: Vec<usize> = (0..cells.len()).collect();
     sorted.sort_by(|a, b| {
         let key = |n: usize| {
@@ -52,7 +50,6 @@ impl Units {
             unit: (0..cells.len()).collect(),
             span: vec![0; cells.len()],
             first: (0..cells.len()).collect(),
-            order: selection_order(cells),
         }
     }
 
@@ -93,7 +90,7 @@ impl Units {
                 None => fixtures.push((key, vec![n])),
             }
         }
-        let base = selection_order(cells);
+        let base = head_order(cells);
         let mut unit = vec![0; cells.len()];
         let mut first = vec![0; cells.len()];
         let mut next = 0;
@@ -108,12 +105,10 @@ impl Units {
                 next += 1;
             }
         }
-        let order = first.iter().map(|f| base[*f]).collect();
         Units {
             unit,
             span: self.span.clone(),
             first,
-            order,
         }
     }
 }
@@ -207,6 +202,41 @@ pub(crate) fn best_fit_axis(points: &[[f64; 3]]) -> Option<[f64; 3]> {
     }
     let axis = (0..3).find(|a| spread[*a] >= most * (1. - 1e-9))?;
     Some(std::array::from_fn(|a| if a == axis { 1. } else { 0. }))
+}
+
+/// The slots of `order` along a direction: the ruler's projections, sorted,
+/// as (lowest, highest) ranges. Projections within a millionth of the
+/// ruler's extent of the one before share a slot, so they light together.
+pub(crate) fn order_slots(ruler: &[f64]) -> Vec<(f64, f64)> {
+    let mut sorted: Vec<f64> = ruler.iter().copied().filter(|p| p.is_finite()).collect();
+    sorted.sort_by(f64::total_cmp);
+    let extent = match (sorted.first(), sorted.last()) {
+        (Some(low), Some(high)) => high - low,
+        _ => return Vec::new(),
+    };
+    let tie = extent * 1e-6;
+    let mut slots: Vec<(f64, f64)> = Vec::new();
+    for p in sorted {
+        match slots.last_mut() {
+            Some(last) if p - last.1 <= tie => last.1 = p,
+            _ => slots.push((p, p)),
+        }
+    }
+    slots
+}
+
+/// The slot of projection `p`: the slot whose range is nearest (0 inside
+/// it), the lower one on a tie. A folded head takes the slot of the place
+/// it folded onto.
+pub(crate) fn order_slot(slots: &[(f64, f64)], p: f64) -> usize {
+    let distance = |(low, high): (f64, f64)| (low - p).max(p - high).max(0.);
+    (0..slots.len())
+        .min_by(|a, b| {
+            distance(slots[*a])
+                .total_cmp(&distance(slots[*b]))
+                .then(a.cmp(b))
+        })
+        .unwrap_or(0)
 }
 
 /// The point at `at` (0–1 per axis) within the box of `points`: (0.5, 0.5,
