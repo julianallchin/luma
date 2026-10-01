@@ -445,8 +445,12 @@ period whose light is integrated exactly over each frame's time slice
 with one rate mapping for every fixture. The renderer also averages a
 frame's shutter moments itself, in scene-linear light before the tone curve
 (`luma_render::footage`, the stage's footage look); the stage and the show
-export share it. `luma-record` still averages its own K = 4 sub-renders after
-the tone curve.
+export share it. `luma-record` now uses the same path
+(`stage_render::Sequence::exposure`): its K = 4 sub-renders and the
+after-the-tone-curve average are gone. With the footage look off, which is
+the venue scene's neutral look, a recorded frame is one moment whose strobes
+are the light of the whole frame interval, so it no longer blurs motion. The
+paragraphs below describe the old K = 4 shutter.
 
 Averaging is in linear light, not on the sRGB bytes the renderer returns: a
 half-duty strobe averaged as bytes lands at code value 128 instead of 188, about

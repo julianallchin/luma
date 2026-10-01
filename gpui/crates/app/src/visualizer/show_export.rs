@@ -11,8 +11,8 @@
 //! motor lag, the footage look and the live pass chain are the ones the stage
 //! draws with. Only the camera differs: it is the stage's camera when the
 //! export starts, and it stays there. And with the footage look on, a frame's
-//! shutter holds [`SHUTTER_SUBFRAMES`] moments where the stage affords
-//! [`luma_render::LIVE_SUBFRAMES`].
+//! shutter holds [`luma_render::footage::EXPORT_SUBFRAMES`] moments where
+//! the stage affords [`luma_render::LIVE_SUBFRAMES`].
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -32,11 +32,6 @@ use super::{Bass, Visualizer};
 
 /// Output frames per second.
 pub(crate) const FPS: u32 = 60;
-
-/// Moments in one frame's shutter with the footage look on. The export is not
-/// paced to a display, so it spends what the stage cannot: each is a whole
-/// render.
-const SHUTTER_SUBFRAMES: u32 = 8;
 
 /// Frames drawn and thrown away before score time 0, so the haze history has
 /// settled by the first frame kept. The temporal resolve keeps 82% of its
@@ -277,7 +272,7 @@ fn run(job: Job, cancel: &AtomicBool, report: &watch::Sender<Progress>) -> Resul
             &shot.scene.render.look.footage,
             tick.clock,
             1.0 / f64::from(FPS),
-            SHUTTER_SUBFRAMES,
+            luma_render::footage::EXPORT_SUBFRAMES,
             |at| {
                 shot.bass
                     .as_ref()
