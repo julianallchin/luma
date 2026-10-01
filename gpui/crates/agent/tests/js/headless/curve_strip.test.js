@@ -1,7 +1,8 @@
 // The curve strip from the outside: one editor for a number curve and a
 // gradient. A number's point moves in x and y and takes a typed value; over
 // time the strip draws the beats one event spans and the playhead. A new
-// curve is a chip on the row it feeds; it opens in place to its strip.
+// curve is a card, closed to a picture of its shape; it opens in place to
+// its strip.
 
 const WASH = { pattern: "graph-clip", name: "Wash", start: 1, end: 3, preset: "Wash" };
 fixture({ seconds: 20, clips: [WASH], rig: 4, window: [1400, 1400] });
@@ -30,10 +31,10 @@ function inRow(card, row, role, label) {
   return found;
 }
 
-// The strip of Curve 1, open on the Color 1 card, in view.
-const strip = () => nav.inCard("Color 1", "card", "Curve 1 strip");
+// The strip of Curve 1, open on its card, in view.
+const strip = () => nav.inCard("Curve 1", "card", "Curve 1 strip");
 
-// Open the chip of Curve 1 on its card.
+// Open the card of Curve 1.
 function expand() {
   app.click(nav.inGraph((s) => s.find({ role: "button", label: "Expand Curve 1" }), "Expand Curve 1"));
   until("the strip", (s) => s.find({ role: "card", label: "Curve 1 strip" }));
@@ -44,7 +45,7 @@ function expand() {
 function promote() {
   app.click(inRow("Color 1", "Brightness", "select", "Value"));
   app.click(node("button", "Over time"));
-  until("the chip", (s) => s.find({ role: "chip", label: "Curve 1" }));
+  until("the card", (s) => s.find({ role: "card", label: "Curve 1" }));
   expand();
 }
 
