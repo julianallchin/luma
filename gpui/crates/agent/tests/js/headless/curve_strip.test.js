@@ -1,6 +1,7 @@
 // The curve strip from the outside: one editor for a number curve and a
 // gradient. A number's point moves in x and y and takes a typed value; over
-// time the strip draws the beats one event spans and the playhead.
+// time the strip draws the beats one event spans and the playhead. A new
+// curve is a chip on the row it feeds; it opens in place to its strip.
 
 const WASH = { pattern: "graph-clip", name: "Wash", start: 1, end: 3, preset: "Wash" };
 fixture({ seconds: 20, clips: [WASH], rig: 4, window: [1400, 1400] });
@@ -29,15 +30,22 @@ function inRow(card, row, role, label) {
   return found;
 }
 
-// The strip of Curve 1, in view.
-const strip = () => nav.inCard("Curve 1", "card", "Curve 1 strip");
+// The strip of Curve 1, open on the Color 1 card, in view.
+const strip = () => nav.inCard("Color 1", "card", "Curve 1 strip");
+
+// Open the chip of Curve 1 on its card.
+function expand() {
+  app.click(nav.inGraph((s) => s.find({ role: "button", label: "Expand Curve 1" }), "Expand Curve 1"));
+  until("the strip", (s) => s.find({ role: "card", label: "Curve 1 strip" }));
+  settle();
+}
 
 // Brightness over time: a time and a curve, the curve's shape in a strip.
 function promote() {
   app.click(inRow("Color 1", "Brightness", "select", "Value"));
   app.click(node("button", "Over time"));
-  until("the strip", (s) => s.find({ role: "card", label: "Curve 1 strip" }));
-  settle();
+  until("the chip", (s) => s.find({ role: "chip", label: "Curve 1" }));
+  expand();
 }
 
 // Move the playhead by pressing the ruler at window x `x`.
@@ -109,30 +117,40 @@ test("a time strip draws the clip's beats and follows the playhead", () => {
   until("no playhead", () => !playhead());
 });
 
-test("a strip on a clock spans one event", () => {
+test("a strip on a time with events spans one event", () => {
   open();
   promote();
   const beats = () => app.snapshot().find((n) => n.label.startsWith("Curve 1 beat grid = "));
   until("the beat grid", () => beats());
   const spanned = () => Number(beats().label.split(" = ")[1]);
-  // With no clock, an event is the whole clip.
+  // With no events, the time runs once over the whole clip.
   expect(spanned()).toBe(graphClip().duration);
-  // A clock every beat: one event spans one beat.
-  app.click(inRow("Time 1", "Clock", "select", "Once"));
-  app.click(node("button", "Clock"));
-  until("the clock", () => nodes().clock1?.inputs?.every === 1);
+  // Events every beat: one event spans one beat.
+  app.click(inRow("Time 1", "Every", "select", "Once"));
+  app.click(node("button", "Value"));
+  until("every beat", () => nodes().time1?.inputs?.every === 1);
   until("one beat", () => spanned() === 1);
   // Every two beats: the strip follows.
-  const every = () => field("Clock 1 every");
+  const every = () => field("Time 1 every");
   until("the every field", () => every());
-  nav.inCard("Clock 1", "row", "Every");
+  nav.inCard("Time 1", "row", "Every");
   app.click(every());
   app.key("secondary-a backspace");
   app.type(every(), "2");
   app.key("enter");
   until("two beats", () => spanned() === 2);
   settle();
-  expect(nodes().clock1.inputs.every).toBe(2);
+  expect(nodes().time1.inputs.every).toBe(2);
+  // A duration of one beat: each event lasts one beat.
+  app.click(inRow("Time 1", "Duration", "select", "Same as every"));
+  app.click(node("button", "Value"));
+  until("a duration", () => typeof nodes().time1.inputs.duration === "number");
+  const duration = () => field("Time 1 duration");
+  app.click(duration());
+  app.key("secondary-a backspace");
+  app.type(duration(), "1");
+  app.key("enter");
+  until("one beat again", () => spanned() === 1);
 });
 
 const GRADIENT = { pattern: "graph-clip", name: "Gradient", start: 1, end: 3, preset: "Gradient" };
@@ -144,6 +162,7 @@ test("a strip across space marks where each head falls", { fixture: { clips: [GR
   nav.stageOff();
   app.click(node("card", "Gradient"));
   nav.widenGraph();
+  expand();
   strip();
   const marks = () => app.snapshot().findAll({ role: "text" }).filter((n) => /^Curve 1 head \d+$/.test(n.label));
   // Each mark's share of the strip's width, left to right.
@@ -157,9 +176,9 @@ test("a strip across space marks where each head falls", { fixture: { clips: [GR
   assert(line.every((x) => x >= -0.01 && x <= 1.01), `marks off the strip: ${line}`);
   assert(line[0] < 0.02 && line.at(-1) > 0.98, `a line spans the strip: ${line}`);
   // In order, the heads sit evenly, each at the centre of its cell.
-  app.click(nav.inCard("Space 1", "button", "Order"));
+  app.click(nav.inCard("place", "button", "Order"));
   strip();
-  until("order stored", () => nodes().space1.settings.kind === "order");
+  until("order stored", () => nodes().place.settings.kind === "order");
   const n = line.length;
   until("even marks", () => {
     const order = shares();

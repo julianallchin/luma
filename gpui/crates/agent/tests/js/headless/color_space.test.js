@@ -57,7 +57,9 @@ test("a color over space reads a gradient along a space node", () => {
   expect(stops.at(-1).color).toEqual([1, 1, 1]);
   node("card", "Space 1");
   inRow("Color 1", "Color", "select", "Over space");
-  inCard("Curve 1", "card", "Curve 1 strip");
+  // The gradient's curve is a chip on the color's row; open, its strip.
+  app.click(inCard("Color 1", "button", "Expand Curve 1"));
+  inCard("Color 1", "card", "Curve 1 strip");
 
   // Another space kind is stored on the node.
   app.click(inCard("Space 1", "button", "Radial"));

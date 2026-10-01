@@ -84,7 +84,7 @@ pub struct Clip {
     /// The clip's selection expression, when not the whole venue.
     #[serde(default)]
     pub selection: Option<String>,
-    /// A clip graph (`{"version": 1, "nodes": {...}}`) to play in place of
+    /// A clip graph (`{"version": 3, "nodes": {...}}`) to play in place of
     /// the preset's.
     #[serde(default)]
     pub graph: Option<Value>,
