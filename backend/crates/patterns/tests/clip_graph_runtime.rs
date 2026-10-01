@@ -529,6 +529,93 @@ fn noise_nodes_draw_their_own_streams_and_a_linked_node_is_shared() {
     }
 }
 
+/// Each head's coordinate on space `space1` of `nodes`, for `cells`.
+fn coordinates(nodes: serde_json::Value, cells: &[Cell]) -> Vec<f64> {
+    graph(nodes)
+        .coordinate_at_heads("space1", frame(cells, 1.))
+        .unwrap()
+        .into_iter()
+        .map(Option::unwrap)
+        .collect()
+}
+
+/// Five heads along U, 0 to 4: a line reads 0, 0.25, 0.5, 0.75, 1.
+fn row_of_five() -> Vec<Cell> {
+    (0..5)
+        .map(|u| cell(format!("r{u}"), [u as f64, 0., 0.]))
+        .collect()
+}
+
+#[test]
+fn at_is_the_origin_that_scale_grows_from() {
+    // As CSS transform-origin: x = at + (a − at − shift) / scale. With
+    // `at` 0.5 and scale 2 the pattern grows from the middle: the middle
+    // head stays at 0.5 and the ends read 0.25 and 0.75 of the curve.
+    let space = |inputs: serde_json::Value| {
+        json!({
+            "space1": {"kind": "space", "settings": {"kind": "line"},
+                       "inputs": inputs},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}})
+    };
+    let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    let middle = coordinates(
+        space(json!({"direction": [1, 0, 0], "at": 0.5, "scale": 2})),
+        &row_of_five(),
+    );
+    assert!(
+        close(&middle, &[0.25, 0.375, 0.5, 0.625, 0.75]),
+        "{middle:?}"
+    );
+    // `at` 0 is the old maths: (a − shift) / scale.
+    let start = coordinates(
+        space(json!({"direction": [1, 0, 0], "shift": 0.5, "scale": 2})),
+        &row_of_five(),
+    );
+    assert!(
+        close(&start, &[-0.25, -0.125, 0., 0.125, 0.25]),
+        "{start:?}"
+    );
+    // The shift moves the ruler after the origin: `at` 0.5, shift 0.25.
+    let both = coordinates(
+        space(json!({"direction": [1, 0, 0], "at": 0.5, "shift": 0.25})),
+        &row_of_five(),
+    );
+    assert!(close(&both, &[-0.25, 0., 0.25, 0.5, 0.75]), "{both:?}");
+}
+
+#[test]
+fn a_mirror_moves_the_heads_never_the_ruler() {
+    // A line after a mirror at the middle: the ruler still runs over the
+    // whole selection, so the folded heads read 0.5 to 1 and each pair of
+    // images reads one value.
+    let nodes = json!({
+        "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
+        "space1": {"kind": "space", "settings": {"kind": "line"},
+                   "inputs": {"heads": {"node": "mirror1"}, "direction": [1, 0, 0]}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}});
+    let a = coordinates(nodes.clone(), &row_of_five());
+    let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    assert!(close(&a, &[1., 0.75, 0.5, 0.75, 1.]), "{a:?}");
+    // A mirror at 0.25 moves its plane, not the ruler: the heads fold
+    // onto 0.25 and above.
+    let mut quarter = nodes;
+    quarter["mirror1"]["inputs"]["at"] = json!(0.25);
+    let a = coordinates(quarter, &row_of_five());
+    assert!(close(&a, &[0.5, 0.25, 0.5, 0.75, 1.]), "{a:?}");
+    // Radial after a mirror: measured around the selection's centre, and
+    // over its farthest head, both before the fold.
+    let radial = json!({
+        "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0], "at": 0.25}},
+        "space1": {"kind": "space", "settings": {"kind": "radial"},
+                   "inputs": {"heads": {"node": "mirror1"}}},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}});
+    let a = coordinates(radial, &row_of_five());
+    assert!(close(&a, &[0., 0.5, 0., 0.5, 1.]), "{a:?}");
+}
+
 #[test]
 fn radial_runs_from_the_nearest_head_to_the_farthest() {
     // Distances 1, 2 and 3 from the centre on each side.
@@ -558,7 +645,7 @@ fn radial_runs_from_the_nearest_head_to_the_farthest() {
     // A centre off the middle: at the left end (u 0 of the box).
     let mut left = radial.clone();
     left.nodes.get_mut("space1").unwrap().inputs.insert(
-        "at".into(),
+        "centre".into(),
         luma_patterns::clip_graph::Input::Vector([0., 0.5, 0.5]),
     );
     let at: Vec<f64> = left
@@ -919,7 +1006,8 @@ fn fine_grid() -> Vec<Cell> {
 /// read against −direction, under a rising step: a head is lit once the
 /// front has reached it, the far corner too), a bloom that grows
 /// out from a line at 68 % of the rig (a mirror there, and a space along
-/// its normal that measures from it, scaled from 4 % to 74 %), a fade for
+/// its direction shifted by 0.68 so it reads 0 on the line, scaled from 4 %
+/// to 74 %), a fade for
 /// all, and a white-to-red color; cut × bloom × fade is one math node.
 fn slash() -> ClipGraph {
     graph(json!({
@@ -927,9 +1015,9 @@ fn slash() -> ClipGraph {
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "t"}, "shape": {"points": [[0, 1], [0.2, 0], [1, 0]]}}},
         "diag": {"kind": "space", "inputs": {"direction": [0.82, 0, -0.57], "shift": {"node": "curve1"}}},
         "cut": {"kind": "curve", "inputs": {"x": {"node": "diag"}, "shape": {"points": [[0, 0], [0, 1], [1, 1]]}}},
-        "line": {"kind": "mirror", "inputs": {"normal": [0.57, 0, 0.82], "at": 0.68}},
+        "line": {"kind": "mirror", "inputs": {"direction": [0.57, 0, 0.82], "at": 0.68}},
         "curve2": {"kind": "curve", "inputs": {"x": {"node": "t"}, "low": 0.04, "high": 0.74}},
-        "dist": {"kind": "space", "inputs": {"heads": {"node": "line"}, "direction": [0.57, 0, 0.82], "scale": {"node": "curve2"}}},
+        "dist": {"kind": "space", "inputs": {"heads": {"node": "line"}, "direction": [0.57, 0, 0.82], "shift": 0.68, "scale": {"node": "curve2"}}},
         "bloom": {"kind": "curve", "inputs": {"x": {"node": "dist"}, "shape": {"points": [[0, 1], [0.76, 1], [1, 0]]}}},
         "fade": {"kind": "curve", "inputs": {"x": {"node": "t"}, "shape": {"points": [[0, 1, "hold"], [0.2, 1, "sine-out"], [1, 0]]}}},
         "heat": {"kind": "curve", "settings": {"kind": "color"}, "inputs": {"x": {"node": "t"}, "gradient": {"stops": [{"t": 0, "color": [1, 1, 1]}, {"t": 0.2, "color": [1, 1, 1]}, {"t": 0.5, "color": [1, 0, 0.01]}, {"t": 1, "color": [1, 0, 0.01]}]}}},
@@ -1347,8 +1435,8 @@ fn two_stacked_mirrors_make_four_chases_in_sync() {
     let graph = chase_over(
         json!({"node": "quarters"}),
         json!({
-            "sides": {"kind": "mirror", "inputs": {"normal": [1, 0, 0]}},
-            "quarters": {"kind": "mirror", "inputs": {"heads": {"node": "sides"}, "normal": [0, 0, 1]}}}),
+            "sides": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
+            "quarters": {"kind": "mirror", "inputs": {"heads": {"node": "sides"}, "direction": [0, 0, 1]}}}),
     );
     let times: Vec<f64> = (0..40).map(|i| i as f64 * 0.05).collect();
     let light = play(&graph, &cells, &times);
@@ -1397,9 +1485,9 @@ fn three_mirrors_through_the_centre_make_six_fold_symmetry() {
     let graph = chase_with(
         json!({"node": "third"}),
         json!({
-            "first": {"kind": "mirror", "inputs": {"normal": [0, 0, 1]}},
-            "second": {"kind": "mirror", "inputs": {"heads": {"node": "first"}, "normal": [-s, 0, 0.5]}},
-            "third": {"kind": "mirror", "inputs": {"heads": {"node": "second"}, "normal": [s, 0, 0.5]}}}),
+            "first": {"kind": "mirror", "inputs": {"direction": [0, 0, 1]}},
+            "second": {"kind": "mirror", "inputs": {"heads": {"node": "first"}, "direction": [-s, 0, 0.5]}},
+            "third": {"kind": "mirror", "inputs": {"heads": {"node": "second"}, "direction": [s, 0, 0.5]}}}),
         json!([[0, 0, [0.4, 0, 0.6, 1]], [0.5, 1, [0.4, 0, 0.6, 1]], [1, 0]]),
     );
     let times: Vec<f64> = (0..40).map(|i| i as f64 * 0.05).collect();
@@ -1460,9 +1548,9 @@ fn the_kaleidoscope_example_repeats_one_slice_six_times_on_a_disc() {
     let graph = chase_with(
         json!({"node": "third"}),
         json!({
-            "first": {"kind": "mirror", "inputs": {"normal": [0, 0, 1]}},
-            "second": {"kind": "mirror", "inputs": {"heads": {"node": "first"}, "normal": [-s, 0, 0.5]}},
-            "third": {"kind": "mirror", "inputs": {"heads": {"node": "second"}, "normal": [s, 0, 0.5]}}}),
+            "first": {"kind": "mirror", "inputs": {"direction": [0, 0, 1]}},
+            "second": {"kind": "mirror", "inputs": {"heads": {"node": "first"}, "direction": [-s, 0, 0.5]}},
+            "third": {"kind": "mirror", "inputs": {"heads": {"node": "second"}, "direction": [s, 0, 0.5]}}}),
         json!([[0, 0, [0.4, 0, 0.6, 1]], [0.5, 1, [0.4, 0, 0.6, 1]], [1, 0]]),
     );
     let times: Vec<f64> = (0..40).map(|i| i as f64 * 0.05).collect();

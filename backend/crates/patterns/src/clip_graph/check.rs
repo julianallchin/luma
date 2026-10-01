@@ -332,17 +332,9 @@ fn values(graph: &ClipGraph, id: &str, node: &Node) -> Result<()> {
                         example(node.kind, name)
                     ));
                 }
-                if value.iter().any(|v| !def.in_range(*v)) {
+                if let Some(why) = def.geometry.and_then(|g| g.refuse(*value)) {
                     return fail(format!(
-                        "{id}.{name}: expected {} for each of u, v and z; got {}. Example: {}",
-                        range_phrase(def),
-                        vector(*value),
-                        example(node.kind, name)
-                    ));
-                }
-                if def.nonzero && is_zero(*value) {
-                    return fail(format!(
-                        "{id}.{name}: expected a direction that is not zero; got {}. Example: {}",
+                        "{id}.{name}: expected {why}; got {}. Example: {}",
                         vector(*value),
                         example(node.kind, name)
                     ));
@@ -663,33 +655,25 @@ fn curve_destinations(graph: &ClipGraph, id: &str) -> Result<()> {
             }
         }
         "vector" => {
-            let direction = dests.iter().find(|dest| dest.def.nonzero);
-            let example = if direction.is_some() {
-                "low=(0, 1, -0.5), high=(0, 0.5, -1)"
-            } else {
-                "low=(-3, 3, 0), high=(3, 3, 0)"
+            let direction = dests.iter().find(|dest| dest.def.is_direction());
+            let geometric = dests.iter().find(|dest| dest.def.geometry.is_some());
+            let example = match geometric.and_then(|dest| dest.def.geometry) {
+                Some(super::Geometry::Direction) => "low=(0, 1, -0.5), high=(0, 0.5, -1)",
+                Some(super::Geometry::Point) => "low=(0.2, 0.5, 0.5), high=(0.8, 0.5, 0.5)",
+                Some(super::Geometry::Number) | None => "low=(-3, 3, 0), high=(3, 3, 0)",
             };
             let mut ends = Vec::new();
             for bound in ["low", "high"] {
                 match node.inputs.get(bound) {
                     Some(Input::Vector(value)) => {
-                        if let Some(dest) = dests
-                            .iter()
-                            .find(|dest| value.iter().any(|v| !dest.def.in_range(*v)))
-                        {
-                            return fail(format!(
-                                "{id}.{bound}: expected {} for each of u, v and z for {}; got {}. Example: {bound}=(0.5, 0.5, 0.5)",
-                                range_phrase(dest.def),
-                                dest.name(),
-                                vector(*value)
-                            ));
-                        }
-                        if let Some(dest) = direction.filter(|_| is_zero(*value)) {
-                            return fail(format!(
-                                "{id}.{bound}: expected a vector that is not zero for {}; got {}. Example: {example}",
-                                dest.name(),
-                                vector(*value)
-                            ));
+                        for dest in &dests {
+                            if let Some(why) = dest.def.geometry.and_then(|g| g.refuse(*value)) {
+                                return fail(format!(
+                                    "{id}.{bound}: expected {why} for {}; got {}. Example: {example}",
+                                    dest.name(),
+                                    vector(*value)
+                                ));
+                            }
                         }
                         ends.push(*value);
                     }
@@ -836,10 +820,6 @@ fn vector(v: [f64; 3]) -> String {
     format!("({},{},{})", v[0], v[1], v[2])
 }
 
-fn is_zero(v: [f64; 3]) -> bool {
-    v.iter().all(|c| *c == 0.)
-}
-
 fn opposite(a: [f64; 3], b: [f64; 3]) -> bool {
     let length = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -883,8 +863,11 @@ fn accepts(def: &InputDef) -> String {
             };
             format!("a number{range} ({unit}) or a number curve")
         }
-        InputType::Vector if def.nonzero => {
-            format!("a vector that is not zero ({unit}) or a vector curve")
+        InputType::Vector if def.is_direction() => {
+            format!("a direction that is not zero ({unit}) or a vector curve")
+        }
+        InputType::Vector if def.geometry.is_some() => {
+            "a point in the selection (u, v, z) each 0–1 or a vector curve".into()
         }
         InputType::Vector => format!("a vector ({unit}) or a vector curve"),
         InputType::Color => "a color (r, g, b) with each channel 0–1 or a color curve".into(),
