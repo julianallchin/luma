@@ -1282,9 +1282,28 @@ fn four_overlapping_wrapping_chases_run_a_quarter_apart() {
 }
 
 /// Julian's 2 → 8 pills: events speed up from every 1 to every 0.5 beats
-/// while each lives 2 → 4 beats, so two pills become eight; each pill's
-/// shift wraps around the ring once over its life.
+/// while each lives 2 → 4 beats, so two pills become eight. Both ramps end
+/// at 3/4 of the clip and hold: pills in flight lag duration / every while
+/// it changes (about 6.4 at the end of a ramp over the whole clip), and
+/// catch up to 8 over the last 4 beats. Each pill enters from beyond one
+/// end (shift −0.05) and leaves past the other (shift 1), so it is dark
+/// when born and when it ends.
 fn two_to_eight_pills() -> ClipGraph {
+    graph(json!({
+        "clip": {"kind": "time"},
+        "curve1": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "shape": {"points": [[0, 0], [0.75, 1], [1, 1]]}, "low": 1, "high": 0.5}},
+        "curve2": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "shape": {"points": [[0, 0], [0.75, 1], [1, 1]]}, "low": 2, "high": 4}},
+        "k": {"kind": "time", "inputs": {"every": {"node": "curve1"}, "duration": {"node": "curve2"}}},
+        "curve3": {"kind": "curve", "inputs": {"x": {"node": "k"}, "low": -0.05, "high": 1}},
+        "x": {"kind": "space", "inputs": {"direction": [1, 0, 0], "shift": {"node": "curve3"}}},
+        "curve4": {"kind": "curve", "inputs": {"x": {"node": "x"}, "shape": {"points": [
+            [0, 0, [0.4, 0, 0.6, 1]], [0.025, 1, [0.4, 0, 0.6, 1]], [0.05, 0], [1, 0]]}}},
+        "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve4"}}}}))
+}
+
+/// The first form of 2 → 8 pills: ramps over the whole clip and a shift
+/// that wraps around the ring once over each pill's life.
+fn wrapped_pills() -> ClipGraph {
     graph(json!({
         "clip": {"kind": "time"},
         "curve1": {"kind": "curve", "inputs": {"x": {"node": "clip"}, "low": 1, "high": 0.5}},
@@ -1306,8 +1325,8 @@ fn line200() -> Vec<Cell> {
 }
 
 /// The largest change of any light between neighbouring frames `step`
-/// beats apart over the clip (value, beat, head), and the pill count at
-/// each whole beat.
+/// beats apart over the clip (value, beat, head), and the most pills seen
+/// in each beat.
 fn pills_and_largest_step(graph: &ClipGraph, step: f64) -> ((f64, f64, usize), Vec<usize>) {
     let cells = line200();
     let times: Vec<f64> = (0..(16. / step) as usize)
@@ -1323,23 +1342,27 @@ fn pills_and_largest_step(graph: &ClipGraph, step: f64) -> ((f64, f64, usize), V
             }
         }
     }
+    let per_beat = (1. / step).round() as usize;
     let counts = (0..times.len())
-        .step_by((1. / step) as usize)
-        .map(|t| pieces(&lit(&light, t), cells.len()))
+        .collect::<Vec<_>>()
+        .chunks(per_beat)
+        .map(|beat| beat.iter().map(|t| pieces(&lit(&light, *t), cells.len())).max().unwrap())
         .collect();
     (most, counts)
 }
 
 #[test]
-#[ignore = "needs Julian's decision: a pill is born and dies at the wrap seam at full brightness, so lights there pop whenever duration is not a whole multiple of every; and over 16 beats the count reaches 6, not 8 (it lags duration / every)"]
 fn two_pills_become_eight_smoothly() {
     let graph = two_to_eight_pills();
     let (coarse, counts) = pills_and_largest_step(&graph, 0.01);
     let (fine, _) = pills_and_largest_step(&graph, 0.005);
-    println!("pills per beat: {counts:?}");
+    println!("most pills in each beat: {counts:?}");
     println!("largest change between frames: {coarse:?} at step 0.01, {fine:?} at step 0.005");
-    assert!(counts.windows(2).all(|w| w[1] + 1 >= w[0]), "{counts:?}");
-    assert!(counts[1] == 2 && *counts.last().unwrap() == 8, "{counts:?}");
+    // In flight = duration / every: 2 in the first beat, 8 in the last. A
+    // pill is dark for an instant at each end, so count the most seen in
+    // each beat.
+    assert!(counts.windows(2).all(|w| w[1] >= w[0]), "{counts:?}");
+    assert!(counts[0] == 2 && *counts.last().unwrap() == 8, "{counts:?}");
     // Motion halves its step when the frames are twice as close; a light
     // that pops on or off does not.
     assert!(
@@ -1352,7 +1375,7 @@ fn two_pills_become_eight_smoothly() {
 /// out over the last: births and deaths at the seam no longer pop.
 #[test]
 fn two_pills_become_more_without_a_jump_when_each_fades_in_and_out() {
-    let mut graph = two_to_eight_pills();
+    let mut graph = wrapped_pills();
     let extra = json!({
         "life": {"kind": "curve", "inputs": {"x": {"node": "k"}, "shape": {"points": [[0, 0], [0.1, 1], [0.9, 1], [1, 0]]}}},
         "math1": {"kind": "math", "inputs": {"values": [{"node": "curve4"}, {"node": "life"}]}}});
