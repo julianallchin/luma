@@ -2,7 +2,7 @@
 use super::{ClipGraph, Input, Kind};
 
 impl ClipGraph {
-    /// Parts joined by " · ": each space's kind word, each clock's
+    /// Parts joined by " · ": each space's kind word, each time node's
     /// `every {E}` (or `every varies`), `noise` when present, `audio
     /// {lo}–{hi} Hz` when present; `still` when none apply. A part that
     /// repeats is written once.
@@ -17,8 +17,9 @@ impl ClipGraph {
         for node in nodes(Kind::Space) {
             parts.push(node.setting("kind").unwrap_or("line").to_string());
         }
-        for node in nodes(Kind::Clock) {
+        for node in nodes(Kind::Time) {
             parts.push(match node.inputs.get("every") {
+                None => continue,
                 Some(Input::Number(every)) => format!("every {every}"),
                 _ => "every varies".into(),
             });

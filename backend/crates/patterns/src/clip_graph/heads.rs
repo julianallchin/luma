@@ -281,21 +281,30 @@ pub(crate) fn plane_basis(
     [first, cross(normal, first)]
 }
 
-/// Folds `points` (one span) across the plane with unit `normal` through
-/// the middle of their extent along it, moved by `offset` metres. Returns
-/// each point's folded position and whether it was on the low side.
-pub(crate) fn fold(points: &[[f64; 3]], normal: [f64; 3], offset: f64) -> Vec<([f64; 3], bool)> {
-    let (min, max) = points
+/// Where a mirror's plane sits along unit `normal` for one span: `at`
+/// (0–1) across the span's positions before any fold, `originals`. Returns
+/// the plane's place along the normal and the span's extent along it.
+pub(crate) fn plane(originals: &[[f64; 3]], normal: [f64; 3], at: f64) -> (f64, f64) {
+    let (min, max) = originals
         .iter()
         .map(|p| dot(*p, normal))
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
             (lo.min(v), hi.max(v))
         });
-    let center = min * 0.5 + max * 0.5 + offset;
+    if !min.is_finite() {
+        return (0., 0.);
+    }
+    (min + at * (max - min), max - min)
+}
+
+/// Folds `points` (one span) across the plane with unit `normal` at
+/// `plane` along it. Returns each point's folded position and whether it
+/// was on the low side.
+pub(crate) fn fold(points: &[[f64; 3]], normal: [f64; 3], plane: f64) -> Vec<([f64; 3], bool)> {
     points
         .iter()
         .map(|p| {
-            let distance = dot(*p, normal) - center;
+            let distance = dot(*p, normal) - plane;
             let low = distance.min(0.);
             (
                 std::array::from_fn(|a| p[a] - 2. * low * normal[a]),

@@ -24,7 +24,7 @@ mod tensor;
 mod value;
 
 pub use aim::{blend_aim, offset_aim, Aim, Turn};
-pub use blend::{blend_light, blend_value, BlendMode};
+pub use blend::{blend_light, blend_light_alpha, blend_value, blend_value_alpha, BlendMode};
 pub use catalog::standard_library;
 pub use clip_graph::ClipGraph;
 pub use clock::*;

@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The graph JSON version this build reads and writes.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// The most nodes one graph may have.
 pub const MAX_NODES: usize = 64;
 
@@ -43,12 +43,12 @@ pub const MAX_NODES: usize = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    Clock,
     Time,
     Space,
     Noise,
     Audio,
     Curve,
+    Math,
     Mirror,
     Shuffle,
     Group,
@@ -61,12 +61,12 @@ pub enum Kind {
 impl Kind {
     /// Every kind, in menu order.
     pub const ALL: [Kind; 13] = [
-        Kind::Clock,
         Kind::Time,
         Kind::Space,
         Kind::Noise,
         Kind::Audio,
         Kind::Curve,
+        Kind::Math,
         Kind::Mirror,
         Kind::Shuffle,
         Kind::Group,
@@ -79,12 +79,12 @@ impl Kind {
     /// The stored spelling, which is also the node id prefix.
     pub fn name(self) -> &'static str {
         match self {
-            Kind::Clock => "clock",
             Kind::Time => "time",
             Kind::Space => "space",
             Kind::Noise => "noise",
             Kind::Audio => "audio",
             Kind::Curve => "curve",
+            Kind::Math => "math",
             Kind::Mirror => "mirror",
             Kind::Shuffle => "shuffle",
             Kind::Group => "group",
@@ -98,12 +98,12 @@ impl Kind {
     /// The kind in sentence case, as a card title shows it ("Curve").
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Clock => "Clock",
             Kind::Time => "Time",
             Kind::Space => "Space",
             Kind::Noise => "Noise",
             Kind::Audio => "Audio",
             Kind::Curve => "Curve",
+            Kind::Math => "Math",
             Kind::Mirror => "Mirror",
             Kind::Shuffle => "Shuffle",
             Kind::Group => "Group",
@@ -167,7 +167,7 @@ struct RawNode {
 impl From<RawNode> for Node {
     /// A bare 3-array reads as a vector; the definition turns it into a
     /// color where the input is a color, and into a list of three numbers
-    /// where the input takes a list.
+    /// where the input is a math node's values.
     fn from(raw: RawNode) -> Self {
         let definition = definition(raw.kind);
         let inputs = raw
@@ -177,9 +177,7 @@ impl From<RawNode> for Node {
                 let def = definition.input(&name);
                 let input = match (def.map(|def| def.ty), input) {
                     (Some(InputType::Color), Input::Vector(rgb)) => Input::Color(rgb),
-                    (Some(InputType::Number), Input::Vector(items))
-                        if def.is_some_and(InputDef::takes_list) =>
-                    {
+                    (Some(InputType::Values), Input::Vector(items)) => {
                         Input::List(items.into_iter().map(Input::Number).collect())
                     }
                     (_, input) => input,
@@ -255,7 +253,7 @@ impl Node {
 
 /// What an input holds. JSON: a number, a 3-array (vector or color, by the
 /// definition), `{"points": …}`, `{"stops": …}`, `{"node": id}`, or a list
-/// of numbers and wires whose values multiply (`[{"node": "curve1"}, 0.5]`).
+/// of numbers and wires, a math node's values (`[{"node": "curve1"}, 0.5]`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
     Number(f64),
@@ -264,8 +262,7 @@ pub enum Input {
     Points(Curve<f64>),
     Gradient(Gradient),
     Wire(String),
-    /// Numbers and wires, multiplied. Only on a number input with range
-    /// 0–1 ([`InputDef::takes_list`]).
+    /// Numbers and wires: a math node's values.
     List(Vec<Input>),
 }
 
@@ -451,6 +448,63 @@ impl ClipGraph {
                 Some(x.values()[[n, 0, 0]])
             })
             .collect())
+    }
+
+    /// What a curve or math node gives: `"number"`, `"vector"` or
+    /// `"color"`. A math node gives the widest kind of its values (color
+    /// over vector over number). `None` for any other node.
+    pub fn value_kind(&self, id: &str) -> Option<&'static str> {
+        fn kind(graph: &ClipGraph, id: &str, depth: usize) -> Option<&'static str> {
+            let node = graph.nodes.get(id)?;
+            match node.kind {
+                Kind::Curve => Some(match node.setting("kind") {
+                    Some("vector") => "vector",
+                    Some("color") => "color",
+                    _ => "number",
+                }),
+                Kind::Math if depth < MAX_NODES => {
+                    let rank = |k: &str| ["number", "vector", "color"].iter().position(|n| *n == k);
+                    let widest = node
+                        .inputs
+                        .get("values")
+                        .into_iter()
+                        .flat_map(Input::sources)
+                        .filter_map(|source| kind(graph, source, depth + 1))
+                        .max_by_key(|k| rank(k));
+                    Some(widest.unwrap_or("number"))
+                }
+                _ => None,
+            }
+        }
+        kind(self, id, 0)
+    }
+
+    /// The events a time node with `every` gives, as a key: two time
+    /// nodes whose `every` and `duration` inputs are equal share one set
+    /// of events. `None` for a time node without `every`, or another node.
+    pub fn clock_key(&self, id: &str) -> Option<String> {
+        let node = self.nodes.get(id)?;
+        if node.kind != Kind::Time {
+            return None;
+        }
+        let every = node.inputs.get("every")?;
+        let key = |input: &Input| match input {
+            Input::Number(value) => format!("{value:?}"),
+            Input::Wire(source) => format!("@{source}"),
+            other => format!("{other:?}"),
+        };
+        let duration = node.inputs.get("duration").unwrap_or(every);
+        Some(format!("{}/{}", key(every), key(duration)))
+    }
+
+    /// The name of a clock key in messages: the first time node, by id
+    /// order, that gives it.
+    pub(crate) fn clock_name(&self, key: &str) -> String {
+        self.ids_in_order()
+            .into_iter()
+            .find(|id| self.clock_key(id).as_deref() == Some(key))
+            .unwrap_or(key)
+            .to_string()
     }
 
     /// Node ids by their letters, then by their number, so `curve2` comes

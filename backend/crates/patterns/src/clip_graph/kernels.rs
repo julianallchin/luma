@@ -20,8 +20,8 @@ pub enum Kernel {
     Events,
     /// Progress 0–1 over the clip.
     ClipProgress,
-    /// Each head's own clock: progress less a delay, over a length, then
-    /// plus a phase, wrapped.
+    /// Each head's own clock: progress less its delay over the duration,
+    /// then plus a phase, wrapped.
     Shift,
     /// Each unit's position: the centroid of its heads.
     Group,
@@ -31,8 +31,8 @@ pub enum Kernel {
     Rank,
     /// The raw axis coordinate of each head within its span.
     Axis,
-    /// A coordinate slid by a shift and read over a length, wrapped on a
-    /// ring: the shader's `(p - shift) / length`.
+    /// A coordinate slid by a shift and read over a scale, wrapped on a
+    /// ring: the shader's `(p - shift) / scale`.
     Slide,
     /// Coherent noise over normalized position and time.
     Noise4,
@@ -44,8 +44,9 @@ pub enum Kernel {
     Pick,
     /// A value at the picked event.
     Gather,
-    /// Two values multiplied: a list input's items.
-    Product,
+    /// Two values combined by a math node's op: `*`, `+`, `-`, `max` or
+    /// `min`.
+    Math,
     ColorOut,
     StrobeOut,
     AimOut,
@@ -71,7 +72,7 @@ impl Kernel {
         Kernel::Curve,
         Kernel::Pick,
         Kernel::Gather,
-        Kernel::Product,
+        Kernel::Math,
         Kernel::ColorOut,
         Kernel::StrobeOut,
         Kernel::AimOut,
@@ -95,7 +96,7 @@ impl Kernel {
             Kernel::Curve => "kernel/curve",
             Kernel::Pick => "kernel/pick",
             Kernel::Gather => "kernel/gather",
-            Kernel::Product => "kernel/product",
+            Kernel::Math => "kernel/math",
             Kernel::ColorOut => "kernel/color_out",
             Kernel::StrobeOut => "kernel/strobe_out",
             Kernel::AimOut => "kernel/aim_out",
@@ -128,7 +129,7 @@ impl Kernel {
             ),
             Kernel::ClipProgress => (vec![], &[], &["value"]),
             Kernel::Shift => (
-                names(&["progress", "delay", "length", "phase"]),
+                names(&["progress", "delay", "duration", "phase"]),
                 &[],
                 &["value"],
             ),
@@ -136,22 +137,23 @@ impl Kernel {
             Kernel::Fold => (
                 names(&[
                     "positions",
+                    "base",
                     "span",
                     "normal_x",
                     "normal_y",
                     "normal_z",
-                    "offset",
+                    "at",
                 ]),
                 &["has_normal"],
-                &["positions", "folded", "normal"],
+                &["positions", "folded", "normal", "plane", "range"],
             ),
             Kernel::Rank => (
                 names(&["index", "unit", "span", "first", "order"]),
                 &["shuffle"],
                 &["value"],
             ),
-            Kernel::Axis => (
-                names(&[
+            Kernel::Axis => {
+                let mut ports = names(&[
                     "positions",
                     "unit",
                     "span",
@@ -159,11 +161,19 @@ impl Kernel {
                     "dir_x",
                     "dir_y",
                     "dir_z",
-                ]),
-                &["kind", "has_direction", "wrap"],
-                &["value"],
-            ),
-            Kernel::Slide => (names(&["a", "shift", "length"]), &["wrap"], &["value"]),
+                ]);
+                for m in 0..AIM_MIRRORS {
+                    for part in ["normal", "plane", "range"] {
+                        ports.push(format!("mirror{m}_{part}"));
+                    }
+                }
+                (
+                    ports,
+                    &["kind", "has_direction", "wrap", "mirrors"],
+                    &["value"],
+                )
+            }
+            Kernel::Slide => (names(&["a", "shift", "scale"]), &["wrap"], &["value"]),
             Kernel::Noise4 => (
                 names(&["positions", "span", "turns", "scale", "contrast"]),
                 &["uniform", "salt_lo", "salt_hi"],
@@ -184,13 +194,9 @@ impl Kernel {
                 &["winner"],
             ),
             Kernel::Gather => (names(&["value", "winner"]), &[], &["value"]),
-            Kernel::Product => (names(&["a", "b"]), &[], &["value"]),
-            Kernel::ColorOut => (
-                names(&["r", "g", "b", "brightness", "alpha"]),
-                &[],
-                &["color"],
-            ),
-            Kernel::StrobeOut => (names(&["rate", "alpha"]), &[], &["strobe"]),
+            Kernel::Math => (names(&["a", "b"]), &["op"], &["value"]),
+            Kernel::ColorOut => (names(&["r", "g", "b", "brightness"]), &[], &["color"]),
+            Kernel::StrobeOut => (names(&["rate"]), &[], &["strobe"]),
             Kernel::AimOut => {
                 let mut ports = names(&[
                     "dir_x",
@@ -442,14 +448,15 @@ pub(crate) fn run(
         Kernel::Shift => {
             let progress = s("progress");
             let delay = s("delay");
-            let length = s("length");
+            let duration = s("duration");
             let phase = s("phase");
-            let dims = shape(&[progress, delay, length, phase])?;
+            let dims = shape(&[progress, delay, duration, phase])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
-                // Below 0 before the head's clock starts, above 1 after it
-                // ends; a length of 0 is a jump at the delay.
-                let length = length.at(n, t, e).max(1e-9);
-                let local = (progress.at(n, t, e) - delay.at(n, t, e)) / length;
+                // A delay in beats moves the head's clock by its share of
+                // the event. Below 0 before the head starts, so a curve
+                // holds its first value there; never clamped.
+                let duration = duration.at(n, t, e).max(1e-9);
+                let local = progress.at(n, t, e) - delay.at(n, t, e) / duration;
                 let ph = phase.at(n, t, e);
                 if ph == 0. {
                     local
@@ -484,39 +491,53 @@ pub(crate) fn run(
         }
         Kernel::Fold => {
             let positions = s("positions");
+            let base = s("base");
             let span = s("span");
             let normal = [s("normal_x"), s("normal_y"), s("normal_z")];
-            let offset = s("offset");
+            let at = s("at");
             let given = f("has_normal")? != 0.;
-            let times = shape(&[positions, normal[0], normal[1], normal[2], offset])?.1;
+            let times = shape(&[positions, base, normal[0], normal[1], normal[2], at])?.1;
             let mut moved = Array3::zeros((heads, times, 3));
             let mut folded = Array3::zeros((heads, times, 1));
             let mut normals = Array3::zeros((heads, times, 3));
+            let mut planes = Array3::zeros((heads, times, 1));
+            let mut ranges = Array3::zeros((heads, times, 1));
             for t in 0..times {
                 for members in spans(span, heads).values() {
                     let points: Vec<[f64; 3]> = members
                         .iter()
                         .map(|n| vector_at(positions, *n, t))
                         .collect();
-                    let plane = if given {
+                    // The plane sits within the span's positions before
+                    // any fold, so 0.5 is its centre for every mirror.
+                    let originals: Vec<[f64; 3]> =
+                        members.iter().map(|n| vector_at(base, *n, t)).collect();
+                    let unit = if given {
                         heads::unit_direction(std::array::from_fn(|a| normal[a].at(0, t, 0)))
                     } else {
                         heads::principal_axis(&points)
                     };
-                    let result = match plane {
-                        Some(plane) => heads::fold(&points, plane, offset.at(0, t, 0)),
+                    let (place, range) = unit.map_or((0., 0.), |unit| {
+                        heads::plane(&originals, unit, at.at(0, t, 0))
+                    });
+                    let result = match unit {
+                        Some(unit) => heads::fold(&points, unit, place),
                         None => points.iter().map(|p| (*p, false)).collect(),
                     };
                     for (n, (p, low)) in members.iter().zip(result) {
                         for a in 0..3 {
                             moved[[*n, t, a]] = p[a];
-                            normals[[*n, t, a]] = plane.map_or(0., |plane| plane[a]);
+                            normals[[*n, t, a]] = unit.map_or(0., |unit| unit[a]);
                         }
                         folded[[*n, t, 0]] = if low { 1. } else { 0. };
+                        planes[[*n, t, 0]] = place;
+                        ranges[[*n, t, 0]] = range;
                     }
                 }
             }
             Ok(BTreeMap::from([
+                ("plane".into(), signal(planes, Channels::Value, &batch)?),
+                ("range".into(), signal(ranges, Channels::Value, &batch)?),
                 (
                     "positions".into(),
                     signal(moved, crate::tensor::VECTOR, &batch)?,
@@ -592,6 +613,9 @@ pub(crate) fn run(
             let kind = f("kind")? as u8;
             let given = f("has_direction")? != 0.;
             let wrap = f("wrap")? != 0.;
+            let mirrors: Vec<[&Signal; 3]> = (0..f("mirrors")? as usize)
+                .map(|m| ["normal", "plane", "range"].map(|part| s(&format!("mirror{m}_{part}"))))
+                .collect();
             let groups = spans(span, heads);
             if kind == 1 {
                 let (_, times, width) = rank.values().dim();
@@ -608,7 +632,9 @@ pub(crate) fn run(
                 }
                 return single("value", events(values, &batch)?);
             }
-            let times = shape(&[positions, direction[0], direction[1], direction[2]])?.1;
+            let mut every = vec![positions, direction[0], direction[1], direction[2]];
+            every.extend(mirrors.iter().flatten().copied());
+            let times = shape(&every)?.1;
             let mut values = Array3::from_elem((heads, times, 1), 0.5);
             for t in 0..times {
                 let dir = given
@@ -620,11 +646,21 @@ pub(crate) fn run(
                     let firsts = unit_heads(unit, members);
                     let points: Vec<[f64; 3]> =
                         firsts.iter().map(|n| vector_at(positions, *n, t)).collect();
+                    // A line along the normal of a mirror in the heads
+                    // measures from that mirror's plane, over the span's
+                    // extent before the fold: 0 is on the plane.
+                    let mut from_plane = None;
                     let raw: Vec<f64> = match kind {
                         0 => {
                             let Some(axis) = dir.or_else(|| heads::principal_axis(&points)) else {
                                 continue;
                             };
+                            let first = firsts.first().copied().unwrap_or(0);
+                            from_plane = mirrors.iter().rev().find_map(|[normal, plane, range]| {
+                                let normal = vector_at(normal, first, t);
+                                (heads::dot(normal, axis) > 1. - 1e-9)
+                                    .then(|| (plane.at(first, t, 0), range.at(first, t, 0)))
+                            });
                             points.iter().map(|p| heads::dot(*p, axis)).collect()
                         }
                         _ => {
@@ -653,7 +689,17 @@ pub(crate) fn run(
                     // axis is a ring of `count` places: the ends sit one
                     // mean spacing apart, as `order` cells do, and never on
                     // one place.
-                    let coordinate: Vec<f64> = if kind != 3 {
+                    let coordinate: Vec<f64> = if let Some((plane, range)) = from_plane {
+                        raw.iter()
+                            .map(|v| {
+                                if range > 1e-12 {
+                                    (v - plane) / range
+                                } else {
+                                    0.
+                                }
+                            })
+                            .collect()
+                    } else if kind != 3 {
                         let min = raw.iter().copied().fold(f64::INFINITY, f64::min);
                         let max = raw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                         let count = raw.len() as f64;
@@ -684,14 +730,14 @@ pub(crate) fn run(
             single("value", signal(values, Channels::Value, &batch)?)
         }
         Kernel::Slide => {
-            let (a, shift, length) = (s("a"), s("shift"), s("length"));
+            let (a, shift, scale) = (s("a"), s("shift"), s("scale"));
             let wrap = f("wrap")? != 0.;
-            let dims = shape(&[a, shift, length])?;
+            let dims = shape(&[a, shift, scale])?;
             let values = Array3::from_shape_fn(dims, |(n, t, e)| {
                 let d = a.at(n, t, e) - shift.at(n, t, e);
                 let d = if wrap { d.rem_euclid(1.) } else { d };
-                // A length of 0 is a jump at the shift, as `time.length`.
-                d / length.at(n, t, e).max(1e-9)
+                // A scale of 0 is a jump at the shift.
+                d / scale.at(n, t, e).max(1e-9)
             });
             single("value", events(values, &batch)?)
         }
@@ -852,29 +898,35 @@ pub(crate) fn run(
             });
             single("value", signal(values, Channels::Value, &batch)?)
         }
-        Kernel::Product => {
+        Kernel::Math => {
             let (a, b) = (s("a"), s("b"));
+            let op = f("op")? as u8;
             let dims = shape(&[a, b])?;
-            let values = Array3::from_shape_fn(dims, |(n, t, e)| a.at(n, t, e) * b.at(n, t, e));
+            let values = Array3::from_shape_fn(dims, |(n, t, e)| {
+                let (a, b) = (a.at(n, t, e), b.at(n, t, e));
+                match op {
+                    0 => a * b,
+                    1 => a + b,
+                    2 => a - b,
+                    3 => a.max(b),
+                    _ => a.min(b),
+                }
+            });
             single("value", events(values, &batch)?)
         }
         Kernel::ColorOut => {
-            let parts = [s("r"), s("g"), s("b"), s("brightness"), s("alpha")];
+            let parts = [s("r"), s("g"), s("b"), s("brightness")];
             let (n, t, _) = shape(&parts)?;
             let values = Array3::from_shape_fn((n, t, 3), |(n, t, ch)| {
-                parts[ch].at(n, t, 0).max(0.)
-                    * parts[3].at(n, t, 0).max(0.)
-                    * parts[4].at(n, t, 0).clamp(0., 1.)
+                parts[ch].at(n, t, 0).max(0.) * parts[3].at(n, t, 0).max(0.)
             });
             single("color", signal(values, Channels::Rgb, &batch)?)
         }
         Kernel::StrobeOut => {
             let rate = s("rate");
-            let alpha = s("alpha");
-            let (n, t, _) = shape(&[rate, alpha])?;
-            let values = Array3::from_shape_fn((n, t, 1), |(n, t, _)| {
-                (rate.at(n, t, 0) * alpha.at(n, t, 0)).clamp(0., 1.)
-            });
+            let (n, t, _) = shape(&[rate])?;
+            let values =
+                Array3::from_shape_fn((n, t, 1), |(n, t, _)| rate.at(n, t, 0).clamp(0., 1.));
             single("strobe", signal(values, Channels::Value, &batch)?)
         }
         Kernel::AimOut => {

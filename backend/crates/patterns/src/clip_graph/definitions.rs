@@ -21,10 +21,12 @@ pub enum InputType {
     Gradient,
     /// A wire from `mirror`, `shuffle`, `group` or `split`.
     Heads,
-    /// A wire from `clock`.
-    Clock,
+    /// A wire from a `time` node: its events.
+    Time,
     /// A wire from `time`, `space`, `noise` or `audio`.
     Coordinate,
+    /// A math node's items: two or more numbers and value wires.
+    Values,
     /// `curve.low` and `curve.high`: a number or a vector by the curve's
     /// kind, in the unit and range of the input the curve feeds.
     Bound,
@@ -35,7 +37,7 @@ impl InputType {
     pub fn is_wire_only(self) -> bool {
         matches!(
             self,
-            InputType::Heads | InputType::Clock | InputType::Coordinate
+            InputType::Heads | InputType::Time | InputType::Coordinate
         )
     }
     /// Whether the input takes a value only.
@@ -79,10 +81,10 @@ impl Unit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Produces {
-    Clock,
     Heads,
     Coordinate,
-    /// A number, vector or color, by the curve's `kind` setting.
+    /// A number, vector or color: by a curve's `kind` setting, or the
+    /// widest of a math node's values.
     Value,
     /// An output node: no wire.
     Output,
@@ -142,16 +144,6 @@ impl InputDef {
         self.time_only = true;
         self
     }
-    fn default(mut self, value: Input) -> Self {
-        self.default = Some(value);
-        self
-    }
-
-    /// Whether the input takes a list, whose items multiply: a number
-    /// input with range 0–1 (`brightness=[a, b]`).
-    pub fn takes_list(&self) -> bool {
-        self.ty == InputType::Number && self.range == Some([Some(0.), Some(1.)])
-    }
 
     /// Whether `value` is inside the range.
     pub fn in_range(&self, value: f64) -> bool {
@@ -180,9 +172,6 @@ impl Serialize for InputDef {
         }
         if self.above_min {
             map.serialize_field("above_min", &true)?;
-        }
-        if self.takes_list() {
-            map.serialize_field("list", &true)?;
         }
         if self.nonzero {
             map.serialize_field("nonzero", &true)?;
@@ -307,25 +296,12 @@ fn build(kind: Kind) -> Definition {
             vec![("rate", share("0.5")), ("alpha", share("1"))],
             vec![],
         ),
-        Kind::Clock => (
-            Produces::Clock,
-            vec![
-                (
-                    "every",
-                    number(Unit::Beats, "1")
-                        .above(0.)
-                        .default(Input::Number(1.)),
-                ),
-                ("duration", number(Unit::Beats, "1").above(0.)),
-            ],
-            vec![],
-        ),
         Kind::Time => (
             Produces::Coordinate,
             vec![
-                ("clock", wire(T::Clock, "clock(every=1)")),
-                ("delay", number(Unit::Turns, "0.25")),
-                ("length", number(Unit::Turns, "0.5").at_least(0.)),
+                ("every", number(Unit::Beats, "1").above(0.)),
+                ("duration", number(Unit::Beats, "2").above(0.)),
+                ("delay", number(Unit::Beats, "0.5")),
                 ("phase", number(Unit::Turns, "0.25")),
             ],
             vec![],
@@ -339,7 +315,7 @@ fn build(kind: Kind) -> Definition {
                     vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
                 ),
                 ("shift", number(Unit::Share, "0.25")),
-                ("length", number(Unit::Share, "0.5").at_least(0.)),
+                ("scale", number(Unit::Share, "0.5").at_least(0.)),
             ],
             vec![
                 (
@@ -382,6 +358,17 @@ fn build(kind: Kind) -> Definition {
             ],
             vec![],
         ),
+        Kind::Math => (
+            Produces::Value,
+            vec![("values", wire(T::Values, "[curve1, curve2]"))],
+            vec![(
+                "op",
+                SettingDef {
+                    options: &["*", "+", "-", "max", "min"],
+                    default: "*",
+                },
+            )],
+        ),
         Kind::Curve => (
             Produces::Value,
             vec![
@@ -407,13 +394,13 @@ fn build(kind: Kind) -> Definition {
                     "normal",
                     vector(Unit::Uvz, "(1, 0, 0)").nonzero().time_only(),
                 ),
-                ("offset", number(Unit::Metres, "0").time_only()),
+                ("at", share("0.5").time_only()),
             ],
             vec![],
         ),
         Kind::Shuffle => (
             Produces::Heads,
-            vec![heads(), ("clock", wire(T::Clock, "clock(every=1)"))],
+            vec![heads(), ("time", wire(T::Time, "time(every=1)"))],
             vec![],
         ),
         Kind::Group => (
