@@ -266,14 +266,21 @@ test("deleting a node gives its input back, and undo brings it back in one step"
   node("card", titleOf(space));
 });
 
-test("a space kind segment stores the setting", () => {
+test("a space kind segment stores the setting, and only radial and angle show a centre", () => {
   open("Chase");
   const space = spaceOf();
-  const card = shown("card", titleOf(space)).bounds;
+  const title = titleOf(space);
+  // Every space shows its origin, shift and scale; a line has no centre.
+  for (const row of ["At", "Shift", "Scale"]) rowOf(title, row);
+  const centreRow = () => app.snapshot().findAll({ role: "row", label: "Centre" })
+    .find((r) => inside(shown("card", title).bounds, r.bounds));
+  expect(centreRow()).toBe(undefined);
+  const card = shown("card", title).bounds;
   app.click(app.snapshot().findAll({ role: "button", label: "Angle" }).find((n) => inside(card, n.bounds)));
   until("angle stored", () => nodes()[space].settings.kind === "angle");
   // An angle wraps by default, so the wrap follows the kind.
   expect(nodes()[space].settings.wrap).toBe("yes");
+  rowOf(title, "Centre");
 });
 
 test("dragging a curve point in an open chip stores new points, and undo takes the drag back", { fixture: { clips: [clipOf("Pulse")] } }, () => {
