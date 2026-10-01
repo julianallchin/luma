@@ -427,7 +427,14 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
     // Read once for both the detail card and its animation height.
     let cell = ctx.cells.borrow_mut().read(tool);
     let open = ctx.is_expanded(&tool.call_id);
-    let openness = openness(open, ctx.fold_progress(&tool.call_id));
+    let fold = ctx.fold_progress(&tool.call_id);
+    let openness = openness(open, fold);
+    // Whole pixels: layout rounds each item to them, and the send room that
+    // takes this height's changes has to see the height the list will lay out.
+    let folded = (card_height(tool, cell.as_deref()) * openness).round();
+    if fold.is_some() {
+        ctx.fold_px.set(folded);
+    }
     let chat = ctx.chat.clone();
     let call_id = SharedString::from(tool.call_id.clone());
     let id = SharedString::from(format!("chat-chip-{call_id}"));
@@ -513,7 +520,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
                 card.into_any_element()
             } else {
                 div()
-                    .h(px(card_height(tool, cell.as_deref()) * openness))
+                    .h(px(folded))
                     .overflow_hidden()
                     .child(card)
                     .into_any_element()

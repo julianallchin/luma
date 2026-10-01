@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     canvas, div, point, prelude::*, px, quad, size, AnyElement, BorderStyle, Bounds, ClipboardItem,
@@ -22,6 +22,7 @@ use gpui::{
     UnderlineStyle, Window,
 };
 
+use luma_ui::icons::IconName;
 use luma_ui::{fonts::font, radius};
 
 use crate::theme::Theme;
@@ -55,17 +56,22 @@ pub const CODE_HEADER_HEIGHT: f32 = 28.0;
 /// number the element will produce, and two spellings of it would drift.
 #[must_use]
 pub fn code_block_height(code: &str) -> f32 {
-    /// The card's own outline, plus the rule under its header.
+    /// The card's own outline, top and bottom. The rule under the header is
+    /// not counted: a declared height includes its border, so the rule sits
+    /// inside [`CODE_HEADER_HEIGHT`].
     const HAIRLINE: f32 = 1.0;
     let lines = code.split('\n').count() as f32;
-    3.0 * HAIRLINE + CODE_HEADER_HEIGHT + 2.0 * CODE_PADDING_Y + lines * CODE_LINE_HEIGHT
+    2.0 * HAIRLINE + CODE_HEADER_HEIGHT + 2.0 * CODE_PADDING_Y + lines * CODE_LINE_HEIGHT
 }
 
-/// The copy glyph's two squares, and the box they are offset inside.
-const COPY_GLYPH: f32 = 9.0;
-const COPY_GLYPH_BOX: f32 = 12.0;
-/// The copy button's hit target.
-const COPY_HIT: f32 = 20.0;
+/// How long a copy button shows its check after a click (Comet: 1.2s).
+const COPIED_FOR: Duration = Duration::from_millis(1200);
+
+thread_local! {
+    /// The copy button that was clicked last, and when. One at a time: a
+    /// click lands on one button, and the check is only an acknowledgement.
+    static COPIED: RefCell<Option<(SharedString, Instant)>> = const { RefCell::new(None) };
+}
 
 // Table metrics — a port of mugen-markdown 0.6.2's `TableBlock` under zeron's
 // resolved md theme. The design is frameless ("flat hairline"): 1px horizontal
@@ -864,13 +870,17 @@ fn register_selection_listeners(
     layout: &gpui::TextLayout,
 ) {
     use gpui::{DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
+    // Where the text can be seen. A code line scrolled sideways lays out
+    // past its block's edge, and a press there is on whatever is painted
+    // there, not on the hidden glyphs.
+    let visible = window.content_mask().bounds;
     {
         let (key, text, layout) = (key.clone(), text.clone(), layout.clone());
         window.on_mouse_event(move |e: &MouseDownEvent, phase, window, _cx| {
             if phase != DispatchPhase::Bubble || e.button != MouseButton::Left {
                 return;
             }
-            if layout.bounds().contains(&e.position) {
+            if layout.bounds().contains(&e.position) && visible.contains(&e.position) {
                 let ix = match layout.closest_index_for_position(e.position) {
                     Ok(ix) | Err(ix) => ix,
                 };
@@ -1067,8 +1077,44 @@ fn render_code_block(
         Some(veil) => veil.borrow_mut().advance(&opts.row_key, ix, code, opts.now),
         None => Vec::new(),
     };
-    let scroll_id: SharedString = format!("{}-code{ix}", opts.row_key).into();
+    let scroll_id: SharedString = format!("{}-code{top_ix}-{ix}", opts.row_key).into();
+    let row_key = opts.row_key.clone();
+    let paint_theme = theme.clone();
+    // Lines never wrap. The column takes its widest line's width (`flex_none`)
+    // and never less than the block (`min_w_full`), and the viewport around it
+    // scrolls sideways. Without the column, a flex child shrinks to the
+    // viewport and its lines are clipped instead. Adapted from Comet, MIT,
+    // (c) 2026 Wing.
+    let lines = div()
+        .min_w_full()
+        .flex_none()
+        .px(px(CODE_PADDING_X))
+        .py(px(CODE_PADDING_Y))
+        .font(font(theme.font_mono.clone()))
+        .text_size(px(CODE_TEXT_SIZE))
+        .line_height(px(CODE_LINE_HEIGHT))
+        .whitespace_nowrap()
+        .flex()
+        .flex_col()
+        .children((0..cached.lines.len()).scan(0usize, move |off, li| {
+            let (line, runs) = &cached.lines[li];
+            let start = *off;
+            *off = start + line.len() + 1; // +1 for the '\n'
+            let local = slice_spans(&veil_spans, start, start + line.len());
+            let runs = apply_veil(runs.clone(), &local);
+            // Each line is its own selectable element: the registry joins
+            // neighbours with '\n', so a drag over the block copies its lines.
+            let key: std::sync::Arc<str> = format!("{row_key}:{top_ix}:{ix}:line{li}").into();
+            Some(
+                div()
+                    .h(px(CODE_LINE_HEIGHT))
+                    .flex_none()
+                    .child(selectable_text(key, line.clone(), runs, &paint_theme)),
+            )
+        }));
     div()
+        .w_full()
+        .min_w_0()
         .rounded(px(radius::PANEL))
         // The one raised-plate fill, with the hairline border.
         .bg(crate::theme::card_bg())
@@ -1076,33 +1122,44 @@ fn render_code_block(
         .border_color(theme.border)
         .overflow_hidden()
         .relative()
-        .child(code_header(language, code, ix, opts, theme))
+        .child(code_header(language, code, top_ix, ix, opts, theme))
         .child(
             div()
                 .id(scroll_id)
-                .overflow_x_scroll()
-                .px(px(CODE_PADDING_X))
-                .py(px(CODE_PADDING_Y))
-                .font(font(theme.font_mono.clone()))
-                .text_size(px(CODE_TEXT_SIZE))
-                .line_height(px(CODE_LINE_HEIGHT))
-                .whitespace_nowrap()
+                .w_full()
+                .min_w_0()
                 .flex()
-                .flex_col()
-                .children((0..cached.lines.len()).scan(0usize, move |off, li| {
-                    let (line, runs) = &cached.lines[li];
-                    let start = *off;
-                    *off = start + line.len() + 1; // +1 for the '\n'
-                    let local = slice_spans(&veil_spans, start, start + line.len());
-                    let runs = apply_veil(runs.clone(), &local);
-                    Some(
-                        div()
-                            .h(px(CODE_LINE_HEIGHT))
-                            .flex_none()
-                            .child(StyledText::new(line.clone()).with_runs(runs)),
-                    )
-                })),
+                .overflow_x_scroll()
+                // A vertical wheel over the code keeps scrolling the
+                // transcript; only a sideways gesture moves the code.
+                .restrict_scroll_to_axis()
+                .child(lines),
         )
+        .into_any_element()
+}
+
+/// Plain text that takes part in the selection — a code line. Paints the wash
+/// under the glyphs through [`paint_text_selection`], the path every markdown
+/// paragraph takes.
+fn selectable_text(
+    key: std::sync::Arc<str>,
+    text: SharedString,
+    runs: Vec<TextRun>,
+    theme: &Theme,
+) -> AnyElement {
+    let styled = StyledText::new(text.clone()).with_runs(runs);
+    let layout = styled.layout().clone();
+    let theme = theme.clone();
+    let underlay = canvas(
+        |_, _, _| (),
+        move |_, _, window, _| paint_text_selection(window, &key, &text, &layout, &theme),
+    )
+    .absolute()
+    .size_full();
+    div()
+        .relative()
+        .child(underlay)
+        .child(styled)
         .into_any_element()
 }
 
@@ -1110,6 +1167,7 @@ fn render_code_block(
 fn code_header(
     language: Option<&str>,
     code: &str,
+    top_ix: usize,
     ix: usize,
     opts: &RenderOptions,
     theme: &Theme,
@@ -1130,57 +1188,44 @@ fn code_header(
         .child(SharedString::from(
             language.unwrap_or_default().to_ascii_lowercase(),
         ))
-        .child(copy_button(code, ix, opts, theme))
+        .child(copy_button(code, top_ix, ix, opts))
 }
 
-/// Copy the block to the clipboard.
-///
-/// The glyph is two `div`s, not an icon: a full square in front and the top-left
-/// corner of a second behind it. Drawing only the corner is what lets the two
-/// overlap without either occluding the other, which is the whole reason this
-/// does not need an opaque fill — and so does not need to know what tone the
-/// header resolved to over the glass.
-fn copy_button(code: &str, ix: usize, opts: &RenderOptions, theme: &Theme) -> impl IntoElement {
-    let id: SharedString = format!("{}-copy{ix}", opts.row_key).into();
+/// Copy the block to the clipboard: the shared icon button with the Nucleo
+/// copy glyph, which turns into a check for [`COPIED_FOR`] after a click.
+/// Adapted from Comet, MIT, (c) 2026 Wing.
+fn copy_button(code: &str, top_ix: usize, ix: usize, opts: &RenderOptions) -> impl IntoElement {
+    let id: SharedString = format!("{}-copy{top_ix}-{ix}", opts.row_key).into();
+    let copied = COPIED.with(|copied| {
+        copied
+            .borrow()
+            .as_ref()
+            .is_some_and(|(key, at)| *key == id && at.elapsed() < COPIED_FOR)
+    });
     let payload = code.to_string();
-    div()
-        .id(id)
-        .flex_none()
-        .size(px(COPY_HIT))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(radius::CHIP))
-        .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::ink(0.08)))
-        .on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(payload.clone()));
-        })
-        .child(
-            div()
-                .relative()
-                .size(px(COPY_GLYPH_BOX))
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .size(px(COPY_GLYPH))
-                        .border_l_1()
-                        .border_t_1()
-                        .border_color(theme.text_faint),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .right_0()
-                        .bottom_0()
-                        .size(px(COPY_GLYPH))
-                        .rounded(px(radius::CHIP))
-                        .border_1()
-                        .border_color(theme.text_muted),
-                ),
-        )
+    let key = id.clone();
+    luma_ui::icon_button(
+        if copied {
+            IconName::Check
+        } else {
+            IconName::Copy
+        },
+        luma_ui::Enabled::Yes,
+    )
+    .id(id)
+    .on_click(move |_, window, cx| {
+        cx.stop_propagation();
+        cx.write_to_clipboard(ClipboardItem::new_string(payload.clone()));
+        COPIED.with(|copied| *copied.borrow_mut() = Some((key.clone(), Instant::now())));
+        window.refresh();
+        // Repaint once the check has had its time, so it turns back.
+        window
+            .spawn(cx, async move |cx| {
+                cx.background_executor().timer(COPIED_FOR).await;
+                cx.update(|window, _| window.refresh()).ok();
+            })
+            .detach();
+    })
 }
 
 /// Build the exact-cover `TextRun` list for one code line from its tokens.

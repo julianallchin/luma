@@ -177,13 +177,9 @@ impl Working {
     }
 }
 
-/// Reserve the indicator's line during send motion so revealing it cannot
-/// shift the newly landed message or change the scroll destination.
+/// The indicator's line. Declared, so its words and timer rewriting within
+/// it never change the row's height.
 const TRAILER_HEIGHT: f32 = 24.0;
-
-pub fn reserved_trailer() -> AnyElement {
-    div().h(px(TRAILER_HEIGHT)).flex_none().into_any_element()
-}
 
 /// The trailer: spinner, word, and — once there is something to time — how
 /// long it has been going.

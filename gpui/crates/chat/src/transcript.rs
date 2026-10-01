@@ -678,7 +678,6 @@ pub struct RowCtx<'a> {
     /// trailer and the timestamp lane.
     pub last_of_turn: bool,
     pub flying: bool,
-    pub trailer_visible: bool,
     /// The working indicator, on the one row that carries it — the last. See
     /// [`crate::working`] for why it trails a row rather than pinning to the
     /// panel.
@@ -694,6 +693,9 @@ pub struct RowCtx<'a> {
     /// tween it is. At most one, because a fold is started by a click and a
     /// click lands on one chip.
     pub fold: Option<(&'a SharedString, f32)>,
+    /// Where the folding call's chip writes its card's height this layout,
+    /// for the send room that is laid out after it.
+    pub fold_px: &'a std::cell::Cell<f32>,
     pub theme: &'a Theme,
 }
 
@@ -782,13 +784,10 @@ pub fn row(
         }
     };
     let view = ctx.chat.entity_id();
-    let trailer = ctx.trailer.as_ref().map(|state| {
-        if ctx.trailer_visible {
-            crate::working::trailer(state, theme, view, cx)
-        } else {
-            crate::working::reserved_trailer()
-        }
-    });
+    let trailer = ctx
+        .trailer
+        .as_ref()
+        .map(|state| crate::working::trailer(state, theme, view, cx));
     // A settled assistant turn is signed with when it arrived — comet's faint
     // line under the reply, revealed on hover. A live turn is not signed at
     // all: a turn still being written is not at a time yet.

@@ -60,7 +60,11 @@ pub fn resolve_spans(elements: &[(&str, &str)], a: (usize, usize), b: (usize, us
         let from = if ei == start.0 { start.1 } else { 0 };
         let to = if ei == end.0 { end.1 } else { text.len() };
         let (from, to) = (from.min(text.len()), to.min(text.len()));
-        if from < to {
+        // Keep empty elements strictly between the endpoints. A code block
+        // registers one element per source line, so a blank line must still
+        // give its newline when a selection crosses it. Adapted from Comet,
+        // MIT, (c) 2026 Wing.
+        if from < to || (ei > start.0 && ei < end.0) {
             spans.push(Span {
                 key: (*key).to_string(),
                 range: from..to,
@@ -167,7 +171,6 @@ pub fn selected_text() -> Option<String> {
 fn join_spans(spans: &[Span]) -> String {
     spans
         .iter()
-        .filter(|s| !s.range.is_empty())
         .map(|s| &s.text[s.range.clone()])
         .collect::<Vec<_>>()
         .join("\n")
@@ -268,6 +271,24 @@ mod tests {
         assert!(!clear_if_owner("p2"));
         assert!(clear_if_owner("p1"));
         assert_eq!(selected_text(), None);
+    }
+
+    /// A blank code line between the ends of a selection keeps its newline:
+    /// copying three lines with an empty middle gives two line breaks.
+    #[test]
+    fn a_blank_line_inside_a_selection_keeps_its_newline() {
+        let _state = state_lock();
+        let lines = vec![("l0", "fn main() {"), ("l1", ""), ("l2", "}")];
+        let spans = resolve_spans(&lines, (0, 3), (2, 1));
+        assert_eq!(spans.len(), 3);
+        begin("l0", 3);
+        assert!(update_spans(spans));
+        assert_eq!(end_drag("l0").as_deref(), Some("main() {\n\n}"));
+        assert!(clear_if_owner("l0"));
+        // An empty element at an end of the selection adds nothing.
+        assert!(resolve_spans(&lines, (1, 0), (2, 1))
+            .iter()
+            .all(|span| span.key != "l1"));
     }
 
     #[test]

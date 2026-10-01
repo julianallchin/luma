@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{Context, EventEmitter, Task};
-use luma_lib::agent::{Transcript, TurnEvent, TurnSteer};
+use luma_lib::agent::{Transcript, TurnEvent, TurnSteer, UserPrompt};
 
 use crate::Turn;
 
@@ -125,7 +125,7 @@ impl RunningTurns {
 
     /// Redirect `thread`'s turn. A thread with no turn running ignores it,
     /// as a turn that has just ended does.
-    pub fn steer(&self, thread: &str, prompt: String) {
+    pub fn steer(&self, thread: &str, prompt: UserPrompt) {
         if let Some(running) = self.turns.get(thread) {
             running.steer.send(prompt);
         }
@@ -247,7 +247,7 @@ mod tests {
     fn turn() -> (
         Turn,
         mpsc::UnboundedSender<TurnEvent>,
-        mpsc::UnboundedReceiver<String>,
+        mpsc::UnboundedReceiver<UserPrompt>,
     ) {
         let (events, rx) = mpsc::unbounded_channel();
         let (steer, steered) = TurnSteer::channel();
@@ -349,7 +349,7 @@ mod tests {
         running.read_with(cx, |running, _| {
             running.steer("a", "and the lasers".into());
         });
-        assert_eq!(steered.try_recv().unwrap(), "and the lasers");
+        assert_eq!(steered.try_recv().unwrap().text, "and the lasers");
     }
 
     #[gpui::test]

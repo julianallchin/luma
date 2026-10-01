@@ -1,6 +1,7 @@
 // Sending, as motion: the prompt lifts from the composer, lands near the top
 // of the conversation and stays there while the reply fills the room. The
-// thinking trailer waits for the prompt to land and does not move after.
+// working trailer shows from the send's first frame and does not move once
+// the prompt has landed.
 //
 // Three turns, one per send: a short reply; one that keeps thinking after its
 // text stops growing (empty deltas), so the trailer is observable standing
@@ -44,19 +45,16 @@ test("in the app shell a sent prompt stays on screen once it lands", () => {
   until("the first reply", (s) => idle(s) && texts(s).some((l) => l.includes("softly lit")));
 
   send("Make it warmer");
+  // The indicator does not wait for the motion: every frame the send drew
+  // with the prompt in flight already says the panel is working.
+  const sent = app.painted().filter((s) => flying(s));
+  assert(sent.length > 0, "the send drew no frame with the prompt in flight");
+  for (const s of sent) assert(busy(s), "the working indicator waited for the message to land");
   const start = flying(until("the prompt in flight", flying));
-  // Thinking waits for the landing: no trailer while the prompt is flying.
-  let thoughtEarly = false;
-  const middle = flying(until("the prompt to lift", (s) => {
-    thoughtEarly ||= flying(s) !== undefined && busy(s);
-    return flying(s) && flying(s).bounds.y < start.bounds.y;
-  }));
+  const middle = flying(until("the prompt to lift", (s) =>
+    flying(s) && flying(s).bounds.y < start.bounds.y));
   expect(middle.bounds.y).toBeLessThan(start.bounds.y);
-  const settled = until("the message to land", (s) => {
-    thoughtEarly ||= flying(s) !== undefined && busy(s);
-    return !flying(s);
-  });
-  assert(!thoughtEarly, "thinking appeared before the message landed");
+  const settled = until("the message to land", (s) => !flying(s));
 
   // It lands near the top of the conversation, not at the bottom.
   const viewport = settled.find({ role: "card", label: "Conversation" }).bounds;
@@ -64,9 +62,12 @@ test("in the app shell a sent prompt stays on screen once it lands", () => {
   assert(prompt, "the landed prompt is not on screen");
   expect(prompt.bounds.y - viewport.y).toBeLessThan(viewport.height / 4);
 
-  // The trailer appears after the landing and holds still while the model
-  // keeps thinking.
-  const thinking = until("thinking", (s) => s.find({ role: "text", label: "Working" }))
+  // Once the reply's text has stopped growing the trailer holds still while
+  // the model keeps thinking. The trailer is up from the send, so it moves
+  // down with the text until then.
+  const replies = (s) => texts(s).filter((l) => l.split("softly lit").length > 16).length;
+  const thinking = until("thinking after the text", (s) =>
+    replies(s) >= 2 && s.find({ role: "text", label: "Working" }))
     .find({ role: "text", label: "Working" });
   const later = until("a later frame", (s) => s.frame > thinking.frame + 5);
   const still = later.find({ role: "text", label: "Working" });

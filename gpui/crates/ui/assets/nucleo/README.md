@@ -19,6 +19,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | ChevronRight | chevron-right | 897 |
 | ChevronUp | chevron-up | 900 |
 | Close | xmark | 6114 |
+| Copy | copy | 5838 |
 | Cpu | microchip | 6661 |
 | Expand | expand | 950 |
 | Minimize | reduce | 1006 |
