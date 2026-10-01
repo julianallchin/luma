@@ -274,7 +274,7 @@ def parallel(a, b):
     return abs(abs(sum(x * y for x, y in zip(a, b))) - 1) < 1e-9
 
 
-def mirror_for(nodes, space, best_fit):
+def mirror_for(nodes, space):
     """'parallel', 'best fit' or None: whether `space` measures from a
     mirror plane in version 3."""
     direction = space.get("inputs", {}).get("direction")
@@ -286,7 +286,7 @@ def mirror_for(nodes, space, best_fit):
             if isinstance(normal, list) and isinstance(direction, list):
                 if parallel(normal, direction):
                     return "parallel"
-            elif best_fit == "halve":
+            else:
                 return "best fit"
         heads = node.get("inputs", {}).get("heads")
     return None
@@ -296,7 +296,10 @@ def halve_mirrored_lines(nodes, notes, best_fit):
     for node in list(nodes.values()):
         if node["kind"] != "space" or node.get("settings", {}).get("kind", "line") != "line":
             continue
-        why = mirror_for(nodes, node, best_fit)
+        why = mirror_for(nodes, node)
+        if why == "best fit" and best_fit == "keep":
+            notes.add("mirrored line: kept (best fit)")
+            continue
         if not why:
             continue
         inputs = node.setdefault("inputs", {})
