@@ -3365,6 +3365,9 @@ impl Gpu {
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
+        // The stored camera, not `frame.camera`: the footage look's shake
+        // turns only the picture, so a click aims where the camera points.
+        // The camera export below keeps the shake.
         let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_cache);
         self.work.pick_ms = picked.elapsed().as_secs_f32() * 1_000.0;
         let completed = self
@@ -6555,6 +6558,86 @@ mod orbit_selection_tests {
             let scene = stage.scene.as_ref().unwrap();
             assert_eq!(scene.pieces[0].pos[2], height as f32);
             assert_eq!(scene.fixtures[0].pos[2], (height + 1.0) as f32);
+        }
+    }
+
+    #[test]
+    fn picking_aims_with_the_stored_camera_not_the_shaken_one() {
+        let camera = Camera {
+            target: Vec3::new(1.0, -2.0, 3.0),
+            ..Default::default()
+        };
+        let mut render = scene_desc::RenderSettings::dark_stage(50.0, 0.5);
+        // As much shake as the dials give.
+        render.look.footage = scene_desc::Footage {
+            enabled: true,
+            handheld: 1.0,
+            bass: 1.0,
+            ..scene_desc::Footage::OFF
+        };
+        let scene = scene_desc::Scene {
+            id: "shake".into(),
+            times: vec![0.0],
+            editing: true,
+            aim_arrows: false,
+            camera: scene_desc::CameraPose {
+                position: coords::three_from_world(camera.position()).to_array(),
+                target: coords::three_from_world(camera.target).to_array(),
+            },
+            render,
+            selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
+            fixtures: Vec::new(),
+            state: std::collections::BTreeMap::new(),
+            pieces: vec![scene_desc::Piece {
+                id: "deck".into(),
+                geometry: scene_desc::Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
+                kind: "floor".into(),
+                pos: [1.0, 2.0, 3.0],
+                rot: [0.0, 0.0, 0.6],
+                scale: 1.0,
+            }],
+        };
+        let mut library = assets::Library::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+        );
+        let viewport = Vec2::new(1200.0, 800.0);
+        let object = EditorObject::StagePiece("deck".into());
+        let mut still = None;
+        for step in 0..8 {
+            let moment = luma_render::Moment {
+                bass: 1.0,
+                ..luma_render::Moment::at(0.3 + f64::from(step) * 0.25)
+            };
+            let frame = build_frame_at(
+                &scene,
+                &Default::default(),
+                &|_, _| None,
+                moment,
+                &mut library,
+            )
+            .unwrap();
+            // The picture is shaken...
+            let shaken = (frame.camera.target - frame.camera.eye)
+                .angle_between(camera.target - camera.position())
+                .to_degrees();
+            assert!(shaken > 0.01, "the frame's camera turned {shaken} degrees");
+            // ...and the pick is not: the stored camera, the same ray, the
+            // same object under the point it aims at.
+            let pick = PickSnapshot::from_frame(&frame, &scene, camera, &mut PickCache::default());
+            assert_eq!(pick.camera, camera);
+            // The middle of the deck's top, which the eye looks down on.
+            let bounds = pick.geometry.bounds[&object];
+            let top = bounds.center().with_z(bounds.max.z - 0.02);
+            let ndc = camera.project(top, viewport.x / viewport.y);
+            let at = Vec2::new(
+                (ndc.x + 1.0) / 2.0 * viewport.x,
+                (1.0 - ndc.y) / 2.0 * viewport.y,
+            );
+            assert_eq!(pick.pick(at, viewport), Some(object.clone()));
+            let ray = pick.ray(at, viewport);
+            let ray = (ray.origin, ray.dir);
+            assert_eq!(*still.get_or_insert(ray), ray);
         }
     }
 
