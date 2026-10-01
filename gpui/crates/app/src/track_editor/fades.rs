@@ -5,11 +5,12 @@
 //! it: a fade-in and a fade-out handle at the top corners, a bend handle in
 //! the middle of each fade, and the flat part of the line for the level.
 //!
-//! The handles edit the output node's `alpha` input, which the clip sheet
-//! shows too: a value, or a curve over the clip (`curve(time(), shape)` with
-//! no clock). A simple fade shape is a [`Fades`]. Any other such curve is
-//! drawn but has no handles; the sheet's curve editor edits it. An alpha
-//! wired any other way has no one line to draw.
+//! The handles edit the output node's `alpha` input, the clip's opacity,
+//! which the clip sheet shows too: a value, or a curve over the clip
+//! (`curve(time(), shape)`, the time with no events, delay or phase). A
+//! simple fade shape is a [`Fades`]. Any other such curve is drawn but has
+//! no handles; the sheet's curve editor edits it. An alpha wired any other
+//! way has no one line to draw.
 
 use super::*;
 use luma_patterns as p;
@@ -195,7 +196,7 @@ impl Alpha {
 
 /// The curve an alpha of `graph`'s output `out` is wired to, when the
 /// timeline may edit it: a number curve over the clip — `x` a time with no
-/// clock and no phase — that nothing else shares.
+/// `every` or `duration` and no delay or phase — that nothing else shares.
 fn over_clip<'a>(graph: &'a ClipGraph, out: &str) -> Option<(&'a str, &'a Node)> {
     let id = graph.nodes.get(out)?.inputs.get(ALPHA)?.source()?;
     let curve = graph.nodes.get(id)?;
@@ -208,12 +209,13 @@ fn over_clip<'a>(graph: &'a ClipGraph, out: &str) -> Option<(&'a str, &'a Node)>
         return None;
     }
     let time = graph.nodes.get(curve.inputs.get("x")?.source()?)?;
-    let still = match time.inputs.get("phase") {
+    let zero = |name: &str| match time.inputs.get(name) {
         None => true,
-        Some(Input::Number(phase)) => *phase == 0.,
+        Some(Input::Number(v)) => *v == 0.,
         Some(_) => false,
     };
-    (time.kind == Kind::Time && !time.inputs.contains_key("clock") && still).then_some((id, curve))
+    let once = !time.inputs.contains_key("every") && !time.inputs.contains_key("duration");
+    (time.kind == Kind::Time && once && zero("delay") && zero("phase")).then_some((id, curve))
 }
 
 /// The alpha of a clip. `None` for an alpha that is noise, audio, space or
@@ -1019,6 +1021,31 @@ mod tests {
             lift(&curve(lowered), 0, 0.75),
             Level::Curve(numbers(&[[0., 0.75], [0.25, 1.], [1., 0.5]], &[]))
         );
+    }
+
+    #[test]
+    fn an_alpha_over_events_or_a_shifted_time_has_no_one_line() {
+        let mut graph = ClipGraph::new([("color1".to_owned(), Node::new(Kind::Color))]);
+        write(&mut graph, &Fades::flat(1.).with_fade_in(0.25).value());
+        assert!(alpha_of(&graph).is_some());
+        let time = graph
+            .nodes
+            .iter()
+            .find(|(_, node)| node.kind == Kind::Time)
+            .map(|(id, _)| id.clone())
+            .unwrap();
+        for (name, value) in [
+            ("every", 1.),
+            ("duration", 2.),
+            ("delay", 0.5),
+            ("phase", 0.25),
+        ] {
+            let mut moved = graph.clone();
+            let node = moved.nodes.get_mut(&time).unwrap();
+            node.inputs
+                .insert(name.into(), p::clip_graph::Input::Number(value));
+            assert!(alpha_of(&moved).is_none(), "a time with {name} has a line");
+        }
     }
 
     #[test]
