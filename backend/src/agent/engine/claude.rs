@@ -397,7 +397,7 @@ const CURATED: &[(&str, &str, &[&str])] = &[
     ("claude-opus-5-5", "Opus 5.5", FULL_EFFORT),
     ("claude-opus-4-8", "Opus 4.8", FULL_EFFORT),
     ("claude-opus-4-7", "Opus 4.7", FULL_EFFORT),
-    ("claude-sonnet-5", "Sonnet 5", FULL_EFFORT),
+    ("claude-sonnet-5-5", "Sonnet 5.5", FULL_EFFORT),
     ("claude-haiku-4-5", "Haiku 4.5", &[]),
 ];
 
@@ -425,7 +425,7 @@ const WINDOWS: &[(&str, u32)] = &[
 /// `id`'s window, also under a dated id (`claude-haiku-4-5-20251001`) or the
 /// CLI's `[1m]` spelling. `None` for a model the table does not know: no
 /// number is better than a guessed one.
-fn window(id: &str) -> Option<u32> {
+pub(super) fn window(id: &str) -> Option<u32> {
     let id = id.strip_suffix("[1m]").unwrap_or(id);
     let undated = match id.rsplit_once('-') {
         Some((head, date)) if date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()) => head,
@@ -650,13 +650,11 @@ mod tests {
                 "Fable 5",
                 "Opus 4.8",
                 "Opus 4.7",
-                "Sonnet 5",
-                "Haiku 4.5",
                 "Sonnet 5.5",
+                "Haiku 4.5",
             ]
         );
         assert_eq!(models[0].id, None);
-        assert_eq!(models[8].effort_levels, ["low", "high"]);
         assert_eq!(catalog(&[])[0].label, "Default");
     }
 

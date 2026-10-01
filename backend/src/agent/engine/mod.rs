@@ -20,6 +20,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// The window the picker shows for a Claude Code model id, for a saved step
+/// that recorded none.
+pub(crate) fn known_window(model: &str) -> Option<u64> {
+    claude::window(model).map(u64::from)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {
