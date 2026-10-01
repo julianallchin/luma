@@ -35,6 +35,23 @@ and version 2 graphs to version 3:
   empty normal or direction the space is kept as it is (`--best-fit-mirror
   keep`): that plays exactly on both stand-in rigs, halving does not.
 
+The 2026-09-30 audit (spec section 0, "Audit"):
+
+- Blend `lighten` becomes `max` (the same math); `value` becomes `replace`
+  with alpha × brightness, its closest standard form.
+- A phase of 0 is dropped: a phase now always wraps.
+- On the clip's own rig (`clip_cells`, from its score's venue): a radial or
+  angle space takes `at`, the place of its heads' centroid in their box
+  (version 2 measured from the centroid; version 3 from `at`, default the
+  middle). A radial space's shift and scale take its nearest head's share
+  m of the largest distance (version 2 read (d − min) / (max − min);
+  version 3 reads d / max): shift' = m' + shift·(1 − m), scale' =
+  scale·(1 − m), m' = m, or m·(n − ½)/n on a wrapped ring of n units.
+- On the clip's own rig, an empty direction (a line space) or normal (a
+  mirror) whose old best fit, the rig's principal axis, is not a stage axis
+  takes that axis as written: the best fit is now the stage axis the heads
+  spread along most.
+
 A number times a wire scales the wired curve's low and high when that curve
 has no other reader, or joins a `*` math node with no other reader; else it
 adds one math node. Writes <dir>/clips.sql and <dir>/drafts.sql (`--
@@ -484,8 +501,9 @@ def wrapped_scales_into_curves(nodes, notes):
         notes.add("wrapped scale: into the curve points")
 
 
-def convert(graph, best_fit="keep"):
-    """(version 3 graph, notes). Raises Refused."""
+def convert(graph, best_fit="keep", cells=None, coordinate=None):
+    """(version 3 graph, notes). Raises Refused. With the clip's `cells` and
+    a `coordinate` reader, the rig-dependent audit steps run too."""
     if graph.get("version") == VERSION:
         return graph, set()
     notes = set()
@@ -505,7 +523,21 @@ def convert(graph, best_fit="keep"):
     lengths_to_scales(nodes)
     halve_mirrored_lines(nodes, notes, best_fit)
     wrapped_scales_into_curves(nodes, notes)
+    zero_phases(nodes, notes)
+    if cells is not None:
+        fit_to_rig(nodes, cells, coordinate, notes)
     return {"version": VERSION, "nodes": nodes}, notes
+
+
+def convert_clip(graph, blend_mode, best_fit="keep", cells=None, coordinate=None):
+    """(version 3 graph, blend mode, notes) for one clip."""
+    version = graph.get("version")
+    graph, notes = convert(graph, best_fit, cells, coordinate)
+    nodes = copy.deepcopy(graph["nodes"])
+    if version != VERSION:
+        ties_read_as_before(nodes, notes)
+    blend_mode = blend(blend_mode, nodes, notes)
+    return {**graph, "nodes": nodes}, blend_mode, notes
 
 
 def convert_document(value, best_fit="keep"):
@@ -514,12 +546,388 @@ def convert_document(value, best_fit="keep"):
     if isinstance(value, dict):
         graph = value.get("graph")
         if isinstance(graph, dict) and graph.get("version") in (1, 2) and "nodes" in graph:
-            return {**{k: convert_document(v, best_fit) for k, v in value.items() if k != "graph"},
-                    "graph": convert(graph, best_fit)[0]}
+            rest = {k: convert_document(v, best_fit) for k, v in value.items() if k != "graph"}
+            graph, blend_mode, _ = convert_clip(graph, value.get("blend_mode"), best_fit)
+            if "blend_mode" in value:
+                rest["blend_mode"] = blend_mode
+            return {**rest, "graph": graph}
         return {k: convert_document(v, best_fit) for k, v in value.items()}
     if isinstance(value, list):
         return [convert_document(v, best_fit) for v in value]
     return value
+
+
+# ---- the 2026-09-30 audit ----
+
+BLENDS = {"lighten": "max", "value": "replace"}
+
+
+def blend(blend_mode, nodes, notes):
+    """The version 3 blend mode for `blend_mode`; `value` (top light as
+    its own opacity) becomes replace with alpha × brightness."""
+    if blend_mode not in BLENDS:
+        return blend_mode
+    notes.add(f"blend: {blend_mode} → {BLENDS[blend_mode]}")
+    if blend_mode == "value":
+        out = output_node(nodes)
+        if out["kind"] == "color":
+            inputs = out.setdefault("inputs", {})
+            alpha = times(nodes, inputs.get("alpha"), inputs.get("brightness", 1), notes,
+                          consumed=False)
+            if alpha != 1:
+                inputs["alpha"] = alpha
+    return BLENDS[blend_mode]
+
+
+def output_node(nodes):
+    return next(n for n in nodes.values() if n["kind"] in ("color", "aim", "strobe"))
+
+
+# How far a jump moves so a head that sat exactly on it reads as before.
+TIE = 1e-9
+
+
+def ties_read_as_before(nodes, notes):
+    """At a jump x read the larger value; now it reads the value after
+    (audit 1). A falling jump moves a hair right (TIE), so x itself still
+    reads the higher value before it. A falling jump at x 1 over a space
+    cannot move past 1: the space's scale grows by TIE instead (every x
+    reads a hair lower), and each rising jump inside 0–1 over that space
+    moves left by twice that, so it still reads its higher value."""
+    nudged = set()
+    for node in nodes.values():
+        shape = node.get("inputs", {}).get("shape")
+        if node["kind"] != "curve" or not isinstance(shape, dict):
+            continue
+        points = shape["points"]
+        out, moved = [], False
+        for i, point in enumerate(points):
+            out.append(list(point))
+            if i == 0 or points[i - 1][0] != point[0] or points[i - 1][1] <= point[1]:
+                continue
+            x = point[0]
+            if x >= 1:
+                source = node["inputs"].get("x")
+                space = nodes.get(source["node"]) if wire(source) else None
+                if space and space["kind"] == "space" and \
+                        space.get("settings", {}).get("wrap", "no") != "yes":
+                    nudged.add(source["node"])
+                continue
+            later = points[i + 1][0] if i + 1 < len(points) else 1
+            if later <= x + TIE:
+                continue
+            if x == 0 and i == 1:
+                out[0:2] = [list(points[0]), [TIE, *points[0][1:]], [TIE, *point[1:]]]
+            else:
+                out[-2][0] = out[-1][0] = x + TIE
+            moved = True
+        if moved:
+            shape["points"] = out
+            notes.add("tie: a falling jump moved a hair right")
+    for space_id in nudged:
+        space = nodes[space_id]
+        inputs = space.setdefault("inputs", {})
+        inputs["scale"] = times(nodes, inputs.get("scale", 1), 1 + TIE, notes)
+        notes.add("tie: a space's scale grew a hair for a falling jump at x 1")
+        for node in nodes.values():
+            shape = node.get("inputs", {}).get("shape")
+            if node["kind"] != "curve" or node["inputs"].get("x") != w(space_id) \
+                    or not isinstance(shape, dict):
+                continue
+            points = shape["points"]
+            for i in range(1, len(points)):
+                x = points[i][0]
+                if 0 < x < 1 and points[i - 1][0] == x and points[i - 1][1] < points[i][1] \
+                        and (i < 2 or points[i - 2][0] < x - 2 * TIE * x):
+                    points[i - 1][0] = points[i][0] = x * (1 - 2 * TIE)
+
+
+def zero_phases(nodes, notes):
+    """A phase now always wraps; version 2 wrapped only a phase other
+    than 0, so a phase of 0 goes."""
+    for node in nodes.values():
+        if node["kind"] == "time" and node.get("inputs", {}).get("phase") == 0:
+            del node["inputs"]["phase"]
+            notes.add("phase 0 dropped")
+
+
+def spread(points, center):
+    """Eigenvalues and eigenvectors (columns) of the points' spread, by
+    the cyclic Jacobi rotations of clip_graph::heads (version 2's best fit)."""
+    m = [[sum((p[a] - center[a]) * (p[b] - center[b]) for p in points) for b in range(3)]
+         for a in range(3)]
+    v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    for _ in range(32):
+        if m[0][1] ** 2 + m[0][2] ** 2 + m[1][2] ** 2 < 1e-30:
+            break
+        for p, q in ((0, 1), (0, 2), (1, 2)):
+            if abs(m[p][q]) < 1e-300:
+                continue
+            theta = (m[q][q] - m[p][p]) / (2.0 * m[p][q])
+            t = math.copysign(1.0, theta) / (abs(theta) + math.sqrt(theta * theta + 1.0))
+            t = 1.0 if theta == 0.0 else t
+            c = 1.0 / math.sqrt(t * t + 1.0)
+            sn = t * c
+            nxt = [row[:] for row in m]
+            for k in range(3):
+                nxt[k][p] = c * m[k][p] - sn * m[k][q]
+                nxt[k][q] = sn * m[k][p] + c * m[k][q]
+            rotated = [row[:] for row in nxt]
+            for k in range(3):
+                nxt[p][k] = c * rotated[p][k] - sn * rotated[q][k]
+                nxt[q][k] = sn * rotated[p][k] + c * rotated[q][k]
+            m = nxt
+            for row in v:
+                a, b = row[p], row[q]
+                row[p] = c * a - sn * b
+                row[q] = sn * a + c * b
+    return [m[0][0], m[1][1], m[2][2]], v
+
+
+def centroid(points):
+    return [sum(p[a] for p in points) / max(len(points), 1) for a in range(3)]
+
+
+def old_best_fit(points):
+    """Version 2's empty direction: the principal axis, its largest
+    component positive. None for one spot."""
+    values, vectors = spread(points, centroid(points))
+    most = max(range(3), key=lambda i: (values[i], i))
+    if values[most] <= 1e-12:
+        return None
+    axis = [vectors[a][most] for a in range(3)]
+    scale = max(abs(c) for c in axis)
+    axis = [c / scale for c in axis]
+    length = math.sqrt(sum(c * c for c in axis))
+    axis = [c / length for c in axis]
+    dominant = max(range(3), key=lambda i: (abs(axis[i]), -i))
+    return [-c for c in axis] if axis[dominant] < 0 else axis
+
+
+def new_best_fit(points):
+    c = centroid(points)
+    spreads = [sum((p[a] - c[a]) ** 2 for p in points) for a in range(3)]
+    most = max(spreads)
+    if most <= 1e-12:
+        return None
+    axis = next(a for a in range(3) if spreads[a] >= most * (1 - 1e-9))
+    return [1.0 if a == axis else 0.0 for a in range(3)]
+
+
+def fixture_of(cell_id):
+    return cell_id.rsplit(":", 1)[0] if ":" in cell_id else cell_id
+
+
+def head_of(cell_id):
+    tail = cell_id.rsplit(":", 1)[-1]
+    return int(tail) if tail.isdigit() else math.inf
+
+
+class Unmapped(Exception):
+    """A heads chain this step cannot follow on a rig (a mirror)."""
+
+
+def units(nodes, heads, cells):
+    """The spans of a heads wire on `cells`: each its unit positions (a
+    group's centroid), as clip_graph::heads makes them, and its cell ids."""
+    chain = []
+    while heads:
+        node = nodes[heads["node"]]
+        chain.append(node)
+        heads = node.get("inputs", {}).get("heads")
+    unit = {c["id"]: c["id"] for c in cells}
+    span = {c["id"]: "" for c in cells}
+    position = {c["id"]: c["uvz"] for c in cells}
+    for node in reversed(chain):
+        kind = node["kind"]
+        if kind == "mirror":
+            raise Unmapped("a mirror in the heads")
+        if kind == "split":
+            by = node.get("settings", {}).get("by", "fixture")
+            for c in cells:
+                first = min((d for d in cells if unit[d["id"]] == unit[c["id"]]),
+                            key=lambda d: d["id"])
+                span[c["id"]] += "|" + (fixture_of(first["id"]) if by == "fixture"
+                                        else first["group"])
+        elif kind == "group":
+            size = node.get("inputs", {}).get("size")
+            if size is not None and not number(size):
+                raise Unmapped("a wired group size")
+            members = collections.defaultdict(list)
+            for c in cells:
+                members[(span[c["id"]], fixture_of(c["id"]))].append(c)
+            for key, group in members.items():
+                group.sort(key=lambda c: (head_of(c["id"]), c["id"]))
+                chunk = max(1, round(size)) if size is not None else len(group)
+                for i in range(0, len(group), chunk):
+                    part = group[i:i + chunk]
+                    for c in part:
+                        unit[c["id"]] = f"{key}#{i}"
+        elif kind not in ("shuffle",):
+            raise Unmapped(f"a {kind} in the heads")
+    spans = collections.defaultdict(dict)
+    for c in cells:
+        spans[span[c["id"]]].setdefault(unit[c["id"]], []).append(c)
+    return [([centroid([c["uvz"] for c in members]) for members in by_unit.values()],
+             [c["id"] for members in by_unit.values() for c in members])
+            for by_unit in spans.values()]
+
+
+def box_place(points, point):
+    out = []
+    for a in range(3):
+        lo, hi = min(p[a] for p in points), max(p[a] for p in points)
+        out.append((point[a] - lo) / (hi - lo) if hi - lo > 1e-9 else 0.5)
+    return out
+
+
+def agree(values, tolerance=1e-6):
+    return all(max(abs(x - y) for x, y in zip(v, values[0])) <= tolerance for v in values)
+
+
+def fit_to_rig(nodes, cells, coordinate, notes):
+    """The rig-dependent steps of the audit on the clip's own cells.
+    `coordinate(nodes, node_id)` gives a space's raw place per cell id."""
+    if not cells:
+        return
+    for node_id, node in list(nodes.items()):
+        if node["kind"] not in ("space", "mirror"):
+            continue
+        inputs = node.get("inputs", {})
+        kind = node.get("settings", {}).get("kind", "line")
+        if node["kind"] == "space" and kind == "line" \
+                and mirror_for(nodes, node) == "parallel":
+            fit_mirrored_line(nodes, node_id, cells, coordinate, notes)
+            continue
+        try:
+            spans = units(nodes, inputs.get("heads"), cells)
+        except Unmapped as e:
+            notes.add(f"rig: {node['kind']} {kind} left as is ({e})")
+            continue
+        ids = [i for _, i in spans if i]
+        spans = [s for s, i in spans if i]
+        if node["kind"] == "mirror" or kind == "line":
+            key = "normal" if node["kind"] == "mirror" else "direction"
+            if key in inputs:
+                continue
+            olds = [old_best_fit(s) for s in spans]
+            news = [new_best_fit(s) for s in spans]
+            pairs = [(o, n) for o, n in zip(olds, news) if o is not None]
+            if all(max(abs(a - b) for a, b in zip(o, n)) <= 1e-9 for o, n in pairs):
+                continue
+            if not agree([o for o, _ in pairs], 1e-9):
+                notes.add("rig: best fit differs per span (approximate)")
+                continue
+            node["inputs"] = {**inputs, key: [clean(c) for c in pairs[0][0]]}
+            notes.add(f"rig: old best fit written ({node['kind']})")
+            continue
+        if kind not in ("radial", "angle") or "at" in inputs:
+            continue
+        places = [box_place(s, centroid(s)) for s in spans]
+        if not agree(places):
+            notes.add(f"rig: {kind} centroid differs per span (approximate)")
+        at = [clean(sum(p[a] for p in places) / len(places)) for a in range(3)]
+        if any(abs(c - 0.5) > 1e-9 for c in at):
+            inputs = node["inputs"] = {**inputs, "at": at}
+            notes.add(f"rig: {kind} centre at the old centroid")
+        if kind != "radial":
+            continue
+        probe = copy.deepcopy(nodes)
+        probe[node_id]["inputs"] = {k: v for k, v in inputs.items()
+                                    if k not in ("shift", "scale")}
+        probe[node_id]["settings"] = {**node.get("settings", {}), "wrap": "no"}
+        # Nodes that only fed the shift or scale go, so the probe checks.
+        while True:
+            orphans = [i for i, n in probe.items()
+                       if n["kind"] not in ("color", "aim", "strobe") and not readers(probe, i)
+                       and i != node_id]
+            if not orphans:
+                break
+            for i in orphans:
+                del probe[i]
+        place = coordinate(probe, node_id)
+        # The nearest unit's share of the largest distance, per span.
+        nearest = [min(place[i] for i in span_ids) for span_ids in ids]
+        wraps = node.get("settings", {}).get("wrap") == "yes"
+        shifts = [m * (len(s) - 0.5) / len(s) if wraps else m for m, s in zip(nearest, spans)]
+        if not agree([[m, x] for m, x in zip(nearest, shifts)]):
+            notes.add("rig: radial nearest head differs per span (approximate)")
+        m = sum(nearest) / len(nearest)
+        shifted = sum(shifts) / len(shifts)
+        if m <= 1e-9:
+            continue
+        inputs = node["inputs"] = dict(inputs)
+        shift = inputs.get("shift", 0)
+        if number(shift):
+            inputs["shift"] = clean(shifted + shift * (1 - m))
+        else:
+            curve_node = nodes[shift["node"]]
+            ci = curve_node.get("inputs", {})
+            if readers(nodes, shift["node"]) != 1 or curve_node["kind"] != "curve" \
+                    or not all(number(ci.get(k, d)) for k, d in (("low", 0), ("high", 1))):
+                notes.add("radial: shared or wired shift (approximate)")
+                continue
+            for k, d in (("low", 0), ("high", 1)):
+                ci[k] = clean(shifted + ci.get(k, d) * (1 - m))
+        inputs["scale"] = times(nodes, inputs.get("scale", 1), clean(1 - m), notes)
+        notes.add("rig: radial over d / max")
+
+
+def heads_chain(nodes, heads):
+    chain = []
+    while heads:
+        chain.append(nodes[heads["node"]])
+        heads = chain[-1].get("inputs", {}).get("heads")
+    return chain
+
+
+def fit_mirrored_line(nodes, node_id, cells, coordinate, notes):
+    """A line space after a parallel mirror, fitted to the clip's rig.
+
+    Version 2 read the folded heads from the nearest (`a` 0) to the
+    farthest (`a` 1). Version 3 reads `a = d / R` from the plane, so the
+    folded heads span `m..M` of it. halve_mirrored_lines assumed `m` 0 and
+    `M` 0.5; on the rig, `x = (a − shift) / scale` keeps every head's old
+    place with shift `m + s (M − m)` and scale `c (M − m)` (`s`, `c` the
+    version 2 values, twice the halved ones)."""
+    node = nodes[node_id]
+    inputs = node["inputs"]
+    if node.get("settings", {}).get("wrap") == "yes" or any(
+            n["kind"] == "split" for n in heads_chain(nodes, inputs.get("heads"))):
+        notes.add("rig: mirrored line kept halved (wrapped or split)")
+        return
+    probe = copy.deepcopy(nodes)
+    probe[node_id]["inputs"] = {k: v for k, v in inputs.items() if k not in ("shift", "scale")}
+    while True:
+        orphans = [i for i, n in probe.items()
+                   if n["kind"] not in ("color", "aim", "strobe") and not readers(probe, i)
+                   and i != node_id]
+        if not orphans:
+            break
+        for i in orphans:
+            del probe[i]
+    place = coordinate(probe, node_id)
+    values = [place[c["id"]] for c in cells if c["id"] in place]
+    if not values:
+        return
+    m, k = min(values), 2 * (max(values) - min(values))
+    if abs(m) <= 1e-9 and abs(k - 1) <= 1e-9:
+        return
+    shift = inputs.get("shift", 0)
+    if number(shift):
+        shift = clean(m + k * shift)
+    else:
+        curve_node = nodes[shift["node"]]
+        ci = curve_node.get("inputs", {})
+        if readers(nodes, shift["node"]) != 1 or curve_node["kind"] != "curve" \
+                or not all(number(ci.get(key, d)) for key, d in (("low", 0), ("high", 1))):
+            notes.add("rig: mirrored line kept halved (shared or wired shift)")
+            return
+        for key, d in (("low", 0), ("high", 1)):
+            ci[key] = clean(m + k * ci.get(key, d))
+    inputs["shift"] = shift
+    inputs["scale"] = times(nodes, inputs.get("scale", 1), clean(k), notes)
+    notes.add("rig: mirrored line fitted to the folded span")
 
 
 # ---- parity ----
@@ -576,7 +984,20 @@ def play(binary, clips, cells, chunk=200):
 
 # ---- the run ----
 
-def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
+def coordinate_reader(new_bin):
+    """`coordinate(nodes, node_id, cells)`: a space's raw place per cell id,
+    from the version 3 build."""
+    def read(nodes, node_id, cells):
+        graph = {"version": VERSION, "nodes": nodes}
+        result = v2.evaluate(new_bin, [{"graph": graph, "node": node_id, "cells": cells}],
+                             "--coordinate")[0]
+        if "error" in result:
+            raise Refused(f"radial centre: {result['error'][:80]}")
+        return result["ok"]
+    return read
+
+
+def run(database, out, old_bin=None, new_bin=None, best_fit="keep", cells_path=None):
     out = pathlib.Path(out)
     out.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(f"file:{pathlib.Path(database).resolve()}?mode=ro", uri=True)
@@ -585,12 +1006,25 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
     notes, growth = collections.Counter(), collections.Counter()
     examples, mirrored = collections.defaultdict(list), collections.defaultdict(list)
     pairs = []
+    rigs = json.loads(pathlib.Path(cells_path).read_text()) if cells_path else None
+    if rigs and not new_bin:
+        raise SystemExit("--cells needs --new: the radial centre reads the version 3 build")
+    reader = coordinate_reader(new_bin) if rigs else None
+    cells_of = {}
+    blends = collections.Counter()
     rows = db.execute("SELECT id, score_id, name, start, duration, seed, blend_mode, z_index, "
                       "selection_json, graph_json FROM clips ORDER BY id").fetchall()
     for row in rows:
         old = json.loads(row["graph_json"])
+        cells = None
+        if rigs is not None:
+            domain = rigs["clips"].get(row["id"])
+            cells = rigs["domains"][domain] if isinstance(domain, int) else []
+            cells_of[row["id"]] = cells
         try:
-            new, why = convert(old, best_fit)
+            coordinate = (lambda nodes, node_id, cells=cells: reader(nodes, node_id, cells)) \
+                if reader else None
+            new, new_blend, why = convert_clip(old, row["blend_mode"], best_fit, cells, coordinate)
         except Refused as e:
             refusals[str(e)] += 1
             examples[f"refused: {e}"].append(row["id"])
@@ -600,10 +1034,16 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
             if n.startswith("mirrored line"):
                 mirrored[n].append(row["id"])
         growth[len(new["nodes"]) - len(old["nodes"])] += 1
-        if new != old:
-            statements.append(f"UPDATE clips SET graph_json = {quote(compact(new))} "
-                              f"WHERE id = {quote(row['id'])} AND graph_json = {quote(row['graph_json'])};")
-        pairs.append((row, v2.clip_json(row, old), v2.clip_json(row, new)))
+        if new_blend != row["blend_mode"]:
+            blends[f"{row['blend_mode']} → {new_blend}"] += 1
+            examples[f"blend {row['blend_mode']}"].append(f"{row['id']} {row['name']!r}")
+        if new != old or new_blend != row["blend_mode"]:
+            statements.append(f"UPDATE clips SET graph_json = {quote(compact(new))}, "
+                              f"blend_mode = {quote(new_blend)} "
+                              f"WHERE id = {quote(row['id'])} AND graph_json = {quote(row['graph_json'])} "
+                              f"AND blend_mode = {quote(row['blend_mode'])};")
+        pairs.append((row, v2.clip_json(row, old),
+                      {**v2.clip_json(row, new), "blend_mode": new_blend}))
     (out / "clips.sql").write_text("\n".join([f"-- expected: {len(statements)}", *statements]) + "\n")
     drafts = []
     for row in db.execute("SELECT id, base_json, state_json FROM drafts ORDER BY id"):
@@ -629,6 +1069,7 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
               "forms": dict(notes),
               "node_count_change": {str(k): v for k, v in sorted(growth.items())},
               "refusals": dict(refusals),
+              "blend_modes": dict(blends),
               "mirrored_lines": {k: v for k, v in mirrored.items()}}
     if new_bin:
         errors, good = collections.Counter(), []
@@ -641,7 +1082,9 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
                 good.append((row, a, b))
         report["checker_errors"] = dict(errors)
         report["fades_over_clips"] = fades_over_clips(new_bin, good, examples)
-        if old_bin:
+        if old_bin and rigs is not None:
+            report.update(rig_parity(old_bin, new_bin, good, cells_of, examples))
+        elif old_bin:
             report.update(parity(old_bin, new_bin, good, examples, best_fit))
     report["examples"] = {k: v[:5] for k, v in examples.items()}
     (out / "report.json").write_text(json.dumps(report, indent=1) + "\n")
@@ -651,6 +1094,116 @@ def run(database, out, old_bin=None, new_bin=None, best_fit="keep"):
 
 def output(graph):
     return next(n for n in graph["nodes"].values() if n["kind"] in ("color", "aim", "strobe"))
+
+
+# Frames per clip on its own rig: evenly over the clip, between beats.
+RIG_FRAMES = 32
+
+
+def rig_beats(clip):
+    step = clip["duration"] / RIG_FRAMES
+    return [clip["start"] + (k + 0.5) * step for k in range(RIG_FRAMES)]
+
+
+def events_of(graph):
+    """('overlap', 'gap') flags: a time node whose events overlap (duration
+    above every, or either wired) or leave gaps (duration below every)."""
+    overlap = gap = False
+    for node in graph["nodes"].values():
+        inputs = node.get("inputs", {})
+        if node["kind"] != "time" or "every" not in inputs:
+            continue
+        every, duration = inputs["every"], inputs.get("duration", inputs["every"])
+        if not (number(every) and number(duration)):
+            overlap = gap = True
+        elif duration > every + 1e-9:
+            overlap = True
+        elif duration < every - 1e-9:
+            gap = True
+    return overlap, gap
+
+
+def rig_parity(old_bin, new_bin, triples, cells_of, examples):
+    """Plays each clip before and after on its own rig (its score's venue,
+    its selection), RIG_FRAMES frames over the clip. Sorts the clips into
+    exact, close and failed, and counts the clips whose look changes on
+    purpose (spec section 0, audit): replace is the top light (2), events
+    combine per channel (4), lighten and value go (5), gaps are transparent
+    (6), audio reads the whole track (8)."""
+    by_score = collections.defaultdict(list)
+    for row, _, clip in triples:
+        by_score[row["score_id"]].append((row, clip))
+
+    def under(row, clip):
+        kind = output(clip["graph"])["kind"]
+        end = row["start"] + row["duration"]
+        return [o for o, c in by_score[row["score_id"]]
+                if o["id"] != row["id"] and o["z_index"] < row["z_index"]
+                and output(c["graph"])["kind"] == kind
+                and o["start"] < end and row["start"] < o["start"] + o["duration"]]
+
+    classes, by_class = collections.Counter(), collections.defaultdict(list)
+    expected = collections.Counter()
+    expected_ids = collections.defaultdict(set)
+    chunk = 16
+    for i in range(0, len(triples), chunk):
+        part = triples[i:i + chunk]
+
+        def requests(k):
+            return [dict(clip=t[k], cells=cells_of.get(t[0]["id"]) or CELLS, beats=rig_beats(t[k]))
+                    for t in part]
+        olds = v2.evaluate(old_bin, requests(1))
+        news = v2.evaluate(new_bin, requests(2))
+        for (row, _, clip), x, y in zip(part, olds, news):
+            label = f"{row['id']} {row['name']!r}"
+            overlap, gap = events_of(clip["graph"])
+            below = under(row, clip)
+            kind = output(clip["graph"])["kind"]
+            if gap and below:
+                expected_ids["6 gaps are transparent (over a clip)"].add(row["id"])
+            if row["blend_mode"] in BLENDS:
+                expected_ids["5 lighten and value go"].add(row["id"])
+            if "error" in x:
+                why = x["error"]
+                if "analyzed track data" in why:
+                    expected_ids["8 audio over the whole track (not played)"].add(row["id"])
+                    classes["not played: audio"] += 1
+                else:
+                    classes["not played: " + why[:50]] += 1
+                continue
+            if "error" in y:
+                classes["failed: new errors"] += 1
+                by_class["failed"].append((math.inf, f"{label}: {y['error'][:60]}"))
+                continue
+            if kind == "color" and clip["blend_mode"] == "replace" and below and any(
+                    1e-6 < o.get("dimmer", 1.0) < 1 - 1e-6
+                    for frame in y["ok"] for o in frame.get("lighting", {}).get("value", {}).values()):
+                expected_ids["2 replace is the top light (dim, over a clip)"].add(row["id"])
+            big, mean = difference(x["ok"], y["ok"])
+            if big <= EXACT:
+                cls = "exact"
+            elif overlap:
+                cls = "changed: events combine per channel"
+                expected_ids["4 events combine per channel"].add(row["id"])
+            elif big <= CLOSE_MAX and mean <= CLOSE_MEAN:
+                cls = "close"
+            else:
+                cls = "failed"
+            classes[cls] += 1
+            by_class[cls].append((big, f"{label} (max {big:.3g}, mean {mean:.3g})"))
+    for item, ids in sorted(expected_ids.items()):
+        expected[item] = len(ids)
+        examples[f"expected {item}"] = sorted(ids)[:5]
+    listed = {kind: [label for _, label in sorted(items, reverse=True)]
+              for kind, items in by_class.items() if kind != "exact"}
+    for kind, labels in listed.items():
+        examples[f"parity {kind}"] = labels
+    return {"parity": dict(classes), "expected_changes": dict(expected),
+            "parity_clips": listed,
+            "parity_rule": f"each clip on its own rig (its venue and selection), {RIG_FRAMES} "
+                           f"frames between beats; exact: every light, strobe and aim number "
+                           f"within {EXACT}; close: largest difference ≤ {CLOSE_MAX} and "
+                           f"mean ≤ {CLOSE_MEAN}"}
 
 
 def fades_over_clips(new_bin, triples, examples):
@@ -772,8 +1325,8 @@ def parity(old_bin, new_bin, good, examples, best_fit="keep"):
 def write_markdown(path, report):
     lines = ["# Graph version 3", ""]
     lines += [f"- {k}: {v}" for k, v in report.items() if not isinstance(v, dict)]
-    for key in ("forms", "node_count_change", "refusals", "checker_errors", "fades_over_clips",
-                "parity"):
+    for key in ("forms", "node_count_change", "refusals", "blend_modes", "checker_errors",
+                "fades_over_clips", "parity", "expected_changes"):
         if key not in report:
             continue
         lines += ["", f"## {key}", ""]
@@ -793,11 +1346,13 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--old", help="clip_graph_parity built from a version 1 checkout")
     parser.add_argument("--new", help="clip_graph_parity built from this checkout")
+    parser.add_argument("--cells", help="clip_cells output: each clip's own rig; the radial "
+                        "centre and best fit are fitted to it and parity plays on it")
     parser.add_argument("--best-fit-mirror", choices=["halve", "keep"], default="keep",
                         help="a line space after a mirror with an empty normal: keep plays "
                              "exactly on both stand-in rigs (2026-09-30 dry run)")
     args = parser.parse_args()
-    report = run(args.database, args.out, args.old, args.new, args.best_fit_mirror)
+    report = run(args.database, args.out, args.old, args.new, args.best_fit_mirror, args.cells)
     print(json.dumps({k: v for k, v in report.items()
                       if k not in ("examples", "mirrored_lines", "parity_clips")}, indent=1))
 
